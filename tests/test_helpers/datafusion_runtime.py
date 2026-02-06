@@ -23,7 +23,7 @@ def df_profile(
     diagnostics
         Optional diagnostics sink to attach to the profile.
 
-    Returns
+    Returns:
     -------
     DataFusionRuntimeProfile
         Runtime profile configured for the test.
@@ -47,7 +47,7 @@ def df_ctx(
     diagnostics
         Optional diagnostics sink to attach to the profile.
 
-    Returns
+    Returns:
     -------
     SessionContext
         DataFusion session context for the test.

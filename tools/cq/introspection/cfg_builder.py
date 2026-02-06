@@ -23,7 +23,7 @@ from tools.cq.introspection.bytecode_index import (
 class BasicBlock:
     """A basic block in the control flow graph.
 
-    Attributes
+    Attributes:
     ----------
     id
         Unique block identifier
@@ -57,7 +57,7 @@ class BasicBlock:
 class CFGEdge:
     """Edge in the control flow graph.
 
-    Attributes
+    Attributes:
     ----------
     source
         Source block ID
@@ -76,7 +76,7 @@ class CFGEdge:
 class CFG:
     """Control Flow Graph for a code object.
 
-    Attributes
+    Attributes:
     ----------
     blocks
         Basic blocks indexed by ID
@@ -97,7 +97,7 @@ class CFG:
     def block_count(self) -> int:
         """Get number of basic blocks.
 
-        Returns
+        Returns:
         -------
         int
             Count of basic blocks.
@@ -108,7 +108,7 @@ class CFG:
     def edge_count(self) -> int:
         """Get number of edges.
 
-        Returns
+        Returns:
         -------
         int
             Count of edges.
@@ -118,7 +118,7 @@ class CFG:
     def get_block_at_offset(self, offset: int) -> BasicBlock | None:
         """Get block containing instruction at offset.
 
-        Returns
+        Returns:
         -------
         BasicBlock | None
             Matching block if found.
@@ -131,7 +131,7 @@ class CFG:
     def to_mermaid(self) -> str:
         """Generate Mermaid flowchart representation.
 
-        Returns
+        Returns:
         -------
         str
             Mermaid flowchart diagram code.
@@ -213,7 +213,7 @@ def _find_block_starts(index: BytecodeIndex) -> set[int]:
     - Jump targets
     - Instructions following jumps/returns
 
-    Returns
+    Returns:
     -------
     set[int]
         Offsets that begin basic blocks.
@@ -397,7 +397,7 @@ def build_cfg(code: CodeType) -> CFG:
     code
         Python code object.
 
-    Returns
+    Returns:
     -------
     CFG
         Control flow graph.

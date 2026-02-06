@@ -62,7 +62,7 @@ class SemanticSpecIndex:
 def _build_semantic_spec_index() -> tuple[SemanticSpecIndex, ...]:
     """Build the full spec index for the semantic pipeline.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticSpecIndex, ...]
         Spec index in dependency-safe order.
@@ -87,7 +87,7 @@ SEMANTIC_SPEC_INDEX: Final[tuple[SemanticSpecIndex, ...]] = _build_semantic_spec
 def semantic_spec_index() -> tuple[SemanticSpecIndex, ...]:
     """Return the full spec index for the semantic pipeline.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticSpecIndex, ...]
         Immutable semantic spec index.

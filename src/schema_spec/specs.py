@@ -39,7 +39,7 @@ DICT_STRING = interop.dictionary(interop.int32(), interop.string())
 def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:
     """Return schema metadata for name/version tagging.
 
-    Returns
+    Returns:
     -------
     dict[bytes, bytes]
         Encoded schema metadata mapping.
@@ -53,7 +53,7 @@ def schema_metadata(name: str, version: int | None) -> dict[bytes, bytes]:
 def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
     """Return schema metadata encoding name/version and constraints.
 
-    Returns
+    Returns:
     -------
     dict[bytes, bytes]
         Encoded schema metadata mapping.
@@ -69,7 +69,7 @@ def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
 def _decode_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
     """Decode Arrow metadata into a string-keyed mapping.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Decoded metadata mapping with string keys and values.
@@ -116,7 +116,7 @@ def dict_field(
 ) -> FieldSpec:
     """Return a FieldSpec configured for dictionary encoding.
 
-    Returns
+    Returns:
     -------
     FieldSpec
         Field spec configured with dictionary encoding metadata.
@@ -168,7 +168,7 @@ class TableSchemaSpec(StructBaseStrict, frozen=True):
         version
             Optional version override for schema metadata.
 
-        Returns
+        Returns:
         -------
         TableSchemaSpec
             Table schema specification derived from the Arrow schema.
@@ -215,11 +215,8 @@ class TableSchemaSpec(StructBaseStrict, frozen=True):
     def __post_init__(self) -> None:
         """Validate the table schema specification.
 
-        Raises
-        ------
-        ValueError
-            Raised when field definitions are duplicated or constraints reference
-            unknown fields.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         seen: set[str] = set()
         dupes: list[str] = []
@@ -248,7 +245,7 @@ class TableSchemaSpec(StructBaseStrict, frozen=True):
     ) -> TableSchemaSpec:
         """Return a new TableSchemaSpec with updated constraints.
 
-        Returns
+        Returns:
         -------
         TableSchemaSpec
             Updated table schema spec.
@@ -262,7 +259,7 @@ class TableSchemaSpec(StructBaseStrict, frozen=True):
     def to_arrow_schema(self) -> SchemaLike:
         """Build a pyarrow.Schema from the spec.
 
-        Returns
+        Returns:
         -------
         pyarrow.Schema
             Arrow schema instance.
@@ -280,7 +277,7 @@ class TableSchemaSpec(StructBaseStrict, frozen=True):
     ) -> SchemaTransform:
         """Create a schema transform for aligning tables to this spec.
 
-        Returns
+        Returns:
         -------
         SchemaTransform
             Transform configured for this schema spec.
@@ -318,12 +315,12 @@ def file_identity_bundle(*, include_sha256: bool = True) -> FieldBundle:
     include_sha256
         Include the file_sha256 field. Default True.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing file identity fields.
 
-    See Also
+    See Also:
     --------
     schema_spec.file_identity : Canonical file identity constants and helpers.
     """
@@ -338,12 +335,12 @@ def file_identity_bundle(*, include_sha256: bool = True) -> FieldBundle:
 def span_bundle() -> FieldBundle:
     """Return a bundle for byte-span columns.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing byte-span fields (bstart, bend).
 
-    See Also
+    See Also:
     --------
     prefixed_span_bundle : Create a span bundle with a custom prefix.
     schema_spec.span_fields : Low-level span field generators.
@@ -356,12 +353,12 @@ def span_bundle() -> FieldBundle:
 def call_span_bundle() -> FieldBundle:
     """Return a bundle for callsite byte-span columns.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing callsite byte-span fields (call_bstart, call_bend).
 
-    See Also
+    See Also:
     --------
     prefixed_span_bundle : Create a span bundle with a custom prefix.
     """
@@ -371,7 +368,7 @@ def call_span_bundle() -> FieldBundle:
 def name_span_bundle() -> FieldBundle:
     """Return a bundle for name byte-span columns.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing name span fields (name_bstart, name_bend).
@@ -382,7 +379,7 @@ def name_span_bundle() -> FieldBundle:
 def def_span_bundle() -> FieldBundle:
     """Return a bundle for definition byte-span columns.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing definition span fields (def_bstart, def_bend).
@@ -393,7 +390,7 @@ def def_span_bundle() -> FieldBundle:
 def stmt_span_bundle() -> FieldBundle:
     """Return a bundle for statement byte-span columns.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing statement span fields (stmt_bstart, stmt_bend).
@@ -404,7 +401,7 @@ def stmt_span_bundle() -> FieldBundle:
 def alias_span_bundle() -> FieldBundle:
     """Return a bundle for alias byte-span columns.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing alias span fields (alias_bstart, alias_bend).
@@ -420,12 +417,12 @@ def prefixed_span_bundle(prefix: str) -> FieldBundle:
     prefix
         Span prefix (e.g., "call_", "def_", "name_").
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing prefixed byte-span fields.
 
-    Examples
+    Examples:
     --------
     >>> bundle = prefixed_span_bundle("call_")
     >>> [f.name for f in bundle.fields]
@@ -453,7 +450,7 @@ def prefixed_span_bundle(prefix: str) -> FieldBundle:
 def scip_range_bundle(*, prefix: str = "", include_len: bool = False) -> FieldBundle:
     """Return a bundle for SCIP line/character range columns.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing SCIP range fields.
@@ -476,7 +473,7 @@ def scip_range_bundle(*, prefix: str = "", include_len: bool = False) -> FieldBu
 def provenance_bundle() -> FieldBundle:
     """Return a bundle for dataset scan provenance columns.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing provenance fields.

@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 def _arrow_cast(expr: Expr, data_type: str) -> Expr:
     """Cast an expression to an Arrow data type.
 
-    Returns
+    Returns:
     -------
     Expr
         Arrow-casted expression.
@@ -61,7 +61,7 @@ def _arrow_cast(expr: Expr, data_type: str) -> Expr:
 def _null_expr(data_type: str) -> Expr:
     """Create a null literal with the specified Arrow data type.
 
-    Returns
+    Returns:
     -------
     Expr
         Null expression with specified type.
@@ -207,7 +207,7 @@ def _semantic_validation_supported(snapshot: Mapping[str, object]) -> bool:
 def _coalesce_cols(df: DataFrame, columns: Sequence[str], dtype: pa.DataType) -> Expr:
     """Coalesce multiple columns, falling back to null if all are missing.
 
-    Returns
+    Returns:
     -------
     Expr
         Coalesced expression.
@@ -246,7 +246,7 @@ def _span_exprs_from_df(
 def _literal_or_null(value: object | None, dtype: pa.DataType) -> Expr:
     """Create a literal or null expression based on the value.
 
-    Returns
+    Returns:
     -------
     Expr
         Literal or null expression.
@@ -260,15 +260,15 @@ def _literal_or_null(value: object | None, dtype: pa.DataType) -> Expr:
 def _stable_id_from_parts(prefix: str, parts: Sequence[Expr]) -> Expr:
     """Build a stable identifier from variadic expression parts.
 
-    Returns
-    -------
-    Expr
-        Stable identifier expression.
+    Args:
+        prefix: Stable ID namespace prefix.
+        parts: Expression parts used to build the identifier.
 
-    Raises
-    ------
-    ValueError
-        Raised when no expression parts are provided.
+    Returns:
+        Expr: Result.
+
+    Raises:
+        ValueError: If no parts are provided.
     """
     if not parts:
         msg = "stable identifiers require at least one part."
@@ -281,22 +281,15 @@ def build_cpg_nodes_df(
 ) -> DataFrame:
     """Build CPG nodes DataFrame from view specs using DataFusion.
 
-    Parameters
-    ----------
-    session_runtime
-        DataFusion SessionRuntime with registered views.
-    task_identity
-        Optional task identity metadata for CPG outputs.
+    Args:
+        session_runtime: Active DataFusion session runtime.
+        task_identity: Optional task identity for tagging output rows.
 
-    Returns
-    -------
-    DataFrame
-        CPG nodes DataFrame with standardized schema.
+    Returns:
+        DataFrame: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when required source tables are missing or no plans are produced.
+    Raises:
+        ValueError: If a required source table is missing.
     """
     with stage_span(
         "cpg.nodes",
@@ -367,7 +360,7 @@ def _emit_nodes_df(
     task_priority
         Optional task priority for metadata.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame with CPG node rows.
@@ -406,7 +399,7 @@ def _prepare_id_columns_df(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Prepare ID columns, adding nulls for missing ones.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[str, ...], tuple[str, ...]]
         Tuple of (all_columns, required_columns).
@@ -423,20 +416,14 @@ def _prepare_id_columns_df(
 def build_cpg_edges_df(session_runtime: SessionRuntime) -> DataFrame:
     """Build CPG edges DataFrame from relation outputs using DataFusion.
 
-    Parameters
-    ----------
-    session_runtime
-        DataFusion SessionRuntime with registered views.
+    Args:
+        session_runtime: Description.
 
-    Returns
-    -------
-    DataFrame
-        CPG edges DataFrame with standardized schema.
+    Returns:
+        DataFrame: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when the relation output table is missing.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     with stage_span(
         "cpg.edges",
@@ -523,7 +510,7 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:
     df
         Source DataFrame with relation outputs.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame with CPG edge rows.
@@ -564,24 +551,16 @@ def build_cpg_props_df(
 ) -> DataFrame:
     """Build CPG properties DataFrame from prop specs using DataFusion.
 
-    Parameters
-    ----------
-    session_runtime
-        DataFusion SessionRuntime with registered views.
-    options
-        Optional property options for filtering.
-    task_identity
-        Optional task identity metadata for CPG outputs.
+    Args:
+        session_runtime: Active DataFusion session runtime.
+        options: Optional property-building options.
+        task_identity: Optional task identity for tagging output rows.
 
-    Returns
-    -------
-    DataFrame
-        CPG properties DataFrame with standardized schema.
+    Returns:
+        DataFrame: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when required source tables are missing.
+    Raises:
+        ValueError: If a required source table is missing.
     """
     with stage_span(
         "cpg.props",
@@ -633,7 +612,7 @@ def build_cpg_props_df(
 def build_cpg_props_map_df(session_runtime: SessionRuntime) -> DataFrame:
     """Build CPG property maps grouped by entity.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Aggregated property map rows keyed by entity.
@@ -671,7 +650,7 @@ def build_cpg_props_map_df(session_runtime: SessionRuntime) -> DataFrame:
 def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
     """Build adjacency lists grouped by source node.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Aggregated adjacency rows keyed by source node.
@@ -725,7 +704,7 @@ def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
 def build_cpg_edges_by_dst_df(session_runtime: SessionRuntime) -> DataFrame:
     """Build adjacency lists grouped by destination node.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Aggregated adjacency rows keyed by destination node.
@@ -796,7 +775,7 @@ def _emit_props_df(
     task_identity
         Optional task identity metadata.
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         DataFrame with CPG property rows, or None if no fields.
@@ -855,7 +834,7 @@ def _prop_row_df(
     task_priority
         Optional task priority for metadata.
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         DataFrame with a single property row, or None if invalid.
@@ -903,7 +882,7 @@ def _field_value_expr_df(df: DataFrame, field: PropFieldSpec) -> Expr | None:
     field
         Property field specification.
 
-    Returns
+    Returns:
     -------
     Expr | None
         Value expression, or None if invalid.
@@ -929,7 +908,7 @@ def _entity_id_expr_df(df: DataFrame, spec: PropTableSpec) -> Expr:
     spec
         Property table specification.
 
-    Returns
+    Returns:
     -------
     Expr
         Entity ID expression.
@@ -961,7 +940,7 @@ def _value_columns_df(value_expr: Expr, *, value_type_str: str) -> dict[str, Exp
     value_type_str
         Type of value (string, int, float, bool, json).
 
-    Returns
+    Returns:
     -------
     dict[str, Expr]
         Dictionary mapping column names to expressions.
@@ -996,7 +975,7 @@ def _empty_props_df(ctx: SessionContext) -> DataFrame:
     ctx
         DataFusion SessionContext.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Empty DataFrame with properties schema.
@@ -1032,7 +1011,7 @@ def _source_columns_lookup_df(
     session_runtime
         DataFusion SessionRuntime.
 
-    Returns
+    Returns:
     -------
     Callable[[str], Sequence[str] | None]
         Lookup function for table columns.

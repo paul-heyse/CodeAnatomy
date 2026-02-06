@@ -38,7 +38,7 @@ def apply_result_filters(result: CqResult, filters: FilterConfig) -> CqResult:
     filters
         Filter configuration.
 
-    Returns
+    Returns:
     -------
     CqResult
         Filtered result.
@@ -76,7 +76,7 @@ def render_result(
     output_format
         Output format.
 
-    Returns
+    Returns:
     -------
     str
         Rendered output.
@@ -114,7 +114,7 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
         Optional filter configuration. If not provided, uses filters
         from the CliResult or an empty FilterConfig.
 
-    Returns
+    Returns:
     -------
     int
         Exit code (0 for success).

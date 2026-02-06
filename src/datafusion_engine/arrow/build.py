@@ -111,7 +111,7 @@ class ConstExpr:
     def to_expression(self) -> ComputeExpression:
         """Return the compute expression for the constant value.
 
-        Returns
+        Returns:
         -------
         ComputeExpression
             Expression representing the constant value.
@@ -122,7 +122,7 @@ class ConstExpr:
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the constant as a full-length array.
 
-        Returns
+        Returns:
         -------
         ArrayLike
             Array filled with the constant value.
@@ -141,7 +141,7 @@ class FieldExpr:
     def to_expression(self) -> ComputeExpression:
         """Return the compute expression for the column reference.
 
-        Returns
+        Returns:
         -------
         ComputeExpression
             Expression referencing the column.
@@ -151,7 +151,7 @@ class FieldExpr:
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the column values from the table.
 
-        Returns
+        Returns:
         -------
         ArrayLike
             Column values from the table.
@@ -169,15 +169,14 @@ class ColumnOrNullExpr:
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the column values or typed nulls.
 
-        Returns
-        -------
-        ArrayLike
-            Column values or typed nulls when missing.
+        Args:
+            table: Description.
 
-        Raises
-        ------
-        TypeError
-            Raised when the column does not support cast().
+        Returns:
+            ArrayLike: Result.
+
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         if self.name not in table.column_names:
             return pa.nulls(table.num_rows, type=self.dtype)
@@ -198,7 +197,7 @@ class CoalesceExpr:
     def materialize(self, table: TableLike) -> ArrayLike:
         """Materialize the expression against a table.
 
-        Returns
+        Returns:
         -------
         ArrayLike
             Coalesced array result.
@@ -216,7 +215,7 @@ class CoalesceExpr:
 def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> ArrayLike:
     """Return a constant array of length ``n`` with the given value.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Array of repeated values.
@@ -228,7 +227,7 @@ def const_array(n: int, value: object, *, dtype: DataTypeLike | None = None) -> 
 def set_or_append_column(table: TableLike, name: str, values: ArrayLike) -> TableLike:
     """Set a column by name, appending if it does not exist.
 
-    Returns
+    Returns:
     -------
     TableLike
         Updated table.
@@ -249,7 +248,7 @@ class ColumnDefaultsSpec:
     def apply(self, table: TableLike) -> TableLike:
         """Apply default column values to a table.
 
-        Returns
+        Returns:
         -------
         TableLike
             Table with defaults applied.
@@ -266,7 +265,7 @@ class ColumnDefaultsSpec:
 def struct_type(fields: Sequence[FieldLike] | Mapping[str, DataTypeLike]) -> DataTypeLike:
     """Return a struct type built from fields or name/type mappings.
 
-    Returns
+    Returns:
     -------
     DataTypeLike
         Struct data type.
@@ -283,7 +282,7 @@ def column_or_null(
 ) -> ArrayLike:
     """Return a column array or a typed null array when missing.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Column array or a typed null array.
@@ -297,15 +296,12 @@ def maybe_dictionary(
 ) -> ArrayLike | ChunkedArrayLike:
     """Return dictionary-encoded values when requested by dtype.
 
-    Returns
-    -------
-    ArrayLike | ChunkedArrayLike
-        Dictionary-encoded values when needed.
+    Args:
+        values: Description.
+        dtype: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when dictionary encoding is unsupported.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if patypes.is_dictionary(values.type):
         return values
@@ -327,15 +323,14 @@ def pick_first(
 ) -> object | None:
     """Return the first row value from the first column found.
 
-    Returns
-    -------
-    object | None
-        First row value or default.
+    Args:
+        table: Description.
+        cols: Description.
+        ignore_missing: Description.
+        default: Description.
 
-    Raises
-    ------
-    KeyError
-        Raised when a required column is missing.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     if table.num_rows == 0:
         return default
@@ -366,15 +361,13 @@ def table_from_arrays(
 ) -> TableLike:
     """Return a table from arrays with optional schema metadata.
 
-    Returns
-    -------
-    TableLike
-        Table built from arrays.
+    Args:
+        arrays: Description.
+        schema: Description.
+        names: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when both schema and names are missing.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if schema is None and names is None:
         msg = "table_from_arrays requires schema or names."
@@ -389,15 +382,12 @@ def table_from_columns(
 ) -> TableLike:
     """Return a table from a schema and column mapping.
 
-    Returns
-    -------
-    TableLike
-        Table built from ordered schema fields.
+    Args:
+        schema: Description.
+        columns: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when any schema field is missing from the column mapping.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     resolved_schema = _resolve_schema(schema)
     arrays: list[ArrayLike | ChunkedArrayLike] = []
@@ -416,7 +406,7 @@ def table_from_columns(
 def empty_table(schema: SchemaLike) -> TableLike:
     """Return an empty table for a schema.
 
-    Returns
+    Returns:
     -------
     TableLike
         Empty Arrow table.
@@ -433,7 +423,7 @@ def table_from_rows(
 ) -> TableLike:
     """Return a table from a sequence of mapping rows.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table built from mapping rows.
@@ -445,7 +435,7 @@ def table_from_rows(
 def table_from_row_dicts(rows: Iterable[Mapping[str, object]]) -> TableLike:
     """Return a table from a sequence of mapping rows.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table built from mapping rows.
@@ -460,7 +450,7 @@ def schema_columns(
 ) -> list[str]:
     """Return schema column names with optional metadata flattening.
 
-    Returns
+    Returns:
     -------
     list[str]
         Column name list.
@@ -476,7 +466,7 @@ def schema_columns(
 def schema_fields(schema: SchemaLike) -> list[FieldLike]:
     """Return schema fields in order.
 
-    Returns
+    Returns:
     -------
     list[FieldLike]
         Schema fields.
@@ -488,7 +478,7 @@ def schema_fields(schema: SchemaLike) -> list[FieldLike]:
 def table_from_schema(schema: SchemaLike) -> TableLike:
     """Return an empty table for a schema.
 
-    Returns
+    Returns:
     -------
     TableLike
         Empty Arrow table.
@@ -499,7 +489,7 @@ def table_from_schema(schema: SchemaLike) -> TableLike:
 def rows_to_table(rows: Iterable[Mapping[str, object]], schema: SchemaLike) -> TableLike:
     """Return a table from rows and an explicit schema.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table built from mapping rows with the provided schema.
@@ -513,7 +503,7 @@ def record_batch_reader_from_rows(
 ) -> pa.RecordBatchReader:
     """Return a RecordBatchReader built from mapping rows.
 
-    Returns
+    Returns:
     -------
     pyarrow.RecordBatchReader
         Reader yielding record batches aligned to the schema.
@@ -530,7 +520,7 @@ def record_batch_reader_from_row_batches(
 ) -> pa.RecordBatchReader:
     """Return a RecordBatchReader built from row batches.
 
-    Returns
+    Returns:
     -------
     pyarrow.RecordBatchReader
         Reader yielding record batches aligned to the schema.
@@ -550,7 +540,7 @@ def list_table_from_rows(
 ) -> TableLike:
     """Return a table from row sequences and explicit field definitions.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table built from row sequences.
@@ -572,7 +562,7 @@ def list_table_from_rows(
 def iter_columns(table: TableLike) -> Iterator[tuple[str, ArrayLike | ChunkedArrayLike]]:
     """Iterate column name and array pairs.
 
-    Yields
+    Yields:
     ------
     tuple[str, ArrayLike | ChunkedArrayLike]
         Column name and values.
@@ -584,7 +574,7 @@ def iter_columns(table: TableLike) -> Iterator[tuple[str, ArrayLike | ChunkedArr
 def iter_rows(table: TableLike) -> Iterator[dict[str, object | None]]:
     """Iterate rows of a table as dictionaries.
 
-    Yields
+    Yields:
     ------
     dict[str, object | None]
         Mapping of column name to value.
@@ -601,7 +591,7 @@ def iter_rows(table: TableLike) -> Iterator[dict[str, object | None]]:
 def rows_from_table(table: TableLike) -> list[dict[str, object | None]]:
     """Return all rows from a table as dictionaries.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object | None]]
         List of row mappings.
@@ -615,7 +605,7 @@ def table_from_arrays_with_schema(
 ) -> TableLike:
     """Return a table from arrays with a given schema.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table built from arrays with a schema.
@@ -631,7 +621,7 @@ def cast_table(
 ) -> TableLike:
     """Cast a table to the provided schema.
 
-    Returns
+    Returns:
     -------
     TableLike
         Casted table.
@@ -647,7 +637,7 @@ def list_view_array_from_text(
 ) -> ArrayLike:
     """Return a list view array from string values.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         List view array from string values.
@@ -663,7 +653,7 @@ def value_field(
 ) -> FieldLike:
     """Return a value field for list or map types.
 
-    Returns
+    Returns:
     -------
     FieldLike
         Value field for nested list/map types.
@@ -689,7 +679,7 @@ def build_const_table(
 ) -> TableLike:
     """Return a constant table of length ``n``.
 
-    Returns
+    Returns:
     -------
     TableLike
         Constant table with repeated values.
@@ -705,15 +695,15 @@ def concatenate_tables(
 ) -> TableLike:
     """Concatenate multiple tables with schema unification.
 
-    Returns
-    -------
-    TableLike
-        Concatenated table.
+    Args:
+        tables: Description.
+            promote: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when no tables are provided.
+    Returns:
+        TableLike: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     tables_list = list(tables)
     if not tables_list:
@@ -727,15 +717,11 @@ def concatenate_tables(
 def table_from_schema_payload(payload: Mapping[str, object]) -> TableLike:
     """Return a table from a schema payload mapping.
 
-    Returns
-    -------
-    TableLike
-        Table constructed from the payload mapping.
+    Args:
+        payload: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the payload schema or rows are invalid.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     schema = payload.get("schema")
     if not isinstance(schema, pa.Schema):
@@ -825,7 +811,7 @@ __all__ = [
 def array_from_lists(values: Iterable[Sequence[object]]) -> ArrayLike:
     """Return a list array for a sequence of lists.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         List array representing the nested lists.

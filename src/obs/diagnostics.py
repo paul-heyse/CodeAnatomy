@@ -68,7 +68,7 @@ class DiagnosticsCollector:
     def events_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
         """Return a shallow copy of collected event rows.
 
-        Returns
+        Returns:
         -------
         dict[str, list[Mapping[str, object]]]
             Mapping of event names to collected rows.
@@ -78,7 +78,7 @@ class DiagnosticsCollector:
     def artifacts_snapshot(self) -> dict[str, list[Mapping[str, object]]]:
         """Return a shallow copy of collected artifacts.
 
-        Returns
+        Returns:
         -------
         dict[str, list[Mapping[str, object]]]
             Mapping of artifact names to collected payloads.
@@ -96,7 +96,7 @@ class PreparedStatementSpec(StructBaseCompat, frozen=True):
     def payload(self) -> Mapping[str, object]:
         """Return a JSON-ready payload for diagnostics sinks.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             JSON-ready payload describing the prepared statement.
@@ -120,7 +120,7 @@ class SemanticQualityArtifact(StructBaseCompat, frozen=True):
     def payload(self) -> Mapping[str, object]:
         """Return a JSON-ready payload for diagnostics sinks.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             JSON-ready payload describing the artifact summary.
@@ -139,7 +139,7 @@ def prepared_statement_hook(
 ) -> Callable[[PreparedStatementSpec], None]:
     """Return a hook that records prepared statements in diagnostics.
 
-    Returns
+    Returns:
     -------
     Callable[[PreparedStatementSpec], None]
         Hook that records prepared statement metadata.

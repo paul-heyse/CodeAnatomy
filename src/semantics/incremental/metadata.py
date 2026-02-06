@@ -48,7 +48,7 @@ def write_incremental_metadata(
 ) -> str:
     """Persist runtime metadata to the state store.
 
-    Returns
+    Returns:
     -------
     str
         Delta table path for the metadata snapshot.
@@ -105,7 +105,7 @@ def write_cdf_cursor_snapshot(
     log_storage_options : StorageOptions | None
         Optional log-storage options for Delta access.
 
-    Returns
+    Returns:
     -------
     str
         Delta table path for the cursor snapshot.
@@ -146,7 +146,7 @@ class ArtifactWriteContext:
     def resolve_storage(self, *, table_uri: str) -> tuple[dict[str, str], dict[str, str]]:
         """Return storage and log-store options for the artifact table.
 
-        Returns
+        Returns:
         -------
         tuple[dict[str, str], dict[str, str]]
             Resolved storage and log-store options.
@@ -178,7 +178,7 @@ def write_semantic_diagnostics_snapshots(
 ) -> dict[str, str]:
     """Persist semantic diagnostics snapshots to Delta.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of snapshot names to Delta table paths.
@@ -221,7 +221,7 @@ def write_incremental_artifacts(
 ) -> dict[str, str]:
     """Persist selected incremental diagnostics artifacts to Delta.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of artifact names to Delta table paths.

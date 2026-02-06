@@ -11,7 +11,7 @@ from importlib import metadata
 def scip_env_payload() -> list[dict[str, object]]:
     """Return environment payload entries for installed distributions.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Environment payload entries.
@@ -34,7 +34,7 @@ def scip_env_payload() -> list[dict[str, object]]:
 def main() -> int:
     """Emit the environment manifest payload.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

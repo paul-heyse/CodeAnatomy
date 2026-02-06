@@ -36,20 +36,14 @@ _MAP_PARTS: int = 2
 def parse_type_signature(value: str) -> pa.DataType:
     """Parse a Rust signature type into a PyArrow datatype.
 
-    Parameters
-    ----------
-    value:
-        Type signature string (e.g., ``string``, ``list<int64>``).
+    Args:
+        value: Description.
 
-    Returns
-    -------
-    pyarrow.DataType
-        Parsed PyArrow datatype.
+    Returns:
+        pa.DataType: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when the signature cannot be parsed.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     text = _normalize_type(value)
     simple = _SIMPLE_TYPES.get(text)
@@ -70,7 +64,7 @@ def signature_inputs(
 ) -> tuple[tuple[pa.DataType, ...], ...]:
     """Return parsed input signatures for a function name.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[pyarrow.DataType, ...], ...]
         Parsed input signatures.
@@ -93,7 +87,7 @@ def signature_inputs(
 def signature_returns(snapshot: Mapping[str, object], name: str) -> tuple[pa.DataType, ...]:
     """Return parsed return types for a function name.
 
-    Returns
+    Returns:
     -------
     tuple[pyarrow.DataType, ...]
         Parsed return types.
@@ -111,7 +105,7 @@ def signature_returns(snapshot: Mapping[str, object], name: str) -> tuple[pa.Dat
 def custom_udf_names(snapshot: Mapping[str, object]) -> tuple[str, ...]:
     """Return the list of custom Rust UDF names from a registry snapshot.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Custom Rust UDF names.

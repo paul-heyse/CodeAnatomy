@@ -472,15 +472,12 @@ def _resolve_extension_module(
 ) -> object:
     """Return the Delta extension module (datafusion._internal or datafusion_ext).
 
-    Raises
-    ------
-    DataFusionEngineError
-        Raised when the required extension module is unavailable.
+    Args:
+        required_attr: Description.
+        entrypoint: Description.
 
-    Returns
-    -------
-    object
-        Resolved extension module implementing the requested entrypoints.
+    Raises:
+        DataFusionEngineError: If the operation cannot be completed.
     """
     resolved = resolve_delta_extension_module(
         required_attr=required_attr,
@@ -512,7 +509,7 @@ def _internal_ctx(
 ) -> InternalSessionContext:
     """Return the internal session context required by Rust entrypoints.
 
-    Returns
+    Returns:
     -------
     InternalSessionContext
         Internal DataFusion session context used by Rust entrypoints.
@@ -636,7 +633,7 @@ def _parse_add_actions(payload: object | None) -> Sequence[Mapping[str, object]]
 def _decode_schema_ipc(payload: bytes) -> pa.Schema:
     """Decode Arrow schema IPC bytes into a ``pyarrow.Schema``.
 
-    Returns
+    Returns:
     -------
     pyarrow.Schema
         Decoded Arrow schema.
@@ -652,7 +649,7 @@ def _decode_schema_ipc(payload: bytes) -> pa.Schema:
 def _cdf_options_to_ext(module: object, options: DeltaCdfOptions | None) -> object:
     """Convert Python CDF options into the Rust extension options type.
 
-    Returns
+    Returns:
     -------
     object
         Rust extension options value.
@@ -675,7 +672,7 @@ def _cdf_options_to_ext(module: object, options: DeltaCdfOptions | None) -> obje
 def _scan_effective_payload(payload: Mapping[str, object]) -> dict[str, object]:
     """Normalize scan-config payloads into an effective scan snapshot.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Normalized scan configuration payload.
@@ -712,7 +709,7 @@ def delta_provider_from_session(
     request
         Provider request describing scan configuration and Delta gates.
 
-    Returns
+    Returns:
     -------
     DeltaProviderBundle
         Provider capsule and control-plane metadata.
@@ -793,7 +790,7 @@ def delta_provider_with_files(
     request
         Provider request describing scan configuration and Delta gates.
 
-    Returns
+    Returns:
     -------
     DeltaProviderBundle
         Provider capsule and control-plane metadata.
@@ -867,7 +864,7 @@ def delta_cdf_provider(
     request
         CDF provider request describing snapshot pins and CDF options.
 
-    Returns
+    Returns:
     -------
     DeltaCdfProviderBundle
         Provider capsule plus snapshot metadata and CDF options payload.
@@ -915,7 +912,7 @@ def delta_snapshot_info(
     request
         Snapshot request describing protocol gates and snapshot pinning.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Snapshot metadata payload from the control plane.
@@ -951,7 +948,7 @@ def delta_add_actions(
     request
         Snapshot request describing protocol gates and snapshot pinning.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Snapshot metadata plus Add-action payload.
@@ -987,7 +984,7 @@ def delta_write_ipc(
     request
         Write request describing target table and commit options.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -1039,7 +1036,7 @@ def delta_delete(
     request
         Delete request describing target table and predicate.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -1142,7 +1139,7 @@ def delta_update(
     request
         Update request describing target table and assignments.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -1195,7 +1192,7 @@ def delta_merge(
     request
         Merge request describing source/target expressions and predicates.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -1261,7 +1258,7 @@ def delta_optimize_compact(
     request
         Optimize request describing target table and compaction sizing.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -1308,7 +1305,7 @@ def delta_vacuum(
     request
         Vacuum request describing retention and enforcement settings.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -1356,7 +1353,7 @@ def delta_restore(
     request
         Restore request describing target and restore pins.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -1402,7 +1399,7 @@ def delta_set_properties(
     request
         Property update request describing target and properties.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -1451,7 +1448,7 @@ def delta_add_features(
     request
         Feature-enable request describing target table and features.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -1494,7 +1491,7 @@ def delta_add_constraints(
 ) -> Mapping[str, object]:
     """Run Rust-native Delta add-constraints.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane response payload for the constraint update.
@@ -1538,7 +1535,7 @@ def delta_drop_constraints(
 ) -> Mapping[str, object]:
     """Run Rust-native Delta drop-constraints.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane response payload for the constraint drop.
@@ -1580,7 +1577,7 @@ def delta_create_checkpoint(
 ) -> Mapping[str, object]:
     """Create a Delta checkpoint for the requested table.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane response payload for the checkpoint request.
@@ -1610,7 +1607,7 @@ def delta_cleanup_metadata(
 ) -> Mapping[str, object]:
     """Clean expired Delta log metadata for the requested table.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane response payload for the cleanup request.
@@ -1655,7 +1652,7 @@ def delta_enable_column_mapping(
 ) -> Mapping[str, object]:
     """Enable Delta column mapping with the desired mode.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties/features report payload.
@@ -1703,7 +1700,7 @@ def delta_enable_deletion_vectors(
 ) -> Mapping[str, object]:
     """Enable Delta deletion vectors (table feature + property).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties/features report payload.
@@ -1747,7 +1744,7 @@ def delta_enable_row_tracking(
 ) -> Mapping[str, object]:
     """Enable Delta row tracking (table feature + property).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties/features report payload.
@@ -1791,7 +1788,7 @@ def delta_enable_change_data_feed(
 ) -> Mapping[str, object]:
     """Enable Delta Change Data Feed (table feature + property).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties/features report payload.
@@ -1835,7 +1832,7 @@ def delta_enable_generated_columns(
 ) -> Mapping[str, object]:
     """Enable Delta generated columns feature.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties/features report payload.
@@ -1867,7 +1864,7 @@ def delta_enable_invariants(
 ) -> Mapping[str, object]:
     """Enable Delta invariants feature.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties/features report payload.
@@ -1899,7 +1896,7 @@ def delta_enable_check_constraints(
 ) -> Mapping[str, object]:
     """Enable Delta check constraints feature.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties/features report payload.
@@ -1932,7 +1929,7 @@ def delta_enable_in_commit_timestamps(
 ) -> Mapping[str, object]:
     """Enable Delta in-commit timestamps via table properties.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties report payload.
@@ -1968,7 +1965,7 @@ def delta_enable_v2_checkpoints(
 ) -> Mapping[str, object]:
     """Enable Delta v2 checkpoints via feature + checkpoint policy property.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties/features report payload.
@@ -2011,7 +2008,7 @@ def delta_enable_vacuum_protocol_check(
 ) -> Mapping[str, object]:
     """Enable vacuum protocol checks via table properties (best-effort).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties report payload.
@@ -2041,7 +2038,7 @@ def delta_enable_checkpoint_protection(
 ) -> Mapping[str, object]:
     """Enable checkpoint protection via table properties (best-effort).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties report payload.
@@ -2071,7 +2068,7 @@ def delta_disable_change_data_feed(
 ) -> Mapping[str, object]:
     """Disable Delta Change Data Feed via table properties (best-effort).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties report payload.
@@ -2101,7 +2098,7 @@ def delta_disable_deletion_vectors(
 ) -> Mapping[str, object]:
     """Disable Delta deletion vectors via table properties (best-effort).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties report payload.
@@ -2131,7 +2128,7 @@ def delta_disable_row_tracking(
 ) -> Mapping[str, object]:
     """Disable Delta row tracking via table properties (best-effort).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties report payload.
@@ -2161,7 +2158,7 @@ def delta_disable_in_commit_timestamps(
 ) -> Mapping[str, object]:
     """Disable Delta in-commit timestamps via table properties (best-effort).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties report payload.
@@ -2191,7 +2188,7 @@ def delta_disable_vacuum_protocol_check(
 ) -> Mapping[str, object]:
     """Disable vacuum protocol check flag via table properties (best-effort).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties report payload.
@@ -2221,7 +2218,7 @@ def delta_disable_checkpoint_protection(
 ) -> Mapping[str, object]:
     """Disable checkpoint protection via table properties (best-effort).
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Properties report payload.

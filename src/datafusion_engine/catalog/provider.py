@@ -167,7 +167,7 @@ class RegistrySchemaProvider(SchemaProvider):
     def owner_name(self) -> str | None:
         """Return the owner name for the schema provider.
 
-        Returns
+        Returns:
         -------
         str | None
             Owner name for diagnostics, when available.
@@ -212,20 +212,11 @@ class RegistrySchemaProvider(SchemaProvider):
     def table(self, name: str) -> Table | None:
         """Return a table for the given name.
 
-        Parameters
-        ----------
-        name:
-            Table name to resolve.
+        Args:
+            name: Description.
 
-        Returns
-        -------
-        datafusion.catalog.Table | None
-            Resolved table when available.
-
-        Raises
-        ------
-        ValueError
-            Raised when the registry lacks a SessionContext.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         key = _normalize_dataset_name(name)
         cached = self._tables.get(key)
@@ -267,7 +258,7 @@ class RegistrySchemaProvider(SchemaProvider):
         name:
             Table name to look up.
 
-        Returns
+        Returns:
         -------
         TableProviderMetadata | None
             Metadata when available.
@@ -285,7 +276,7 @@ class RegistrySchemaProvider(SchemaProvider):
         name:
             Table name to check.
 
-        Returns
+        Returns:
         -------
         bool
             True when the table exists.
@@ -296,7 +287,7 @@ class RegistrySchemaProvider(SchemaProvider):
     def table_names(self) -> set[str]:
         """Return available table names.
 
-        Returns
+        Returns:
         -------
         set[str]
             Registered table names.
@@ -364,7 +355,7 @@ class RegistryCatalogProvider(CatalogProvider):
         name:
             Schema name to resolve.
 
-        Returns
+        Returns:
         -------
         datafusion.catalog.Schema | None
             Resolved schema when available.
@@ -378,7 +369,7 @@ class RegistryCatalogProvider(CatalogProvider):
     def schema_names(self) -> set[str]:
         """Return available schema names.
 
-        Returns
+        Returns:
         -------
         set[str]
             Available schema names.
@@ -445,7 +436,7 @@ class MultiRegistryCatalogProvider(CatalogProvider):
         name:
             Schema name to resolve.
 
-        Returns
+        Returns:
         -------
         datafusion.catalog.Schema | None
             Resolved schema provider when available.
@@ -461,7 +452,7 @@ class MultiRegistryCatalogProvider(CatalogProvider):
     def schema_names(self) -> set[str]:
         """Return available schema names.
 
-        Returns
+        Returns:
         -------
         set[str]
             Schema names exposed by the provider.
@@ -492,7 +483,7 @@ def register_registry_catalog(
     runtime_profile:
         Optional runtime profile for provider resolution defaults.
 
-    Returns
+    Returns:
     -------
     RegistryCatalogProvider
         Registered catalog provider.
@@ -533,7 +524,7 @@ def register_registry_catalogs(
     runtime_profile:
         Optional runtime profile for provider resolution defaults.
 
-    Returns
+    Returns:
     -------
     MultiRegistryCatalogProvider
         Registered catalog provider.

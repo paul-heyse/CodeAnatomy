@@ -75,7 +75,7 @@ class SymtableContext:
     def file_id(self) -> str:
         """Return the file id for this extraction context.
 
-        Returns
+        Returns:
         -------
         str
             File id from the file context.
@@ -86,7 +86,7 @@ class SymtableContext:
     def path(self) -> str:
         """Return the file path for this extraction context.
 
-        Returns
+        Returns:
         -------
         str
             File path from the file context.
@@ -97,7 +97,7 @@ class SymtableContext:
     def file_sha256(self) -> str | None:
         """Return the file sha256 for this extraction context.
 
-        Returns
+        Returns:
         -------
         str | None
             File hash from the file context.
@@ -107,7 +107,7 @@ class SymtableContext:
     def identity_row(self) -> dict[str, str | None]:
         """Return the identity row for this context.
 
-        Returns
+        Returns:
         -------
         dict[str, str | None]
             File identity columns for row construction.
@@ -771,7 +771,7 @@ def extract_symtable(
 ) -> ExtractResult[TableLike]:
     """Extract symbol table artifacts from repository files.
 
-    Returns
+    Returns:
     -------
     ExtractResult[TableLike]
         Nested symtable file table.
@@ -821,7 +821,7 @@ def extract_symtable_plans(
 ) -> dict[str, DataFusionPlanBundle]:
     """Extract symbol table plans from repository files.
 
-    Returns
+    Returns:
     -------
     dict[str, DataFusionPlanBundle]
         Plan bundle keyed by symtable outputs.
@@ -906,7 +906,7 @@ def extract_symtables_table(
         Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx, profile,
         prefer_reader).
 
-    Returns
+    Returns:
     -------
     TableLike | RecordBatchReaderLike
         Symtable extraction output.

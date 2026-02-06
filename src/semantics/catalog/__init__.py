@@ -4,7 +4,7 @@ This module provides the semantic dataset rows, dataset specs, and tag helpers
 used across the semantic-compile pipeline. View registration is IR-driven and
 no longer uses a catalog registry.
 
-Example
+Example:
 -------
 >>> # Access dataset rows with operational metadata
 >>> from semantics.catalog import dataset_row, get_semantic_dataset_rows

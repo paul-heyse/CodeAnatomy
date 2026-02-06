@@ -10,7 +10,7 @@ IS_STUB: bool = True
 def plugin_library_path() -> str:
     """Return a placeholder plugin library path for stubs.
 
-    Returns
+    Returns:
     -------
     str
         Empty string placeholder.
@@ -21,7 +21,7 @@ def plugin_library_path() -> str:
 def plugin_manifest(path: str | None = None) -> dict[str, object]:
     """Return a stub plugin manifest payload.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Stub manifest payload.
@@ -38,7 +38,7 @@ def _stub_expr(*values: object) -> Expr:
     *values
         Values referenced to satisfy unused-argument checks.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -59,7 +59,7 @@ def load_df_plugin(path: str) -> object:
     path
         Plugin library path.
 
-    Returns
+    Returns:
     -------
     object
         Stub plugin handle instance.
@@ -108,7 +108,7 @@ def create_df_plugin_table_provider(
     options_json
         Optional provider options payload.
 
-    Returns
+    Returns:
     -------
     object
         Stub table provider capsule.
@@ -143,7 +143,7 @@ def install_function_factory(ctx: SessionContext, payload: bytes) -> None:
 def udf_expr(name: str, *args: object, ctx: SessionContext | None = None) -> Expr:
     """Return a stub expression for udf_expr.
 
-    Returns
+    Returns:
     -------
     Expr
         Stub expression instance.
@@ -168,7 +168,7 @@ def install_expr_planners(ctx: SessionContext, planners: object) -> None:
 def delta_scan_config_from_session(ctx: SessionContext, *_args: object) -> dict[str, object]:
     """Return a stub Delta scan config payload.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Stub Delta scan config payload.
@@ -188,7 +188,7 @@ def delta_scan_config_from_session(ctx: SessionContext, *_args: object) -> dict[
 def capabilities_snapshot() -> dict[str, object]:
     """Return a stub capabilities snapshot payload.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Stub capabilities snapshot payload.
@@ -212,7 +212,7 @@ def capabilities_snapshot() -> dict[str, object]:
 def arrow_stream_to_batches(obj: object) -> object:
     """Return a stub Arrow stream conversion result.
 
-    Returns
+    Returns:
     -------
     object
         Stub conversion result.
@@ -241,7 +241,7 @@ def registry_snapshot(ctx: SessionContext) -> dict[str, object]:
     ctx
         DataFusion session context.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Snapshot mapping with required keys.
@@ -274,7 +274,7 @@ def udf_docs_snapshot(ctx: SessionContext) -> dict[str, object]:
     ctx
         DataFusion session context.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Empty docs snapshot mapping.
@@ -291,7 +291,7 @@ def map_entries(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -307,7 +307,7 @@ def map_keys(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -323,7 +323,7 @@ def map_values(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -341,7 +341,7 @@ def map_extract(expr: Expr, key: str) -> Expr:
     key
         Map key to extract.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -359,7 +359,7 @@ def list_extract(expr: Expr, index: int) -> Expr:
     index
         List index to extract.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -375,7 +375,7 @@ def list_unique(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -391,7 +391,7 @@ def first_value_agg(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -407,7 +407,7 @@ def last_value_agg(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -423,7 +423,7 @@ def count_distinct_agg(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -441,7 +441,7 @@ def string_agg(value: Expr, delimiter: Expr) -> Expr:
     delimiter
         Delimiter expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -457,7 +457,7 @@ def row_number_window(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -473,7 +473,7 @@ def lag_window(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -489,7 +489,7 @@ def lead_window(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -507,7 +507,7 @@ def arrow_metadata(expr: Expr, key: str | None = None) -> Expr:
     key
         Optional metadata key.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -523,7 +523,7 @@ def union_tag(expr: Expr) -> Expr:
     expr
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -541,7 +541,7 @@ def union_extract(expr: Expr, tag: str) -> Expr:
     tag
         Union tag to extract.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -557,7 +557,7 @@ def stable_hash64(value: Expr) -> Expr:
     value
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -573,7 +573,7 @@ def stable_hash128(value: Expr) -> Expr:
     value
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -591,7 +591,7 @@ def prefixed_hash64(prefix: str, value: Expr) -> Expr:
     value
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -609,7 +609,7 @@ def stable_id(prefix: str, value: Expr) -> Expr:
     value
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -627,7 +627,7 @@ def semantic_tag(semantic_type: str, value: Expr) -> Expr:
     value
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -647,7 +647,7 @@ def stable_id_parts(prefix: str, part1: Expr, *parts: Expr) -> Expr:
     *parts
         Additional expression parts.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -667,7 +667,7 @@ def prefixed_hash_parts64(prefix: str, part1: Expr, *parts: Expr) -> Expr:
     *parts
         Additional expression parts.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -692,7 +692,7 @@ def stable_hash_any(
     null_sentinel
         Null sentinel value.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -722,7 +722,7 @@ def span_make(
     end_exclusive
         Optional end-exclusive flag expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -738,7 +738,7 @@ def span_len(span: Expr) -> Expr:
     span
         Span expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -756,7 +756,7 @@ def span_overlaps(span_a: Expr, span_b: Expr) -> Expr:
     span_b
         Second span expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -774,7 +774,7 @@ def span_contains(span_a: Expr, span_b: Expr) -> Expr:
     span_b
         Second span expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -801,7 +801,7 @@ def interval_align_score(
     right_end
         Right interval end expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -832,7 +832,7 @@ def span_id(
     kind
         Optional kind expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -860,7 +860,7 @@ def utf8_normalize(
     collapse_ws
         Whether to collapse whitespace.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -876,7 +876,7 @@ def utf8_null_if_blank(value: Expr) -> Expr:
     value
         Input expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -901,7 +901,7 @@ def qname_normalize(
     lang
         Optional language expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -921,7 +921,7 @@ def map_get_default(map_expr: Expr, key: str, default_value: Expr) -> Expr:
     default_value
         Default value expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -946,7 +946,7 @@ def map_normalize(
     sort_keys
         Whether to sort keys.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -962,7 +962,7 @@ def list_compact(list_expr: Expr) -> Expr:
     list_expr
         List expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -978,7 +978,7 @@ def list_unique_sorted(list_expr: Expr) -> Expr:
     list_expr
         List expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -996,7 +996,7 @@ def struct_pick(struct_expr: Expr, *fields: str) -> Expr:
     *fields
         Field names to select.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -1012,7 +1012,7 @@ def cdf_change_rank(change_type: Expr) -> Expr:
     change_type
         Change type expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -1028,7 +1028,7 @@ def cdf_is_upsert(change_type: Expr) -> Expr:
     change_type
         Change type expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -1044,7 +1044,7 @@ def cdf_is_delete(change_type: Expr) -> Expr:
     change_type
         Change type expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.
@@ -1064,7 +1064,7 @@ def col_to_byte(line_text: Expr, col_index: Expr, col_unit: Expr) -> Expr:
     col_unit
         Column unit expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Placeholder expression.

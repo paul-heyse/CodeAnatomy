@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 class EdgeValidationResult(StructBaseStrict, frozen=True):
     """Result of validating a single edge's requirements.
 
-    Attributes
+    Attributes:
     ----------
     source_name : str
         Name of the source evidence dataset.
@@ -60,7 +60,7 @@ class EdgeValidationResult(StructBaseStrict, frozen=True):
 class TaskValidationResult(StructBaseStrict, frozen=True):
     """Result of validating all edges for a task.
 
-    Attributes
+    Attributes:
     ----------
     task_name : str
         Name of the task being validated.
@@ -84,7 +84,7 @@ class TaskValidationResult(StructBaseStrict, frozen=True):
 class GraphValidationSummary(StructBaseStrict, frozen=True):
     """Summary of validation across all tasks in a graph.
 
-    Attributes
+    Attributes:
     ----------
     total_tasks : int
         Total number of tasks validated.
@@ -131,7 +131,7 @@ def validate_edge_requirements(
     catalog : EvidenceCatalog
         Evidence catalog with available datasets and columns.
 
-    Returns
+    Returns:
     -------
     bool
         True if all predecessor edge requirements are satisfied.
@@ -184,27 +184,16 @@ def validate_edge_requirements_detailed(
 ) -> TaskValidationResult:
     """Validate predecessor edges with detailed results.
 
-    Similar to validate_edge_requirements but returns detailed information
-    about which requirements are missing from which edges.
+    Args:
+        graph: Description.
+            task_idx: Description.
+            catalog: Description.
 
-    Parameters
-    ----------
-    graph : TaskGraph
-        The task graph containing the task.
-    task_idx : int
-        Node index of the task to validate.
-    catalog : EvidenceCatalog
-        Evidence catalog with available datasets and columns.
+    Returns:
+        TaskValidationResult: Result.
 
-    Returns
-    -------
-    TaskValidationResult
-        Detailed validation result for the task.
-
-    Raises
-    ------
-    TypeError
-        Raised when the graph node at task_idx is not a TaskNode.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     node = graph.graph[task_idx]
     if not isinstance(node, GraphNode) or not isinstance(node.payload, TaskNode):
@@ -356,7 +345,7 @@ def validate_graph_edges(
     catalog : EvidenceCatalog
         Evidence catalog with available datasets and columns.
 
-    Returns
+    Returns:
     -------
     GraphValidationSummary
         Summary of validation across all tasks.
@@ -470,7 +459,7 @@ def ready_tasks_with_column_validation(
     completed : set[str]
         Set of completed task names.
 
-    Returns
+    Returns:
     -------
     Sequence[str]
         Names of tasks ready for execution.

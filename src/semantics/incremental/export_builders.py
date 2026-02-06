@@ -30,7 +30,7 @@ def _empty_exported_defs(ctx: SessionContext) -> DataFrame:
 def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame of exported definitions for incremental analysis.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Exported definitions DataFrame aligned to dim_exported_defs_v1.

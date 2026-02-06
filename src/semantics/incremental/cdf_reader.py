@@ -44,7 +44,7 @@ class CdfReadResult:
     used to update cursors after successful processing. The ``has_changes``
     flag indicates whether any changes were found in the version range.
 
-    Attributes
+    Attributes:
     ----------
     df
         DataFrame containing the CDF changes. May be empty if no changes
@@ -71,7 +71,7 @@ class CdfReadOptions:
     Groups optional parameters for CDF reads to simplify the function
     signature and provide a reusable configuration object.
 
-    Attributes
+    Attributes:
     ----------
     start_version
         Optional starting version (inclusive). If not provided and cursor
@@ -255,7 +255,7 @@ def read_cdf_changes(
         Validation may raise ``ValueError`` if ``cursor_store`` is set
         without ``dataset_name``.
 
-    Returns
+    Returns:
     -------
     CdfReadResult | None
         Result containing the CDF DataFrame and version info, or None if:
@@ -265,7 +265,7 @@ def read_cdf_changes(
         - The table version could not be determined
         - The start version is greater than the end version (no changes)
 
-    Examples
+    Examples:
     --------
     Read all CDF changes from version 0 to latest:
 
@@ -360,7 +360,7 @@ def _table_exists(
     table_version_fn
         Callable that returns the Delta table version if available.
 
-    Returns
+    Returns:
     -------
     bool
         True if the table exists and is a valid Delta table.
@@ -396,7 +396,7 @@ def _resolve_start_version(
     dataset_name
         Dataset name for cursor lookup.
 
-    Returns
+    Returns:
     -------
     int
         Resolved starting version.
@@ -425,7 +425,7 @@ def _arrow_table_to_dataframe(
     table
         Arrow table to convert.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFusion DataFrame containing the table data.

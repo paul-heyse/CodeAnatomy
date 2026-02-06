@@ -44,7 +44,7 @@ def write_delta_table(
     options
         Optional seed configuration overrides.
 
-    Returns
+    Returns:
     -------
     tuple[DataFusionRuntimeProfile, SessionContext, Path]
         Runtime profile, session context, and Delta table path.

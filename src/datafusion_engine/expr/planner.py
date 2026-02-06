@@ -32,7 +32,7 @@ class ExprPlannerPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the ExprPlanner policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing ExprPlanner policy settings.
@@ -44,7 +44,7 @@ class ExprPlannerPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the ExprPlanner policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -54,7 +54,7 @@ class ExprPlannerPolicy(FingerprintableConfig):
     def to_payload(self) -> dict[str, object]:
         """Return a policy payload for IPC serialization.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Policy payload for IPC serialization.
@@ -67,7 +67,7 @@ def default_expr_planner_policy(
 ) -> ExprPlannerPolicy:
     """Return the default ExprPlanner policy.
 
-    Returns
+    Returns:
     -------
     ExprPlannerPolicy
         Policy describing ExprPlanner names to install.
@@ -84,17 +84,12 @@ def _policy_payload(policy: ExprPlannerPolicy) -> str:
 def _load_extension() -> object:
     """Import the native DataFusion extension module.
 
-    Returns
-    -------
-    object
-        Imported DataFusion extension module.
+    Returns:
+        object: Result.
 
-    Raises
-    ------
-    ImportError
-        Raised when the extension module is unavailable.
-    ModuleNotFoundError
-        Raised when a nested dependency import fails.
+    Raises:
+        ImportError: If the operation cannot be completed.
+            ModuleNotFoundError: If the operation cannot be completed.
     """
     for module_name in ("datafusion._internal", "datafusion_ext"):
         try:
@@ -158,19 +153,13 @@ def install_expr_planners(
 ) -> None:
     """Install ExprPlanner hooks for named-argument support.
 
-    Parameters
-    ----------
-    ctx:
-        DataFusion SessionContext for extension installation.
-    planner_names:
-        ExprPlanner identifiers to register.
+    Args:
+        ctx: Description.
+        planner_names: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when no planner names are provided.
-    TypeError
-        Raised when the DataFusion extension entrypoint is unavailable.
+    Raises:
+        TypeError: If the operation cannot be completed.
+        ValueError: If the operation cannot be completed.
     """
     if not planner_names:
         msg = "ExprPlanner installation requires at least one planner name."
@@ -190,7 +179,7 @@ def install_expr_planners(
 def expr_planner_payloads(planner_names: Sequence[str]) -> Mapping[str, object]:
     """Return a structured payload for ExprPlanner settings.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Structured payload of expr planner settings.

@@ -1,5 +1,4 @@
-"""
-Streaming execution via Arrow C Stream protocol.
+"""Streaming execution via Arrow C Stream protocol.
 
 Provides zero-copy streaming access to DataFusion query results
 without full materialization, enabling efficient processing of large
@@ -40,8 +39,7 @@ class PipeToDatasetOptions:
 
 @dataclass(frozen=True)
 class StreamingExecutionResult:
-    """
-    Lazy execution result that can be consumed as Arrow stream OR collected.
+    """Lazy execution result that can be consumed as Arrow stream OR collected.
 
     Implements deferred materialization - no data is executed until
     a terminal operation (to_table, to_polars, pipe_to_*) is called.
@@ -51,7 +49,7 @@ class StreamingExecutionResult:
     df : DataFrame
         DataFusion DataFrame to stream.
 
-    Examples
+    Examples:
     --------
     >>> result = StreamingExecutionResult(df=ctx.sql("SELECT * FROM tbl"))
     >>> # Stream to partitioned dataset
@@ -64,10 +62,9 @@ class StreamingExecutionResult:
 
     @property
     def schema(self) -> pa.Schema:
-        """
-        Get schema without executing.
+        """Get schema without executing.
 
-        Returns
+        Returns:
         -------
         pa.Schema
             Arrow schema of the result.
@@ -94,19 +91,18 @@ class StreamingExecutionResult:
         return None
 
     def to_arrow_stream(self) -> pa.RecordBatchReader:
-        """
-        Zero-copy streaming via Arrow C Stream protocol.
+        """Zero-copy streaming via Arrow C Stream protocol.
 
         DataFusion DataFrames implement __arrow_c_stream__,
         allowing direct consumption as Arrow RecordBatchReader
         without intermediate serialization.
 
-        Returns
+        Returns:
         -------
         pa.RecordBatchReader
             Streaming reader over query results.
 
-        Notes
+        Notes:
         -----
         This method enables zero-copy data transfer from DataFusion
         to PyArrow using the Arrow C Stream interface.
@@ -117,15 +113,14 @@ class StreamingExecutionResult:
         return pa.RecordBatchReader.from_stream(self.df)
 
     def to_batches(self) -> Iterator[pa.RecordBatch]:
-        """
-        Iterate over record batches.
+        """Iterate over record batches.
 
-        Yields
+        Yields:
         ------
         pa.RecordBatch
             Record batches from the query result.
 
-        Notes
+        Notes:
         -----
         Actual batch sizes depend on upstream operators and
         DataFusion's execution plan configuration.
@@ -134,15 +129,14 @@ class StreamingExecutionResult:
         yield from reader
 
     def to_table(self) -> pa.Table:
-        """
-        Materialize full result as Arrow Table.
+        """Materialize full result as Arrow Table.
 
-        Returns
+        Returns:
         -------
         pa.Table
             Materialized table with all query results.
 
-        Warnings
+        Warnings:
         --------
         This method materializes the entire result in memory.
         For large datasets, prefer streaming methods.
@@ -153,15 +147,14 @@ class StreamingExecutionResult:
         )
 
     def to_polars(self) -> pl.DataFrame:
-        """
-        Materialize as polars DataFrame.
+        """Materialize as polars DataFrame.
 
-        Returns
+        Returns:
         -------
         pl.DataFrame
             Polars DataFrame with all query results.
 
-        Warnings
+        Warnings:
         --------
         This method materializes the entire result in memory.
         For large datasets, prefer streaming methods.
@@ -176,8 +169,7 @@ class StreamingExecutionResult:
         *,
         options: PipeToDatasetOptions | None = None,
     ) -> None:
-        """
-        Stream partitioned dataset to disk.
+        """Stream partitioned dataset to disk.
 
         Writes results as a partitioned dataset using PyArrow's
         dataset API. Supports Hive-style partitioning and custom
@@ -190,7 +182,7 @@ class StreamingExecutionResult:
         options : PipeToDatasetOptions | None
             Dataset streaming configuration.
 
-        Examples
+        Examples:
         --------
         >>> result.pipe_to_dataset(
         ...     "/data/events",
@@ -224,8 +216,7 @@ class StreamingExecutionResult:
 
 
 class StreamingExecutor:
-    """
-    Executor that produces streaming results.
+    """Executor that produces streaming results.
 
     All execution paths return StreamingExecutionResult,
     deferring materialization to the caller. This enables
@@ -237,7 +228,7 @@ class StreamingExecutor:
     ctx : SessionContext
         DataFusion session context.
 
-    Examples
+    Examples:
     --------
     >>> from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     >>> profile = DataFusionRuntimeProfile()
@@ -253,8 +244,7 @@ class StreamingExecutor:
         *,
         sql_options: SQLOptions | None = None,
     ) -> None:
-        """
-        Initialize streaming executor.
+        """Initialize streaming executor.
 
         Parameters
         ----------
@@ -273,32 +263,18 @@ class StreamingExecutor:
         sql_options: SQLOptions | None = None,
         **params: Any,
     ) -> StreamingExecutionResult:
-        """
-        Execute SQL and return streaming result.
+        """Execute SQL and return streaming result.
 
-        Parameters
-        ----------
-        sql : str
-            SQL query to execute.
-        sql_options : SQLOptions | None, optional
-            Optional SQL options to override the executor defaults.
-        **params
-            Query parameters for parameterized queries.
+        Args:
+            sql: Description.
+                    sql_options: Description.
+                    **params: Description.
 
-        Returns
-        -------
-        StreamingExecutionResult
-            Streaming result wrapper.
+        Returns:
+            StreamingExecutionResult: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when scalar parameters are provided for SQL execution.
-
-        Examples
-        --------
-        >>> result = executor.execute_sql("SELECT * FROM tbl WHERE id = $1", $1=42)
-        >>> table = result.to_table()
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         resolved_options = sql_options or self.sql_options
         from datafusion_engine.tables.param import register_table_params, resolve_param_bindings
@@ -315,20 +291,19 @@ class StreamingExecutor:
         self,
         table_name: str,
     ) -> StreamingExecutionResult:
-        """
-        Get streaming result from registered table.
+        """Get streaming result from registered table.
 
         Parameters
         ----------
         table_name : str
             Name of registered table.
 
-        Returns
+        Returns:
         -------
         StreamingExecutionResult
             Streaming result wrapper.
 
-        Examples
+        Examples:
         --------
         >>> from datafusion_engine.session.facade import DataFusionExecutionFacade
         >>> from datafusion_engine.dataset.registry import DatasetLocation

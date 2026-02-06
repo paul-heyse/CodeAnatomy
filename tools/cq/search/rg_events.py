@@ -20,7 +20,7 @@ _RG_DECODER = msgspec.json.Decoder(type=RgEvent)
 def decode_rg_event(line: str | bytes) -> RgEvent | None:
     """Decode a ripgrep JSON event line.
 
-    Returns
+    Returns:
     -------
     RgEvent | None
         Decoded event, or None when decoding fails.

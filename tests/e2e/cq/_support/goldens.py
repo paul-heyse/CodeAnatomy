@@ -22,7 +22,7 @@ def _normalize_result_for_snapshot(result: CqResult) -> dict[str, Any]:
     result : CqResult
         Query result to normalize.
 
-    Returns
+    Returns:
     -------
     dict[str, Any]
         Normalized result dictionary suitable for snapshot comparison.
@@ -74,7 +74,7 @@ def _result_to_dict(result: CqResult) -> dict[str, Any]:
     result : CqResult
         Query result to convert.
 
-    Returns
+    Returns:
     -------
     dict[str, Any]
         Result as dictionary.
@@ -92,19 +92,13 @@ def assert_json_snapshot(
 ) -> None:
     """Assert that actual result matches the golden JSON snapshot.
 
-    Parameters
-    ----------
-    fixture_name : str
-        Name of the fixture file (relative to fixtures directory).
-    actual : CqResult
-        Actual query result to compare.
-    update : bool
-        If True, update the golden file instead of asserting.
+    Args:
+        fixture_name: Description.
+        actual: Description.
+        update: Description.
 
-    Raises
-    ------
-    AssertionError
-        When actual does not match expected and update is False.
+    Raises:
+        AssertionError: If the operation cannot be completed.
     """
     fixture_path = GOLDENS_DIR / fixture_name
 
@@ -145,20 +139,14 @@ def assert_json_snapshot(
 def load_golden_query_spec(fixture_name: str) -> dict[str, Any]:
     """Load a golden query specification fixture.
 
-    Parameters
-    ----------
-    fixture_name : str
-        Name of the fixture file (relative to fixtures directory).
+    Args:
+        fixture_name: Description.
 
-    Returns
-    -------
-    dict[str, Any]
-        Golden query specification.
+    Returns:
+        dict[str, Any]: Result.
 
-    Raises
-    ------
-    FileNotFoundError
-        If fixture file does not exist.
+    Raises:
+        FileNotFoundError: If the operation cannot be completed.
     """
     fixture_path = GOLDENS_DIR / fixture_name
 

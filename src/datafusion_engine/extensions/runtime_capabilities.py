@@ -55,7 +55,7 @@ def collect_delta_compatibility(
 ) -> DeltaCompatibilitySnapshot:
     """Collect Delta extension compatibility diagnostics.
 
-    Returns
+    Returns:
     -------
     DeltaCompatibilitySnapshot
         Compatibility status and probe metadata for the Delta extension.
@@ -81,7 +81,7 @@ def collect_extension_plugin_snapshot(
 ) -> ExtensionPluginSnapshot:
     """Collect plugin-manifest and capability snapshot diagnostics.
 
-    Returns
+    Returns:
     -------
     ExtensionPluginSnapshot
         Plugin manifest data, capability snapshot payload, and probe errors.
@@ -108,7 +108,7 @@ def build_runtime_capabilities_snapshot(
 ) -> RuntimeCapabilitiesSnapshot:
     """Build the runtime capabilities snapshot payload.
 
-    Returns
+    Returns:
     -------
     RuntimeCapabilitiesSnapshot
         Canonical runtime-capabilities snapshot payload.
@@ -132,7 +132,7 @@ def build_runtime_capabilities_snapshot(
 def runtime_capabilities_payload(snapshot: RuntimeCapabilitiesSnapshot) -> dict[str, object]:
     """Return a legacy-compatible runtime capabilities payload mapping.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Event payload emitted to diagnostics sinks.

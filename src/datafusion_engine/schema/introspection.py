@@ -53,7 +53,7 @@ def schema_map_fingerprint_from_mapping(mapping: SchemaMapping) -> str:
     mapping : SchemaMapping
         Nested schema mapping structure.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 fingerprint for the schema map payload.
@@ -69,7 +69,7 @@ def schema_map_fingerprint(introspector: SchemaIntrospector) -> str:
     introspector : SchemaIntrospector
         Schema introspector providing the schema mapping.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 fingerprint for the schema mapping payload.
@@ -86,7 +86,7 @@ def schema_contract_from_table(
 ) -> SchemaContract:
     """Return a SchemaContract derived from a DataFusion table schema.
 
-    Returns
+    Returns:
     -------
     SchemaContract
         Schema contract derived from the catalog schema.
@@ -314,7 +314,7 @@ def table_names_snapshot(
 ) -> set[str]:
     """Return registered table names from information_schema.
 
-    Returns
+    Returns:
     -------
     set[str]
         Set of table names registered in the session.
@@ -345,7 +345,7 @@ def settings_snapshot_table(
 ) -> pa.Table:
     """Return session settings as a pyarrow.Table.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Table of settings from information_schema.df_settings.
@@ -361,7 +361,7 @@ def tables_snapshot_table(
 ) -> pa.Table:
     """Return table inventory rows as a pyarrow.Table.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Table inventory from information_schema.tables.
@@ -593,7 +593,7 @@ def routines_snapshot_table(
 ) -> pa.Table:
     """Return information_schema.routines as a pyarrow.Table.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Routine inventory from information_schema.routines.
@@ -614,7 +614,7 @@ def parameters_snapshot_table(
 ) -> pa.Table | None:
     """Return information_schema.parameters as a pyarrow.Table when available.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table | None
         Parameter inventory from information_schema.parameters, or None if unavailable.
@@ -639,7 +639,7 @@ def table_constraint_rows(
 ) -> list[dict[str, object]]:
     """Return constraint metadata rows for a table when available.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Rows including constraint type and column names where available.
@@ -683,7 +683,7 @@ def constraint_rows(
 ) -> list[dict[str, object]]:
     """Return constraint metadata rows across tables.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Rows including constraint type and column names where available.
@@ -695,27 +695,12 @@ def constraint_rows(
 def schema_from_table(ctx: SessionContext, name: str) -> pa.Schema:
     """Return Arrow schema from DataFusion catalog for a table.
 
-    This is the canonical schema discovery method for DataFusion-registered tables.
-    Schema resolution uses ctx.table(name).schema() to query DataFusion's catalog
-    and TableProvider metadata. All downstream schema validation, contract checking,
-    and DDL generation should source schemas through this function or SchemaIntrospector.
+    Args:
+        ctx: Description.
+        name: Description.
 
-    Parameters
-    ----------
-    ctx : SessionContext
-        DataFusion session context.
-    name : str
-        Table name registered in the catalog.
-
-    Returns
-    -------
-    pyarrow.Schema
-        Arrow schema resolved from DataFusion catalog.
-
-    Raises
-    ------
-    TypeError
-        Raised when the schema cannot be resolved to an Arrow schema.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     df = ctx.table(name)
     schema = coerce_arrow_schema(df.schema())
@@ -728,20 +713,14 @@ def schema_from_table(ctx: SessionContext, name: str) -> pa.Schema:
 def _table_name_from_ddl(ddl: str) -> str:
     """Extract table name from CREATE EXTERNAL TABLE DDL.
 
-    Parameters
-    ----------
-    ddl : str
-        CREATE EXTERNAL TABLE DDL statement.
+    Args:
+        ddl: Description.
 
-    Returns
-    -------
-    str
-        Extracted table name.
+    Returns:
+        str: Result.
 
-    Raises
-    ------
-    ValueError
-        If the table name cannot be extracted from the DDL.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     lines = ddl.split("\n")
     for line in lines:
@@ -791,7 +770,7 @@ class SchemaIntrospector:
     def invalidate_cache(self, *, tag: str | None = None) -> int:
         """Evict cached schema rows for this introspector.
 
-        Returns
+        Returns:
         -------
         int
             Count of evicted cache entries.
@@ -807,17 +786,12 @@ class SchemaIntrospector:
     def describe_query(self, sql: str) -> list[dict[str, object]]:
         """Return the computed output schema for a SQL query.
 
-        Returns
-        -------
-        list[dict[str, object]]
-            ``DESCRIBE`` rows for the query.
+        Args:
+            sql: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when the SQL cannot be parsed for schema introspection.
-        TypeError
-            Raised when the DataFusion schema cannot be resolved to PyArrow.
+        Raises:
+            TypeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
         """
         cache = self.cache
         payload = {"sql": sql}
@@ -850,7 +824,7 @@ class SchemaIntrospector:
     def table_columns(self, table_name: str) -> list[dict[str, object]]:
         """Return column metadata from information_schema for a table.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Column metadata rows for the table.
@@ -879,7 +853,7 @@ class SchemaIntrospector:
     def table_columns_with_ordinal(self, table_name: str) -> list[dict[str, object]]:
         """Return ordered column metadata rows for a table.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Column metadata rows ordered by ordinal position.
@@ -923,7 +897,7 @@ class SchemaIntrospector:
     def tables_snapshot(self) -> list[dict[str, object]]:
         """Return table inventory rows from information_schema.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Table inventory rows including catalog/schema/type.
@@ -943,7 +917,7 @@ class SchemaIntrospector:
     def schemata_snapshot(self) -> list[dict[str, object]]:
         """Return schema inventory rows from information_schema.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Schema inventory rows including catalog and schema names.
@@ -960,7 +934,7 @@ class SchemaIntrospector:
     def columns_snapshot(self) -> list[dict[str, object]]:
         """Return all column metadata rows from information_schema.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Column metadata rows for all tables.
@@ -993,7 +967,7 @@ class SchemaIntrospector:
         table_name : str
             Table name registered in the catalog.
 
-        Returns
+        Returns:
         -------
         pyarrow.Schema
             Arrow schema resolved from DataFusion catalog.
@@ -1003,7 +977,7 @@ class SchemaIntrospector:
     def routines_snapshot(self) -> list[dict[str, object]]:
         """Return routine inventory rows from information_schema.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Routine inventory rows including name and type.
@@ -1027,7 +1001,7 @@ class SchemaIntrospector:
     def parameters_snapshot(self) -> list[dict[str, object]]:
         """Return routine parameter rows from information_schema.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Parameter metadata rows including names and data types.
@@ -1058,7 +1032,7 @@ class SchemaIntrospector:
     ) -> list[dict[str, object]]:
         """Return a stable snapshot of DataFusion function metadata.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Sorted function catalog entries derived from information_schema.
@@ -1084,7 +1058,7 @@ class SchemaIntrospector:
     def function_names(self) -> set[str]:
         """Return function names from information_schema.routines.
 
-        Returns
+        Returns:
         -------
         set[str]
             Function name set from information_schema.
@@ -1102,7 +1076,7 @@ class SchemaIntrospector:
     def settings_snapshot(self) -> list[dict[str, object]]:
         """Return session settings from information_schema.df_settings.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Session settings rows with name/value pairs.
@@ -1116,7 +1090,7 @@ class SchemaIntrospector:
     def table_column_defaults(self, table_name: str) -> dict[str, object]:
         """Return column default metadata for a table when available.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Mapping of column names to default expressions.
@@ -1138,7 +1112,7 @@ class SchemaIntrospector:
     def table_column_names(self, table_name: str) -> set[str]:
         """Return column names for a table from information_schema.
 
-        Returns
+        Returns:
         -------
         set[str]
             Column name set for the table.
@@ -1153,7 +1127,7 @@ class SchemaIntrospector:
     def table_logical_plan(self, table_name: str) -> str | None:
         """Return a logical plan description for a table when available.
 
-        Returns
+        Returns:
         -------
         str | None
             Logical plan description when available.
@@ -1176,7 +1150,7 @@ class SchemaIntrospector:
         table_name
             Table name to describe.
 
-        Returns
+        Returns:
         -------
         str | None
             CREATE TABLE statement when available.
@@ -1192,7 +1166,7 @@ class SchemaIntrospector:
         table_name
             Table name to inspect.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Constraint expressions or identifiers.
@@ -1220,7 +1194,7 @@ class SchemaIntrospector:
         Delegates to the underlying IntrospectionSnapshot.schema_map() method
         to provide a mapping of table names to their columns and types.
 
-        Returns
+        Returns:
         -------
         dict[str, dict[str, str]]
             Mapping of table_name -> {column_name: data_type}.
@@ -1238,15 +1212,12 @@ def find_struct_field_keys(
 ) -> tuple[str, ...]:
     """Return struct field keys for the first matching nested field.
 
-    Returns
-    -------
-    tuple[str, ...]
-        Struct field names for the matched nested field.
+    Args:
+        schema: Description.
+        field_names: Description.
 
-    Raises
-    ------
-    KeyError
-        Raised when no matching struct field is found in the schema.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     for schema_field in schema:
         keys = _find_struct_keys_in_type(schema_field.type, field_names=field_names)
@@ -1303,7 +1274,7 @@ def _function_catalog_sort_key(row: Mapping[str, object]) -> tuple[str, str]:
 def catalogs_snapshot(introspector: SchemaIntrospector) -> list[dict[str, object]]:
     """Return catalog inventory rows from information_schema.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Catalog inventory rows.

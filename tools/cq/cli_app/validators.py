@@ -8,22 +8,15 @@ from pathlib import Path
 def validate_path_exists(path: Path, *, name: str = "path") -> Path:
     """Validate that a path exists.
 
-    Parameters
-    ----------
-    path
-        Path to validate.
-    name
-        Parameter name for error message.
+    Args:
+        path: Path value to validate.
+        name: Label used in validation errors.
 
-    Returns
-    -------
-    Path
-        Validated path.
+    Returns:
+        Path: The validated path.
 
-    Raises
-    ------
-    ValueError
-        If path does not exist.
+    Raises:
+        ValueError: If the path does not exist.
     """
     if not path.exists():
         msg = f"{name} does not exist: {path}"
@@ -34,22 +27,15 @@ def validate_path_exists(path: Path, *, name: str = "path") -> Path:
 def validate_positive_int(value: int, *, name: str = "value") -> int:
     """Validate that an integer is positive.
 
-    Parameters
-    ----------
-    value
-        Value to validate.
-    name
-        Parameter name for error message.
+    Args:
+        value: Integer value to validate.
+        name: Label used in validation errors.
 
-    Returns
-    -------
-    int
-        Validated value.
+    Returns:
+        int: The validated integer.
 
-    Raises
-    ------
-    ValueError
-        If value is not positive.
+    Raises:
+        ValueError: If the integer is not positive.
     """
     if value <= 0:
         msg = f"{name} must be positive, got: {value}"
@@ -60,20 +46,14 @@ def validate_positive_int(value: int, *, name: str = "value") -> int:
 def validate_target_spec(value: str) -> tuple[str, str]:
     """Validate and parse a target spec string.
 
-    Parameters
-    ----------
-    value
-        Target spec string like 'function:foo'.
+    Args:
+        value: Target specification in `kind:value` form.
 
-    Returns
-    -------
-    tuple[str, str]
-        Tuple of (kind, target_value).
+    Returns:
+        tuple[str, str]: Parsed target kind and target value.
 
-    Raises
-    ------
-    ValueError
-        If format is invalid.
+    Raises:
+        ValueError: If the target format, kind, or value is invalid.
     """
     if ":" not in value:
         msg = "Target spec must be in the form kind:value (e.g., function:foo)"

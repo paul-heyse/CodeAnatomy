@@ -54,7 +54,7 @@ def extract_plan_fingerprint(
     inputs
         Required inputs for the task.
 
-    Returns
+    Returns:
     -------
     str
         Deterministic plan fingerprint.
@@ -71,7 +71,7 @@ def extract_plan_fingerprint(
 def build_extract_tasks() -> tuple[ExtractTaskSpec, ...]:
     """Return extract task specs derived from registry metadata.
 
-    Returns
+    Returns:
     -------
     tuple[ExtractTaskSpec, ...]
         Extract task specs by extractor template.
@@ -96,7 +96,7 @@ def build_extract_tasks() -> tuple[ExtractTaskSpec, ...]:
 def extract_output_tasks() -> tuple[ExtractOutputTask, ...]:
     """Return extract output tasks derived from extractor specs.
 
-    Returns
+    Returns:
     -------
     tuple[ExtractOutputTask, ...]
         Output-scoped task specs for extract scheduling.
@@ -108,7 +108,7 @@ def extract_output_tasks() -> tuple[ExtractOutputTask, ...]:
 def extract_output_task_map() -> Mapping[str, ExtractOutputTask]:
     """Return extract output tasks keyed by dataset name.
 
-    Returns
+    Returns:
     -------
     Mapping[str, ExtractOutputTask]
         Mapping of output dataset name to extract task specification.
@@ -119,7 +119,7 @@ def extract_output_task_map() -> Mapping[str, ExtractOutputTask]:
 def extract_inferred_deps() -> tuple[InferredDeps, ...]:
     """Return inferred dependency records for extract outputs.
 
-    Returns
+    Returns:
     -------
     tuple[InferredDeps, ...]
         Inferred dependency entries for extract tasks.
@@ -141,7 +141,7 @@ def extract_inferred_deps() -> tuple[InferredDeps, ...]:
 def extract_task_kind_map() -> dict[str, str]:
     """Return task kind mapping for extract outputs.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of task name to task kind label.

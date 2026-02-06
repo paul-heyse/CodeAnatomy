@@ -17,7 +17,7 @@ def cached_schema_identity_hash(dataset_name: str) -> str:
     dataset_name
         Name of the dataset to fingerprint.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 fingerprint of the dataset schema.
@@ -28,7 +28,7 @@ def cached_schema_identity_hash(dataset_name: str) -> str:
 def ast_files_fingerprint() -> str:
     """Return cached schema fingerprint for AST dataset.
 
-    Returns
+    Returns:
     -------
     str
         Cached schema fingerprint.
@@ -39,7 +39,7 @@ def ast_files_fingerprint() -> str:
 def bytecode_files_fingerprint() -> str:
     """Return cached schema fingerprint for bytecode dataset.
 
-    Returns
+    Returns:
     -------
     str
         Cached schema fingerprint.
@@ -50,7 +50,7 @@ def bytecode_files_fingerprint() -> str:
 def libcst_files_fingerprint() -> str:
     """Return cached schema fingerprint for LibCST dataset.
 
-    Returns
+    Returns:
     -------
     str
         Cached schema fingerprint.
@@ -61,7 +61,7 @@ def libcst_files_fingerprint() -> str:
 def symtable_files_fingerprint() -> str:
     """Return cached schema fingerprint for symtable dataset.
 
-    Returns
+    Returns:
     -------
     str
         Cached schema fingerprint.
@@ -72,7 +72,7 @@ def symtable_files_fingerprint() -> str:
 def tree_sitter_files_fingerprint() -> str:
     """Return cached schema fingerprint for tree-sitter dataset.
 
-    Returns
+    Returns:
     -------
     str
         Cached schema fingerprint.
@@ -83,7 +83,7 @@ def tree_sitter_files_fingerprint() -> str:
 def repo_file_blobs_fingerprint() -> str:
     """Return cached schema fingerprint for repo blob dataset.
 
-    Returns
+    Returns:
     -------
     str
         Cached schema fingerprint.
@@ -94,7 +94,7 @@ def repo_file_blobs_fingerprint() -> str:
 def repo_files_fingerprint() -> str:
     """Return cached schema fingerprint for repo files dataset.
 
-    Returns
+    Returns:
     -------
     str
         Cached schema fingerprint.
@@ -105,7 +105,7 @@ def repo_files_fingerprint() -> str:
 def file_line_index_fingerprint() -> str:
     """Return cached schema fingerprint for line index dataset.
 
-    Returns
+    Returns:
     -------
     str
         Cached schema fingerprint.

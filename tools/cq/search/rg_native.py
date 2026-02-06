@@ -29,7 +29,7 @@ class RgProcessResult:
 def detect_rg_version() -> tuple[bool, str | None]:
     """Detect whether ``rg`` is available and return a version banner.
 
-    Returns
+    Returns:
     -------
     tuple[bool, str | None]
         Availability and first version banner line.
@@ -49,7 +49,7 @@ def detect_rg_version() -> tuple[bool, str | None]:
 def detect_rg_types() -> set[str]:
     """Return declared ripgrep type names from ``rg --type-list``.
 
-    Returns
+    Returns:
     -------
     set[str]
         Declared ripgrep file type names.
@@ -82,7 +82,7 @@ def build_rg_command(  # noqa: PLR0913
 ) -> list[str]:
     """Build a deterministic ``rg --json`` command.
 
-    Returns
+    Returns:
     -------
     list[str]
         Shell argv for ripgrep invocation.
@@ -126,7 +126,7 @@ def run_rg_json(  # noqa: PLR0913
 ) -> RgProcessResult:
     """Run native ``rg --json`` and decode events.
 
-    Returns
+    Returns:
     -------
     RgProcessResult
         Process metadata and decoded event stream.

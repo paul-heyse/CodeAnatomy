@@ -32,7 +32,7 @@ def schema_policy_for_dataset(
 ) -> SchemaPolicy:
     """Return the schema policy for an extract dataset.
 
-    Returns
+    Returns:
     -------
     SchemaPolicy
         Schema policy aligned to the dataset spec and runtime options.
@@ -118,7 +118,7 @@ def metadata_spec_for_dataset(
 ) -> SchemaMetadataSpec:
     """Return the metadata spec for an extract dataset.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec merged with runtime options.
@@ -134,7 +134,7 @@ def metadata_specs_for_datasets(
 ) -> Mapping[str, SchemaMetadataSpec]:
     """Return metadata specs for multiple datasets.
 
-    Returns
+    Returns:
     -------
     Mapping[str, SchemaMetadataSpec]
         Metadata spec map keyed by dataset name.
@@ -147,7 +147,7 @@ def metadata_specs_for_datasets(
 def apply_pipeline_kernels(_name: str, table: TableLike) -> TableLike:
     """Apply postprocess kernels for a dataset name.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table with pipeline kernels applied.
@@ -163,7 +163,7 @@ def finalize_context_for_dataset(
 ) -> FinalizeContext:
     """Return a finalize context for the dataset name.
 
-    Returns
+    Returns:
     -------
     FinalizeContext
         Finalize context configured with schema policy and contract.
@@ -187,7 +187,7 @@ def normalized_schema_policy_for_dataset(
 ) -> SchemaPolicy:
     """Return schema policy with information_schema column ordering applied.
 
-    Returns
+    Returns:
     -------
     SchemaPolicy
         Schema policy with ordered schema when available.
@@ -214,7 +214,7 @@ def validate_extract_output(
 ) -> FinalizeResult:
     """Validate an extract output, returning good/errors/stats tables.
 
-    Returns
+    Returns:
     -------
     FinalizeResult
         Finalize result with good, errors, stats, and alignment outputs.

@@ -52,7 +52,7 @@ class RunIdSpanProcessor(SpanProcessor):
         timeout_millis
             Timeout in milliseconds.
 
-        Returns
+        Returns:
         -------
         bool
             True if flush succeeded.
@@ -98,7 +98,7 @@ class RunIdLogRecordProcessor(LogRecordProcessor):
         timeout_millis
             Timeout in milliseconds.
 
-        Returns
+        Returns:
         -------
         bool
             True if flush succeeded.
@@ -137,7 +137,7 @@ class LogRecordAttributeLimitProcessor(LogRecordProcessor):
         timeout_millis
             Timeout in milliseconds.
 
-        Returns
+        Returns:
         -------
         bool
             True if flush succeeded.

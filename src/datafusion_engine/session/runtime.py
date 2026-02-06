@@ -370,7 +370,7 @@ def effective_catalog_autoload(
 ) -> tuple[str | None, str | None]:
     """Return effective catalog autoload settings for a profile.
 
-    Returns
+    Returns:
     -------
     tuple[str | None, str | None]
         Catalog location and file format.
@@ -381,7 +381,7 @@ def effective_catalog_autoload(
 def effective_ident_normalization(profile: DataFusionRuntimeProfile) -> bool:
     """Return whether identifier normalization is enabled for a profile.
 
-    Returns
+    Returns:
     -------
     bool
         True when identifier normalization is enabled.
@@ -392,7 +392,7 @@ def effective_ident_normalization(profile: DataFusionRuntimeProfile) -> bool:
 def supports_explain_analyze_level() -> bool:
     """Return whether explain analyze level is supported.
 
-    Returns
+    Returns:
     -------
     bool
         True when explain analyze level is supported.
@@ -405,7 +405,7 @@ def resolved_config_policy(
 ) -> DataFusionConfigPolicy | None:
     """Return resolved config policy for a profile.
 
-    Returns
+    Returns:
     -------
     DataFusionConfigPolicy | None
         Resolved policy or None.
@@ -418,7 +418,7 @@ def resolved_schema_hardening(
 ) -> SchemaHardeningProfile | None:
     """Return resolved schema hardening profile for a profile.
 
-    Returns
+    Returns:
     -------
     SchemaHardeningProfile | None
         Resolved schema hardening profile or None.
@@ -477,17 +477,12 @@ def delta_runtime_env_options(
 ) -> _DeltaRuntimeEnvOptions | None:
     """Return delta runtime env options for a profile.
 
-    Returns
-    -------
-    _DeltaRuntimeEnvOptions | None
-        Delta runtime env options or None.
+    Args:
+        profile: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when datafusion._internal is unavailable.
-    TypeError
-        Raised when delta runtime env options are unavailable.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
+        TypeError: If the operation cannot be completed.
     """
     if (
         profile.execution.delta_max_spill_size is None
@@ -576,7 +571,7 @@ def normalize_dataset_locations_for_profile(
 ) -> Mapping[str, DatasetLocation]:
     """Return normalize dataset locations derived from the output root.
 
-    Returns
+    Returns:
     -------
     Mapping[str, DatasetLocation]
         Mapping of normalize dataset names to locations, or empty mapping
@@ -605,7 +600,7 @@ def extract_output_locations_for_profile(
 ) -> Mapping[str, DatasetLocation]:
     """Return extract output dataset locations derived from the output root.
 
-    Returns
+    Returns:
     -------
     Mapping[str, DatasetLocation]
         Mapping of extract dataset names to locations, or empty mapping
@@ -632,7 +627,7 @@ def semantic_output_locations_for_profile(
 ) -> Mapping[str, DatasetLocation]:
     """Return semantic output dataset locations derived from the output root.
 
-    Returns
+    Returns:
     -------
     Mapping[str, DatasetLocation]
         Mapping of semantic output names to locations, or empty mapping
@@ -724,7 +719,7 @@ class DataFusionConfigPolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return the fingerprint payload for config settings.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing the DataFusion settings.
@@ -736,7 +731,7 @@ class DataFusionConfigPolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the config settings.
 
-        Returns
+        Returns:
         -------
         str
             Stable fingerprint hash.
@@ -746,7 +741,7 @@ class DataFusionConfigPolicy(StructBaseStrict, frozen=True):
     def apply(self, config: SessionConfig) -> SessionConfig:
         """Return a SessionConfig with policy settings applied.
 
-        Returns
+        Returns:
         -------
         datafusion.SessionConfig
             Session config with policy settings applied.
@@ -773,7 +768,7 @@ class DataFusionFeatureGates(StructBaseStrict, frozen=True):
     def settings(self) -> dict[str, str]:
         """Return DataFusion config settings for the feature gates.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Mapping of DataFusion config keys to string values.
@@ -802,7 +797,7 @@ class DataFusionFeatureGates(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for feature gate settings.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing feature gate settings.
@@ -819,7 +814,7 @@ class DataFusionFeatureGates(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return fingerprint for feature gate settings.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the feature gates.
@@ -841,7 +836,7 @@ class DataFusionJoinPolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return the fingerprint payload for join policy settings.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing join policy settings.
@@ -859,7 +854,7 @@ class DataFusionJoinPolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for join policy settings.
 
-        Returns
+        Returns:
         -------
         str
             Stable fingerprint hash.
@@ -869,7 +864,7 @@ class DataFusionJoinPolicy(StructBaseStrict, frozen=True):
     def settings(self) -> dict[str, str]:
         """Return DataFusion config settings for join preferences.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Mapping of DataFusion config keys to string values.
@@ -905,7 +900,7 @@ class DataFusionSettingsContract(StructBaseStrict, frozen=True):
     def apply(self, config: SessionConfig) -> SessionConfig:
         """Return a SessionConfig with settings and feature gates applied.
 
-        Returns
+        Returns:
         -------
         datafusion.SessionConfig
             Session config with settings applied.
@@ -931,7 +926,7 @@ class SchemaHardeningProfile(StructBaseStrict, frozen=True):
     def settings(self) -> dict[str, str]:
         """Return DataFusion settings for schema hardening.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Mapping of DataFusion config keys to string values.
@@ -959,7 +954,7 @@ class SchemaHardeningProfile(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return canonical payload for fingerprinting.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload used for profile fingerprinting.
@@ -978,7 +973,7 @@ class SchemaHardeningProfile(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the profile.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint string.
@@ -988,7 +983,7 @@ class SchemaHardeningProfile(StructBaseStrict, frozen=True):
     def apply(self, config: SessionConfig) -> SessionConfig:
         """Return SessionConfig with schema hardening settings applied.
 
-        Returns
+        Returns:
         -------
         datafusion.SessionConfig
             Updated session config with schema hardening settings.
@@ -1016,7 +1011,7 @@ class FeatureStateSnapshot(
     def to_row(self) -> dict[str, object]:
         """Return a row mapping for diagnostics sinks.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Row mapping for diagnostics table ingestion.
@@ -1038,7 +1033,7 @@ def feature_state_snapshot(
 ) -> FeatureStateSnapshot:
     """Build a feature state snapshot for diagnostics.
 
-    Returns
+    Returns:
     -------
     FeatureStateSnapshot
         Snapshot describing runtime feature state.
@@ -1076,7 +1071,7 @@ def named_args_supported(profile: DataFusionRuntimeProfile) -> bool:
     profile
         Runtime profile to evaluate.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when named arguments should be supported.
@@ -1106,7 +1101,7 @@ class _DataFusionExplainCollector:
     def snapshot(self) -> list[dict[str, object]]:
         """Return a snapshot of explain artifacts.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Collected explain artifacts.
@@ -1127,7 +1122,7 @@ class _DataFusionPlanCollector:
     def snapshot(self) -> list[dict[str, object]]:
         """Return a snapshot of plan artifacts.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Plan artifact payloads.
@@ -1173,7 +1168,7 @@ class DataFusionViewRegistry(Registry[str, DataFusionViewArtifact]):
         key
             View name.
 
-        Returns
+        Returns:
         -------
         DataFusionViewArtifact | None
             View artifact when registered, otherwise ``None``.
@@ -1188,7 +1183,7 @@ class DataFusionViewRegistry(Registry[str, DataFusionViewArtifact]):
         key
             View name.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when the view is registered.
@@ -1198,7 +1193,7 @@ class DataFusionViewRegistry(Registry[str, DataFusionViewArtifact]):
     def __iter__(self) -> Iterator[str]:
         """Iterate over registered view names.
 
-        Returns
+        Returns:
         -------
         Iterator[str]
             Iterator of registered view names.
@@ -1208,7 +1203,7 @@ class DataFusionViewRegistry(Registry[str, DataFusionViewArtifact]):
     def __len__(self) -> int:
         """Return the number of registered views.
 
-        Returns
+        Returns:
         -------
         int
             Count of registered views.
@@ -1218,7 +1213,7 @@ class DataFusionViewRegistry(Registry[str, DataFusionViewArtifact]):
     def snapshot(self) -> list[dict[str, object]]:
         """Return a stable snapshot of registered view artifacts.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Snapshot payloads for registered view artifacts.
@@ -1236,7 +1231,7 @@ class DataFusionViewRegistry(Registry[str, DataFusionViewArtifact]):
         event_time_unix_ms
             Event timestamp to attach to each payload.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Diagnostics-ready payloads for registered view artifacts.
@@ -1262,7 +1257,7 @@ class AdapterExecutionPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return the fingerprint payload for adapter execution policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing adapter execution policy.
@@ -1272,7 +1267,7 @@ class AdapterExecutionPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for adapter execution policy.
 
-        Returns
+        Returns:
         -------
         str
             Stable fingerprint hash.
@@ -1499,7 +1494,7 @@ def _sql_parse_errors(
     sql_options
         SQL options that gate SQL execution behavior.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]] | None
         List of parsing errors if any, None if parsing succeeds.
@@ -1646,7 +1641,7 @@ class SchemaRegistryValidationResult:
     def has_errors(self) -> bool:
         """Return whether any validation errors are present.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when the validation result includes any errors.
@@ -1672,17 +1667,9 @@ def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) ->
 def _load_schema_evolution_adapter_factory() -> object:
     """Return a schema evolution adapter factory from the native extension.
 
-    Returns
-    -------
-    object
-        Adapter factory instance exposed by the native extension.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when the native extension is missing.
-    TypeError
-        Raised when the adapter factory is not callable.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
+        TypeError: If the operation cannot be completed.
     """
     module = _resolve_extension_module(required_attr="schema_evolution_adapter_factory")
     if module is None:  # pragma: no cover - optional dependency
@@ -1698,23 +1685,12 @@ def _load_schema_evolution_adapter_factory() -> object:
 def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
     """Install the schema evolution adapter factory via the native extension.
 
-    Schema evolution adapters handle schema drift resolution at scan-time,
-    normalizing physical batches at the TableProvider boundary. This eliminates
-    the need for downstream cast/projection transforms and ensures schema
-    adaptation happens during physical plan execution rather than in
-    post-processing.
+    Args:
+        ctx: Description.
 
-    Parameters
-    ----------
-    ctx:
-        DataFusion session context to update.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when the native extension is missing.
-    TypeError
-        Raised when the native installer is not callable.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
+        TypeError: If the operation cannot be completed.
     """
     module = _resolve_extension_module(
         required_attr="install_schema_evolution_adapter_factory",
@@ -1828,7 +1804,7 @@ def settings_snapshot_for_profile(
 ) -> pa.Table:
     """Return a DataFusion settings snapshot for a runtime profile.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Table of settings from information_schema.df_settings.
@@ -1851,7 +1827,7 @@ def catalog_snapshot_for_profile(
 ) -> pa.Table:
     """Return a DataFusion catalog snapshot for a runtime profile.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Table inventory from information_schema.tables.
@@ -1868,7 +1844,7 @@ def function_catalog_snapshot_for_profile(
 ) -> list[dict[str, object]]:
     """Return a function catalog snapshot for a runtime profile.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Sorted function catalog entries from information_schema.
@@ -2064,7 +2040,7 @@ def labeled_explain_hook(
 ) -> Callable[[str, ExplainRows], None]:
     """Return an explain hook that records rule-scoped diagnostics.
 
-    Returns
+    Returns:
     -------
     Callable[[str, ExplainRows], None]
         Hook that appends labeled explain diagnostics to the sink.
@@ -2088,7 +2064,7 @@ def diagnostics_cache_hook(
 ) -> Callable[[DataFusionCacheEvent], None]:
     """Return a cache hook that records diagnostics rows.
 
-    Returns
+    Returns:
     -------
     Callable[[DataFusionCacheEvent], None]
         Hook that records cache events in the diagnostics sink.
@@ -2118,7 +2094,7 @@ def diagnostics_substrait_fallback_hook(
 ) -> Callable[[DataFusionSubstraitFallbackEvent], None]:
     """Return a Substrait fallback hook that records diagnostics rows.
 
-    Returns
+    Returns:
     -------
     Callable[[DataFusionSubstraitFallbackEvent], None]
         Hook that records Substrait fallback events in the diagnostics sink.
@@ -2150,7 +2126,7 @@ def diagnostics_explain_hook(
 ) -> Callable[[str, ExplainRows], None]:
     """Return an explain hook that records diagnostics rows.
 
-    Returns
+    Returns:
     -------
     Callable[[str, ExplainRows], None]
         Hook that records explain rows in the diagnostics sink.
@@ -2178,7 +2154,7 @@ def diagnostics_plan_artifacts_hook(
 ) -> Callable[[Mapping[str, object]], None]:
     """Return a plan artifacts hook that records diagnostics payloads.
 
-    Returns
+    Returns:
     -------
     Callable[[Mapping[str, object]], None]
         Hook that records plan artifacts in the diagnostics sink.
@@ -2203,7 +2179,7 @@ def diagnostics_semantic_diff_hook(
 ) -> Callable[[Mapping[str, object]], None]:
     """Return a semantic diff hook that records diagnostics payloads.
 
-    Returns
+    Returns:
     -------
     Callable[[Mapping[str, object]], None]
         Hook that records semantic diff diagnostics in the sink.
@@ -2221,7 +2197,7 @@ def diagnostics_sql_ingest_hook(
 ) -> Callable[[Mapping[str, object]], None]:
     """Return a SQL ingest hook that records diagnostics payloads.
 
-    Returns
+    Returns:
     -------
     Callable[[Mapping[str, object]], None]
         Hook that records SQL ingest artifacts in the diagnostics sink.
@@ -2239,7 +2215,7 @@ def diagnostics_arrow_ingest_hook(
 ) -> Callable[[Mapping[str, object]], None]:
     """Return an Arrow ingest hook that records diagnostics payloads.
 
-    Returns
+    Returns:
     -------
     Callable[[Mapping[str, object]], None]
         Hook that records Arrow ingestion artifacts in the diagnostics sink.
@@ -2257,7 +2233,7 @@ def diagnostics_dml_hook(
 ) -> Callable[[Mapping[str, object]], None]:
     """Return a DML hook that records diagnostics payloads.
 
-    Returns
+    Returns:
     -------
     Callable[[Mapping[str, object]], None]
         Hook that records DML statement payloads in the diagnostics sink.
@@ -2618,7 +2594,7 @@ class _RuntimeDiagnosticsMixin:
     def view_registry_snapshot(self) -> list[dict[str, object]] | None:
         """Return a stable snapshot of recorded view definitions.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]] | None
             Snapshot payload or ``None`` when registry tracking is disabled.
@@ -2631,7 +2607,7 @@ class _RuntimeDiagnosticsMixin:
     def settings_payload(self) -> dict[str, str]:
         """Return resolved settings applied to DataFusion SessionConfig.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Resolved DataFusion settings payload.
@@ -2658,7 +2634,7 @@ class _RuntimeDiagnosticsMixin:
     def settings_hash(self) -> str:
         """Return a stable hash for the SessionConfig settings payload.
 
-        Returns
+        Returns:
         -------
         str
             SHA-256 hash for the settings payload.
@@ -2676,7 +2652,7 @@ class _RuntimeDiagnosticsMixin:
         Uses existing settings and telemetry hashes to avoid re-serializing
         the full runtime profile surface.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing the runtime profile fingerprint inputs.
@@ -2696,7 +2672,7 @@ class _RuntimeDiagnosticsMixin:
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the runtime profile.
 
-        Returns
+        Returns:
         -------
         str
             Stable fingerprint for the runtime profile.
@@ -2706,7 +2682,7 @@ class _RuntimeDiagnosticsMixin:
     def telemetry_payload(self) -> dict[str, object]:
         """Return a diagnostics-friendly payload for the runtime profile.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Runtime settings serialized for telemetry/diagnostics.
@@ -2892,7 +2868,7 @@ class _RuntimeDiagnosticsMixin:
     def telemetry_payload_v1(self) -> dict[str, object]:
         """Return a versioned runtime payload for diagnostics.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Versioned runtime payload with grouped settings.
@@ -3004,7 +2980,7 @@ class _RuntimeDiagnosticsMixin:
     def telemetry_payload_msgpack(self) -> bytes:
         """Return a MessagePack-encoded telemetry payload.
 
-        Returns
+        Returns:
         -------
         bytes
             MessagePack payload for runtime telemetry.
@@ -3014,7 +2990,7 @@ class _RuntimeDiagnosticsMixin:
     def telemetry_payload_hash(self) -> str:
         """Return a stable hash for the versioned telemetry payload.
 
-        Returns
+        Returns:
         -------
         str
             SHA-256 hash of the telemetry payload.
@@ -3050,7 +3026,7 @@ def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str,
     rows
         Settings rows from information_schema snapshots.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of setting names to stringified values.
@@ -3149,7 +3125,7 @@ def record_runtime_setting_override(
 def runtime_setting_overrides(ctx: SessionContext) -> Mapping[str, str]:
     """Return recorded runtime setting overrides for a SessionContext.
 
-    Returns
+    Returns:
     -------
     Mapping[str, str]
         Runtime setting overrides keyed by setting name.
@@ -3201,7 +3177,7 @@ def build_session_runtime(
     use_cache
         When ``True``, cache the runtime by the profile cache key.
 
-    Returns
+    Returns:
     -------
     SessionRuntime
         Planning-ready runtime with UDF identity and settings snapshots.
@@ -3248,15 +3224,15 @@ def refresh_session_runtime(
 ) -> SessionRuntime:
     """Rebuild and cache a SessionRuntime for the current SessionContext.
 
-    Returns
-    -------
-    SessionRuntime
-        Refreshed session runtime cached for the profile context.
+    Args:
+        profile: Description.
+            ctx: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the runtime builder is unavailable on the profile.
+    Returns:
+        SessionRuntime: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     resolved_ctx = ctx or profile.session_context()
     runtime_builder = cast(
@@ -3292,7 +3268,7 @@ def session_runtime_hash(runtime: SessionRuntime) -> str:
     runtime
         Planning-ready session runtime snapshot.
 
-    Returns
+    Returns:
     -------
     str
         Stable identity hash for runtime-sensitive plan signatures.
@@ -3383,7 +3359,7 @@ class ExecutionConfig(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for execution settings.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing execution-level configuration values.
@@ -3426,7 +3402,7 @@ class CatalogConfig(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for catalog settings.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing catalog configuration values.
@@ -3501,7 +3477,7 @@ class FeatureGatesConfig(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for feature gate settings.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing feature gate values.
@@ -3672,7 +3648,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for policy bundle settings.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing policy bundle settings.
@@ -3766,7 +3742,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return fingerprint for policy bundle settings.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy bundle.
@@ -3783,7 +3759,7 @@ class RuntimeProfileDeltaOps:
     def delta_runtime_ctx(self) -> SessionContext:
         """Return a SessionContext configured for Delta operations.
 
-        Returns
+        Returns:
         -------
         SessionContext
             Session context configured for Delta operations.
@@ -3793,7 +3769,7 @@ class RuntimeProfileDeltaOps:
     def delta_service(self) -> DeltaService:
         """Return the Delta service bound to this runtime profile.
 
-        Returns
+        Returns:
         -------
         DeltaService
             Delta service bound to the runtime profile.
@@ -3811,7 +3787,7 @@ class RuntimeProfileDeltaOps:
     ) -> tuple[IdempotentWriteOptions, DataFusionRun]:
         """Reserve the next idempotent commit version for a Delta write.
 
-        Returns
+        Returns:
         -------
         tuple[IdempotentWriteOptions, DataFusionRun]
             Commit options plus the updated run context.
@@ -3881,7 +3857,7 @@ class RuntimeProfileDeltaOps:
     def ensure_delta_plan_codecs(self, ctx: SessionContext) -> bool:
         """Install Delta plan codecs when enabled.
 
-        Returns
+        Returns:
         -------
         bool
             True when codecs are installed.
@@ -3905,7 +3881,7 @@ class RuntimeProfileIO:
     def cache_root(self) -> str:
         """Return the root directory for Delta-backed caches.
 
-        Returns
+        Returns:
         -------
         str
             Cache root directory.
@@ -3917,7 +3893,7 @@ class RuntimeProfileIO:
     def runtime_artifact_root(self) -> str:
         """Return the root directory for runtime artifact cache tables.
 
-        Returns
+        Returns:
         -------
         str
             Runtime artifact cache root.
@@ -3929,7 +3905,7 @@ class RuntimeProfileIO:
     def metadata_cache_snapshot_root(self) -> str:
         """Return the root directory for metadata cache snapshots.
 
-        Returns
+        Returns:
         -------
         str
             Metadata cache snapshot root.
@@ -3939,7 +3915,7 @@ class RuntimeProfileIO:
     def ephemeral_context(self) -> SessionContext:
         """Return a non-cached SessionContext configured from the profile.
 
-        Returns
+        Returns:
         -------
         SessionContext
             Ephemeral session context configured for this profile.
@@ -3958,7 +3934,7 @@ class RuntimeProfileCatalog:
     def ast_dataset_location(self) -> DatasetLocation | None:
         """Return the configured AST dataset location, when available.
 
-        Returns
+        Returns:
         -------
         DatasetLocation | None
             AST dataset location when configured.
@@ -3968,7 +3944,7 @@ class RuntimeProfileCatalog:
     def bytecode_dataset_location(self) -> DatasetLocation | None:
         """Return the configured bytecode dataset location, when available.
 
-        Returns
+        Returns:
         -------
         DatasetLocation | None
             Bytecode dataset location when configured.
@@ -3978,7 +3954,7 @@ class RuntimeProfileCatalog:
     def extract_dataset_location(self, name: str) -> DatasetLocation | None:
         """Return a configured extract dataset location for the dataset name.
 
-        Returns
+        Returns:
         -------
         DatasetLocation | None
             Dataset location when configured.
@@ -4004,7 +3980,7 @@ class RuntimeProfileCatalog:
     def dataset_location(self, name: str) -> DatasetLocation | None:
         """Return a configured dataset location for the dataset name.
 
-        Returns
+        Returns:
         -------
         DatasetLocation | None
             Dataset location when configured.
@@ -4055,15 +4031,11 @@ class RuntimeProfileCatalog:
     def dataset_location_or_raise(self, name: str) -> DatasetLocation:
         """Return a configured dataset location for the dataset name.
 
-        Returns
-        -------
-        DatasetLocation
-            Dataset location when configured.
+        Args:
+            name: Description.
 
-        Raises
-        ------
-        KeyError
-            Raised when the dataset location is not configured.
+        Raises:
+            KeyError: If the operation cannot be completed.
         """
         location = self.dataset_location(name)
         if location is None:
@@ -4078,7 +4050,7 @@ class _RuntimeProfileIOFacadeMixin:
     def cache_root(self) -> str:
         """Return the configured cache root directory.
 
-        Returns
+        Returns:
         -------
         str
             Cache root directory.
@@ -4093,7 +4065,7 @@ class _RuntimeProfileCatalogFacadeMixin:
     def dataset_location(self, name: str) -> DatasetLocation | None:
         """Return a configured dataset location for the dataset name.
 
-        Returns
+        Returns:
         -------
         DatasetLocation | None
             Dataset location when configured.
@@ -4108,7 +4080,7 @@ class _RuntimeProfileDeltaFacadeMixin:
     def delta_service(self) -> DeltaService:
         """Return a DeltaService bound to this runtime profile.
 
-        Returns
+        Returns:
         -------
         DeltaService
             DeltaService instance bound to this profile.
@@ -4152,7 +4124,7 @@ class DataFusionRuntimeProfile(
     def delta_ops(self) -> RuntimeProfileDeltaOps:
         """Return Delta runtime operations bound to this profile.
 
-        Returns
+        Returns:
         -------
         RuntimeProfileDeltaOps
             Delta operations helper.
@@ -4163,7 +4135,7 @@ class DataFusionRuntimeProfile(
     def io_ops(self) -> RuntimeProfileIO:
         """Return I/O helpers bound to this profile.
 
-        Returns
+        Returns:
         -------
         RuntimeProfileIO
             I/O operations helper.
@@ -4174,7 +4146,7 @@ class DataFusionRuntimeProfile(
     def catalog_ops(self) -> RuntimeProfileCatalog:
         """Return catalog helpers bound to this profile.
 
-        Returns
+        Returns:
         -------
         RuntimeProfileCatalog
             Catalog operations helper.
@@ -4227,10 +4199,8 @@ class DataFusionRuntimeProfile(
     def __post_init__(self) -> None:
         """Initialize defaults after dataclass construction.
 
-        Raises
-        ------
-        ValueError
-            Raised when the async UDF policy is invalid.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         self._validate_information_schema()
         self._validate_catalog_names()
@@ -4258,7 +4228,7 @@ class DataFusionRuntimeProfile(
     def _session_config(self) -> SessionConfig:
         """Return a SessionConfig configured from the profile.
 
-        Returns
+        Returns:
         -------
         datafusion.SessionConfig
             Session configuration for the profile.
@@ -4278,7 +4248,7 @@ class DataFusionRuntimeProfile(
     def runtime_env_builder(self) -> RuntimeEnvBuilder:
         """Return a RuntimeEnvBuilder configured from the profile.
 
-        Returns
+        Returns:
         -------
         datafusion.RuntimeEnvBuilder
             Runtime environment builder for the profile.
@@ -4321,18 +4291,9 @@ class DataFusionRuntimeProfile(
     def _delta_runtime_env_options(self) -> _DeltaRuntimeEnvOptions | None:
         """Return delta-specific RuntimeEnv options when configured.
 
-        Returns
-        -------
-        _DeltaRuntimeEnvOptions | None
-            Delta runtime env options object for the extension module, or ``None`` when
-            no delta-specific overrides are configured.
-
-        Raises
-        ------
-        RuntimeError
-            Raised when the DataFusion extension module is unavailable.
-        TypeError
-            Raised when the delta runtime env options class is unavailable.
+        Raises:
+            RuntimeError: If the operation cannot be completed.
+            TypeError: If the operation cannot be completed.
         """
         if (
             self.execution.delta_max_spill_size is None
@@ -4360,7 +4321,7 @@ class DataFusionRuntimeProfile(
         Use session_runtime() for planning to ensure UDF and settings
         snapshots are captured deterministically.
 
-        Returns
+        Returns:
         -------
         datafusion.SessionContext
             Session context configured for the profile. When
@@ -4393,7 +4354,7 @@ class DataFusionRuntimeProfile(
     def build_ephemeral_context(self) -> SessionContext:
         """Return a non-cached SessionContext configured from the profile.
 
-        Returns
+        Returns:
         -------
         SessionContext
             Ephemeral session context configured for this profile.
@@ -4406,7 +4367,7 @@ class DataFusionRuntimeProfile(
     ) -> tuple[RegistrationPhase, ...]:
         """Return registration phases for ephemeral contexts.
 
-        Returns
+        Returns:
         -------
         tuple[RegistrationPhase, ...]
             Registration phases for ephemeral contexts.
@@ -4416,7 +4377,7 @@ class DataFusionRuntimeProfile(
     def install_delta_plan_codecs(self, ctx: SessionContext) -> tuple[bool, bool]:
         """Install Delta plan codecs using the extension or context fallback.
 
-        Returns
+        Returns:
         -------
         tuple[bool, bool]
             Tuple of (available, installed) flags.
@@ -4433,7 +4394,7 @@ class DataFusionRuntimeProfile(
     def resolve_dataset_template(self, name: str) -> DatasetLocation | None:
         """Return a dataset location template for the name.
 
-        Returns
+        Returns:
         -------
         DatasetLocation | None
             Template dataset location when configured.
@@ -4443,7 +4404,7 @@ class DataFusionRuntimeProfile(
     def resolve_ast_dataset_location(self) -> DatasetLocation | None:
         """Return the configured AST dataset location.
 
-        Returns
+        Returns:
         -------
         DatasetLocation | None
             AST dataset location when configured.
@@ -4453,7 +4414,7 @@ class DataFusionRuntimeProfile(
     def resolve_bytecode_dataset_location(self) -> DatasetLocation | None:
         """Return the configured bytecode dataset location.
 
-        Returns
+        Returns:
         -------
         DatasetLocation | None
             Bytecode dataset location when configured.
@@ -4472,7 +4433,7 @@ class DataFusionRuntimeProfile(
         storage_options
             Optional storage options used to disable shared context reuse.
 
-        Returns
+        Returns:
         -------
         datafusion.SessionContext
             Session context configured for Delta operations.
@@ -4492,7 +4453,7 @@ class DataFusionRuntimeProfile(
 
         Avoids re-entering session_context while still capturing snapshots.
 
-        Returns
+        Returns:
         -------
         SessionRuntime
             Planning-ready session runtime for the provided context.
@@ -4502,7 +4463,7 @@ class DataFusionRuntimeProfile(
     def session_runtime(self) -> SessionRuntime:
         """Return a planning-ready SessionRuntime for the profile.
 
-        Returns
+        Returns:
         -------
         SessionRuntime
             Planning-ready session runtime.
@@ -4517,7 +4478,7 @@ class DataFusionRuntimeProfile(
     ) -> DataFusionContextPool:
         """Return a pooled SessionContext manager for isolated run execution.
 
-        Returns
+        Returns:
         -------
         DataFusionContextPool
             Reusable context pool configured for this runtime profile.
@@ -4602,7 +4563,7 @@ class DataFusionRuntimeProfile(
     def _validate_async_udf_policy(self) -> dict[str, object]:
         """Validate async UDF policy configuration.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Validation report with status and configuration details.
@@ -4640,7 +4601,7 @@ class DataFusionRuntimeProfile(
         This method checks whether the Python-side configuration for named arguments
         is consistent with the available Rust extension capabilities.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Validation report with status and details.
@@ -4676,15 +4637,14 @@ class DataFusionRuntimeProfile(
     def _validate_udf_info_schema_parity(self, ctx: SessionContext) -> dict[str, object]:
         """Validate that Rust UDFs appear in information_schema.
 
-        Returns
-        -------
-        dict[str, object]
-            Parity report payload.
+        Args:
+            ctx: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when required routines are missing from information_schema.
+        Returns:
+            dict[str, object]: Result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if not self.catalog.enable_information_schema:
             return {
@@ -4814,10 +4774,11 @@ class DataFusionRuntimeProfile(
     def _install_planner_rules(self, ctx: SessionContext) -> None:
         """Install Rust planner policy rules for the session context.
 
-        Raises
-        ------
-        TypeError
-            Raised when planner policy installers are missing in datafusion._internal.
+        Args:
+            ctx: Description.
+
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         policy = self._resolved_sql_policy()
         installers = _resolve_planner_rule_installers()
@@ -4858,10 +4819,12 @@ class DataFusionRuntimeProfile(
     ) -> None:
         """Validate Rust UDF snapshot coverage against the runtime catalog.
 
-        Raises
-        ------
-        ValueError
-            Raised when Rust UDFs are missing from DataFusion.
+        Args:
+            catalog: Description.
+            introspector: Description.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         from datafusion_engine.udf.runtime import (
             fallback_udfs_active,
@@ -4946,7 +4909,7 @@ class DataFusionRuntimeProfile(
     def udf_catalog(self, ctx: SessionContext) -> UdfCatalog:
         """Return the cached UDF catalog for a session context.
 
-        Returns
+        Returns:
         -------
         UdfCatalog
             Cached UDF catalog for the session.
@@ -4961,7 +4924,7 @@ class DataFusionRuntimeProfile(
     def function_factory_policy_hash(self, ctx: SessionContext) -> str | None:
         """Return the FunctionFactory policy hash for a session context.
 
-        Returns
+        Returns:
         -------
         str | None
             Policy hash when enabled, otherwise ``None``.
@@ -4980,10 +4943,11 @@ class DataFusionRuntimeProfile(
     def _validate_rule_function_allowlist(self, ctx: SessionContext) -> None:
         """Validate rulepack function demands against information_schema.
 
-        Raises
-        ------
-        ValueError
-            Raised when required rulepack functions are missing or mismatched.
+        Args:
+            ctx: Description.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if not self.catalog.enable_information_schema:
             return
@@ -5784,10 +5748,11 @@ class DataFusionRuntimeProfile(
     def _install_schema_registry(self, ctx: SessionContext) -> None:
         """Register canonical nested schemas on the session context.
 
-        Raises
-        ------
-        ValueError
-            Raised when schema registration or validation fails.
+        Args:
+            ctx: Description.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if not self.features.enable_schema_registry:
             return
@@ -6112,7 +6077,7 @@ class DataFusionRuntimeProfile(
     def _build_session_context(self) -> SessionContext:
         """Create the SessionContext base for this runtime profile.
 
-        Returns
+        Returns:
         -------
         datafusion.SessionContext
             Base session context for this profile.
@@ -6192,10 +6157,11 @@ class DataFusionRuntimeProfile(
     def _install_physical_expr_adapter_factory(self, ctx: SessionContext) -> None:
         """Install a physical expression adapter factory when available.
 
-        Raises
-        ------
-        TypeError
-            Raised when the SessionContext cannot accept the factory.
+        Args:
+            ctx: Description.
+
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         factory = self.policies.physical_expr_adapter_factory
         uses_default_adapter = False
@@ -6270,10 +6236,11 @@ class DataFusionRuntimeProfile(
     def _install_tracing(self, ctx: SessionContext) -> None:
         """Enable tracing when configured.
 
-        Raises
-        ------
-        ValueError
-            Raised when tracing is enabled without a hook.
+        Args:
+            ctx: Description.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if not self.features.enable_tracing:
             return
@@ -6409,7 +6376,7 @@ class DataFusionRuntimeProfile(
     ) -> DataFusionCompileOptions:
         """Return DataFusion compile options derived from the profile.
 
-        Returns
+        Returns:
         -------
         DataFusionCompileOptions
             Compile options aligned with this runtime profile.
@@ -6533,7 +6500,7 @@ class DataFusionRuntimeProfile(
     def _resolved_sql_policy(self) -> DataFusionSqlPolicy:
         """Return the resolved SQL policy for this runtime profile.
 
-        Returns
+        Returns:
         -------
         DataFusionSqlPolicy
             SQL policy derived from the profile configuration.
@@ -6547,7 +6514,7 @@ class DataFusionRuntimeProfile(
     def _sql_options(self) -> SQLOptions:
         """Return SQLOptions for SQL execution.
 
-        Returns
+        Returns:
         -------
         datafusion.SQLOptions
             SQL options for use with DataFusion contexts.
@@ -6557,7 +6524,7 @@ class DataFusionRuntimeProfile(
     def sql_options(self) -> SQLOptions:
         """Return SQLOptions derived from the resolved SQL policy.
 
-        Returns
+        Returns:
         -------
         datafusion.SQLOptions
             SQL options derived from the profile policy.
@@ -6567,7 +6534,7 @@ class DataFusionRuntimeProfile(
     def _statement_sql_options(self) -> SQLOptions:
         """Return SQLOptions that allow statement execution.
 
-        Returns
+        Returns:
         -------
         datafusion.SQLOptions
             SQL options with statement execution enabled.
@@ -6577,7 +6544,7 @@ class DataFusionRuntimeProfile(
     def _diskcache(self, kind: DiskCacheKind) -> Cache | FanoutCache | None:
         """Return a DiskCache instance for the requested kind.
 
-        Returns
+        Returns:
         -------
         diskcache.Cache | diskcache.FanoutCache | None
             Cache instance when DiskCache is configured.
@@ -6590,7 +6557,7 @@ class DataFusionRuntimeProfile(
     def _diskcache_ttl_seconds(self, kind: DiskCacheKind) -> float | None:
         """Return the TTL in seconds for a DiskCache kind when configured.
 
-        Returns
+        Returns:
         -------
         float | None
             TTL in seconds or None when unset.
@@ -6613,7 +6580,7 @@ class DataFusionRuntimeProfile(
     def _schema_introspector(self, ctx: SessionContext) -> SchemaIntrospector:
         """Return a schema introspector for the session.
 
-        Returns
+        Returns:
         -------
         SchemaIntrospector
             Introspector bound to the provided SessionContext.
@@ -6644,7 +6611,7 @@ class DataFusionRuntimeProfile(
     def _settings_snapshot(self, ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion settings when information_schema is enabled.
 
-        Returns
+        Returns:
         -------
         pyarrow.Table
             Table of settings from information_schema.df_settings.
@@ -6655,7 +6622,7 @@ class DataFusionRuntimeProfile(
     def _catalog_snapshot(self, ctx: SessionContext) -> pa.Table:
         """Return a snapshot of DataFusion catalog tables when available.
 
-        Returns
+        Returns:
         -------
         pyarrow.Table
             Table inventory from information_schema.tables.
@@ -6678,7 +6645,7 @@ class DataFusionRuntimeProfile(
         include_routines:
             Whether to include information_schema routines metadata.
 
-        Returns
+        Returns:
         -------
         list[dict[str, object]]
             Sorted function catalog entries from ``information_schema``.
@@ -6705,7 +6672,7 @@ class DataFusionRuntimeProfile(
     def context_cache_key(self) -> str:
         """Return a stable cache key for the session context.
 
-        Returns
+        Returns:
         -------
         str
             Stable cache key derived from the runtime profile.
@@ -6733,7 +6700,7 @@ def cache_prefix_for_delta_snapshot(
 ) -> str | None:
     """Return a cache prefix that pins caches to a Delta snapshot.
 
-    Returns
+    Returns:
     -------
     str | None
         Cache prefix when snapshot identifiers are available; otherwise ``None``.
@@ -6759,7 +6726,7 @@ def collect_datafusion_metrics(
 ) -> Mapping[str, object] | None:
     """Return optional DataFusion metrics payload.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object] | None
         Metrics payload when enabled and available.
@@ -6777,7 +6744,7 @@ def schema_introspector_for_profile(
 ) -> SchemaIntrospector:
     """Return a schema introspector for a runtime profile.
 
-    Returns
+    Returns:
     -------
     SchemaIntrospector
         Introspector configured from the profile.
@@ -6804,7 +6771,7 @@ def run_diskcache_maintenance(
 ) -> list[dict[str, object]]:
     """Run DiskCache maintenance for a runtime profile.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Maintenance payloads for each cache kind.
@@ -6839,7 +6806,7 @@ def evict_diskcache_entries(
 ) -> int:
     """Evict DiskCache entries for a runtime profile.
 
-    Returns
+    Returns:
     -------
     int
         Count of evicted entries.
@@ -6858,7 +6825,7 @@ def register_cdf_inputs_for_profile(
 ) -> Mapping[str, str]:
     """Register Delta CDF inputs for the requested tables.
 
-    Returns
+    Returns:
     -------
     Mapping[str, str]
         Mapping of base table names to registered CDF view names.
@@ -6873,7 +6840,7 @@ def collect_datafusion_traces(
 ) -> Mapping[str, object] | None:
     """Return optional DataFusion tracing payload.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object] | None
         Tracing payload when enabled and available.
@@ -7110,7 +7077,7 @@ def apply_execution_label(
     explain_sink:
         Destination list for labeled explain entries.
 
-    Returns
+    Returns:
     -------
     DataFusionCompileOptions
         Options updated with labeled diagnostics hooks when configured.
@@ -7142,7 +7109,7 @@ def apply_execution_policy(
     execution_policy:
         Optional execution policy controls execution behaviors.
 
-    Returns
+    Returns:
     -------
     DataFusionCompileOptions
         Options updated with execution policy settings when configured.
@@ -7204,7 +7171,7 @@ def session_runtime_for_context(
 ) -> SessionRuntime | None:
     """Return a SessionRuntime for the provided context when compatible.
 
-    Returns
+    Returns:
     -------
     SessionRuntime | None
         Session runtime for the context when compatible, otherwise ``None``.
@@ -7245,7 +7212,7 @@ def align_table_to_schema(
 ) -> pa.Table:
     """Align a table to a target schema using DataFusion casts.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Table aligned to the provided schema.
@@ -7332,10 +7299,12 @@ def assert_schema_metadata(
 ) -> None:
     """Raise when schema metadata does not match the target schema.
 
-    Raises
-    ------
-    ValueError
-        Raised when the schema metadata does not match.
+    Args:
+        table: Description.
+        schema: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     table_schema = pa.schema(table.schema)
     expected_schema = pa.schema(schema)
@@ -7351,22 +7320,12 @@ def dataset_schema_from_context(
 ) -> SchemaLike:
     """Return the dataset schema from the DataFusion SessionContext.
 
-    Parameters
-    ----------
-    name : str
-        Dataset name registered in the SessionContext.
-    ctx : SessionContext | None
-        Optional SessionContext override for schema resolution.
+    Args:
+        name: Description.
+        ctx: Description.
 
-    Returns
-    -------
-    SchemaLike
-        Arrow schema fetched from DataFusion.
-
-    Raises
-    ------
-    KeyError
-        Raised when the dataset is not registered in the SessionContext.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     session_ctx = ctx or DataFusionRuntimeProfile().session_context()
     try:
@@ -7413,7 +7372,7 @@ def read_delta_as_reader(
 ) -> pa.RecordBatchReader:
     """Return a streaming Delta table snapshot using the Delta TableProvider.
 
-    Returns
+    Returns:
     -------
     pyarrow.RecordBatchReader
         Streaming reader for the Delta table via DataFusion's Delta table provider.
@@ -7477,7 +7436,7 @@ def dataset_spec_from_context(
     ctx : SessionContext | None
         Optional SessionContext override for schema resolution.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         DatasetSpec derived from the DataFusion schema.

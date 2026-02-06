@@ -116,6 +116,7 @@ class ExceptionVisitor(ast.NodeVisitor):
     """Extract raise and except sites from a module."""
 
     def __init__(self, file: str) -> None:
+        """__init__."""
         self.file = file
         self.raises: list[RaiseSite] = []
         self.catches: list[CatchSite] = []
@@ -217,7 +218,7 @@ class ExceptionVisitor(ast.NodeVisitor):
     def _extract_exception_type(self, exc: ast.expr) -> str:
         """Extract exception type from raise expression.
 
-        Returns
+        Returns:
         -------
         str
             Exception type name.
@@ -234,7 +235,7 @@ class ExceptionVisitor(ast.NodeVisitor):
     def _extract_message(exc: ast.expr) -> str | None:
         """Extract message from exception constructor.
 
-        Returns
+        Returns:
         -------
         str | None
             Message string when extractable.
@@ -252,7 +253,7 @@ class ExceptionVisitor(ast.NodeVisitor):
     def _get_name(node: ast.expr) -> str:
         """Get name from an expression node.
 
-        Returns
+        Returns:
         -------
         str
             Best-effort name string.
@@ -267,7 +268,7 @@ class ExceptionVisitor(ast.NodeVisitor):
 def _iter_python_files(root: Path) -> list[Path]:
     """Collect Python files under root using gitignore semantics.
 
-    Returns
+    Returns:
     -------
     list[Path]
         Python files under the repository root.
@@ -286,7 +287,7 @@ def _iter_python_files(root: Path) -> list[Path]:
 def _scan_exceptions(root: Path) -> tuple[list[RaiseSite], list[CatchSite]]:
     """Scan Python files for raise/catch sites.
 
-    Returns
+    Returns:
     -------
     tuple[list[RaiseSite], list[CatchSite]]
         Raise and catch site lists.
@@ -315,7 +316,7 @@ def _summarize_exception_types(
 ) -> tuple[dict[str, int], dict[str, int]]:
     """Summarize exception type frequency.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, int], dict[str, int]]
         Raised and caught exception type counts.
@@ -491,7 +492,7 @@ def cmd_exceptions(
     function : str | None
         Focus on specific function.
 
-    Returns
+    Returns:
     -------
     CqResult
         Analysis result.

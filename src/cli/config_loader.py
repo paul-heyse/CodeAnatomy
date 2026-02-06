@@ -25,7 +25,7 @@ def load_effective_config(config_file: str | None) -> dict[str, JsonValue]:
     config_file
         Optional explicit config file path.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Parsed configuration contents.
@@ -63,7 +63,7 @@ def normalize_config_contents(config: Mapping[str, JsonValue]) -> dict[str, Json
     config
         Raw configuration contents.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Normalized configuration payload.
@@ -79,7 +79,7 @@ def _find_in_parents(filename: str) -> Path | None:
     filename
         Filename to locate.
 
-    Returns
+    Returns:
     -------
     Path | None
         Path to the first matching file in the current directory or parents.
@@ -104,7 +104,7 @@ def load_effective_config_with_sources(
     config_file
         Optional explicit config file path.
 
-    Returns
+    Returns:
     -------
     ConfigWithSources
         Configuration with source tracking for each value.

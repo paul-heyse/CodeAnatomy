@@ -129,19 +129,13 @@ class DatasetCatalog(MutableRegistry[str, DatasetLocation]):
     def register(self, key: str, value: DatasetLocation, *, overwrite: bool = False) -> None:
         """Register a dataset location.
 
-        Parameters
-        ----------
-        key:
-            Dataset name.
-        value:
-            Location metadata.
-        overwrite:
-            Whether to overwrite existing entries.
+        Args:
+            key: Description.
+            value: Description.
+            overwrite: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when the dataset name is empty.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if not key:
             msg = "DatasetCatalog.register: name must be non-empty."
@@ -151,20 +145,11 @@ class DatasetCatalog(MutableRegistry[str, DatasetLocation]):
     def get(self, key: str) -> DatasetLocation:
         """Return a registered dataset location.
 
-        Parameters
-        ----------
-        key:
-            Dataset name.
+        Args:
+            key: Description.
 
-        Returns
-        -------
-        DatasetLocation
-            Location metadata for the dataset.
-
-        Raises
-        ------
-        KeyError
-            Raised when the dataset name is not registered.
+        Raises:
+            KeyError: If the operation cannot be completed.
         """
         value = super().get(key)
         if value is None:
@@ -180,7 +165,7 @@ class DatasetCatalog(MutableRegistry[str, DatasetLocation]):
         name:
             Dataset name.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when the dataset is registered.
@@ -190,7 +175,7 @@ class DatasetCatalog(MutableRegistry[str, DatasetLocation]):
     def names(self) -> list[str]:
         """Return registered dataset names in sorted order.
 
-        Returns
+        Returns:
         -------
         list[str]
             Sorted dataset names.
@@ -204,7 +189,7 @@ def registry_snapshot(catalog: DatasetCatalog) -> list[dict[str, object]]:
     Non-Delta locations are omitted because catalog autoload handles
     non-Delta registration.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Registry snapshot payloads.
@@ -332,7 +317,7 @@ def dataset_catalog_from_profile(
 ) -> DatasetCatalog:
     """Build a DatasetCatalog from a runtime profile.
 
-    Returns
+    Returns:
     -------
     DatasetCatalog
         Catalog with dataset locations derived from the profile.
@@ -550,7 +535,7 @@ def resolve_dataset_policies(
 ) -> ResolvedDatasetPolicies:
     """Return resolved policy bundle for a dataset location.
 
-    Returns
+    Returns:
     -------
     ResolvedDatasetPolicies
         Resolved policy bundle for the dataset location.
@@ -642,7 +627,7 @@ def _resolve_dataset_schema_internal(
 def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocation:
     """Return a resolved view of a dataset location.
 
-    Returns
+    Returns:
     -------
     ResolvedDatasetLocation
         Resolved dataset location with derived configuration.
@@ -686,7 +671,7 @@ def _resolve_cached_location(location: DatasetLocation) -> ResolvedDatasetLocati
 def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider | None:
     """Return the effective DataFusion provider for a dataset location.
 
-    Returns
+    Returns:
     -------
     DataFusionProvider | None
         Resolved provider for the dataset location, when available.
@@ -697,7 +682,7 @@ def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider
 def resolve_dataset_schema(location: DatasetLocation) -> SchemaLike | None:
     """Return the resolved schema for a dataset location.
 
-    Returns
+    Returns:
     -------
     SchemaLike | None
         Resolved schema when available, otherwise ``None``.

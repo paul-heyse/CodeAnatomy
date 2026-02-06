@@ -94,30 +94,16 @@ def udf_expr(
 ) -> Expr:
     """Return a DataFusion expression for the named UDF.
 
-    Parameters
-    ----------
-    name
-        UDF name as registered in the runtime catalog.
-    *args
-        Positional arguments for the UDF.
-    ctx
-        Optional SessionContext; when provided, prefer its registry.
-    **kwargs
-        Keyword arguments are appended positionally for compatibility.
+    Args:
+        name: Description.
+        *args: Description.
+        ctx: Description.
+        **kwargs: Description.
 
-    Returns
-    -------
-    datafusion.expr.Expr
-        Expression representing the UDF invocation.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when the DataFusion extension fails to build the expression.
-    TypeError
-        Raised when the extension returns an unsupported result type.
-    ValueError
-        Raised when the extension rejects the arguments.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
+        TypeError: If the operation cannot be completed.
+        ValueError: If the operation cannot be completed.
     """
     call_args = list(args)
     if kwargs:

@@ -913,7 +913,7 @@ def extract_ts(
     context:
         Shared execution context bundle for extraction.
 
-    Returns
+    Returns:
     -------
     ExtractResult[TableLike]
         Extracted tree-sitter file table.
@@ -956,7 +956,7 @@ def extract_ts_plans(
 ) -> dict[str, DataFusionPlanBundle]:
     """Extract tree-sitter plans for nested file records.
 
-    Returns
+    Returns:
     -------
     dict[str, DataFusionPlanBundle]
         Plan bundle keyed by ``tree_sitter_files``.
@@ -1522,7 +1522,7 @@ def extract_ts_tables(
         Keyword-only arguments for extraction (repo_files, options, context, file_contexts,
         evidence_plan, ctx, profile, prefer_reader).
 
-    Returns
+    Returns:
     -------
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted tree-sitter outputs keyed by output name.

@@ -151,7 +151,7 @@ def migrate_parquet_to_delta(
     options
         Migration options controlling schema, partitioning, and storage.
 
-    Returns
+    Returns:
     -------
     MigrationReport
         Migration report payload with resolved Delta version.
@@ -206,7 +206,7 @@ def migrate_parquet_to_delta(
 def main(argv: Sequence[str] | None = None) -> int:
     """Run Parquet-to-Delta migration with CLI-provided options.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

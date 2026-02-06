@@ -23,7 +23,7 @@ class PropSpec:
     def to_dict(self) -> dict[str, object]:
         """Serialize the property spec to a dictionary.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             JSON-serializable property spec.
@@ -38,7 +38,7 @@ class PropSpec:
 def p_str(desc: str = "", enum: Sequence[str] | None = None) -> PropSpec:
     """Create a string property spec.
 
-    Returns
+    Returns:
     -------
     PropSpec
         String property specification.
@@ -49,7 +49,7 @@ def p_str(desc: str = "", enum: Sequence[str] | None = None) -> PropSpec:
 def p_int(desc: str = "") -> PropSpec:
     """Create an integer property spec.
 
-    Returns
+    Returns:
     -------
     PropSpec
         Integer property specification.
@@ -60,7 +60,7 @@ def p_int(desc: str = "") -> PropSpec:
 def p_float(desc: str = "") -> PropSpec:
     """Create a float property spec.
 
-    Returns
+    Returns:
     -------
     PropSpec
         Float property specification.
@@ -71,7 +71,7 @@ def p_float(desc: str = "") -> PropSpec:
 def p_bool(desc: str = "") -> PropSpec:
     """Create a boolean property spec.
 
-    Returns
+    Returns:
     -------
     PropSpec
         Boolean property specification.
@@ -82,7 +82,7 @@ def p_bool(desc: str = "") -> PropSpec:
 def p_json(desc: str = "") -> PropSpec:
     """Create a JSON property spec.
 
-    Returns
+    Returns:
     -------
     PropSpec
         JSON property specification.
@@ -362,15 +362,11 @@ PROP_BUNDLES: dict[str, tuple[str, ...]] = {
 def prop_value_type(key: str) -> PropValueType:
     """Return the value type for a property key.
 
-    Returns
-    -------
-    PropValueType
-        Value type for the property key.
+    Args:
+        key: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the property key is not defined in the catalog.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     spec = PROP_SPECS.get(key)
     if spec is None:
@@ -386,15 +382,12 @@ def resolve_prop_specs(
 ) -> dict[str, PropSpec]:
     """Return prop specs for the requested keys.
 
-    Returns
-    -------
-    dict[str, PropSpec]
-        Mapping of property keys to PropSpec entries.
+    Args:
+        keys: Description.
+        overrides: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when a key is not defined in the property catalog.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     out: dict[str, PropSpec] = {}
     override_map: dict[str, PropSpec] = dict(overrides) if overrides else {}

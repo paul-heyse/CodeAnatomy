@@ -97,7 +97,7 @@ def _relationship_payload(spec: QualityRelationshipSpec) -> Mapping[str, object]
 def semantic_model_fingerprint(model: SemanticModel) -> str:
     """Return a deterministic fingerprint for a semantic model.
 
-    Returns
+    Returns:
     -------
     str
         Stable hash for the semantic model inputs.
@@ -123,7 +123,7 @@ def semantic_model_fingerprint(model: SemanticModel) -> str:
 def semantic_ir_fingerprint(ir: SemanticIR) -> str:
     """Return a deterministic fingerprint for a semantic IR.
 
-    Returns
+    Returns:
     -------
     str
         Stable hash for the semantic IR structure.
@@ -542,7 +542,7 @@ def compile_semantics(model: SemanticModel) -> SemanticIR:
     model
         Semantic model describing normalization and relationships.
 
-    Returns
+    Returns:
     -------
     SemanticIR
         Compiled semantic IR.
@@ -779,15 +779,15 @@ def optimize_semantics(
 ) -> SemanticIR:
     """Optimize the semantic IR with join fusion grouping and deduplication.
 
-    Returns
-    -------
-    SemanticIR
-        Optimized semantic IR with join fusion group metadata.
+    Args:
+        ir: Description.
+            outputs: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when duplicate IR views conflict on definition.
+    Returns:
+        SemanticIR: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     seen: dict[str, SemanticIRView] = {}
     for view in ir.views:
@@ -835,7 +835,7 @@ def optimize_semantics(
 def emit_semantics(ir: SemanticIR) -> SemanticIR:
     """Emit semantic IR artifacts (placeholder).
 
-    Returns
+    Returns:
     -------
     SemanticIR
         Emitted semantic IR artifacts.
@@ -857,7 +857,7 @@ def emit_semantics(ir: SemanticIR) -> SemanticIR:
 def build_semantic_ir(*, outputs: Collection[str] | None = None) -> SemanticIR:
     """Build the end-to-end semantic IR pipeline.
 
-    Returns
+    Returns:
     -------
     SemanticIR
         Semantic IR after compile/optimize/emit.

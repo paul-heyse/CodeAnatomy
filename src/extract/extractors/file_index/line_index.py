@@ -88,7 +88,7 @@ class _LineIndexConfig:
 def default_line_index_options() -> LineIndexOptions:
     """Return default LineIndexOptions for line index extraction.
 
-    Returns
+    Returns:
     -------
     LineIndexOptions
         Default line index options.
@@ -99,7 +99,7 @@ def default_line_index_options() -> LineIndexOptions:
 def file_line_index_query(repo_id: str | None) -> QuerySpec:
     """Return the QuerySpec for line index extraction.
 
-    Returns
+    Returns:
     -------
     QuerySpec
         QuerySpec for line index projection.
@@ -120,7 +120,7 @@ def extract_file_line_index(file_path: Path, config: _LineIndexConfig) -> pa.Tab
     config
         Extraction configuration with file identity and options.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Line index table with columns: file_id, path, line_no,
@@ -145,7 +145,7 @@ def extract_line_index_rows(
     config
         Extraction configuration with file identity and options.
 
-    Yields
+    Yields:
     ------
     dict[str, object]
         Line index row dictionaries.
@@ -211,7 +211,7 @@ def _line_index_cache_key(
 ) -> str | None:
     """Compute stable cache key for line index extraction.
 
-    Returns
+    Returns:
     -------
     str | None
         Cache key when identity fields are available.
@@ -233,7 +233,7 @@ def _line_index_cache_key(
 def _get_file_content(file_ctx: FileContext) -> bytes | None:
     """Resolve file content from context or filesystem.
 
-    Returns
+    Returns:
     -------
     bytes | None
         File content when available.
@@ -269,7 +269,7 @@ def _build_line_index_rows(
 ) -> list[dict[str, object]] | None:
     """Build line index rows from a repo file row.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]] | None
         Line index rows for the file, or None if unavailable.
@@ -332,7 +332,7 @@ def scan_file_line_index(
     prefer_reader
         When True, return a streaming reader when possible.
 
-    Returns
+    Returns:
     -------
     TableLike | RecordBatchReaderLike
         Line index output table.
@@ -370,7 +370,7 @@ def scan_file_line_index_plan(
 ) -> DataFusionPlanBundle:
     """Build the plan for line index extraction.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         DataFusion plan bundle emitting line index rows.
@@ -406,7 +406,7 @@ def _iter_line_index_rows(
 ) -> Iterator[dict[str, object]]:
     """Yield line index rows from repo files with caching.
 
-    Yields
+    Yields:
     ------
     dict[str, object]
         Line index row dictionaries.
@@ -450,7 +450,7 @@ def _load_cached_line_rows(
 ) -> list[dict[str, object]] | None:
     """Load cached line index rows.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]] | None
         Cached rows when available.

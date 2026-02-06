@@ -34,7 +34,7 @@ class SchemaPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the schema policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing schema policy settings.
@@ -67,7 +67,7 @@ class SchemaPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the schema policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -77,7 +77,7 @@ class SchemaPolicy(FingerprintableConfig):
     def resolved_schema(self) -> SchemaLike:
         """Return the schema with metadata applied.
 
-        Returns
+        Returns:
         -------
         SchemaLike
             Schema with metadata applied.
@@ -90,7 +90,7 @@ class SchemaPolicy(FingerprintableConfig):
     def transform(self) -> SchemaTransform:
         """Return a SchemaTransform for the policy.
 
-        Returns
+        Returns:
         -------
         SchemaTransform
             Schema transform for alignment/casting.
@@ -105,7 +105,7 @@ class SchemaPolicy(FingerprintableConfig):
     def apply(self, table: TableLike) -> TableLike:
         """Align and optionally encode a table.
 
-        Returns
+        Returns:
         -------
         TableLike
             Aligned (and encoded) table.
@@ -118,7 +118,7 @@ class SchemaPolicy(FingerprintableConfig):
     def apply_with_info(self, table: TableLike) -> tuple[TableLike, AlignmentInfo]:
         """Align and optionally encode a table, returning alignment metadata.
 
-        Returns
+        Returns:
         -------
         tuple[TableLike, AlignmentInfo]
             Aligned (and encoded) table and alignment info.
@@ -144,7 +144,7 @@ class SchemaPolicyOptions(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for schema policy overrides.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing schema policy overrides.
@@ -179,7 +179,7 @@ class SchemaPolicyOptions(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for schema policy overrides.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the overrides.
@@ -194,7 +194,7 @@ def schema_policy_factory(
 ) -> SchemaPolicy:
     """Return a schema policy derived from a table spec.
 
-    Returns
+    Returns:
     -------
     SchemaPolicy
         Schema policy with defaults applied.
@@ -231,15 +231,12 @@ def schema_policy_from_contract(
 ) -> SchemaPolicy:
     """Return a schema policy derived from a SchemaContract.
 
-    Returns
-    -------
-    SchemaPolicy
-        Schema policy with defaults applied to the contract schema.
+    Args:
+        contract: Description.
+        options: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the contract is not a SchemaContract.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     from datafusion_engine.schema.contracts import EvolutionPolicy, SchemaContract
 

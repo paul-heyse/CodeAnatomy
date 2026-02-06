@@ -10,7 +10,7 @@ from tools.cq.core.structs import CqStruct
 def _package_version(name: str) -> str | None:
     """Return installed package version when available.
 
-    Returns
+    Returns:
     -------
     str | None
         Package version, otherwise ``None``.
@@ -28,7 +28,7 @@ def _package_version(name: str) -> str | None:
 def _detect_rg() -> tuple[bool, str | None]:
     """Detect ripgrep availability.
 
-    Returns
+    Returns:
     -------
     tuple[bool, str | None]
         Availability flag and version banner.
@@ -59,7 +59,7 @@ class Toolchain(CqStruct, frozen=True):
     def detect() -> Toolchain:
         """Detect available tools and versions.
 
-        Returns
+        Returns:
         -------
         Toolchain
             Detected toolchain snapshot.
@@ -83,7 +83,7 @@ class Toolchain(CqStruct, frozen=True):
     def to_dict(self) -> dict[str, str | None]:
         """Convert to run metadata mapping.
 
-        Returns
+        Returns:
         -------
         dict[str, str | None]
             Tool version mapping for run metadata.
@@ -97,10 +97,8 @@ class Toolchain(CqStruct, frozen=True):
     def require_rg(self) -> None:
         """Verify ripgrep is available.
 
-        Raises
-        ------
-        RuntimeError
-            Raised when ripgrep is missing.
+        Raises:
+            RuntimeError: If the operation cannot be completed.
         """
         if not self.rg_available:
             msg = "ripgrep (rg) is required but was not found on PATH."
@@ -109,10 +107,8 @@ class Toolchain(CqStruct, frozen=True):
     def require_sgpy(self) -> None:
         """Verify ast-grep-py package is available.
 
-        Raises
-        ------
-        RuntimeError
-            Raised when ast-grep-py is missing.
+        Raises:
+            RuntimeError: If the operation cannot be completed.
         """
         if not self.sgpy_available:
             msg = (

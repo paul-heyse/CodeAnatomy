@@ -11,7 +11,7 @@ DEFAULT_POSITION_ENCODING: int = ENC_UTF32
 def normalize_col_unit_value(value: object | None) -> str:
     """Normalize a col-unit value to one of: byte/utf8/utf16/utf32.
 
-    Returns
+    Returns:
     -------
     str
         Normalized col-unit string.
@@ -26,7 +26,7 @@ def normalize_col_unit_value(value: object | None) -> str:
 def col_unit_from_int(value: int) -> str:
     """Return a col-unit string for a numeric encoding.
 
-    Returns
+    Returns:
     -------
     str
         Normalized col-unit string.
@@ -42,7 +42,7 @@ def col_unit_from_int(value: int) -> str:
 def col_unit_from_text(value: str) -> str:
     """Return a col-unit string for a text encoding description.
 
-    Returns
+    Returns:
     -------
     str
         Normalized col-unit string.
@@ -64,7 +64,7 @@ def col_unit_from_text(value: str) -> str:
 def encoding_from_unit(unit: str) -> int:
     """Return encoding enum for a normalized col-unit string.
 
-    Returns
+    Returns:
     -------
     int
         Encoding enum value.

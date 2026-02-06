@@ -26,7 +26,7 @@ class HamiltonTrackerConfig:
     def from_env(cls) -> HamiltonTrackerConfig | None:
         """Build tracker config from environment variables.
 
-        Returns
+        Returns:
         -------
         HamiltonTrackerConfig | None
             Tracker configuration when environment provides values.
@@ -71,7 +71,7 @@ class HamiltonTelemetryProfile:
     def resolve(cls) -> HamiltonTelemetryProfile:
         """Resolve telemetry profile from environment.
 
-        Returns
+        Returns:
         -------
         HamiltonTelemetryProfile
             Resolved telemetry profile with overrides applied.

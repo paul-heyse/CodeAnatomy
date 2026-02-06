@@ -31,7 +31,7 @@ type DiskCacheKind = Literal[
 def _default_cache_root() -> Path:
     """Return the default DiskCache root path.
 
-    Returns
+    Returns:
     -------
     pathlib.Path
         Default cache root path.
@@ -60,7 +60,7 @@ class DiskCacheSettings(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return canonical payload for settings fingerprinting.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload used for settings fingerprinting.
@@ -82,7 +82,7 @@ class DiskCacheSettings(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for cache settings.
 
-        Returns
+        Returns:
         -------
         str
             Stable fingerprint for settings.
@@ -114,7 +114,7 @@ class DiskCacheProfile(StructBaseStrict, frozen=True):
     def settings_for(self, kind: DiskCacheKind) -> DiskCacheSettings:
         """Return settings for a cache kind.
 
-        Returns
+        Returns:
         -------
         DiskCacheSettings
             Settings for the cache kind.
@@ -125,7 +125,7 @@ class DiskCacheProfile(StructBaseStrict, frozen=True):
     def ttl_for(self, kind: DiskCacheKind) -> float | None:
         """Return the TTL in seconds for the cache kind when configured.
 
-        Returns
+        Returns:
         -------
         float | None
             TTL in seconds when set.
@@ -135,7 +135,7 @@ class DiskCacheProfile(StructBaseStrict, frozen=True):
     def fingerprint(self, kind: DiskCacheKind) -> str:
         """Return a fingerprint for the profile+kind combination.
 
-        Returns
+        Returns:
         -------
         str
             Stable profile fingerprint for the cache kind.
@@ -153,7 +153,7 @@ class DiskCacheProfile(StructBaseStrict, frozen=True):
 def default_diskcache_profile() -> DiskCacheProfile:
     """Return the default DiskCache profile.
 
-    Returns
+    Returns:
     -------
     DiskCacheProfile
         Default DiskCache profile.
@@ -231,7 +231,7 @@ def run_cache_maintenance(
 ) -> DiskCacheMaintenance:
     """Run cache maintenance for a cache kind.
 
-    Returns
+    Returns:
     -------
     DiskCacheMaintenance
         Maintenance results for the cache kind.
@@ -259,7 +259,7 @@ def run_profile_maintenance(
 ) -> list[DiskCacheMaintenance]:
     """Run maintenance across a set of cache kinds.
 
-    Returns
+    Returns:
     -------
     list[DiskCacheMaintenance]
         Maintenance results for each cache kind.
@@ -278,7 +278,7 @@ def evict_cache_tag(
 ) -> int:
     """Evict cache entries for a tag and kind.
 
-    Returns
+    Returns:
     -------
     int
         Count of evicted entries.
@@ -297,7 +297,7 @@ def bulk_cache_set(
 ) -> int:
     """Set multiple cache entries, using transactions when available.
 
-    Returns
+    Returns:
     -------
     int
         Count of entries written.
@@ -331,7 +331,7 @@ def bulk_cache_set(
 def cache_for_kind(profile: DiskCacheProfile, kind: DiskCacheKind) -> Cache | FanoutCache:
     """Return a cached Cache/FanoutCache instance for the kind.
 
-    Returns
+    Returns:
     -------
     Cache | FanoutCache
         Cache instance for the kind.
@@ -404,7 +404,7 @@ def _settings_kwargs(settings: DiskCacheSettings) -> DiskCacheKwargs:
 def diskcache_stats_snapshot(cache: Cache | FanoutCache) -> dict[str, object]:
     """Return a stats snapshot for the provided DiskCache instance.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Snapshot of DiskCache stats and volume.
@@ -432,7 +432,7 @@ def build_deque(
 ) -> Deque:
     """Return a persistent DiskCache Deque.
 
-    Returns
+    Returns:
     -------
     Deque
         Persistent deque backed by DiskCache.
@@ -444,7 +444,7 @@ def build_deque(
 def build_index(profile: DiskCacheProfile, *, name: str) -> Index:
     """Return a persistent DiskCache Index.
 
-    Returns
+    Returns:
     -------
     Index
         Persistent index backed by DiskCache.

@@ -13,7 +13,7 @@ _CHUNK_SIZE = 1024 * 1024
 def scip_index_fingerprint(path: Path) -> str:
     """Return a stable SHA-256 fingerprint for a SCIP index file.
 
-    Returns
+    Returns:
     -------
     str
         Hex-encoded fingerprint of the file contents.
@@ -24,7 +24,7 @@ def scip_index_fingerprint(path: Path) -> str:
 def read_scip_fingerprint(state_store: StateStore) -> str | None:
     """Return the previous SCIP fingerprint when present.
 
-    Returns
+    Returns:
     -------
     str | None
         Stored fingerprint, or None if missing.
@@ -51,7 +51,7 @@ def scip_fingerprint_changed(
 ) -> bool:
     """Return True when the SCIP index fingerprint differs from the previous run.
 
-    Returns
+    Returns:
     -------
     bool
         True if the fingerprint changed, otherwise False.

@@ -10,15 +10,11 @@ from core_types import JsonValue
 def validate_config_mutual_exclusion(config: Mapping[str, JsonValue]) -> None:
     """Validate config-level mutual exclusion rules.
 
-    Parameters
-    ----------
-    config
-        Parsed configuration contents.
+    Args:
+        config: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when config violates mutual exclusion constraints.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     delta_config = config.get("delta", {}) or {}
     if isinstance(delta_config, dict):

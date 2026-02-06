@@ -109,7 +109,7 @@ def impact_score(signals: ImpactSignals, severity: str | None = None) -> float:
     severity : str | None
         Optional severity level for score adjustment.
 
-    Returns
+    Returns:
     -------
     float
         Impact score in [0.0, 1.0].
@@ -146,7 +146,7 @@ def confidence_score(signals: ConfidenceSignals) -> float:
     signals : ConfidenceSignals
         Confidence signal values.
 
-    Returns
+    Returns:
     -------
     float
         Confidence score in [0.0, 1.0].
@@ -162,7 +162,7 @@ def bucket(score: float) -> str:
     score : float
         Score in [0.0, 1.0].
 
-    Returns
+    Returns:
     -------
     str
         Bucket label: "high" (>= 0.7), "med" (>= 0.4), or "low".
@@ -182,7 +182,7 @@ def build_score_details(
 ) -> ScoreDetails | None:
     """Build ScoreDetails from impact/confidence signals.
 
-    Returns
+    Returns:
     -------
     ScoreDetails | None
         Score details when inputs are provided, otherwise None.
@@ -209,7 +209,7 @@ def build_detail_payload(
 ) -> DetailPayload:
     """Construct a DetailPayload from scoring signals and data.
 
-    Returns
+    Returns:
     -------
     DetailPayload
         Structured payload with score and arbitrary data fields.

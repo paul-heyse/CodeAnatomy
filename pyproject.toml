@@ -170,7 +170,7 @@ max-branches = 12
 max-returns = 6
 
 [tool.ruff.lint.pydocstyle]
-convention = "numpy"
+convention = "google"
 
 [tool.ruff.lint.flake8-type-checking]
 strict = true

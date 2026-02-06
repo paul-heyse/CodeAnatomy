@@ -68,15 +68,11 @@ PROP_INCLUDES: dict[str, PropIncludeFn] = {
 def resolve_prop_transform(transform_id: str | None) -> PropTransformSpec | None:
     """Return the PropTransformSpec for a transform id.
 
-    Returns
-    -------
-    PropTransformSpec | None
-        Transform spec for the id, if registered.
+    Args:
+        transform_id: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the transform id is not registered.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if transform_id is None:
         return None
@@ -90,15 +86,11 @@ def resolve_prop_transform(transform_id: str | None) -> PropTransformSpec | None
 def resolve_prop_include(include_id: str | None) -> PropIncludeFn | None:
     """Return the include-if function for a filter id.
 
-    Returns
-    -------
-    PropIncludeFn | None
-        Include predicate for the id, if registered.
+    Args:
+        include_id: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the include id is not registered.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if include_id is None:
         return None
@@ -116,7 +108,7 @@ def filter_fields(
 ) -> list[PropFieldSpec]:
     """Return property fields filtered by include-if rules.
 
-    Returns
+    Returns:
     -------
     list[PropFieldSpec]
         Fields that pass include-if filtering.
@@ -177,10 +169,8 @@ class PropFieldSpec(StructBaseStrict, frozen=True):
     def __post_init__(self) -> None:
         """Validate that exactly one of literal or source_col is set.
 
-        Raises
-        ------
-        ValueError
-            Raised when literal and source_col are both set or both missing.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if (self.literal is None) == (self.source_col is None):
             msg = "PropFieldSpec requires exactly one of literal or source_col."
@@ -194,7 +184,7 @@ class PropFieldSpec(StructBaseStrict, frozen=True):
         row:
             Row mapping with candidate source columns.
 
-        Returns
+        Returns:
         -------
         object | None
             Value to emit for the property.

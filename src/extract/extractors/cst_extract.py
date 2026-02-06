@@ -118,7 +118,7 @@ class CSTFileContext:
     def file_id(self) -> str:
         """Return the file id for this extraction context.
 
-        Returns
+        Returns:
         -------
         str
             File id from the file context.
@@ -129,7 +129,7 @@ class CSTFileContext:
     def path(self) -> str:
         """Return the file path for this extraction context.
 
-        Returns
+        Returns:
         -------
         str
             File path from the file context.
@@ -140,7 +140,7 @@ class CSTFileContext:
     def file_sha256(self) -> str | None:
         """Return the file sha256 for this extraction context.
 
-        Returns
+        Returns:
         -------
         str | None
             File hash from the file context.
@@ -176,7 +176,7 @@ class CSTExtractContext:
     ) -> CSTExtractContext:
         """Create an empty extraction context.
 
-        Returns
+        Returns:
         -------
         CSTExtractContext
             New extraction context with empty buffers.
@@ -665,6 +665,12 @@ class CSTCollector(cst.CSTVisitor):
         ctx: CollectorContext,
         meta: CollectorMetadata,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            ctx: Description.
+            meta: Description.
+        """
         self._module = ctx.module
         self._file_ctx = ctx.file_ctx
         self._options = ctx.extract_ctx.options
@@ -853,7 +859,7 @@ class CSTCollector(cst.CSTVisitor):
     def visit_Module(self, node: cst.Module) -> bool | None:
         """Collect module docstrings.
 
-        Returns
+        Returns:
         -------
         bool | None
             True to continue CST traversal.
@@ -869,7 +875,7 @@ class CSTCollector(cst.CSTVisitor):
     def visit_FunctionDef(self, node: cst.FunctionDef) -> bool | None:
         """Collect function definition rows.
 
-        Returns
+        Returns:
         -------
         bool | None
             True to continue CST traversal.
@@ -969,7 +975,7 @@ class CSTCollector(cst.CSTVisitor):
     def visit_ClassDef(self, node: cst.ClassDef) -> bool | None:
         """Collect class definition rows.
 
-        Returns
+        Returns:
         -------
         bool | None
             True to continue CST traversal.
@@ -1044,7 +1050,7 @@ class CSTCollector(cst.CSTVisitor):
     def visit_Name(self, node: cst.Name) -> bool | None:
         """Collect name reference rows.
 
-        Returns
+        Returns:
         -------
         bool | None
             True to continue CST traversal.
@@ -1086,7 +1092,7 @@ class CSTCollector(cst.CSTVisitor):
     def visit_Attribute(self, node: cst.Attribute) -> bool | None:
         """Collect attribute reference rows.
 
-        Returns
+        Returns:
         -------
         bool | None
             True to continue CST traversal.
@@ -1126,7 +1132,7 @@ class CSTCollector(cst.CSTVisitor):
     def visit_Import(self, node: cst.Import) -> bool | None:
         """Collect import rows.
 
-        Returns
+        Returns:
         -------
         bool | None
             True to continue CST traversal.
@@ -1165,7 +1171,7 @@ class CSTCollector(cst.CSTVisitor):
     def visit_ImportFrom(self, node: cst.ImportFrom) -> bool | None:
         """Collect from-import rows.
 
-        Returns
+        Returns:
         -------
         bool | None
             True to continue CST traversal.
@@ -1234,7 +1240,7 @@ class CSTCollector(cst.CSTVisitor):
     def visit_Call(self, node: cst.Call) -> bool | None:
         """Collect callsite rows.
 
-        Returns
+        Returns:
         -------
         bool | None
             True to continue CST traversal.
@@ -1657,7 +1663,7 @@ def extract_cst(
 ) -> ExtractResult[TableLike]:
     """Extract LibCST-derived structures from repo files.
 
-    Returns
+    Returns:
     -------
     ExtractResult[TableLike]
         Tables derived from LibCST parsing and metadata providers.
@@ -1726,7 +1732,7 @@ def extract_cst_plans(
 ) -> dict[str, DataFusionPlanBundle]:
     """Extract CST plans for nested file records.
 
-    Returns
+    Returns:
     -------
     dict[str, DataFusionPlanBundle]
         Plan bundle keyed by ``libcst_files``.
@@ -1833,7 +1839,7 @@ def extract_cst_tables(
         Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx, profile,
         prefer_reader).
 
-    Returns
+    Returns:
     -------
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted CST outputs keyed by output name.

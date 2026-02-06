@@ -46,10 +46,8 @@ class RuleSpec:
     def __post_init__(self) -> None:
         """Normalize config to a concrete mapping.
 
-        Raises
-        ------
-        TypeError
-            Raised when config is not a mapping.
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         if not isinstance(self.config, Mapping):
             msg = f"RuleSpec.config must be a mapping, got {type(self.config)!r}"
@@ -60,7 +58,7 @@ class RuleSpec:
     def to_config(self) -> Rule:
         """Convert to ast-grep-py Rule mapping.
 
-        Returns
+        Returns:
         -------
         dict[str, Any]
             Configuration dict suitable for SgNode.find_all().
@@ -77,7 +75,7 @@ class RuleSpec:
 class SgRecord:
     """Parsed record from ast-grep scan output.
 
-    Attributes
+    Attributes:
     ----------
     record
         Record type (def, call, import, raise, except, assign_ctor)
@@ -134,7 +132,7 @@ def _is_full_config(config: Mapping[str, Any]) -> bool:
     config
         Rule configuration dict.
 
-    Returns
+    Returns:
     -------
     bool
         True if config has top-level wrapper keys.
@@ -150,7 +148,7 @@ def _has_complex_rule_keys(config: Mapping[str, Any]) -> bool:
     config
         Inner rule configuration dict.
 
-    Returns
+    Returns:
     -------
     bool
         True if config has complex keys requiring {"rule": config} wrapper.
@@ -188,7 +186,7 @@ def scan_files(
     lang
         Language used by ast-grep for parsing source files.
 
-    Returns
+    Returns:
     -------
     list[SgRecord]
         Parsed scan records.
@@ -254,7 +252,7 @@ def scan_with_pattern(
     lang
         Language used by ast-grep for parsing source files.
 
-    Returns
+    Returns:
     -------
     list[dict[str, Any]]
         Raw match dictionaries with position and metavar info.
@@ -296,7 +294,7 @@ def _match_to_record(
     root
         Repository root for relative path normalization.
 
-    Returns
+    Returns:
     -------
     SgRecord | None
         Parsed record, or None if match is invalid.
@@ -350,7 +348,7 @@ def _node_to_match_dict(
     rule_id
         Rule ID to include in the result.
 
-    Returns
+    Returns:
     -------
     dict[str, Any]
         Match dictionary compatible with CLI JSON output format.
@@ -384,7 +382,7 @@ def _extract_metavars(match: SgNode) -> dict[str, dict[str, Any]]:
     match
         ast-grep-py SgNode match.
 
-    Returns
+    Returns:
     -------
     dict[str, dict[str, Any]]
         Dictionary of metavariable name to capture info.
@@ -446,7 +444,7 @@ def _apply_regex_filters(text: str, rule_config: Mapping[str, Any]) -> bool:
     rule_config
         Rule configuration that may contain regex/not.regex.
 
-    Returns
+    Returns:
     -------
     bool
         True if text passes all regex filters.
@@ -477,7 +475,7 @@ def _normalize_file_path(file_path: Path, root: Path) -> str:
     root
         Repository root.
 
-    Returns
+    Returns:
     -------
     str
         Repo-relative POSIX path string.
@@ -503,7 +501,7 @@ def filter_records_by_type(
     record_types
         Set of record types to keep. If None, returns all records.
 
-    Returns
+    Returns:
     -------
     list[SgRecord]
         Filtered records.
@@ -521,7 +519,7 @@ def group_records_by_file(records: list[SgRecord]) -> dict[str, list[SgRecord]]:
     records
         Records to group.
 
-    Returns
+    Returns:
     -------
     dict[str, list[SgRecord]]
         Records grouped by file path.

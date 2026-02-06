@@ -71,7 +71,7 @@ class ExecutionResult:
         plan_bundle
             Optional plan bundle for lineage tracking.
 
-        Returns
+        Returns:
         -------
         ExecutionResult
             Wrapped execution result.
@@ -91,7 +91,7 @@ class ExecutionResult:
         table
             Materialized table-like object.
 
-        Returns
+        Returns:
         -------
         ExecutionResult
             Wrapped execution result.
@@ -107,7 +107,7 @@ class ExecutionResult:
         reader
             Record batch reader to wrap.
 
-        Returns
+        Returns:
         -------
         ExecutionResult
             Wrapped execution result.
@@ -123,7 +123,7 @@ class ExecutionResult:
         result
             Write result to wrap.
 
-        Returns
+        Returns:
         -------
         ExecutionResult
             Wrapped execution result.
@@ -133,15 +133,8 @@ class ExecutionResult:
     def require_dataframe(self) -> DataFrame:
         """Return the DataFrame result or raise when missing.
 
-        Returns
-        -------
-        datafusion.DataFrame
-            DataFrame result for this execution.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution result is not a DataFrame.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.dataframe is None:
             msg = f"Execution result is not a dataframe: {self.kind}."
@@ -151,15 +144,8 @@ class ExecutionResult:
     def require_table(self) -> TableLike:
         """Return the materialized table result or raise when missing.
 
-        Returns
-        -------
-        TableLike
-            Materialized table result for this execution.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution result is not a table.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.table is None:
             msg = f"Execution result is not a table: {self.kind}."
@@ -169,15 +155,8 @@ class ExecutionResult:
     def require_reader(self) -> RecordBatchReaderLike:
         """Return the record batch reader or raise when missing.
 
-        Returns
-        -------
-        RecordBatchReaderLike
-            Streaming reader for this execution.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution result is not a reader.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.reader is None:
             msg = f"Execution result is not a reader: {self.kind}."
@@ -187,15 +166,8 @@ class ExecutionResult:
     def require_write(self) -> WriteResult:
         """Return the write result or raise when missing.
 
-        Returns
-        -------
-        WriteResult
-            Write result for this execution.
-
-        Raises
-        ------
-        ValueError
-            Raised when the execution result is not a write.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.write_result is None:
             msg = f"Execution result is not a write result: {self.kind}."

@@ -80,7 +80,7 @@ class TableSpec:
         version
             Delta version to pin.
 
-        Returns
+        Returns:
         -------
         TableSpec
             New TableSpec with version pinned.
@@ -106,7 +106,7 @@ class TableSpec:
     def cache_key(self) -> str:
         """Return a stable cache key for this table specification.
 
-        Returns
+        Returns:
         -------
         str
             Stable identifier for caching and comparison.
@@ -135,26 +135,17 @@ def table_spec_from_location(
 ) -> TableSpec:
     """Build a TableSpec from a DatasetLocation.
 
-    Parameters
-    ----------
-    name
-        Logical table name.
-    location
-        Dataset location with path and format metadata.
-    schema
-        Optional schema override. If None, will need to be inferred.
-    required_udfs
-        UDF names required for queries against this table.
+    Args:
+        name: Description.
+            location: Description.
+            schema: Description.
+            required_udfs: Description.
 
-    Returns
-    -------
-    TableSpec
-        Unified table specification.
+    Returns:
+        TableSpec: Result.
 
-    Raises
-    ------
-    ValueError
-        When schema is required but not provided.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     resolved = location.resolved
     if schema is None:

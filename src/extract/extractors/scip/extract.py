@@ -137,7 +137,7 @@ class ScipExtractContext:
     def ensure_session(self) -> ExtractSession:
         """Return the effective extract session.
 
-        Returns
+        Returns:
         -------
         ExtractSession
             Provided session or a profile-derived session when missing.
@@ -150,7 +150,7 @@ class ScipExtractContext:
     def ensure_runtime_profile(self) -> DataFusionRuntimeProfile:
         """Return the DataFusion runtime profile for SCIP extraction.
 
-        Returns
+        Returns:
         -------
         DataFusionRuntimeProfile
             Runtime profile derived from the extract session.
@@ -255,24 +255,16 @@ def run_scip_python_index(
 ) -> Path:
     """Run scip-python to produce an index.scip file.
 
-    Parameters
-    ----------
-    opts:
-        Index invocation options.
-    on_complete:
-        Optional callback invoked with the run report regardless of exit status.
+    Args:
+        opts: Description.
+            on_complete: Description.
 
-    Returns
-    -------
-    pathlib.Path
-        Path to the generated index.scip file.
+    Returns:
+        Path: Result.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when scip-python exits with a non-zero status.
-    FileNotFoundError
-        Raised when the output file is not found after execution.
+    Raises:
+        FileNotFoundError: If the operation cannot be completed.
+            RuntimeError: If the operation cannot be completed.
     """
     with stage_span(
         "extract.scip_index",
@@ -330,7 +322,7 @@ def run_scip_python_index(
 def _normalize_range(rng: Sequence[int]) -> tuple[int, int, int, int, int] | None:
     """Normalize SCIP occurrence ranges to a consistent 4-tuple.
 
-    Returns
+    Returns:
     -------
     tuple[int, int, int, int, int]
         Normalized start/end positions and a range length marker.
@@ -431,22 +423,15 @@ def _parse_index_protobuf(index_path: Path, scip_pb2: ModuleType) -> object:
 def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = None) -> object:
     """Parse index.scip into a protobuf Index object.
 
-    Parameters
-    ----------
-    index_path:
-        Path to the index.scip file.
-    parse_opts:
-        Parsing options.
+    Args:
+        index_path: Description.
+            parse_opts: Description.
 
-    Returns
-    -------
-    object
-        Parsed protobuf Index instance.
+    Returns:
+        object: Result.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when SCIP protobuf bindings cannot be imported.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     normalized_opts = normalize_options("scip", parse_opts, SCIPParseOptions)
     if normalized_opts.build_dir is None:
@@ -503,10 +488,11 @@ def _index_counts(index: object) -> tuple[dict[str, int], bool]:
 def assert_scip_index_health(index: object) -> None:
     """Raise when the SCIP index is missing core data.
 
-    Raises
-    ------
-    ValueError
-        Raised when the index has no documents or occurrences.
+    Args:
+        index: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     counts, _has_index_symbols = _index_counts(index)
     if counts["documents"] == 0:
@@ -624,7 +610,7 @@ def _metadata_row(index: object, *, index_id: str | None, index_path: Path) -> R
 def _strip_keys(row: Row, *, keys: Sequence[str]) -> Row:
     """Return a row mapping without the specified keys.
 
-    Returns
+    Returns:
     -------
     Row
         Row mapping with requested keys removed.
@@ -647,7 +633,7 @@ class _ScipDocumentInputs:
 def _scip_document_row(inputs: _ScipDocumentInputs) -> Row:
     """Build a nested document payload for the SCIP index row.
 
-    Returns
+    Returns:
     -------
     Row
         Nested document payload for the SCIP index row.
@@ -1416,7 +1402,7 @@ def extract_scip_tables(
     prefer_reader:
         When True, return streaming readers when possible.
 
-    Returns
+    Returns:
     -------
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted SCIP outputs keyed by output name.

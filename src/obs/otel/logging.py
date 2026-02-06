@@ -26,7 +26,7 @@ class TraceContextFilter(logging.Filter):
     def filter(record: logging.LogRecord) -> bool:
         """Inject trace/span IDs into the log record when available.
 
-        Returns
+        Returns:
         -------
         bool
             True to keep the log record.
@@ -49,7 +49,7 @@ class TraceContextFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Format a log record with ensured trace/span fields.
 
-        Returns
+        Returns:
         -------
         str
             Formatted log record string.

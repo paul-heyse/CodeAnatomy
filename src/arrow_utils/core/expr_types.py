@@ -22,7 +22,7 @@ class ExplodeSpec:
     def rename_parent(self, *, parent: str, value: str) -> tuple[str, str] | None:
         """Return rename columns when defaults were used.
 
-        Returns
+        Returns:
         -------
         tuple[str, str] | None
             Rename pair for parent/value when defaults were used.

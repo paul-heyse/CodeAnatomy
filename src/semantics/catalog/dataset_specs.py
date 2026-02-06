@@ -34,7 +34,7 @@ _CACHE = _DatasetSpecCache()
 def _get_all_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     """Import and return all dataset rows to avoid circular import.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticDatasetRow, ...]
         All semantic dataset rows.
@@ -52,7 +52,7 @@ def _build_spec(row: SemanticDatasetRow) -> DatasetSpec:
     row
         Semantic dataset row.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Built dataset spec.
@@ -70,7 +70,7 @@ def _build_input(row: SemanticDatasetRow) -> SchemaLike:
     row
         Semantic dataset row.
 
-    Returns
+    Returns:
     -------
     SchemaLike
         Built input schema.
@@ -83,7 +83,7 @@ def _build_input(row: SemanticDatasetRow) -> SchemaLike:
 def _get_dataset_rows_map() -> dict[str, SemanticDatasetRow]:
     """Return the lazily-initialized dataset rows mapping.
 
-    Returns
+    Returns:
     -------
     dict[str, SemanticDatasetRow]
         Mapping from dataset name to row.
@@ -98,7 +98,7 @@ def _get_dataset_rows_map() -> dict[str, SemanticDatasetRow]:
 def _get_input_schemas() -> dict[str, SchemaLike]:
     """Return the lazily-initialized input schemas mapping.
 
-    Returns
+    Returns:
     -------
     dict[str, SchemaLike]
         Mapping from dataset name to input schema.
@@ -113,7 +113,7 @@ def _get_input_schemas() -> dict[str, SchemaLike]:
 def _get_dataset_specs() -> dict[str, DatasetSpec]:
     """Return the lazily-initialized dataset specs mapping.
 
-    Returns
+    Returns:
     -------
     dict[str, DatasetSpec]
         Mapping from dataset name to DatasetSpec.
@@ -128,15 +128,8 @@ def _get_dataset_specs() -> dict[str, DatasetSpec]:
 def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
     """Return the lazily-initialized alias mappings.
 
-    Returns
-    -------
-    tuple[dict[str, str], dict[str, str]]
-        Tuple of (name_to_alias, alias_to_name) mappings.
-
-    Raises
-    ------
-    ValueError
-        Raised when duplicate aliases are detected in the registry.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     dataset_aliases = _CACHE.dataset_aliases
     aliases_to_name = _CACHE.aliases_to_name
@@ -158,22 +151,12 @@ def _get_alias_maps() -> tuple[dict[str, str], dict[str, str]]:
 def dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetSpec:
     """Return a DatasetSpec by name.
 
-    Parameters
-    ----------
-    name
-        Dataset name to retrieve.
-    ctx
-        Optional DataFusion session context for runtime enrichment.
+    Args:
+        name: Description.
+        ctx: Description.
 
-    Returns
-    -------
-    DatasetSpec
-        Registered dataset spec.
-
-    Raises
-    ------
-    KeyError
-        Raised when the dataset name is not found.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     # ctx reserved for future runtime enrichment
     _ = ctx
@@ -187,7 +170,7 @@ def dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetSpec:
 def maybe_dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetSpec | None:
     """Return a DatasetSpec by name when available.
 
-    Returns
+    Returns:
     -------
     DatasetSpec | None
         Registered dataset spec when present, otherwise ``None``.
@@ -201,7 +184,7 @@ def maybe_dataset_spec(name: str, ctx: SessionContext | None = None) -> DatasetS
 def dataset_specs() -> Iterable[DatasetSpec]:
     """Return all semantic dataset specs.
 
-    Returns
+    Returns:
     -------
     Iterable[DatasetSpec]
         Dataset specifications in registry order.
@@ -217,7 +200,7 @@ def dataset_schema(name: str) -> SchemaLike:
     name
         Dataset name to retrieve.
 
-    Returns
+    Returns:
     -------
     SchemaLike
         Dataset schema with metadata.
@@ -231,23 +214,11 @@ def dataset_schema(name: str) -> SchemaLike:
 def dataset_input_schema(name: str) -> SchemaLike:
     """Return the input schema for a semantic dataset.
 
-    The input schema represents the expected schema from upstream sources
-    before transformations are applied.
+    Args:
+        name: Description.
 
-    Parameters
-    ----------
-    name
-        Dataset name to retrieve.
-
-    Returns
-    -------
-    SchemaLike
-        Input schema for plan sources.
-
-    Raises
-    ------
-    KeyError
-        Raised when the dataset name is not found.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     schemas = _get_input_schemas()
     if name not in schemas:
@@ -259,7 +230,7 @@ def dataset_input_schema(name: str) -> SchemaLike:
 def dataset_names() -> tuple[str, ...]:
     """Return semantic dataset names in registry order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Dataset names.
@@ -270,20 +241,11 @@ def dataset_names() -> tuple[str, ...]:
 def dataset_name_from_alias(alias: str) -> str:
     """Return the dataset name for a canonical alias.
 
-    Parameters
-    ----------
-    alias
-        Alias to resolve.
+    Args:
+        alias: Description.
 
-    Returns
-    -------
-    str
-        Canonical dataset name.
-
-    Raises
-    ------
-    KeyError
-        Raised when the dataset alias is unknown.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     name_to_alias, alias_to_name = _get_alias_maps()
     name = alias_to_name.get(alias)
@@ -299,20 +261,11 @@ def dataset_name_from_alias(alias: str) -> str:
 def dataset_alias(name: str) -> str:
     """Return the canonical alias for a dataset name.
 
-    Parameters
-    ----------
-    name
-        Dataset name to resolve.
+    Args:
+        name: Description.
 
-    Returns
-    -------
-    str
-        Dataset alias used in pipeline wiring.
-
-    Raises
-    ------
-    KeyError
-        Raised when the dataset name is unknown.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     name_to_alias, alias_to_name = _get_alias_maps()
     alias = name_to_alias.get(name)
@@ -338,7 +291,7 @@ def dataset_contract(
     ctx
         Optional DataFusion session context for runtime enrichment.
 
-    Returns
+    Returns:
     -------
     ContractSpec
         Contract specification for the dataset.
@@ -357,7 +310,7 @@ def dataset_contract_schema(name: str) -> SchemaLike:
     name
         Dataset name to retrieve.
 
-    Returns
+    Returns:
     -------
     SchemaLike
         Arrow schema defined by the dataset contract.
@@ -369,23 +322,11 @@ def dataset_contract_schema(name: str) -> SchemaLike:
 def dataset_merge_keys(name: str) -> tuple[str, ...]:
     """Return merge keys for a semantic dataset.
 
-    Merge keys are used for Delta Lake merge operations during
-    incremental processing.
+    Args:
+        name: Description.
 
-    Parameters
-    ----------
-    name
-        Dataset name to retrieve.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Merge key column names, or empty tuple if merge is not supported.
-
-    Raises
-    ------
-    KeyError
-        Raised when the dataset name is not found.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     rows = _get_dataset_rows_map()
     if name not in rows:
@@ -400,23 +341,11 @@ def dataset_merge_keys(name: str) -> tuple[str, ...]:
 def supports_incremental(name: str) -> bool:
     """Return whether a semantic dataset supports incremental processing.
 
-    A dataset supports incremental processing when it has CDF enabled
-    and merge keys defined.
+    Args:
+        name: Description.
 
-    Parameters
-    ----------
-    name
-        Dataset name to check.
-
-    Returns
-    -------
-    bool
-        True if the dataset supports incremental processing.
-
-    Raises
-    ------
-    KeyError
-        Raised when the dataset name is not found.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     rows = _get_dataset_rows_map()
     if name not in rows:

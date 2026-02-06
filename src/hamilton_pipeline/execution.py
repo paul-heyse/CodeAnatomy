@@ -260,7 +260,7 @@ def execute_pipeline(
 ) -> Mapping[str, JsonDict | None]:
     """Execute the full Hamilton pipeline for a repository.
 
-    Returns
+    Returns:
     -------
     Mapping[str, JsonDict | None]
         Mapping of output node names to their emitted metadata.

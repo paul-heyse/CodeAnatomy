@@ -53,7 +53,7 @@ def build_module_index(
 ) -> pa.Table:
     """Build a per-file module index table.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Module index table with module_fqn and is_init columns.

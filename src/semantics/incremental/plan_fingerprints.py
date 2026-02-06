@@ -46,7 +46,7 @@ class PlanFingerprintSnapshot:
     Plan snapshots capture both the DataFusion plan fingerprint and a
     runtime-aware task signature that includes session identity.
 
-    Attributes
+    Attributes:
     ----------
     plan_fingerprint : str
         SHA256 hash of Substrait bytes or optimized plan display.
@@ -61,7 +61,7 @@ class PlanFingerprintSnapshot:
 def _plan_fingerprints_path(state_store: StateStore) -> Path:
     """Return the plan fingerprint metadata path.
 
-    Returns
+    Returns:
     -------
     Path
         Path to the plan fingerprint metadata directory.
@@ -76,7 +76,7 @@ def read_plan_snapshots(
 ) -> dict[str, PlanFingerprintSnapshot]:
     """Read plan fingerprints from the state store.
 
-    Returns
+    Returns:
     -------
     dict[str, PlanFingerprintSnapshot]
         Mapping of task names to plan snapshot metadata.
@@ -117,7 +117,7 @@ def read_plan_fingerprints(
 ) -> dict[str, str]:
     """Read plan fingerprints from the state store.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of task names to plan fingerprints.
@@ -136,7 +136,7 @@ def write_plan_snapshots(
 ) -> str:
     """Persist plan fingerprints to the state store.
 
-    Returns
+    Returns:
     -------
     str
         Delta table path where fingerprints were written.
@@ -202,7 +202,7 @@ def write_plan_fingerprints(
 ) -> str:
     """Persist plan fingerprints to the state store.
 
-    Returns
+    Returns:
     -------
     str
         Delta table path where fingerprints were written.

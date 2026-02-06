@@ -59,7 +59,7 @@ def write_delta_table_via_pipeline(
     request:
         Write request settings for the Delta destination.
 
-    Returns
+    Returns:
     -------
     WriteResult
         Result payload from the WritePipeline write.

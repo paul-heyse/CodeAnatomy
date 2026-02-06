@@ -31,7 +31,7 @@ from storage.ipc_utils import read_table_ipc_file, write_table_ipc_file, write_t
 def mmap_file(path: PathLike, *, mode: Literal["r", "r+", "w+", "a+"] = "r") -> pa.MemoryMappedFile:
     """Return a memory-mapped file handle for a path.
 
-    Returns
+    Returns:
     -------
     pyarrow.MemoryMappedFile
         Memory-mapped file handle.
@@ -47,7 +47,7 @@ def open_compressed_input(
 ) -> pa.CompressedInputStream:
     """Return a compressed input stream for a path.
 
-    Returns
+    Returns:
     -------
     pyarrow.CompressedInputStream
         Compressed input stream.
@@ -63,7 +63,7 @@ def open_compressed_output(
 ) -> pa.CompressedOutputStream:
     """Return a compressed output stream for a path.
 
-    Returns
+    Returns:
     -------
     pyarrow.CompressedOutputStream
         Compressed output stream.

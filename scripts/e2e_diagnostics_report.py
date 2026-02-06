@@ -750,7 +750,7 @@ def _build_report(
 def main(argv: Sequence[str] | None = None) -> int:
     """Generate a diagnostic report for e2e pipeline outputs.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

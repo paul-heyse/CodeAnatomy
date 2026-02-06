@@ -108,7 +108,7 @@ def build_task_execution_module(
 ) -> ModuleType:
     """Build a Hamilton module with per-task execution nodes.
 
-    Returns
+    Returns:
     -------
     ModuleType
         Module containing dynamically generated task output nodes.

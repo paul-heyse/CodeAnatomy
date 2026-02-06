@@ -158,7 +158,7 @@ def _write_artifact(report: MaintenanceReport, artifact_path: str | None) -> Non
 def main(argv: Sequence[str] | None = None) -> int:
     """Run Delta maintenance tasks with CLI-provided options.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

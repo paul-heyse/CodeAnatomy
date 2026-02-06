@@ -20,15 +20,11 @@ class DataTypeLike(Protocol):
 def ensure_arrow_dtype(dtype: DataTypeLike | object) -> pa.DataType:
     """Return a concrete pyarrow.DataType for known spec types.
 
-    Returns
-    -------
-    pa.DataType
-        Resolved Arrow data type.
+    Args:
+        dtype: Description.
 
-    Raises
-    ------
-    TypeError
-        If the input cannot be coerced into a pyarrow.DataType.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if isinstance(dtype, pa.DataType):
         return dtype
@@ -52,7 +48,7 @@ def coerce_arrow_schema(value: object) -> pa.Schema | None:
     value
         Schema-like value to coerce.
 
-    Returns
+    Returns:
     -------
     pa.Schema | None
         Coerced schema, or ``None`` when conversion is not possible.
@@ -177,7 +173,7 @@ class RecordBatchReaderLike(Protocol):
     def __subclasshook__(cls, subclass: type, /) -> bool:
         """Return True when a subclass satisfies the reader protocol shape.
 
-        Returns
+        Returns:
         -------
         bool
             True when the subclass advertises the expected reader attributes.
@@ -254,7 +250,7 @@ class TableLike(Protocol):
     def __subclasshook__(cls, subclass: type, /) -> bool:
         """Return True when a subclass satisfies the table protocol shape.
 
-        Returns
+        Returns:
         -------
         bool
             True when the subclass advertises the expected table attributes.
@@ -436,15 +432,11 @@ type ScalarOperand = str | bytes | ScalarLike | ComputeExpression
 def ensure_expression(value: object) -> ComputeExpression:
     """Return a compute expression after a runtime guard.
 
-    Returns
-    -------
-    ComputeExpression
-        The validated compute expression.
+    Args:
+        value: Description.
 
-    Raises
-    ------
-    TypeError
-        If the value is not a compute expression.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if isinstance(value, ComputeExpression):
         return value
@@ -459,26 +451,14 @@ def call_expression_function(
 ) -> ComputeExpression:
     """Return a compute expression for a registered function call.
 
-    Parameters
-    ----------
-    function_name
-        Compute function name to invoke.
-    arguments
-        Compute expression arguments for the function.
-    options
-        Optional function options payload.
+    Args:
+        function_name: Description.
+        arguments: Description.
+        options: Description.
 
-    Returns
-    -------
-    ComputeExpression
-        Expression representing the function call.
-
-    Raises
-    ------
-    ValueError
-        Raised when no arguments are provided.
-    AttributeError
-        Raised when the expression does not support function calls.
+    Raises:
+        AttributeError: If the operation cannot be completed.
+        ValueError: If the operation cannot be completed.
     """
     if not arguments:
         msg = "call_expression_function requires at least one argument."
@@ -496,17 +476,12 @@ def call_expression_function(
 def table_from_dataframe_protocol(obj: object) -> TableLike:
     """Return a pyarrow.Table from the dataframe interchange protocol.
 
-    Returns
-    -------
-    TableLike
-        Arrow table constructed from the dataframe protocol.
+    Args:
+        obj: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when pyarrow interchange is unavailable.
-    TypeError
-        Raised when the object does not implement the protocol.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
+        TypeError: If the operation cannot be completed.
     """
     interchange = getattr(pa, "interchange", None)
     if interchange is None:
@@ -525,30 +500,13 @@ def reader_from_arrow_stream(
 ) -> RecordBatchReaderLike:
     """Return a RecordBatchReader from an Arrow C stream provider.
 
-    Parameters
-    ----------
-    obj
-        Input object exposing the Arrow C stream protocol.
-    requested_schema
-        Optional schema request for providers that support projection or reordering.
+    Args:
+        obj: Description.
+        requested_schema: Description.
 
-    Returns
-    -------
-    RecordBatchReaderLike
-        Record batch reader over the stream input.
-
-    Raises
-    ------
-    TypeError
-        Raised when the object does not expose the Arrow C stream protocol.
-    ValueError
-        Raised when schema negotiation is not supported by the provider.
-
-    Notes
-    -----
-    Arrow C stream providers are single-consumption objects. Keep the
-    provider alive for the duration of ingestion and do not reuse it after
-    conversion.
+    Raises:
+        TypeError: If the operation cannot be completed.
+        ValueError: If the operation cannot be completed.
     """
     stream_provider = getattr(obj, "__arrow_c_stream__", None)
     if not callable(stream_provider):
@@ -576,31 +534,14 @@ def table_from_arrow_c_array(
 ) -> TableLike:
     """Return a table from an Arrow C array provider.
 
-    Parameters
-    ----------
-    obj
-        Object implementing the Arrow C array protocol.
-    name
-        Column name to assign to the imported array.
-    requested_schema
-        Optional schema request for providers that support projection or reordering.
+    Args:
+        obj: Description.
+        name: Description.
+        requested_schema: Description.
 
-    Returns
-    -------
-    TableLike
-        Single-column table built from the imported array.
-
-    Raises
-    ------
-    TypeError
-        Raised when the object does not expose the Arrow C array protocol.
-    ValueError
-        Raised when the Arrow C array schema capsule is missing.
-
-    Notes
-    -----
-    Arrow C array providers are single-consumption objects. Keep the provider
-    alive for the duration of ingestion and do not reuse it after conversion.
+    Raises:
+        TypeError: If the operation cannot be completed.
+        ValueError: If the operation cannot be completed.
     """
     array_provider = getattr(obj, "__arrow_c_array__", None)
     if not callable(array_provider):
@@ -636,22 +577,15 @@ def coerce_table_like(
 ) -> TableLike | RecordBatchReaderLike:
     """Coerce Arrow-like inputs into table or reader representations.
 
-    Parameters
-    ----------
-    obj
-        Input object to coerce.
-    requested_schema
-        Optional schema request for providers that support projection or reordering.
+    Args:
+        obj: Description.
+            requested_schema: Description.
 
-    Returns
-    -------
-    TableLike | RecordBatchReaderLike
-        Coerced table or reader instance.
+    Returns:
+        TableLike | RecordBatchReaderLike: Result.
 
-    Raises
-    ------
-    TypeError
-        Raised when the object cannot be coerced.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if isinstance(obj, (TableLike, RecordBatchReaderLike)):
         return obj
@@ -672,22 +606,12 @@ def as_reader(
 ) -> RecordBatchReaderLike:
     """Return a RecordBatchReader for Arrow table/stream-compatible inputs.
 
-    Parameters
-    ----------
-    obj
-        Input object implementing table, reader, or Arrow stream export contracts.
-    requested_schema
-        Optional projection schema for stream-capable exporters.
+    Args:
+        obj: Description.
+        requested_schema: Description.
 
-    Returns
-    -------
-    RecordBatchReaderLike
-        Reader view over the provided input.
-
-    Raises
-    ------
-    TypeError
-        Raised when the object cannot be adapted to a reader.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if isinstance(obj, RecordBatchReaderLike):
         return obj
@@ -711,20 +635,11 @@ def as_reader(
 def concat_readers(readers: Sequence[RecordBatchReaderLike]) -> RecordBatchReaderLike:
     """Return a RecordBatchReader that concatenates reader batches in order.
 
-    Parameters
-    ----------
-    readers
-        Sequence of RecordBatchReader inputs to concatenate.
+    Args:
+        readers: Description.
 
-    Returns
-    -------
-    RecordBatchReaderLike
-        Reader yielding batches from each input reader in order.
-
-    Raises
-    ------
-    ValueError
-        Raised when readers are empty or schema mismatches are detected.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not readers:
         msg = "concat_readers requires at least one reader."
@@ -746,7 +661,7 @@ def concat_readers(readers: Sequence[RecordBatchReaderLike]) -> RecordBatchReade
 def empty_table_for_schema(schema: pa.Schema) -> pa.Table:
     """Return an empty table preserving schema metadata and complex types.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Empty table with the provided schema.

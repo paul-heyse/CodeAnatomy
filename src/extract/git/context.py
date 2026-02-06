@@ -26,7 +26,7 @@ class GitContext:
 def open_git_context(path: PathLike) -> GitContext | None:
     """Return a GitContext if the path belongs to a git repository.
 
-    Returns
+    Returns:
     -------
     GitContext | None
         Git context when discovery succeeds.
@@ -48,7 +48,7 @@ def open_git_context(path: PathLike) -> GitContext | None:
 def discover_repo_root(path: PathLike) -> Path | None:
     """Return the repository root for a path when available.
 
-    Returns
+    Returns:
     -------
     pathlib.Path | None
         Repository root when available.
@@ -63,7 +63,7 @@ def discover_repo_root(path: PathLike) -> Path | None:
 def discover_repo_root_from_paths(paths: Iterable[PathLike]) -> Path | None:
     """Return the first repository root discovered from input paths.
 
-    Returns
+    Returns:
     -------
     pathlib.Path | None
         First repository root found, if any.
@@ -78,7 +78,7 @@ def discover_repo_root_from_paths(paths: Iterable[PathLike]) -> Path | None:
 def github_name_with_owner(origin_url: str | None) -> str | None:
     """Return a nameWithOwner slug for GitHub origins when possible.
 
-    Returns
+    Returns:
     -------
     str | None
         GitHub nameWithOwner slug when derivable.
@@ -103,7 +103,7 @@ def github_name_with_owner(origin_url: str | None) -> str | None:
 def default_project_name(repo_root: Path) -> str:
     """Return a default project name derived from a repo root.
 
-    Returns
+    Returns:
     -------
     str
         Project name derived from the repo root.

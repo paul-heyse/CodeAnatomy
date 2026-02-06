@@ -68,7 +68,7 @@ def normalize_byte_span_df(
     Prefers explicit bstart/bend, then byte_start/byte_len, then span.byte_span,
     and finally falls back to line/col conversion using file_line_index_v1.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame with bstart/bend/span columns normalized.
@@ -120,7 +120,7 @@ def normalize_byte_span_df(
 def drop_line_columns(df: DataFrame, *, extra: Iterable[str] = ()) -> DataFrame:
     """Drop line/column metadata columns if present.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame without line/column metadata columns.

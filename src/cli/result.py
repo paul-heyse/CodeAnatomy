@@ -52,7 +52,7 @@ class CliResult:
         metrics
             Optional metrics.
 
-        Returns
+        Returns:
         -------
         CliResult
             Success result with exit code 0.
@@ -80,7 +80,7 @@ class CliResult:
         summary
             Optional error summary.
 
-        Returns
+        Returns:
         -------
         CliResult
             Error result with the specified exit code.
@@ -109,7 +109,7 @@ class CliResult:
         summary
             Optional custom summary (defaults to exception message).
 
-        Returns
+        Returns:
         -------
         CliResult
             Error result with exit code derived from exception type.
@@ -124,7 +124,7 @@ class CliResult:
     def ok(self) -> bool:
         """Check if the result indicates success.
 
-        Returns
+        Returns:
         -------
         bool
             True if exit_code is 0.

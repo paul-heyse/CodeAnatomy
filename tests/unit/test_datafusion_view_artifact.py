@@ -126,7 +126,7 @@ def test_build_view_artifact_from_bundle(mock_plan_bundle: DataFusionPlanBundle)
 def mock_plan_bundle() -> DataFusionPlanBundle:
     """Create a mock DataFusionPlanBundle for testing.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Mock plan bundle with test fingerprint.

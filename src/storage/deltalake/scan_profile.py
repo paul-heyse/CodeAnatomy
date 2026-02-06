@@ -14,7 +14,7 @@ def build_delta_scan_config(
 ) -> DeltaScanOptions | None:
     """Return the effective Delta scan configuration for a dataset.
 
-    Returns
+    Returns:
     -------
     DeltaScanOptions | None
         Resolved Delta scan options when applicable.

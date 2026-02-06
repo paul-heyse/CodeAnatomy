@@ -144,7 +144,7 @@ class DocstringsPolicyConfigSpec(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for docstring policy settings.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing docstring policy settings.
@@ -159,7 +159,7 @@ class DocstringsPolicyConfigSpec(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return fingerprint for docstring policy settings.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.

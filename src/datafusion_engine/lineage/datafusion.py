@@ -113,7 +113,7 @@ def extract_lineage(
 ) -> LineageReport:
     """Extract lineage information from a DataFusion logical plan.
 
-    Returns
+    Returns:
     -------
     LineageReport
         Structured lineage report extracted from the plan.
@@ -153,7 +153,7 @@ def extract_lineage(
 def referenced_tables_from_plan(plan: object) -> tuple[str, ...]:
     """Extract referenced table names from a DataFusion plan.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted table names referenced in the plan.
@@ -164,7 +164,7 @@ def referenced_tables_from_plan(plan: object) -> tuple[str, ...]:
 def required_columns_by_table(plan: object) -> Mapping[str, tuple[str, ...]]:
     """Extract required columns per table from a DataFusion plan.
 
-    Returns
+    Returns:
     -------
     Mapping[str, tuple[str, ...]]
         Mapping of dataset name to required columns.

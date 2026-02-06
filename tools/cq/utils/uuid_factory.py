@@ -32,15 +32,8 @@ else:
 def uuid7() -> uuid.UUID:
     """Return a time-ordered UUIDv7 (thread-safe, monotone).
 
-    Returns
-    -------
-    uuid.UUID
-        Generated UUIDv7 instance.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when uuid7 is unavailable and no uuid6 fallback is installed.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _UUID_LOCK:
         uuid7_func = getattr(uuid, "uuid7", None)
@@ -57,7 +50,7 @@ def uuid7_str() -> str:
 
     Used by CQ identifiers that prefer a string representation.
 
-    Returns
+    Returns:
     -------
     str
         UUIDv7 string.
@@ -70,7 +63,7 @@ def uuid7_hex() -> str:
 
     Used by CQ artifacts that need compact, sortable identifiers.
 
-    Returns
+    Returns:
     -------
     str
         UUIDv7 hex string.
@@ -81,17 +74,11 @@ def uuid7_hex() -> str:
 def uuid7_suffix(length: int = 12) -> str:
     """Return a short suffix from the UUIDv7 random tail.
 
-    Used when a shorter ID suffix is sufficient for logs or filenames.
+    Args:
+        length: Description.
 
-    Returns
-    -------
-    str
-        UUIDv7 suffix string.
-
-    Raises
-    ------
-    ValueError
-        If ``length`` is non-positive or exceeds ``UUID7_HEX_LENGTH``.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if length <= 0:
         msg = "length must be positive."
@@ -105,17 +92,11 @@ def uuid7_suffix(length: int = 12) -> str:
 def secure_token_hex(nbytes: int = 16) -> str:
     """Return a CSPRNG-backed hex token.
 
-    Used for security-sensitive tokens where UUIDv7 is not appropriate.
+    Args:
+        nbytes: Description.
 
-    Returns
-    -------
-    str
-        Hex-encoded random token.
-
-    Raises
-    ------
-    ValueError
-        If ``nbytes`` is non-positive.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if nbytes <= 0:
         msg = "nbytes must be positive."

@@ -24,7 +24,7 @@ _OUTPUT_ROWS_RE = re.compile(r"\|\s*Output Rows\s*\|\s*(?P<value>[0-9]+)\s*\|")
 class ExplainCapture:
     """Capture explain output and parsed metrics.
 
-    Attributes
+    Attributes:
     ----------
     text
         Raw explain output text.
@@ -56,7 +56,7 @@ def capture_explain(
     analyze
         Whether to request EXPLAIN ANALYZE output.
 
-    Returns
+    Returns:
     -------
     ExplainCapture | None
         Captured explain output and metrics, or ``None`` if unavailable.
@@ -129,7 +129,7 @@ def _parse_duration_ms(text: str) -> float | None:
     text
         Explain output text.
 
-    Returns
+    Returns:
     -------
     float | None
         Duration in milliseconds, when available.
@@ -158,7 +158,7 @@ def _parse_output_rows(text: str) -> int | None:
     text
         Explain output text.
 
-    Returns
+    Returns:
     -------
     int | None
         Output row count, when available.

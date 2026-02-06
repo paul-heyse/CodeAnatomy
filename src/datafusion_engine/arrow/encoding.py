@@ -50,7 +50,7 @@ class EncodingPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the encoding policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing encoding policy settings.
@@ -79,7 +79,7 @@ class EncodingPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the encoding policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.

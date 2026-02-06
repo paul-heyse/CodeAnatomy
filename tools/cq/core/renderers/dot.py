@@ -54,7 +54,7 @@ class DotRenderBuilder:
     def render(self) -> str:
         """Render the accumulated DOT graph.
 
-        Returns
+        Returns:
         -------
         str
             Complete DOT graph payload.
@@ -72,7 +72,7 @@ def render_dot(result: CqResult, graph_name: str = "cq_result") -> str:
     graph_name
         Name for the DOT graph
 
-    Returns
+    Returns:
     -------
     str
         DOT format string.
@@ -120,7 +120,7 @@ def _sanitize_dot_id(name: str) -> str:
     name
         Original name
 
-    Returns
+    Returns:
     -------
     str
         Sanitized node ID safe for DOT.
@@ -147,7 +147,7 @@ def _escape_dot_string(s: str) -> str:
     s
         Original string
 
-    Returns
+    Returns:
     -------
     str
         Escaped string safe for DOT labels.
@@ -165,7 +165,7 @@ def _kind_to_shape(kind: str) -> str:
     kind
         Entity kind (function, class, etc.)
 
-    Returns
+    Returns:
     -------
     str
         DOT shape name.

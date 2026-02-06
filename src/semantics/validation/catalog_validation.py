@@ -44,7 +44,7 @@ def _information_schema_tables(ctx: SessionContext) -> set[str]:
     ctx
         DataFusion session context.
 
-    Returns
+    Returns:
     -------
     set[str]
         Table names available in information_schema.
@@ -63,7 +63,7 @@ def _information_schema_columns(ctx: SessionContext, table_name: str) -> set[str
     table_name
         Table name to inspect.
 
-    Returns
+    Returns:
     -------
     set[str]
         Column names for the table.
@@ -130,7 +130,7 @@ def validate_semantic_input_columns(
     specs
         Optional column validation specs to override defaults.
 
-    Returns
+    Returns:
     -------
     SemanticInputValidationResult
         Validation result with missing tables/columns details.

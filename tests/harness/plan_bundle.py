@@ -24,15 +24,16 @@ def build_plan_manifest_for_sql(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Build a plan bundle and return ``plan_manifest`` plus full plan details.
 
-    Returns
-    -------
-    tuple[dict[str, object], dict[str, object]]
-        The plan-manifest payload and the full plan-details mapping.
+    Args:
+        ctx: Description.
+            session_runtime: Description.
+            sql: Description.
 
-    Raises
-    ------
-    TypeError
-        If the generated plan bundle does not include a manifest mapping.
+    Returns:
+        tuple[dict[str, object], dict[str, object]]: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     bundle = build_plan_bundle(
         ctx,
@@ -55,7 +56,7 @@ def persist_plan_artifacts(
 ) -> tuple[Path, Path]:
     """Persist manifest/detail JSON payloads for failure triage.
 
-    Returns
+    Returns:
     -------
     tuple[Path, Path]
         Paths to the persisted manifest and plan-details JSON files.

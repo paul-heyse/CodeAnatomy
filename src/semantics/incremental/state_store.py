@@ -21,7 +21,7 @@ class StateStore:
     def snapshots_dir(self) -> Path:
         """Return the snapshots directory.
 
-        Returns
+        Returns:
         -------
         Path
             Snapshots directory path.
@@ -31,7 +31,7 @@ class StateStore:
     def datasets_dir(self) -> Path:
         """Return the datasets directory.
 
-        Returns
+        Returns:
         -------
         Path
             Datasets directory path.
@@ -41,7 +41,7 @@ class StateStore:
     def latest_snapshot_dir(self) -> Path:
         """Return the directory for the latest snapshot.
 
-        Returns
+        Returns:
         -------
         Path
             Latest snapshot directory path.
@@ -51,7 +51,7 @@ class StateStore:
     def repo_snapshot_path(self) -> Path:
         """Return the path to the current repo snapshot Delta table.
 
-        Returns
+        Returns:
         -------
         Path
             Repo snapshot Delta table path.
@@ -61,7 +61,7 @@ class StateStore:
     def scip_snapshot_path(self) -> Path:
         """Return the path to the SCIP snapshot Delta table.
 
-        Returns
+        Returns:
         -------
         Path
             SCIP snapshot Delta table path.
@@ -71,7 +71,7 @@ class StateStore:
     def scip_diff_path(self) -> Path:
         """Return the path to the SCIP diff Delta table.
 
-        Returns
+        Returns:
         -------
         Path
             SCIP diff Delta table path.
@@ -81,7 +81,7 @@ class StateStore:
     def dataset_dir(self, dataset_name: str) -> Path:
         """Return the dataset directory for a named dataset.
 
-        Returns
+        Returns:
         -------
         Path
             Dataset directory path.
@@ -91,7 +91,7 @@ class StateStore:
     def metadata_dir(self) -> Path:
         """Return the metadata directory.
 
-        Returns
+        Returns:
         -------
         Path
             Metadata directory path.
@@ -101,7 +101,7 @@ class StateStore:
     def semantic_diagnostics_dir(self) -> Path:
         """Return the semantic diagnostics directory.
 
-        Returns
+        Returns:
         -------
         Path
             Semantic diagnostics directory path.
@@ -116,7 +116,7 @@ class StateStore:
         name
             Diagnostic view name.
 
-        Returns
+        Returns:
         -------
         Path
             Semantic diagnostics Delta table path.
@@ -126,7 +126,7 @@ class StateStore:
     def invalidation_snapshot_path(self) -> Path:
         """Return the invalidation snapshot Delta path.
 
-        Returns
+        Returns:
         -------
         Path
             Invalidation snapshot Delta table path.
@@ -136,7 +136,7 @@ class StateStore:
     def scip_fingerprint_path(self) -> Path:
         """Return the SCIP index fingerprint path.
 
-        Returns
+        Returns:
         -------
         Path
             SCIP fingerprint path.
@@ -146,7 +146,7 @@ class StateStore:
     def cdf_cursors_path(self) -> Path:
         """Return the directory for CDF cursors.
 
-        Returns
+        Returns:
         -------
         Path
             CDF cursors directory path.
@@ -156,7 +156,7 @@ class StateStore:
     def incremental_metadata_path(self) -> Path:
         """Return the Delta path for incremental runtime metadata.
 
-        Returns
+        Returns:
         -------
         Path
             Metadata Delta table path.
@@ -166,7 +166,7 @@ class StateStore:
     def cdf_cursor_snapshot_path(self) -> Path:
         """Return the Delta path for CDF cursor snapshots.
 
-        Returns
+        Returns:
         -------
         Path
             CDF cursor snapshot Delta table path.
@@ -176,7 +176,7 @@ class StateStore:
     def pruning_metrics_path(self) -> Path:
         """Return the Delta path for pruning metrics.
 
-        Returns
+        Returns:
         -------
         Path
             Pruning metrics Delta table path.
@@ -186,7 +186,7 @@ class StateStore:
     def view_artifacts_path(self) -> Path:
         """Return the Delta path for view artifact snapshots.
 
-        Returns
+        Returns:
         -------
         Path
             View artifact Delta table path.

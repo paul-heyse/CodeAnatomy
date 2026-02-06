@@ -23,7 +23,7 @@ class PythonEnvProfile:
     def is_stdlib(self, path: Path) -> bool:
         """Return True when the path is under the stdlib.
 
-        Returns
+        Returns:
         -------
         bool
             True for stdlib paths.
@@ -34,7 +34,7 @@ class PythonEnvProfile:
     def distribution_for_path(self, path: Path) -> metadata.Distribution | None:
         """Return the distribution that owns the given path when possible.
 
-        Returns
+        Returns:
         -------
         importlib.metadata.Distribution | None
             Distribution metadata when resolvable.
@@ -60,7 +60,7 @@ class PythonEnvProfile:
 def resolve_python_env_profile() -> PythonEnvProfile:
     """Resolve the active Python environment profile.
 
-    Returns
+    Returns:
     -------
     PythonEnvProfile
         Environment profile with stdlib/site paths.

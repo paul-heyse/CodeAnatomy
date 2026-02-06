@@ -147,7 +147,7 @@ def scalar_literal(
 ) -> ScalarLiteralSpec:
     """Return a tagged scalar literal spec for primitive values.
 
-    Returns
+    Returns:
     -------
     ScalarLiteralSpec
         Tagged literal specification.
@@ -160,7 +160,7 @@ def scalar_literal_value(
 ) -> ScalarLiteralValue:
     """Return the Python scalar value for a literal spec.
 
-    Returns
+    Returns:
     -------
     ScalarLiteralValue
         Python scalar value extracted from the literal spec.
@@ -210,15 +210,8 @@ class ExprIR(StructBaseStrict, frozen=True):
     def to_sql(self) -> str:
         """Return DataFusion SQL expression text for this spec.
 
-        Returns
-        -------
-        str
-            DataFusion SQL expression text.
-
-        Raises
-        ------
-        ValueError
-            Raised when the expression is missing required fields.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.op == "field":
             if self.name is None:
@@ -238,15 +231,8 @@ class ExprIR(StructBaseStrict, frozen=True):
     def to_expr(self) -> Expr:
         """Return a DataFusion expression for this spec.
 
-        Returns
-        -------
-        Expr
-            DataFusion expression for the expression spec.
-
-        Raises
-        ------
-        ValueError
-            Raised when the expression is missing required fields.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.op == "field":
             if self.name is None:
@@ -747,10 +733,8 @@ class ExprSpec(StructBaseStrict, frozen=True):
     def __post_init__(self) -> None:
         """Populate SQL from ExprIR when needed.
 
-        Raises
-        ------
-        ValueError
-            Raised when neither SQL nor ExprIR is provided.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.sql is None and self.expr_ir is None:
             msg = "ExprSpec requires sql or expr_ir."
@@ -761,15 +745,8 @@ class ExprSpec(StructBaseStrict, frozen=True):
     def to_sql(self) -> str:
         """Return SQL expression text.
 
-        Returns
-        -------
-        str
-            DataFusion SQL expression string.
-
-        Raises
-        ------
-        ValueError
-            Raised when the SQL expression is unavailable.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.sql is None:
             msg = "ExprSpec missing SQL expression."
@@ -779,15 +756,8 @@ class ExprSpec(StructBaseStrict, frozen=True):
     def to_expr(self) -> Expr:
         """Return a DataFusion expression for this spec.
 
-        Returns
-        -------
-        Expr
-            DataFusion expression resolved from the spec.
-
-        Raises
-        ------
-        ValueError
-            Raised when the expression spec cannot be resolved.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.expr_ir is not None:
             return self.expr_ir.to_expr()

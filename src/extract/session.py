@@ -25,7 +25,7 @@ class ExtractSession:
     def df_ctx(self) -> SessionContext:
         """Return the DataFusion SessionContext for extract workloads.
 
-        Returns
+        Returns:
         -------
         SessionContext
             DataFusion SessionContext for extract workloads.
@@ -36,7 +36,7 @@ class ExtractSession:
     def session_runtime(self) -> SessionRuntime:
         """Return the DataFusion SessionRuntime for extract workloads.
 
-        Returns
+        Returns:
         -------
         SessionRuntime
             Planning-ready DataFusion session runtime.
@@ -48,7 +48,7 @@ class ExtractSession:
 def build_extract_session(runtime_spec: RuntimeProfileSpec) -> ExtractSession:
     """Return a shared extract session for a runtime profile spec.
 
-    Returns
+    Returns:
     -------
     ExtractSession
         DataFusion SessionContext bound to the runtime profile.

@@ -81,7 +81,7 @@ class CpgOutputSpec(StructBaseStrict, frozen=True):
 def cpg_output_specs() -> tuple[CpgOutputSpec, ...]:
     """Return the canonical CPG output specs.
 
-    Returns
+    Returns:
     -------
     tuple[CpgOutputSpec, ...]
         CPG output specs for semantic dataset row derivation.

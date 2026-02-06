@@ -133,24 +133,13 @@ def _reader_from_object(
 def to_reader(obj: object, *, schema: pa.Schema | None = None) -> pa.RecordBatchReader:
     """Return a RecordBatchReader for a streaming source.
 
-    Parameters
-    ----------
-    obj
-        Source object to convert into a RecordBatchReader.
-    schema
-        Optional schema to apply when supported by the source.
+    Args:
+        obj: Description.
+        schema: Description.
 
-    Returns
-    -------
-    pyarrow.RecordBatchReader
-        Record batch reader for the input source.
-
-    Raises
-    ------
-    TypeError
-        Raised when the source cannot be coerced into a reader.
-    ValueError
-        Raised when schema negotiation is requested but unsupported.
+    Raises:
+        TypeError: If the operation cannot be completed.
+        ValueError: If the operation cannot be completed.
     """
     try:
         reader = _reader_from_object(obj, schema=schema)
@@ -173,7 +162,7 @@ def to_reader(obj: object, *, schema: pa.Schema | None = None) -> pa.RecordBatch
 class StreamDiagnostics:
     """Diagnostics captured from streaming a RecordBatchReader.
 
-    Attributes
+    Attributes:
     ----------
     batch_count : int
         Number of batches processed.
@@ -199,7 +188,7 @@ def emit_stream_diagnostics(
     reporter : Callable[[StreamDiagnostics], None] | None
         Optional callback to receive diagnostics when streaming completes.
 
-    Returns
+    Returns:
     -------
     pa.RecordBatchReader
         Wrapped reader that tracks batch and row counts.

@@ -23,7 +23,7 @@ class DriverBuilder:
     def build(self) -> driver.Driver:
         """Build and return a Hamilton driver instance.
 
-        Returns
+        Returns:
         -------
         driver.Driver
             Built Hamilton driver instance.

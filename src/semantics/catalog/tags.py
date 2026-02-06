@@ -57,7 +57,7 @@ def tag_spec_for_dataset(name: str) -> SemanticTagSpec:
     name
         Dataset name or alias.
 
-    Returns
+    Returns:
     -------
     SemanticTagSpec
         Resolved semantic tagging metadata.
@@ -102,7 +102,7 @@ def tag_spec_for_column(dataset_name: str, column_name: str) -> SemanticColumnTa
     column_name
         Column name to tag.
 
-    Returns
+    Returns:
     -------
     SemanticColumnTagSpec
         Resolved semantic column tagging metadata.
@@ -225,7 +225,7 @@ def column_name_prefix(dataset_alias: str) -> str:
     dataset_alias
         Dataset alias for the semantic output.
 
-    Returns
+    Returns:
     -------
     str
         Prefix used for namespaced column nodes.
@@ -246,7 +246,7 @@ def prefixed_column_names(
     columns
         Column names to prefix.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Prefixed column names.

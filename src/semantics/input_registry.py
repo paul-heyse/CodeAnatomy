@@ -60,7 +60,7 @@ def validate_semantic_inputs(ctx: SessionContext) -> InputValidationResult:
     ctx
         DataFusion session context with registered tables.
 
-    Returns
+    Returns:
     -------
     InputValidationResult
         Validation result with missing tables and resolved names.
@@ -94,15 +94,14 @@ def validate_semantic_inputs(ctx: SessionContext) -> InputValidationResult:
 def require_semantic_inputs(ctx: SessionContext) -> dict[str, str]:
     """Validate inputs and return resolved name mapping.
 
-    Returns
-    -------
-    dict[str, str]
-        Mapping from canonical names to resolved table names.
+    Args:
+        ctx: Description.
 
-    Raises
-    ------
-    ValueError
-        If required inputs are missing.
+    Returns:
+        dict[str, str]: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     result = validate_semantic_inputs(ctx)
     if not result.valid:

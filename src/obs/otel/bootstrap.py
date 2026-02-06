@@ -84,6 +84,15 @@ class ConfiguredMeterProvider(MeterProvider):
         shutdown_on_exit: bool = True,
         views: Sequence[View] = (),
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            metric_readers: Description.
+            resource: Description.
+            exemplar_filter: Description.
+            shutdown_on_exit: Description.
+            views: Description.
+        """
         super().__init__(
             metric_readers=metric_readers,
             resource=resource,
@@ -551,7 +560,7 @@ def build_meter_provider(
     use_test_mode
         Whether to use test-mode exporters/processors.
 
-    Returns
+    Returns:
     -------
     MeterProvider
         Configured meter provider.
@@ -644,15 +653,15 @@ def configure_otel(
 ) -> OtelProviders:
     """Configure OpenTelemetry providers for the current process.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when OTEL_EXPERIMENTAL_CONFIG_FILE is set but does not configure providers.
+    Args:
+        service_name: Description.
+            options: Description.
 
-    Returns
-    -------
-    OtelProviders
-        Configured providers for traces, metrics, and logs.
+    Returns:
+        OtelProviders: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     if options is not None and options.test_mode and _STATE["providers"] is not None:
         _STATE["providers"].shutdown()

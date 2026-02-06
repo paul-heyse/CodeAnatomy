@@ -55,12 +55,12 @@ def analyze_symtable(source: str, filename: str) -> dict[str, SymtableInfo]:
     filename
         Filename for error reporting
 
-    Returns
+    Returns:
     -------
     dict[str, SymtableInfo]
         Mapping from function/class names to their SymtableInfo
 
-    Notes
+    Notes:
     -----
     Gracefully handles syntax errors and returns empty dict on failure.
     """
@@ -112,12 +112,12 @@ def analyze_bytecode(code_object: CodeType) -> BytecodeInfo:
     code_object
         Code object to analyze
 
-    Returns
+    Returns:
     -------
     BytecodeInfo
         Extracted LOAD_GLOBAL, LOAD_ATTR, and CALL_FUNCTION information
 
-    Notes
+    Notes:
     -----
     Handles both Python 3.11+ and earlier bytecode formats.
     """
@@ -170,7 +170,7 @@ def _extract_definition_name(matched_text: str, kind: str) -> str | None:
     kind
         Either 'function' or 'class'
 
-    Returns
+    Returns:
     -------
     str | None
         Extracted name or None if extraction fails
@@ -213,7 +213,7 @@ def _enrich_with_bytecode(
     file_path
         Source file path
 
-    Returns
+    Returns:
     -------
     BytecodeInfo | None
         Bytecode info if analysis succeeds, None otherwise
@@ -256,7 +256,7 @@ def _enrich_record(
     file_path
         Source file path
 
-    Returns
+    Returns:
     -------
     dict
         Enrichment data (may be empty)
@@ -302,7 +302,7 @@ def enrich_records(
     python_path
         Python interpreter to use (currently unused, reserved for future use)
 
-    Returns
+    Returns:
     -------
     dict[str, dict]
         Mapping from record location to enrichment data containing:
@@ -366,7 +366,7 @@ class SymtableEnricher:
     def _get_scope_graph(self, file_path: Path) -> ScopeGraph | None:
         """Get or create scope graph for a file.
 
-        Returns
+        Returns:
         -------
         ScopeGraph | None
             Cached scope graph or None if the file cannot be read.
@@ -398,7 +398,7 @@ class SymtableEnricher:
         record
             The ast-grep record for the function
 
-        Returns
+        Returns:
         -------
         dict
             Scope-related enrichment data.
@@ -434,7 +434,7 @@ class SymtableEnricher:
 def _extract_def_name_from_record(record: SgRecord) -> str | None:
     """Extract function/class name from an ast-grep record.
 
-    Returns
+    Returns:
     -------
     str | None
         Definition name when it can be parsed.
@@ -468,7 +468,7 @@ def filter_by_scope(
     records
         Original ast-grep records (parallel to findings)
 
-    Returns
+    Returns:
     -------
     list[Finding]
         Filtered findings matching scope criteria.
@@ -546,7 +546,7 @@ def extract_decorators_from_function(source: str, lineno: int) -> list[str]:
     lineno
         Line number of the function definition (1-indexed)
 
-    Returns
+    Returns:
     -------
     list[str]
         List of decorator names.
@@ -574,7 +574,7 @@ def extract_decorators_from_function(source: str, lineno: int) -> list[str]:
 def _extract_decorator_name(decorator: ast.expr) -> str | None:
     """Extract name from a decorator expression.
 
-    Returns
+    Returns:
     -------
     str | None
         Decorator name when extractable.
@@ -610,7 +610,7 @@ def enrich_with_decorators(
     source
         Source code
 
-    Returns
+    Returns:
     -------
     dict
         Decorator enrichment data.

@@ -26,7 +26,7 @@ class SemanticIncrementalConfig:
     in the semantic pipeline. It provides settings for cursor state management,
     change filtering, and merge strategies.
 
-    Attributes
+    Attributes:
     ----------
     enabled
         Whether incremental processing is enabled. When False, full refresh
@@ -54,7 +54,7 @@ class SemanticIncrementalConfig:
         When True, only process files changed between git refs.
         Requires ``git_base_ref`` and ``git_head_ref`` to be set.
 
-    Examples
+    Examples:
     --------
     Create a basic incremental config:
 
@@ -94,7 +94,7 @@ class SemanticIncrementalConfig:
         The cursor store holds version cursors for incremental CDF reads,
         allowing the pipeline to track which changes have been processed.
 
-        Returns
+        Returns:
         -------
         Path | None
             Path to the cursors directory if ``state_dir`` is set, else None.
@@ -134,12 +134,12 @@ class SemanticIncrementalConfig:
         impact_strategy
             Strategy for computing incremental impact scope.
 
-        Returns
+        Returns:
         -------
         SemanticIncrementalConfig
             Configured incremental config with CDF enabled.
 
-        Examples
+        Examples:
         --------
         >>> config = SemanticIncrementalConfig.with_cdf_enabled(
         ...     state_dir=Path("/tmp/state"),
@@ -170,12 +170,12 @@ class SemanticIncrementalConfig:
         snapshot that can be stored in manifests and build artifacts for
         reproducibility tracking.
 
-        Returns
+        Returns:
         -------
         IncrementalRunConfig
             Snapshot suitable for manifest storage.
 
-        Notes
+        Notes:
         -----
         This method lazily imports ``IncrementalRunConfig`` to avoid circular
         imports, as the Hamilton pipeline types may reference semantic types.

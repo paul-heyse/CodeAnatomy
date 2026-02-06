@@ -98,7 +98,7 @@ def file_identity_fields(
     include_sha256
         Include the file_sha256 field. Default True.
 
-    Returns
+    Returns:
     -------
     tuple[pa.Field, ...]
         Tuple of pyarrow.Field objects for file identity.
@@ -127,7 +127,7 @@ def file_identity_struct(
     include_sha256
         Include the file_sha256 field in the struct. Default False.
 
-    Returns
+    Returns:
     -------
     pa.StructType
         Struct type containing file identity fields.
@@ -141,7 +141,7 @@ def file_identity_fields_for_nesting() -> tuple[pa.Field, ...]:
     Use for file identity fields embedded in outer-join results or optional
     nested structures where nullability is required.
 
-    Returns
+    Returns:
     -------
     tuple[pa.Field, ...]
         Tuple of nullable file_id and path fields.
@@ -165,7 +165,7 @@ def schema_with_file_identity(
     include_sha256
         Include the file_sha256 field. Default True.
 
-    Returns
+    Returns:
     -------
     pa.Schema
         Schema with file identity fields followed by additional fields.
@@ -193,7 +193,7 @@ def file_identity_field_specs(
     include_sha256
         Include the file_sha256 field spec. Default True.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Tuple of FieldSpec objects for schema_spec bundles.

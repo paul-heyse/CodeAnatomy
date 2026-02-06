@@ -187,7 +187,7 @@ _FROM_PYARROW: tuple[
 def arrow_type_from_pyarrow(dtype: pa.DataType) -> ArrowTypeSpec:
     """Return a serializable ArrowTypeSpec from a pyarrow dtype.
 
-    Returns
+    Returns:
     -------
     ArrowTypeSpec
         Serializable Arrow type specification.
@@ -309,15 +309,11 @@ _TO_PYARROW: dict[type[ArrowTypeBase], Callable[[ArrowTypeBase], pa.DataType]] =
 def arrow_type_to_pyarrow(spec: ArrowTypeSpec | ArrowTypeBase) -> pa.DataType:
     """Return pyarrow dtype for an ArrowTypeSpec.
 
-    Returns
-    -------
-    pyarrow.DataType
-        PyArrow data type for the spec.
+    Args:
+        spec: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the spec is unsupported.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     builder = _TO_PYARROW.get(type(spec))
     if builder is not None:

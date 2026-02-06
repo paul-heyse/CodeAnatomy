@@ -38,7 +38,7 @@ def normalize_substrait_plan(
 ) -> DataFusionLogicalPlan:
     """Normalize logical plans for Substrait serialization.
 
-    Returns
+    Returns:
     -------
     DataFusionLogicalPlan
         Normalized logical plan ready for Substrait serialization.

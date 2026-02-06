@@ -31,7 +31,7 @@ class CompositeFingerprint(StructBaseStrict, frozen=True):
     ) -> CompositeFingerprint:
         """Create a composite fingerprint from named components.
 
-        Returns
+        Returns:
         -------
         CompositeFingerprint
             Composite fingerprint instance.
@@ -47,7 +47,7 @@ class CompositeFingerprint(StructBaseStrict, frozen=True):
     def as_cache_key(self, *, prefix: str = "") -> str:
         """Return a deterministic cache key for the fingerprint.
 
-        Returns
+        Returns:
         -------
         str
             Cache key string.
@@ -62,7 +62,7 @@ class CompositeFingerprint(StructBaseStrict, frozen=True):
     def payload(self) -> Mapping[str, object]:
         """Return a mapping payload for diagnostics/serialization.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Serialized fingerprint payload.
@@ -82,7 +82,7 @@ class CompositeFingerprint(StructBaseStrict, frozen=True):
     def extend(self, **additional: str) -> CompositeFingerprint:
         """Return a new fingerprint with additional components.
 
-        Returns
+        Returns:
         -------
         CompositeFingerprint
             New composite fingerprint.

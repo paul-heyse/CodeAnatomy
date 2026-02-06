@@ -27,7 +27,7 @@ def build_exported_defs_index(
 ) -> pa.Table:
     """Build the exported definitions index for top-level defs.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Exported definitions table with qname and optional symbol bindings.

@@ -76,7 +76,7 @@ def diag_command(
 ) -> int:
     """Generate a diagnostic report for pipeline outputs.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

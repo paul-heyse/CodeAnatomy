@@ -25,7 +25,7 @@ class TableProviderCapsule:
     def datafusion_table_provider(self) -> object:
         """Return the wrapped provider capsule.
 
-        Returns
+        Returns:
         -------
         object
             PyCapsule provider used by DataFusion.
@@ -48,7 +48,7 @@ class TableProviderMetadata:
     This dataclass tracks DDL provenance, schema constraints, and other
     metadata that should be preserved alongside table registrations.
 
-    Attributes
+    Attributes:
     ----------
     table_name : str
         Name of the registered table.
@@ -115,7 +115,7 @@ class TableProviderMetadata:
         ddl : str
             CREATE EXTERNAL TABLE DDL statement.
 
-        Returns
+        Returns:
         -------
         TableProviderMetadata
             New metadata instance with updated DDL.
@@ -148,7 +148,7 @@ class TableProviderMetadata:
         constraints : tuple[str, ...]
             Constraint expressions or constraint names.
 
-        Returns
+        Returns:
         -------
         TableProviderMetadata
             New metadata instance with updated constraints.
@@ -181,7 +181,7 @@ class TableProviderMetadata:
         fingerprint : str
             Schema fingerprint string.
 
-        Returns
+        Returns:
         -------
         TableProviderMetadata
             New metadata instance with updated fingerprint.
@@ -214,7 +214,7 @@ class TableProviderMetadata:
         enabled : bool
             Whether schema evolution adapters are enabled at scan-time.
 
-        Returns
+        Returns:
         -------
         TableProviderMetadata
             New metadata instance with updated schema adapter flag.
@@ -275,7 +275,7 @@ def table_provider_metadata(
     table_name : str
         Table name to look up.
 
-    Returns
+    Returns:
     -------
     TableProviderMetadata | None
         Metadata instance when available.
@@ -291,7 +291,7 @@ def all_table_provider_metadata(ctx_id: int) -> dict[str, TableProviderMetadata]
     ctx_id : int
         Session context ID (from id(ctx)).
 
-    Returns
+    Returns:
     -------
     dict[str, TableProviderMetadata]
         Mapping of table names to metadata.

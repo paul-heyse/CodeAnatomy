@@ -31,7 +31,7 @@ class RunContext(CqStruct, frozen=True):
     ) -> RunContext:
         """Construct a run context from common command inputs.
 
-        Returns
+        Returns:
         -------
         RunContext
             Fully populated run context.
@@ -46,7 +46,7 @@ class RunContext(CqStruct, frozen=True):
     def to_runmeta(self, macro: str) -> RunMeta:
         """Build RunMeta from the context.
 
-        Returns
+        Returns:
         -------
         RunMeta
             Run metadata for the command.

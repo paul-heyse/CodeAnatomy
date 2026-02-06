@@ -99,7 +99,7 @@ class RepoScanBundle:
 def default_repo_scan_options() -> RepoScanOptions:
     """Return default RepoScanOptions for repo scanning.
 
-    Returns
+    Returns:
     -------
     RepoScanOptions
         Default repo scan options.
@@ -110,7 +110,7 @@ def default_repo_scan_options() -> RepoScanOptions:
 def repo_files_query(repo_id: str | None) -> QuerySpec:
     """Return the QuerySpec for repo file scanning.
 
-    Returns
+    Returns:
     -------
     QuerySpec
         QuerySpec for repo file projection.
@@ -389,7 +389,7 @@ def scan_repo(
 ) -> TableLike | RecordBatchReaderLike:
     """Scan the repo for Python files and return a repo_files table.
 
-    Returns
+    Returns:
     -------
     TableLike | RecordBatchReaderLike
         Repo file metadata output.
@@ -446,7 +446,7 @@ def scan_repo_tables(
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Scan the repo and return repo scope tables.
 
-    Returns
+    Returns:
     -------
     Mapping[str, TableLike | RecordBatchReaderLike]
         Mapping of output table names to data.
@@ -503,7 +503,7 @@ def scan_repo_plan(
 ) -> DataFusionPlanBundle:
     """Build the plan for repository scanning.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         DataFusion plan bundle emitting repo file metadata.
@@ -561,7 +561,7 @@ def scan_repo_plans(
 ) -> Mapping[str, DataFusionPlanBundle]:
     """Build plan bundles for repo scope datasets.
 
-    Returns
+    Returns:
     -------
     Mapping[str, DataFusionPlanBundle]
         Mapping of dataset name to plan bundle.

@@ -22,7 +22,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     """Generate completion scripts and return an exit code.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

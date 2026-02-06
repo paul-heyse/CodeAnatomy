@@ -15,7 +15,7 @@ _VALIDATION_RE = re.compile(r"^(?P<summary>.*?)(?:\s+-\s+at\s+`(?P<path>[^`]+)`)
 def normalize_exception(exc: Exception) -> dict[str, str]:
     """Convert an exception into a snapshot-friendly dict.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Normalized exception payload.
@@ -42,7 +42,7 @@ def normalize_exception(exc: Exception) -> dict[str, str]:
 def normalize_jsonable(value: object) -> object:
     """Convert values into JSON-friendly structures.
 
-    Returns
+    Returns:
     -------
     object
         Normalized JSON-compatible value.

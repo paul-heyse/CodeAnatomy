@@ -12,7 +12,7 @@ import pygit2
 class RepoContext:
     """Resolved git repository context.
 
-    Attributes
+    Attributes:
     ----------
     repo_root
         Resolved repository root (workdir for non-bare repos).
@@ -38,7 +38,7 @@ def resolve_repo_context(start: Path | None = None) -> RepoContext:
     start
         Starting path for repository discovery. Defaults to CWD.
 
-    Returns
+    Returns:
     -------
     RepoContext
         Resolved repository context.
@@ -76,7 +76,7 @@ def resolve_repo_context(start: Path | None = None) -> RepoContext:
 def open_repo(repo_context: RepoContext) -> pygit2.Repository | None:
     """Open a pygit2 repository if git_dir is available.
 
-    Returns
+    Returns:
     -------
     pygit2.Repository | None
         Repository handle when available.

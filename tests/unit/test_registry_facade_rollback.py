@@ -23,6 +23,7 @@ class FailingProviderRegistry(MutableRegistry[str, RegistrationMetadata]):
     """Provider registry that can fail after registering a location."""
 
     def __init__(self, *, fail: bool) -> None:
+        """__init__."""
         super().__init__()
         self._fail = fail
 
@@ -36,15 +37,17 @@ class FailingProviderRegistry(MutableRegistry[str, RegistrationMetadata]):
     ) -> DataFrame:
         """Register a dataset location, optionally raising to simulate failure.
 
-        Returns
-        -------
-        DataFrame
-            Placeholder provider object for tests.
+        Args:
+            name: Description.
+                    location: Description.
+                    overwrite: Description.
+                    cache_policy: Description.
 
-        Raises
-        ------
-        RuntimeError
-            Raised when the registry is configured to fail.
+        Returns:
+            DataFrame: Result.
+
+        Raises:
+            RuntimeError: If the operation cannot be completed.
         """
         _ = (cache_policy, location)
         metadata = RegistrationMetadata(

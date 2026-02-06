@@ -27,7 +27,7 @@ class ConfigResolution:
 def resolve_config(config_file: str | None) -> ConfigResolution:
     """Resolve config contents and source metadata from disk/env.
 
-    Returns
+    Returns:
     -------
     ConfigResolution
         Resolved configuration contents and source metadata.
@@ -39,7 +39,7 @@ def resolve_config(config_file: str | None) -> ConfigResolution:
 def build_cyclopts_config(contents: Mapping[str, JsonValue]) -> list[Dict]:
     """Build Cyclopts config providers from resolved config contents.
 
-    Returns
+    Returns:
     -------
     list[Config]
         Cyclopts config providers for CLI defaults.

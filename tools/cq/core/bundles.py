@@ -48,7 +48,7 @@ class TargetScope:
     def matches(self, file_path: Path) -> bool:
         """Return True if file_path is within scope.
 
-        Returns
+        Returns:
         -------
         bool
             True if the file is included by file or directory scope.
@@ -83,15 +83,14 @@ class BundleStepResult:
 def parse_target_spec(value: str) -> TargetSpec:
     """Parse a target spec string like 'function:foo'.
 
-    Returns
-    -------
-    TargetSpec
-        Parsed target kind and value.
+    Args:
+        value: Target specification string in `kind:value` form.
 
-    Raises
-    ------
-    ValueError
-        If the spec is missing a kind/value separator or is unsupported.
+    Returns:
+        TargetSpec: Parsed target spec payload.
+
+    Raises:
+        ValueError: If the target spec is malformed or unsupported.
     """
     if ":" not in value:
         msg = "Target spec must be in the form kind:value"
@@ -112,7 +111,7 @@ def parse_target_spec(value: str) -> TargetSpec:
 def run_bundle(preset: str, ctx: BundleContext) -> CqResult:
     """Run a report bundle preset.
 
-    Returns
+    Returns:
     -------
     CqResult
         Merged result for the selected bundle.
@@ -132,7 +131,7 @@ def run_bundle(preset: str, ctx: BundleContext) -> CqResult:
 def resolve_target_scope(ctx: BundleContext) -> TargetScope:
     """Resolve target scope to file and directory sets.
 
-    Returns
+    Returns:
     -------
     TargetScope
         File and directory scope derived from the target.
@@ -182,7 +181,7 @@ def filter_result_by_scope(
 ) -> CqResult:
     """Filter findings in a result to the target scope.
 
-    Returns
+    Returns:
     -------
     CqResult
         Result containing findings within the target scope.
@@ -221,7 +220,7 @@ def filter_result_by_scope(
 def merge_bundle_results(preset: str, ctx: BundleContext, results: list[CqResult]) -> CqResult:
     """Merge macro results into a single bundle report.
 
-    Returns
+    Returns:
     -------
     CqResult
         Combined bundle report result.

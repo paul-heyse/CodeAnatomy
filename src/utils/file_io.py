@@ -22,7 +22,7 @@ def read_text(path: Path, *, encoding: str = "utf-8") -> str:
     encoding
         Text encoding.
 
-    Returns
+    Returns:
     -------
     str
         File contents.
@@ -33,20 +33,14 @@ def read_text(path: Path, *, encoding: str = "utf-8") -> str:
 def read_toml(path: Path) -> Mapping[str, object]:
     """Read and parse a TOML file.
 
-    Parameters
-    ----------
-    path
-        Path to the TOML file.
+    Args:
+        path: Description.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Parsed TOML content.
+    Returns:
+        Mapping[str, object]: Result.
 
-    Raises
-    ------
-    TypeError
-        Raised when the TOML content is not a mapping.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     payload = msgspec.toml.decode(path.read_text(encoding="utf-8"), type=object, strict=True)
     if not isinstance(payload, dict):
@@ -63,7 +57,7 @@ def read_json(path: Path) -> Any:
     path
         Path to the JSON file.
 
-    Returns
+    Returns:
     -------
     Any
         Parsed JSON content.
@@ -80,7 +74,7 @@ def read_pyproject_toml(path: Path) -> Mapping[str, object]:
         Path to the pyproject.toml file. If a directory is provided,
         looks for pyproject.toml in that directory.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Parsed pyproject.toml content.
@@ -93,7 +87,7 @@ def read_pyproject_toml(path: Path) -> Mapping[str, object]:
 def detect_encoding(data: bytes, *, default: str = "utf-8") -> str:
     """Detect file encoding using tokenize rules.
 
-    Returns
+    Returns:
     -------
     str
         Detected encoding name.
@@ -113,7 +107,7 @@ def decode_bytes(
 ) -> tuple[str, str | None]:
     """Detect encoding and decode bytes best-effort.
 
-    Returns
+    Returns:
     -------
     tuple[str, str | None]
         Tuple of resolved encoding and decoded text.

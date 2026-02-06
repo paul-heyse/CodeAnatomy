@@ -75,7 +75,7 @@ class CacheInventoryRegistry(
     def get(self, key: str) -> CacheInventoryRecord | None:
         """Return a cache inventory record by view name.
 
-        Returns
+        Returns:
         -------
         CacheInventoryRecord | None
             Cache inventory record when present.
@@ -85,7 +85,7 @@ class CacheInventoryRegistry(
     def __contains__(self, key: str) -> bool:
         """Return True when a view has a registered cache record.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when the view has a cache record.
@@ -95,7 +95,7 @@ class CacheInventoryRegistry(
     def __iter__(self) -> Iterator[str]:
         """Iterate over registered view names.
 
-        Returns
+        Returns:
         -------
         Iterator[str]
             Iterator of registered view names.
@@ -105,7 +105,7 @@ class CacheInventoryRegistry(
     def __len__(self) -> int:
         """Return the count of registered cache inventory records.
 
-        Returns
+        Returns:
         -------
         int
             Number of registered cache inventory records.
@@ -115,7 +115,7 @@ class CacheInventoryRegistry(
     def snapshot(self) -> Mapping[str, CacheInventoryRecord]:
         """Return a snapshot of the registry entries.
 
-        Returns
+        Returns:
         -------
         Mapping[str, CacheInventoryRecord]
             Snapshot of registry entries.
@@ -135,7 +135,7 @@ def resolve_cache_hit(
 ) -> CacheInventoryRecord | None:
     """Return the latest cache inventory record when still valid.
 
-    Returns
+    Returns:
     -------
     CacheInventoryRecord | None
         Latest cache inventory record when it is still valid.
@@ -182,7 +182,7 @@ def latest_cache_inventory_record(
 ) -> CacheInventoryRecord | None:
     """Return the latest cache inventory record for a view and plan hash.
 
-    Returns
+    Returns:
     -------
     CacheInventoryRecord | None
         Latest inventory record for the requested view and plan hash.
@@ -253,7 +253,7 @@ def record_cache_inventory(
     ctx
         Optional session context to reuse for inventory writes.
 
-    Returns
+    Returns:
     -------
     int | None
         Delta version for the inventory table write.

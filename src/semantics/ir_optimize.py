@@ -23,7 +23,7 @@ def order_join_groups(
 ) -> tuple[SemanticIRJoinGroup, ...]:
     """Return join groups ordered by a stable heuristic.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticIRJoinGroup, ...]
         Ordered join group specs.
@@ -58,7 +58,7 @@ def prune_ir(ir: SemanticIR, *, outputs: Collection[str] | None) -> SemanticIR:
     outputs
         Output view names to retain. When None, returns the IR unchanged.
 
-    Returns
+    Returns:
     -------
     SemanticIR
         Pruned semantic IR.

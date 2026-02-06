@@ -235,7 +235,7 @@ def vacuum_command(
 ) -> int:
     """Run Delta vacuum to remove expired files.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.
@@ -289,7 +289,7 @@ def checkpoint_command(
 ) -> int:
     """Create a Delta checkpoint.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.
@@ -317,7 +317,7 @@ def cleanup_log_command(
 ) -> int:
     """Cleanup expired Delta log files.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.
@@ -348,7 +348,7 @@ def export_command(
 ) -> int:
     """Clone a Delta snapshot into Delta storage.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.
@@ -375,7 +375,7 @@ def restore_command(
 ) -> int:
     """Restore a Delta table to a prior version or timestamp.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.
@@ -416,15 +416,16 @@ def clone_delta_snapshot(
 ) -> CloneReport:
     """Clone a Delta snapshot into Delta storage and return a report.
 
-    Returns
-    -------
-    CloneReport
-        Snapshot clone report payload.
+    Args:
+        path: Source Delta table path.
+        target: Destination path for the cloned snapshot.
+        options: Optional clone settings.
 
-    Raises
-    ------
-    ValueError
-        Raised when both version and timestamp are supplied.
+    Returns:
+        CloneReport: Result.
+
+    Raises:
+        ValueError: If both version and timestamp are provided.
     """
     resolved = options or DeltaCloneOptions()
     if resolved.version is not None and resolved.timestamp is not None:

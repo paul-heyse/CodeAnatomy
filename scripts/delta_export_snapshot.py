@@ -127,15 +127,16 @@ def clone_delta_snapshot(
 ) -> CloneReport:
     """Clone a Delta snapshot into Delta storage and return a report.
 
-    Returns
-    -------
-    CloneReport
-        Snapshot clone report payload.
+    Args:
+        path: Source Delta table path.
+        target: Destination path for the cloned snapshot.
+        options: Optional clone settings.
 
-    Raises
-    ------
-    ValueError
-        Raised when both version and timestamp are supplied.
+    Returns:
+        CloneReport: Result.
+
+    Raises:
+        ValueError: If both version and timestamp are provided.
     """
     resolved = options or DeltaCloneOptions()
     if resolved.version is not None and resolved.timestamp is not None:
@@ -202,7 +203,7 @@ def clone_delta_snapshot(
 def main(argv: Sequence[str] | None = None) -> int:
     """Run Delta snapshot clone with CLI-provided options.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

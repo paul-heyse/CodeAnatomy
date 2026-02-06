@@ -66,15 +66,17 @@ def plan_with_delta_pins(
 ) -> PlanningPipelineResult:
     """Plan views, pin Delta inputs, and re-plan under pinned providers.
 
-    Returns
-    -------
-    PlanningPipelineResult
-        Planning outputs with scan units promoted to schedulable tasks.
+    Args:
+        ctx: Description.
+            view_nodes: Description.
+            runtime_profile: Description.
+            snapshot: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the runtime profile is unavailable.
+    Returns:
+        PlanningPipelineResult: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if runtime_profile is None:
         msg = "Runtime profile is required for planning with Delta pins."

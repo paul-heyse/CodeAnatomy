@@ -1,5 +1,4 @@
-"""
-DataFusion catalog introspection snapshot.
+"""DataFusion catalog introspection snapshot.
 
 This module provides point-in-time snapshots of DataFusion catalog state
 including tables, columns, functions, and settings. Snapshots ensure
@@ -32,13 +31,12 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class IntrospectionSnapshot:
-    """
-    Point-in-time snapshot of DataFusion catalog state.
+    """Point-in-time snapshot of DataFusion catalog state.
 
     All schema/function queries should go through this snapshot
     to ensure consistency within a compilation unit.
 
-    Attributes
+    Attributes:
     ----------
     tables : pa.Table
         Table metadata from information_schema.tables
@@ -74,8 +72,7 @@ class IntrospectionSnapshot:
         *,
         sql_options: SQLOptions | None = None,
     ) -> IntrospectionSnapshot:
-        """
-        Capture snapshot from SessionContext.
+        """Capture snapshot from SessionContext.
 
         Queries information_schema views to extract catalog metadata.
         Gracefully handles missing routines/parameters for backends that
@@ -88,7 +85,7 @@ class IntrospectionSnapshot:
         sql_options : SQLOptions | None
             Reserved for compatibility; DataFrame API ignores SQL options.
 
-        Returns
+        Returns:
         -------
         IntrospectionSnapshot
             Snapshot containing all available catalog metadata
@@ -200,10 +197,9 @@ class IntrospectionSnapshot:
         )
 
     def schema_map(self) -> dict[str, dict[str, str]]:
-        """
-        Build schema mapping for DataFusion catalog metadata.
+        """Build schema mapping for DataFusion catalog metadata.
 
-        Returns
+        Returns:
         -------
         dict[str, dict[str, str]]
             Mapping of table_name -> {column_name: data_type}
@@ -219,10 +215,9 @@ class IntrospectionSnapshot:
         return result
 
     def qualified_schema_map(self) -> dict[str, dict[str, dict[str, str]]]:
-        """
-        Build fully qualified schema mapping.
+        """Build fully qualified schema mapping.
 
-        Returns
+        Returns:
         -------
         dict[str, dict[str, dict[str, str]]]
             Mapping of catalog.schema -> table -> {column: type}
@@ -243,15 +238,14 @@ class IntrospectionSnapshot:
         return result
 
     def table_exists(self, name: str) -> bool:
-        """
-        Check if table exists in snapshot.
+        """Check if table exists in snapshot.
 
         Parameters
         ----------
         name : str
             Table name to check
 
-        Returns
+        Returns:
         -------
         bool
             True if table exists in catalog
@@ -259,15 +253,14 @@ class IntrospectionSnapshot:
         return name in self.tables["table_name"].to_pylist()
 
     def get_table_columns(self, name: str) -> list[tuple[str, str]]:
-        """
-        Get columns for a table as (name, type) pairs.
+        """Get columns for a table as (name, type) pairs.
 
         Parameters
         ----------
         name : str
             Table name to query
 
-        Returns
+        Returns:
         -------
         list[tuple[str, str]]
             List of (column_name, data_type) tuples ordered by position
@@ -279,13 +272,12 @@ class IntrospectionSnapshot:
         ]
 
     def function_signatures(self) -> dict[str, list[tuple[list[str], str]]]:
-        """
-        Build function signature map.
+        """Build function signature map.
 
         Extracts function signatures from routines and parameters metadata.
         Returns empty dict if function introspection is unavailable.
 
-        Returns
+        Returns:
         -------
         dict[str, list[tuple[list[str], str]]]
             Mapping of function_name -> [(param_types, return_type), ...]
@@ -320,8 +312,7 @@ class IntrospectionSnapshot:
 
 
 class IntrospectionCache:
-    """
-    Cached introspection snapshot with invalidation support.
+    """Cached introspection snapshot with invalidation support.
 
     Holds a single snapshot and provides invalidation hooks for DDL operations.
     Automatically recaptures when accessed after invalidation.
@@ -331,7 +322,7 @@ class IntrospectionCache:
     ctx : SessionContext
         DataFusion session to introspect
 
-    Attributes
+    Attributes:
     ----------
     snapshot : IntrospectionSnapshot
         Current or recaptured snapshot (property)
@@ -351,12 +342,11 @@ class IntrospectionCache:
 
     @property
     def snapshot(self) -> IntrospectionSnapshot:
-        """
-        Get or capture snapshot.
+        """Get or capture snapshot.
 
         Automatically recaptures if cache is invalidated or empty.
 
-        Returns
+        Returns:
         -------
         IntrospectionSnapshot
             Current snapshot
@@ -370,18 +360,16 @@ class IntrospectionCache:
         return self._snapshot
 
     def invalidate(self) -> None:
-        """
-        Mark cache as stale (call after DDL changes).
+        """Mark cache as stale (call after DDL changes).
 
         Next access to `snapshot` property will trigger recapture.
         """
         self._invalidated = True
 
     def schema_map(self) -> dict[str, dict[str, str]]:
-        """
-        Get schema map from current snapshot.
+        """Get schema map from current snapshot.
 
-        Returns
+        Returns:
         -------
         dict[str, dict[str, str]]
             Schema map from current snapshot
@@ -399,7 +387,7 @@ def introspection_cache_for_ctx(
 ) -> IntrospectionCache:
     """Return a cached IntrospectionCache for a SessionContext.
 
-    Returns
+    Returns:
     -------
     IntrospectionCache
         Cache bound to the provided SessionContext.
@@ -451,7 +439,7 @@ class CacheStateSnapshot:
     def to_row(self) -> dict[str, object]:
         """Return a row mapping for diagnostics sinks.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             JSON-ready cache snapshot row.
@@ -540,7 +528,7 @@ def _settings_snapshot(ctx: SessionContext) -> list[dict[str, object]]:
 def metadata_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     """Capture metadata cache state snapshot.
 
-    Returns
+    Returns:
     -------
     CacheStateSnapshot
         Cache snapshot for metadata cache.
@@ -566,7 +554,7 @@ def metadata_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
 def list_files_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     """Capture list_files cache state snapshot.
 
-    Returns
+    Returns:
     -------
     CacheStateSnapshot
         Cache snapshot for list_files cache.
@@ -592,7 +580,7 @@ def list_files_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
 def statistics_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     """Capture statistics cache state snapshot.
 
-    Returns
+    Returns:
     -------
     CacheStateSnapshot
         Cache snapshot for statistics cache.
@@ -618,7 +606,7 @@ def statistics_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
 def predicate_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
     """Capture predicate cache state snapshot.
 
-    Returns
+    Returns:
     -------
     CacheStateSnapshot
         Cache snapshot for predicate cache.
@@ -644,7 +632,7 @@ def predicate_cache_snapshot(ctx: SessionContext) -> CacheStateSnapshot:
 def capture_cache_diagnostics(ctx: SessionContext) -> dict[str, Any]:
     """Capture cache configuration and state for diagnostics.
 
-    Returns
+    Returns:
     -------
     dict[str, Any]
         Diagnostics payload describing cache configuration and snapshots.

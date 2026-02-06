@@ -19,7 +19,7 @@ def diagnostic_profile(
     profile_factory
         Optional factory for building a profile using the diagnostics sink.
 
-    Returns
+    Returns:
     -------
     tuple[DataFusionRuntimeProfile, DiagnosticsCollector]
         Runtime profile and diagnostics collector.

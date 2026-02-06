@@ -174,7 +174,7 @@ class CallSiteBuildContext:
 def _get_containing_function(tree: ast.AST, lineno: int) -> str:
     """Find the function/method containing a line.
 
-    Returns
+    Returns:
     -------
     str
         Function or method name.
@@ -218,7 +218,7 @@ def _preview_kwarg(kw: ast.keyword) -> str:
 def _analyze_call(node: ast.Call) -> CallAnalysis:
     """Analyze a call node for argument patterns.
 
-    Returns
+    Returns:
     -------
     dict
         Call analysis metrics.
@@ -263,7 +263,7 @@ def _analyze_call(node: ast.Call) -> CallAnalysis:
 def _matches_target_expr(func: ast.expr, target_name: str) -> bool:
     """Check if a call expression matches the target name.
 
-    Returns
+    Returns:
     -------
     bool
         True if the expression matches the target name.
@@ -287,7 +287,7 @@ def _matches_target_expr(func: ast.expr, target_name: str) -> bool:
 def _get_call_name(func: ast.expr) -> tuple[str, bool, str | None]:
     """Extract call name and determine if method call.
 
-    Returns
+    Returns:
     -------
     tuple[str, bool, str | None]
         (name, is_method, receiver_name) for the call.
@@ -345,7 +345,7 @@ def _find_function_signature(
     function_name : str
         Name of the function to find.
 
-    Returns
+    Returns:
     -------
     str
         Signature string like "(x, y, z)" or empty string if not found.
@@ -420,7 +420,7 @@ def _enrich_call_site(
     rel_path
         Relative file path.
 
-    Returns
+    Returns:
     -------
     dict[str, dict[str, object] | None]
         Enrichment data with 'symtable' and 'bytecode' keys.
@@ -479,7 +479,7 @@ def _compute_context_window(
     total_lines
         Total lines in the file.
 
-    Returns
+    Returns:
     -------
     dict[str, int]
         Dict with 'start_line' and 'end_line' keys.
@@ -526,7 +526,7 @@ def _extract_context_snippet(
     max_lines
         Maximum lines before truncation.
 
-    Returns
+    Returns:
     -------
     str | None
         The extracted snippet, or None on errors.
@@ -560,6 +560,7 @@ class CallFinder(ast.NodeVisitor):
     """Find all calls to a specific function."""
 
     def __init__(self, file: str, target_name: str, tree: ast.AST) -> None:
+        """__init__."""
         self.file = file
         self.target_name = target_name
         self.tree = tree
@@ -614,7 +615,7 @@ def _rg_find_candidates(
     limits : SearchLimits | None, optional
         Search limits, defaults to INTERACTIVE profile.
 
-    Returns
+    Returns:
     -------
     list[tuple[Path, int]]
         Candidate (file, line) pairs with absolute paths.
@@ -632,7 +633,7 @@ def _group_candidates(candidates: list[tuple[Path, int]]) -> dict[Path, list[int
     candidates : list[tuple[Path, int]]
         List of (file, line) candidate pairs.
 
-    Returns
+    Returns:
     -------
     dict[Path, list[int]]
         Mapping of file to candidate line numbers.
@@ -659,7 +660,7 @@ def _collect_call_sites(
     function_name : str
         Name of the function to find calls for.
 
-    Returns
+    Returns:
     -------
     list[CallSite]
         Collected call sites.
@@ -714,7 +715,7 @@ def _collect_call_sites_from_records(
     function_name : str
         Function name to find calls for.
 
-    Returns
+    Returns:
     -------
     tuple[list[CallSite], int]
         List of call sites and count of files with calls.
@@ -812,7 +813,7 @@ def _analyze_sites(
     all_sites : list[CallSite]
         All call sites to analyze.
 
-    Returns
+    Returns:
     -------
     tuple[Counter[str], Counter[str], int, Counter[str], Counter[str]]
         Argument shapes, keyword usage, forwarding count, contexts, hazard counts.
@@ -993,7 +994,7 @@ class CallScanResult:
 def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
     """Scan for call sites using ast-grep, falling back to ripgrep if needed.
 
-    Returns
+    Returns:
     -------
     CallScanResult
         Summary of scan inputs, outputs, and fallback status.
@@ -1060,7 +1061,7 @@ def _build_call_scoring(
 ) -> ScoreDetails | None:
     """Compute scoring details for call-site findings.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Scoring details for impact/confidence.
@@ -1220,7 +1221,7 @@ def cmd_calls(
     function_name : str
         Function to find calls for.
 
-    Returns
+    Returns:
     -------
     CqResult
         Analysis result.

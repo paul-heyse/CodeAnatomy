@@ -22,12 +22,12 @@ def compute_file_hash(path: Path) -> str | None:
     path : Path
         Path to file to hash.
 
-    Returns
+    Returns:
     -------
     str | None
         Hex digest of SHA-256 hash, or None if file cannot be read.
 
-    Examples
+    Examples:
     --------
     >>> hash_val = compute_file_hash(Path("script.py"))
     >>> isinstance(hash_val, str) and len(hash_val) == 64
@@ -48,12 +48,12 @@ def compute_file_mtime(path: Path) -> float | None:
     path : Path
         Path to file.
 
-    Returns
+    Returns:
     -------
     float | None
         Modification time as POSIX timestamp, or None if file cannot be stat'd.
 
-    Examples
+    Examples:
     --------
     >>> mtime = compute_file_mtime(Path("script.py"))
     >>> isinstance(mtime, float)
@@ -73,13 +73,13 @@ def hash_files_batch(paths: Sequence[Path]) -> dict[Path, tuple[str, float]]:
     paths : Sequence[Path]
         Paths to files to process.
 
-    Returns
+    Returns:
     -------
     dict[Path, tuple[str, float]]
         Mapping from path to (hash, mtime) tuple. Files that cannot be
         processed are excluded from the result.
 
-    Examples
+    Examples:
     --------
     >>> results = hash_files_batch([Path("a.py"), Path("b.py")])
     >>> all(isinstance(h, str) and isinstance(m, float) for h, m in results.values())
@@ -107,13 +107,13 @@ def files_changed_since(
     cached_hashes : dict[str, str]
         Mapping from file path (as string) to cached hash value.
 
-    Returns
+    Returns:
     -------
     list[Path]
         Paths of files that are new, modified, or cannot be read.
         Files that cannot be read are included to trigger reprocessing.
 
-    Examples
+    Examples:
     --------
     >>> cached = {"/path/to/a.py": "abc123"}
     >>> changed = files_changed_since([Path("/path/to/a.py")], cached)

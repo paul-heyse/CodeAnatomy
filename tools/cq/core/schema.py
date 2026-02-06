@@ -62,7 +62,7 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
     def from_legacy(cls, details: dict[str, object]) -> DetailPayload:
         """Convert legacy detail dicts into a structured payload.
 
-        Returns
+        Returns:
         -------
         DetailPayload
             Structured payload with score and data fields split.
@@ -93,7 +93,7 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
     def get(self, key: str, default: object | None = None) -> object | None:
         """Mapping-style get for detail payloads.
 
-        Returns
+        Returns:
         -------
         object | None
             Value for the key when present, otherwise the default.
@@ -108,15 +108,11 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
     def __getitem__(self, key: str) -> object:
         """Return the value for a key, raising KeyError if absent.
 
-        Returns
-        -------
-        object
-            Value for the key.
+        Args:
+            key: Description.
 
-        Raises
-        ------
-        KeyError
-            If the key is not present in the payload.
+        Raises:
+            KeyError: If the operation cannot be completed.
         """
         value = self.get(key, None)
         if value is None and key not in self:
@@ -137,7 +133,7 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
     def __contains__(self, key: object) -> bool:
         """Return True if the key exists in the detail payload.
 
-        Returns
+        Returns:
         -------
         bool
             True if the key exists.
@@ -153,7 +149,7 @@ class DetailPayload(msgspec.Struct, omit_defaults=True):
     def to_legacy_dict(self) -> dict[str, object]:
         """Convert structured details back to legacy dict format.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Legacy detail mapping with score fields and data.
@@ -195,7 +191,7 @@ class Anchor(msgspec.Struct, frozen=True, omit_defaults=True):
     def to_ref(self) -> str:
         """Return file:line reference string.
 
-        Returns
+        Returns:
         -------
         str
             File reference string.
@@ -206,7 +202,7 @@ class Anchor(msgspec.Struct, frozen=True, omit_defaults=True):
     def from_span(cls, span: SourceSpan) -> Anchor:
         """Create an Anchor from a SourceSpan.
 
-        Returns
+        Returns:
         -------
         Anchor
             Anchor with line/column details from the span.
@@ -364,7 +360,7 @@ def mk_runmeta(
     toolchain : dict[str, str | None]
         Tool versions.
 
-    Returns
+    Returns:
     -------
     RunMeta
         Populated metadata.
@@ -393,7 +389,7 @@ def mk_result(run: RunMeta) -> CqResult:
     run : RunMeta
         Run metadata.
 
-    Returns
+    Returns:
     -------
     CqResult
         Empty result ready to populate.
@@ -404,7 +400,7 @@ def mk_result(run: RunMeta) -> CqResult:
 def ms() -> float:
     """Return current time in milliseconds since epoch.
 
-    Returns
+    Returns:
     -------
     float
         Current time in milliseconds.

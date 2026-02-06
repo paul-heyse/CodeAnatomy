@@ -95,7 +95,7 @@ def show_config(
 ) -> int:
     """Show the effective configuration payload.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.
@@ -127,7 +127,7 @@ def validate_config(
 ) -> int:
     """Validate configuration payloads for mutual exclusion rules.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.
@@ -161,15 +161,15 @@ def init_config(
 ) -> int:
     """Write a configuration template to disk.
 
-    Returns
-    -------
-    int
-        Exit status code.
+    Args:
+        path: Optional output path for the template file.
+        force: Whether to overwrite an existing file.
 
-    Raises
-    ------
-    FileExistsError
-        Raised when the config file exists and overwrite is not enabled.
+    Returns:
+        int: Result.
+
+    Raises:
+        FileExistsError: If the target path exists and `force` is false.
     """
     target_path = path if path is not None else Path("codeanatomy.toml")
     if target_path.exists() and not force:

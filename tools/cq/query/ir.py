@@ -112,7 +112,7 @@ PYTHON_AST_FIELDS: frozenset[str] = frozenset(
 class Expander(msgspec.Struct, frozen=True):
     """Graph expansion operator.
 
-    Attributes
+    Attributes:
     ----------
     kind
         Type of expansion (callers, callees, imports, etc.)
@@ -127,7 +127,7 @@ class Expander(msgspec.Struct, frozen=True):
 class Scope(msgspec.Struct, frozen=True):
     """File scope constraints for queries.
 
-    Attributes
+    Attributes:
     ----------
     in_dir
         Only search in this directory (relative to repo root)
@@ -147,7 +147,7 @@ class MetaVarCapture(msgspec.Struct, frozen=True):
 
     Represents a value captured by a metavariable during ast-grep pattern matching.
 
-    Attributes
+    Attributes:
     ----------
     name
         Metavariable name (without $ prefix)
@@ -159,7 +159,7 @@ class MetaVarCapture(msgspec.Struct, frozen=True):
         For multi captures ($$$), list of individual node texts.
         None for single captures.
 
-    Notes
+    Notes:
     -----
     Metavariable naming conventions:
     - `$NAME`: Named single capture (equality enforced on reuse)
@@ -179,7 +179,7 @@ class MetaVarFilter(msgspec.Struct, frozen=True):
 
     Used to post-filter pattern matches based on captured metavariable content.
 
-    Attributes
+    Attributes:
     ----------
     name
         Metavariable name (without $ prefix, e.g., 'OP' for $$OP)
@@ -188,7 +188,7 @@ class MetaVarFilter(msgspec.Struct, frozen=True):
     negate
         If True, match when pattern does NOT match
 
-    Examples
+    Examples:
     --------
     Filter binary expressions by operator:
     ```
@@ -213,7 +213,7 @@ class MetaVarFilter(msgspec.Struct, frozen=True):
         capture
             Metavariable capture to test.
 
-        Returns
+        Returns:
         -------
         bool
             True if capture passes the filter.
@@ -227,7 +227,7 @@ class MetaVarFilter(msgspec.Struct, frozen=True):
 class NthChildSpec(msgspec.Struct, frozen=True):
     """Positional matching specification for nthChild queries.
 
-    Attributes
+    Attributes:
     ----------
     position
         Exact position (1-indexed) or formula like '2n+1' for odd positions
@@ -247,7 +247,7 @@ class PatternSpec(msgspec.Struct, frozen=True):
 
     Supports full ast-grep pattern objects for disambiguation and advanced matching.
 
-    Attributes
+    Attributes:
     ----------
     pattern
         The ast-grep pattern to match (e.g., 'def $F($$$)')
@@ -264,7 +264,7 @@ class PatternSpec(msgspec.Struct, frozen=True):
         Matching strictness mode (cst, smart, ast, relaxed, signature).
         Controls how strictly the pattern must match the source code.
 
-    Notes
+    Notes:
     -----
     Pattern objects with context/selector support disambiguation for patterns
     that don't parse correctly as standalone code:
@@ -287,7 +287,7 @@ class PatternSpec(msgspec.Struct, frozen=True):
     def requires_yaml_rule(self) -> bool:
         """Check if pattern needs full YAML rule (vs simple CLI pattern).
 
-        Returns
+        Returns:
         -------
         bool
             True if pattern requires YAML inline rule for execution.
@@ -301,12 +301,12 @@ class PatternSpec(msgspec.Struct, frozen=True):
     def to_yaml_dict(self) -> dict[str, object]:
         """Convert to ast-grep YAML rule format.
 
-        Returns
+        Returns:
         -------
         dict
             Dictionary suitable for YAML serialization as inline rule.
 
-        Notes
+        Notes:
         -----
         Generates the appropriate ast-grep rule structure:
         - With context: `{"pattern": {"context": ..., "selector": ...}}`
@@ -333,7 +333,7 @@ class RelationalConstraint(msgspec.Struct, frozen=True):
 
     Supports ast-grep relational rules: inside, has, precedes, follows.
 
-    Attributes
+    Attributes:
     ----------
     operator
         Relational operator (inside, has, precedes, follows):
@@ -352,7 +352,7 @@ class RelationalConstraint(msgspec.Struct, frozen=True):
         Optional field name for field-specific matching (inside/has only).
         Constrains search to specific AST fields (e.g., 'keys', 'returns').
 
-    Notes
+    Notes:
     -----
     Field constraints are only valid for `inside` and `has` operators.
     Using field_name with `precedes` or `follows` will raise ValueError.
@@ -369,11 +369,8 @@ class RelationalConstraint(msgspec.Struct, frozen=True):
     def __post_init__(self) -> None:
         """Validate constraint configuration.
 
-        Raises
-        ------
-        ValueError
-            If a field constraint is used with a relational operator that
-            does not support field scoping.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         # precedes/follows don't support field constraint
         if self.operator in {"precedes", "follows"} and self.field_name:
@@ -383,7 +380,7 @@ class RelationalConstraint(msgspec.Struct, frozen=True):
     def to_ast_grep_dict(self) -> dict[str, object]:
         """Convert to ast-grep rule format.
 
-        Returns
+        Returns:
         -------
         dict
             Dictionary suitable for ast-grep YAML rule.
@@ -408,7 +405,7 @@ class CompositeRule(msgspec.Struct, frozen=True):
 
     Supports ast-grep composite rules: all, any, not.
 
-    Attributes
+    Attributes:
     ----------
     operator
         Composite operator:
@@ -420,7 +417,7 @@ class CompositeRule(msgspec.Struct, frozen=True):
     metavar_order
         For "all" operator, specifies metavariable extraction order
 
-    Examples
+    Examples:
     --------
     Match functions with specific patterns:
     ```
@@ -445,15 +442,11 @@ class CompositeRule(msgspec.Struct, frozen=True):
     def to_ast_grep_dict(self) -> dict[str, object]:
         """Convert to ast-grep rule format.
 
-        Returns
-        -------
-        dict
-            Dictionary suitable for ast-grep YAML rule.
+        Returns:
+            dict[str, object]: ast-grep rule payload for the composite operator.
 
-        Raises
-        ------
-        ValueError
-            If a ``not`` rule is configured with multiple patterns.
+        Raises:
+            ValueError: If `not` is provided with more than one pattern.
         """
         if self.operator == "not":
             # Not takes a single rule
@@ -470,7 +463,7 @@ class CompositeRule(msgspec.Struct, frozen=True):
 class ScopeFilter(msgspec.Struct, frozen=True):
     """Scope-based filter using symtable analysis.
 
-    Attributes
+    Attributes:
     ----------
     scope_type
         Filter to specific scope types (closure, generator, coroutine, etc.)
@@ -488,7 +481,7 @@ class ScopeFilter(msgspec.Struct, frozen=True):
 class DecoratorFilter(msgspec.Struct, frozen=True):
     """Filter for decorator-related queries.
 
-    Attributes
+    Attributes:
     ----------
     decorated_by
         Filter to items decorated by specific decorator
@@ -506,7 +499,7 @@ class DecoratorFilter(msgspec.Struct, frozen=True):
 class JoinTarget(msgspec.Struct, frozen=True):
     """Target for join queries.
 
-    Attributes
+    Attributes:
     ----------
     entity
         Target entity type
@@ -521,20 +514,14 @@ class JoinTarget(msgspec.Struct, frozen=True):
     def parse(cls, spec: str) -> JoinTarget:
         """Parse a join target specification.
 
-        Parameters
-        ----------
-        spec
-            Target spec like 'function' or 'function:foo'
+        Args:
+            spec: Join target in `entity` or `entity:name` form.
 
-        Returns
-        -------
-        JoinTarget
-            Parsed join target.
+        Returns:
+            JoinTarget: Parsed join target specification.
 
-        Raises
-        ------
-        ValueError
-            If the target entity is not a supported join type.
+        Raises:
+            ValueError: If the target entity is not valid.
         """
         if ":" in spec:
             entity_str, name = spec.split(":", 1)
@@ -551,7 +538,7 @@ class JoinTarget(msgspec.Struct, frozen=True):
 class JoinConstraint(msgspec.Struct, frozen=True):
     """Join constraint for cross-entity queries.
 
-    Attributes
+    Attributes:
     ----------
     join_type
         Type of join (used_by, defines, raises, exports)
@@ -570,7 +557,7 @@ class Query(msgspec.Struct, frozen=True):
     1. Entity queries: Search by entity type (function, class, etc.)
     2. Pattern queries: Search by ast-grep pattern
 
-    Attributes
+    Attributes:
     ----------
     entity
         Type of entity to search for (function, class, method, module, callsite, import)
@@ -626,10 +613,8 @@ class Query(msgspec.Struct, frozen=True):
     def __post_init__(self) -> None:
         """Validate query configuration.
 
-        Raises
-        ------
-        ValueError
-            If neither or both of ``entity`` and ``pattern_spec`` are set.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.entity is None and self.pattern_spec is None:
             msg = "Query must specify either 'entity' or 'pattern_spec'"
@@ -648,7 +633,7 @@ class Query(msgspec.Struct, frozen=True):
 
         Used by bundle builders to apply CLI scope constraints.
 
-        Returns
+        Returns:
         -------
         Query
             New Query instance with updated scope.
@@ -677,7 +662,7 @@ class Query(msgspec.Struct, frozen=True):
 
         Used by bundle builders to add CLI ``expand`` options.
 
-        Returns
+        Returns:
         -------
         Query
             New Query instance with expanded graph options.
@@ -706,7 +691,7 @@ class Query(msgspec.Struct, frozen=True):
 
         Used by bundle builders to override field selections.
 
-        Returns
+        Returns:
         -------
         Query
             New Query instance with updated field selection.
@@ -735,7 +720,7 @@ class Query(msgspec.Struct, frozen=True):
 
         Used by bundle builders to apply CLI ``inside/has/precedes`` filters.
 
-        Returns
+        Returns:
         -------
         Query
             New Query instance with appended relational constraints.
@@ -762,7 +747,7 @@ class Query(msgspec.Struct, frozen=True):
     def get_all_relational_constraints(self) -> list[RelationalConstraint]:
         """Get all relational constraints.
 
-        Returns
+        Returns:
         -------
         list[RelationalConstraint]
             All relational constraints in this query.

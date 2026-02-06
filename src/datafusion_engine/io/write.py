@@ -199,7 +199,7 @@ class _DeltaPolicyContext:
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for Delta policy context.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing Delta policy context settings.
@@ -240,7 +240,7 @@ class _DeltaPolicyContext:
     def fingerprint(self) -> str:
         """Return fingerprint for Delta policy context.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the context.
@@ -404,7 +404,7 @@ class WriteRequest:
     delta_inputs
         Optional Delta input pins or descriptors to include in commit metadata.
 
-    Examples
+    Examples:
     --------
     >>> request = WriteRequest(
     ...     source="SELECT * FROM events",
@@ -570,7 +570,7 @@ def _apply_zorder_sort(
     lineage_columns
         Lineage-derived columns used for policy evaluation.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Sorted DataFrame when z-order is configured, otherwise input.
@@ -605,7 +605,7 @@ def _delta_feature_mutation_options(
     runtime_profile
         Optional runtime profile for feature gate enforcement.
 
-    Returns
+    Returns:
     -------
     DeltaFeatureMutationOptions
         Options used by feature mutation routines.
@@ -741,7 +741,7 @@ class WritePipeline:
     sql_options
         Optional SQL execution options for SQL ingress.
 
-    Examples
+    Examples:
     --------
     >>> from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     >>> profile = DataFusionRuntimeProfile()
@@ -854,7 +854,7 @@ class WritePipeline:
     ) -> tuple[str, DatasetLocation] | None:
         """Resolve a dataset binding for a destination when possible.
 
-        Returns
+        Returns:
         -------
         tuple[str, DatasetLocation] | None
             Dataset name and location when resolved.
@@ -896,7 +896,7 @@ class WritePipeline:
     ) -> tuple[str, DatasetLocation] | None:
         """Return the first dataset location matching the destination path.
 
-        Returns
+        Returns:
         -------
         tuple[str, DatasetLocation] | None
             Dataset name and location when the destination matches.
@@ -923,7 +923,7 @@ class WritePipeline:
         destination
             Target destination path or table name.
 
-        Returns
+        Returns:
         -------
         tuple[str | None, DatasetLocation | None]
             Dataset name and location, or (None, None) when unavailable.
@@ -1055,13 +1055,13 @@ class WritePipeline:
         request
             Write request specification.
 
-        Notes
+        Notes:
         -----
         This method is preferred for large datasets or when partitioning
         is required, as it allows streaming writes without full
         materialization.
 
-        Returns
+        Returns:
         -------
         WriteResult
             Write result metadata for the streaming operation.
@@ -1091,12 +1091,12 @@ class WritePipeline:
         prefer_streaming
             If True, prefer streaming write for DELTA format.
 
-        Returns
+        Returns:
         -------
         WriteResult
             Write result metadata for the executed write.
 
-        Notes
+        Notes:
         -----
         The unified writer executes a DataFusion DataFrame. Delta uses
         streaming dataset writes; other formats use DataFusion-native writers.
@@ -1119,7 +1119,7 @@ class WritePipeline:
         prefer_streaming
             Prefer streaming writes when possible.
 
-        Returns
+        Returns:
         -------
         WriteResult
             Write result metadata.
@@ -1148,7 +1148,7 @@ class WritePipeline:
         result
             Write result metadata to record.
 
-        Notes
+        Notes:
         -----
         Records `write_operation` diagnostics when a recorder is configured.
         """
@@ -1281,19 +1281,13 @@ class WritePipeline:
     def _write_table(df: DataFrame, *, request: WriteRequest, table_name: str) -> None:
         """Write to registered table via DataFusion-native DataFrame.write_table.
 
-        Parameters
-        ----------
-        df
-            DataFusion DataFrame to write.
-        request
-            Write request specification.
-        table_name
-            Target table name for INSERT operation.
+        Args:
+            df: Description.
+            request: Description.
+            table_name: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when partition_by is specified or mode is ERROR.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if request.mode == WriteMode.ERROR:
             msg = "Table writes require APPEND or OVERWRITE mode."
@@ -1331,7 +1325,7 @@ class WritePipeline:
         options
             Format options used to resolve idempotent settings.
 
-        Returns
+        Returns:
         -------
         tuple[dict[str, str], IdempotentWriteOptions | None, DataFusionRun | None]
             Updated metadata, idempotent options, and reserved commit run.
@@ -1373,7 +1367,7 @@ class WritePipeline:
         inputs
             Input context for policy resolution and lineage-derived settings.
 
-        Returns
+        Returns:
         -------
         DeltaWriteSpec
             Deterministic write specification including commit properties.
@@ -1483,7 +1477,7 @@ class WritePipeline:
     ) -> tuple[IdempotentWriteOptions, DataFusionRun] | None:
         """Reserve an idempotent Delta commit from the runtime profile.
 
-        Returns
+        Returns:
         -------
         tuple[IdempotentWriteOptions, DataFusionRun] | None
             Idempotent write options and run metadata when reserved.
@@ -1667,26 +1661,17 @@ class WritePipeline:
     ) -> DeltaWriteOutcome:
         """Write a Delta table using a deterministic write specification.
 
-        Parameters
-        ----------
-        result
-            Streaming execution result with Arrow stream access.
-        request
-            Write request specification.
-        spec
-            Delta write specification with commit and table properties.
+        Args:
+            result: Description.
+                    request: Description.
+                    spec: Description.
 
-        Returns
-        -------
-        DeltaWriteOutcome
-            Delta write outcome including version and enabled feature metadata.
+        Returns:
+            DeltaWriteOutcome: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when ERROR mode encounters an existing destination.
-        DataFusionEngineError
-            Raised when Delta protocol, feature, or schema validation fails.
+        Raises:
+            DataFusionEngineError: If the operation cannot be completed.
+                    ValueError: If the operation cannot be completed.
         """
         local_path = Path(spec.table_uri)
         delta_service = delta_service_for_profile(self.runtime_profile)
@@ -1924,17 +1909,12 @@ class WritePipeline:
     def _write_csv(self, df: DataFrame, *, request: WriteRequest) -> None:
         """Write CSV via DataFusion-native DataFrame writer.
 
-        Parameters
-        ----------
-        df
-            DataFusion DataFrame to write.
-        request
-            Write request specification.
+        Args:
+            df: Description.
+            request: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when partition_by is specified (not supported for CSV).
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if request.partition_by:
             msg = "CSV writes do not support partition_by."
@@ -1953,17 +1933,12 @@ class WritePipeline:
     def _write_json(self, df: DataFrame, *, request: WriteRequest) -> None:
         """Write JSON via DataFusion-native DataFrame writer.
 
-        Parameters
-        ----------
-        df
-            DataFusion DataFrame to write.
-        request
-            Write request specification.
+        Args:
+            df: Description.
+            request: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when partition_by is specified (not supported for JSON).
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if request.partition_by:
             msg = "JSON writes do not support partition_by."
@@ -2290,7 +2265,7 @@ def _resolve_delta_schema_policy(
     dataset_location
         Dataset location for default policy lookup.
 
-    Returns
+    Returns:
     -------
     object | None
         Resolved schema policy instance when available.
@@ -2380,7 +2355,7 @@ def _base_commit_metadata(request: WriteRequest, *, context: _DeltaCommitContext
     context
         Commit context describing method and mode.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Base metadata entries for the commit.
@@ -2405,7 +2380,7 @@ def _dataset_location_commit_metadata(
     dataset_location
         Dataset location with optional version pins.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Metadata entries derived from the dataset location.
@@ -2434,7 +2409,7 @@ def _optional_commit_metadata(
     context
         Commit context with optional dataset details.
 
-    Returns
+    Returns:
     -------
     dict[str, str | None]
         Optional metadata keys with values or None when absent.
@@ -2486,7 +2461,7 @@ def _apply_policy_commit_metadata(
     extra_constraints
         Additional constraints to persist in metadata.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Commit metadata augmented with policy fields.

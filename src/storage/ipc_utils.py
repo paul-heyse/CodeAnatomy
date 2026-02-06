@@ -34,7 +34,7 @@ def ipc_write_options_factory(
 ) -> pa_ipc.IpcWriteOptions:
     """Return a shared IPC write options configuration.
 
-    Returns
+    Returns:
     -------
     pyarrow.ipc.IpcWriteOptions
         Configured IPC write options.
@@ -59,7 +59,7 @@ def ipc_read_options_factory(
 ) -> pa_ipc.IpcReadOptions:
     """Return a shared IPC read options configuration.
 
-    Returns
+    Returns:
     -------
     pyarrow.ipc.IpcReadOptions
         Configured IPC read options.
@@ -82,7 +82,7 @@ def payload_table(payload: Mapping[str, object], schema: pa.Schema) -> pa.Table:
     schema:
         Explicit schema for the payload table.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Single-row table matching the provided schema.
@@ -98,7 +98,7 @@ def ipc_bytes(table: pa.Table) -> bytes:
     table:
         Arrow table to serialize.
 
-    Returns
+    Returns:
     -------
     bytes
         IPC stream bytes for the table.
@@ -117,7 +117,7 @@ def ipc_hash(table: pa.Table) -> str:
     table:
         Arrow table to hash.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hex digest of the IPC bytes.
@@ -141,7 +141,7 @@ def payload_ipc_bytes(payload: Mapping[str, object], schema: pa.Schema) -> bytes
     schema:
         Explicit schema for the payload table.
 
-    Returns
+    Returns:
     -------
     bytes
         IPC stream bytes for the payload.
@@ -159,7 +159,7 @@ def payload_hash(payload: Mapping[str, object], schema: pa.Schema) -> str:
     schema:
         Explicit schema for the payload table.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hex digest for the payload IPC bytes.
@@ -175,7 +175,7 @@ def ipc_table(payload: bytes) -> pa.Table:
     payload:
         IPC stream bytes.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Table decoded from the IPC stream.
@@ -214,7 +214,7 @@ def write_table_ipc_file(
 ) -> str:
     """Write an Arrow IPC file (random-access) to a path.
 
-    Returns
+    Returns:
     -------
     str
         Path to the written IPC file.
@@ -253,7 +253,7 @@ def write_table_ipc_stream(
 ) -> str:
     """Write an Arrow IPC stream (sequential) to a path.
 
-    Returns
+    Returns:
     -------
     str
         Path to the written IPC stream.
@@ -292,7 +292,7 @@ def write_ipc_bundle(
 ) -> dict[str, str]:
     """Write IPC file and stream artifacts for repro bundles.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping with ``file`` and ``stream`` artifact paths.
@@ -321,7 +321,7 @@ def write_ipc_bundle(
 def ipc_write_config_payload(config: IpcWriteConfig | None) -> JsonDict:
     """Return a JSON-friendly payload for IPC write options.
 
-    Returns
+    Returns:
     -------
     JsonDict
         JSON-ready IPC write configuration payload.
@@ -340,7 +340,7 @@ def ipc_write_config_payload(config: IpcWriteConfig | None) -> JsonDict:
 def read_table_ipc_file(path: PathLike) -> TableLike:
     """Read an Arrow IPC file.
 
-    Returns
+    Returns:
     -------
     TableLike
         Loaded table.
@@ -355,7 +355,7 @@ def read_table_ipc_file(path: PathLike) -> TableLike:
 def read_table_ipc_stream(path: PathLike) -> TableLike:
     """Read an Arrow IPC stream.
 
-    Returns
+    Returns:
     -------
     TableLike
         Loaded table.

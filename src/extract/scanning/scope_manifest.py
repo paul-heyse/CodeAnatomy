@@ -30,7 +30,7 @@ class ScopeManifestEntry:
     def to_row(self) -> dict[str, str | None]:
         """Return a row payload for persistence.
 
-        Returns
+        Returns:
         -------
         dict[str, str | None]
             Manifest row payload.
@@ -56,7 +56,7 @@ class ScopeManifest:
     def allowed_paths(self) -> frozenset[str]:
         """Return the set of included paths.
 
-        Returns
+        Returns:
         -------
         frozenset[str]
             Paths included in scope.
@@ -66,7 +66,7 @@ class ScopeManifest:
     def rows(self) -> list[dict[str, str | None]]:
         """Return row payloads for manifest entries.
 
-        Returns
+        Returns:
         -------
         list[dict[str, str | None]]
             Manifest rows.
@@ -93,7 +93,7 @@ def build_scope_manifest(
 ) -> ScopeManifest:
     """Build a scope manifest from candidate paths.
 
-    Returns
+    Returns:
     -------
     ScopeManifest
         Scope manifest entries for the candidate paths.

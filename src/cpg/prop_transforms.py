@@ -13,7 +13,7 @@ from datafusion_engine.udf.expr import udf_expr
 def expr_context_value(value: object) -> str | None:
     """Normalize expression context strings.
 
-    Returns
+    Returns:
     -------
     str | None
         Normalized context value when valid.
@@ -31,7 +31,7 @@ def expr_context_value(value: object) -> str | None:
 def flag_to_bool(value: object | None) -> bool | None:
     """Normalize integer/bool flags to optional bools.
 
-    Returns
+    Returns:
     -------
     bool | None
         True when flagged, otherwise None.
@@ -46,7 +46,7 @@ def flag_to_bool(value: object | None) -> bool | None:
 def expr_context_expr(expr: Expr) -> Expr:
     """Return a DataFusion expression for expr-context normalization.
 
-    Returns
+    Returns:
     -------
     datafusion.expr.Expr
         Expression for normalized context values.
@@ -70,7 +70,7 @@ def expr_context_expr(expr: Expr) -> Expr:
 def flag_to_bool_expr(expr: Expr) -> Expr:
     """Return a DataFusion expression for optional boolean flags.
 
-    Returns
+    Returns:
     -------
     datafusion.expr.Expr
         Expression returning True or NULL.

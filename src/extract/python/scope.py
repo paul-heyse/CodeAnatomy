@@ -31,7 +31,7 @@ class PythonScopePolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the Python scope policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing Python scope policy settings.
@@ -46,7 +46,7 @@ class PythonScopePolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the Python scope policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -64,7 +64,7 @@ class PythonExtensionCatalog:
     def rows(self) -> list[dict[str, str]]:
         """Return rows for python_extensions_v1 datasets.
 
-        Returns
+        Returns:
         -------
         list[dict[str, str]]
             Row payloads for extension/source pairs.
@@ -82,7 +82,7 @@ class PythonExtensionCatalog:
 def normalize_extension(value: str) -> str | None:
     """Normalize an extension into a dotted lowercase suffix.
 
-    Returns
+    Returns:
     -------
     str | None
         Normalized extension or None when empty.
@@ -100,7 +100,7 @@ def normalize_extension(value: str) -> str | None:
 def globs_for_extensions(extensions: Iterable[str]) -> list[str]:
     """Return glob patterns for the provided extensions.
 
-    Returns
+    Returns:
     -------
     list[str]
         Glob patterns for use in pathspec rules.
@@ -116,7 +116,7 @@ def resolve_python_extensions(
 ) -> frozenset[str]:
     """Resolve Python extensions for a repository.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         Discovered Python extensions.
@@ -132,7 +132,7 @@ def resolve_python_extension_catalog(
 ) -> PythonExtensionCatalog:
     """Return the resolved Python extensions and source annotations.
 
-    Returns
+    Returns:
     -------
     PythonExtensionCatalog
         Extension catalog with source labels.

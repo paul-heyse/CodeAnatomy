@@ -48,7 +48,7 @@ class UnionTypeProtocol(Protocol):
 def list_view_type(value_type: DataTypeLike, *, large: bool = False) -> DataTypeLike:
     """Return a list or large_list type.
 
-    Returns
+    Returns:
     -------
     DataTypeLike
         Arrow list data type.
@@ -64,7 +64,7 @@ def map_type(
 ) -> DataTypeLike:
     """Return a map type with optional key ordering.
 
-    Returns
+    Returns:
     -------
     DataTypeLike
         Arrow map data type.
@@ -81,7 +81,7 @@ def union_type(
 ) -> DataTypeLike:
     """Return a dense or sparse union type from fields.
 
-    Returns
+    Returns:
     -------
     DataTypeLike
         Arrow union data type.
@@ -102,7 +102,7 @@ def dictionary_type(
 ) -> DataTypeLike:
     """Return a dictionary type for categorical encoding.
 
-    Returns
+    Returns:
     -------
     DataTypeLike
         Arrow dictionary data type.

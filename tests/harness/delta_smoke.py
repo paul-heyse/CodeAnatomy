@@ -45,15 +45,14 @@ class DeltaSmokeResult:
 def run_delta_smoke_round_trip(scenario: DeltaSmokeScenario) -> DeltaSmokeResult:
     """Execute the canonical Delta/DataFusion smoke round-trip.
 
-    Returns
-    -------
-    DeltaSmokeResult
-        Result bundle used by conformance assertions.
+    Args:
+        scenario: Description.
 
-    Raises
-    ------
-    RuntimeError
-        If the write pipeline does not return a committed Delta version.
+    Returns:
+        DeltaSmokeResult: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     delta_path = scenario.tmp_path / scenario.delta_dir_name
     artifacts_root = scenario.tmp_path / scenario.artifacts_dir_name

@@ -76,10 +76,8 @@ class DeltaMutationRequest:
     def validate(self) -> None:
         """Validate that exactly one mutation is specified.
 
-        Raises
-        ------
-        ValueError
-            Raised when the request has zero or multiple mutations.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.merge is None and self.delete is None:
             msg = "DeltaMutationRequest requires merge or delete payloads."
@@ -126,7 +124,7 @@ class DeltaFeatureOps:
     ) -> DeltaFeatureMutationOptions:
         """Build resolved feature mutation options using runtime defaults.
 
-        Returns
+        Returns:
         -------
         DeltaFeatureMutationOptions
             Resolved mutation options with runtime defaults applied.
@@ -156,7 +154,7 @@ class DeltaFeatureOps:
     ) -> dict[str, str]:
         """Enable Delta table feature properties using runtime defaults.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Properties applied to the Delta table.
@@ -175,7 +173,7 @@ class DeltaFeatureOps:
     ) -> Mapping[str, object]:
         """Enable Delta change data feed using runtime defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Control-plane mutation report payload.
@@ -193,7 +191,7 @@ class DeltaFeatureOps:
     ) -> Mapping[str, object]:
         """Enable Delta deletion vectors using runtime defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Control-plane mutation report payload.
@@ -211,7 +209,7 @@ class DeltaFeatureOps:
     ) -> Mapping[str, object]:
         """Enable Delta row tracking using runtime defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Control-plane mutation report payload.
@@ -230,7 +228,7 @@ class DeltaFeatureOps:
     ) -> Mapping[str, object]:
         """Enable in-commit timestamps using runtime defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Control-plane mutation report payload.
@@ -250,7 +248,7 @@ class DeltaFeatureOps:
     ) -> Mapping[str, object]:
         """Enable Delta column mapping using runtime defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Control-plane mutation report payload.
@@ -269,7 +267,7 @@ class DeltaFeatureOps:
     ) -> Mapping[str, object]:
         """Enable Delta v2 checkpoints using runtime defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Control-plane mutation report payload.
@@ -287,7 +285,7 @@ class DeltaFeatureOps:
     ) -> Mapping[str, object]:
         """Enable Delta check constraints using runtime defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Control-plane mutation report payload.
@@ -305,7 +303,7 @@ class DeltaFeatureOps:
     ) -> Mapping[str, object]:
         """Add Delta check constraints using runtime defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Control-plane mutation report payload.
@@ -350,7 +348,7 @@ class DeltaService:
     ) -> tuple[dict[str, str], dict[str, str]]:
         """Resolve storage options using the profile's Delta store policy.
 
-        Returns
+        Returns:
         -------
         tuple[dict[str, str], dict[str, str]]
             Resolved storage and log storage options.
@@ -377,7 +375,7 @@ class DeltaService:
     ) -> DatasetResolution:
         """Resolve a Delta provider using the runtime profile.
 
-        Returns
+        Returns:
         -------
         DatasetResolution
             Resolved dataset provider with scan metadata.
@@ -460,7 +458,7 @@ class DeltaService:
     ) -> int | None:
         """Return the latest Delta table version when the table exists.
 
-        Returns
+        Returns:
         -------
         int | None
             Latest Delta table version, or ``None`` when unavailable.
@@ -480,7 +478,7 @@ class DeltaService:
     def table_schema(self, request: DeltaSchemaRequest) -> pa.Schema | None:
         """Return a Delta table schema using runtime defaults.
 
-        Returns
+        Returns:
         -------
         pyarrow.Schema | None
             Schema for the table or ``None`` when unavailable.
@@ -500,7 +498,7 @@ class DeltaService:
     def read_table(self, request: DeltaReadRequest) -> RecordBatchReaderLike:
         """Read a Delta table using the runtime profile (streaming).
 
-        Returns
+        Returns:
         -------
         RecordBatchReaderLike
             Streaming reader containing the requested Delta snapshot.
@@ -521,7 +519,7 @@ class DeltaService:
     def read_table_eager(self, request: DeltaReadRequest) -> pa.Table:
         """Read a Delta table and materialize to an Arrow table.
 
-        Returns
+        Returns:
         -------
         pyarrow.Table
             Materialized table containing the requested Delta snapshot.
@@ -549,7 +547,7 @@ class DeltaService:
     ) -> RecordBatchReaderLike:
         """Read Delta change data feed table (streaming).
 
-        Returns
+        Returns:
         -------
         RecordBatchReaderLike
             Streaming reader for the requested change data feed range.
@@ -576,7 +574,7 @@ class DeltaService:
     ) -> pa.Table:
         """Read Delta change data feed and materialize to a table.
 
-        Returns
+        Returns:
         -------
         pyarrow.Table
             Materialized Arrow table with CDF changes.
@@ -602,7 +600,7 @@ class DeltaService:
     ) -> bool:
         """Return whether CDF is enabled for a Delta table.
 
-        Returns
+        Returns:
         -------
         bool
             True when CDF is enabled for the table.
@@ -629,7 +627,7 @@ class DeltaService:
     ) -> Mapping[str, object] | None:
         """Return the latest Delta history snapshot using runtime defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object] | None
             History snapshot payload or ``None`` when unavailable.
@@ -657,7 +655,7 @@ class DeltaService:
     ) -> DeltaProtocolSnapshot | None:
         """Return the Delta protocol snapshot using runtime defaults.
 
-        Returns
+        Returns:
         -------
         DeltaProtocolSnapshot | None
             Protocol snapshot or ``None`` when unavailable.
@@ -684,7 +682,7 @@ class DeltaService:
     ) -> list[str]:
         """Run Delta vacuum using runtime store-policy defaults.
 
-        Returns
+        Returns:
         -------
         list[str]
             Removed or eligible file paths.
@@ -711,7 +709,7 @@ class DeltaService:
     ) -> Mapping[str, object]:
         """Create a Delta checkpoint using runtime store-policy defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Checkpoint report payload.
@@ -739,7 +737,7 @@ class DeltaService:
     ) -> Mapping[str, object]:
         """Clean Delta log metadata using runtime store-policy defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Cleanup report payload.
@@ -779,7 +777,7 @@ class DeltaService:
     ) -> DeltaFeatureMutationOptions:
         """Resolve feature mutation options using runtime defaults.
 
-        Returns
+        Returns:
         -------
         DeltaFeatureMutationOptions
             Resolved feature mutation options with runtime defaults applied.
@@ -794,7 +792,7 @@ class DeltaService:
     ) -> Mapping[str, object]:
         """Delete rows from a Delta table.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Delete operation report payload.
@@ -821,7 +819,7 @@ class DeltaService:
     ) -> Mapping[str, object]:
         """Merge Arrow data into a Delta table.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Merge operation report payload.
@@ -848,15 +846,15 @@ class DeltaService:
     ) -> Mapping[str, object]:
         """Execute a Delta mutation request.
 
-        Returns
-        -------
-        Mapping[str, object]
-            Mutation operation report payload.
+        Args:
+            request: Description.
+                    ctx: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when the mutation request is invalid.
+        Returns:
+            Mapping[str, object]: Result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         request.validate()
         if request.merge is not None:
@@ -870,7 +868,7 @@ class DeltaService:
 def delta_service_for_profile(profile: DataFusionRuntimeProfile | None) -> DeltaService:
     """Return a DeltaService for the provided runtime profile.
 
-    Returns
+    Returns:
     -------
     DeltaService
         Delta service bound to the resolved runtime profile.

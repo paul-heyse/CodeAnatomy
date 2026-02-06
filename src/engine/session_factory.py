@@ -57,7 +57,7 @@ def build_engine_session(
     options
         Optional engine session options for diagnostics, semantic config, and tracing.
 
-    Returns
+    Returns:
     -------
     EngineSession
         Engine session wired to the runtime surfaces.

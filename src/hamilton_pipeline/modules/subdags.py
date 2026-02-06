@@ -15,7 +15,7 @@ DataFusion session context via ``ensure_view_graph()``. This separation ensures:
 2. Clear ownership: View Graph owns registration, Hamilton owns execution
 3. Consistent schema contracts across both systems
 
-See Also
+See Also:
 --------
 datafusion_engine.views.registry_specs : View registration entry point.
 hamilton_pipeline.driver_factory.build_view_graph_context : View graph setup.
@@ -47,7 +47,7 @@ _CPG_EDGES_BY_DST_SCHEMA = (("dst_node_id", "string"), ("edges", "string"))
 def cpg_nodes(cpg_nodes_v1: TableLike) -> TableLike:
     """Return the canonical CPG nodes output table.
 
-    Returns
+    Returns:
     -------
     TableLike
         CPG nodes output table.
@@ -60,7 +60,7 @@ def cpg_nodes(cpg_nodes_v1: TableLike) -> TableLike:
 def cpg_edges(cpg_edges_v1: TableLike) -> TableLike:
     """Return the canonical CPG edges output table.
 
-    Returns
+    Returns:
     -------
     TableLike
         CPG edges output table.
@@ -73,7 +73,7 @@ def cpg_edges(cpg_edges_v1: TableLike) -> TableLike:
 def cpg_props(cpg_props_v1: TableLike) -> TableLike:
     """Return the canonical CPG properties output table.
 
-    Returns
+    Returns:
     -------
     TableLike
         CPG properties output table.
@@ -86,7 +86,7 @@ def cpg_props(cpg_props_v1: TableLike) -> TableLike:
 def cpg_props_map(cpg_props_map_v1: TableLike) -> TableLike:
     """Return the canonical CPG property map table.
 
-    Returns
+    Returns:
     -------
     TableLike
         CPG property map table.
@@ -99,7 +99,7 @@ def cpg_props_map(cpg_props_map_v1: TableLike) -> TableLike:
 def cpg_edges_by_src(cpg_edges_by_src_v1: TableLike) -> TableLike:
     """Return CPG edges grouped by source node.
 
-    Returns
+    Returns:
     -------
     TableLike
         CPG edges-by-source table.
@@ -112,7 +112,7 @@ def cpg_edges_by_src(cpg_edges_by_src_v1: TableLike) -> TableLike:
 def cpg_edges_by_dst(cpg_edges_by_dst_v1: TableLike) -> TableLike:
     """Return CPG edges grouped by destination node.
 
-    Returns
+    Returns:
     -------
     TableLike
         CPG edges-by-destination table.

@@ -4,7 +4,7 @@ This module provides a unified diagnostics recording system for DataFusion
 operations. All diagnostics emission should go through DiagnosticsRecorder
 to ensure consistent payload shapes.
 
-Examples
+Examples:
 --------
 >>> from datafusion_engine.lineage.diagnostics import (
 ...     CompilationRecord,
@@ -148,7 +148,7 @@ class InMemoryDiagnosticsSink:
     Stores all artifacts and events in memory for inspection.
     Useful for unit tests and local debugging.
 
-    Attributes
+    Attributes:
     ----------
     artifacts : list[tuple[str, dict]]
         List of (name, payload) tuples for recorded artifacts.
@@ -199,7 +199,7 @@ class InMemoryDiagnosticsSink:
     def events_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
         """Return collected event rows by name.
 
-        Returns
+        Returns:
         -------
         dict[str, list[Mapping[str, Any]]]
             Mapping of event names to collected payloads.
@@ -212,7 +212,7 @@ class InMemoryDiagnosticsSink:
     def artifacts_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
         """Return collected artifact payloads by name.
 
-        Returns
+        Returns:
         -------
         dict[str, list[Mapping[str, Any]]]
             Mapping of artifact names to collected payloads.
@@ -230,7 +230,7 @@ class InMemoryDiagnosticsSink:
         name : str
             Artifact type identifier to filter by.
 
-        Returns
+        Returns:
         -------
         list[dict]
             List of artifact payloads matching the given name.
@@ -245,7 +245,7 @@ class DiagnosticsContext:
     Provides session-level context information that is automatically included
     in all diagnostics artifacts.
 
-    Attributes
+    Attributes:
     ----------
     session_id : str
         Unique identifier for the DataFusion session.
@@ -276,7 +276,7 @@ class DiagnosticsRecorder:
     context : DiagnosticsContext | None
         Context information for this recorder. If None, uses default context.
 
-    Attributes
+    Attributes:
     ----------
     _sink : DiagnosticsSink | None
         The underlying diagnostics sink.
@@ -305,7 +305,7 @@ class DiagnosticsRecorder:
     def enabled(self) -> bool:
         """Check if diagnostics are enabled.
 
-        Returns
+        Returns:
         -------
         bool
             True if sink is configured and recording is enabled.
@@ -548,7 +548,7 @@ class DiagnosticsRecorderAdapter:
     def events_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
         """Return collected event rows from the underlying sink when available.
 
-        Returns
+        Returns:
         -------
         dict[str, list[Mapping[str, Any]]]
             Mapping of event names to collected payloads.
@@ -561,7 +561,7 @@ class DiagnosticsRecorderAdapter:
     def artifacts_snapshot(self) -> dict[str, list[Mapping[str, Any]]]:
         """Return collected artifact payloads from the underlying sink when available.
 
-        Returns
+        Returns:
         -------
         dict[str, list[Mapping[str, Any]]]
             Mapping of artifact names to collected payloads.
@@ -574,7 +574,7 @@ class DiagnosticsRecorderAdapter:
     def __getattr__(self, name: str) -> object:
         """Delegate unknown attributes to the underlying sink.
 
-        Returns
+        Returns:
         -------
         object
             Attribute resolved from the underlying sink.
@@ -683,7 +683,7 @@ def ensure_recorder_sink(
 ) -> DiagnosticsSink:
     """Wrap a diagnostics sink with a recorder adapter when needed.
 
-    Returns
+    Returns:
     -------
     DiagnosticsSink
         Recorder adapter when wrapping is required.
@@ -710,7 +710,7 @@ def recorder_for_profile(
     session_id : str | None
         Optional session identifier override.
 
-    Returns
+    Returns:
     -------
     DiagnosticsRecorder | None
         Recorder instance when diagnostics are enabled, otherwise ``None``.
@@ -740,7 +740,7 @@ def view_udf_parity_payload(
     ctx
         Optional session context for information_schema parity checks.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Diagnostics payload describing required/missing UDFs per view.
@@ -808,7 +808,7 @@ def view_fingerprint_payload(
     view_nodes
         View nodes to fingerprint.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Diagnostics payload containing per-view fingerprints.
@@ -836,7 +836,7 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, objec
     snapshot
         Rust UDF registry snapshot payload.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Summary payload with counts and metadata coverage.
@@ -885,7 +885,7 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, objec
 def otel_diagnostics_sink() -> DiagnosticsSink:
     """Return an OTel-backed diagnostics sink.
 
-    Returns
+    Returns:
     -------
     DiagnosticsSink
         Diagnostics sink that emits OpenTelemetry logs.

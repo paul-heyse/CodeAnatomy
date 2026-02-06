@@ -18,7 +18,7 @@ def cli_result_action(result: Any) -> int:
     result
         The return value from the command function.
 
-    Returns
+    Returns:
     -------
     int
         Exit code for the process.

@@ -88,7 +88,7 @@ Language scope defaults to `auto` (search both Python and Rust); use `--lang rus
 /cq q "entity=class name=~^Arrow lang=rust"
 
 # Find Rust use declarations
-/cq q "entity=import lang=rust in=rust/"
+/cq q "entity=import lang=rust in=rust"
 
 # Pattern search in Rust code
 /cq q "pattern='pub fn \$F(\$$$) -> \$R' lang=rust"
@@ -276,7 +276,6 @@ All commands support these global options:
 | `summary` | Condensed single-line - for CI |
 | `mermaid` | Mermaid flowchart - call graphs |
 | `mermaid-class` | Mermaid class diagram |
-| `mermaid-cfg` | Control flow graph |
 | `dot` | Graphviz DOT format |
 
 ### Examples with Global Options
@@ -456,13 +455,6 @@ Query bytecode instructions directly using Python's `dis` module (Python-only).
 | `bytecode.is_jump_target=true` | Jump target instructions | Branch points |
 | `bytecode.stack_effect>=N` | Stack effect filter | Net stack changes |
 
-**CFG Visualization:**
-
-| Format | Description |
-|--------|-------------|
-| `--format mermaid-cfg` | Control flow graph as Mermaid |
-| `fields=basic_block_count` | Number of basic blocks |
-
 **Examples:**
 ```bash
 # Find functions using LOAD_GLOBAL
@@ -473,9 +465,6 @@ Query bytecode instructions directly using Python's `dis` module (Python-only).
 
 # Find complex control flow (many basic blocks)
 /cq q "entity=function fields=basic_block_count" | grep -E "blocks: [0-9]{2,}"
-
-# Visualize control flow graph
-/cq q "entity=function name=complex_fn" --format mermaid-cfg
 ```
 
 ### q - Declarative Entity Queries
@@ -514,7 +503,7 @@ Usage: /cq q "<query_string>"
 - Regex: `name=~^test_.*` (prefix with `~`)
 
 **Scope:**
-- `in=src/semantics/` - Search only in directory
+- `in=src/semantics` - Search only in directory
 - `exclude=tests,__pycache__` - Exclude directories
 
 **Expanders:**
@@ -532,10 +521,10 @@ Usage: /cq q "<query_string>"
 /cq q "entity=import name=Path"
 
 # Find functions matching pattern with callers
-/cq q "entity=function name=~^build expand=callers in=src/"
+/cq q "entity=function name=~^build expand=callers in=src"
 
 # Find class definitions with definition metadata
-/cq q "entity=class in=src/semantics/ fields=def"
+/cq q "entity=class in=src/semantics fields=def"
 
 # Show query plan explanation
 /cq q "entity=function name=compile explain=true"
@@ -785,7 +774,7 @@ Filter functions by scope characteristics using Python's symtable (Python-only).
 /cq q "entity=function scope=closure"
 
 # Find closures in a specific directory
-/cq q "entity=function scope=closure in=src/semantics/"
+/cq q "entity=function scope=closure in=src/semantics"
 
 # Find functions capturing a specific variable
 /cq q "entity=function captures=config"
@@ -859,13 +848,10 @@ Generate visual representations of code structure.
 /cq q "entity=function name=build_graph expand=callers" --format mermaid
 
 # Generate class diagram
-/cq q "entity=class in=src/semantics/" --format mermaid-class
+/cq q "entity=class in=src/semantics" --format mermaid-class
 
 # Export for Graphviz
 /cq q "entity=function expand=callees" --format dot > graph.dot
-
-# Control flow graph visualization
-/cq q "entity=function name=complex_fn" --format mermaid-cfg
 ```
 
 ### Security Pattern Queries
@@ -964,7 +950,7 @@ Based on evidence quality:
 | Finding hidden deps | `/cq bytecode-surface <file>` |
 | Finding specific imports | `/cq q "entity=import name=pandas"` |
 | Finding functions by pattern | `/cq q "entity=function name=~^test_"` |
-| Quick entity census | `/cq q "entity=class in=src/"` |
+| Quick entity census | `/cq q "entity=class in=src"` |
 | Finding structural patterns | `/cq q "pattern='getattr(\$X, \$Y)'"` |
 | Context-aware search | `/cq q "entity=function inside='class Config'"` |
 | Closure investigation | `/cq q "entity=function scope=closure"` |

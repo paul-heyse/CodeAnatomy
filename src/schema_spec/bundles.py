@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 def base_bundle_catalog(*, include_sha256: bool) -> dict[str, FieldBundle]:
     """Return a base bundle catalog with file identity and span bundles.
 
-    Returns
+    Returns:
     -------
     dict[str, FieldBundle]
         Bundle catalog mapping.
@@ -36,7 +36,7 @@ def extended_bundle_catalog(*, include_sha256: bool) -> dict[str, FieldBundle]:
     include_sha256
         Include file_sha256 in file identity bundle.
 
-    Returns
+    Returns:
     -------
     dict[str, FieldBundle]
         Extended bundle catalog mapping.

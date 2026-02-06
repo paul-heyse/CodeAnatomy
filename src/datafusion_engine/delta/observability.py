@@ -79,7 +79,7 @@ _OBSERVABILITY_APPEND_ERRORS = (
 def ensure_delta_tracing() -> tuple[bool, str | None]:
     """Initialize delta-rs tracing once per process.
 
-    Returns
+    Returns:
     -------
     tuple[bool, str | None]
         (installed, error) result.
@@ -198,7 +198,7 @@ def record_delta_snapshot(
 ) -> int | None:
     """Persist a Delta snapshot artifact row when enabled.
 
-    Returns
+    Returns:
     -------
     int | None
         Delta table version for the write, or ``None`` when disabled.
@@ -257,7 +257,7 @@ def record_delta_mutation(
 ) -> int | None:
     """Persist a Delta mutation artifact row when enabled.
 
-    Returns
+    Returns:
     -------
     int | None
         Delta table version for the write, or ``None`` when disabled.
@@ -348,7 +348,7 @@ def record_delta_scan_plan(
 ) -> int | None:
     """Persist a Delta scan-plan artifact row when enabled.
 
-    Returns
+    Returns:
     -------
     int | None
         Delta table version for the write, or ``None`` when disabled.
@@ -402,7 +402,7 @@ def record_delta_maintenance(
 ) -> int | None:
     """Persist a Delta maintenance artifact row when enabled.
 
-    Returns
+    Returns:
     -------
     int | None
         Delta table version for the write, or ``None`` when disabled.

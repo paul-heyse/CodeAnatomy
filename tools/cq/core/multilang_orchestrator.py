@@ -28,7 +28,7 @@ T = TypeVar("T")
 def language_priority(scope: QueryLanguageScope) -> dict[QueryLanguage, int]:
     """Return deterministic language ordering for a scope.
 
-    Returns
+    Returns:
     -------
     dict[QueryLanguage, int]
         Language rank mapping used by merge ordering.
@@ -42,7 +42,7 @@ def execute_by_language_scope[T](
 ) -> dict[QueryLanguage, T]:
     """Execute a callback once per language in scope.
 
-    Returns
+    Returns:
     -------
     dict[QueryLanguage, T]
         Per-language execution outputs.
@@ -63,7 +63,7 @@ def merge_partitioned_items(
 ) -> list[T]:
     """Merge and sort language partitions with stable deterministic ordering.
 
-    Returns
+    Returns:
     -------
     list[T]
         Flattened and ordered items across all language partitions.
@@ -143,7 +143,7 @@ def merge_language_cq_results(
 ) -> CqResult:
     """Merge per-language CQ results into a canonical multi-language result.
 
-    Returns
+    Returns:
     -------
     CqResult
         Unified result with deterministic ordering and multilang summary.
@@ -231,7 +231,7 @@ def runmeta_for_scope_merge(
 ) -> RunMeta:
     """Create run metadata for merged multi-language results.
 
-    Returns
+    Returns:
     -------
     RunMeta
         Run metadata for a merged multi-language CQ response.

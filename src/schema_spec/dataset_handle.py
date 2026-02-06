@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 def _schema_version_from_name(name: str) -> int | None:
     """Extract a version suffix from a schema name.
 
-    Returns
+    Returns:
     -------
     int | None
         Parsed version suffix when available.
@@ -45,10 +45,8 @@ class DatasetHandle:
     def __post_init__(self) -> None:
         """Validate dataset handle invariants.
 
-        Raises
-        ------
-        ValueError
-            Raised when the dataset naming or versioning is invalid.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         name = dataset_spec_name(self.spec)
         if not name:
@@ -74,7 +72,7 @@ class DatasetHandle:
     def schema(self) -> SchemaLike:
         """Return the dataset schema.
 
-        Returns
+        Returns:
         -------
         SchemaLike
             Arrow schema for the dataset.
@@ -96,7 +94,7 @@ class DatasetHandle:
         location:
             Dataset location to register.
 
-        Returns
+        Returns:
         -------
         datafusion.dataframe.DataFrame
             Registered DataFrame for the dataset location.
@@ -121,10 +119,12 @@ class DatasetHandle:
     ) -> None:
         """Register associated view specs into DataFusion (removed).
 
-        Raises
-        ------
-        RuntimeError
-            Raised because view registration is now handled elsewhere.
+        Args:
+            session_runtime: Description.
+            validate: Description.
+
+        Raises:
+            RuntimeError: If the operation cannot be completed.
         """
         _ = session_runtime
         _ = validate
@@ -134,7 +134,7 @@ class DatasetHandle:
     def view_specs(self) -> tuple[ViewSpec, ...]:
         """Return the view specs associated with the dataset.
 
-        Returns
+        Returns:
         -------
         tuple[ViewSpec, ...]
             View specifications for the dataset.

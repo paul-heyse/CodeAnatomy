@@ -189,7 +189,7 @@ def register_delta_object_store(
 ) -> DeltaObjectStoreSpec | None:
     """Register an object store for a Delta table URI when supported.
 
-    Returns
+    Returns:
     -------
     DeltaObjectStoreSpec | None
         Registered object store spec or ``None`` when registration is skipped.

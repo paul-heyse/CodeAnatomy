@@ -43,7 +43,7 @@ class MermaidFlowBuilder:
     def render(self) -> str:
         """Render the flowchart markdown.
 
-        Returns
+        Returns:
         -------
         str
             Mermaid flowchart markdown.
@@ -69,7 +69,7 @@ class MermaidClassBuilder:
     def render(self) -> str:
         """Render the class diagram markdown.
 
-        Returns
+        Returns:
         -------
         str
             Mermaid class diagram markdown.
@@ -103,7 +103,7 @@ def render_mermaid_flowchart(result: CqResult) -> str:
     result
         CqResult to render
 
-    Returns
+    Returns:
     -------
     str
         Mermaid flowchart markdown.
@@ -148,7 +148,7 @@ def render_mermaid_class_diagram(result: CqResult) -> str:
     result
         CqResult to render
 
-    Returns
+    Returns:
     -------
     str
         Mermaid class diagram markdown.
@@ -182,7 +182,7 @@ def _sanitize_node_id(name: str) -> str:
     name
         Original name
 
-    Returns
+    Returns:
     -------
     str
         Sanitized node ID safe for Mermaid.

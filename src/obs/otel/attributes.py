@@ -121,7 +121,7 @@ def _normalize_attributes(
     value_length_limit
         Maximum string length to retain, or ``None`` for no limit.
 
-    Returns
+    Returns:
     -------
     dict[str, AttributeValue]
         Normalized attribute mapping with OpenTelemetry-safe values.
@@ -155,7 +155,7 @@ def _normalize_attributes(
 def normalize_attributes(attrs: Mapping[str, object] | None) -> dict[str, AttributeValue]:
     """Normalize attributes for spans/metrics.
 
-    Returns
+    Returns:
     -------
     dict[str, AttributeValue]
         Normalized attribute mapping with OpenTelemetry-safe values.
@@ -170,7 +170,7 @@ def normalize_attributes(attrs: Mapping[str, object] | None) -> dict[str, Attrib
 def normalize_log_attributes(attrs: Mapping[str, object] | None) -> dict[str, AttributeValue]:
     """Normalize attributes for log records with log-record limits.
 
-    Returns
+    Returns:
     -------
     dict[str, AttributeValue]
         Normalized attribute mapping with OpenTelemetry-safe values.

@@ -68,7 +68,7 @@ RELATIONSHIP_SCHEMA_VERSION: int = 1
 class RelationshipContractData:
     """Configuration data for generating a relationship contract.
 
-    Attributes
+    Attributes:
     ----------
     table_name : str
         The table/contract name (e.g., "rel_name_symbol_v1").
@@ -103,7 +103,7 @@ class RelationshipContractData:
     def dedupe_keys(self) -> tuple[str, ...]:
         """Return the complete dedupe key tuple for this relationship.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Entity ID columns + standard relationship columns + extra keys.
@@ -114,7 +114,7 @@ class RelationshipContractData:
     def tie_breakers(self) -> tuple[SortKeySpec, ...]:
         """Return the tie-breakers for this relationship.
 
-        Returns
+        Returns:
         -------
         tuple[SortKeySpec, ...]
             Custom tie-breakers if specified, otherwise standard.
@@ -127,7 +127,7 @@ class RelationshipContractData:
     def canonical_sort(self) -> tuple[SortKeySpec, ...]:
         """Return the canonical sort order for this relationship.
 
-        Returns
+        Returns:
         -------
         tuple[SortKeySpec, ...]
             Path prefix + entity ID columns (or custom suffix).
@@ -142,7 +142,7 @@ class RelationshipContractData:
     def resolved_version(self) -> int:
         """Return the schema version for this relationship.
 
-        Returns
+        Returns:
         -------
         int
             Custom version if specified, otherwise RELATIONSHIP_SCHEMA_VERSION.
@@ -165,7 +165,7 @@ def generate_relationship_contract(
     table_spec
         The TableSchemaSpec for the relationship dataset.
 
-    Returns
+    Returns:
     -------
     ContractSpec
         Fully configured contract specification.
@@ -212,7 +212,7 @@ RELATIONSHIP_CONTRACT_DATA: tuple[RelationshipContractData, ...] = (
 def derive_relationship_contract_data() -> tuple[RelationshipContractData, ...]:
     """Return the canonical relationship contract data set.
 
-    Returns
+    Returns:
     -------
     tuple[RelationshipContractData, ...]
         Contract data for all relationship outputs.
@@ -223,7 +223,7 @@ def derive_relationship_contract_data() -> tuple[RelationshipContractData, ...]:
 def relationship_contract_data_by_name() -> Mapping[str, RelationshipContractData]:
     """Return relationship contract data indexed by table name.
 
-    Returns
+    Returns:
     -------
     Mapping[str, RelationshipContractData]
         Mapping of table name to contract data.
@@ -243,7 +243,7 @@ def generate_relationship_contract_catalog(
         Typically this wraps dataset_spec_from_context() to resolve schemas
         from the DataFusion catalog.
 
-    Returns
+    Returns:
     -------
     ContractCatalogSpec
         Contract catalog containing all relationship contracts.
@@ -266,7 +266,7 @@ def relationship_contract_catalog_from_specs(
         Mapping of table names to their TableSchemaSpec instances.
         Must contain all keys from RELATIONSHIP_CONTRACT_DATA table names.
 
-    Returns
+    Returns:
     -------
     ContractCatalogSpec
         Contract catalog containing all relationship contracts.

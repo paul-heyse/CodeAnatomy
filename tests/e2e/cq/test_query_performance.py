@@ -16,7 +16,7 @@ from tools.cq.query.planner import compile_query
 def repo_root() -> Path:
     """Get repository root path.
 
-    Returns
+    Returns:
     -------
     Path
         Repository root directory.
@@ -28,7 +28,7 @@ def repo_root() -> Path:
 def toolchain() -> Toolchain:
     """Build a Toolchain instance for performance testing.
 
-    Returns
+    Returns:
     -------
     Toolchain
         Detected toolchain instance.

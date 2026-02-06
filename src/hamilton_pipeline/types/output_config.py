@@ -27,7 +27,7 @@ class OutputStoragePolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for output storage policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing output storage policy settings.
@@ -40,7 +40,7 @@ class OutputStoragePolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for output storage policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.

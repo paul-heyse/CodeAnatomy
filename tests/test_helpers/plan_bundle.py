@@ -35,7 +35,7 @@ def bundle_for_table(
     session_runtime
         Session runtime used to populate plan bundle options.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Built plan bundle for the provided table.

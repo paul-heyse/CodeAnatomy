@@ -282,7 +282,7 @@ class _PrunedPlanComponents:
 def priority_for_task(task_name: str) -> int:
     """Return a deterministic scheduling priority for a task name.
 
-    Returns
+    Returns:
     -------
     int
         Priority value used by the scheduler.
@@ -301,20 +301,14 @@ def _scan_unit_delta_pins(
 ) -> dict[str, tuple[int | None, str | None]]:
     """Extract Delta pins from scan units for determinism tracking.
 
-    Parameters
-    ----------
-    scan_units
-        Sequence of scan units with optional Delta version pins.
+    Args:
+        scan_units: Description.
 
-    Returns
-    -------
-    dict[str, tuple[int | None, str | None]]
-        Mapping of dataset name to pinned Delta version and timestamp.
+    Returns:
+        dict[str, tuple[int | None, str | None]]: Result.
 
-    Raises
-    ------
-    ValueError
-        When conflicting Delta versions exist for the same dataset.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     pins: dict[str, tuple[int | None, str | None]] = {}
     for unit in scan_units:
@@ -342,7 +336,7 @@ def _assemble_plan_components(
 ) -> _PlanAssembly:
     """Assemble plan components for an execution plan.
 
-    Returns
+    Returns:
     -------
     _PlanAssembly
         Plan components used to build the final execution plan.
@@ -421,7 +415,7 @@ def _plan_cost_context(
     enable_metric_scheduling
         Flag indicating whether metric-based scheduling is enabled.
 
-    Returns
+    Returns:
     -------
     tuple[ScheduleCostContext, dict[str, TaskPlanMetrics], dict[str, float]]
         Cost context, plan metrics, and task cost mapping.
@@ -469,7 +463,7 @@ def compile_execution_plan(
     request : ExecutionPlanRequest
         Inputs that shape plan compilation and pruning.
 
-    Returns
+    Returns:
     -------
     ExecutionPlan
         Fully compiled execution plan for this session.
@@ -893,7 +887,7 @@ def dependency_map_from_inferred(
 ) -> dict[str, tuple[str, ...]]:
     """Build a task-to-task dependency map from inferred dependencies.
 
-    Returns
+    Returns:
     -------
     dict[str, tuple[str, ...]]
         Mapping of output task name to sorted dependency names.
@@ -925,7 +919,7 @@ def bottom_level_costs(
 ) -> dict[str, float]:
     """Compute bottom-level costs to prioritize critical-path tasks.
 
-    Returns
+    Returns:
     -------
     dict[str, float]
         Mapping of task name to critical-path priority score.
@@ -959,7 +953,7 @@ def task_slack_by_task(
 ) -> dict[str, float]:
     """Return per-task slack values based on weighted scheduling costs.
 
-    Returns
+    Returns:
     -------
     dict[str, float]
         Mapping of task name to slack (latest start - earliest start).
@@ -1104,7 +1098,7 @@ def _task_names_from_node_ids(graph: TaskGraph, node_ids: Iterable[int]) -> set[
 def upstream_task_closure(graph: TaskGraph, task_names: Iterable[str]) -> set[str]:
     """Return upstream task closure for the requested tasks.
 
-    Returns
+    Returns:
     -------
     set[str]
         Task names including upstream dependencies.
@@ -1125,7 +1119,7 @@ def upstream_task_closure(graph: TaskGraph, task_names: Iterable[str]) -> set[st
 def downstream_task_closure(graph: TaskGraph, task_names: Iterable[str]) -> set[str]:
     """Return downstream task closure for the requested tasks.
 
-    Returns
+    Returns:
     -------
     set[str]
         Task names including downstream dependents.
@@ -1549,7 +1543,7 @@ def _base_cost_from_metrics(metric: TaskPlanMetrics) -> float | None:
     metric
         Task plan metrics captured from DataFusion explains.
 
-    Returns
+    Returns:
     -------
     float | None
         Base cost derived from duration, output rows, or partition count.
@@ -1580,7 +1574,7 @@ def _apply_physical_adjustments(base_cost: float, metric: TaskPlanMetrics) -> fl
     metric
         Task plan metrics captured from DataFusion explains.
 
-    Returns
+    Returns:
     -------
     float
         Adjusted cost incorporating partition and repartition signals.
@@ -1700,7 +1694,7 @@ def _pruned_scan_components(
 ) -> _PrunedScanComponents:
     """Prune scan-unit related components to active tasks.
 
-    Returns
+    Returns:
     -------
     _PrunedScanComponents
         Pruned scan-unit components for active tasks.
@@ -1740,7 +1734,7 @@ def _pruned_plan_maps(
 ) -> _PrunedPlanMaps:
     """Prune plan mappings to active tasks.
 
-    Returns
+    Returns:
     -------
     _PrunedPlanMaps
         Pruned plan mappings for active tasks.
@@ -1841,15 +1835,13 @@ def prune_execution_plan(
 ) -> ExecutionPlan:
     """Return a plan pruned to the provided active task set.
 
-    Returns
-    -------
-    ExecutionPlan
-        Pruned plan with recomputed scheduling and diagnostics.
+    Args:
+        plan: Description.
+        active_tasks: Description.
+        allow_partial: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when pruning resolves to zero active tasks.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     target_active = set(active_tasks) & set(plan.active_tasks)
     if not target_active:

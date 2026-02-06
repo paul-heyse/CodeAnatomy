@@ -31,7 +31,7 @@ def register_temp_table(
     prefix
         Prefix for the generated table name.
 
-    Returns
+    Returns:
     -------
     str
         The generated table name.
@@ -78,7 +78,7 @@ def temp_table(
     prefix
         Prefix for the generated table name.
 
-    Yields
+    Yields:
     ------
     str
         The generated table name.

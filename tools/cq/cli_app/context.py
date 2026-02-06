@@ -39,7 +39,7 @@ class CliContextOptions:
     def from_kwargs(cls, kwargs: CliContextKwargs) -> CliContextOptions:
         """Build options from legacy keyword arguments.
 
-        Returns
+        Returns:
         -------
         CliContextOptions
             Normalized option bundle.
@@ -91,32 +91,16 @@ class CliContext(CqStruct, frozen=True):
     ) -> CliContext:
         """Build a CLI context from arguments.
 
-        Parameters
-        ----------
-        argv
-            Command-line arguments.
-        options
-            Pre-constructed CLI context options.
-        root
-            Optional explicit repository root.
-        verbose
-            Verbosity level.
-        output_format
-            Default output format.
-        artifact_dir
-            Directory for artifacts.
-        save_artifact
-            Whether to save artifacts.
+        Args:
+            argv: Original CLI argument vector.
+            options: Optional context options object.
+            **kwargs: Legacy keyword overrides for context options.
 
-        Returns
-        -------
-        CliContext
-            Resolved context.
+        Returns:
+            CliContext: Fully initialized CLI context.
 
-        Raises
-        ------
-        ValueError
-            If both options and legacy keyword overrides are provided.
+        Raises:
+            ValueError: If both `options` and legacy keyword overrides are provided.
         """
         from tools.cq.core.toolchain import Toolchain
 
@@ -179,7 +163,7 @@ class CliResult(CqStruct, frozen=True):
     def get_exit_code(self) -> int:
         """Get the exit code for this result.
 
-        Returns
+        Returns:
         -------
         int
             Exit code (0 for success).

@@ -42,7 +42,7 @@ class ExprContext(Protocol):
         name
             Column name, optionally prefixed with alias indicator.
 
-        Returns
+        Returns:
         -------
         Expr
             DataFusion column expression.
@@ -57,7 +57,7 @@ class ExprContext(Protocol):
         value
             Value to wrap as literal.
 
-        Returns
+        Returns:
         -------
         Expr
             DataFusion literal expression.
@@ -100,7 +100,7 @@ class ExprContextImpl:
     right_alias
         Prefix for right table columns (default: "r").
 
-    Examples
+    Examples:
     --------
     >>> ctx = ExprContextImpl(left_alias="l", right_alias="r")
     >>> ctx.col("l__file_id")  # Returns col("l__file_id")
@@ -108,6 +108,7 @@ class ExprContextImpl:
     """
 
     def __init__(self, left_alias: str = "l", right_alias: str = "r") -> None:
+        """__init__."""
         self._left_alias = left_alias
         self._right_alias = right_alias
 
@@ -131,7 +132,7 @@ class ExprContextImpl:
             Column name. If prefixed with ``l__`` or ``r__``,
             returns the column as-is. Otherwise returns unprefixed.
 
-        Returns
+        Returns:
         -------
         Expr
             DataFusion column expression.
@@ -147,7 +148,7 @@ class ExprContextImpl:
         value
             Value to wrap as literal.
 
-        Returns
+        Returns:
         -------
         Expr
             DataFusion literal expression.
@@ -162,7 +163,7 @@ class ExprContextImpl:
         name
             Column name (without alias prefix).
 
-        Returns
+        Returns:
         -------
         Expr
             Column expression with left alias prefix.
@@ -177,7 +178,7 @@ class ExprContextImpl:
         name
             Column name (without alias prefix).
 
-        Returns
+        Returns:
         -------
         Expr
             Column expression with right alias prefix.
@@ -189,6 +190,7 @@ class ExprValidationContext:
     """Expression context that records referenced columns for validation."""
 
     def __init__(self, left_alias: str = "l", right_alias: str = "r") -> None:
+        """__init__."""
         self._left_alias = left_alias
         self._right_alias = right_alias
         self._columns: set[str] = set()
@@ -206,7 +208,7 @@ class ExprValidationContext:
     def col(self, name: str) -> Expr:
         """Record and return a column expression.
 
-        Returns
+        Returns:
         -------
         Expr
             Column expression.
@@ -218,7 +220,7 @@ class ExprValidationContext:
     def lit(value: object) -> Expr:
         """Create literal expression.
 
-        Returns
+        Returns:
         -------
         Expr
             Literal expression.
@@ -228,7 +230,7 @@ class ExprValidationContext:
     def used_columns(self) -> set[str]:
         """Return referenced column names.
 
-        Returns
+        Returns:
         -------
         set[str]
             Referenced column names.
@@ -255,12 +257,12 @@ def clamp(value: Expr, *, min_value: Expr, max_value: Expr) -> Expr:
     max_value
         Maximum bound expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Clamped expression.
 
-    Examples
+    Examples:
     --------
     >>> clamped = clamp(col("score"), min_value=lit(0.0), max_value=lit(1.0))
     """
@@ -281,12 +283,12 @@ def c(name: str) -> ExprSpec:
     name
         Column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a column expression.
 
-    Examples
+    Examples:
     --------
     >>> spec = c("file_id")
     >>> expr = spec(ctx)  # Returns col("file_id")
@@ -306,12 +308,12 @@ def v(value: object) -> ExprSpec:
     value
         Value to wrap as literal.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a literal expression.
 
-    Examples
+    Examples:
     --------
     >>> spec = v(0.95)
     >>> expr = spec(ctx)  # Returns lit(0.95)
@@ -333,7 +335,7 @@ def eq_value(column: str, value: object) -> ExprSpec:
     value
         Literal value to compare against.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an equality expression.
@@ -353,7 +355,7 @@ def truthy_expr(column: str) -> ExprSpec:
     column
         Column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a truthy predicate expression.
@@ -375,12 +377,12 @@ def eq(left: str, right: str) -> ExprSpec:
     right
         Right column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an equality expression.
 
-    Examples
+    Examples:
     --------
     >>> spec = eq("owner_def_id", "def_id")
     >>> expr = spec(ctx)  # Returns col("owner_def_id") == col("def_id")
@@ -402,12 +404,12 @@ def gt(left: str, right: str) -> ExprSpec:
     right
         Right column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a greater-than expression.
 
-    Examples
+    Examples:
     --------
     >>> spec = gt("score", "threshold")
     >>> expr = spec(ctx)  # Returns col("score") > col("threshold")
@@ -429,7 +431,7 @@ def lt(left: str, right: str) -> ExprSpec:
     right
         Right column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a less-than expression.
@@ -451,7 +453,7 @@ def gte(left: str, right: str) -> ExprSpec:
     right
         Right column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a gte expression.
@@ -473,7 +475,7 @@ def lte(left: str, right: str) -> ExprSpec:
     right
         Right column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a lte expression.
@@ -493,12 +495,12 @@ def is_not_null(column: str) -> ExprSpec:
     column
         Column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an is_not_null expression.
 
-    Examples
+    Examples:
     --------
     >>> spec = is_not_null("owner_def_id")
     >>> expr = spec(ctx)  # Returns col("owner_def_id").is_not_null()
@@ -518,7 +520,7 @@ def is_null(column: str) -> ExprSpec:
     column
         Column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an is_null expression.
@@ -538,12 +540,12 @@ def and_(*predicates: ExprSpec) -> ExprSpec:
     *predicates
         Predicate specs to combine.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an AND expression.
 
-    Examples
+    Examples:
     --------
     >>> spec = and_(is_not_null("a"), eq("a", "b"))
     """
@@ -567,7 +569,7 @@ def or_(*predicates: ExprSpec) -> ExprSpec:
     *predicates
         Predicate specs to combine.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an OR expression.
@@ -606,12 +608,12 @@ def between_overlap(
     right_end
         End column of right span.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an overlap expression.
 
-    Examples
+    Examples:
     --------
     >>> spec = between_overlap("l_bstart", "l_bend", "r_bstart", "r_bend")
     """
@@ -649,7 +651,7 @@ def span_contains_span(
     inner_end
         End column of inner span.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a containment expression.
@@ -673,7 +675,7 @@ def span_start_expr(span_column: str) -> ExprSpec:
     span_column
         Column name containing the span struct.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns the span start expression.
@@ -693,7 +695,7 @@ def span_end_expr(span_column: str) -> ExprSpec:
     span_column
         Column name containing the span struct.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns the span end expression.
@@ -715,7 +717,7 @@ def span_overlaps_expr(left_span: str, right_span: str) -> ExprSpec:
     right_span
         Column name for the right span struct.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an overlap expression.
@@ -737,7 +739,7 @@ def span_contains_expr(outer_span: str, inner_span: str) -> ExprSpec:
     inner_span
         Column name for the inner span struct.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a containment expression.
@@ -759,7 +761,7 @@ def eq_expr(left: ExprSpec, right: ExprSpec) -> ExprSpec:
     right
         Right expression spec.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an equality expression.
@@ -781,7 +783,7 @@ def case_eq_expr(left: ExprSpec, right: ExprSpec) -> ExprSpec:
     right
         Right expression spec.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a case expression (1 or 0).
@@ -801,7 +803,7 @@ def is_not_null_expr(expr: ExprSpec) -> ExprSpec:
     expr
         Expression spec to evaluate.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a not-null expression.
@@ -821,7 +823,7 @@ def is_null_expr(expr: ExprSpec) -> ExprSpec:
     expr
         Expression spec to evaluate.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a null expression.
@@ -845,12 +847,12 @@ def case_eq(column: str, match_column: str) -> ExprSpec:
     match_column
         Second column name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a case expression (1 or 0).
 
-    Examples
+    Examples:
     --------
     >>> spec = case_eq("owner_kind", "def_kind")
     >>> # Returns 1 when owner_kind == def_kind, 0 otherwise
@@ -872,12 +874,12 @@ def case_eq_value(column: str, value: object) -> ExprSpec:
     value
         Value to compare against.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a case expression (1 or 0).
 
-    Examples
+    Examples:
     --------
     >>> spec = case_eq_value("kind", "function")
     """
@@ -898,7 +900,7 @@ def coalesce_default(column: str, default: object) -> ExprSpec:
     default
         Default value if null.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a coalesce expression.
@@ -918,7 +920,7 @@ def add_columns(*columns: str) -> ExprSpec:
     *columns
         Column names to sum.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a sum expression.
@@ -945,7 +947,7 @@ def mul(column: str, factor: float) -> ExprSpec:
     factor
         Multiplication factor.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a multiplication expression.
@@ -965,7 +967,7 @@ def stable_hash64(column: str) -> ExprSpec:
     column
         Column name to hash.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns a stable hash expression.
@@ -987,7 +989,7 @@ def alias(expr_spec: ExprSpec, name: str) -> ExprSpec:
     name
         Alias name.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Callable that returns an aliased expression.
@@ -1013,7 +1015,7 @@ def sort_expr(column: str, direction: SortDirection = "asc") -> SortExprSpec:
     direction
         Sort direction ("asc" or "desc").
 
-    Returns
+    Returns:
     -------
     SortExprSpec
         Callable that returns a sorted expression for ORDER BY.
@@ -1044,11 +1046,13 @@ def validate_expr_spec(
 ) -> None:
     """Validate that an ExprSpec references only known columns and is deterministic.
 
-    Raises
-    ------
-    ValueError
-        Raised when referenced columns are missing or the expression is
-        detected as non-deterministic.
+    Args:
+        expr_spec: Description.
+        available_columns: Description.
+        expr_label: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     ctx = ExprValidationContext()
     expr = expr_spec(ctx)

@@ -393,7 +393,7 @@ class SchemaTypeRegistry(Registry[str, SchemaTypeSpec], SnapshotRegistry[str, Sc
     def get(self, key: str) -> SchemaTypeSpec | None:
         """Return a schema type spec by name.
 
-        Returns
+        Returns:
         -------
         SchemaTypeSpec | None
             Schema type spec when present.
@@ -403,7 +403,7 @@ class SchemaTypeRegistry(Registry[str, SchemaTypeSpec], SnapshotRegistry[str, Sc
     def __contains__(self, key: str) -> bool:
         """Return True when a schema type is registered.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when the schema type is registered.
@@ -413,7 +413,7 @@ class SchemaTypeRegistry(Registry[str, SchemaTypeSpec], SnapshotRegistry[str, Sc
     def __iter__(self) -> Iterator[str]:
         """Iterate over registered schema type names.
 
-        Returns
+        Returns:
         -------
         Iterator[str]
             Iterator of registered schema type names.
@@ -423,7 +423,7 @@ class SchemaTypeRegistry(Registry[str, SchemaTypeSpec], SnapshotRegistry[str, Sc
     def __len__(self) -> int:
         """Return the count of registered schema types.
 
-        Returns
+        Returns:
         -------
         int
             Number of registered schema types.
@@ -433,7 +433,7 @@ class SchemaTypeRegistry(Registry[str, SchemaTypeSpec], SnapshotRegistry[str, Sc
     def snapshot(self) -> Mapping[str, SchemaTypeSpec]:
         """Return a snapshot of the registry entries.
 
-        Returns
+        Returns:
         -------
         Mapping[str, SchemaTypeSpec]
             Snapshot of registry entries.
@@ -458,7 +458,7 @@ SCHEMA_TYPES = tuple(spec.schema_type for spec in _SCHEMA_REGISTRY.snapshot().va
 def schema_type_registry() -> SchemaTypeRegistry:
     """Return the schema type registry.
 
-    Returns
+    Returns:
     -------
     SchemaTypeRegistry
         Schema type registry instance.
@@ -483,7 +483,7 @@ def _schema_hook(obj: type[msgspec.Struct]) -> dict[str, object]:
 def schema_components() -> tuple[dict[str, object], dict[str, object]]:
     """Return msgspec schema components for all registered types.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, object], dict[str, object]]
         Schema map and shared component definitions.
@@ -530,7 +530,7 @@ def _external_schema_components() -> dict[str, object]:
 def schema_contract_payload() -> dict[str, object]:
     """Return a combined schema payload for registry export.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Combined schema payload.
@@ -546,7 +546,7 @@ def schema_contract_payload() -> dict[str, object]:
 def openapi_contract_payload() -> dict[str, object]:
     """Return an OpenAPI payload for the schema registry.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         OpenAPI 3.1 payload with schema components and root references.
@@ -571,7 +571,7 @@ def openapi_contract_payload() -> dict[str, object]:
 def schema_contract_index() -> list[dict[str, object]]:
     """Return a structured contract index from msgspec.inspect.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         List of contract entries with type info payloads.
@@ -597,7 +597,7 @@ def schema_contract_index() -> list[dict[str, object]]:
 def schema_contract_hash() -> str:
     """Return a deterministic hash for the schema registry payload.
 
-    Returns
+    Returns:
     -------
     str
         Hash of the schema registry payload.

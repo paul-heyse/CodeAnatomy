@@ -87,7 +87,7 @@ class ArrowFieldSpec(StructBaseStrict, frozen=True):
     def from_pyarrow(cls, field: pa.Field) -> ArrowFieldSpec:
         """Return an ArrowFieldSpec from a pyarrow.Field.
 
-        Returns
+        Returns:
         -------
         ArrowFieldSpec
             Serializable field specification.
@@ -102,7 +102,7 @@ class ArrowFieldSpec(StructBaseStrict, frozen=True):
     def to_pyarrow(self) -> pa.Field:
         """Return a pyarrow.Field for the spec.
 
-        Returns
+        Returns:
         -------
         pyarrow.Field
             PyArrow field definition.
@@ -221,7 +221,7 @@ def _encode_metadata(metadata: Mapping[str, str]) -> dict[bytes, bytes]:
 def arrow_type_from_pyarrow(dtype: pa.DataType) -> ArrowTypeSpec:
     """Return a serializable ArrowTypeSpec from a pyarrow dtype.
 
-    Returns
+    Returns:
     -------
     ArrowTypeSpec
         Serializable Arrow type specification.
@@ -234,7 +234,7 @@ def arrow_type_from_pyarrow(dtype: pa.DataType) -> ArrowTypeSpec:
 def arrow_type_to_pyarrow(spec: ArrowTypeSpec | ArrowTypeBase) -> pa.DataType:
     """Return pyarrow dtype for an ArrowTypeSpec.
 
-    Returns
+    Returns:
     -------
     pyarrow.DataType
         PyArrow data type for the spec.

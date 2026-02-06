@@ -25,7 +25,7 @@ class DiagnosticsPolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for diagnostics policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing diagnostics policy settings.
@@ -43,7 +43,7 @@ class DiagnosticsPolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return fingerprint for diagnostics policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -60,7 +60,7 @@ class PipelinePolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the pipeline policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing pipeline policy settings.
@@ -73,7 +73,7 @@ class PipelinePolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return fingerprint for the pipeline policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.

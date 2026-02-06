@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 def dataset_spec_name(spec: DatasetSpec) -> str:
     """Return the dataset name.
 
-    Returns
+    Returns:
     -------
     str
         Dataset name from the table spec.
@@ -54,7 +54,7 @@ def dataset_spec_name(spec: DatasetSpec) -> str:
 def dataset_spec_datafusion_scan(spec: DatasetSpec) -> DataFusionScanOptions | None:
     """Return DataFusion scan options from policy bundle.
 
-    Returns
+    Returns:
     -------
     DataFusionScanOptions | None
         DataFusion scan options when configured.
@@ -65,7 +65,7 @@ def dataset_spec_datafusion_scan(spec: DatasetSpec) -> DataFusionScanOptions | N
 def dataset_spec_delta_scan(spec: DatasetSpec) -> DeltaScanOptions | None:
     """Return Delta scan options from policy bundle.
 
-    Returns
+    Returns:
     -------
     DeltaScanOptions | None
         Delta scan options when configured.
@@ -78,7 +78,7 @@ def dataset_spec_delta_scan(spec: DatasetSpec) -> DeltaScanOptions | None:
 def dataset_spec_delta_cdf_policy(spec: DatasetSpec) -> DeltaCdfPolicy | None:
     """Return Delta CDF policy from policy bundle.
 
-    Returns
+    Returns:
     -------
     DeltaCdfPolicy | None
         Delta CDF policy when configured.
@@ -91,7 +91,7 @@ def dataset_spec_delta_cdf_policy(spec: DatasetSpec) -> DeltaCdfPolicy | None:
 def dataset_spec_delta_maintenance_policy(spec: DatasetSpec) -> DeltaMaintenancePolicy | None:
     """Return Delta maintenance policy from policy bundle.
 
-    Returns
+    Returns:
     -------
     DeltaMaintenancePolicy | None
         Delta maintenance policy when configured.
@@ -107,7 +107,7 @@ def dataset_spec_with_delta_maintenance(
 ) -> DatasetSpec:
     """Return a DatasetSpec with updated Delta maintenance policy.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset spec with updated maintenance policy.
@@ -126,7 +126,7 @@ def dataset_spec_with_delta_maintenance(
 def dataset_spec_delta_write_policy(spec: DatasetSpec) -> DeltaWritePolicy | None:
     """Return Delta write policy from policy bundle.
 
-    Returns
+    Returns:
     -------
     DeltaWritePolicy | None
         Delta write policy when configured.
@@ -139,7 +139,7 @@ def dataset_spec_delta_write_policy(spec: DatasetSpec) -> DeltaWritePolicy | Non
 def dataset_spec_delta_schema_policy(spec: DatasetSpec) -> DeltaSchemaPolicy | None:
     """Return Delta schema policy from policy bundle.
 
-    Returns
+    Returns:
     -------
     DeltaSchemaPolicy | None
         Delta schema policy when configured.
@@ -152,7 +152,7 @@ def dataset_spec_delta_schema_policy(spec: DatasetSpec) -> DeltaSchemaPolicy | N
 def dataset_spec_delta_feature_gate(spec: DatasetSpec) -> DeltaFeatureGate | None:
     """Return Delta feature gate from policy bundle.
 
-    Returns
+    Returns:
     -------
     DeltaFeatureGate | None
         Delta feature gate when configured.
@@ -165,7 +165,7 @@ def dataset_spec_delta_feature_gate(spec: DatasetSpec) -> DeltaFeatureGate | Non
 def dataset_spec_delta_constraints(spec: DatasetSpec) -> tuple[str, ...]:
     """Return Delta constraints from policy bundle.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Declared Delta constraints, if any.
@@ -178,7 +178,7 @@ def dataset_spec_delta_constraints(spec: DatasetSpec) -> tuple[str, ...]:
 def dataset_spec_validation(spec: DatasetSpec) -> ArrowValidationOptions | None:
     """Return Arrow validation options from policy bundle.
 
-    Returns
+    Returns:
     -------
     ArrowValidationOptions | None
         Arrow validation options when configured.
@@ -189,7 +189,7 @@ def dataset_spec_validation(spec: DatasetSpec) -> ArrowValidationOptions | None:
 def dataset_spec_dataframe_validation(spec: DatasetSpec) -> ValidationPolicySpec | None:
     """Return DataFrame validation policy from policy bundle.
 
-    Returns
+    Returns:
     -------
     ValidationPolicySpec | None
         DataFrame validation policy when configured.
@@ -200,7 +200,7 @@ def dataset_spec_dataframe_validation(spec: DatasetSpec) -> ValidationPolicySpec
 def dataset_spec_schema(spec: DatasetSpec) -> SchemaLike:
     """Return the Arrow schema with dataset metadata applied.
 
-    Returns
+    Returns:
     -------
     SchemaLike
         Arrow schema with merged metadata.
@@ -222,7 +222,7 @@ def dataset_spec_schema(spec: DatasetSpec) -> SchemaLike:
 def dataset_spec_ordering(spec: DatasetSpec) -> Ordering:
     """Return ordering metadata derived from the dataset spec.
 
-    Returns
+    Returns:
     -------
     Ordering
         Ordering derived from contract and key fields.
@@ -238,7 +238,7 @@ def dataset_spec_ordering(spec: DatasetSpec) -> Ordering:
 def dataset_spec_query(spec: DatasetSpec) -> QuerySpec:
     """Return the query spec, deriving it from the table spec if needed.
 
-    Returns
+    Returns:
     -------
     QuerySpec
         Query specification for this dataset.
@@ -257,7 +257,7 @@ def dataset_spec_query(spec: DatasetSpec) -> QuerySpec:
 def dataset_spec_contract_spec_or_default(spec: DatasetSpec) -> ContractSpec:
     """Return the contract spec, deriving a default when missing.
 
-    Returns
+    Returns:
     -------
     ContractSpec
         Contract spec derived or defaulted from the dataset spec.
@@ -278,7 +278,7 @@ def dataset_spec_contract_spec_or_default(spec: DatasetSpec) -> ContractSpec:
 def dataset_spec_contract(spec: DatasetSpec) -> Contract:
     """Return a runtime contract derived from the contract spec.
 
-    Returns
+    Returns:
     -------
     Contract
         Runtime contract instance.
@@ -289,7 +289,7 @@ def dataset_spec_contract(spec: DatasetSpec) -> Contract:
 def dataset_spec_handle(spec: DatasetSpec) -> DatasetHandle:
     """Return a DatasetHandle for this dataset spec.
 
-    Returns
+    Returns:
     -------
     DatasetHandle
         Dataset handle for the dataset spec.
@@ -302,7 +302,7 @@ def dataset_spec_handle(spec: DatasetSpec) -> DatasetHandle:
 def dataset_spec_resolved_view_specs(spec: DatasetSpec) -> tuple[ViewSpec, ...]:
     """Return the merged view specs for this dataset.
 
-    Returns
+    Returns:
     -------
     tuple[ViewSpec, ...]
         View specs merged from contract and dataset scopes.
@@ -326,7 +326,7 @@ def dataset_spec_resolved_view_specs(spec: DatasetSpec) -> tuple[ViewSpec, ...]:
 def dataset_spec_is_streaming(spec: DatasetSpec) -> bool:
     """Return True if this dataset represents a streaming source.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the dataset is configured as unbounded.
@@ -339,7 +339,7 @@ def dataset_spec_is_streaming(spec: DatasetSpec) -> bool:
 def dataset_spec_finalize_context(spec: DatasetSpec) -> FinalizeContext:
     """Return a FinalizeContext for this dataset spec.
 
-    Returns
+    Returns:
     -------
     FinalizeContext
         Finalize context with contract and schema policy.
@@ -368,7 +368,7 @@ def dataset_spec_unify_tables(
 ) -> TableLike:
     """Unify table schemas using the evolution spec and execution context.
 
-    Returns
+    Returns:
     -------
     TableLike
         Unified table with aligned schema.
@@ -385,7 +385,7 @@ def dataset_spec_unify_tables(
 def dataset_spec_encoding_policy(spec: DatasetSpec) -> EncodingPolicy | None:
     """Return an encoding policy derived from the schema spec.
 
-    Returns
+    Returns:
     -------
     EncodingPolicy | None
         Encoding policy derived from the schema spec when defined.

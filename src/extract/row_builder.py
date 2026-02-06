@@ -84,7 +84,7 @@ def make_span_dict(bstart: int, bend: int) -> dict[str, int]:
     bend
         End byte offset (exclusive).
 
-    Returns
+    Returns:
     -------
     dict[str, int]
         Row fragment with bstart and bend columns.
@@ -100,7 +100,7 @@ def make_span_spec_dict(spec: SpanTemplateSpec) -> dict[str, object] | None:
     spec
         Span template specification with position and byte information.
 
-    Returns
+    Returns:
     -------
     dict[str, object] | None
         Structured span dict or None when all fields are empty.
@@ -116,7 +116,7 @@ def make_attrs_list(values: Mapping[str, object] | None = None) -> list[tuple[st
     values
         Key-value pairs to include in the attrs map.
 
-    Returns
+    Returns:
     -------
     list[tuple[str, str]]
         List of key/value map entries.
@@ -142,7 +142,7 @@ class ExtractionRowBuilder:
     repo_id
         Optional repository identifier.
 
-    Examples
+    Examples:
     --------
     >>> builder = ExtractionRowBuilder(
     ...     file_id="abc123",
@@ -178,7 +178,7 @@ class ExtractionRowBuilder:
         repo_id
             Optional repository identifier override.
 
-        Returns
+        Returns:
         -------
         ExtractionRowBuilder
             Row builder initialized from the file context.
@@ -193,7 +193,7 @@ class ExtractionRowBuilder:
     def add_identity(self) -> dict[str, str | None]:
         """Return the standard file identity columns.
 
-        Returns
+        Returns:
         -------
         dict[str, str | None]
             Row fragment with file_id, path, and file_sha256.
@@ -207,7 +207,7 @@ class ExtractionRowBuilder:
     def add_repo_identity(self) -> dict[str, str | None]:
         """Return file identity columns with repo_id.
 
-        Returns
+        Returns:
         -------
         dict[str, str | None]
             Row fragment with repo, file_id, path, and file_sha256.
@@ -228,7 +228,7 @@ class ExtractionRowBuilder:
         bend
             End byte offset (exclusive).
 
-        Returns
+        Returns:
         -------
         dict[str, int]
             Row fragment with bstart and bend columns.
@@ -244,7 +244,7 @@ class ExtractionRowBuilder:
         spec
             Span template specification with position and byte information.
 
-        Returns
+        Returns:
         -------
         dict[str, object] | None
             Structured span dict or None when all fields are empty.
@@ -260,7 +260,7 @@ class ExtractionRowBuilder:
         values
             Key-value pairs to include in the attrs map.
 
-        Returns
+        Returns:
         -------
         list[tuple[str, str]]
             List of key/value map entries.
@@ -282,7 +282,7 @@ class ExtractionRowBuilder:
         fields
             Custom fields to include in the row.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Complete row with identity columns and custom fields.
@@ -315,7 +315,7 @@ class ExtractionRowBuilder:
         fields
             Custom fields to include in the row.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Complete row with identity, span, and custom fields.
@@ -328,20 +328,14 @@ class ExtractionRowBuilder:
 def _resolve_schema(schema: SchemaLike) -> pa.Schema:
     """Resolve a schema-like object to a pyarrow Schema.
 
-    Parameters
-    ----------
-    schema
-        Arrow schema or compatible schema-like object.
+    Args:
+        schema: Description.
 
-    Returns
-    -------
-    pa.Schema
-        Resolved pyarrow Schema.
+    Returns:
+        pa.Schema: Result.
 
-    Raises
-    ------
-    TypeError
-        Raised when schema is not a pa.Schema or lacks to_pyarrow() method.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if isinstance(schema, pa.Schema):
         return schema
@@ -368,7 +362,7 @@ class ExtractionBatchBuilder:
     schema
         Arrow schema defining the batch structure.
 
-    Examples
+    Examples:
     --------
     >>> schema = pa.schema([("file_id", pa.utf8()), ("path", pa.utf8())])
     >>> batch_builder = ExtractionBatchBuilder(schema)
@@ -399,7 +393,7 @@ class ExtractionBatchBuilder:
         dataset_name
             Name of the registered extraction dataset (e.g., "ast_files_v1").
 
-        Returns
+        Returns:
         -------
         ExtractionBatchBuilder
             Batch builder initialized with the dataset schema.
@@ -414,7 +408,7 @@ class ExtractionBatchBuilder:
     def schema(self) -> pa.Schema:
         """Return the batch schema.
 
-        Returns
+        Returns:
         -------
         pa.Schema
             Arrow schema for the batch.
@@ -425,7 +419,7 @@ class ExtractionBatchBuilder:
     def num_rows(self) -> int:
         """Return the number of accumulated rows.
 
-        Returns
+        Returns:
         -------
         int
             Row count.
@@ -469,7 +463,7 @@ class ExtractionBatchBuilder:
     def build(self) -> pa.RecordBatch:
         """Build a RecordBatch from accumulated rows.
 
-        Returns
+        Returns:
         -------
         pa.RecordBatch
             Arrow RecordBatch aligned to the schema.
@@ -479,7 +473,7 @@ class ExtractionBatchBuilder:
     def build_table(self) -> pa.Table:
         """Build a Table from accumulated rows.
 
-        Returns
+        Returns:
         -------
         pa.Table
             Arrow Table aligned to the schema.
@@ -489,7 +483,7 @@ class ExtractionBatchBuilder:
     def build_and_clear(self) -> pa.RecordBatch:
         """Build a RecordBatch and clear accumulated rows.
 
-        Returns
+        Returns:
         -------
         pa.RecordBatch
             Arrow RecordBatch aligned to the schema.
@@ -528,12 +522,12 @@ def extraction_schema_template(
     options
         Schema template options. If None, uses default options.
 
-    Returns
+    Returns:
     -------
     list[tuple[str, pa.DataType]]
         Field definitions for Arrow schema construction.
 
-    Examples
+    Examples:
     --------
     >>> opts = SchemaTemplateOptions(include_bstart=True, include_bend=True)
     >>> fields = extraction_schema_template(opts)
@@ -585,7 +579,7 @@ def build_extraction_rows(
     include_repo
         Whether to include the repo column.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Rows with file identity merged.

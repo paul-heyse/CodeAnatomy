@@ -455,7 +455,7 @@ def execute_plan(
     argv
         Original command line arguments
 
-    Returns
+    Returns:
     -------
     CqResult
         Query results
@@ -567,7 +567,7 @@ def _merge_auto_scope_results(
 def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     """Execute an entity-based query.
 
-    Returns
+    Returns:
     -------
     CqResult
         Query result with findings and summary metadata.
@@ -586,7 +586,7 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
 def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     """Execute an entity query using pre-scanned records.
 
-    Returns
+    Returns:
     -------
     CqResult
         Query result with findings and summary metadata.
@@ -626,7 +626,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
 def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     """Execute a pattern-based query using inline ast-grep rules.
 
-    Returns
+    Returns:
     -------
     CqResult
         Query result with findings and summary metadata.
@@ -667,7 +667,7 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
 def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     """Execute a pattern query using a pre-tabulated file list.
 
-    Returns
+    Returns:
     -------
     CqResult
         Query result with findings and summary metadata.
@@ -743,7 +743,7 @@ def _execute_ast_grep_rules(
     _globs
         Optional glob filters (not used with ast-grep-py, filtering done upstream)
 
-    Returns
+    Returns:
     -------
     tuple[list[Finding], list[SgRecord], list[dict[str, object]]]
         Findings, underlying records, and raw match data.
@@ -863,7 +863,7 @@ def _extract_match_metavars(match: SgNode) -> dict[str, str]:
     match
         ast-grep-py SgNode match.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Dictionary of metavariable name to captured text.
@@ -888,7 +888,7 @@ def _parse_sgpy_metavariables(match: SgNode) -> dict[str, MetaVarCapture]:
     match
         ast-grep-py SgNode match.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Dictionary of metavariable info for filtering.
@@ -913,7 +913,7 @@ def _coerce_int(value: object) -> int:
 def _match_to_finding(data: dict[str, object]) -> tuple[Finding | None, SgRecord | None]:
     """Convert ast-grep match to Finding and SgRecord.
 
-    Returns
+    Returns:
     -------
     tuple[Finding | None, SgRecord | None]
         Finding and record for the match when available.
@@ -974,7 +974,7 @@ def _collect_match_spans(
 ) -> dict[str, list[tuple[int, int]]]:
     """Collect matched spans for relational constraints using ast-grep-py.
 
-    Returns
+    Returns:
     -------
     dict[str, list[tuple[int, int]]]
         Mapping from file to matched (start_line, end_line) spans.
@@ -1070,7 +1070,7 @@ def _filter_records_by_spans(
 ) -> list[SgRecord]:
     """Filter records to those overlapping matched spans.
 
-    Returns
+    Returns:
     -------
     list[SgRecord]
         Records that overlap the provided spans.
@@ -1093,7 +1093,7 @@ def _filter_records_by_spans(
 def _record_key(record: SgRecord) -> tuple[str, int, int, int, int]:
     """Return a stable key for a record.
 
-    Returns
+    Returns:
     -------
     tuple[str, int, int, int, int]
         Stable key identifying a record location.
@@ -1110,7 +1110,7 @@ def _record_key(record: SgRecord) -> tuple[str, int, int, int, int]:
 def _normalize_match_file(file_path: str, root: Path) -> str:
     """Normalize match paths to repo-relative POSIX strings.
 
-    Returns
+    Returns:
     -------
     str
         Repository-relative POSIX path.
@@ -1130,7 +1130,7 @@ def _build_def_evidence_map(
 ) -> dict[tuple[str, int, int, int, int], dict[str, object]]:
     """Build a map of definition records to symtable/bytecode evidence.
 
-    Returns
+    Returns:
     -------
     dict[tuple[str, int, int, int, int], dict[str, object]]
         Evidence details keyed by record location.
@@ -1457,7 +1457,7 @@ def rg_files_with_matches(
     limits
         Optional search safety limits. Uses scope.max_depth if not provided.
 
-    Returns
+    Returns:
     -------
     list[Path]
         Files containing matches
@@ -1490,7 +1490,7 @@ def assign_calls_to_defs(
     calls
         Call records to assign
 
-    Returns
+    Returns:
     -------
     dict[SgRecord, list[SgRecord]]
         Mapping from definition to calls within it
@@ -1533,7 +1533,7 @@ def _filter_to_matching(
 ) -> list[SgRecord]:
     """Filter definitions to those matching the query.
 
-    Returns
+    Returns:
     -------
     list[SgRecord]
         Records that match the query filters.
@@ -1557,7 +1557,7 @@ def _filter_to_matching(
 def _matches_entity(record: SgRecord, entity: str | None) -> bool:
     """Check if record matches entity type.
 
-    Returns
+    Returns:
     -------
     bool
         True if the record matches the entity type.
@@ -1614,7 +1614,7 @@ def _matches_entity(record: SgRecord, entity: str | None) -> bool:
 def _matches_name(record: SgRecord, name: str) -> bool:
     """Check if record matches name pattern.
 
-    Returns
+    Returns:
     -------
     bool
         True if the record matches the name pattern.
@@ -1642,7 +1642,7 @@ def _matches_name(record: SgRecord, name: str) -> bool:
 def _extract_def_name(record: SgRecord) -> str | None:
     """Extract the name from a definition record.
 
-    Returns
+    Returns:
     -------
     str | None
         Definition name when available.
@@ -1669,7 +1669,7 @@ def _extract_import_name(record: SgRecord) -> str | None:
     For single imports, returns the imported name or alias.
     For multi-imports (comma-separated or parenthesized), returns the module name.
 
-    Returns
+    Returns:
     -------
     str | None
         Imported name or module name when extractable.
@@ -1695,7 +1695,7 @@ def _extract_import_name(record: SgRecord) -> str | None:
 def _extract_simple_import(text: str) -> str | None:
     """Extract name from 'import foo' or 'import foo.bar'.
 
-    Returns
+    Returns:
     -------
     str | None
         Imported module name when found.
@@ -1710,7 +1710,7 @@ def _extract_simple_import(text: str) -> str | None:
 def _extract_import_alias(text: str) -> str | None:
     """Extract alias from 'import foo as bar'.
 
-    Returns
+    Returns:
     -------
     str | None
         Alias name when found.
@@ -1723,7 +1723,7 @@ def _extract_import_alias(text: str) -> str | None:
 def _extract_from_import(text: str) -> str | None:
     """Extract name from 'from x import y' (single import only).
 
-    Returns
+    Returns:
     -------
     str | None
         Imported name or module name when extractable.
@@ -1740,7 +1740,7 @@ def _extract_from_import(text: str) -> str | None:
 def _extract_from_import_alias(text: str) -> str | None:
     """Extract alias from 'from x import y as z'.
 
-    Returns
+    Returns:
     -------
     str | None
         Alias name when found.
@@ -1753,7 +1753,7 @@ def _extract_from_import_alias(text: str) -> str | None:
 def _extract_from_module(text: str) -> str | None:
     """Extract module name from 'from x import ...'.
 
-    Returns
+    Returns:
     -------
     str | None
         Module name when found.
@@ -1766,7 +1766,7 @@ def _extract_from_module(text: str) -> str | None:
 def _extract_rust_use_name(text: str) -> str | None:
     """Extract import target from Rust use declarations.
 
-    Returns
+    Returns:
     -------
     str | None
         Imported Rust symbol name or alias when extractable.
@@ -1787,7 +1787,7 @@ def _def_to_finding(
 ) -> Finding:
     """Convert a definition record to a Finding.
 
-    Returns
+    Returns:
     -------
     Finding
         Finding describing the definition record.
@@ -1831,7 +1831,7 @@ def _def_to_finding(
 def _import_to_finding(import_record: SgRecord) -> Finding:
     """Convert an import record to a Finding.
 
-    Returns
+    Returns:
     -------
     Finding
         Finding describing the import record.
@@ -1890,7 +1890,7 @@ def _build_callers_section(
 ) -> Section:
     """Build section showing callers of target definitions.
 
-    Returns
+    Returns:
     -------
     Section
         Callers section for the report.
@@ -2007,7 +2007,7 @@ def _build_callees_section(
 ) -> Section:
     """Build section showing callees for target definitions.
 
-    Returns
+    Returns:
     -------
     Section
         Callees section for the report.
@@ -2054,7 +2054,7 @@ def _build_imports_section(
 ) -> Section:
     """Build section showing imports within target files.
 
-    Returns
+    Returns:
     -------
     Section
         Imports section for the report.
@@ -2082,7 +2082,7 @@ def _build_raises_section(
 ) -> Section:
     """Build section showing raises/excepts within target definitions.
 
-    Returns
+    Returns:
     -------
     Section
         Raises section for the report.
@@ -2129,7 +2129,7 @@ def _build_scope_section(
 ) -> Section:
     """Build section showing scope details for target definitions.
 
-    Returns
+    Returns:
     -------
     Section
         Scope section for the report.
@@ -2175,7 +2175,7 @@ def _build_bytecode_surface_section(
 ) -> Section:
     """Build section showing bytecode surface info for target definitions.
 
-    Returns
+    Returns:
     -------
     Section
         Bytecode surface section for the report.
@@ -2232,7 +2232,7 @@ def _call_to_finding(
 ) -> Finding:
     """Convert a call record to a Finding.
 
-    Returns
+    Returns:
     -------
     Finding
         Finding describing the callsite.
@@ -2260,7 +2260,7 @@ def _call_to_finding(
 def _extract_call_target(call: SgRecord) -> str:
     """Extract the target name from a call record.
 
-    Returns
+    Returns:
     -------
     str
         Extracted target name.
@@ -2284,7 +2284,7 @@ def _extract_call_target(call: SgRecord) -> str:
 def _extract_call_receiver(call: SgRecord) -> str | None:
     """Extract the receiver name for attribute calls.
 
-    Returns
+    Returns:
     -------
     str | None
         Receiver name when present.
@@ -2303,7 +2303,7 @@ def _find_enclosing_class(
 ) -> SgRecord | None:
     """Find the innermost class containing a record.
 
-    Returns
+    Returns:
     -------
     SgRecord | None
         Enclosing class record when found.
@@ -2336,7 +2336,7 @@ def _find_enclosing_class(
 def _extract_call_name(call: SgRecord) -> str | None:
     """Extract the name for callsite matching.
 
-    Returns
+    Returns:
     -------
     str | None
         Extracted call name when available.

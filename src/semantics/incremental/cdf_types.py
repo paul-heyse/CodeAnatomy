@@ -38,7 +38,7 @@ class CdfChangeType(Enum):
         value
             Value from the _change_type column in CDF output.
 
-        Returns
+        Returns:
         -------
         CdfChangeType | None
             Corresponding change type enum value, or None if unrecognized.
@@ -55,7 +55,7 @@ class CdfChangeType(Enum):
     def to_cdf_column_value(self) -> str:
         """Convert enum to CDF _change_type column value.
 
-        Returns
+        Returns:
         -------
         str
             Value to match in the _change_type column.
@@ -70,7 +70,7 @@ class CdfFilterPolicy(FingerprintableConfig):
     This policy determines which types of changes should be included
     when reading from a Delta table's change data feed.
 
-    Attributes
+    Attributes:
     ----------
     include_insert
         Whether to include INSERT operations.
@@ -88,7 +88,7 @@ class CdfFilterPolicy(FingerprintableConfig):
     def include_all(cls) -> CdfFilterPolicy:
         """Return a policy that includes all change types.
 
-        Returns
+        Returns:
         -------
         CdfFilterPolicy
             Policy that includes inserts, updates, and deletes.
@@ -99,7 +99,7 @@ class CdfFilterPolicy(FingerprintableConfig):
     def inserts_and_updates_only(cls) -> CdfFilterPolicy:
         """Return a policy that excludes deletes.
 
-        Returns
+        Returns:
         -------
         CdfFilterPolicy
             Policy that includes inserts and updates only.
@@ -109,7 +109,7 @@ class CdfFilterPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the CDF filter policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing CDF filter policy settings.
@@ -123,7 +123,7 @@ class CdfFilterPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the CDF filter policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -138,7 +138,7 @@ class CdfFilterPolicy(FingerprintableConfig):
         change_type
             Change type to check.
 
-        Returns
+        Returns:
         -------
         bool
             True if the change type should be included.
@@ -154,7 +154,7 @@ class CdfFilterPolicy(FingerprintableConfig):
     def to_sql_predicate(self) -> str | None:
         """Generate SQL predicate for filtering CDF _change_type column.
 
-        Returns
+        Returns:
         -------
         str | None
             SQL WHERE clause predicate, or None if all types are included.
@@ -181,7 +181,7 @@ class CdfFilterPolicy(FingerprintableConfig):
     def to_datafusion_predicate(self) -> Expr | None:
         """Return a DataFusion predicate for filtering CDF change types.
 
-        Returns
+        Returns:
         -------
         Expr | None
             DataFusion expression for filtering change types, or None if all

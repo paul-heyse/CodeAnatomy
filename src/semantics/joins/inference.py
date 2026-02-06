@@ -37,7 +37,7 @@ class JoinInferenceError(Exception):
 class JoinCapabilities:
     """Capabilities extracted from a schema for join inference.
 
-    Attributes
+    Attributes:
     ----------
     has_file_identity
         Schema has file_id or path column.
@@ -66,7 +66,7 @@ class JoinCapabilities:
         schema
             Annotated schema to analyze.
 
-        Returns
+        Returns:
         -------
         JoinCapabilities
             Extracted capabilities.
@@ -148,7 +148,7 @@ def _span_strategy(
 def _can_span_join(left_caps: JoinCapabilities, right_caps: JoinCapabilities) -> bool:
     """Check if span-based join is possible.
 
-    Returns
+    Returns:
     -------
     bool
         True if both schemas have file identity and span columns.
@@ -164,7 +164,7 @@ def _can_span_join(left_caps: JoinCapabilities, right_caps: JoinCapabilities) ->
 def _can_file_join(left_caps: JoinCapabilities, right_caps: JoinCapabilities) -> bool:
     """Check if file equi-join is possible.
 
-    Returns
+    Returns:
     -------
     bool
         True if both schemas have file identity columns.
@@ -175,7 +175,7 @@ def _can_file_join(left_caps: JoinCapabilities, right_caps: JoinCapabilities) ->
 def _can_symbol_join(left_caps: JoinCapabilities, right_caps: JoinCapabilities) -> bool:
     """Check if symbol-based join is possible.
 
-    Returns
+    Returns:
     -------
     bool
         True if both schemas have symbol columns.
@@ -196,7 +196,7 @@ def _find_fk_match(
     right_caps
         Capabilities of right schema.
 
-    Returns
+    Returns:
     -------
     tuple[str, str] | None
         (left_col, right_col) if match found, None otherwise.
@@ -276,7 +276,8 @@ def _infer_with_hint(
 
     Parameters
     ----------
-    hint
+
+    Hint:
         Requested strategy type.
     left_caps
         Capabilities of left schema.
@@ -287,7 +288,7 @@ def _infer_with_hint(
     right_schema
         Annotated schema of the right table.
 
-    Returns
+    Returns:
     -------
     JoinStrategy | None
         Strategy if hint can be satisfied, None otherwise.
@@ -339,7 +340,7 @@ def _infer_default(
     right_schema
         Annotated schema of the right table.
 
-    Returns
+    Returns:
     -------
     JoinStrategy | None
         Best inferred strategy, or None if no valid strategy.
@@ -386,15 +387,16 @@ def infer_join_strategy(
         Annotated schema of the left table.
     right_schema
         Annotated schema of the right table.
-    hint
+
+    Hint:
         Optional hint for preferred strategy type.
 
-    Returns
+    Returns:
     -------
     JoinStrategy | None
         Inferred join strategy, or None if no valid strategy found.
 
-    Examples
+    Examples:
     --------
     >>> import pyarrow as pa
     >>> from semantics.types import AnnotatedSchema
@@ -441,7 +443,7 @@ def infer_join_strategy(
 def _format_capabilities(name: str, caps: JoinCapabilities) -> str:
     """Format capabilities for diagnostic output.
 
-    Returns
+    Returns:
     -------
     str
         Formatted string describing schema capabilities.
@@ -463,28 +465,18 @@ def require_join_strategy(
 ) -> JoinStrategy:
     """Infer join strategy or raise with clear diagnostics.
 
-    Parameters
-    ----------
-    left_schema
-        Annotated schema of the left table.
-    right_schema
-        Annotated schema of the right table.
-    hint
-        Optional hint for preferred strategy type.
-    left_name
-        Name of left table for error messages.
-    right_name
-        Name of right table for error messages.
+    Args:
+        left_schema: Description.
+            right_schema: Description.
+            hint: Description.
+            left_name: Description.
+            right_name: Description.
 
-    Returns
-    -------
-    JoinStrategy
-        Inferred join strategy.
+    Returns:
+        JoinStrategy: Result.
 
-    Raises
-    ------
-    JoinInferenceError
-        When no valid join strategy can be inferred.
+    Raises:
+        JoinInferenceError: If the operation cannot be completed.
     """
     strategy = infer_join_strategy(left_schema, right_schema, hint=hint)
     if strategy is not None:

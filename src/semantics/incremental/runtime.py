@@ -40,7 +40,7 @@ class IncrementalRuntime:
     ) -> IncrementalRuntime:
         """Create a runtime with default DataFusion profile.
 
-        Returns
+        Returns:
         -------
         IncrementalRuntime
             Newly constructed runtime instance.
@@ -57,7 +57,7 @@ class IncrementalRuntime:
     def session_runtime(self) -> SessionRuntime:
         """Return the cached DataFusion SessionRuntime.
 
-        Returns
+        Returns:
         -------
         SessionRuntime
             Cached DataFusion session runtime.
@@ -67,7 +67,7 @@ class IncrementalRuntime:
     def session_context(self) -> SessionContext:
         """Return the DataFusion SessionContext for compatibility.
 
-        Returns
+        Returns:
         -------
         SessionContext
             Session context bound to the incremental SessionRuntime.
@@ -77,7 +77,7 @@ class IncrementalRuntime:
     def io_adapter(self) -> DataFusionIOAdapter:
         """Return a DataFusion IO adapter bound to this runtime.
 
-        Returns
+        Returns:
         -------
         DataFusionIOAdapter
             IO adapter bound to the runtime session.
@@ -89,6 +89,7 @@ class TempTableRegistry:
     """Track and cleanup temporary DataFusion tables."""
 
     def __init__(self, runtime: IncrementalRuntime) -> None:
+        """__init__."""
         self._runtime = runtime
         self._ctx = runtime.session_runtime().ctx
         self._names: list[str] = []
@@ -96,7 +97,7 @@ class TempTableRegistry:
     def register_table(self, table: pa.Table, *, prefix: str) -> str:
         """Register an Arrow table and track its name.
 
-        Returns
+        Returns:
         -------
         str
             Registered table name.
@@ -109,7 +110,7 @@ class TempTableRegistry:
     def track(self, name: str) -> str:
         """Track a table name registered elsewhere.
 
-        Returns
+        Returns:
         -------
         str
             Tracked table name.
@@ -136,7 +137,7 @@ class TempTableRegistry:
     def __enter__(self) -> Self:
         """Enter the context and return self.
 
-        Returns
+        Returns:
         -------
         TempTableRegistry
             Context manager instance.

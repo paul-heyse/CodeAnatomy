@@ -246,7 +246,7 @@ class SchemaMetadataSpec(StructBaseStrict, frozen=True):
     def apply(self, schema: SchemaLike) -> SchemaLike:
         """Return a schema with metadata updates applied.
 
-        Returns
+        Returns:
         -------
         SchemaLike
             Updated schema with metadata applied.
@@ -277,7 +277,7 @@ class SchemaMetadataSpec(StructBaseStrict, frozen=True):
 def options_hash(options: object) -> str:
     """Return a stable hash for options objects.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hex digest of the normalized options payload.
@@ -295,7 +295,7 @@ def options_metadata_spec(
 ) -> SchemaMetadataSpec:
     """Return schema metadata for options/repo identifiers.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec with run-specific identifiers.
@@ -315,7 +315,7 @@ def extractor_option_defaults_spec(
 ) -> SchemaMetadataSpec:
     """Return schema metadata for extractor option defaults.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec storing MessagePack-encoded option defaults.
@@ -331,15 +331,11 @@ def extractor_option_defaults_from_metadata(
 ) -> dict[str, object]:
     """Return extractor option defaults from schema metadata.
 
-    Returns
-    -------
-    dict[str, object]
-        Decoded option defaults, or an empty dict when missing.
+    Args:
+        source: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when metadata is not a MessagePack mapping payload.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     metadata = source if isinstance(source, Mapping) else (source.metadata or {})
     payload = metadata.get(EXTRACTOR_DEFAULTS_META)
@@ -474,7 +470,7 @@ def evidence_metadata(
 ) -> dict[bytes, bytes]:
     """Return evidence metadata with common keys applied.
 
-    Returns
+    Returns:
     -------
     dict[bytes, bytes]
         Metadata payload with evidence keys applied.
@@ -509,7 +505,7 @@ class EvidenceMetadata:
 def evidence_metadata_spec(metadata: EvidenceMetadata) -> SchemaMetadataSpec:
     """Return schema metadata for evidence semantics.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec describing evidence semantics.
@@ -530,7 +526,7 @@ def evidence_metadata_spec(metadata: EvidenceMetadata) -> SchemaMetadataSpec:
 def metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
     """Capture schema/field metadata for inheritance.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata specification derived from the schema.
@@ -580,7 +576,7 @@ def update_field_metadata(
 ) -> TableLike:
     """Return a table with field metadata updates applied.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table with updated field metadata.
@@ -662,7 +658,7 @@ def schema_constraints_from_metadata(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Return required non-null and key fields parsed from metadata.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[str, ...], tuple[str, ...]]
         Required non-null and key field names.
@@ -677,7 +673,7 @@ def schema_constraints_from_metadata(
 def schema_identity_from_metadata(metadata: Mapping[bytes, bytes] | None) -> dict[str, str]:
     """Return schema identity metadata (name/version) if present.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Schema identity fields derived from metadata.
@@ -704,7 +700,7 @@ def schema_identity_from_metadata(metadata: Mapping[bytes, bytes] | None) -> dic
 def infer_ordering_keys(names: Sequence[str]) -> tuple[OrderingKey, ...]:
     """Infer ordering keys from a list of column names.
 
-    Returns
+    Returns:
     -------
     tuple[OrderingKey, ...]
         Ordered key list for ordering metadata.
@@ -729,7 +725,7 @@ def ordering_metadata_spec(
 ) -> SchemaMetadataSpec:
     """Return schema metadata describing ordering semantics.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec with ordering annotations.
@@ -745,7 +741,7 @@ def ordering_metadata_spec(
 def ordering_from_schema(schema: SchemaLike) -> Ordering:
     """Return ordering metadata parsed from a schema.
 
-    Returns
+    Returns:
     -------
     Ordering
         Ordering metadata derived from schema annotations.
@@ -767,7 +763,7 @@ def ordering_from_schema(schema: SchemaLike) -> Ordering:
 def merge_metadata_specs(*specs: SchemaMetadataSpec | None) -> SchemaMetadataSpec:
     """Merge schema metadata specs into a single combined spec.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Combined schema metadata spec.
@@ -904,7 +900,7 @@ def _build_encoding_policy(
 def encoding_policy_from_spec(table_spec: TableSchemaProtocol) -> EncodingPolicy:
     """Return an encoding policy derived from a TableSchemaSpec.
 
-    Returns
+    Returns:
     -------
     EncodingPolicy
         Encoding policy derived from the schema specification.
@@ -920,7 +916,7 @@ def encoding_policy_from_spec(table_spec: TableSchemaProtocol) -> EncodingPolicy
 def encoding_policy_from_fields(fields: Sequence[ArrowFieldSpec]) -> EncodingPolicy:
     """Return an encoding policy derived from ArrowFieldSpec values.
 
-    Returns
+    Returns:
     -------
     EncodingPolicy
         Encoding policy derived from the field specs.
@@ -932,7 +928,7 @@ def encoding_policy_from_fields(fields: Sequence[ArrowFieldSpec]) -> EncodingPol
 def encoding_policy_from_schema(schema: SchemaLike) -> EncodingPolicy:
     """Return an encoding policy derived from schema field metadata.
 
-    Returns
+    Returns:
     -------
     EncodingPolicy
         Encoding policy derived from schema metadata.
@@ -953,7 +949,7 @@ def dictionary_array_from_indices(
 ) -> ArrayLike:
     """Build a dictionary array from indices and dictionary values.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Dictionary-encoded array.
@@ -977,7 +973,7 @@ def _ordering_keys_payload(keys: Sequence[OrderingKey]) -> dict[str, object]:
 def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
     """Return schema metadata for the given schema spec.
 
-    Returns
+    Returns:
     -------
     dict[bytes, bytes]
         Schema metadata encoded from the table spec.
@@ -989,7 +985,7 @@ def schema_metadata_for_spec(spec: TableSchemaSpec) -> dict[bytes, bytes]:
 def apply_spec_metadata(spec: TableSchemaSpec) -> SchemaMetadataSpec:
     """Return schema metadata spec for a table spec.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Schema metadata spec derived from the table spec.
@@ -1005,7 +1001,7 @@ def extractor_metadata_spec(
 ) -> SchemaMetadataSpec:
     """Return schema metadata for extractor provenance.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec encoding extractor provenance.
@@ -1026,7 +1022,7 @@ def evidence_metadata_for_table(
 ) -> TableLike:
     """Return a table with evidence metadata applied.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table with evidence metadata applied.
@@ -1040,7 +1036,7 @@ def evidence_metadata_for_table(
 def required_functions_from_metadata(metadata: Mapping[bytes, bytes] | None) -> tuple[str, ...]:
     """Return required function names parsed from metadata.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Required function names.
@@ -1054,7 +1050,7 @@ def required_functions_from_metadata(metadata: Mapping[bytes, bytes] | None) -> 
 def optional_functions_from_metadata(metadata: Mapping[bytes, bytes] | None) -> tuple[str, ...]:
     """Return optional function names parsed from metadata.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Optional function names.
@@ -1070,7 +1066,7 @@ def required_function_signatures_from_metadata(
 ) -> dict[str, int]:
     """Return required function signature counts parsed from metadata.
 
-    Returns
+    Returns:
     -------
     dict[str, int]
         Mapping of function name to required signature counts.
@@ -1092,7 +1088,7 @@ def required_function_signature_types_from_metadata(
 ) -> dict[str, tuple[frozenset[str] | None, ...]]:
     """Return required signature type hints parsed from metadata.
 
-    Returns
+    Returns:
     -------
     dict[str, tuple[frozenset[str] | None, ...]]
         Mapping of function name to required argument type hints.
@@ -1118,7 +1114,7 @@ def function_requirements_metadata_spec(
 ) -> SchemaMetadataSpec:
     """Return schema metadata spec encoding function requirements.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Schema metadata spec encoding function requirements.
@@ -1142,7 +1138,7 @@ def normalize_dictionaries_for_schema(
 ) -> TableLike:
     """Normalize dictionary encoding for a schema.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table with normalized dictionary encoding.
@@ -1163,7 +1159,7 @@ def metadata_payload(
 ) -> dict[str, object]:
     """Return metadata payload for diagnostics.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Schema metadata payload for diagnostics.

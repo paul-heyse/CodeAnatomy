@@ -52,7 +52,7 @@ class ExtractMetadata:
     def output_name(self) -> str:
         """Return the canonical output alias for the dataset row.
 
-        Returns
+        Returns:
         -------
         str
             Output alias used by extract bundles.
@@ -158,7 +158,7 @@ def _metadata_from_record(record: Mapping[str, object]) -> ExtractMetadata:
 def extract_metadata_specs() -> tuple[ExtractMetadata, ...]:
     """Return the extract metadata specs derived from template expansion.
 
-    Returns
+    Returns:
     -------
     tuple[ExtractMetadata, ...]
         Extract metadata records in registry order.
@@ -171,15 +171,8 @@ def extract_metadata_specs() -> tuple[ExtractMetadata, ...]:
 def extract_metadata_by_name() -> Mapping[str, ExtractMetadata]:
     """Return extract metadata mapped by dataset name.
 
-    Returns
-    -------
-    Mapping[str, ExtractMetadata]
-        Mapping of dataset name to extract metadata.
-
-    Raises
-    ------
-    ValueError
-        Raised when duplicate dataset names are present in the metadata list.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     metadata: dict[str, ExtractMetadata] = {}
     for spec in extract_metadata_specs():

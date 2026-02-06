@@ -19,7 +19,7 @@ def test_invoke_with_telemetry_injects_run_context() -> None:
     def hello(*, run_context: Annotated[RunContext | None, Parameter(parse=False)] = None) -> int:
         """Return success after capturing run context.
 
-        Returns
+        Returns:
         -------
         int
             Exit status code.

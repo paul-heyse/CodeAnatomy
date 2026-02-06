@@ -59,7 +59,7 @@ def fragment_telemetry(
 ) -> ScanTelemetry:
     """Return telemetry for dataset fragments.
 
-    Returns
+    Returns:
     -------
     ScanTelemetry
         Fragment counts and estimated row totals (when available).

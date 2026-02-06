@@ -11,7 +11,7 @@ Join Strategy Types
 - FOREIGN_KEY: FK relationship (entity_id -> def_id)
 - SYMBOL_MATCH: Symbol name matching
 
-Example
+Example:
 -------
 >>> from semantics.joins import infer_join_strategy
 >>> from semantics.types import AnnotatedSchema

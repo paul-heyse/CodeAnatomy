@@ -15,19 +15,13 @@ def assert_text_snapshot(
 ) -> None:
     """Assert that actual text matches the golden file, optionally updating it.
 
-    Parameters
-    ----------
-    fixture_name
-        Name of the fixture file (relative to fixtures directory).
-    actual
-        Actual output to compare.
-    update
-        If True, update the golden file instead of asserting.
+    Args:
+        fixture_name: Description.
+        actual: Description.
+        update: Description.
 
-    Raises
-    ------
-    AssertionError
-        When actual does not match expected and update is False.
+    Raises:
+        AssertionError: If the operation cannot be completed.
     """
     fixture_path = GOLDENS_DIR / fixture_name
 

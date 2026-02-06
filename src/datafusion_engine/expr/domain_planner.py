@@ -25,7 +25,7 @@ class DomainPlannerSpec:
     ) -> tuple[str, ...]:
         """Return operator names derived from registry rewrite tags.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Operator names enabled for this planner.
@@ -41,7 +41,7 @@ class DomainPlannerSpec:
     def to_payload(self, *, snapshot: Mapping[str, object] | None = None) -> dict[str, object]:
         """Return a payload representation for the domain planner.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Domain planner payload mapping.
@@ -71,7 +71,7 @@ def resolve_domain_planner(name: str) -> DomainPlannerSpec | None:
     name
         Domain planner name.
 
-    Returns
+    Returns:
     -------
     DomainPlannerSpec | None
         Domain planner spec when available.
@@ -93,7 +93,7 @@ def domain_planner_payloads(
     snapshot
         Optional registry snapshot for rewrite tag resolution.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Payload representations for each resolved planner.
@@ -111,7 +111,7 @@ def domain_planner_names_from_snapshot(
 ) -> tuple[str, ...]:
     """Return planner names enabled by registry rewrite tags.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Planner names enabled by the snapshot.

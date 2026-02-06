@@ -53,7 +53,7 @@ def _normalize_prefix(prefix: str) -> str:
     prefix
         Raw prefix string (may or may not end with underscore).
 
-    Returns
+    Returns:
     -------
     str
         Normalized prefix with trailing underscore if non-empty.
@@ -71,12 +71,12 @@ def span_field_names(prefix: SpanPrefix = "") -> tuple[str, str]:
     prefix
         Span prefix (e.g., "", "call_", "def_").
 
-    Returns
+    Returns:
     -------
     tuple[str, str]
         Tuple of (bstart_name, bend_name).
 
-    Examples
+    Examples:
     --------
     >>> span_field_names("")
     ('bstart', 'bend')
@@ -95,12 +95,12 @@ def make_span_field_specs(prefix: SpanPrefix = "") -> tuple[FieldSpec, FieldSpec
     prefix
         Span prefix (e.g., "", "call_", "def_").
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, FieldSpec]
         Tuple of FieldSpec for (bstart, bend) columns.
 
-    Examples
+    Examples:
     --------
     >>> bstart, bend = make_span_field_specs("call_")
     >>> bstart.name
@@ -123,12 +123,12 @@ def make_span_pa_fields(prefix: SpanPrefix = "") -> tuple[pa.Field, pa.Field]:
     prefix
         Span prefix (e.g., "", "call_", "def_").
 
-    Returns
+    Returns:
     -------
     tuple[pa.Field, pa.Field]
         Tuple of pyarrow fields for (bstart, bend) columns.
 
-    Examples
+    Examples:
     --------
     >>> bstart, bend = make_span_pa_fields("def_")
     >>> bstart.name
@@ -151,12 +151,12 @@ def make_span_pa_tuples(prefix: SpanPrefix = "") -> tuple[tuple[str, pa.DataType
     prefix
         Span prefix (e.g., "", "call_", "def_").
 
-    Returns
+    Returns:
     -------
     tuple[tuple[str, pa.DataType], ...]
         Tuple of (name, dtype) pairs for span columns.
 
-    Examples
+    Examples:
     --------
     >>> make_span_pa_tuples("stmt_")
     (('stmt_bstart', DataType(int64)), ('stmt_bend', DataType(int64)))

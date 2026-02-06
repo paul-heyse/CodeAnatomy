@@ -746,7 +746,7 @@ def build_command(
 ) -> int:
     """Build the Code Property Graph for a repository.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

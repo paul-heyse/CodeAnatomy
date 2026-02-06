@@ -27,7 +27,7 @@ _STANDARD_COMMIT_INFO_KEYS: set[str] = {
 def latest_commit_metadata(table_path: Path) -> dict[str, str]:
     """Return custom commit metadata from the latest Delta log entry.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Parsed user metadata key/value pairs, if available.
@@ -41,7 +41,7 @@ def latest_commit_metadata(table_path: Path) -> dict[str, str]:
 def latest_commit_info(table_path: Path) -> dict[str, object]:
     """Return the commitInfo payload from the latest Delta log JSON file.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Commit info payload when available.

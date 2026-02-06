@@ -109,7 +109,7 @@ def _scope_edges_df(ctx: SessionContext) -> DataFrame:
 def symtable_bindings_df(ctx: SessionContext) -> DataFrame:
     """Return a DataFrame for symtable binding rows.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of binding records.
@@ -191,7 +191,7 @@ def symtable_bindings_df(ctx: SessionContext) -> DataFrame:
 def symtable_def_sites_df(ctx: SessionContext) -> DataFrame:
     """Return a DataFrame for symtable definition site rows.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of definition site records.
@@ -248,7 +248,7 @@ def symtable_def_sites_df(ctx: SessionContext) -> DataFrame:
 def symtable_use_sites_df(ctx: SessionContext) -> DataFrame:
     """Return a DataFrame for symtable use site rows.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of use site records.
@@ -300,7 +300,7 @@ def symtable_use_sites_df(ctx: SessionContext) -> DataFrame:
 def symtable_type_params_df(ctx: SessionContext) -> DataFrame:
     """Return a DataFrame for symtable type parameter rows.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of type parameter records.
@@ -326,7 +326,7 @@ def symtable_type_params_df(ctx: SessionContext) -> DataFrame:
 def symtable_type_param_edges_df(ctx: SessionContext) -> DataFrame:
     """Return a DataFrame for symtable type-parameter edge rows.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of type-parameter edge records.
@@ -357,7 +357,7 @@ def symtable_type_param_edges_df(ctx: SessionContext) -> DataFrame:
 def symtable_binding_resolutions_df(ctx: SessionContext) -> DataFrame:
     """Return a DataFrame resolving symtable bindings to outer scopes.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of binding resolution edges.

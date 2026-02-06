@@ -35,7 +35,7 @@ class SemanticOperationMetrics:
     normalize, relate, or union. Row counts are optional since they require
     execution to compute.
 
-    Attributes
+    Attributes:
     ----------
     operation
         Name of the operation (normalize, relate, union, aggregate, dedupe).
@@ -76,7 +76,7 @@ class SemanticOperationMetrics:
         output_count
             Output row count (from execution).
 
-        Returns
+        Returns:
         -------
         SemanticOperationMetrics
             New metrics instance with row counts.
@@ -99,7 +99,7 @@ class SemanticOperationMetrics:
         elapsed_ms
             Elapsed time in milliseconds.
 
-        Returns
+        Returns:
         -------
         SemanticOperationMetrics
             New metrics instance with elapsed time.
@@ -122,7 +122,7 @@ class SemanticOperationMetrics:
         fingerprint
             Plan fingerprint hash.
 
-        Returns
+        Returns:
         -------
         SemanticOperationMetrics
             New metrics instance with plan fingerprint.
@@ -145,7 +145,7 @@ class PipelineMetrics:
     Collects metrics from multiple semantic operations and provides
     summary statistics for the entire pipeline execution.
 
-    Attributes
+    Attributes:
     ----------
     operation_metrics
         List of per-operation metrics.
@@ -178,7 +178,7 @@ class PipelineMetrics:
         operation
             Operation type to filter by.
 
-        Returns
+        Returns:
         -------
         list[SemanticOperationMetrics]
             Operations matching the specified type.
@@ -188,7 +188,7 @@ class PipelineMetrics:
     def total_input_rows(self) -> int | None:
         """Sum of all input row counts.
 
-        Returns
+        Returns:
         -------
         int | None
             Total input rows, or None if any operation lacks row counts.
@@ -201,7 +201,7 @@ class PipelineMetrics:
     def total_output_rows(self) -> int | None:
         """Sum of all output row counts.
 
-        Returns
+        Returns:
         -------
         int | None
             Total output rows, or None if any operation lacks row counts.
@@ -214,7 +214,7 @@ class PipelineMetrics:
     def as_dict(self) -> dict[str, object]:
         """Convert to dictionary for serialization.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Dictionary representation of pipeline metrics.
@@ -263,12 +263,12 @@ def collect_dataframe_metrics(
     output_name
         Output view name.
 
-    Returns
+    Returns:
     -------
     SemanticOperationMetrics
         Metrics without row counts (add them after execution if needed).
 
-    Examples
+    Examples:
     --------
     >>> metrics = collect_dataframe_metrics(
     ...     df,

@@ -42,7 +42,7 @@ class JoinStrategyType(StrEnum):
 class JoinStrategy:
     """Specification for how to join two tables.
 
-    Attributes
+    Attributes:
     ----------
     strategy_type
         The type of join strategy.
@@ -62,7 +62,7 @@ class JoinStrategy:
     def describe(self) -> str:
         """Generate human-readable description of the strategy.
 
-        Returns
+        Returns:
         -------
         str
             Description of join strategy including keys and conditions.
@@ -89,7 +89,7 @@ class JoinStrategy:
         filter_expr
             SQL filter expression to apply after join.
 
-        Returns
+        Returns:
         -------
         JoinStrategy
             New strategy with filter expression.
@@ -144,7 +144,7 @@ def make_fk_strategy(
     right_pk_col
         Primary key column in right table.
 
-    Returns
+    Returns:
     -------
     JoinStrategy
         Foreign key join strategy.
@@ -169,7 +169,7 @@ def make_symbol_match_strategy(
     right_col
         Symbol column in right table.
 
-    Returns
+    Returns:
     -------
     JoinStrategy
         Symbol match join strategy.

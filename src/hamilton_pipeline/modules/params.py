@@ -51,7 +51,7 @@ else:
 def param_table_policy(pipeline_policy: PipelinePolicy) -> ParamTablePolicy:
     """Return the default parameter table policy.
 
-    Returns
+    Returns:
     -------
     ParamTablePolicy
         Default parameter table policy.
@@ -66,7 +66,7 @@ def param_table_scope_key(
 ) -> str | None:
     """Return an optional scope key for parameter table registration.
 
-    Returns
+    Returns:
     -------
     str | None
         Scope key for schema/table scoping when configured.
@@ -82,7 +82,7 @@ def param_table_scope_key(
 def param_table_specs() -> tuple[ParamTableSpec, ...]:
     """Return default parameter table specs.
 
-    Returns
+    Returns:
     -------
     tuple[ParamTableSpec, ...]
         Default parameter table specs.
@@ -123,7 +123,7 @@ def param_table_inputs(
 ) -> ParamTableInputs:
     """Bundle inputs for param table registration.
 
-    Returns
+    Returns:
     -------
     ParamTableInputs
         Normalized param table inputs for registration.
@@ -148,7 +148,7 @@ def relspec_param_dependency_reports(
 ) -> tuple[TaskDependencyReport, ...]:
     """Infer param-table dependencies from view inputs.
 
-    Returns
+    Returns:
     -------
     tuple[TaskDependencyReport, ...]
         Per-task parameter dependency reports.
@@ -179,7 +179,7 @@ def param_bundle(
 ) -> ParamBundle:
     """Return a parameter bundle split into scalar and list values.
 
-    Returns
+    Returns:
     -------
     ParamBundle
         Parameter bundle with scalar/list values separated.
@@ -201,7 +201,7 @@ def param_bundle(
 def param_scalar_signature(param_bundle: ParamBundle) -> str:
     """Return a stable signature for scalar parameters.
 
-    Returns
+    Returns:
     -------
     str
         Signature hash for scalar parameter values.
@@ -218,7 +218,7 @@ def param_table_registry(
 ) -> ParamTableRegistry:
     """Return a param table registry populated from runtime values.
 
-    Returns
+    Returns:
     -------
     ParamTableRegistry
         Registry populated with param table artifacts.
@@ -250,7 +250,7 @@ def param_table_artifacts(
 ) -> Mapping[str, ParamTableArtifact]:
     """Return param table artifacts from the registry.
 
-    Returns
+    Returns:
     -------
     Mapping[str, ParamTableArtifact]
         Param table artifacts keyed by logical name.
@@ -265,7 +265,7 @@ def param_table_name_map(
 ) -> dict[str, str]:
     """Return param table names without backend registration.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of logical param names to qualified table names.
@@ -285,7 +285,7 @@ def param_tables_datafusion(
 ) -> dict[str, DataFrame]:
     """Return DataFusion DataFrames for registered param tables.
 
-    Returns
+    Returns:
     -------
     dict[str, datafusion.dataframe.DataFrame]
         DataFusion DataFrames keyed by logical name.
@@ -301,7 +301,7 @@ def write_param_tables_delta(
 ) -> Mapping[str, JsonDict] | None:
     """Write param tables as Delta tables when enabled.
 
-    Returns
+    Returns:
     -------
     Mapping[str, JsonDict] | None
         Mapping of logical names to Delta table reports, or ``None`` when disabled.
@@ -412,7 +412,7 @@ def active_param_set(
 ) -> ActiveParamSet:
     """Return the set of active param tables for the run.
 
-    Returns
+    Returns:
     -------
     ActiveParamSet
         Active parameter table logical names.

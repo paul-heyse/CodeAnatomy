@@ -52,7 +52,7 @@ class CacheSnapshotEvent:
     def to_row(self) -> dict[str, object]:
         """Return a JSON-ready snapshot payload.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Snapshot payload dictionary.
@@ -74,7 +74,7 @@ def snapshot_datafusion_caches(
 ) -> list[dict[str, object]]:
     """Snapshot DataFusion cache tables into Delta and register results.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Diagnostics payloads for each snapshot attempt.

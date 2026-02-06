@@ -36,7 +36,7 @@ _SCHEMA_URL = _resolve_schema_url()
 def instrumentation_version() -> str | None:
     """Return the resolved instrumentation version, if available.
 
-    Returns
+    Returns:
     -------
     str | None
         Instrumentation version, if detected.
@@ -47,7 +47,7 @@ def instrumentation_version() -> str | None:
 def instrumentation_schema_url() -> str | None:
     """Return the resolved schema URL, if configured.
 
-    Returns
+    Returns:
     -------
     str | None
         Schema URL if configured.

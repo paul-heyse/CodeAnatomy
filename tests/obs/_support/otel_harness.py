@@ -52,7 +52,7 @@ _HARNESS_CACHE: dict[str, OtelTestHarness | None] = {"value": None}
 def get_otel_harness() -> OtelTestHarness:
     """Return a singleton OTel test harness with in-memory exporters.
 
-    Returns
+    Returns:
     -------
     OtelTestHarness
         Configured in-memory exporters for traces, metrics, and logs.

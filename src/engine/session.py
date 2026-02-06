@@ -36,7 +36,7 @@ class EngineSession:
     def df_ctx(self) -> SessionContext:
         """Return the DataFusion SessionContext when configured.
 
-        Returns
+        Returns:
         -------
         datafusion.SessionContext | None
             Session context when available.
@@ -46,7 +46,7 @@ class EngineSession:
     def df_runtime(self) -> SessionRuntime:
         """Return the DataFusion SessionRuntime when configured.
 
-        Returns
+        Returns:
         -------
         SessionRuntime | None
             Session runtime when available.
@@ -56,7 +56,7 @@ class EngineSession:
     def datafusion_facade(self) -> DataFusionExecutionFacade:
         """Return a DataFusion execution facade when configured.
 
-        Returns
+        Returns:
         -------
         DataFusionExecutionFacade | None
             Execution facade when available.

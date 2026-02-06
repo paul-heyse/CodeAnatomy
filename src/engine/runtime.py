@@ -28,7 +28,7 @@ class EngineRuntime:
     ) -> EngineRuntime:
         """Return a copy of the runtime with updated DataFusion profile.
 
-        Returns
+        Returns:
         -------
         EngineRuntime
             Updated engine runtime bundle.
@@ -47,7 +47,7 @@ def build_engine_runtime(
 ) -> EngineRuntime:
     """Build the unified runtime bundle for engine execution.
 
-    Returns
+    Returns:
     -------
     EngineRuntime
         Bundled runtime settings for DataFusion execution.
@@ -78,7 +78,7 @@ def _apply_diagnostics_policy(
 ) -> DataFusionRuntimeProfile:
     """Return a runtime profile updated with diagnostics settings.
 
-    Returns
+    Returns:
     -------
     DataFusionRuntimeProfile
         Updated runtime profile with diagnostics settings applied.

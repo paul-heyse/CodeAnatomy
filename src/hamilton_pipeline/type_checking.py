@@ -18,6 +18,7 @@ class CodeAnatomyTypeChecker(lifecycle_api.NodeExecutionHook):
     """Type checker that understands PEP-695 TypeAliasType hints."""
 
     def __init__(self, *, check_input: bool = True, check_output: bool = True) -> None:
+        """__init__."""
         self.check_input = check_input
         self.check_output = check_output
 
@@ -31,10 +32,14 @@ class CodeAnatomyTypeChecker(lifecycle_api.NodeExecutionHook):
     ) -> None:
         """Validate node inputs against declared types.
 
-        Raises
-        ------
-        TypeError
-            Raised when an input value does not satisfy its expected type.
+        Args:
+            node_name: Description.
+            node_kwargs: Description.
+            node_input_types: Description.
+            **_future_kwargs: Description.
+
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         if not self.check_input:
             return
@@ -58,10 +63,14 @@ class CodeAnatomyTypeChecker(lifecycle_api.NodeExecutionHook):
     ) -> None:
         """Validate node output against declared return types.
 
-        Raises
-        ------
-        TypeError
-            Raised when the result does not satisfy its expected type.
+        Args:
+            node_name: Description.
+            node_return_type: Description.
+            result: Description.
+            **_future_kwargs: Description.
+
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         if not self.check_output:
             return

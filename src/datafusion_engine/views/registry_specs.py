@@ -150,7 +150,7 @@ def _semantic_cache_policy_for_row(
     Cache policy is derived from semantic metadata (CDF support, category,
     merge keys) and runtime output configuration.
 
-    Returns
+    Returns:
     -------
     Literal["none", "delta_staging", "delta_output"]
         Cache policy for the semantic dataset row.
@@ -238,26 +238,14 @@ def view_graph_nodes(
 ) -> tuple[ViewNode, ...]:
     """Return view graph nodes for IR-driven semantic outputs.
 
-    Parameters
-    ----------
-    ctx
-        DataFusion session context.
-    snapshot
-        Rust UDF snapshot used for required UDF validation.
-    runtime_profile
-        Runtime profile used for plan bundle compilation.
-    semantic_ir
-        Compiled semantic IR artifact that defines view ordering and outputs.
+    Args:
+        ctx: Description.
+        snapshot: Description.
+        runtime_profile: Description.
+        semantic_ir: Description.
 
-    Returns
-    -------
-    tuple[ViewNode, ...]
-        View graph nodes ordered by the semantic IR.
-
-    Raises
-    ------
-    ValueError
-        Raised when the runtime profile is unavailable.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     validate_rust_udf_snapshot(snapshot)
     if runtime_profile is None:
@@ -486,46 +474,18 @@ def _semantics_view_nodes(
 ) -> list[ViewNode]:
     """Build semantic pipeline view nodes with inferred dependencies.
 
-    **SOLE REGISTRATION POINT FOR SEMANTIC VIEWS**
+    Args:
+        ctx: Description.
+            snapshot: Description.
+            runtime_profile: Description.
+            runtime_config: Description.
+            semantic_ir: Description.
 
-    This function is the single source of truth for semantic view registration.
-    Hamilton nodes consume these views via ``source()`` inputs but do NOT
-    re-register them. The execution authority pattern is:
+    Returns:
+        list[ViewNode]: Result.
 
-    - View Graph (this module): Registers views via ``view_graph_nodes()``
-    - Hamilton Pipeline: Consumes registered views, never duplicates registration
-
-    Integrates semantic CPG builders from semantics.pipeline into the
-    view graph infrastructure. Dependencies and required UDFs are
-    extracted from DataFusion plan bundles via lineage analysis.
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context.
-    snapshot
-        Rust UDF snapshot for UDF validation.
-    runtime_profile
-        Runtime configuration for building plan bundles.
-    runtime_config
-        Semantic runtime configuration for cache policy and output locations.
-    semantic_ir
-        Compiled semantic IR artifact.
-
-    Returns
-    -------
-    list[ViewNode]
-        Semantic view nodes with proper plan bundles and dependencies.
-
-    Raises
-    ------
-    ValueError
-        Raised when required runtime context is unavailable.
-
-    See Also
-    --------
-    semantics.pipeline._cpg_view_specs : Source of semantic view definitions.
-    hamilton_pipeline.modules.subdags : Hamilton consumer of semantic outputs.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from datafusion_engine.io.adapter import DataFusionIOAdapter
 

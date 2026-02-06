@@ -30,7 +30,7 @@ def cache_commit_metadata(request: CacheCommitMetadataRequest) -> dict[str, str]
     request
         Commit metadata inputs for cache operations.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Stringified commit metadata entries.

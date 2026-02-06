@@ -40,7 +40,7 @@ class NodeFamily(StrEnum):
 def _identity_fields() -> tuple[FieldSpec, ...]:
     """Return common identity fields for anchored nodes.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Fields for node_id, node_kind, and file_id.
@@ -57,7 +57,7 @@ def _identity_fields() -> tuple[FieldSpec, ...]:
 def _path_field() -> FieldSpec:
     """Return the path field spec.
 
-    Returns
+    Returns:
     -------
     FieldSpec
         Field for file path.
@@ -68,7 +68,7 @@ def _path_field() -> FieldSpec:
 def _span_fields() -> tuple[FieldSpec, ...]:
     """Return byte span fields (bstart, bend).
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Fields for byte span columns.
@@ -82,7 +82,7 @@ def _span_fields() -> tuple[FieldSpec, ...]:
 def _treesitter_span_fields() -> tuple[FieldSpec, ...]:
     """Return tree-sitter byte span fields (start_byte, end_byte).
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Fields for tree-sitter byte span columns.
@@ -96,7 +96,7 @@ def _treesitter_span_fields() -> tuple[FieldSpec, ...]:
 def _task_fields() -> tuple[FieldSpec, ...]:
     """Return task identity fields for CPG outputs.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Fields for task_name and task_priority.
@@ -112,7 +112,7 @@ def _task_fields() -> tuple[FieldSpec, ...]:
 def _scip_range_fields() -> tuple[FieldSpec, ...]:
     """Return SCIP line/character range fields.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Fields for SCIP range columns.
@@ -155,7 +155,7 @@ class NodeSpecOptions:
 def _file_family_fields() -> tuple[FieldSpec, ...]:
     """Return fields for FILE family nodes.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Complete field set for file nodes.
@@ -171,7 +171,7 @@ def _file_family_fields() -> tuple[FieldSpec, ...]:
 def _cst_family_fields() -> tuple[FieldSpec, ...]:
     """Return fields for CST family nodes.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Complete field set for CST-derived nodes.
@@ -187,7 +187,7 @@ def _cst_family_fields() -> tuple[FieldSpec, ...]:
 def _symtable_family_fields() -> tuple[FieldSpec, ...]:
     """Return fields for SYMTABLE family nodes.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Complete field set for symtable-derived nodes.
@@ -205,7 +205,7 @@ def _scip_family_fields() -> tuple[FieldSpec, ...]:
 
     SCIP nodes use symbol as identifier and may lack file anchoring.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Complete field set for SCIP-derived nodes.
@@ -226,7 +226,7 @@ def _treesitter_family_fields() -> tuple[FieldSpec, ...]:
 
     Tree-sitter nodes use start_byte/end_byte instead of bstart/bend.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Complete field set for tree-sitter nodes.
@@ -242,7 +242,7 @@ def _treesitter_family_fields() -> tuple[FieldSpec, ...]:
 def _type_family_fields() -> tuple[FieldSpec, ...]:
     """Return fields for TYPE family nodes.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Complete field set for type nodes.
@@ -258,7 +258,7 @@ def _type_family_fields() -> tuple[FieldSpec, ...]:
 def _diagnostic_family_fields() -> tuple[FieldSpec, ...]:
     """Return fields for DIAGNOSTIC family nodes.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Complete field set for diagnostic nodes.
@@ -276,7 +276,7 @@ def _runtime_family_fields() -> tuple[FieldSpec, ...]:
 
     Runtime nodes represent introspection data and may lack file anchoring.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Complete field set for runtime introspection nodes.
@@ -293,7 +293,7 @@ def _runtime_family_fields() -> tuple[FieldSpec, ...]:
 def _bytecode_family_fields() -> tuple[FieldSpec, ...]:
     """Return fields for BYTECODE family nodes.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Complete field set for bytecode-derived nodes.
@@ -395,7 +395,7 @@ def node_family_bundle(family: NodeFamily) -> FieldBundle:
     family
         Node family to get the field bundle for.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing the family's default fields.
@@ -416,7 +416,7 @@ def node_family_defaults(family: NodeFamily) -> NodeFamilyDefaults:
     family
         Node family to get defaults for.
 
-    Returns
+    Returns:
     -------
     NodeFamilyDefaults
         Default configuration for the family.
@@ -443,7 +443,7 @@ def node_spec_with_family(
     options
         Optional spec configuration (version, constraints).
 
-    Returns
+    Returns:
     -------
     TableSchemaSpec
         Table schema spec combining family defaults and extra fields.
@@ -480,7 +480,7 @@ def merge_field_bundles(*bundles: FieldBundle) -> tuple[FieldSpec, ...]:
     bundles
         Field bundles to merge.
 
-    Returns
+    Returns:
     -------
     tuple[FieldSpec, ...]
         Merged fields with duplicates removed (first occurrence wins).

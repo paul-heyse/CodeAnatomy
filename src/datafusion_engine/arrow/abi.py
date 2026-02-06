@@ -32,7 +32,7 @@ def _resolve_schema(schema: SchemaLike) -> pa.Schema:
 def schema_abi_payload(schema: SchemaLike) -> JsonDict:
     """Return a canonical ABI payload for a schema.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Deterministic schema ABI payload.
@@ -96,7 +96,7 @@ def _extension_info(dtype: DataTypeLike | None) -> JsonDict | None:
 def schema_to_dict(schema: SchemaLike) -> JsonDict:
     """Return a JSON-ready ABI payload for a schema.
 
-    Returns
+    Returns:
     -------
     JsonDict
         JSON-ready ABI payload.
@@ -107,7 +107,7 @@ def schema_to_dict(schema: SchemaLike) -> JsonDict:
 def schema_to_msgpack(schema: SchemaLike) -> bytes:
     """Serialize a schema ABI payload to MessagePack bytes.
 
-    Returns
+    Returns:
     -------
     bytes
         MessagePack-encoded schema payload.
@@ -118,15 +118,14 @@ def schema_to_msgpack(schema: SchemaLike) -> bytes:
 def schema_from_msgpack(payload: bytes) -> pa.Schema:
     """Deserialize an Arrow schema from MessagePack bytes.
 
-    Returns
-    -------
-    pyarrow.Schema
-        Decoded schema payload.
+    Args:
+        payload: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the payload does not decode to a schema.
+    Returns:
+        pa.Schema: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     decoded = loads_msgpack(payload, target_type=object, strict=False)
     if isinstance(decoded, pa.Schema):

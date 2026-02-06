@@ -47,7 +47,7 @@ class DeltaAccessContext:
     def storage_kwargs(self) -> dict[str, StorageOptions | None]:
         """Return storage option kwargs for Delta helpers.
 
-        Returns
+        Returns:
         -------
         dict[str, StorageOptions | None]
             Storage option kwargs for Delta helpers.
@@ -60,7 +60,7 @@ class DeltaAccessContext:
     def resolve_storage(self, *, table_uri: str) -> DeltaStorageOptions:
         """Return effective storage options merged with runtime policy.
 
-        Returns
+        Returns:
         -------
         DeltaStorageOptions
             Storage option bundle after applying policy overrides.
@@ -90,7 +90,7 @@ def read_delta_table_via_facade(
 ) -> pa.Table:
     """Read a Delta table via the DataFusion execution facade.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Materialized table from the Delta provider.
@@ -121,7 +121,7 @@ def register_delta_df(
 ) -> DataFrame:
     """Register a Delta table in DataFusion and return a DataFrame.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFusion DataFrame for the registered Delta table.

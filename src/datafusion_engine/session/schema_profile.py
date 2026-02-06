@@ -62,7 +62,7 @@ _BUILDER_METHOD_KEYS: Final[frozenset[str]] = frozenset(
 def schema_profile_settings() -> Mapping[str, str]:
     """Return the schema profile as a mapping.
 
-    Returns
+    Returns:
     -------
     Mapping[str, str]
         Dictionary of DataFusion config keys to string values.
@@ -88,12 +88,12 @@ def build_session_config(
     overrides : Mapping[str, str] | None
         Optional settings to override after profile application.
 
-    Returns
+    Returns:
     -------
     SessionConfig
         Configured SessionConfig with schema hardening applied.
 
-    Examples
+    Examples:
     --------
     >>> config = build_session_config()
     >>> ctx = SessionContext(config)
@@ -162,12 +162,12 @@ def create_session_context(
         Optional RuntimeEnvBuilder for custom runtime configuration.
         If not provided, uses default runtime environment.
 
-    Returns
+    Returns:
     -------
     SessionContext
         Hardened SessionContext ready for schema introspection.
 
-    Examples
+    Examples:
     --------
     >>> ctx = create_session_context()
     >>> ctx.sql("SELECT * FROM information_schema.tables").show()
@@ -199,7 +199,7 @@ def apply_schema_profile(
     profile : tuple[tuple[str, str], ...] | None
         Optional schema profile to apply. Defaults to SCHEMA_PROFILE.
 
-    Returns
+    Returns:
     -------
     SessionConfig
         Modified SessionConfig with schema hardening applied.

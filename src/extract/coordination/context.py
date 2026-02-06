@@ -50,15 +50,14 @@ class FileContext:
     def _payload_from_row(cls, row: Mapping[str, object]) -> RepoFileRow:
         """Convert a repo_files row into a typed payload.
 
-        Returns
-        -------
-        RepoFileRow
-            Typed row payload.
+        Args:
+            row: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when the row payload does not conform to the expected schema.
+        Returns:
+            RepoFileRow: Result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         try:
             return convert(dict(row), target_type=RepoFileRow, strict=False)
@@ -76,7 +75,7 @@ class FileContext:
         row:
             Row mapping from repo_files output.
 
-        Returns
+        Returns:
         -------
         FileContext
             Parsed file context.
@@ -127,7 +126,7 @@ class ExtractExecutionContext:
     def ensure_session(self) -> ExtractSession:
         """Return the effective extract session.
 
-        Returns
+        Returns:
         -------
         ExtractSession
             Provided session or a profile-derived session when missing.
@@ -140,7 +139,7 @@ class ExtractExecutionContext:
     def ensure_runtime_profile(self) -> DataFusionRuntimeProfile:
         """Return the DataFusion runtime profile for extraction.
 
-        Returns
+        Returns:
         -------
         DataFusionRuntimeProfile
             Resolved DataFusion runtime profile.
@@ -159,7 +158,7 @@ class ExtractExecutionContext:
     def determinism_tier(self) -> DeterminismTier:
         """Return the determinism tier for extract execution.
 
-        Returns
+        Returns:
         -------
         DeterminismTier
             Determinism tier for extract execution.
@@ -189,7 +188,7 @@ def iter_file_contexts(repo_files: TableLike) -> Iterator[FileContext]:
     repo_files:
         Repo files table.
 
-    Yields
+    Yields:
     ------
     FileContext
         Parsed file context rows with required identity fields.
@@ -205,7 +204,7 @@ def file_identity_row(file_ctx: FileContext) -> dict[str, str | None]:
 
     Delegates to :class:`ExtractionRowBuilder` for canonical implementation.
 
-    Returns
+    Returns:
     -------
     dict[str, str | None]
         Row fragment with file_id, path, and file_sha256.
@@ -222,7 +221,7 @@ def attrs_map(values: Mapping[str, object] | None) -> list[tuple[str, str]]:
 
     Delegates to :func:`make_attrs_list` for canonical implementation.
 
-    Returns
+    Returns:
     -------
     list[tuple[str, str]]
         List of key/value map entries.
@@ -236,7 +235,7 @@ def attrs_map(values: Mapping[str, object] | None) -> list[tuple[str, str]]:
 def pos_dict(line0: int | None, col: int | None) -> dict[str, int | None] | None:
     """Return a position dict for nested span structs.
 
-    Returns
+    Returns:
     -------
     dict[str, int | None] | None
         Position mapping or ``None`` when empty.
@@ -249,7 +248,7 @@ def pos_dict(line0: int | None, col: int | None) -> dict[str, int | None] | None
 def byte_span_dict(byte_start: int | None, byte_len: int | None) -> dict[str, int | None] | None:
     """Return a byte-span dict for nested span structs.
 
-    Returns
+    Returns:
     -------
     dict[str, int | None] | None
         Byte-span mapping or ``None`` when empty.
@@ -264,7 +263,7 @@ def span_dict(spec: SpanSpec) -> dict[str, object] | None:
 
     Delegates to :func:`make_span_spec_dict` for canonical implementation.
 
-    Returns
+    Returns:
     -------
     dict[str, object] | None
         Span mapping or ``None`` when empty.
@@ -289,7 +288,7 @@ def span_dict(spec: SpanSpec) -> dict[str, object] | None:
 def text_from_file_ctx(file_ctx: FileContext) -> str | None:
     """Return decoded text from a file context, if available.
 
-    Returns
+    Returns:
     -------
     str | None
         Decoded text or ``None`` when unavailable.
@@ -306,7 +305,7 @@ def text_from_file_ctx(file_ctx: FileContext) -> str | None:
 def bytes_from_file_ctx(file_ctx: FileContext) -> bytes | None:
     """Return raw bytes from a file context.
 
-    Returns
+    Returns:
     -------
     bytes | None
         Raw file bytes or ``None`` when unavailable.
@@ -330,7 +329,7 @@ def iter_contexts(
 ) -> Iterator[FileContext]:
     """Iterate file contexts from provided contexts or a repo_files table.
 
-    Yields
+    Yields:
     ------
     FileContext
         File contexts for extraction.

@@ -30,7 +30,7 @@ class ScopeType(Enum):
 class SymbolFact:
     """Information about a symbol in a scope.
 
-    Attributes
+    Attributes:
     ----------
     name
         Symbol name
@@ -67,7 +67,7 @@ class SymbolFact:
 class ScopeFact:
     """Information about a scope (function, class, module).
 
-    Attributes
+    Attributes:
     ----------
     name
         Scope name
@@ -110,7 +110,7 @@ class ScopeFact:
 class ScopeGraph:
     """Graph of scopes in a Python file.
 
-    Attributes
+    Attributes:
     ----------
     filename
         Source filename
@@ -138,7 +138,7 @@ def extract_scope_graph(source: str, filename: str) -> ScopeGraph:
     filename
         Filename for error reporting
 
-    Returns
+    Returns:
     -------
     ScopeGraph
         Extracted scope information.
@@ -227,7 +227,7 @@ def _walk_table(
 def _get_scope_type(table: symtable.SymbolTable) -> ScopeType:
     """Determine scope type from symbol table.
 
-    Returns
+    Returns:
     -------
     ScopeType
         Parsed scope type for the symbol table.
@@ -261,7 +261,7 @@ def _get_scope_type(table: symtable.SymbolTable) -> ScopeType:
 def _extract_symbol_fact(sym: symtable.Symbol) -> SymbolFact:
     """Extract fact from a symbol.
 
-    Returns
+    Returns:
     -------
     SymbolFact
         Extracted symbol facts.
@@ -284,7 +284,7 @@ def _is_cell(sym: symtable.Symbol) -> bool:
 
     Cell variables are captured by nested scopes (closures).
 
-    Returns
+    Returns:
     -------
     bool
         True if the symbol is a cell variable.
@@ -305,7 +305,7 @@ def _is_cell(sym: symtable.Symbol) -> bool:
 def get_free_vars(scope: ScopeFact) -> tuple[str, ...]:
     """Get free variables (closure captures) for a scope.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Free variable names.
@@ -316,7 +316,7 @@ def get_free_vars(scope: ScopeFact) -> tuple[str, ...]:
 def get_cell_vars(scope: ScopeFact) -> tuple[str, ...]:
     """Get cell variables (captured by children) for a scope.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Cell variable names.
@@ -327,7 +327,7 @@ def get_cell_vars(scope: ScopeFact) -> tuple[str, ...]:
 def is_closure(scope: ScopeFact) -> bool:
     """Check if scope is a closure (has free variables).
 
-    Returns
+    Returns:
     -------
     bool
         True if the scope captures free variables.

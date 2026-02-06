@@ -20,15 +20,11 @@ def _resolve_datafusion_extension(required: tuple[str, ...]) -> ModuleType | Non
 def require_datafusion() -> ModuleType:
     """Require DataFusion and extension hooks for tests.
 
-    Returns
-    -------
-    ModuleType
-        Imported datafusion module.
+    Returns:
+        ModuleType: Result.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when DataFusion or required extension hooks are unavailable.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     try:
         datafusion = importlib.import_module("datafusion")
@@ -58,15 +54,11 @@ def _fallback_udfs_available() -> bool:
 def require_datafusion_udfs() -> ModuleType:
     """Require DataFusion UDF extensions for tests.
 
-    Returns
-    -------
-    ModuleType
-        Imported datafusion module.
+    Returns:
+        ModuleType: Result.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when UDF support is unavailable and no fallback registry exists.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     datafusion = require_datafusion()
     internal = _resolve_datafusion_extension(("register_codeanatomy_udfs",))
@@ -84,15 +76,11 @@ def require_datafusion_udfs() -> ModuleType:
 def require_deltalake() -> ModuleType:
     """Require Delta Lake for tests.
 
-    Returns
-    -------
-    ModuleType
-        Imported deltalake module.
+    Returns:
+        ModuleType: Result.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the ``deltalake`` package is unavailable.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     try:
         return importlib.import_module("deltalake")
@@ -104,15 +92,11 @@ def require_deltalake() -> ModuleType:
 def require_delta_extension() -> ModuleType:
     """Require Delta DataFusion extension support for tests.
 
-    Returns
-    -------
-    ModuleType
-        Imported datafusion module.
+    Returns:
+        ModuleType: Result.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when Delta extension support is unavailable or incompatible.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     datafusion = require_datafusion()
     from datafusion import SessionContext

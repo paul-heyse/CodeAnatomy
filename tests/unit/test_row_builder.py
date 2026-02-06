@@ -187,7 +187,7 @@ class TestExtractionBatchBuilder:
     def simple_schema(self) -> pa.Schema:
         """Return a simple test schema for batch builder tests.
 
-        Returns
+        Returns:
         -------
         pa.Schema
             A schema with file_id, path, kind, and name columns.

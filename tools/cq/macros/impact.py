@@ -130,6 +130,13 @@ class TaintVisitor(ast.NodeVisitor):
         tainted_params: set[str],
         depth: int,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            file: Description.
+            tainted_params: Description.
+            depth: Description.
+        """
         self.file = file
         self.tainted: set[str] = set(tainted_params)
         self.sites: list[TaintedSite] = []
@@ -223,7 +230,7 @@ class TaintVisitor(ast.NodeVisitor):
     def expr_tainted(self, expr: ast.expr) -> bool:
         """Check if expression uses tainted values.
 
-        Returns
+        Returns:
         -------
         bool
             True when expression references tainted values.
@@ -315,7 +322,7 @@ def _tainted_joined(visitor: TaintVisitor, expr: ast.JoinedStr) -> bool:
 def _tainted_boolop(visitor: TaintVisitor, expr: ast.BoolOp) -> bool:
     """Handle `or` and `and` expressions (e.g., `sources or {}`).
 
-    Returns
+    Returns:
     -------
     bool
         True if any operand is tainted.
@@ -326,7 +333,7 @@ def _tainted_boolop(visitor: TaintVisitor, expr: ast.BoolOp) -> bool:
 def _tainted_namedexpr(visitor: TaintVisitor, expr: ast.NamedExpr) -> bool:
     """Handle walrus operator (e.g., `(x := tainted_val)`).
 
-    Returns
+    Returns:
     -------
     bool
         True if the assigned value is tainted.
@@ -337,7 +344,7 @@ def _tainted_namedexpr(visitor: TaintVisitor, expr: ast.NamedExpr) -> bool:
 def _tainted_starred(visitor: TaintVisitor, expr: ast.Starred) -> bool:
     """Handle starred expressions (e.g., `*tainted_list`).
 
-    Returns
+    Returns:
     -------
     bool
         True if the starred value is tainted.
@@ -348,7 +355,7 @@ def _tainted_starred(visitor: TaintVisitor, expr: ast.Starred) -> bool:
 def _tainted_lambda(_visitor: TaintVisitor, _expr: ast.Lambda) -> bool:
     """Lambda captures are not tracked; assume not tainted for simplicity.
 
-    Returns
+    Returns:
     -------
     bool
         Always False for lambdas.
@@ -359,7 +366,7 @@ def _tainted_lambda(_visitor: TaintVisitor, _expr: ast.Lambda) -> bool:
 def _tainted_generator(visitor: TaintVisitor, expr: ast.GeneratorExp) -> bool:
     """Handle generator expressions - tainted if iterating over tainted data.
 
-    Returns
+    Returns:
     -------
     bool
         True if any generator source or element is tainted.
@@ -373,7 +380,7 @@ def _tainted_generator(visitor: TaintVisitor, expr: ast.GeneratorExp) -> bool:
 def _tainted_listcomp(visitor: TaintVisitor, expr: ast.ListComp) -> bool:
     """Handle list comprehensions - tainted if iterating over tainted data.
 
-    Returns
+    Returns:
     -------
     bool
         True if any generator source or element is tainted.
@@ -387,7 +394,7 @@ def _tainted_listcomp(visitor: TaintVisitor, expr: ast.ListComp) -> bool:
 def _tainted_setcomp(visitor: TaintVisitor, expr: ast.SetComp) -> bool:
     """Handle set comprehensions - tainted if iterating over tainted data.
 
-    Returns
+    Returns:
     -------
     bool
         True if any generator source or element is tainted.
@@ -401,7 +408,7 @@ def _tainted_setcomp(visitor: TaintVisitor, expr: ast.SetComp) -> bool:
 def _tainted_dictcomp(visitor: TaintVisitor, expr: ast.DictComp) -> bool:
     """Handle dict comprehensions - tainted if iterating over tainted data.
 
-    Returns
+    Returns:
     -------
     bool
         True if any generator source or key/value is tainted.
@@ -470,7 +477,7 @@ def _find_class_method(
 def _find_function_node(source: str, fn: FnDecl) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """Find the AST node for a function declaration.
 
-    Returns
+    Returns:
     -------
     ast.FunctionDef | ast.AsyncFunctionDef | None
         Matched AST node if found.
@@ -564,7 +571,7 @@ def _find_callers_via_search(
     limits : SearchLimits | None
         Search limits (defaults to INTERACTIVE profile).
 
-    Returns
+    Returns:
     -------
     list[tuple[str, int]]
         Candidate caller (file, line) pairs with relative paths.
@@ -858,7 +865,7 @@ def cmd_impact(request: ImpactRequest) -> CqResult:
     request : ImpactRequest
         Impact analysis request payload.
 
-    Returns
+    Returns:
     -------
     CqResult
         Analysis result.

@@ -158,7 +158,7 @@ def plan_scan_unit(
 ) -> ScanUnit:
     """Plan a deterministic scan unit for a dataset lineage entry.
 
-    Returns
+    Returns:
     -------
     ScanUnit
         Deterministic scan unit for the dataset and lineage inputs.
@@ -228,7 +228,7 @@ def _resolve_delta_scan_resolution(
 ) -> _DeltaScanResolution:
     """Resolve Delta scan metadata and compatibility state.
 
-    Returns
+    Returns:
     -------
     _DeltaScanResolution
         Resolved Delta scan metadata and compatibility signals.
@@ -300,7 +300,7 @@ def plan_scan_units(
 ) -> tuple[tuple[ScanUnit, ...], dict[str, tuple[str, ...]]]:
     """Plan scan units for each task based on structured lineage scans.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[ScanUnit, ...], dict[str, tuple[str, ...]]]
         Sorted scan units and per-task scan unit keys.
@@ -394,7 +394,7 @@ class _DeltaAddActionsPayload:
 def _delta_snapshot_request(location: DatasetLocation) -> DeltaSnapshotRequest:
     """Build a control-plane snapshot request for a dataset location.
 
-    Returns
+    Returns:
     -------
     DeltaSnapshotRequest
         Snapshot request pinned to version or timestamp when provided.
@@ -419,15 +419,14 @@ def _delta_add_actions_payload(
 ) -> _DeltaAddActionsPayload:
     """Resolve add actions and Delta version from the control plane.
 
-    Returns
-    -------
-    _DeltaAddActionsPayload
-        Delta version plus normalized add-action payloads.
+    Args:
+        request: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the control-plane response is missing snapshot metadata.
+    Returns:
+        _DeltaAddActionsPayload: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     response = delta_add_actions(request)
     snapshot = response.get("snapshot")
@@ -453,7 +452,7 @@ def _resolve_delta_version(
 ) -> int | None:
     """Resolve a Delta version from snapshot metadata.
 
-    Returns
+    Returns:
     -------
     int | None
         Resolved Delta version, or the pinned version when unavailable.
@@ -472,7 +471,7 @@ def _resolve_delta_version(
 def _resolve_snapshot_timestamp(snapshot: Mapping[str, object]) -> int | None:
     """Resolve a snapshot timestamp from snapshot metadata.
 
-    Returns
+    Returns:
     -------
     int | None
         Snapshot timestamp as an integer when available.

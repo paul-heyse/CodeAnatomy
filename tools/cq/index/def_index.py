@@ -75,7 +75,7 @@ class FnDecl:
     def qualified_name(self) -> str:
         """Return class.method or function name.
 
-        Returns
+        Returns:
         -------
         str
             Qualified function name.
@@ -88,7 +88,7 @@ class FnDecl:
     def key(self) -> str:
         """Return unique key: file::qualified_name.
 
-        Returns
+        Returns:
         -------
         str
             Unique function key.
@@ -127,7 +127,7 @@ class ClassDecl:
     def key(self) -> str:
         """Return unique key: file::class_name.
 
-        Returns
+        Returns:
         -------
         str
             Unique class key.
@@ -171,7 +171,7 @@ def _safe_unparse(node: ast.AST | None) -> str | None:
 def _extract_param_info(arg: ast.arg, default: ast.expr | None) -> ParamInfo:
     """Extract parameter info from AST arg node.
 
-    Returns
+    Returns:
     -------
     ParamInfo
         Parsed parameter information.
@@ -189,7 +189,7 @@ def _extract_param_info(arg: ast.arg, default: ast.expr | None) -> ParamInfo:
 def _extract_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ParamInfo]:
     """Extract all parameters from a function definition.
 
-    Returns
+    Returns:
     -------
     list[ParamInfo]
         Extracted parameter metadata.
@@ -243,7 +243,7 @@ def _extract_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ParamI
 def _extract_decorator_names(decorators: list[ast.expr]) -> list[str]:
     """Extract decorator names from AST nodes.
 
-    Returns
+    Returns:
     -------
     list[str]
         Decorator names.
@@ -294,6 +294,7 @@ class DefIndexVisitor(ast.NodeVisitor):
     """AST visitor that extracts definitions from a module."""
 
     def __init__(self, file: str) -> None:
+        """__init__."""
         self.file = file
         self.functions: list[FnDecl] = []
         self.classes: list[ClassDecl] = []
@@ -394,7 +395,7 @@ class DefIndexVisitor(ast.NodeVisitor):
     def to_module_info(self) -> ModuleInfo:
         """Convert visitor state to ModuleInfo.
 
-        Returns
+        Returns:
         -------
         ModuleInfo
             Collected module information.
@@ -443,7 +444,7 @@ class DefIndex:
         exclude_patterns : list[str] | None
             Glob patterns to exclude.
 
-        Returns
+        Returns:
         -------
         DefIndex
             Built index.
@@ -492,7 +493,7 @@ class DefIndex:
 
         Build is always fresh; no caching is performed.
 
-        Returns
+        Returns:
         -------
         DefIndex
             Populated definition index.
@@ -521,7 +522,7 @@ class DefIndex:
     def all_functions(self) -> Iterator[FnDecl]:
         """Iterate over all function declarations.
 
-        Yields
+        Yields:
         ------
         FnDecl
             Function declarations.
@@ -534,7 +535,7 @@ class DefIndex:
     def all_classes(self) -> Iterator[ClassDecl]:
         """Iterate over all class declarations.
 
-        Yields
+        Yields:
         ------
         ClassDecl
             Class declarations.
@@ -550,7 +551,7 @@ class DefIndex:
         name : str
             Function name (not qualified).
 
-        Returns
+        Returns:
         -------
         list[FnDecl]
             Matching declarations.
@@ -565,7 +566,7 @@ class DefIndex:
         qname : str
             Qualified name.
 
-        Returns
+        Returns:
         -------
         list[FnDecl]
             Matching declarations.
@@ -580,7 +581,7 @@ class DefIndex:
         symbol : str
             Function or qualified name.
 
-        Returns
+        Returns:
         -------
         list[str]
             Matching function keys.
@@ -599,7 +600,7 @@ class DefIndex:
         name : str
             Class name.
 
-        Returns
+        Returns:
         -------
         list[ClassDecl]
             Matching declarations.
@@ -614,7 +615,7 @@ class DefIndex:
         name : str
             Class name.
 
-        Returns
+        Returns:
         -------
         list[str]
             Matching class keys.
@@ -629,7 +630,7 @@ class DefIndex:
         file : str
             Relative file path.
 
-        Returns
+        Returns:
         -------
         ModuleInfo | None
             Module info if indexed.
@@ -646,7 +647,7 @@ class DefIndex:
         name : str
             Name or dotted name to resolve.
 
-        Returns
+        Returns:
         -------
         tuple[str | None, str | None]
             (module, symbol) if resolved, else (None, None).

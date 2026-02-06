@@ -8,7 +8,7 @@ from datafusion_engine.expr.spec import ScalarLiteralInput, ScalarLiteralSpec, s
 def parse_scalar_value(value: ScalarLiteralInput) -> ScalarLiteralSpec:
     """Parse a scalar literal value.
 
-    Returns
+    Returns:
     -------
     ScalarLiteralSpec
         Parsed scalar literal.

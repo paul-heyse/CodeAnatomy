@@ -79,18 +79,15 @@ def register_table(
 ) -> DataFrame:
     """Register a table using the unified registry and return a DataFrame.
 
-    Non-Delta tables prefer catalog autoload when configured, falling back
-    to explicit registration when autoload is unavailable.
+    Args:
+        ctx: Description.
+            request: Description.
 
-    Returns
-    -------
-    DataFrame
-        DataFusion DataFrame for the registered table.
+    Returns:
+        DataFrame: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when runtime profile, schema resolution, or autoload access fails.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if request.runtime_profile is None:
         msg = "Runtime profile is required for table registration."
@@ -142,7 +139,7 @@ def register_listing_table(
 ) -> ListingRegistrationResult:
     """Register a listing table using DataFusion-native surfaces when possible.
 
-    Returns
+    Returns:
     -------
     ListingRegistrationResult
         Registered DataFusion DataFrame and provider metadata.

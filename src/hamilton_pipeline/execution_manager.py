@@ -60,6 +60,14 @@ class PlanExecutionManager(executors.ExecutionManager):
         cost_threshold: float | None = None,
         diagnostics: DiagnosticsCollector | None = None,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            local_executor: Description.
+            remote_executor: Description.
+            cost_threshold: Description.
+            diagnostics: Description.
+        """
         super().__init__([local_executor, remote_executor])
         self._local_executor = local_executor
         self._remote_executor = remote_executor
@@ -72,7 +80,7 @@ class PlanExecutionManager(executors.ExecutionManager):
     ) -> executors.TaskExecutor:
         """Return the executor for a task based on its tagged kind.
 
-        Returns
+        Returns:
         -------
         executors.TaskExecutor
             Remote executor for scan tasks, local executor otherwise.

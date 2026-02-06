@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 def datafusion_session() -> SessionContext:
     """Create a clean DataFusion session for testing.
 
-    Returns
+    Returns:
     -------
     SessionContext
         Fresh DataFusion session context.

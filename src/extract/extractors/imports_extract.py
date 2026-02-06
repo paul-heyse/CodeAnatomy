@@ -42,7 +42,7 @@ def extract_python_imports(
 ) -> ExtractResult[TableLike]:
     """Extract unified python imports into a physical dataset.
 
-    Returns
+    Returns:
     -------
     ExtractResult[TableLike]
         Extracted python imports table.
@@ -175,7 +175,7 @@ def extract_python_imports_tables(
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract python imports tables as a name-keyed bundle.
 
-    Returns
+    Returns:
     -------
     Mapping[str, TableLike | RecordBatchReaderLike]
         Output tables keyed by dataset name.

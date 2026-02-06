@@ -18,7 +18,7 @@ from tools.cq.search.profiles import SearchLimits
 def sample_repo(tmp_path: Path) -> Path:
     """Create a temporary directory with sample Python files.
 
-    Returns
+    Returns:
     -------
     Path
         Path to the sample repository root.

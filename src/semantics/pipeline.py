@@ -203,7 +203,7 @@ def _bundle_for_builder(
 ) -> DataFusionPlanBundle:
     """Build a plan bundle for a DataFrame builder.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Plan bundle for the builder output.
@@ -290,7 +290,7 @@ def _relationship_builder(
     join_group
         Optional join-fusion group for shared joins.
 
-    Returns
+    Returns:
     -------
     DataFrameBuilder
         A callable that builds the relationship DataFrame.
@@ -648,28 +648,14 @@ def _cpg_view_specs(
 ) -> list[tuple[str, DataFrameBuilder]]:
     """Build view specs for the CPG pipeline.
 
-    Uses the declarative RELATIONSHIP_SPECS registry to generate relationship
-    builders. New relationships can be added to the registry without modifying
-    this function.
+    Args:
+        request: Description.
 
-    All output names use the canonical naming policy from semantics.naming
-    to ensure consistent versioned output names across all consumers.
+    Returns:
+        list[tuple[str, DataFrameBuilder]]: Result.
 
-    Parameters
-    ----------
-    request
-        Inputs required to build semantic view specs.
-
-    Returns
-    -------
-    list[tuple[str, DataFrameBuilder]]
-        List of (view_name, builder) tuples for the CPG pipeline.
-
-    Raises
-    ------
-    ValueError
-        Raised when the runtime profile is unavailable.
-
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from semantics.spec_registry import (
         RELATIONSHIP_SPECS,
@@ -1312,33 +1298,14 @@ def build_cpg(
 ) -> None:
     """Build the complete CPG from extraction tables.
 
-    Expects these tables registered in ctx:
-    - cst_refs, cst_defs, cst_imports, cst_callsites (CST extraction)
-    - scip_occurrences (SCIP index)
-    - file_line_index_v1 (line index for SCIP byte offsets)
+    Args:
+        ctx: Description.
+        runtime_profile: Description.
+        runtime_config: Description.
+        options: Description.
 
-    Registers these views (using canonical _v1 output names):
-    - scip_occurrences_norm_v1
-    - cst_refs_norm_v1, cst_defs_norm_v1, cst_imports_norm_v1, cst_calls_norm_v1
-    - rel_name_symbol_v1, rel_def_symbol_v1, rel_import_symbol_v1, rel_callsite_symbol_v1
-    - semantic_nodes_union_v1, semantic_edges_union_v1
-    - cpg_nodes_v1, cpg_edges_v1
-
-    Parameters
-    ----------
-    ctx
-        DataFusion session context with extraction tables registered.
-    runtime_profile
-        Runtime configuration for building cached view graphs (required).
-    runtime_config
-        Semantic runtime configuration for cache policy and output locations.
-    options
-        Optional build settings for cache policy, schema validation, and CDF inputs.
-
-    Raises
-    ------
-    ValueError
-        Raised when runtime_profile is missing.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     resolved = options or CpgBuildOptions()
     if runtime_profile is None:
@@ -1451,7 +1418,7 @@ def _semantic_output_view_names(
 ) -> list[str]:
     """Return semantic output view names.
 
-    Returns
+    Returns:
     -------
     list[str]
         Semantic output view names, including the relation output.
@@ -1471,15 +1438,11 @@ def _semantic_output_view_names(
 def _ensure_canonical_output_locations(runtime_config: SemanticRuntimeConfig) -> None:
     """Validate that semantic output locations use canonical names.
 
-    Parameters
-    ----------
-    runtime_config
-        Semantic runtime configuration.
+    Args:
+        runtime_config: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when non-canonical names are supplied.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from semantics.naming import canonical_output_name
 
@@ -1506,7 +1469,7 @@ def _semantic_output_locations(
     runtime_config
         Semantic runtime configuration providing output locations.
 
-    Returns
+    Returns:
     -------
     dict[str, DatasetLocation]
         Mapping of view name to dataset location.
@@ -1553,17 +1516,12 @@ def _ensure_semantic_output_locations(
 ) -> None:
     """Ensure all semantic outputs have explicit dataset locations.
 
-    Parameters
-    ----------
-    view_names
-        Expected semantic view names.
-    output_locations
-        Resolved output locations.
+    Args:
+        view_names: Description.
+        output_locations: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when any output location is missing.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     missing_outputs = [name for name in view_names if name not in output_locations]
     if missing_outputs:
@@ -1583,19 +1541,13 @@ def _write_semantic_output(
 ) -> None:
     """Materialize a single semantic output view.
 
-    Parameters
-    ----------
-    view_name
-        Semantic view name to materialize.
-    output_location
-        Destination dataset location.
-    write_context
-        Shared context for output materialization.
+    Args:
+        view_name: Description.
+        output_location: Description.
+        write_context: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the resolved output format is not Delta.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from datafusion_engine.delta.schema_guard import enforce_schema_policy
     from datafusion_engine.delta.store_policy import apply_delta_store_policy
@@ -1900,7 +1852,7 @@ def build_cpg_from_inferred_deps(
     options
         Optional build settings for cache policy, schema validation, and CDF inputs.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Mapping of view names to dependency information.

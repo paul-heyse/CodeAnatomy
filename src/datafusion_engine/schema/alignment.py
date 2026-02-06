@@ -38,15 +38,18 @@ def align_to_schema(
 ) -> tuple[TableLike, AlignmentInfo]:
     """Align and cast a table to a target schema.
 
-    Raises
-    ------
-    ValueError
-        Raised when unsupported alignment options are requested.
+    Args:
+        table: Description.
+            schema: Description.
+            safe_cast: Description.
+            on_error: Description.
+            keep_extra_columns: Description.
 
-    Returns
-    -------
-    tuple[TableLike, AlignmentInfo]
-        Aligned table and alignment metadata.
+    Returns:
+        tuple[TableLike, AlignmentInfo]: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if on_error == "keep":
         msg = "on_error='keep' is not supported by DataFusion alignment."
@@ -92,7 +95,7 @@ def align_table(
 ) -> TableLike:
     """Return a table aligned to the target schema.
 
-    Returns
+    Returns:
     -------
     TableLike
         Aligned table.
@@ -116,15 +119,17 @@ def align_table_to_contract(
 ) -> TableLike:
     """Align a table to a SchemaContract.
 
-    Returns
-    -------
-    TableLike
-        Table aligned to the contract schema.
+    Args:
+        table: Description.
+            contract: Description.
+            safe_cast: Description.
+            on_error: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the contract is not a SchemaContract.
+    Returns:
+        TableLike: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     from datafusion_engine.schema.contracts import EvolutionPolicy, SchemaContract
 
@@ -153,7 +158,7 @@ class SchemaTransform:
     def apply(self, table: TableLike) -> TableLike:
         """Align a table to the stored schema.
 
-        Returns
+        Returns:
         -------
         TableLike
             Aligned table.
@@ -170,7 +175,7 @@ class SchemaTransform:
     def apply_with_info(self, table: TableLike) -> tuple[TableLike, AlignmentInfo]:
         """Align a table to the stored schema and return alignment info.
 
-        Returns
+        Returns:
         -------
         tuple[TableLike, AlignmentInfo]
             Aligned table and alignment metadata.
@@ -197,7 +202,7 @@ class SchemaEvolutionSpec(StructBaseStrict, frozen=True):
     def unify_schema(self, tables: Sequence[TableLike]) -> SchemaLike:
         """Return a unified schema for the provided tables.
 
-        Returns
+        Returns:
         -------
         SchemaLike
             Unified schema for the tables.
@@ -208,7 +213,7 @@ class SchemaEvolutionSpec(StructBaseStrict, frozen=True):
     def unify_schema_from_schemas(self, schemas: Sequence[SchemaLike]) -> SchemaLike:
         """Return a unified schema for a sequence of schemas.
 
-        Returns
+        Returns:
         -------
         SchemaLike
             Unified schema for the schemas.
@@ -218,7 +223,7 @@ class SchemaEvolutionSpec(StructBaseStrict, frozen=True):
     def resolve_name(self, name: str) -> str:
         """Return the logical name for a physical column.
 
-        Returns
+        Returns:
         -------
         str
             Logical column name after applying rename mapping.
@@ -235,7 +240,7 @@ class SchemaEvolutionSpec(StructBaseStrict, frozen=True):
     ) -> TableLike:
         """Unify schemas, align tables, and concatenate.
 
-        Returns
+        Returns:
         -------
         TableLike
             Concatenated table with unified schema.
@@ -263,7 +268,7 @@ def unify_schemas_core(
 ) -> SchemaLike:
     """Return a unified schema using Arrow evolution rules.
 
-    Returns
+    Returns:
     -------
     SchemaLike
         Unified schema derived from the input schemas.

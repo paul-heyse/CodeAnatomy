@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 def semantic_df() -> DataFrame:
     """Create a DataFrame with semantic relationship schema.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame with semantic output columns.

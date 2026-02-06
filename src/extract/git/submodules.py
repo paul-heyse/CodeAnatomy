@@ -38,7 +38,7 @@ class SubmoduleUpdateResult:
 def submodule_roots(repo_root: Path) -> tuple[SubmoduleRoot, ...]:
     """Return submodule roots for a repository when available.
 
-    Returns
+    Returns:
     -------
     tuple[SubmoduleRoot, ...]
         Submodule roots discovered for the repo.
@@ -74,7 +74,7 @@ def update_submodules(
 ) -> SubmoduleUpdateResult:
     """Update submodules to the commits recorded in the superproject.
 
-    Returns
+    Returns:
     -------
     SubmoduleUpdateResult
         Summary of updated and failed submodules.
@@ -105,7 +105,7 @@ def update_submodules(
 def worktree_roots(repo_root: Path) -> tuple[WorktreeRoot, ...]:
     """Return worktree roots for a repository when available.
 
-    Returns
+    Returns:
     -------
     tuple[WorktreeRoot, ...]
         Worktree roots discovered for the repo.

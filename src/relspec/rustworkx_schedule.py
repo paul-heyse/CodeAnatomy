@@ -65,15 +65,13 @@ def schedule_tasks(
 ) -> TaskSchedule:
     """Return a deterministic task schedule driven by a task graph.
 
-    Returns
-    -------
-    TaskSchedule
-        Ordered task names and generation waves.
+    Args:
+        graph: Description.
+        evidence: Description.
+        options: Description.
 
-    Raises
-    ------
-    RelspecValidationError
-        Raised when evidence requirements cannot be satisfied.
+    Raises:
+        RelspecValidationError: If the operation cannot be completed.
     """
     working = evidence.clone()
     resolved_options = options or ScheduleOptions()
@@ -140,7 +138,7 @@ def impacted_tasks(
 ) -> tuple[str, ...]:
     """Return task names impacted by a changed evidence dataset.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted impacted task names.
@@ -160,7 +158,7 @@ def impacted_tasks_for_evidence(
 ) -> tuple[str, ...]:
     """Return impacted tasks for multiple evidence datasets.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted impacted task names.
@@ -178,7 +176,7 @@ def provenance_for_task(
 ) -> tuple[str, ...]:
     """Return evidence names that contribute to a task.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted evidence names contributing to the task.
@@ -198,7 +196,7 @@ def task_schedule_metadata(
 ) -> dict[str, TaskScheduleMetadata]:
     """Return per-task schedule metadata for execution events.
 
-    Returns
+    Returns:
     -------
     dict[str, TaskScheduleMetadata]
         Mapping of task names to schedule metadata.

@@ -26,7 +26,7 @@ def load_gitignore_spec(
 ) -> GitIgnoreSpec:
     """Load GitIgnoreSpec from repository ignore sources.
 
-    Returns
+    Returns:
     -------
     GitIgnoreSpec
         Compiled ignore spec from repository sources.
@@ -45,7 +45,7 @@ def collect_gitignore_inputs(
 ) -> GitIgnoreInputs:
     """Collect gitignore patterns with Git-like semantics.
 
-    Returns
+    Returns:
     -------
     GitIgnoreInputs
         Collected patterns and their sources.
@@ -80,7 +80,7 @@ def collect_gitignore_inputs(
 def iter_gitignore_files(repo_root: Path) -> Iterable[Path]:
     """Yield all .gitignore files under the repository root.
 
-    Yields
+    Yields:
     ------
     Path
         Paths to .gitignore files.
@@ -94,7 +94,7 @@ def iter_gitignore_files(repo_root: Path) -> Iterable[Path]:
 def _read_ignore_lines(path: Path) -> list[str]:
     """Read ignore file lines, returning empty list on I/O failure.
 
-    Returns
+    Returns:
     -------
     list[str]
         Lines from the ignore file.
@@ -108,7 +108,7 @@ def _read_ignore_lines(path: Path) -> list[str]:
 def _prefix_pattern(line: str, rel_dir: str) -> str | None:
     """Prefix gitignore patterns with their directory scope.
 
-    Returns
+    Returns:
     -------
     str | None
         Normalized pattern or None if the line should be ignored.

@@ -13,7 +13,7 @@ def get_rules_for_types(
 ) -> tuple[RuleSpec, ...]:
     """Get ast-grep rules for record types in a specific language.
 
-    Returns
+    Returns:
     -------
     tuple[RuleSpec, ...]
         Rules matching the requested language and record types.

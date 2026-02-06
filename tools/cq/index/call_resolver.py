@@ -97,7 +97,7 @@ def _confidence_exact_likely(targets: list[FnDecl]) -> str:
 def _get_call_name(node: ast.Call) -> tuple[str, bool, str | None]:
     """Extract call name and determine if method call.
 
-    Returns
+    Returns:
     -------
     tuple[str, bool, str | None]
         (callee_name, is_method_call, receiver_name).
@@ -136,7 +136,7 @@ def extract_calls_from_file(file: str, source: str) -> list[CallInfo]:
     source : str
         File contents.
 
-    Returns
+    Returns:
     -------
     list[CallInfo]
         Extracted call sites.
@@ -268,7 +268,7 @@ def resolve_call_targets(
     var_types : dict[str, str] | None
         Known variable types for receiver resolution.
 
-    Returns
+    Returns:
     -------
     ResolvedCall
         Resolution result.
@@ -329,7 +329,7 @@ def resolve_constructor_class_key(
     call : CallInfo
         Call site (assumed to be ClassName()).
 
-    Returns
+    Returns:
     -------
     str | None
         Class key if resolved.

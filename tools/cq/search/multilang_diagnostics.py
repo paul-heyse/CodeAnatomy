@@ -24,7 +24,7 @@ _PYTHON_QUERY_HINTS: tuple[str, ...] = (
 def is_python_oriented_query_text(query: str) -> bool:
     """Return True when free-text query intent appears Python-specific.
 
-    Returns
+    Returns:
     -------
     bool
         True when the query contains Python-specific signals.
@@ -36,7 +36,7 @@ def is_python_oriented_query_text(query: str) -> bool:
 def is_python_oriented_query_ir(query: Query) -> bool:
     """Return True when a parsed query requests Python-specific semantics.
 
-    Returns
+    Returns:
     -------
     bool
         True when query intent appears Python-oriented.
@@ -61,7 +61,7 @@ def build_cross_language_diagnostics(
 ) -> list[Finding]:
     """Build structured cross-language diagnostics for merged output.
 
-    Returns
+    Returns:
     -------
     list[Finding]
         Diagnostic findings for cross-language intent/result mismatches.

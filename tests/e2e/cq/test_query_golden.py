@@ -17,7 +17,7 @@ from tests.e2e.cq._support.goldens import assert_json_snapshot, load_golden_quer
 def repo_root() -> Path:
     """Get repository root path.
 
-    Returns
+    Returns:
     -------
     Path
         Repository root directory.
@@ -29,7 +29,7 @@ def repo_root() -> Path:
 def toolchain() -> Toolchain:
     """Build a Toolchain instance for testing.
 
-    Returns
+    Returns:
     -------
     Toolchain
         Detected toolchain instance.

@@ -54,7 +54,7 @@ class PlanSchedulingContext:
     def from_plan(cls, plan: ExecutionPlan) -> PlanSchedulingContext:
         """Build a scheduling context from a compiled execution plan.
 
-        Returns
+        Returns:
         -------
         PlanSchedulingContext
             Scheduling metadata derived from the plan.
@@ -78,6 +78,7 @@ class PlanGroupingStrategy(grouping.GroupingStrategy):
     """Group tasks by plan generation and prioritize by criticality."""
 
     def __init__(self, plan: ExecutionPlan) -> None:
+        """__init__."""
         ctx = PlanSchedulingContext.from_plan(plan)
         self._schedule_metadata = dict(ctx.schedule_metadata)
         self._bottom_level_costs = dict(ctx.bottom_level_costs)
@@ -92,7 +93,7 @@ class PlanGroupingStrategy(grouping.GroupingStrategy):
     def group_nodes(self, nodes: list[hamilton_node.Node]) -> list[grouping.NodeGroup]:
         """Group nodes by generation with plan-aware ordering.
 
-        Returns
+        Returns:
         -------
         list[grouping.NodeGroup]
             Grouped nodes ordered by plan generations.
@@ -143,7 +144,7 @@ class PlanGroupingStrategy(grouping.GroupingStrategy):
 def plan_grouping_strategy(plan: ExecutionPlan) -> grouping.GroupingStrategy:
     """Return a plan-aware grouping strategy for dynamic execution.
 
-    Returns
+    Returns:
     -------
     grouping.GroupingStrategy
         Grouping strategy that honors plan ordering and priority.
@@ -162,16 +163,11 @@ class PlanTaskSubmissionHook(lifecycle_api.TaskSubmissionHook):
     def run_before_task_submission(self, **kwargs: object) -> None:
         """Record diagnostics and optionally enforce task admission.
 
-        Parameters
-        ----------
-        **kwargs : object
-            Hamilton task submission hook payload. Expected keys include
-            ``run_id``, ``task_id``, ``nodes``, ``inputs``, and ``purpose``.
+        Args:
+            **kwargs: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when admission rejects inactive tasks in strict mode.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         run_id = _require_str(kwargs, "run_id")
         task_id = _require_str(kwargs, "task_id")
@@ -283,7 +279,7 @@ def plan_task_submission_hook(
 ) -> lifecycle_api.TaskSubmissionHook:
     """Return the plan-native task submission hook.
 
-    Returns
+    Returns:
     -------
     lifecycle_api.TaskSubmissionHook
         Hook that records task admission diagnostics.
@@ -301,7 +297,7 @@ def plan_task_grouping_hook(
 ) -> lifecycle_api.TaskGroupingHook:
     """Return the plan-native task grouping hook.
 
-    Returns
+    Returns:
     -------
     lifecycle_api.TaskGroupingHook
         Hook that records task grouping diagnostics.

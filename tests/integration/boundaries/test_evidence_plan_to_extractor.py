@@ -29,7 +29,7 @@ from extract.coordination.spec_helpers import (
 def plan_without_bytecode() -> EvidencePlan:
     """Evidence plan that does not require bytecode datasets.
 
-    Returns
+    Returns:
     -------
     EvidencePlan
         Evidence plan excluding bytecode-backed sources.
@@ -43,7 +43,7 @@ def plan_without_bytecode() -> EvidencePlan:
 def plan_cst_only() -> EvidencePlan:
     """Evidence plan requiring only CST datasets.
 
-    Returns
+    Returns:
     -------
     EvidencePlan
         Evidence plan scoped to CST sources and required columns.
@@ -60,7 +60,7 @@ def plan_cst_only() -> EvidencePlan:
 def plan_all_sources() -> EvidencePlan:
     """Evidence plan compiled with all available sources.
 
-    Returns
+    Returns:
     -------
     EvidencePlan
         Fully compiled evidence plan including all default sources.

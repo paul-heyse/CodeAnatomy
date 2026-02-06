@@ -53,13 +53,8 @@ class TestCapabilityNegotiation:
     def test_require_datafusion_udfs_graceful_fallback(self) -> None:
         """Verify require_datafusion_udfs() provides actionable error.
 
-        When UDF support is unavailable and no fallback exists,
-        the error message should include rebuild instructions.
-
-        Raises
-        ------
-        AssertionError
-            Raised when fallback RuntimeError lacks actionable guidance.
+        Raises:
+            AssertionError: If the operation cannot be completed.
         """
         from tests.test_helpers.optional_deps import require_datafusion_udfs
 

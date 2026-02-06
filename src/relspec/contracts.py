@@ -76,7 +76,7 @@ def _metadata_spec_with_ordering(
 def rel_name_symbol_metadata_spec() -> SchemaMetadataSpec:
     """Metadata spec for name-symbol relationship outputs.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec for name-symbol outputs.
@@ -88,7 +88,7 @@ def rel_name_symbol_metadata_spec() -> SchemaMetadataSpec:
 def rel_import_symbol_metadata_spec() -> SchemaMetadataSpec:
     """Metadata spec for import-symbol relationship outputs.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec for import-symbol outputs.
@@ -100,7 +100,7 @@ def rel_import_symbol_metadata_spec() -> SchemaMetadataSpec:
 def rel_def_symbol_metadata_spec() -> SchemaMetadataSpec:
     """Metadata spec for def-symbol relationship outputs.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec for def-symbol outputs.
@@ -112,7 +112,7 @@ def rel_def_symbol_metadata_spec() -> SchemaMetadataSpec:
 def rel_callsite_symbol_metadata_spec() -> SchemaMetadataSpec:
     """Metadata spec for callsite-symbol relationship outputs.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec for callsite-symbol outputs.
@@ -124,7 +124,7 @@ def rel_callsite_symbol_metadata_spec() -> SchemaMetadataSpec:
 def relation_output_metadata_spec() -> SchemaMetadataSpec:
     """Metadata spec for canonical relationship outputs.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec for relation output rows.
@@ -138,15 +138,11 @@ def relation_output_metadata_spec() -> SchemaMetadataSpec:
 def relspec_metadata_spec(name: str) -> SchemaMetadataSpec:
     """Return the metadata spec for a relspec output view.
 
-    Returns
-    -------
-    SchemaMetadataSpec
-        Metadata spec for the requested relspec output.
+    Args:
+        name: Description.
 
-    Raises
-    ------
-    KeyError
-        Raised when the relspec output name is unknown.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     specs: dict[str, SchemaMetadataSpec] = {
         REL_NAME_SYMBOL_NAME: rel_name_symbol_metadata_spec(),

@@ -36,7 +36,7 @@ class ValidationViolation:
     def __str__(self) -> str:
         """Return a human-readable violation message.
 
-        Returns
+        Returns:
         -------
         str
             Human-readable violation message.

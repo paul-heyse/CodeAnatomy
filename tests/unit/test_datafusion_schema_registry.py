@@ -44,10 +44,8 @@ def _to_arrow_schema(value: object) -> pa.Schema:
 def test_nested_view_spec_roundtrip() -> None:
     """Ensure nested view specs round-trip from the DataFusion context.
 
-    Raises
-    ------
-    AssertionError
-        Raised when the nested view spec builder is missing.
+    Raises:
+        AssertionError: If the operation cannot be completed.
     """
     profile = df_profile()
     ctx = profile.session_context()

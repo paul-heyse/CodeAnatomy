@@ -46,7 +46,7 @@ def _fallback_stage() -> str | None:
 def push_stage(stage: str) -> Token[tuple[str, ...]]:
     """Push a stage name onto the current context stack.
 
-    Returns
+    Returns:
     -------
     Token[tuple[str, ...]]
         Token used to restore the previous stack.
@@ -67,7 +67,7 @@ def pop_stage(token: Token[tuple[str, ...]]) -> None:
 def current_stage() -> str | None:
     """Return the current stage name, if any.
 
-    Returns
+    Returns:
     -------
     str | None
         Current stage name when present.
@@ -160,7 +160,7 @@ def start_build_heartbeat(
 ) -> HeartbeatController:
     """Start a background heartbeat emitter for the build.
 
-    Returns
+    Returns:
     -------
     HeartbeatController
         Controller used to stop the heartbeat.

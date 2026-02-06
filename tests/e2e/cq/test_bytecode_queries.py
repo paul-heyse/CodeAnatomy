@@ -221,7 +221,7 @@ class TestBytecodeWithFixtures:
     def fixtures_dir(self) -> Path:
         """Get fixtures directory.
 
-        Returns
+        Returns:
         -------
         Path
             Path to the fixture directory.

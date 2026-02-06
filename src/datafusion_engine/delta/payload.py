@@ -17,15 +17,14 @@ if TYPE_CHECKING:
 def schema_ipc_payload(schema: object | None) -> bytes | None:
     """Serialize an Arrow schema to IPC bytes when supported.
 
-    Returns
-    -------
-    bytes | None
-        IPC payload when schema serialization succeeds, otherwise None.
+    Args:
+        schema: Description.
 
-    Raises
-    ------
-    DataFusionEngineError
-        Raised when the schema serialization payload is invalid.
+    Returns:
+        bytes | None: Result.
+
+    Raises:
+        DataFusionEngineError: If the operation cannot be completed.
     """
     if schema is None:
         return None
@@ -61,7 +60,7 @@ def commit_payload(
 ]:
     """Convert commit options into Rust extension payload values.
 
-    Returns
+    Returns:
     -------
     tuple[list[tuple[str, str]] | None, str | None, int | None, int | None, int | None, bool | None]
         Commit metadata and idempotent transaction fields for Rust calls.
@@ -92,7 +91,7 @@ def cdf_options_payload(
 ) -> dict[str, object]:
     """Return a normalized payload for CDF options.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Payload describing the requested CDF window.
@@ -117,7 +116,7 @@ def cdf_options_payload(
 def msgpack_payload(value: object) -> bytes:
     """Encode a value as msgpack for diagnostic payloads.
 
-    Returns
+    Returns:
     -------
     bytes
         MessagePack-encoded payload.
@@ -128,7 +127,7 @@ def msgpack_payload(value: object) -> bytes:
 def msgpack_or_none(value: object | None) -> bytes | None:
     """Return MessagePack payload when a value is provided.
 
-    Returns
+    Returns:
     -------
     bytes | None
         MessagePack payload when value is present, otherwise None.
@@ -141,7 +140,7 @@ def msgpack_or_none(value: object | None) -> bytes | None:
 def string_list(value: object) -> list[str]:
     """Normalize a value into a list of strings for payloads.
 
-    Returns
+    Returns:
     -------
     list[str]
         Normalized string list.
@@ -158,7 +157,7 @@ def string_list(value: object) -> list[str]:
 def string_map(value: object) -> dict[str, str]:
     """Normalize a mapping payload into a string-keyed dict.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Normalized string mapping.
@@ -171,7 +170,7 @@ def string_map(value: object) -> dict[str, str]:
 def settings_bool(settings: Mapping[str, str], key: str) -> bool | None:
     """Parse a settings value as a boolean when possible.
 
-    Returns
+    Returns:
     -------
     bool | None
         Parsed boolean value when available.

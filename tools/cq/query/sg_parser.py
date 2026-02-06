@@ -62,7 +62,7 @@ def sg_scan(
     lang
         Query language for scanner parsing and rule dispatch.
 
-    Returns
+    Returns:
     -------
     list[SgRecord]
         Parsed scan records.
@@ -102,7 +102,7 @@ def list_scan_files(
     lang
         Query language for file extension selection.
 
-    Returns
+    Returns:
     -------
     list[Path]
         Files selected for scanning
@@ -125,7 +125,7 @@ def _tabulate_scan_files(
 
     Used by ``sg_scan`` and ``list_scan_files`` to build the scan list.
 
-    Returns
+    Returns:
     -------
     list[Path]
         Files selected for scanning.
@@ -146,15 +146,14 @@ def normalize_record_types(
 ) -> set[RecordType] | None:
     """Normalize and validate record types.
 
-    Returns
-    -------
-    set[RecordType] | None
-        Normalized record types, or None to indicate "all records".
+    Args:
+        record_types: Requested record types, if any.
 
-    Raises
-    ------
-    QueryParseError
-        Raised when invalid record types are provided.
+    Returns:
+        set[RecordType] | None: Normalized record types, empty set, or `None`.
+
+    Raises:
+        QueryParseError: If any provided record type is invalid.
     """
     if record_types is None:
         return None
@@ -182,7 +181,7 @@ def _normalize_file_path(file_path: str, root: Path) -> str:
 
     Used by record normalization to stabilize file identifiers.
 
-    Returns
+    Returns:
     -------
     str
         Normalized POSIX path, relative to ``root`` when possible.
@@ -211,7 +210,7 @@ def _parse_rule_id(rule_id: str) -> tuple[RecordType | None, str]:
 
     Used by record normalization to derive record type/kind.
 
-    Returns
+    Returns:
     -------
     tuple[RecordType | None, str]
         Parsed record type and kind name.
@@ -258,7 +257,7 @@ def filter_records_by_kind(
     kinds
         Optional set of kinds to match. If None, matches all kinds.
 
-    Returns
+    Returns:
     -------
     list[SgRecord]
         Filtered records

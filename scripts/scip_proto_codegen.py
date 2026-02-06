@@ -21,6 +21,7 @@ class ScipVersionError(ValueError):
     """Raised when the scip CLI version string cannot be parsed."""
 
     def __init__(self, version_output: str) -> None:
+        """__init__."""
         msg = f"Unsupported scip version output: {version_output!r}"
         super().__init__(msg)
 
@@ -28,20 +29,11 @@ class ScipVersionError(ValueError):
 def scip_cli_version(scip_bin: str) -> str:
     """Return the scip CLI version string.
 
-    Parameters
-    ----------
-    scip_bin:
-        Path or name of the scip CLI binary.
+    Args:
+        scip_bin: Description.
 
-    Returns
-    -------
-    str
-        The CLI version string (e.g. "v0.6.1").
-
-    Raises
-    ------
-    ScipVersionError
-        Raised when the CLI output cannot be parsed.
+    Raises:
+        ScipVersionError: If the operation cannot be completed.
     """
     proc = subprocess.run(
         [scip_bin, "--version"],
@@ -84,7 +76,7 @@ def ensure_build_dir(repo_root: Path, build_subdir: Path) -> Path:
     build_subdir:
         Relative build subdirectory (defaults to build/scip).
 
-    Returns
+    Returns:
     -------
     pathlib.Path
         Resolved build directory path.
@@ -110,7 +102,7 @@ def resolve_scip_proto_path(
     build_dir:
         Build directory where scip.proto must live.
 
-    Returns
+    Returns:
     -------
     pathlib.Path
         Path to build/scip/scip.proto.
@@ -162,7 +154,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     argv:
         CLI arguments.
 
-    Returns
+    Returns:
     -------
     argparse.Namespace
         Parsed arguments.
@@ -186,7 +178,7 @@ def main(argv: list[str]) -> int:
     argv:
         CLI arguments.
 
-    Returns
+    Returns:
     -------
     int
         Exit code.

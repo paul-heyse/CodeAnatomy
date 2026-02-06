@@ -28,7 +28,7 @@ def set_hamilton_diagnostics_collector(collector: DiagnosticsCollector | None) -
 def get_hamilton_diagnostics_collector() -> DiagnosticsCollector | None:
     """Return the configured diagnostics collector for Hamilton hooks.
 
-    Returns
+    Returns:
     -------
     DiagnosticsCollector | None
         Configured diagnostics collector when available.

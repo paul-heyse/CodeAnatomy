@@ -11,7 +11,7 @@ _QUERY_ID: ContextVar[str | None] = ContextVar("codeanatomy.query_id", default=N
 def get_run_id() -> str | None:
     """Return the current run_id, if set.
 
-    Returns
+    Returns:
     -------
     str | None
         Current run identifier or None.
@@ -27,7 +27,7 @@ def set_run_id(run_id: str) -> Token[str | None]:
     run_id
         Run identifier to set.
 
-    Returns
+    Returns:
     -------
     contextvars.Token[str | None]
         Token used to restore the previous value.
@@ -48,7 +48,7 @@ def clear_run_id() -> None:
 def get_query_id() -> str | None:
     """Return the current query_id, if set.
 
-    Returns
+    Returns:
     -------
     str | None
         Current query identifier or None.
@@ -64,7 +64,7 @@ def set_query_id(query_id: str) -> Token[str | None]:
     query_id
         Query identifier to set.
 
-    Returns
+    Returns:
     -------
     contextvars.Token[str | None]
         Token used to restore the previous value.

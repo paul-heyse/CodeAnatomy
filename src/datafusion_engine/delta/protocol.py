@@ -78,7 +78,7 @@ def delta_protocol_compatibility(
     support
         Runtime support bounds for protocol versions/features.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Compatibility payload describing mismatches and status.
@@ -138,10 +138,12 @@ def validate_delta_gate(
 ) -> None:
     """Validate Delta protocol and feature gates against snapshot metadata.
 
-    Raises
-    ------
-    DataFusionEngineError
-        Raised when the snapshot is missing or the extension is unavailable.
+    Args:
+        snapshot: Description.
+        gate: Description.
+
+    Raises:
+        DataFusionEngineError: If the operation cannot be completed.
     """
     resolved = _protocol_snapshot(snapshot)
     if resolved is None:
@@ -178,7 +180,7 @@ def delta_feature_gate_rust_payload(
 ) -> tuple[int | None, int | None, list[str] | None, list[str] | None]:
     """Return a Rust-compatible Delta feature gate payload.
 
-    Returns
+    Returns:
     -------
     tuple[int | None, int | None, list[str] | None, list[str] | None]
         Rust-compatible gate payload with optional feature lists.

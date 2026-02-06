@@ -29,7 +29,7 @@ def ensure_mapping(
     error_type
         Exception type to raise on validation failure.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         The validated mapping.
@@ -48,24 +48,16 @@ def ensure_sequence(
 ) -> Sequence[object]:
     """Validate that value is a Sequence.
 
-    Parameters
-    ----------
-    value
-        Value to validate.
-    label
-        Descriptive label for error messages.
-    item_type
-        Optional type to validate sequence items against.
+    Args:
+        value: Description.
+            label: Description.
+            item_type: Description.
 
-    Returns
-    -------
-    Sequence[object]
-        The validated sequence.
+    Returns:
+        Sequence[object]: Result.
 
-    Raises
-    ------
-    TypeError
-        If value is not a Sequence or items don't match item_type.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         msg = f"{label} must be a Sequence, got {type(value).__name__}"
@@ -90,22 +82,15 @@ def ensure_callable(
 ) -> Callable[..., object]:
     """Validate that value is callable.
 
-    Parameters
-    ----------
-    value
-        Value to validate.
-    label
-        Descriptive label for error messages.
+    Args:
+        value: Description.
+            label: Description.
 
-    Returns
-    -------
-    Callable[..., object]
-        The validated callable.
+    Returns:
+        Callable[..., object]: Result.
 
-    Raises
-    ------
-    TypeError
-        If value is not callable.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if not callable(value):
         msg = f"{label} must be callable, got {type(value).__name__}"
@@ -116,22 +101,15 @@ def ensure_callable(
 def ensure_table(value: object, *, label: str = "input") -> pa.Table:
     """Convert table-like input into a PyArrow Table.
 
-    Parameters
-    ----------
-    value
-        Arrow-like input to convert.
-    label
-        Descriptive label for error messages.
+    Args:
+        value: Description.
+            label: Description.
 
-    Returns
-    -------
-    pa.Table
-        Converted table.
+    Returns:
+        pa.Table: Result.
 
-    Raises
-    ------
-    TypeError
-        Raised when conversion fails.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     from datafusion_engine.arrow.coercion import to_arrow_table
 
@@ -149,22 +127,15 @@ def ensure_not_empty[T](
 ) -> Sequence[T]:
     """Ensure sequence is not empty.
 
-    Parameters
-    ----------
-    value
-        Sequence to validate.
-    label
-        Label for error messages.
+    Args:
+        value: Description.
+            label: Description.
 
-    Returns
-    -------
-    Sequence[T]
-        The validated sequence.
+    Returns:
+        Sequence[T]: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when sequence is empty.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not value:
         msg = f"{label} must not be empty"
@@ -180,19 +151,13 @@ def ensure_subset(
 ) -> None:
     """Ensure all items are in the universe.
 
-    Parameters
-    ----------
-    items
-        Items to validate.
-    universe
-        Container of allowed values.
-    label
-        Label for error messages.
+    Args:
+        items: Description.
+        universe: Description.
+        label: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when items contain invalid values.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     extra = [item for item in items if item not in universe]
     if extra:
@@ -207,22 +172,15 @@ def ensure_unique[T](
 ) -> list[T]:
     """Ensure all items are unique.
 
-    Parameters
-    ----------
-    items
-        Items to validate.
-    label
-        Label for error messages.
+    Args:
+        items: Description.
+            label: Description.
 
-    Returns
-    -------
-    list[T]
-        Deduplicated list of items.
+    Returns:
+        list[T]: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when duplicates are present.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     seen: set[T] = set()
     duplicates: list[T] = []
@@ -249,7 +207,7 @@ def find_missing(required: Iterable[T], available: Container[T]) -> list[T]:
     available
         Container to check against.
 
-    Returns
+    Returns:
     -------
     list[T]
         List of missing items (empty if all present).

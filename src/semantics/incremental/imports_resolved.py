@@ -137,7 +137,7 @@ def resolve_imports(
 ) -> pa.Table:
     """Resolve normalized imports to absolute module names.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Resolved imports table with module/name mappings.

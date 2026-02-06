@@ -69,7 +69,7 @@ class OtelDiagnosticsSink:
     def events_snapshot() -> dict[str, list[Mapping[str, object]]]:
         """Return collected event payloads (not stored for OTel sinks).
 
-        Returns
+        Returns:
         -------
         dict[str, list[Mapping[str, object]]]
             Empty mapping because OpenTelemetry sinks stream events directly.
@@ -80,7 +80,7 @@ class OtelDiagnosticsSink:
     def artifacts_snapshot() -> dict[str, list[Mapping[str, object]]]:
         """Return collected artifact payloads (not stored for OTel sinks).
 
-        Returns
+        Returns:
         -------
         dict[str, list[Mapping[str, object]]]
             Empty mapping because OpenTelemetry sinks stream artifacts directly.

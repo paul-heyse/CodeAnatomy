@@ -21,6 +21,7 @@ class DataFusionEngineError(Exception):
     """Base exception for DataFusion engine failures."""
 
     def __init__(self, message: str, *, kind: ErrorKind = ErrorKind.GENERIC) -> None:
+        """__init__."""
         super().__init__(message)
         self.kind = kind
 

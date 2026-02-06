@@ -70,7 +70,7 @@ def resolve_delta_maintenance_plan(
 ) -> DeltaMaintenancePlan | None:
     """Resolve a maintenance plan from location and policy inputs.
 
-    Returns
+    Returns:
     -------
     DeltaMaintenancePlan | None
         Maintenance plan when maintenance is configured, otherwise ``None``.
@@ -106,7 +106,7 @@ def run_delta_maintenance(
 ) -> tuple[Mapping[str, object], ...]:
     """Execute the maintenance plan and record observability artifacts.
 
-    Returns
+    Returns:
     -------
     tuple[Mapping[str, object], ...]
         Sequence of maintenance reports emitted by the control plane.
@@ -347,7 +347,7 @@ def maintenance_z_order_cols(
 ) -> Sequence[str]:
     """Return z-order columns for the policy when configured.
 
-    Returns
+    Returns:
     -------
     Sequence[str]
         Z-order columns, or empty sequence when not configured.

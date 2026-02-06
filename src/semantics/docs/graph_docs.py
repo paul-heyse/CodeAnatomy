@@ -110,7 +110,7 @@ def _resolve_report_markdown(
 def generate_mermaid_diagram(explain_payload: ArtifactPayload) -> str:
     """Generate a Mermaid flowchart diagram from explain-plan payload.
 
-    Returns
+    Returns:
     -------
     str
         Mermaid diagram as a fenced code block.
@@ -252,7 +252,7 @@ def generate_markdown_docs(
         Optional output subset to build an IR-based explain payload when
         artifacts are not provided.
 
-    Returns
+    Returns:
     -------
     str
         Markdown documentation for the semantic explain plan.
@@ -287,7 +287,7 @@ def export_graph_documentation(
     When no artifacts are provided, the documentation is generated directly
     from the semantic IR using the requested outputs (if supplied).
 
-    Returns
+    Returns:
     -------
     str
         Markdown documentation content.

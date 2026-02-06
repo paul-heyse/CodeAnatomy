@@ -60,7 +60,7 @@ class SemanticConfig:
     def overrides_for(self, table_name: str | None) -> Mapping[ColumnType, str]:
         """Return overrides for the table name.
 
-        Returns
+        Returns:
         -------
         Mapping[ColumnType, str]
             Overrides for the table when configured.
@@ -72,7 +72,7 @@ class SemanticConfig:
     def spec_for(self, table_name: str | None) -> SemanticTableSpec | None:
         """Return the semantic spec for the table when configured.
 
-        Returns
+        Returns:
         -------
         SemanticTableSpec | None
             Registered semantic spec, if available.
@@ -89,7 +89,7 @@ def semantic_config_from_spec(
 ) -> SemanticConfig:
     """Resolve a runtime SemanticConfig from a serializable spec.
 
-    Returns
+    Returns:
     -------
     SemanticConfig
         Runtime semantic configuration with compiled patterns.

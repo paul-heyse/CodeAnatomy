@@ -34,7 +34,7 @@ def dumps_json(result: CqResult, *, indent: int | None = 2) -> str:
     indent
         Indentation level for pretty printing. Use None for compact JSON.
 
-    Returns
+    Returns:
     -------
     str
         JSON string representation.
@@ -49,7 +49,7 @@ def dumps_json(result: CqResult, *, indent: int | None = 2) -> str:
 def loads_json(payload: bytes | str) -> CqResult:
     """Deserialize a CqResult from JSON bytes or string.
 
-    Returns
+    Returns:
     -------
     CqResult
         Parsed CQ result.
@@ -62,7 +62,7 @@ def loads_json(payload: bytes | str) -> CqResult:
 def dumps_msgpack(value: Any) -> bytes:
     """Serialize an arbitrary value to msgpack bytes.
 
-    Returns
+    Returns:
     -------
     bytes
         MessagePack-encoded bytes.
@@ -73,7 +73,7 @@ def dumps_msgpack(value: Any) -> bytes:
 def loads_msgpack(payload: bytes | bytearray | memoryview) -> Any:
     """Deserialize msgpack bytes to a Python value.
 
-    Returns
+    Returns:
     -------
     Any
         Decoded Python value.
@@ -84,7 +84,7 @@ def loads_msgpack(payload: bytes | bytearray | memoryview) -> Any:
 def loads_msgpack_result(payload: bytes | bytearray | memoryview) -> CqResult:
     """Deserialize msgpack bytes into a CqResult.
 
-    Returns
+    Returns:
     -------
     CqResult
         Decoded CQ result.
@@ -95,7 +95,7 @@ def loads_msgpack_result(payload: bytes | bytearray | memoryview) -> CqResult:
 def to_builtins(value: Any) -> Any:
     """Convert a value to builtins for generic JSON handling.
 
-    Returns
+    Returns:
     -------
     Any
         Builtins-only representation.

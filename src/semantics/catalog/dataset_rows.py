@@ -26,7 +26,7 @@ class SemanticDatasetRow:
     for semantic pipeline operations including CDF support, partition
     configuration, and merge key specifications.
 
-    Attributes
+    Attributes:
     ----------
     name
         Unique dataset name (canonical output name with version suffix).
@@ -114,7 +114,7 @@ _SEMANTIC_DATASET_ROWS_CACHE = _SemanticDatasetRowCache()
 def _get_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     """Return the cached semantic dataset rows, building if needed.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticDatasetRow, ...]
         All semantic dataset rows in dependency order.
@@ -131,7 +131,7 @@ def _get_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
 def _get_rows_by_name() -> Mapping[str, SemanticDatasetRow]:
     """Return the indexed lookup mapping, building if needed.
 
-    Returns
+    Returns:
     -------
     Mapping[str, SemanticDatasetRow]
         Mapping from dataset name to row.
@@ -154,22 +154,12 @@ def dataset_row(name: str, *, strict: Literal[False] = ...) -> SemanticDatasetRo
 def dataset_row(name: str, *, strict: bool = False) -> SemanticDatasetRow | None:
     """Return the semantic dataset row for a given name.
 
-    Parameters
-    ----------
-    name
-        Dataset name to look up.
-    strict
-        When True, raise KeyError if not found.
+    Args:
+        name: Description.
+        strict: Description.
 
-    Returns
-    -------
-    SemanticDatasetRow | None
-        Dataset row when found, or None when not found and strict is False.
-
-    Raises
-    ------
-    KeyError
-        Raised when strict is True and dataset is not found.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     rows_by_name = _get_rows_by_name()
     row = rows_by_name.get(name)
@@ -187,7 +177,7 @@ def dataset_rows(names: Sequence[str]) -> tuple[SemanticDatasetRow, ...]:
     names
         Dataset names to look up.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticDatasetRow, ...]
         Dataset rows in the order requested (skips missing names).
@@ -199,7 +189,7 @@ def dataset_rows(names: Sequence[str]) -> tuple[SemanticDatasetRow, ...]:
 def get_all_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     """Return all semantic dataset rows.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticDatasetRow, ...]
         All registered semantic dataset rows in dependency order.
@@ -210,7 +200,7 @@ def get_all_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
 def get_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     """Return semantic dataset rows with category 'semantic'.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticDatasetRow, ...]
         Semantic category dataset rows.
@@ -221,7 +211,7 @@ def get_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
 def get_analysis_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     """Return semantic dataset rows with category 'analysis'.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticDatasetRow, ...]
         Analysis category dataset rows.
@@ -232,7 +222,7 @@ def get_analysis_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
 def get_diagnostic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     """Return semantic dataset rows with category 'diagnostic'.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticDatasetRow, ...]
         Diagnostic category dataset rows.
@@ -243,7 +233,7 @@ def get_diagnostic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
 def get_cdf_enabled_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     """Return semantic dataset rows that support CDF.
 
-    Returns
+    Returns:
     -------
     tuple[SemanticDatasetRow, ...]
         Dataset rows with supports_cdf=True.
@@ -254,7 +244,7 @@ def get_cdf_enabled_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
 def dataset_names() -> tuple[str, ...]:
     """Return all dataset names in registry order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Dataset names in dependency order.
@@ -270,7 +260,7 @@ def dataset_names_by_category(category: DatasetCategory) -> tuple[str, ...]:
     category
         Dataset category to filter by.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Dataset names in the category.

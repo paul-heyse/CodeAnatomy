@@ -15,7 +15,7 @@ type ArrowTypeLike = ArrowTypeSpec | pa.DataType | interop.DataTypeLike
 def coerce_arrow_type(value: ArrowTypeLike) -> ArrowTypeSpec:
     """Return a canonical ArrowTypeSpec for an Arrow-like input.
 
-    Returns
+    Returns:
     -------
     ArrowTypeSpec
         Canonical Arrow type specification.

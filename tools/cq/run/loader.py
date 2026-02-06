@@ -25,15 +25,14 @@ class RunPlanError(RuntimeError):
 def load_run_plan(options: RunOptions) -> RunPlan:
     """Load a RunPlan from a plan file and inline steps.
 
-    Returns
-    -------
-    RunPlan
-        Normalized run plan with deterministic step IDs.
+    Args:
+        options: CLI run options containing plan and inline steps.
 
-    Raises
-    ------
-    RunPlanError
-        Raised when the plan cannot be loaded or validated.
+    Returns:
+        RunPlan: Validated run plan with normalized step IDs.
+
+    Raises:
+        RunPlanError: If no steps are provided or plan data is invalid.
     """
     plan = _load_plan_file(Path(options.plan)) if options.plan else RunPlan()
 

@@ -43,7 +43,7 @@ def _extract_line_text(data: dict[str, object]) -> str:
 def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
     """Find all top-level def/async/class and Rust type lines with indentation.
 
-    Returns
+    Returns:
     -------
     list[tuple[int, int]]
         `(line_number, indent)` tuples.
@@ -87,7 +87,7 @@ def find_files_with_pattern(  # noqa: PLR0913
 ) -> list[Path]:
     """Find files containing pattern with native ripgrep.
 
-    Returns
+    Returns:
     -------
     list[Path]
         Absolute file paths containing at least one match.
@@ -136,7 +136,7 @@ def find_call_candidates(
 ) -> list[tuple[Path, int]]:
     """Find candidate call sites for function/method symbols.
 
-    Returns
+    Returns:
     -------
     list[tuple[Path, int]]
         Absolute path and 1-based line number tuples.
@@ -186,7 +186,7 @@ def find_callers(
 ) -> list[tuple[Path, int]]:
     """Find callers for a symbol.
 
-    Returns
+    Returns:
     -------
     list[tuple[Path, int]]
         Absolute path and 1-based line number tuples.
@@ -204,7 +204,7 @@ def search_content(
 ) -> list[tuple[Path, int, str]]:
     """Search file contents and return `(path, line, text)` triples.
 
-    Returns
+    Returns:
     -------
     list[tuple[Path, int, str]]
         Absolute path, 1-based line number, and line text triples.

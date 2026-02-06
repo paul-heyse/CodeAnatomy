@@ -26,7 +26,7 @@ def env_value(name: str) -> str | None:
     name
         Environment variable name.
 
-    Returns
+    Returns:
     -------
     str | None
         Stripped value or None.
@@ -58,7 +58,7 @@ def env_text(
     allow_empty
         Whether to return empty strings instead of the default.
 
-    Returns
+    Returns:
     -------
     str | None
         Parsed value, or default/None when missing.
@@ -97,7 +97,7 @@ def env_list(
     strip
         Whether to strip whitespace from each item.
 
-    Returns
+    Returns:
     -------
     list[str]
         Parsed list or default.
@@ -150,7 +150,7 @@ def env_enum[TEnum: Enum](
     default
         Default value if not set or invalid.
 
-    Returns
+    Returns:
     -------
     TEnum | None
         Parsed enum value or default.
@@ -224,7 +224,7 @@ def env_bool(
     log_invalid
         Whether to log invalid values.
 
-    Returns
+    Returns:
     -------
     bool | None
         Parsed boolean or default/None.
@@ -263,7 +263,7 @@ def env_bool_strict(name: str, *, default: bool, log_invalid: bool = True) -> bo
     log_invalid
         Whether to log invalid values.
 
-    Returns
+    Returns:
     -------
     bool
         Parsed boolean or default.
@@ -310,7 +310,7 @@ def env_int(name: str, *, default: int | None = None) -> int | None:
     default
         Default value if not set or invalid.
 
-    Returns
+    Returns:
     -------
     int | None
         Parsed integer or default/None.
@@ -348,7 +348,7 @@ def env_float(name: str, *, default: float | None = None) -> float | None:
     default
         Default value if not set or invalid.
 
-    Returns
+    Returns:
     -------
     float | None
         Parsed float or default/None.
@@ -366,7 +366,7 @@ def env_float(name: str, *, default: float | None = None) -> float | None:
 def env_truthy(value: str | None) -> bool:
     """Return True when the raw env value is 'true' (case-insensitive).
 
-    Returns
+    Returns:
     -------
     bool
         True when the value is the literal "true".

@@ -40,7 +40,7 @@ class UdfParityReport:
     def payload(self) -> dict[str, object]:
         """Return a diagnostics payload for parity mismatches.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Serializable diagnostics payload.
@@ -83,7 +83,7 @@ class UdfInfoSchemaParityReport:
     def payload(self) -> dict[str, object]:
         """Return a diagnostics payload for information_schema parity.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Serializable diagnostics payload.
@@ -113,7 +113,7 @@ def udf_parity_report(
 ) -> UdfParityReport:
     """Return parity mismatches for Rust registry snapshot metadata.
 
-    Returns
+    Returns:
     -------
     UdfParityReport
         Summary of mismatches for diagnostics (empty when Rust snapshot is authoritative).
@@ -134,7 +134,7 @@ def udf_info_schema_parity_report(
 ) -> UdfInfoSchemaParityReport:
     """Return parity mismatches between Rust registry and information_schema.
 
-    Returns
+    Returns:
     -------
     UdfInfoSchemaParityReport
         Summary of parity mismatches for diagnostics.
@@ -355,7 +355,7 @@ class UdfSignatureConformanceReport:
     def payload(self) -> dict[str, object]:
         """Return a diagnostics payload for signature conformance.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Serializable diagnostics payload.
@@ -392,7 +392,7 @@ def udf_signature_conformance_report(
     snapshot
         Optional Rust UDF snapshot. If None, queries the current snapshot.
 
-    Returns
+    Returns:
     -------
     UdfSignatureConformanceReport
         Report containing coverage metrics for return_type and rewrite_tags.
@@ -436,7 +436,7 @@ def _missing_return_types(
 ) -> list[str]:
     """Return UDF names missing from information_schema routines.
 
-    Returns
+    Returns:
     -------
     list[str]
         Names of UDFs missing from information_schema routines.

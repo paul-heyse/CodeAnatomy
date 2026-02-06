@@ -25,7 +25,7 @@ class PlanExecutionEvent:
     def to_payload(self) -> dict[str, object]:
         """Return payload suitable for diagnostics recording.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Diagnostics event payload.
@@ -56,7 +56,7 @@ class ExtractWriteEvent:
     def to_payload(self) -> dict[str, object]:
         """Return payload suitable for diagnostics recording.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Diagnostics event payload.
@@ -92,7 +92,7 @@ class ExtractQualityEvent:
     def to_payload(self) -> dict[str, object]:
         """Return payload suitable for diagnostics recording.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Diagnostics event payload.

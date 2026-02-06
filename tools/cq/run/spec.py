@@ -133,7 +133,7 @@ RUN_STEP_TYPES: tuple[type[RunStep], ...] = (
 def is_run_step(obj: object) -> TypeGuard[RunStep]:
     """Return True if obj is a RunStep instance.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when obj is a RunStep instance.
@@ -158,15 +158,11 @@ _STEP_TAGS: dict[type[RunStep], str] = {
 def step_type(step: RunStep) -> str:
     """Return the tag string for a run step.
 
-    Returns
-    -------
-    str
-        Step tag for the run step.
+    Args:
+        step: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the step type is unknown.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     try:
         return _STEP_TAGS[type(step)]
@@ -178,7 +174,7 @@ def step_type(step: RunStep) -> str:
 def normalize_step_ids(steps: tuple[RunStep, ...]) -> tuple[RunStep, ...]:
     """Ensure every step has a deterministic id.
 
-    Returns
+    Returns:
     -------
     tuple[RunStep, ...]
         Steps with deterministic ids assigned when missing.

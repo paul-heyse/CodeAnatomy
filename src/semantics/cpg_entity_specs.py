@@ -82,7 +82,7 @@ class CpgEntitySpec:
     def to_node_plan(self) -> NodePlanSpec | None:
         """Return a NodePlanSpec for this entity when configured.
 
-        Returns
+        Returns:
         -------
         NodePlanSpec | None
             Node plan spec when node emission is configured.
@@ -109,7 +109,7 @@ class CpgEntitySpec:
     ) -> PropTableSpec | None:
         """Return a PropTableSpec for this entity when configured.
 
-        Returns
+        Returns:
         -------
         PropTableSpec | None
             Prop table spec when property emission is configured.
@@ -571,7 +571,7 @@ EXPLICIT_CPG_ENTITY_SPECS: tuple[CpgEntitySpec, ...] = (
 def build_cpg_entity_specs(model: SemanticModel) -> tuple[CpgEntitySpec, ...]:
     """Build CPG entity specs from the semantic model.
 
-    Returns
+    Returns:
     -------
     tuple[CpgEntitySpec, ...]
         CPG entity specs for node and property emission.

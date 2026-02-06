@@ -409,7 +409,7 @@ def dedupe_kernel(
 ) -> TableLike:
     """Apply DataFusion-native dedupe using window + aggregate ops.
 
-    Returns
+    Returns:
     -------
     TableLike
         Deduplicated table.
@@ -460,7 +460,7 @@ def winner_select_kernel(
 ) -> TableLike:
     """Select a single winner per key group based on score and tie breakers.
 
-    Returns
+    Returns:
     -------
     TableLike
         Winner-selected table.
@@ -485,7 +485,7 @@ def canonical_sort_if_canonical(
 ) -> TableLike:
     """Sort only when determinism is canonical.
 
-    Returns
+    Returns:
     -------
     TableLike
         Sorted table when canonical; otherwise unchanged.
@@ -532,7 +532,7 @@ def explode_list_kernel(
     runtime_profile:
         Optional runtime profile for DataFusion execution.
 
-    Returns
+    Returns:
     -------
     TableLike
         Exploded table with optional index column.
@@ -936,7 +936,7 @@ def interval_align_kernel(
 ) -> TableLike:
     """Align intervals using DataFusion joins + window ordering.
 
-    Returns
+    Returns:
     -------
     TableLike
         Interval-aligned table.
@@ -988,7 +988,7 @@ def interval_align_kernel(
 def datafusion_kernel_registry() -> dict[str, KernelFn]:
     """Return available DataFusion kernel adapters.
 
-    Returns
+    Returns:
     -------
     dict[str, KernelFn]
         Kernel adapter registry.

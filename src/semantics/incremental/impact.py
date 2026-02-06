@@ -76,7 +76,7 @@ def impacted_callers_from_changed_exports(
 ) -> pa.Table:
     """Return caller impact rows from changed exports.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Impacted callers table derived from callsite relationships.
@@ -126,7 +126,7 @@ def impacted_importers_from_changed_exports(
 ) -> pa.Table:
     """Return importer impact rows from changed exports.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Impacted importers table derived from resolved imports.
@@ -195,7 +195,7 @@ def import_closure_only_from_changed_exports(
 ) -> pa.Table:
     """Return module-level import closures for changed exports.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Impacted importers table for module-level imports.
@@ -277,7 +277,7 @@ def merge_impacted_files(
 ) -> pa.Table:
     """Merge impacted file tables using the chosen strategy.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Impacted files table aligned to ``inc_impacted_files_v2``.
@@ -326,7 +326,7 @@ def changed_file_impact_table(
 ) -> pa.Table:
     """Build the base impact table from changed/deleted files.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Impacted file table seeded from repo/SCIP changes.

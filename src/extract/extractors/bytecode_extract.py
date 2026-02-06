@@ -77,8 +77,7 @@ PYTHON_MAGIC = importlib.util.MAGIC_NUMBER.hex()
 
 @dataclass(frozen=True)
 class BytecodeExtractOptions(RepoOptions, WorklistQueueOptions, WorkerOptions):
-    """
-    Bytecode extraction options.
+    """Bytecode extraction options.
 
     - adaptive=False is the canonical stream for stable semantics across runs
       (per your recipe). :contentReference[oaicite:17]{index=17}
@@ -111,7 +110,7 @@ class BytecodeFileContext:
     def file_id(self) -> str:
         """Return the file id for this extraction context.
 
-        Returns
+        Returns:
         -------
         str
             File id from the file context.
@@ -122,7 +121,7 @@ class BytecodeFileContext:
     def path(self) -> str:
         """Return the file path for this extraction context.
 
-        Returns
+        Returns:
         -------
         str
             File path from the file context.
@@ -133,7 +132,7 @@ class BytecodeFileContext:
     def file_sha256(self) -> str | None:
         """Return the file sha256 for this extraction context.
 
-        Returns
+        Returns:
         -------
         str | None
             File hash from the file context.
@@ -143,7 +142,7 @@ class BytecodeFileContext:
     def identity_row(self) -> Row:
         """Return the identity row for this context.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             File identity columns for row construction.
@@ -1670,7 +1669,7 @@ def extract_bytecode(
 ) -> ExtractResult[TableLike]:
     """Extract bytecode tables from repository files.
 
-    Returns
+    Returns:
     -------
     ExtractResult[TableLike]
         Nested bytecode file table.
@@ -1717,7 +1716,7 @@ def extract_bytecode_plans(
 ) -> dict[str, DataFusionPlanBundle]:
     """Extract bytecode plans from repository files.
 
-    Returns
+    Returns:
     -------
     dict[str, DataFusionPlanBundle]
         Plan bundle keyed by bytecode output name.
@@ -1802,7 +1801,7 @@ def extract_bytecode_table(
         Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx, profile,
         prefer_reader).
 
-    Returns
+    Returns:
     -------
     TableLike | RecordBatchReaderLike
         Bytecode instruction output.

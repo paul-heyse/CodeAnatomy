@@ -53,7 +53,7 @@ BASE_QUALITY_SCORE: int = 1000
 def _table_exists(ctx: SessionContext, name: str) -> bool:
     """Check if a table exists in the session context.
 
-    Returns
+    Returns:
     -------
     bool
         True if table exists, False otherwise.
@@ -72,7 +72,7 @@ def _build_cst_parse_errors_signals(ctx: SessionContext) -> DataFrame | None:
     - has_cst_parse_errors: 1 if any errors, 0 otherwise
     - cst_error_count: count of parse errors
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         CST parse error signals DataFrame, or None if table doesn't exist.
@@ -98,7 +98,7 @@ def _build_tree_sitter_signals(ctx: SessionContext) -> DataFrame | None:
     - ts_missing_count: count of missing nodes
     - ts_match_limit_exceeded: 1 if query match limit exceeded, 0 otherwise
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         Tree-sitter signals DataFrame, or None if table doesn't exist.
@@ -137,7 +137,7 @@ def _build_scip_diagnostics_signals(ctx: SessionContext) -> DataFrame | None:
     - has_scip_diagnostics: 1 if any diagnostics, 0 otherwise
     - scip_diagnostic_count: count of diagnostics
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         SCIP diagnostics signals DataFrame, or None if table doesn't exist.
@@ -171,7 +171,7 @@ def _build_scip_encoding_signals(ctx: SessionContext) -> DataFrame | None:
     Unspecified encoding is a quality signal because it may indicate
     incomplete or low-quality SCIP data.
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         SCIP encoding signals DataFrame, or None if table doesn't exist.
@@ -193,7 +193,7 @@ def _build_scip_encoding_signals(ctx: SessionContext) -> DataFrame | None:
 def _join_if_present(base: DataFrame, signals: DataFrame | None) -> DataFrame:
     """Left join signals DataFrame to base if not None.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Joined DataFrame (unchanged if signals is None).
@@ -241,7 +241,7 @@ def _with_default_columns(
 def _coalesce_col(name: str) -> Expr:
     """Return coalesced column expression with 0 default.
 
-    Returns
+    Returns:
     -------
     Expr
         Coalesced column expression.
@@ -252,7 +252,7 @@ def _coalesce_col(name: str) -> Expr:
 def _compute_quality_score(weights: dict[str, int]) -> Expr:
     """Compute quality score expression from weights.
 
-    Returns
+    Returns:
     -------
     Expr
         Quality score expression.
@@ -277,53 +277,16 @@ def build_file_quality_view(
 ) -> DataFrame:
     """Build aggregated file quality signals from all extraction sources.
 
-    Joins quality signals from multiple sources and computes a weighted
-    quality score per file. Files with higher quality scores are preferred
-    during relationship compilation.
+    Args:
+        ctx: Description.
+            base_table: Description.
+            weights: Description.
 
-    Parameters
-    ----------
-    ctx
-        DataFusion session context with extraction tables registered.
-    base_table
-        Name of the base file table (default: "repo_files_v1").
-        Must have file_id column.
-    weights
-        Quality penalty weights. Keys are signal names, values are
-        penalty amounts subtracted from base score. Uses DEFAULT_QUALITY_WEIGHTS
-        if not provided.
+    Returns:
+        DataFrame: Result.
 
-    Returns
-    -------
-    DataFrame
-        File quality view with columns:
-        - file_id: File identifier
-        - file_sha256: File content hash (if available)
-        - has_cst_parse_errors: 1 if CST parse errors exist
-        - cst_error_count: Number of CST parse errors
-        - ts_timed_out: 1 if tree-sitter parse timed out
-        - ts_error_count: Number of tree-sitter syntax errors
-        - ts_missing_count: Number of tree-sitter missing nodes
-        - ts_match_limit_exceeded: 1 if tree-sitter match limit exceeded
-        - has_scip_diagnostics: 1 if SCIP diagnostics exist
-        - scip_diagnostic_count: Number of SCIP diagnostics
-        - scip_encoding_unspecified: 1 if SCIP position encoding unspecified
-        - file_quality_score: Computed quality score (higher = better)
-
-    Raises
-    ------
-    ValueError
-        If base_table doesn't exist in the context.
-
-    Notes
-    -----
-    Uses LEFT JOINs to handle missing extraction tables gracefully.
-    Missing signals are coalesced to 0 (no penalty).
-
-    The file_quality_score is computed as:
-        base_score - sum(signal_value * signal_weight)
-
-    Where base_score is 1000 by default.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not _table_exists(ctx, base_table):
         for fallback in ("file_index", "repo_files"):

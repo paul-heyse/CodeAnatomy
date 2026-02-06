@@ -31,10 +31,8 @@ class FieldSpec(StructBaseStrict, frozen=True):
     def __post_init__(self) -> None:
         """Validate dtype is a serializable ArrowTypeSpec.
 
-        Raises
-        ------
-        TypeError
-            If dtype is not an ArrowTypeSpec instance.
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         if not isinstance(self.dtype, ArrowTypeBase):
             msg = f"FieldSpec.dtype must be ArrowTypeSpec, got {type(self.dtype).__name__}"
@@ -43,7 +41,7 @@ class FieldSpec(StructBaseStrict, frozen=True):
     def to_arrow_field(self) -> FieldLike:
         """Build a pyarrow.Field from the spec.
 
-        Returns
+        Returns:
         -------
         pyarrow.Field
             Arrow field instance.
@@ -64,7 +62,7 @@ class FieldSpec(StructBaseStrict, frozen=True):
     def to_pandera_dtype(self) -> object:
         """Return a Pandera-compatible dtype for this field.
 
-        Returns
+        Returns:
         -------
         object
             Pandera-compatible dtype object.

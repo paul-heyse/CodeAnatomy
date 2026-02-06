@@ -40,7 +40,7 @@ class ColumnStats:
     All statistics are optional since they may not be available without
     execution.
 
-    Attributes
+    Attributes:
     ----------
     name
         Column name.
@@ -53,7 +53,7 @@ class ColumnStats:
     max_value
         Maximum value (if applicable), stored as string for serialization.
 
-    Examples
+    Examples:
     --------
     >>> col_stats = ColumnStats(
     ...     name="file_path",
@@ -73,7 +73,7 @@ class ColumnStats:
     def as_dict(self) -> dict[str, object]:
         """Convert to dictionary for serialization.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Dictionary representation of column statistics.
@@ -95,7 +95,7 @@ class ViewStats:
     column statistics, and size estimates. Statistics can be estimated from
     plan metadata or computed exactly via execution.
 
-    Attributes
+    Attributes:
     ----------
     view_name
         Name of the semantic view.
@@ -110,7 +110,7 @@ class ViewStats:
     schema_fingerprint
         Optional schema fingerprint for cache invalidation.
 
-    Examples
+    Examples:
     --------
     >>> stats = ViewStats(view_name="cst_refs_norm_v1")
     >>> stats.row_count = 1000
@@ -140,7 +140,7 @@ class ViewStats:
     def column_names(self) -> tuple[str, ...]:
         """Return column names in the view.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Column names from collected statistics.
@@ -150,7 +150,7 @@ class ViewStats:
     def has_exact_count(self) -> bool:
         """Check if row count is exact.
 
-        Returns
+        Returns:
         -------
         bool
             True if row_count is from execution, False if estimated.
@@ -160,7 +160,7 @@ class ViewStats:
     def as_dict(self) -> dict[str, object]:
         """Convert to dictionary for serialization.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Dictionary representation of view statistics.
@@ -182,12 +182,12 @@ class ViewStatsCache:
     Statistics can be invalidated by schema fingerprint changes or manually
     cleared.
 
-    Attributes
+    Attributes:
     ----------
     _cache : dict[str, ViewStats]
         Internal cache storage.
 
-    Examples
+    Examples:
     --------
     >>> cache = ViewStatsCache()
     >>> stats = ViewStats(view_name="my_view", row_count=100)
@@ -209,7 +209,7 @@ class ViewStatsCache:
         view_name
             Name of the view to look up.
 
-        Returns
+        Returns:
         -------
         ViewStats | None
             Cached statistics or None if not found.
@@ -248,7 +248,7 @@ class ViewStatsCache:
         view_name
             Name of the view to check.
 
-        Returns
+        Returns:
         -------
         bool
             True if statistics are cached.
@@ -258,7 +258,7 @@ class ViewStatsCache:
     def __len__(self) -> int:
         """Return number of cached entries.
 
-        Returns
+        Returns:
         -------
         int
             Number of views with cached statistics.
@@ -274,7 +274,7 @@ def _parse_row_count_from_line(line: str) -> int | None:
     line
         A single line from plan display output.
 
-    Returns
+    Returns:
     -------
     int | None
         Extracted row count or None if parsing fails.
@@ -300,18 +300,18 @@ def estimate_row_count(df: DataFrame) -> int | None:
     df
         DataFrame to estimate row count for.
 
-    Returns
+    Returns:
     -------
     int | None
         Estimated row count, or None if statistics are not available.
 
-    Notes
+    Notes:
     -----
     DataFusion maintains statistics for table scans and some operations.
     For complex plans with joins or aggregations, statistics may not
     propagate and this function will return None.
 
-    Examples
+    Examples:
     --------
     >>> # Table scan may have statistics from parquet metadata
     >>> df = ctx.table("my_table")
@@ -351,7 +351,7 @@ def _collect_column_stats_from_schema(df: DataFrame) -> dict[str, ColumnStats]:
     df
         DataFrame to collect schema from.
 
-    Returns
+    Returns:
     -------
     dict[str, ColumnStats]
         Column statistics keyed by column name.
@@ -400,12 +400,12 @@ def collect_view_stats(
     schema_fingerprint
         Optional schema fingerprint for cache invalidation.
 
-    Returns
+    Returns:
     -------
     ViewStats
         Collected statistics (estimated unless execute_for_exact=True).
 
-    Examples
+    Examples:
     --------
     >>> # Quick stats without execution
     >>> stats = collect_view_stats(df, view_name="cst_refs_norm_v1")

@@ -27,7 +27,7 @@ def conformance_profile(
 ) -> DataFusionRuntimeProfile:
     """Build a deterministic runtime profile for conformance tests.
 
-    Returns
+    Returns:
     -------
     DataFusionRuntimeProfile
         Runtime profile configured for conformance scenarios.
@@ -61,7 +61,7 @@ def conformance_profile_with_sink(
 ) -> tuple[DataFusionRuntimeProfile, DiagnosticsCollector]:
     """Build a conformance profile with an attached diagnostics collector.
 
-    Returns
+    Returns:
     -------
     tuple[DataFusionRuntimeProfile, DiagnosticsCollector]
         The configured runtime profile and its diagnostics sink.
@@ -80,7 +80,7 @@ def conformance_profile_with_sink(
 def strict_native_provider_supported() -> bool:
     """Return whether strict non-fallback Delta provider probing is compatible.
 
-    Returns
+    Returns:
     -------
     bool
         `True` when strict native provider probing is both available and compatible.

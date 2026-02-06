@@ -41,7 +41,7 @@ _SQL = "SELECT id FROM events WHERE id > 1"
 def _normalize_text(value: str) -> str:
     """Normalize text to ASCII-safe output.
 
-    Returns
+    Returns:
     -------
     str
         ASCII-safe representation of the input.
@@ -56,7 +56,7 @@ def _normalize_rows(
 ) -> list[dict[str, object]]:
     """Normalize and optionally sort row dictionaries for deterministic output.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Normalized row dictionaries.
@@ -70,7 +70,7 @@ def _normalize_rows(
 def _normalize_value(value: object) -> object:
     """Normalize nested values for stable JSON comparisons.
 
-    Returns
+    Returns:
     -------
     object
         Normalized value for JSON serialization.
@@ -89,7 +89,7 @@ def _normalize_value(value: object) -> object:
 def _df_settings_mapping(rows: list[dict[str, object]]) -> dict[str, str]:
     """Build a key/value mapping from df_settings rows.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of settings names to string values.
@@ -107,7 +107,7 @@ def _df_settings_mapping(rows: list[dict[str, object]]) -> dict[str, str]:
 def _information_schema_rows(ctx: SessionContext, *, table: str) -> list[dict[str, object]]:
     """Fetch rows from the information_schema table using planning SQL options.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Rows from the selected information_schema table.
@@ -124,7 +124,7 @@ def _information_schema_rows(ctx: SessionContext, *, table: str) -> list[dict[st
 def _information_schema_snapshot(ctx: SessionContext) -> dict[str, object]:
     """Capture an information_schema snapshot for plan hashing.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Snapshot payload of information_schema tables.
@@ -146,7 +146,7 @@ def _information_schema_snapshot(ctx: SessionContext) -> dict[str, object]:
 def _info_schema_hash(snapshot: Mapping[str, object]) -> str:
     """Hash the information schema snapshot for change detection.
 
-    Returns
+    Returns:
     -------
     str
         Hex digest of the snapshot payload.
@@ -174,7 +174,7 @@ def _canonicalize_snapshot(value: object) -> object:
 def _explain_rows(ctx: SessionContext, *, prefix: str, sql: str) -> list[dict[str, object]]:
     """Execute an explain query and return rows.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Explain rows for the specified query.
@@ -191,7 +191,7 @@ def _fixture_payload(
 ) -> dict[str, object]:
     """Generate the golden fixture payload for the simple query.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         JSON-serializable fixture payload.
@@ -232,15 +232,14 @@ def _fixture_payload(
 def _load_golden(path: Path) -> dict[str, object]:
     """Load the golden fixture JSON from disk.
 
-    Returns
-    -------
-    dict[str, object]
-        Parsed JSON payload.
+    Args:
+        path: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the fixture does not contain a JSON object.
+    Returns:
+        dict[str, object]: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):

@@ -13,7 +13,7 @@ def looks_like_plan(value: object) -> bool:
     value : object
         Candidate object to inspect.
 
-    Returns
+    Returns:
     -------
     bool
         True when the object exposes plan-like APIs.
@@ -29,7 +29,7 @@ def _safe_inputs(plan: object) -> list[object]:
     plan : object
         Logical plan to query for inputs.
 
-    Returns
+    Returns:
     -------
     list[object]
         Child plan inputs, or an empty list when unavailable.
@@ -54,7 +54,7 @@ def embedded_plans(variant: object) -> list[object]:
     variant : object
         Plan variant payload with embedded plan references.
 
-    Returns
+    Returns:
     -------
     list[object]
         Embedded plan objects discovered on the variant.
@@ -79,7 +79,7 @@ def walk_logical_complete(root: object) -> list[object]:
     root : object
         Root logical plan to traverse.
 
-    Returns
+    Returns:
     -------
     list[object]
         Ordered plan nodes including embedded subplans.

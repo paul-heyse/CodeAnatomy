@@ -46,7 +46,7 @@ def apply_git_settings_once() -> None:
 def git_settings_from_env() -> GitSettingsSpec | None:
     """Build GitSettingsSpec from environment variables when present.
 
-    Returns
+    Returns:
     -------
     GitSettingsSpec | None
         Settings derived from environment variables.

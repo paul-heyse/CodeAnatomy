@@ -26,7 +26,7 @@ def dumps_json_value(value: Any, *, indent: int | None = None) -> str:
     indent
         Optional indentation level.
 
-    Returns
+    Returns:
     -------
     str
         JSON string.
@@ -41,7 +41,7 @@ def dumps_json_value(value: Any, *, indent: int | None = None) -> str:
 def loads_json_value(payload: bytes | str) -> Any:
     """Decode JSON into a Python value.
 
-    Returns
+    Returns:
     -------
     Any
         Decoded value.
@@ -54,7 +54,7 @@ def loads_json_value(payload: bytes | str) -> Any:
 def loads_json_result(payload: bytes | str) -> CqResult:
     """Decode JSON into a CqResult.
 
-    Returns
+    Returns:
     -------
     CqResult
         Decoded result.

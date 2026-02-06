@@ -57,7 +57,7 @@ def partition_spec_from_row(
     table_spec
         Table schema specification for type lookup.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[str, pa.DataType], ...]
         Partition column specifications as (name, dtype) pairs.
@@ -80,7 +80,7 @@ def write_policy_from_row(row: SemanticDatasetRow) -> DeltaWritePolicy:
     row
         Semantic dataset row definition.
 
-    Returns
+    Returns:
     -------
     DeltaWritePolicy
         Write policy configured from row metadata.
@@ -110,20 +110,11 @@ _SEMANTIC_BUNDLE_CATALOG: dict[str, FieldBundle] = {
 def _bundle(name: str) -> FieldBundle:
     """Return a semantic field bundle by name.
 
-    Parameters
-    ----------
-    name
-        Bundle name to retrieve.
+    Args:
+        name: Description.
 
-    Returns
-    -------
-    FieldBundle
-        Bundle specification.
-
-    Raises
-    ------
-    KeyError
-        Raised when the bundle name is not recognized.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     if name not in _SEMANTIC_BUNDLE_CATALOG:
         if name == "file_identity":
@@ -138,7 +129,7 @@ def _bundle(name: str) -> FieldBundle:
 def _bundles_for_row(row: SemanticDatasetRow) -> tuple[FieldBundle, ...]:
     """Return field bundles for a semantic dataset row.
 
-    Returns
+    Returns:
     -------
     tuple[FieldBundle, ...]
         Bundles referenced by the row.
@@ -301,7 +292,7 @@ def _input_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
 def _field_specs_for_row(row: SemanticDatasetRow) -> list[FieldSpec]:
     """Return field specs for a semantic dataset row.
 
-    Returns
+    Returns:
     -------
     list[FieldSpec]
         Field specifications for the row schema.
@@ -403,7 +394,7 @@ _SEMANTIC_VALIDATION_POLICY = ValidationPolicySpec(enabled=True, lazy=True, samp
 def build_input_schema(row: SemanticDatasetRow) -> SchemaLike:
     """Build the input schema for a semantic dataset row.
 
-    Returns
+    Returns:
     -------
     SchemaLike
         Schema describing the row inputs.
@@ -419,7 +410,7 @@ def build_input_schema(row: SemanticDatasetRow) -> SchemaLike:
 def build_dataset_spec(row: SemanticDatasetRow) -> DatasetSpec:
     """Build the DatasetSpec for a semantic dataset row.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Registered dataset specification.

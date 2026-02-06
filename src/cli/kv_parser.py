@@ -11,20 +11,14 @@ from core_types import JsonValue
 def parse_kv_pairs(values: tuple[str, ...]) -> dict[str, str]:
     """Parse key=value pairs from CLI repeatable options.
 
-    Parameters
-    ----------
-    values
-        Tuple of key=value strings.
+    Args:
+        values: Description.
 
-    Returns
-    -------
-    dict[str, str]
-        Parsed key/value mapping.
+    Returns:
+        dict[str, str]: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when a value is not formatted as key=value.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     parsed: dict[str, str] = {}
     for item in values:
@@ -39,20 +33,14 @@ def parse_kv_pairs(values: tuple[str, ...]) -> dict[str, str]:
 def parse_kv_pairs_json(values: tuple[str, ...]) -> dict[str, JsonValue]:
     """Parse key=json pairs from CLI repeatable options.
 
-    Parameters
-    ----------
-    values
-        Tuple of key=json strings.
+    Args:
+        values: Description.
 
-    Returns
-    -------
-    dict[str, object]
-        Parsed key/value mapping with JSON values.
+    Returns:
+        dict[str, JsonValue]: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when a value is not formatted as key=json.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     parsed: dict[str, JsonValue] = {}
     for item in values:

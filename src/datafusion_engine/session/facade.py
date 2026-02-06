@@ -68,10 +68,12 @@ def _validate_required_rewrite_tags(
 def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanBundle) -> None:
     """Fail fast when the execution UDF platform diverges from the plan bundle.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the execution UDF snapshot hash does not match the plan bundle.
+    Args:
+        ctx: Description.
+        bundle: Description.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     from datafusion_engine.udf.runtime import (
         rust_udf_snapshot,
@@ -169,7 +171,7 @@ class DataFusionExecutionFacade:
     def io_adapter(self) -> DataFusionIOAdapter:
         """Return a DataFusionIOAdapter for the session context.
 
-        Returns
+        Returns:
         -------
         DataFusionIOAdapter
             IO adapter bound to the DataFusion session context.
@@ -184,7 +186,7 @@ class DataFusionExecutionFacade:
         operation_id
             Operation identifier for the recorder.
 
-        Returns
+        Returns:
         -------
         DiagnosticsRecorder | None
             Recorder if a runtime profile is configured.
@@ -196,7 +198,7 @@ class DataFusionExecutionFacade:
     def write_pipeline(self) -> WritePipeline:
         """Return a WritePipeline bound to this facade.
 
-        Returns
+        Returns:
         -------
         WritePipeline
             Write pipeline configured for the session context.
@@ -216,7 +218,7 @@ class DataFusionExecutionFacade:
     def _session_runtime(self) -> SessionRuntime | None:
         """Return the planning-ready SessionRuntime when it matches the context.
 
-        Returns
+        Returns:
         -------
         SessionRuntime | None
             Session runtime when the profile matches the session context.
@@ -236,30 +238,15 @@ class DataFusionExecutionFacade:
     ) -> DataFusionPlanBundle:
         """Compile a DataFrame builder to a DataFusionPlanBundle.
 
-        This is the canonical compilation path for DataFusion-native planning.
+        Args:
+            builder: Description.
+                    compute_execution_plan: Description.
 
-        Parameters
-        ----------
-        builder
-            Callable that returns a DataFrame given a SessionContext.
-        compute_execution_plan
-            Whether to compute the physical execution plan.
+        Returns:
+            DataFusionPlanBundle: Result.
 
-        Returns
-        -------
-        DataFusionPlanBundle
-            Canonical plan artifact for execution and scheduling.
-
-        Raises
-        ------
-        ValueError
-            Raised when the session runtime is unavailable for planning.
-
-        Examples
-        --------
-        >>> def build_query(ctx: SessionContext) -> DataFrame:
-        ...     return ctx.sql("SELECT * FROM my_table")
-        >>> bundle = facade.compile_to_bundle(build_query)
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         session_runtime = self._session_runtime()
         if session_runtime is None:
@@ -325,23 +312,19 @@ class DataFusionExecutionFacade:
     ) -> ExecutionResult:
         """Execute a plan bundle with Substrait-first replay.
 
-        Substrait replay is the primary execution path for determinism. The
-        original DataFrame is used as fallback when replay fails. Fallback
-        events are recorded for diagnostics.
+        Args:
+            bundle: Description.
+                    view_name: Description.
+                    scan_units: Description.
+                    scan_keys: Description.
 
-        Returns
-        -------
-        ExecutionResult
-            Unified execution result for the plan bundle.
+        Returns:
+            ExecutionResult: Result.
 
-        Raises
-        ------
-        RuntimeError
-            Raised when UDF compatibility checks fail.
-        ValueError
-            Raised when execution fails with invalid inputs.
-        TypeError
-            Raised when replay fails due to incompatible plan types.
+        Raises:
+            RuntimeError: If the operation cannot be completed.
+                    TypeError: If the operation cannot be completed.
+                    ValueError: If the operation cannot be completed.
         """
         tracer = get_tracer(SCOPE_DATAFUSION)
         start = time.perf_counter()
@@ -499,18 +482,11 @@ class DataFusionExecutionFacade:
     ) -> tuple[DataFrame, bool]:
         """Return DataFrame using Substrait-first execution.
 
-        Substrait replay is the primary path for deterministic execution.
-        Falls back to cached plan protos or the original DataFrame when replay fails.
+        Args:
+            bundle: Description.
 
-        Returns
-        -------
-        tuple[DataFrame, bool]
-            DataFrame and whether fallback was used.
-
-        Raises
-        ------
-        ValueError
-            Raised when Substrait bytes are missing from the plan bundle.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         substrait_bytes = bundle.substrait_bytes
         if not substrait_bytes:
@@ -650,7 +626,7 @@ class DataFusionExecutionFacade:
         request
             Write request specification.
 
-        Returns
+        Returns:
         -------
         ExecutionResult
             Unified execution result for the write operation.
@@ -707,7 +683,7 @@ class DataFusionExecutionFacade:
         prefer_streaming
             Prefer streaming writes when possible.
 
-        Returns
+        Returns:
         -------
         ExecutionResult
             Execution result wrapping the write metadata.
@@ -752,7 +728,7 @@ class DataFusionExecutionFacade:
     def ensure_view_graph(self) -> Mapping[str, object]:
         """Ensure the view graph is registered for the current context.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Rust UDF snapshot used for view registration.
@@ -775,24 +751,16 @@ class DataFusionExecutionFacade:
     ) -> DataFrame:
         """Register a dataset location via the registry bridge.
 
-        Parameters
-        ----------
-        name
-            Dataset name to register.
-        location
-            Dataset location metadata.
-        cache_policy
-            Optional cache policy to apply during registration.
+        Args:
+            name: Description.
+                    location: Description.
+                    cache_policy: Description.
 
-        Returns
-        -------
-        DataFrame
-            DataFusion DataFrame representing the registered dataset.
+        Returns:
+            DataFrame: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when the runtime profile is unavailable.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.runtime_profile is None:
             msg = "Runtime profile is required for dataset registration."
@@ -816,15 +784,14 @@ class DataFusionExecutionFacade:
     ) -> Mapping[str, str]:
         """Register Delta CDF-backed inputs for the provided table names.
 
-        Returns
-        -------
-        Mapping[str, str]
-            Mapping from base table names to registered CDF view names.
+        Args:
+            table_names: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when the runtime profile is unavailable or CDF is disabled.
+        Returns:
+            Mapping[str, str]: Result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.runtime_profile is None:
             msg = "Runtime profile is required for CDF registration."
@@ -843,7 +810,7 @@ class DataFusionExecutionFacade:
     def schema_introspector(self) -> SchemaIntrospector:
         """Return a SchemaIntrospector bound to the facade context.
 
-        Returns
+        Returns:
         -------
         SchemaIntrospector
             Introspector for information_schema queries.
@@ -864,27 +831,16 @@ class DataFusionExecutionFacade:
     ) -> DataFusionPlanBundle:
         """Build a plan bundle from a DataFrame.
 
-        This is the canonical way to capture plan artifacts for scheduling
-        and lineage analysis.
+        Args:
+            df: Description.
+                    compute_execution_plan: Description.
+                    compute_substrait: Description.
 
-        Parameters
-        ----------
-        df
-            DataFusion DataFrame to build plan bundle from.
-        compute_execution_plan
-            Whether to compute the physical execution plan.
-        compute_substrait
-            Whether to compute Substrait bytes for fingerprinting.
+        Returns:
+            DataFusionPlanBundle: Result.
 
-        Returns
-        -------
-        DataFusionPlanBundle
-            Canonical plan artifact for the DataFrame.
-
-        Raises
-        ------
-        ValueError
-            Raised when the session runtime is unavailable for planning.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         session_runtime = self._session_runtime()
         if session_runtime is None:

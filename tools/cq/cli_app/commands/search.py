@@ -22,28 +22,16 @@ def search(
 ) -> CliResult:
     """Search for code patterns with semantic enrichment.
 
-    Smart Search provides semantically-enriched, grouped results using:
-    - native ripgrep (`rg`) for candidate generation
-    - ast-grep for AST-level classification
-    - symtable for scope analysis
+    Args:
+        query: Search string provided by the user.
+        opts: Optional search command options.
+        ctx: Injected CLI context.
 
-    Examples
-    --------
-        cq search build_graph
-        cq search "config.*path" --regex
-        cq search "hello world" --literal
-        cq search CqResult --in tools/cq/core/
-        cq search foo --include-strings
+    Returns:
+        CliResult: Renderable command result payload.
 
-    Returns
-    -------
-    CliResult
-        Structured command result.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.query.language import parse_query_language_scope
     from tools.cq.search.classifier import QueryMode

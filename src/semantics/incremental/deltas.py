@@ -28,7 +28,7 @@ def compute_changed_exports(
 ) -> pa.Table:
     """Compute export deltas for changed files.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Export delta table with added/removed rows.

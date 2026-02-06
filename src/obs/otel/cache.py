@@ -95,7 +95,7 @@ def _record_cache_run_stats(*, operation: str, result: str) -> None:
 def drain_cache_run_stats(run_id: str) -> CacheRunStats | None:
     """Return and clear cached run stats for a run id.
 
-    Returns
+    Returns:
     -------
     CacheRunStats | None
         Cached run stats payload when available.
@@ -125,10 +125,11 @@ def cache_span(
         Cache scope (view/dataset/artifact/metadata).
     operation
         Cache operation (read/write/snapshot/inventory).
-    attributes
+
+    Attributes:
         Optional span attributes.
 
-    Yields
+    Yields:
     ------
     tuple[Span, CacheResultSetter]
         The active span and a setter for cache result.

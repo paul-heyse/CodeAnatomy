@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 class SqlBindings:
     """Parameter bindings for SQL execution.
 
-    Attributes
+    Attributes:
     ----------
     param_values
         Scalar parameter values passed via ``param_values``.
@@ -54,28 +54,15 @@ def safe_sql(
 ) -> DataFrame:
     """Return a DataFrame for SQL using SessionConfig policy enforcement.
 
-    Parameters
-    ----------
-    ctx
-        DataFusion session context used for SQL execution.
-    sql
-        SQL string to execute.
-    sql_options
-        Optional SQL options overriding the default SessionConfig-driven policy.
-    runtime_profile
-        Optional runtime profile for SQL policy resolution.
-    bindings
-        Optional parameter bindings for positional and named parameters.
+    Args:
+        ctx: Description.
+        sql: Description.
+        sql_options: Description.
+        runtime_profile: Description.
+        bindings: Description.
 
-    Returns
-    -------
-    DataFrame
-        DataFusion DataFrame resulting from SQL execution.
-
-    Raises
-    ------
-    ValueError
-        Raised when parameter bindings are invalid or SQL execution fails.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     options = _resolve_sql_options(sql_options, runtime_profile=runtime_profile)
     resolved = _resolve_bindings(bindings)
@@ -94,7 +81,7 @@ def _resolve_sql_options(
 ) -> SQLOptions:
     """Resolve SQL options for SQL execution.
 
-    Returns
+    Returns:
     -------
     SQLOptions
         SQL options resolved from explicit overrides or defaults.
@@ -107,7 +94,7 @@ def _resolve_sql_options(
 def _resolve_bindings(bindings: SqlBindings | None) -> _ResolvedSqlBindings:
     """Resolve and validate SQL parameter bindings.
 
-    Returns
+    Returns:
     -------
     _ResolvedSqlBindings
         Normalized bindings used for SQL execution.
@@ -128,15 +115,14 @@ def _resolve_bindings(bindings: SqlBindings | None) -> _ResolvedSqlBindings:
 def _resolve_param_values(values: Mapping[str, object] | None) -> dict[str, object]:
     """Resolve scalar parameter values for SQL execution.
 
-    Returns
-    -------
-    dict[str, object]
-        Scalar parameter values ready for DataFusion execution.
+    Args:
+        values: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when table-like params are passed via ``param_values``.
+    Returns:
+        dict[str, object]: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not values:
         return {}
@@ -156,15 +142,15 @@ def _resolve_named_params(
 ) -> tuple[dict[str, object], DataFusionParamBindings | None]:
     """Resolve named parameters and any table bindings.
 
-    Returns
-    -------
-    tuple[dict[str, object], DataFusionParamBindings | None]
-        Scalar named parameters and optional table bindings.
+    Args:
+        values: Description.
+            existing_param_values: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when duplicate bindings are provided.
+    Returns:
+        tuple[dict[str, object], DataFusionParamBindings | None]: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not values:
         return {}, None
@@ -189,15 +175,17 @@ def _execute_sql(
 ) -> DataFrame | None:
     """Execute SQL with resolved bindings and guardrails.
 
-    Returns
-    -------
-    DataFrame | None
-        DataFusion DataFrame or ``None`` if execution returned nothing.
+    Args:
+        ctx: Description.
+            sql: Description.
+            options: Description.
+            bindings: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when SQL execution fails.
+    Returns:
+        DataFrame | None: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from datafusion_engine.tables.param import register_table_params
 

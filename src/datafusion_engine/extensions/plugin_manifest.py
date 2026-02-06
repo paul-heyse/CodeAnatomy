@@ -25,7 +25,7 @@ class PluginManifestResolution:
 def resolve_plugin_manifest(module_name: str = "datafusion_ext") -> PluginManifestResolution:
     """Resolve plugin manifest payload from the extension module.
 
-    Returns
+    Returns:
     -------
     PluginManifestResolution
         Resolved manifest payload with best-effort diagnostics when unavailable.

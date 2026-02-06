@@ -218,7 +218,7 @@ def _teardown_faulthandler() -> None:
 def df_profile() -> object:
     """Provide a default DataFusion runtime profile for tests.
 
-    Returns
+    Returns:
     -------
     object
         Runtime profile instance for tests.
@@ -232,7 +232,7 @@ def df_profile() -> object:
 def df_ctx() -> object:
     """Provide a default DataFusion session context for tests.
 
-    Returns
+    Returns:
     -------
     object
         Session context instance for tests.
@@ -246,7 +246,7 @@ def df_ctx() -> object:
 def diagnostic_profile() -> tuple[object, object]:
     """Provide a runtime profile wired to a diagnostics collector.
 
-    Returns
+    Returns:
     -------
     tuple[object, object]
         Runtime profile and diagnostics collector tuple.

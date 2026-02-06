@@ -36,7 +36,7 @@ from relspec.rustworkx_schedule import (
 def simple_linear_deps() -> tuple[InferredDeps, ...]:
     """Two tasks with linear dependency: task_a -> ev_a -> task_b.
 
-    Returns
+    Returns:
     -------
     tuple[InferredDeps, ...]
         Dependency set encoding a simple linear chain.
@@ -62,7 +62,7 @@ def simple_linear_deps() -> tuple[InferredDeps, ...]:
 def independent_deps() -> tuple[InferredDeps, ...]:
     """Three independent tasks with no inter-dependencies.
 
-    Returns
+    Returns:
     -------
     tuple[InferredDeps, ...]
         Dependency set containing three independent tasks.
@@ -96,7 +96,7 @@ def diamond_deps() -> tuple[InferredDeps, ...]:
     task_a produces ev_a, task_b and task_c consume ev_a, and task_d
     consumes both ev_b and ev_c.
 
-    Returns
+    Returns:
     -------
     tuple[InferredDeps, ...]
         Dependency set encoding a diamond-shaped graph.
@@ -133,7 +133,7 @@ def diamond_deps() -> tuple[InferredDeps, ...]:
 def simple_linear_graph(simple_linear_deps: tuple[InferredDeps, ...]) -> TaskGraph:
     """Build TaskGraph from simple linear deps.
 
-    Returns
+    Returns:
     -------
     TaskGraph
         Task graph built from ``simple_linear_deps``.
@@ -145,7 +145,7 @@ def simple_linear_graph(simple_linear_deps: tuple[InferredDeps, ...]) -> TaskGra
 def independent_graph(independent_deps: tuple[InferredDeps, ...]) -> TaskGraph:
     """Build TaskGraph from independent deps.
 
-    Returns
+    Returns:
     -------
     TaskGraph
         Task graph built from ``independent_deps``.
@@ -157,7 +157,7 @@ def independent_graph(independent_deps: tuple[InferredDeps, ...]) -> TaskGraph:
 def diamond_graph(diamond_deps: tuple[InferredDeps, ...]) -> TaskGraph:
     """Build TaskGraph from diamond deps.
 
-    Returns
+    Returns:
     -------
     TaskGraph
         Task graph built from ``diamond_deps``.
@@ -169,7 +169,7 @@ def diamond_graph(diamond_deps: tuple[InferredDeps, ...]) -> TaskGraph:
 def empty_evidence_catalog() -> EvidenceCatalog:
     """Empty evidence catalog (no pre-registered evidence).
 
-    Returns
+    Returns:
     -------
     EvidenceCatalog
         Empty catalog instance.
@@ -184,7 +184,7 @@ def evidence_catalog_with_ev_a() -> EvidenceCatalog:
     This simulates an evidence source that already exists (e.g.,
     from a previous extraction run).
 
-    Returns
+    Returns:
     -------
     EvidenceCatalog
         Catalog containing a registered schema for ``ev_a``.

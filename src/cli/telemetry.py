@@ -122,24 +122,16 @@ def invoke_with_telemetry(
 ) -> tuple[int, CliInvokeEvent]:
     """Execute CLI with telemetry capture.
 
-    Parameters
-    ----------
-    app
-        Cyclopts application to invoke.
-    tokens
-        CLI tokens (without program name).
-    run_context
-        Optional run context for injection.
+    Args:
+        app: CLI app instance.
+        tokens: Command tokens to execute.
+        run_context: Optional runtime context for telemetry correlation.
 
-    Returns
-    -------
-    tuple[int, CliInvokeEvent]
-        Exit code and structured telemetry payload.
+    Returns:
+        tuple[int, CliInvokeEvent]: Result.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the invocation does not produce a result payload.
+    Raises:
+        RuntimeError: If command dispatch fails unexpectedly.
     """
     state = _InvokeState(time.perf_counter(), _command_name_from_tokens(tokens))
     run_token = None
@@ -246,7 +238,7 @@ def _classify_error_stage(exc: CycloptsError) -> str:
     exc
         Cyclopts exception instance.
 
-    Returns
+    Returns:
     -------
     str
         Error stage label.
@@ -272,7 +264,7 @@ def apply_telemetry_config(*_args: object, **_kwargs: object) -> None:
 def get_otel_config_snapshot() -> Mapping[str, object]:
     """Return the cached OpenTelemetry config snapshot.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Immutable snapshot of resolved OpenTelemetry configuration.

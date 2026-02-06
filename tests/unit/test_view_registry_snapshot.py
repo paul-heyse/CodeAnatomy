@@ -16,15 +16,14 @@ from tests.test_helpers.datafusion_runtime import df_profile
 def _arrow_schema_from_df(df: object) -> pa.Schema:
     """Resolve a DataFusion DataFrame schema into PyArrow.
 
-    Returns
-    -------
-    pa.Schema
-        Resolved PyArrow schema for the DataFrame.
+    Args:
+        df: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the schema cannot be resolved to PyArrow.
+    Returns:
+        pa.Schema: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     schema = getattr(df, "schema", None)
     if callable(schema):

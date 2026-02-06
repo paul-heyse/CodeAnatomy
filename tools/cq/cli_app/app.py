@@ -89,7 +89,7 @@ class LaunchContext(CqStruct, frozen=True):
 def _make_console() -> Console:
     """Create a deterministic console for output.
 
-    Returns
+    Returns:
     -------
     Console
         Configured Rich console.
@@ -244,7 +244,7 @@ def launcher(
 ) -> int:
     """Handle global options and dispatch the selected command.
 
-    Returns
+    Returns:
     -------
     int
         Process exit code.

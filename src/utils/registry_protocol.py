@@ -63,19 +63,13 @@ class MutableRegistry[K, V]:
     def register(self, key: K, value: V, *, overwrite: bool = False) -> None:
         """Register a value for the provided key.
 
-        Parameters
-        ----------
-        key
-            Key to register.
-        value
-            Value to associate with the key.
-        overwrite
-            Whether to replace existing entries.
+        Args:
+            key: Description.
+            value: Description.
+            overwrite: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when the key is already registered and overwrite is ``False``.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if key in self._entries and not overwrite:
             msg = f"Key {key!r} already registered. Use overwrite=True."
@@ -90,7 +84,7 @@ class MutableRegistry[K, V]:
         key
             Key to look up.
 
-        Returns
+        Returns:
         -------
         V | None
             Registered value, or ``None`` when missing.
@@ -105,7 +99,7 @@ class MutableRegistry[K, V]:
         key
             Key to check.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` if the key is registered.
@@ -115,7 +109,7 @@ class MutableRegistry[K, V]:
     def __iter__(self) -> Iterator[K]:
         """Iterate over registered keys.
 
-        Returns
+        Returns:
         -------
         Iterator[K]
             Iterator over registered keys.
@@ -125,7 +119,7 @@ class MutableRegistry[K, V]:
     def __len__(self) -> int:
         """Return the count of registered entries.
 
-        Returns
+        Returns:
         -------
         int
             Number of registered entries.
@@ -135,7 +129,7 @@ class MutableRegistry[K, V]:
     def items(self) -> Iterator[tuple[K, V]]:
         """Iterate over registry entries.
 
-        Returns
+        Returns:
         -------
         Iterator[tuple[K, V]]
             Iterator over key/value pairs.
@@ -145,7 +139,7 @@ class MutableRegistry[K, V]:
     def snapshot(self) -> Mapping[K, V]:
         """Return immutable snapshot of current state.
 
-        Returns
+        Returns:
         -------
         Mapping[K, V]
             Snapshot of registry entries.
@@ -177,7 +171,7 @@ class ImmutableRegistry[K, V]:
         key
             Key to look up.
 
-        Returns
+        Returns:
         -------
         V | None
             Registered value, or ``None`` when missing.
@@ -195,7 +189,7 @@ class ImmutableRegistry[K, V]:
         key
             Key to check.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` if the key is registered.
@@ -205,7 +199,7 @@ class ImmutableRegistry[K, V]:
     def __iter__(self) -> Iterator[K]:
         """Iterate over registered keys.
 
-        Returns
+        Returns:
         -------
         Iterator[K]
             Iterator over registered keys.
@@ -215,7 +209,7 @@ class ImmutableRegistry[K, V]:
     def __len__(self) -> int:
         """Return the count of registered entries.
 
-        Returns
+        Returns:
         -------
         int
             Number of registered entries.
@@ -231,7 +225,7 @@ class ImmutableRegistry[K, V]:
         data
             Source mapping of entries.
 
-        Returns
+        Returns:
         -------
         ImmutableRegistry[K, V]
             Frozen registry containing the mapping entries.
@@ -250,10 +244,12 @@ class MappingRegistryAdapter[K, V]:
     def register(self, key: K, value: V) -> None:
         """Register a value for the provided key.
 
-        Raises
-        ------
-        ValueError
-            Raised when the registry is read-only or the key is already registered.
+        Args:
+            key: Description.
+            value: Description.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.read_only:
             msg = "Registry is read-only."
@@ -266,7 +262,7 @@ class MappingRegistryAdapter[K, V]:
     def get(self, key: K) -> V | None:
         """Retrieve a value by key.
 
-        Returns
+        Returns:
         -------
         V | None
             Registered value, or ``None`` when missing.
@@ -276,7 +272,7 @@ class MappingRegistryAdapter[K, V]:
     def __contains__(self, key: K) -> bool:
         """Check whether a key is registered.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when the key is registered.
@@ -286,7 +282,7 @@ class MappingRegistryAdapter[K, V]:
     def __iter__(self) -> Iterator[K]:
         """Iterate over registered keys.
 
-        Returns
+        Returns:
         -------
         Iterator[K]
             Iterator over registered keys.
@@ -296,7 +292,7 @@ class MappingRegistryAdapter[K, V]:
     def __len__(self) -> int:
         """Return the count of registered entries.
 
-        Returns
+        Returns:
         -------
         int
             Count of registered entries.
@@ -306,7 +302,7 @@ class MappingRegistryAdapter[K, V]:
     def snapshot(self) -> Mapping[K, V]:
         """Return immutable snapshot of current state.
 
-        Returns
+        Returns:
         -------
         Mapping[K, V]
             Snapshot of registry entries.
@@ -327,7 +323,7 @@ class MappingRegistryAdapter[K, V]:
     ) -> MappingRegistryAdapter[K, V]:
         """Create a registry adapter from a mapping.
 
-        Returns
+        Returns:
         -------
         MappingRegistryAdapter[K, V]
             Registry adapter initialized from the mapping.

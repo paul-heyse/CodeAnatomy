@@ -110,7 +110,7 @@ class DeltaWritePolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return canonical payload for fingerprinting.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload used for policy fingerprinting.
@@ -133,7 +133,7 @@ class DeltaWritePolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the policy.
 
-        Returns
+        Returns:
         -------
         str
             Fingerprint string for the policy.
@@ -154,7 +154,7 @@ class ParquetWriterPolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return canonical payload for fingerprinting.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload used for policy fingerprinting.
@@ -171,7 +171,7 @@ class ParquetWriterPolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the policy.
 
-        Returns
+        Returns:
         -------
         str
             Fingerprint string for the policy.
@@ -188,7 +188,7 @@ class DeltaSchemaPolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return canonical payload for fingerprinting.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload used for policy fingerprinting.
@@ -201,7 +201,7 @@ class DeltaSchemaPolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the policy.
 
-        Returns
+        Returns:
         -------
         str
             Fingerprint string for the policy.
@@ -227,7 +227,7 @@ class DeltaRetryPolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return canonical payload for fingerprinting.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload used for policy fingerprinting.
@@ -243,7 +243,7 @@ class DeltaRetryPolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the policy.
 
-        Returns
+        Returns:
         -------
         str
             Fingerprint string for the policy.
@@ -266,7 +266,7 @@ class DeltaMutationPolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return canonical payload for fingerprinting.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload used for policy fingerprinting.
@@ -281,7 +281,7 @@ class DeltaMutationPolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the policy.
 
-        Returns
+        Returns:
         -------
         str
             Fingerprint string for the policy.
@@ -303,7 +303,7 @@ class StatsColumnsInputs(StructBaseStrict, frozen=True):
 def delta_write_configuration(policy: DeltaWritePolicy | None) -> dict[str, str] | None:
     """Return Delta table configuration entries for write policies.
 
-    Returns
+    Returns:
     -------
     dict[str, str] | None
         Delta configuration values to apply, or ``None`` when no policy exists.
@@ -319,7 +319,7 @@ def delta_write_configuration(policy: DeltaWritePolicy | None) -> dict[str, str]
 def resolve_stats_columns(inputs: StatsColumnsInputs) -> tuple[str, ...] | None:
     """Resolve Delta stats columns based on policy and schema.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...] | None
         Resolved stats columns, or ``None`` when disabled.
@@ -347,7 +347,7 @@ def resolve_stats_columns(inputs: StatsColumnsInputs) -> tuple[str, ...] | None:
 def delta_schema_configuration(policy: DeltaSchemaPolicy | None) -> dict[str, str] | None:
     """Return Delta configuration entries for schema policies.
 
-    Returns
+    Returns:
     -------
     dict[str, str] | None
         Delta configuration values to apply, or ``None`` when no policy exists.

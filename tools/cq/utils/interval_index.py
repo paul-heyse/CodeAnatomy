@@ -57,7 +57,7 @@ class IntervalIndex[T]:
 
         Used by AST span indexes and record classification.
 
-        Returns
+        Returns:
         -------
         IntervalIndex
             Interval index for the provided spans.
@@ -77,7 +77,7 @@ class IntervalIndex[T]:
 
         Used by classification and query expansion to index definitions.
 
-        Returns
+        Returns:
         -------
         IntervalIndex
             Interval index for the provided records.
@@ -90,7 +90,7 @@ class IntervalIndex[T]:
 
         Used by search classifiers to attribute matches to definitions.
 
-        Returns
+        Returns:
         -------
         T | None
             Innermost containing payload, or None if no match.
@@ -109,7 +109,7 @@ class IntervalIndex[T]:
 
         Used by ``find_containing`` to evaluate nested candidates.
 
-        Returns
+        Returns:
         -------
         list[T]
             Candidate payloads spanning the line.
@@ -166,7 +166,7 @@ class FileIntervalIndex:
 
         Used by query expansion to avoid cross-file attribution.
 
-        Returns
+        Returns:
         -------
         FileIntervalIndex
             Per-file interval index mapping.
@@ -183,7 +183,7 @@ class FileIntervalIndex:
 
         Used by call/callee expansion to locate enclosing definitions.
 
-        Returns
+        Returns:
         -------
         SgRecord | None
             Containing definition record, or None if not found.

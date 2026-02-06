@@ -20,10 +20,8 @@ from tools.cq.cli_app.params import QueryParams
 def _has_query_tokens(query_string: str) -> bool:
     """Check whether a query string contains any key=value tokens.
 
-    Returns
-    -------
-    bool
-        True if any tokenized query parts are present.
+    Returns:
+        bool: True if any tokenized query parts are present.
     """
     token_pattern = r"([\w.]+|\$+\w+)=(?:'([^']+)'|\"([^\"]+)\"|([^\s]+))"
     return bool(list(re.finditer(token_pattern, query_string)))
@@ -37,40 +35,16 @@ def q(
 ) -> CliResult:
     """Run a declarative code query using ast-grep.
 
-    Query syntax: key=value pairs separated by spaces.
+    Args:
+        query_string: Query expression provided by the user.
+        opts: Optional query command options.
+        ctx: Injected CLI context.
 
-    Required:
-        entity=TYPE    Entity type (function, class, method, module, callsite, import)
+    Returns:
+        CliResult: Renderable command result payload.
 
-    Optional:
-        name=PATTERN   Name to match (exact or ~regex)
-        expand=KIND    Graph expansion (callers, callees, imports, raises, scope)
-                       Use KIND(depth=N) to set depth (default: 1)
-        in=DIR         Search only in directory
-        exclude=DIRS   Exclude directories (comma-separated)
-        fields=FIELDS  Output fields (def,loc,callers,callees,evidence,imports)
-        limit=N        Maximum results
-        explain=true   Include query plan explanation
-
-    For plain queries without key=value pairs (e.g., "build_graph"),
-    this command falls back to Smart Search.
-
-    Examples
-    --------
-        cq q "entity=function name=build_graph_product"
-        cq q "entity=function name=detect expand=callers(depth=2) in=tools/cq/"
-        cq q "entity=class in=src/relspec/ fields=def,imports"
-        cq q build_graph  # falls back to smart search
-
-    Returns
-    -------
-    CliResult
-        Structured command result.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.core.run_context import RunContext

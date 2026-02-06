@@ -230,15 +230,18 @@ def read_cdf_changes(
 ) -> CdfReadResult | None:
     """Read Delta CDF changes using the shared incremental runtime.
 
-    Returns
-    -------
-    CdfReadResult | None
-        CDF read result when changes are available, otherwise ``None``.
+    Args:
+        context: Description.
+            dataset_path: Description.
+            dataset_name: Description.
+            cursor_store: Description.
+            filter_policy: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when Delta CDF is required but unavailable or registration fails.
+    Returns:
+        CdfReadResult | None: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     profile = context.runtime.profile
     profile_location = profile.catalog_ops.dataset_location(dataset_name)

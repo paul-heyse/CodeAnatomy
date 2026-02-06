@@ -34,7 +34,7 @@ class RemoteAuthSpec:
 def remote_features() -> RemoteFeatureSet:
     """Return supported remote transport features.
 
-    Returns
+    Returns:
     -------
     RemoteFeatureSet
         Supported transport features.
@@ -50,7 +50,7 @@ def remote_features() -> RemoteFeatureSet:
 def remote_auth_from_env() -> RemoteAuthSpec | None:
     """Return RemoteAuthSpec from environment variables when present.
 
-    Returns
+    Returns:
     -------
     RemoteAuthSpec | None
         Resolved authentication spec when any env values are set.
@@ -85,7 +85,7 @@ def remote_auth_from_env() -> RemoteAuthSpec | None:
 def remote_callbacks_from_env() -> pygit2.RemoteCallbacks | None:
     """Return RemoteCallbacks based on environment configuration.
 
-    Returns
+    Returns:
     -------
     pygit2.RemoteCallbacks | None
         Callback instance when env configuration is present.
@@ -100,6 +100,7 @@ class RemoteAuthCallbacks(pygit2.RemoteCallbacks):
     """Remote callbacks that negotiate credentials from a spec."""
 
     def __init__(self, spec: RemoteAuthSpec) -> None:
+        """__init__."""
         super().__init__()
         self._spec = spec
 
@@ -111,15 +112,13 @@ class RemoteAuthCallbacks(pygit2.RemoteCallbacks):
     ) -> pygit2.credentials.Username | pygit2.credentials.UserPass | pygit2.credentials.Keypair:
         """Return credentials based on the allowed types.
 
-        Returns
-        -------
-        object
-            Credential object accepted by pygit2.
+        Args:
+            url: Description.
+            username_from_url: Description.
+            allowed_types: Description.
 
-        Raises
-        ------
-        pygit2.GitError
-            Raised when no supported credential type is available.
+        Raises:
+            GitError: If the operation cannot be completed.
         """
         username = username_from_url or self._spec.username or _username_from_url(url) or "git"
         if allowed_types & pygit2.enums.CredentialType.USERNAME:
@@ -145,7 +144,7 @@ class RemoteAuthCallbacks(pygit2.RemoteCallbacks):
     def certificate_check(self, certificate: None, valid: int, host: bytes) -> bool:
         """Return whether to accept a certificate check result.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` to accept the certificate, otherwise ``False``.
@@ -161,10 +160,12 @@ class RemoteAuthCallbacks(pygit2.RemoteCallbacks):
     def push_update_reference(self, refname: str, message: str | None) -> None:
         """Handle per-ref push update responses.
 
-        Raises
-        ------
-        pygit2.GitError
-            Raised when the remote rejects the ref update.
+        Args:
+            refname: Description.
+            message: Description.
+
+        Raises:
+            GitError: If the operation cannot be completed.
         """
         if message and self._spec.raise_on_push_reject:
             msg = f"push rejected for {refname}: {message}"
@@ -181,7 +182,7 @@ def fetch_remote(
 ) -> bool:
     """Fetch a remote, returning True on success.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the fetch succeeded.

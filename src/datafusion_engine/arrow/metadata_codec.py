@@ -56,7 +56,7 @@ def encode_metadata_map(entries: Mapping[str, str]) -> bytes:
     entries:
         Mapping of string keys to string values.
 
-    Returns
+    Returns:
     -------
     bytes
         MessagePack payload for the mapping.
@@ -77,20 +77,14 @@ def encode_metadata_map(entries: Mapping[str, str]) -> bytes:
 def decode_metadata_map(payload: bytes | None) -> dict[str, str]:
     """Decode MessagePack metadata bytes into a string mapping.
 
-    Parameters
-    ----------
-    payload:
-        MessagePack payload bytes.
+    Args:
+        payload: Description.
 
-    Returns
-    -------
-    dict[str, str]
-        Decoded string mapping.
+    Returns:
+        dict[str, str]: Result.
 
-    Raises
-    ------
-    TypeError
-        Raised when the payload shape is invalid.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     decoded = _decode_payload(payload, target_type=MetadataMapPayload, label="metadata_map")
     if decoded is None:
@@ -109,7 +103,7 @@ def encode_metadata_list(entries: Sequence[str]) -> bytes:
     entries:
         Sequence of string values.
 
-    Returns
+    Returns:
     -------
     bytes
         MessagePack payload for the list.
@@ -124,20 +118,14 @@ def encode_metadata_list(entries: Sequence[str]) -> bytes:
 def decode_metadata_list(payload: bytes | None) -> list[str]:
     """Decode MessagePack metadata bytes into a list of strings.
 
-    Parameters
-    ----------
-    payload:
-        MessagePack payload bytes.
+    Args:
+        payload: Description.
 
-    Returns
-    -------
-    list[str]
-        Decoded list of strings.
+    Returns:
+        list[str]: Result.
 
-    Raises
-    ------
-    TypeError
-        Raised when the payload shape is invalid.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     decoded = _decode_payload(payload, target_type=MetadataListPayload, label="metadata_list")
     if decoded is None:
@@ -156,7 +144,7 @@ def encode_metadata_scalar_map(entries: Mapping[str, object]) -> bytes:
     entries:
         Mapping of scalar values keyed by string.
 
-    Returns
+    Returns:
     -------
     bytes
         MessagePack payload for the scalar mapping.
@@ -182,7 +170,7 @@ def encode_metadata_payload(payload: object) -> bytes:
     payload
         Arbitrary metadata payload to encode.
 
-    Returns
+    Returns:
     -------
     bytes
         UTF-8 safe MessagePack payload prefixed for decoding.
@@ -200,7 +188,7 @@ def decode_metadata_payload(payload: bytes) -> bytes:
     payload
         UTF-8 safe metadata payload to decode.
 
-    Returns
+    Returns:
     -------
     bytes
         Raw MessagePack payload bytes.
@@ -221,20 +209,14 @@ def decode_metadata_payload(payload: bytes) -> bytes:
 def decode_metadata_scalar_map(payload: bytes | None) -> dict[str, object]:
     """Decode MessagePack metadata bytes into a scalar mapping.
 
-    Parameters
-    ----------
-    payload:
-        MessagePack payload bytes.
+    Args:
+        payload: Description.
 
-    Returns
-    -------
-    dict[str, object]
-        Decoded scalar mapping.
+    Returns:
+        dict[str, object]: Result.
 
-    Raises
-    ------
-    TypeError
-        Raised when the payload shape is invalid.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     decoded = _decode_payload(
         payload,

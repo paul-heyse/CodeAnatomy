@@ -30,7 +30,7 @@ from extract.coordination.spec_helpers import (
 def evidence_plan_cst_only() -> EvidencePlan:
     """Evidence plan requiring only CST-related datasets.
 
-    Returns
+    Returns:
     -------
     EvidencePlan
         Plan containing only CST sources and cst_refs projection.
@@ -45,7 +45,7 @@ def evidence_plan_cst_only() -> EvidencePlan:
 def evidence_plan_with_ast() -> EvidencePlan:
     """Evidence plan requiring CST and AST datasets.
 
-    Returns
+    Returns:
     -------
     EvidencePlan
         Plan containing CST and AST sources.
@@ -59,7 +59,7 @@ def evidence_plan_with_ast() -> EvidencePlan:
 def evidence_plan_compiled() -> EvidencePlan:
     """Evidence plan compiled from string output names.
 
-    Returns
+    Returns:
     -------
     EvidencePlan
         Compiled plan built via ``compile_evidence_plan``.

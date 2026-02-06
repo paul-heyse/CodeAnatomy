@@ -68,11 +68,13 @@ def file_changes_from_cdf(
             change_types=(CdfChangeType.DELETE.to_cdf_column_value(),),
             file_id_column=file_id_column,
         )
+    changed_set = set(changed)
+    deleted_set = set(deleted) - changed_set
 
     # CDF always represents a delta, not a full refresh
     return IncrementalFileChanges(
-        changed_file_ids=changed,
-        deleted_file_ids=deleted,
+        changed_file_ids=tuple(sorted(changed_set)),
+        deleted_file_ids=tuple(sorted(deleted_set)),
         full_refresh=False,
     )
 

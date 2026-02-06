@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-import importlib
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from datafusion import SessionContext
+
+from datafusion_engine.extensions.context_adaptation import (
+    ExtensionContextPolicy,
+    ExtensionEntrypointInvocation,
+    invoke_entrypoint_with_adapted_context,
+    resolve_extension_module,
+    select_context_candidate,
+)
 
 _DELTA_EXTENSION_MODULES: tuple[str, ...] = ("datafusion._internal", "datafusion_ext")
 _DELTA_SESSION_BUILDER = "delta_session_context"
@@ -49,7 +56,13 @@ def probe_delta_entrypoint(
     DeltaExtensionCompatibility
         Availability/compatibility status plus diagnostic payload.
     """
-    resolved = resolve_delta_extension_module(entrypoint=entrypoint)
+    policy = ExtensionContextPolicy(
+        module_names=_DELTA_EXTENSION_MODULES,
+        entrypoint=entrypoint,
+        allow_fallback=True,
+        require_non_fallback=require_non_fallback,
+    )
+    resolved = resolve_delta_extension_module(entrypoint=policy.entrypoint)
     if resolved is None:
         resolved_any = resolve_delta_extension_module()
         if resolved_any is None:
@@ -72,8 +85,7 @@ def probe_delta_entrypoint(
             probe_result="entrypoint_unavailable",
         )
     probe_entrypoint = "delta_scan_config_from_session"
-    probe = getattr(resolved.module, probe_entrypoint, None)
-    if not callable(probe):
+    if not callable(getattr(resolved.module, probe_entrypoint, None)):
         return DeltaExtensionCompatibility(
             available=True,
             compatible=False,
@@ -84,13 +96,19 @@ def probe_delta_entrypoint(
             probe_result="probe_unavailable",
         )
     args = _probe_args_for_entrypoint(probe_entrypoint)
+    internal_ctx = getattr(ctx, "ctx", None)
     try:
-        ctx_kind, _ = invoke_delta_entrypoint(
+        selection, _ = invoke_entrypoint_with_adapted_context(
+            resolved.name,
             resolved.module,
             probe_entrypoint,
-            ctx=ctx,
-            args=args,
-            allow_fallback=True,
+            ExtensionEntrypointInvocation(
+                ctx=ctx,
+                internal_ctx=internal_ctx,
+                args=args,
+                allow_fallback=True,
+                fallback_ctx_factory=_build_delta_session_context,
+            ),
         )
     except (TypeError, RuntimeError, ValueError) as exc:
         return DeltaExtensionCompatibility(
@@ -102,6 +120,7 @@ def probe_delta_entrypoint(
             ctx_kind=None,
             probe_result="error",
         )
+    ctx_kind = selection.ctx_kind
     if require_non_fallback and ctx_kind == "fallback":
         return DeltaExtensionCompatibility(
             available=True,
@@ -155,15 +174,13 @@ def resolve_delta_extension_module(
     DeltaExtensionModule | None
         Resolved extension module metadata, or ``None`` when unavailable.
     """
-    for module_name in _DELTA_EXTENSION_MODULES:
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        if required_attr is not None and not hasattr(module, required_attr):
-            continue
-        if entrypoint is not None and not callable(getattr(module, entrypoint, None)):
-            continue
+    resolved = resolve_extension_module(
+        _DELTA_EXTENSION_MODULES,
+        required_attr=required_attr,
+        entrypoint=entrypoint,
+    )
+    if resolved is not None:
+        module_name, module = resolved
         return DeltaExtensionModule(name=module_name, module=module)
     return None
 
@@ -181,12 +198,12 @@ def delta_context_candidates(
     tuple[tuple[str, object], ...]
         Ordered (kind, context) candidates to probe.
     """
-    candidates: list[tuple[str, object]] = []
-    _append_candidate(candidates, "outer", ctx)
-    _append_candidate(candidates, "internal", getattr(ctx, "ctx", None))
-    if allow_fallback:
-        _append_candidate(candidates, "fallback", _build_delta_session_context(module))
-    return tuple(candidates)
+    return select_context_candidate(
+        ctx,
+        internal_ctx=getattr(ctx, "ctx", None),
+        allow_fallback=allow_fallback,
+        fallback_ctx=_build_delta_session_context(module),
+    )
 
 
 def invoke_delta_entrypoint(
@@ -204,44 +221,20 @@ def invoke_delta_entrypoint(
     tuple[str, object]
         Tuple containing the successful context kind and the payload.
 
-    Raises
-    ------
-    TypeError
-        Raised when the requested entrypoint is not callable.
-    RuntimeError
-        Raised when probing fails across all context candidates.
     """
-    fn = getattr(module, entrypoint, None)
-    if not callable(fn):
-        msg = f"Delta entrypoint {entrypoint} is unavailable."
-        raise TypeError(msg)
-    errors: list[str] = []
-    for ctx_kind, candidate in delta_context_candidates(
-        ctx,
+    selection, payload = invoke_entrypoint_with_adapted_context(
+        "unknown",
         module,
-        allow_fallback=allow_fallback,
-    ):
-        try:
-            payload = _call_with_ctx(fn, candidate, args)
-        except (TypeError, RuntimeError, ValueError) as exc:
-            errors.append(f"{ctx_kind}: {exc}")
-            continue
-        return ctx_kind, payload
-    detail = "; ".join(errors) if errors else "no context candidates"
-    msg = f"Delta entrypoint {entrypoint} failed across context candidates ({detail})"
-    raise RuntimeError(msg)
-
-
-def _append_candidate(
-    candidates: list[tuple[str, object]],
-    kind: str,
-    candidate: object | None,
-) -> None:
-    if candidate is None:
-        return
-    if any(existing is candidate for _, existing in candidates):
-        return
-    candidates.append((kind, candidate))
+        entrypoint,
+        ExtensionEntrypointInvocation(
+            ctx=ctx,
+            internal_ctx=getattr(ctx, "ctx", None),
+            args=args,
+            allow_fallback=allow_fallback,
+            fallback_ctx_factory=_build_delta_session_context,
+        ),
+    )
+    return selection.ctx_kind, payload
 
 
 def _build_delta_session_context(module: object) -> object | None:
@@ -255,14 +248,6 @@ def _build_delta_session_context(module: object) -> object | None:
             return builder(None, None, None)
         except (TypeError, RuntimeError, ValueError):
             return None
-
-
-def _call_with_ctx(
-    fn: Callable[..., object],
-    ctx_value: object,
-    args: Sequence[object],
-) -> object:
-    return fn(ctx_value, *args)
 
 
 def _probe_args_for_entrypoint(entrypoint: str) -> tuple[object, ...]:

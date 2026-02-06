@@ -2,6 +2,11 @@
 name = "df_plugin_api"
 version = "0.1.0"
 edition = "2021"
+description.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 abi_stable = "0.11"

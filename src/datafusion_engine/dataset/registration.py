@@ -1582,6 +1582,24 @@ class _DeltaProviderRegistration:
     predicate_error: str | None
 
 
+@dataclass(frozen=True)
+class _DeltaRegistrationState:
+    registration: _DeltaProviderRegistration
+    resolution: DatasetResolution
+    adapter: DataFusionIOAdapter
+    provider: object
+    provider_to_register: object
+    provider_is_native: bool
+    format_name: str
+    cache_prefix: str | None
+
+
+@dataclass(frozen=True)
+class _DeltaRegistrationResult:
+    df: DataFrame
+    cache_prefix: str | None
+
+
 def _delta_pruning_predicate(
     context: DataFusionRegistrationContext,
 ) -> tuple[str | None, str | None]:
@@ -1651,84 +1669,163 @@ def _provider_for_registration(provider: object) -> object:
 def _register_delta_provider(
     context: DataFusionRegistrationContext,
 ) -> tuple[DataFrame, str | None]:
-    location = context.location
-    registration = _build_delta_provider_registration(context)
-    resolution = registration.resolution
-    cache_prefix: str | None = None
-    if (
-        context.runtime_profile is not None
-        and context.runtime_profile.policies.snapshot_pinned_mode == "delta_version"
-    ):
-        cache_prefix = cache_prefix_for_delta_snapshot(
-            context.runtime_profile,
-            dataset_name=context.name,
-            snapshot=resolution.delta_snapshot,
-        )
-    provider = resolution.provider
-    adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
-    provider_to_register = _provider_for_registration(provider)
-    format_name = location.format or "delta"
-    provider_is_native = _table_provider_capsule(provider_to_register) is not None
-    if format_name == "delta" and not provider_is_native:
-        msg = (
-            "Delta provider registration fell back to a PyArrow dataset; "
-            "FFI TableProvider is required for pushdown and correctness."
-        )
-        if (
-            context.runtime_profile is not None
-            and context.runtime_profile.features.enforce_delta_ffi_provider
-        ):
-            raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
-        logger.warning(msg)
-    if resolution.provider_kind == "delta_cdf":
-        adapter.register_delta_cdf_provider(context.name, provider_to_register)
-    else:
-        adapter.register_delta_table_provider(context.name, provider_to_register)
-    df = context.ctx.table(context.name)
+    state = _resolve_delta_registration_state(context)
+    _enforce_delta_native_provider_policy(state, context)
+    result = _register_delta_provider_with_adapter(state, context)
     schema_identity_hash_value, ddl_fingerprint, fingerprint_details = (
         _update_table_provider_fingerprints(
             context.ctx,
             name=context.name,
-            schema=df.schema(),
+            schema=result.df.schema(),
         )
     )
-    if resolution.provider_kind == "delta_cdf":
-        artifact_details = _delta_cdf_artifact_payload(location, resolution=resolution)
-        artifact_details["ffi_table_provider"] = provider_is_native
-        if format_name == "delta" and not provider_is_native:
-            artifact_details["provider_mode"] = "dataset_fallback"
-        if fingerprint_details:
-            artifact_details.update(fingerprint_details)
-        _record_table_provider_artifact(
-            context.runtime_profile,
-            artifact=_TableProviderArtifact(
-                name=context.name,
-                provider=provider,
-                provider_kind="cdf_table_provider"
-                if provider_is_native
-                else "cdf_dataset_fallback",
-                source=None,
-                details=artifact_details,
-            ),
+    if state.resolution.provider_kind == "delta_cdf":
+        _record_delta_cdf_registration_artifacts(
+            state,
+            context,
+            fingerprint_details=fingerprint_details,
         )
-        _update_table_provider_capabilities(
-            context.ctx,
+    else:
+        _record_delta_table_registration_artifacts(
+            state,
+            context,
+            fingerprint_details=fingerprint_details,
+            schema_identity_hash_value=schema_identity_hash_value,
+            ddl_fingerprint=ddl_fingerprint,
+        )
+    _update_table_provider_capabilities(
+        context.ctx,
+        name=context.name,
+        supports_insert=state.resolution.provider_kind != "delta_cdf",
+        supports_cdf=state.resolution.provider_kind == "delta_cdf",
+    )
+    return _maybe_cache(context, result.df), result.cache_prefix
+
+
+def _resolve_delta_registration_state(
+    context: DataFusionRegistrationContext,
+) -> _DeltaRegistrationState:
+    registration = _build_delta_provider_registration(context)
+    resolution = registration.resolution
+    provider = resolution.provider
+    provider_to_register = _provider_for_registration(provider)
+    return _DeltaRegistrationState(
+        registration=registration,
+        resolution=resolution,
+        adapter=DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile),
+        provider=provider,
+        provider_to_register=provider_to_register,
+        provider_is_native=_table_provider_capsule(provider_to_register) is not None,
+        format_name=context.location.format or "delta",
+        cache_prefix=_cache_prefix_for_registration(context, resolution=resolution),
+    )
+
+
+def _cache_prefix_for_registration(
+    context: DataFusionRegistrationContext,
+    *,
+    resolution: DatasetResolution,
+) -> str | None:
+    if context.runtime_profile is None:
+        return None
+    if context.runtime_profile.policies.snapshot_pinned_mode != "delta_version":
+        return None
+    return cache_prefix_for_delta_snapshot(
+        context.runtime_profile,
+        dataset_name=context.name,
+        snapshot=resolution.delta_snapshot,
+    )
+
+
+def _enforce_delta_native_provider_policy(
+    state: _DeltaRegistrationState,
+    context: DataFusionRegistrationContext,
+) -> None:
+    if state.format_name != "delta" or state.provider_is_native:
+        return
+    msg = (
+        "Delta provider registration fell back to a PyArrow dataset; "
+        "FFI TableProvider is required for pushdown and correctness."
+    )
+    if (
+        context.runtime_profile is not None
+        and context.runtime_profile.features.enforce_delta_ffi_provider
+    ):
+        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
+    logger.warning(msg)
+
+
+def _register_delta_provider_with_adapter(
+    state: _DeltaRegistrationState,
+    context: DataFusionRegistrationContext,
+) -> _DeltaRegistrationResult:
+    if state.resolution.provider_kind == "delta_cdf":
+        state.adapter.register_delta_cdf_provider(context.name, state.provider_to_register)
+    else:
+        state.adapter.register_delta_table_provider(context.name, state.provider_to_register)
+    return _DeltaRegistrationResult(
+        df=context.ctx.table(context.name),
+        cache_prefix=state.cache_prefix,
+    )
+
+
+def _delta_registration_mode(state: _DeltaRegistrationState) -> str | None:
+    if state.format_name == "delta" and not state.provider_is_native:
+        return "dataset_fallback"
+    return None
+
+
+def _record_delta_cdf_registration_artifacts(
+    state: _DeltaRegistrationState,
+    context: DataFusionRegistrationContext,
+    *,
+    fingerprint_details: Mapping[str, object] | None,
+) -> None:
+    location = context.location
+    resolution = state.resolution
+    details = _delta_cdf_artifact_payload(location, resolution=resolution)
+    details["ffi_table_provider"] = state.provider_is_native
+    provider_mode = _delta_registration_mode(state)
+    if provider_mode is not None:
+        details["provider_mode"] = provider_mode
+    if fingerprint_details:
+        details.update(fingerprint_details)
+    _record_table_provider_artifact(
+        context.runtime_profile,
+        artifact=_TableProviderArtifact(
             name=context.name,
-            supports_cdf=True,
-        )
-        _record_delta_cdf_artifact(
-            context.runtime_profile,
-            artifact=DeltaCdfArtifact(
-                name=context.name,
-                path=str(location.path),
-                provider="table_provider",
-                options=location.delta_cdf_options,
-                log_storage_options=location.delta_log_storage_options,
-                snapshot=resolution.delta_snapshot,
-            ),
-        )
-        return _maybe_cache(context, df), cache_prefix
-    artifact_details = _delta_provider_artifact_payload(
+            provider=state.provider,
+            provider_kind="cdf_table_provider"
+            if state.provider_is_native
+            else "cdf_dataset_fallback",
+            source=None,
+            details=details,
+        ),
+    )
+    _record_delta_cdf_artifact(
+        context.runtime_profile,
+        artifact=DeltaCdfArtifact(
+            name=context.name,
+            path=str(location.path),
+            provider="table_provider",
+            options=location.delta_cdf_options,
+            log_storage_options=location.delta_log_storage_options,
+            snapshot=resolution.delta_snapshot,
+        ),
+    )
+
+
+def _record_delta_table_registration_artifacts(
+    state: _DeltaRegistrationState,
+    context: DataFusionRegistrationContext,
+    *,
+    fingerprint_details: Mapping[str, object] | None,
+    schema_identity_hash_value: str | None,
+    ddl_fingerprint: str | None,
+) -> None:
+    location = context.location
+    resolution = state.resolution
+    details = _delta_provider_artifact_payload(
         location,
         context=_DeltaProviderArtifactContext(
             delta_scan=resolution.delta_scan_options,
@@ -1737,26 +1834,27 @@ def _register_delta_provider(
             delta_scan_identity_hash=resolution.delta_scan_identity_hash,
             snapshot=resolution.delta_snapshot,
             registration_path="provider",
-            predicate=registration.predicate_sql,
-            predicate_error=registration.predicate_error,
+            predicate=state.registration.predicate_sql,
+            predicate_error=state.registration.predicate_error,
             add_actions=resolution.add_actions,
         ),
     )
-    artifact_details["ffi_table_provider"] = provider_is_native
-    if format_name == "delta" and not provider_is_native:
-        artifact_details["provider_mode"] = "dataset_fallback"
+    details["ffi_table_provider"] = state.provider_is_native
+    provider_mode = _delta_registration_mode(state)
+    if provider_mode is not None:
+        details["provider_mode"] = provider_mode
     if fingerprint_details:
-        artifact_details.update(fingerprint_details)
+        details.update(fingerprint_details)
     _record_table_provider_artifact(
         context.runtime_profile,
         artifact=_TableProviderArtifact(
             name=context.name,
-            provider=provider,
+            provider=state.provider,
             provider_kind="delta_table_provider"
-            if provider_is_native
+            if state.provider_is_native
             else "delta_dataset_fallback",
             source=None,
-            details=artifact_details,
+            details=details,
         ),
     )
     _record_delta_log_health(
@@ -1772,38 +1870,50 @@ def _register_delta_provider(
         delta_scan_identity_hash=resolution.delta_scan_identity_hash,
         delta_scan_effective=resolution.delta_scan_effective,
     )
-    if resolution.delta_snapshot is not None:
-        from datafusion_engine.delta.observability import (
-            DELTA_MAINTENANCE_TABLE_NAME,
-            DELTA_MUTATION_TABLE_NAME,
-            DELTA_SCAN_PLAN_TABLE_NAME,
-            DELTA_SNAPSHOT_TABLE_NAME,
-            DeltaSnapshotArtifact,
-            record_delta_snapshot,
-        )
-        observability_tables = {
-            DELTA_SNAPSHOT_TABLE_NAME,
-            DELTA_MUTATION_TABLE_NAME,
-            DELTA_SCAN_PLAN_TABLE_NAME,
-            DELTA_MAINTENANCE_TABLE_NAME,
-        }
-        if context.name not in observability_tables:
-            record_delta_snapshot(
-                context.runtime_profile,
-                artifact=DeltaSnapshotArtifact(
-                    table_uri=str(location.path),
-                    snapshot=resolution.delta_snapshot,
-                    dataset_name=context.name,
-                    schema_identity_hash=schema_identity_hash_value,
-                    ddl_fingerprint=ddl_fingerprint,
-                ),
-            )
-    _update_table_provider_capabilities(
-        context.ctx,
-        name=context.name,
-        supports_insert=True,
+    _record_delta_snapshot_if_applicable(
+        context,
+        resolution=resolution,
+        schema_identity_hash_value=schema_identity_hash_value,
+        ddl_fingerprint=ddl_fingerprint,
     )
-    return _maybe_cache(context, df), cache_prefix
+
+
+def _record_delta_snapshot_if_applicable(
+    context: DataFusionRegistrationContext,
+    *,
+    resolution: DatasetResolution,
+    schema_identity_hash_value: str | None,
+    ddl_fingerprint: str | None,
+) -> None:
+    if resolution.delta_snapshot is None:
+        return
+    from datafusion_engine.delta.observability import (
+        DELTA_MAINTENANCE_TABLE_NAME,
+        DELTA_MUTATION_TABLE_NAME,
+        DELTA_SCAN_PLAN_TABLE_NAME,
+        DELTA_SNAPSHOT_TABLE_NAME,
+        DeltaSnapshotArtifact,
+        record_delta_snapshot,
+    )
+
+    observability_tables = {
+        DELTA_SNAPSHOT_TABLE_NAME,
+        DELTA_MUTATION_TABLE_NAME,
+        DELTA_SCAN_PLAN_TABLE_NAME,
+        DELTA_MAINTENANCE_TABLE_NAME,
+    }
+    if context.name in observability_tables:
+        return
+    record_delta_snapshot(
+        context.runtime_profile,
+        artifact=DeltaSnapshotArtifact(
+            table_uri=str(context.location.path),
+            snapshot=resolution.delta_snapshot,
+            dataset_name=context.name,
+            schema_identity_hash=schema_identity_hash_value,
+            ddl_fingerprint=ddl_fingerprint,
+        ),
+    )
 
 
 def _delta_provider_artifact_payload(
@@ -2152,12 +2262,26 @@ def _record_provider_mode_diagnostics(
     provider_class = type(context.provider).__name__ if context.provider is not None else None
     ffi_table_provider = context.capsule_id is not None
     severity = _provider_mode_severity(format_name, context.provider_kind)
+    strict_native_provider_enabled = runtime_profile.features.enforce_delta_ffi_provider
+    expected_native_provider = format_name == "delta"
+    native_provider_modes = {"delta_table_provider", "cdf_table_provider"}
+    fallback_provider_modes = {"delta_dataset_fallback", "cdf_dataset_fallback"}
+    provider_is_native = context.provider_kind in native_provider_modes
+    strict_native_provider_violation = (
+        strict_native_provider_enabled
+        and expected_native_provider
+        and context.provider_kind in fallback_provider_modes
+    )
     payload = {
         "dataset": context.name,
         "provider_mode": context.provider_kind,
         "provider_class": provider_class,
         "ffi_table_provider": ffi_table_provider,
         "capsule_id": context.capsule_id,
+        "strict_native_provider_enabled": strict_native_provider_enabled,
+        "expected_native_provider": expected_native_provider,
+        "provider_is_native": provider_is_native,
+        "strict_native_provider_violation": strict_native_provider_violation,
         "run_id": get_run_id(),
         "diagnostic.severity": severity,
         "diagnostic.category": "datafusion_provider",
@@ -2785,31 +2909,35 @@ def _adapter_factory_payload(factory: object | None) -> str | None:
     return repr(factory)
 
 
+@dataclass(frozen=True)
+class _TableProvenanceRequest:
+    ctx: SessionContext
+    name: str
+    enable_information_schema: bool
+    sql_options: SQLOptions
+    runtime_profile: DataFusionRuntimeProfile | None = None
+    cache_prefix: str | None = None
+
+
 def _table_provenance_snapshot(
-    ctx: SessionContext,
-    *,
-    name: str,
-    enable_information_schema: bool,
-    sql_options: SQLOptions,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-    cache_prefix: str | None = None,
+    request: _TableProvenanceRequest,
 ) -> dict[str, object]:
-    if runtime_profile is not None:
+    if request.runtime_profile is not None:
         introspector = schema_introspector_for_profile(
-            runtime_profile,
-            ctx,
-            cache_prefix=cache_prefix,
+            request.runtime_profile,
+            request.ctx,
+            cache_prefix=request.cache_prefix,
         )
     else:
-        introspector = SchemaIntrospector(ctx, sql_options=sql_options)
-    table_definition = introspector.table_definition(name)
+        introspector = SchemaIntrospector(request.ctx, sql_options=request.sql_options)
+    table_definition = introspector.table_definition(request.name)
     constraints: tuple[str, ...] = ()
     column_defaults: dict[str, object] | None = None
     logical_plan: str | None = None
-    if enable_information_schema:
-        constraints = introspector.table_constraints(name)
-        column_defaults = introspector.table_column_defaults(name) or None
-        logical_plan = introspector.table_logical_plan(name)
+    if request.enable_information_schema:
+        constraints = introspector.table_constraints(request.name)
+        column_defaults = introspector.table_column_defaults(request.name) or None
+        logical_plan = introspector.table_logical_plan(request.name)
     return {
         "table_definition": table_definition,
         "table_constraints": list(constraints) if constraints else None,

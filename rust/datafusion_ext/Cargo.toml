@@ -2,6 +2,11 @@
 name = "datafusion_ext"
 version = "0.1.0"
 edition = "2021"
+description.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [lib]
 name = "datafusion_ext"

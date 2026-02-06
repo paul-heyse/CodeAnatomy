@@ -43,6 +43,7 @@ def test_ast_extract_enriched_outputs() -> None:
         "def baz(x):\n"
         "    return x\n"
         "\n"
+        # Intentional parser input: validate extraction of type-ignore comments.
         "x = 1  # type: ignore\n"
     )
     repo_files = pa.table(

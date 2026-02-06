@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from datafusion_engine.arrow.coercion import coerce_table_to_storage, to_arrow_table
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
@@ -127,6 +128,65 @@ def _read_cdf_table(
     if predicate is not None:
         df = df.filter(predicate)
     return execute_df_to_table(runtime, df, view_name=f"incremental_cdf::{table_name}")
+
+
+def _is_cdf_start_version_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "no starting version or timestamp provided for cdc" in message
+
+
+def _read_cdf_table_fallback(
+    state: _CdfReadState,
+    *,
+    filter_policy: CdfFilterPolicy | None,
+) -> pa.Table:
+    from deltalake import DeltaTable
+
+    storage_options = dict(state.inputs.storage_options) if state.inputs.storage_options else None
+    table = DeltaTable(str(state.inputs.path), storage_options=storage_options)
+    reader = table.load_cdf(
+        starting_version=state.cdf_options.starting_version,
+        ending_version=state.cdf_options.ending_version,
+        starting_timestamp=state.cdf_options.starting_timestamp,
+        ending_timestamp=state.cdf_options.ending_timestamp,
+        columns=state.cdf_options.columns,
+        predicate=state.cdf_options.predicate,
+        allow_out_of_range=state.cdf_options.allow_out_of_range,
+    )
+    # deltalake may return arro3-backed table/array objects; normalize to
+    # pyarrow to keep downstream compute/filter code deterministic.
+    resolved = coerce_table_to_storage(to_arrow_table(reader.read_all()))
+    policy = filter_policy or CdfFilterPolicy.include_all()
+    if "_change_type" not in resolved.column_names:
+        return resolved
+    allowed_types: list[str] = []
+    if policy.include_insert:
+        allowed_types.append("insert")
+    if policy.include_update_postimage:
+        allowed_types.append("update_postimage")
+    if policy.include_delete:
+        allowed_types.append("delete")
+    if not allowed_types:
+        return resolved.slice(0, 0)
+    change_type_column = resolved["_change_type"]
+    try:
+        import pyarrow.compute as pc
+
+        normalized_change_type = pc.cast(change_type_column, pa.string())
+    except (pa.ArrowInvalid, pa.ArrowTypeError, NotImplementedError):
+        normalized_change_type = pa.array(
+            [None if value is None else str(value) for value in change_type_column.to_pylist()],
+            type=pa.string(),
+        )
+    allowed_type_set = set(allowed_types)
+    mask = pa.array(
+        [
+            value is not None and str(value) in allowed_type_set
+            for value in normalized_change_type.to_pylist()
+        ],
+        type=pa.bool_(),
+    )
+    return resolved.filter(mask)
 
 
 def _prepare_cdf_read_state(
@@ -295,7 +355,19 @@ def read_cdf_changes(
             )
             return None
         registry.track(cdf_name)
-        table = _read_cdf_table(state.runtime, table_name=cdf_name, filter_policy=filter_policy)
+        try:
+            table = _read_cdf_table(
+                state.runtime,
+                table_name=cdf_name,
+                filter_policy=filter_policy,
+            )
+        except Exception as exc:
+            if not _is_cdf_start_version_error(exc):
+                raise
+            table = _read_cdf_table_fallback(
+                state,
+                filter_policy=filter_policy,
+            )
     cursor_store.save_cursor(
         CdfCursor(dataset_name=dataset_name, last_version=state.current_version)
     )

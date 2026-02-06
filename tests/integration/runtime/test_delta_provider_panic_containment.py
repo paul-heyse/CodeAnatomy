@@ -17,11 +17,20 @@ import pytest
 
 from tests.test_helpers.optional_deps import require_datafusion, require_delta_extension
 
+_PANIC_LEAK_MARKERS = ("panicked at", "panic in a function that cannot unwind", "rust_panic")
+
 
 def setup_module() -> None:
     """Ensure DataFusion and Delta extension are available."""
     require_datafusion()
     require_delta_extension()
+
+
+def _assert_no_panic_leak(exc: Exception) -> None:
+    """Assert that surfaced provider errors do not include panic leak markers."""
+    message = str(exc).lower()
+    for marker in _PANIC_LEAK_MARKERS:
+        assert marker not in message
 
 
 @pytest.mark.integration
@@ -53,8 +62,8 @@ class TestDeltaProviderPanicContainment:
 
         try:
             delta_provider_from_session(ctx, request=request)
-        except (RuntimeError, OSError, ValueError, DataFusionEngineError):
-            pass
+        except (RuntimeError, OSError, ValueError, DataFusionEngineError) as exc:
+            _assert_no_panic_leak(exc)
         else:
             pytest.fail("Expected structured provider error for invalid Delta URI.")
 
@@ -91,8 +100,8 @@ class TestDeltaProviderPanicContainment:
 
         try:
             delta_provider_from_session(ctx, request=request)
-        except (RuntimeError, OSError, ValueError, DataFusionEngineError):
-            pass
+        except (RuntimeError, OSError, ValueError, DataFusionEngineError) as exc:
+            _assert_no_panic_leak(exc)
         else:
             pytest.fail("Expected structured provider error for corrupt Delta metadata.")
 
@@ -107,5 +116,7 @@ class TestDeltaProviderPanicContainment:
             timestamp=None,
             delta_scan=None,
         )
+        attr_name = "table_uri"
         with pytest.raises(AttributeError):
-            request.table_uri = "/other"  # type: ignore[misc]
+            setattr(request, attr_name, "/other")
+        assert request.table_uri == "/tmp/test"

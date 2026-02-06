@@ -20,18 +20,23 @@ def storage_type(data_type: pa.DataType) -> pa.DataType:
     pa.DataType
         The underlying storage type with ExtensionTypes unwrapped.
     """
+    resolved = data_type
     if isinstance(data_type, pa.ExtensionType):
-        return storage_type(data_type.storage_type)
-    if pa.types.is_struct(data_type):
+        resolved = storage_type(data_type.storage_type)
+    elif pa.types.is_string_view(data_type):
+        resolved = pa.string()
+    elif pa.types.is_binary_view(data_type):
+        resolved = pa.binary()
+    elif pa.types.is_struct(data_type):
         fields = [
             pa.field(field.name, storage_type(field.type), field.nullable, field.metadata)
             for field in data_type
         ]
-        return pa.struct(fields)
-    if pa.types.is_list(data_type):
+        resolved = pa.struct(fields)
+    elif pa.types.is_list(data_type) or pa.types.is_list_view(data_type):
         value_field = data_type.value_field
         value_type = storage_type(value_field.type)
-        return pa.list_(
+        resolved = pa.list_(
             pa.field(
                 value_field.name,
                 value_type,
@@ -39,10 +44,10 @@ def storage_type(data_type: pa.DataType) -> pa.DataType:
                 value_field.metadata,
             )
         )
-    if pa.types.is_large_list(data_type):
+    elif pa.types.is_large_list(data_type) or pa.types.is_large_list_view(data_type):
         value_field = data_type.value_field
         value_type = storage_type(value_field.type)
-        return pa.large_list(
+        resolved = pa.large_list(
             pa.field(
                 value_field.name,
                 value_type,
@@ -50,13 +55,13 @@ def storage_type(data_type: pa.DataType) -> pa.DataType:
                 value_field.metadata,
             )
         )
-    if pa.types.is_map(data_type):
-        return pa.map_(
+    elif pa.types.is_map(data_type):
+        resolved = pa.map_(
             storage_type(data_type.key_type),
             storage_type(data_type.item_type),
             keys_sorted=data_type.keys_sorted,
         )
-    return data_type
+    return resolved
 
 
 def storage_schema(schema: pa.Schema) -> pa.Schema:

@@ -96,7 +96,7 @@ def plan_command(
 ) -> int:
     """Show the computed execution plan without running it.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

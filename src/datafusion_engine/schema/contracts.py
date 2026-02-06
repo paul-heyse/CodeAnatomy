@@ -1,5 +1,4 @@
-"""
-Schema contract validation for DataFusion tables.
+"""Schema contract validation for DataFusion tables.
 
 This module provides declarative schema contracts that can be validated
 against introspection snapshots and used to generate DDL. Contracts enable
@@ -42,7 +41,7 @@ ConstraintType = Literal["pk", "not_null", "check", "unique"]
 def normalize_column_names(values: Iterable[str] | None) -> tuple[str, ...]:
     """Return normalized column names in stable order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Normalized column names without duplicates.
@@ -63,7 +62,7 @@ def normalize_column_names(values: Iterable[str] | None) -> tuple[str, ...]:
 def merge_constraint_expressions(*parts: Iterable[str]) -> tuple[str, ...]:
     """Return normalized constraint expressions from multiple sources.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Normalized constraint expressions without duplicates.
@@ -142,7 +141,7 @@ def _normalize_contract_type(text: str) -> str:
 class ConstraintSpec(msgspec.Struct, frozen=True):
     """Constraint specification for governance policies.
 
-    Attributes
+    Attributes:
     ----------
     constraint_type : Literal["pk", "not_null", "check", "unique"]
         Constraint type identifier.
@@ -162,7 +161,7 @@ class ConstraintSpec(msgspec.Struct, frozen=True):
     def normalized_columns(self) -> tuple[str, ...]:
         """Return normalized column names from the constraint spec.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Normalized column names for the constraint.
@@ -176,7 +175,7 @@ class ConstraintSpec(msgspec.Struct, frozen=True):
     def normalized_expression(self) -> str | None:
         """Return a normalized expression string, if present.
 
-        Returns
+        Returns:
         -------
         str | None
             Normalized expression, or None if unavailable.
@@ -190,7 +189,7 @@ class ConstraintSpec(msgspec.Struct, frozen=True):
 class TableConstraints(msgspec.Struct, frozen=True):
     """Governance constraints for a table.
 
-    Attributes
+    Attributes:
     ----------
     primary_key : tuple[str, ...] | None
         Ordered primary key column names.
@@ -210,7 +209,7 @@ class TableConstraints(msgspec.Struct, frozen=True):
     def required_non_null(self) -> tuple[str, ...]:
         """Return normalized non-null column names.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Columns required to be non-null.
@@ -220,7 +219,7 @@ class TableConstraints(msgspec.Struct, frozen=True):
     def check_expressions(self) -> tuple[str, ...]:
         """Return normalized check expressions.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Check expressions for the constraint bundle.
@@ -252,7 +251,7 @@ def table_constraints_from_spec(
     unique : Iterable[Iterable[str]]
         Unique constraint column groups.
 
-    Returns
+    Returns:
     -------
     TableConstraints
         Constraint bundle derived from the schema spec.
@@ -284,7 +283,7 @@ def constraint_key_fields(constraints: TableConstraints) -> tuple[str, ...]:
     constraints : TableConstraints
         Constraints bundle to inspect.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Key fields resolved from primary or unique constraints.
@@ -304,7 +303,7 @@ def delta_check_constraints(constraints: TableConstraints) -> tuple[str, ...]:
     constraints : TableConstraints
         Constraints bundle to translate.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Delta CHECK constraint expressions.
@@ -321,7 +320,7 @@ def table_constraint_definitions(constraints: TableConstraints) -> tuple[str, ..
     constraints : TableConstraints
         Constraints bundle to translate.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Constraint definitions for information_schema metadata.
@@ -352,7 +351,7 @@ def table_constraints_from_location(
     extra_checks : Iterable[str]
         Additional CHECK constraint expressions to merge.
 
-    Returns
+    Returns:
     -------
     TableConstraints
         Resolved constraints for the dataset.
@@ -407,7 +406,7 @@ def delta_constraints_for_location(
     extra_checks : Iterable[str]
         Additional CHECK constraint expressions to merge.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Delta CHECK constraint expressions.
@@ -427,7 +426,7 @@ class EvolutionPolicy(Enum):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the evolution policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing the evolution policy.
@@ -437,7 +436,7 @@ class EvolutionPolicy(Enum):
     def fingerprint(self) -> str:
         """Return fingerprint for the evolution policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -470,14 +469,13 @@ def _field_spec_from_arrow_field(field: pa.Field) -> FieldSpec:
 
 @dataclass(frozen=True)
 class SchemaContract:
-    """
-    Declared schema contract for a dataset.
+    """Declared schema contract for a dataset.
 
     Use this to define expected schemas and validate against
     actual catalog state. Contracts can be validated at compile time
     and used to generate DDL for table creation.
 
-    Attributes
+    Attributes:
     ----------
     table_name : str
         Name of table this contract applies to
@@ -508,8 +506,7 @@ class SchemaContract:
         schema: pa.Schema,
         **kwargs: Any,
     ) -> SchemaContract:
-        """
-        Create from PyArrow schema.
+        """Create from PyArrow schema.
 
         Parameters
         ----------
@@ -520,7 +517,7 @@ class SchemaContract:
         **kwargs
             Additional contract attributes (partition_cols, ordering, etc.)
 
-        Returns
+        Returns:
         -------
         SchemaContract
             Contract derived from schema
@@ -563,7 +560,7 @@ class SchemaContract:
         enforce_semantic_types
             Whether to enforce semantic type matching.
 
-        Returns
+        Returns:
         -------
         SchemaContract
             Contract with annotated schema for semantic validation.
@@ -592,10 +589,9 @@ class SchemaContract:
         )
 
     def to_arrow_schema(self) -> pa.Schema:
-        """
-        Convert to PyArrow schema.
+        """Convert to PyArrow schema.
 
-        Returns
+        Returns:
         -------
         pa.Schema
             PyArrow schema representation
@@ -607,8 +603,7 @@ class SchemaContract:
         self,
         snapshot: IntrospectionSnapshot,
     ) -> list[ValidationViolation]:
-        """
-        Validate contract against actual catalog state.
+        """Validate contract against actual catalog state.
 
         Checks for missing/extra columns, type mismatches, and applies
         evolution policy rules.
@@ -618,7 +613,7 @@ class SchemaContract:
         snapshot : IntrospectionSnapshot
             Point-in-time catalog snapshot to validate against
 
-        Returns
+        Returns:
         -------
         list[ValidationViolation]
             List of violations (empty if valid)
@@ -697,7 +692,7 @@ class SchemaContract:
         schema : pa.Schema
             Arrow schema to validate.
 
-        Returns
+        Returns:
         -------
         list[ValidationViolation]
             List of violations (empty if valid).
@@ -844,15 +839,14 @@ class SchemaContract:
         return violations
 
     def schema_from_catalog(self, ctx: SessionContext) -> pa.Schema:
-        """
-        Get Arrow schema from DataFusion catalog.
+        """Get Arrow schema from DataFusion catalog.
 
         Parameters
         ----------
         ctx : SessionContext
             DataFusion session context
 
-        Returns
+        Returns:
         -------
         pa.Schema
             Arrow schema resolved from catalog
@@ -861,15 +855,14 @@ class SchemaContract:
 
     @staticmethod
     def _arrow_type_to_sql(arrow_type: pa.DataType) -> str:
-        """
-        Convert Arrow type to SQL type string.
+        """Convert Arrow type to SQL type string.
 
         Parameters
         ----------
         arrow_type : pa.DataType
             Arrow data type
 
-        Returns
+        Returns:
         -------
         str
             SQL type string
@@ -900,8 +893,7 @@ class SchemaContract:
 
     @staticmethod
     def _types_compatible(expected: str, actual: str) -> bool:
-        """
-        Check if types are compatible.
+        """Check if types are compatible.
 
         Parameters
         ----------
@@ -910,7 +902,7 @@ class SchemaContract:
         actual : str
             Actual type string from catalog
 
-        Returns
+        Returns:
         -------
         bool
             True if types are compatible
@@ -922,8 +914,7 @@ class SchemaContract:
 
 @dataclass
 class ContractRegistry(Registry[str, SchemaContract]):
-    """
-    Registry of schema contracts for validation.
+    """Registry of schema contracts for validation.
 
     Maintains a collection of schema contracts and provides
     batch validation against introspection snapshots.
@@ -938,7 +929,7 @@ class ContractRegistry(Registry[str, SchemaContract]):
     def get(self, key: str) -> SchemaContract | None:
         """Return a schema contract when present.
 
-        Returns
+        Returns:
         -------
         SchemaContract | None
             Matching schema contract or None.
@@ -948,7 +939,7 @@ class ContractRegistry(Registry[str, SchemaContract]):
     def __contains__(self, key: str) -> bool:
         """Return True when a contract is registered.
 
-        Returns
+        Returns:
         -------
         bool
             True when the key is registered.
@@ -958,7 +949,7 @@ class ContractRegistry(Registry[str, SchemaContract]):
     def __iter__(self) -> Iterator[str]:
         """Iterate over registered contract names.
 
-        Returns
+        Returns:
         -------
         Iterator[str]
             Iterator over registered keys.
@@ -968,7 +959,7 @@ class ContractRegistry(Registry[str, SchemaContract]):
     def __len__(self) -> int:
         """Return the number of registered contracts.
 
-        Returns
+        Returns:
         -------
         int
             Number of registered contracts.
@@ -978,7 +969,7 @@ class ContractRegistry(Registry[str, SchemaContract]):
     def items(self) -> Iterator[tuple[str, SchemaContract]]:
         """Iterate over contract entries.
 
-        Returns
+        Returns:
         -------
         Iterator[tuple[str, SchemaContract]]
             Iterator of registry items.
@@ -988,7 +979,7 @@ class ContractRegistry(Registry[str, SchemaContract]):
     def snapshot(self) -> Mapping[str, SchemaContract]:
         """Return a snapshot of registered contracts.
 
-        Returns
+        Returns:
         -------
         Mapping[str, SchemaContract]
             Snapshot of current registry contents.
@@ -1005,7 +996,7 @@ class ContractRegistry(Registry[str, SchemaContract]):
     ) -> dict[str, list[ValidationViolation]]:
         """Validate all registered contracts.
 
-        Returns
+        Returns:
         -------
         dict[str, list[ValidationViolation]]
             Mapping from table name to violations.
@@ -1021,7 +1012,7 @@ class ContractRegistry(Registry[str, SchemaContract]):
     ) -> list[ValidationViolation]:
         """Get all violations across all contracts.
 
-        Returns
+        Returns:
         -------
         list[ValidationViolation]
             Flattened list of schema violations.
@@ -1053,7 +1044,7 @@ def schema_contract_from_table_schema_contract(
     enforce_columns
         Whether to enforce column-level schema matching.
 
-    Returns
+    Returns:
     -------
     SchemaContract
         Schema contract constructed from the table schema contract.
@@ -1107,7 +1098,7 @@ def schema_contract_from_dataset_spec(
     enforce_columns
         Override column enforcement; defaults to view/query-aware behavior.
 
-    Returns
+    Returns:
     -------
     SchemaContract
         Schema contract derived from the dataset specification.
@@ -1152,7 +1143,7 @@ def schema_contract_from_contract_spec(
     enforce_columns
         Whether to enforce column-level schema matching.
 
-    Returns
+    Returns:
     -------
     SchemaContract
         Schema contract derived from the contract specification.

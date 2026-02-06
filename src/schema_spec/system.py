@@ -74,15 +74,17 @@ def validate_arrow_table(
 ) -> TableLike:
     """Validate an Arrow table with Arrow-native validation.
 
-    Returns
-    -------
-    TableLike
-        Validated table.
+    Args:
+        table: Description.
+            spec: Description.
+            options: Description.
+            runtime_profile: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when strict validation fails.
+    Returns:
+        TableLike: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     options = options or ArrowValidationOptions()
     report = validate_table(
@@ -106,7 +108,7 @@ class SortKeySpec(StructBaseStrict, frozen=True):
     def to_sort_key(self) -> SortKey:
         """Convert to a SortKey instance.
 
-        Returns
+        Returns:
         -------
         SortKey
             Sort key instance.
@@ -129,7 +131,7 @@ class DedupeSpecSpec(StructBaseStrict, frozen=True):
     def to_dedupe_spec(self) -> DedupeSpec:
         """Convert to a DedupeSpec instance.
 
-        Returns
+        Returns:
         -------
         DedupeSpec
             Dedupe spec instance.
@@ -161,7 +163,7 @@ class TableSchemaContract(StructBaseStrict, frozen=True):
     partition_cols specify partition column metadata used in DataFusion's
     register_listing_table() table_partition_cols parameter.
 
-    Attributes
+    Attributes:
     ----------
     file_schema : pa.Schema
         Arrow schema for data files (without partition columns).
@@ -189,7 +191,7 @@ class TableSchemaContract(StructBaseStrict, frozen=True):
     def partition_schema(self) -> pa.Schema | None:
         """Return the partition schema when partition columns are present.
 
-        Returns
+        Returns:
         -------
         pyarrow.Schema | None
             Partition schema when partition columns are defined.
@@ -209,7 +211,7 @@ class TableSchemaContract(StructBaseStrict, frozen=True):
     def partition_cols_pyarrow(self) -> tuple[tuple[str, pa.DataType], ...]:
         """Return partition columns as pyarrow data types.
 
-        Returns
+        Returns:
         -------
         tuple[tuple[str, pyarrow.DataType], ...]
             Partition columns with PyArrow data types.
@@ -233,7 +235,7 @@ class ParquetColumnOptions(StructBaseStrict, frozen=True):
     def external_table_options(self) -> dict[str, str]:
         """Return DataFusion external table options for column settings.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             External table options keyed by option name.
@@ -255,7 +257,7 @@ class DataFusionScanOptions(StructBaseStrict, frozen=True):
     These options map directly to DataFusion's register_listing_table() parameters
     and CREATE EXTERNAL TABLE options.
 
-    Attributes
+    Attributes:
     ----------
     partition_cols : tuple[tuple[str, pa.DataType], ...]
         Partition column specifications for DataFusion registration.
@@ -340,7 +342,7 @@ class DataFusionScanOptions(StructBaseStrict, frozen=True):
     def partition_cols_pyarrow(self) -> tuple[tuple[str, pa.DataType], ...]:
         """Return partition columns as pyarrow data types.
 
-        Returns
+        Returns:
         -------
         tuple[tuple[str, pyarrow.DataType], ...]
             Partition columns with PyArrow data types.
@@ -365,7 +367,7 @@ class ScanPolicyDefaults(StructBaseStrict, frozen=True):
     def has_any(self) -> bool:
         """Return True when any default is configured.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when any default is set.
@@ -383,7 +385,7 @@ class ScanPolicyDefaults(StructBaseStrict, frozen=True):
     def apply(self, options: DataFusionScanOptions) -> DataFusionScanOptions:
         """Apply defaults to DataFusion scan options.
 
-        Returns
+        Returns:
         -------
         DataFusionScanOptions
             Scan options with policy defaults applied.
@@ -415,7 +417,7 @@ class ScanPolicyDefaults(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return a fingerprint payload for policy defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Serializable fingerprint payload.
@@ -439,7 +441,7 @@ class DeltaScanPolicyDefaults(StructBaseStrict, frozen=True):
     def has_any(self) -> bool:
         """Return True when any default is configured.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when any default is set.
@@ -457,7 +459,7 @@ class DeltaScanPolicyDefaults(StructBaseStrict, frozen=True):
     def apply(self, options: DeltaScanOptions) -> DeltaScanOptions:
         """Apply defaults to Delta scan options.
 
-        Returns
+        Returns:
         -------
         DeltaScanOptions
             Delta scan options with policy defaults applied.
@@ -489,7 +491,7 @@ class DeltaScanPolicyDefaults(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return a fingerprint payload for policy defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Serializable fingerprint payload.
@@ -512,7 +514,7 @@ class ScanPolicyConfig(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return a fingerprint payload for scan policies.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Serializable fingerprint payload.
@@ -526,7 +528,7 @@ class ScanPolicyConfig(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return the fingerprint hash for the scan policy config.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint hash.
@@ -542,7 +544,7 @@ def apply_scan_policy(
 ) -> DataFusionScanOptions | None:
     """Apply policy defaults to DataFusion scan options.
 
-    Returns
+    Returns:
     -------
     DataFusionScanOptions | None
         Scan options with defaults applied, or ``None`` when unchanged.
@@ -563,7 +565,7 @@ def apply_delta_scan_policy(
 ) -> DeltaScanOptions | None:
     """Apply policy defaults to Delta scan options.
 
-    Returns
+    Returns:
     -------
     DeltaScanOptions | None
         Delta scan options with defaults applied, or ``None`` when unchanged.
@@ -584,12 +586,12 @@ class DeltaScanOptions(StructBaseStrict, frozen=True):
     All IO contracts for Delta tables are specified through DataFusion
     registration and catalog metadata.
 
-    Notes
+    Notes:
     -----
     Delta CDF configuration is handled via DatasetLocation.delta_cdf_options
     to keep change-data-feed registration separate from standard scans.
 
-    Attributes
+    Attributes:
     ----------
     file_column_name : str | None
         Column name for source file metadata in Delta scans.
@@ -619,7 +621,7 @@ class DeltaCdfPolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the Delta CDF policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing Delta CDF policy settings.
@@ -632,7 +634,7 @@ class DeltaCdfPolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return fingerprint for the Delta CDF policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -659,7 +661,7 @@ class DeltaMaintenancePolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the Delta maintenance policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing Delta maintenance policy settings.
@@ -682,7 +684,7 @@ class DeltaMaintenancePolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return fingerprint for the Delta maintenance policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -709,10 +711,12 @@ def _ordering_metadata_spec(
 def _validate_view_specs(view_specs: Sequence[ViewSpec], *, label: str) -> None:
     """Validate view spec invariants.
 
-    Raises
-    ------
-    ValueError
-        Raised when view specs are duplicated or unnamed.
+    Args:
+        view_specs: Description.
+        label: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     names = [view.name for view in view_specs]
     if not names:
@@ -757,7 +761,7 @@ class ContractSpec(StructBaseStrict, frozen=True):
     def to_contract(self) -> Contract:
         """Convert to a runtime Contract.
 
-        Returns
+        Returns:
         -------
         Contract
             Runtime contract instance.
@@ -853,15 +857,14 @@ class DatasetOpenSpec(StructBaseStrict, frozen=True):
     def open(self, path: PathLike) -> ds.Dataset:
         """Open a dataset using the stored options.
 
-        Raises
-        ------
-        ValueError
-            Raised when Delta discovery is requested without DataFusion.
+        Args:
+            path: Description.
 
-        Returns
-        -------
-        ds.Dataset
-            Opened dataset instance.
+        Returns:
+            ds.Dataset: Result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.dataset_format == "delta":
             msg = "Delta dataset discovery requires DataFusion catalog introspection."
@@ -971,7 +974,7 @@ def _merge_names(*parts: Iterable[str]) -> tuple[str, ...]:
 def _merge_constraints(*parts: Iterable[str]) -> tuple[str, ...]:
     """Return unique constraint expressions in stable order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Normalized constraint expressions.
@@ -991,7 +994,7 @@ def _merge_constraints(*parts: Iterable[str]) -> tuple[str, ...]:
 def _delta_constraints_from_table_spec(table_spec: TableSchemaSpec) -> tuple[str, ...]:
     """Return default Delta constraints derived from schema constraints.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Constraint expressions derived from required and key fields.
@@ -1025,7 +1028,7 @@ def make_table_spec(
 ) -> TableSchemaSpec:
     """Create a TableSchemaSpec from field bundles and explicit fields.
 
-    Returns
+    Returns:
     -------
     TableSchemaSpec
         Table schema specification.
@@ -1051,7 +1054,7 @@ def table_spec_from_schema(
 ) -> TableSchemaSpec:
     """Create a TableSchemaSpec from an Arrow schema.
 
-    Returns
+    Returns:
     -------
     TableSchemaSpec
         Table schema specification derived from the Arrow schema.
@@ -1066,7 +1069,7 @@ def make_contract_spec(
 ) -> ContractSpec:
     """Create a ContractSpec from a TableSchemaSpec.
 
-    Returns
+    Returns:
     -------
     ContractSpec
         Contract specification.
@@ -1101,7 +1104,7 @@ def make_dataset_spec(
 ) -> DatasetSpec:
     """Create a DatasetSpec from schema, contract, and query settings.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset specification bundling schema, contract, and query behavior.
@@ -1143,7 +1146,7 @@ def make_dataset_spec(
 def _sort_key_specs(keys: Iterable[SortKey]) -> tuple[SortKeySpec, ...]:
     """Convert SortKey objects into SortKeySpec values.
 
-    Returns
+    Returns:
     -------
     tuple[SortKeySpec, ...]
         SortKeySpec values for the keys.
@@ -1154,7 +1157,7 @@ def _sort_key_specs(keys: Iterable[SortKey]) -> tuple[SortKeySpec, ...]:
 def _dedupe_spec_spec(dedupe: DedupeSpec | None) -> DedupeSpecSpec | None:
     """Convert a DedupeSpec into a DedupeSpecSpec.
 
-    Returns
+    Returns:
     -------
     DedupeSpecSpec | None
         Dedupe spec model or ``None``.
@@ -1171,7 +1174,7 @@ def _dedupe_spec_spec(dedupe: DedupeSpec | None) -> DedupeSpecSpec | None:
 def _table_spec_from_contract(contract: Contract) -> TableSchemaSpec:
     """Build a TableSchemaSpec from a runtime contract.
 
-    Returns
+    Returns:
     -------
     TableSchemaSpec
         Table schema specification derived from the contract.
@@ -1195,7 +1198,7 @@ def _table_spec_from_contract(contract: Contract) -> TableSchemaSpec:
 def dataset_spec_from_contract(contract: Contract) -> DatasetSpec:
     """Create a DatasetSpec aligned to a runtime Contract.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset spec derived from the contract.
@@ -1232,7 +1235,7 @@ def ddl_fingerprint_from_definition(ddl: str) -> str:
     ddl
         CREATE TABLE statement text.
 
-    Returns
+    Returns:
     -------
     str
         Stable fingerprint of the DDL string.
@@ -1248,7 +1251,7 @@ def dataset_table_ddl_fingerprint(name: str) -> str | None:
     name
         Dataset name registered in DataFusion.
 
-    Returns
+    Returns:
     -------
     str | None
         Stable DDL fingerprint when available.
@@ -1267,7 +1270,7 @@ def dataset_spec_from_schema(
 ) -> DatasetSpec:
     """Create a DatasetSpec from an Arrow schema.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset spec derived from the schema.
@@ -1294,7 +1297,7 @@ def dataset_table_definition(name: str) -> str | None:
     name
         Dataset name registered in DataFusion.
 
-    Returns
+    Returns:
     -------
     str | None
         CREATE TABLE statement when available from DataFusion catalog.
@@ -1317,7 +1320,7 @@ def dataset_table_constraints(name: str) -> tuple[str, ...]:
     name
         Dataset name registered in DataFusion.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Constraint expressions or identifiers from DataFusion catalog.
@@ -1340,7 +1343,7 @@ def dataset_table_column_defaults(name: str) -> dict[str, object]:
     name
         Dataset name registered in DataFusion.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Mapping of column names to default expressions from DataFusion catalog.
@@ -1363,7 +1366,7 @@ def dataset_table_logical_plan(name: str) -> str | None:
     name
         Dataset name registered in DataFusion.
 
-    Returns
+    Returns:
     -------
     str | None
         Logical plan text from DataFusion when available.
@@ -1386,7 +1389,7 @@ def schema_from_datafusion_catalog(name: str) -> pa.Schema:
     name
         Dataset name registered in DataFusion.
 
-    Returns
+    Returns:
     -------
     pyarrow.Schema
         Arrow schema resolved from DataFusion catalog.
@@ -1406,7 +1409,7 @@ def dataset_spec_from_dataset(
 ) -> DatasetSpec:
     """Create a DatasetSpec from a dataset schema.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset spec derived from the dataset schema.
@@ -1423,15 +1426,17 @@ def dataset_spec_from_path(
 ) -> DatasetSpec:
     """Create a DatasetSpec from a dataset path.
 
-    Returns
-    -------
-    DatasetSpec
-        Dataset spec derived from the dataset path.
+    Args:
+        name: Description.
+            path: Description.
+            options: Description.
+            version: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the Delta schema cannot be resolved from the dataset path.
+    Returns:
+        DatasetSpec: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     options = options or DatasetOpenSpec()
     if options.dataset_format == "delta":
@@ -1467,7 +1472,7 @@ SCHEMA_EVOLUTION_PRESETS: Mapping[str, SchemaEvolutionSpec] = {
 def resolve_schema_evolution_spec(name: str) -> SchemaEvolutionSpec:
     """Return a canonical schema evolution spec for a dataset name.
 
-    Returns
+    Returns:
     -------
     SchemaEvolutionSpec
         Evolution rules for the dataset name.
@@ -1483,10 +1488,8 @@ class ContractCatalogSpec(StructBaseStrict, frozen=True):
     def __post_init__(self) -> None:
         """Validate that contract names match mapping keys.
 
-        Raises
-        ------
-        ValueError
-            Raised when contract keys do not match their spec names.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         mismatched = [name for name, spec in self.contracts.items() if name != spec.name]
         if mismatched:
@@ -1496,7 +1499,7 @@ class ContractCatalogSpec(StructBaseStrict, frozen=True):
     def to_contracts(self) -> dict[str, ContractSpec]:
         """Return a name->spec mapping.
 
-        Returns
+        Returns:
         -------
         dict[str, ContractSpec]
             Mapping of contract names to specs.

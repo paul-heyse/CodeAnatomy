@@ -15,7 +15,7 @@ def resolve_path(repo_root: Path, value: Path | str | None) -> Path | None:
     value
         Input path or string.
 
-    Returns
+    Returns:
     -------
     Path | None
         Resolved absolute path or None when input is None.

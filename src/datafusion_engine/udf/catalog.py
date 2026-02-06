@@ -93,10 +93,8 @@ class DataFusionUdfSpec:
     def __post_init__(self) -> None:
         """Validate UDF tier values.
 
-        Raises
-        ------
-        ValueError
-            Raised when the tier is not supported.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.udf_tier != "builtin":
             msg = f"Only Rust builtin UDFs are supported. Received tier {self.udf_tier!r}."
@@ -105,7 +103,7 @@ class DataFusionUdfSpec:
     def to_snapshot(self) -> DataFusionUdfSpecSnapshot:
         """Return a serializable snapshot of this UDF spec.
 
-        Returns
+        Returns:
         -------
         DataFusionUdfSpecSnapshot
             Snapshot payload suitable for registry persistence.
@@ -138,7 +136,7 @@ class DataFusionUdfSpec:
         snapshot
             Serialized UDF spec snapshot.
 
-        Returns
+        Returns:
         -------
         DataFusionUdfSpec
             Restored UDF spec with pyarrow data types.
@@ -337,7 +335,7 @@ class FunctionCatalog:
         parameters_available:
             Whether parameters table is available in the DataFusion version.
 
-        Returns
+        Returns:
         -------
         FunctionCatalog
             Immutable catalog of runtime functions.
@@ -385,7 +383,7 @@ class FunctionCatalog:
         table:
             Arrow table from SHOW FUNCTIONS query.
 
-        Returns
+        Returns:
         -------
         FunctionCatalog
             Catalog built from SHOW FUNCTIONS output.
@@ -426,7 +424,7 @@ class FunctionCatalog:
     def merge(self, other: FunctionCatalog) -> FunctionCatalog:
         """Return a merged catalog with unioned function metadata.
 
-        Returns
+        Returns:
         -------
         FunctionCatalog
             Merged catalog with unioned function sets and signatures.
@@ -453,7 +451,7 @@ class FunctionCatalog:
         func_id:
             Function identifier to check.
 
-        Returns
+        Returns:
         -------
         bool
             True if function exists in the runtime catalog.
@@ -471,7 +469,7 @@ def _builtin_spec_from_signature(func_id: str, sig: FunctionSignature) -> Builti
     sig:
         Function signature from information_schema.
 
-    Returns
+    Returns:
     -------
     BuiltinFunctionSpec
         Builtin function specification.
@@ -503,7 +501,7 @@ def _default_builtin_spec(func_id: str) -> BuiltinFunctionSpec:
     func_id:
         Function identifier.
 
-    Returns
+    Returns:
     -------
     BuiltinFunctionSpec
         Default builtin function specification.
@@ -559,7 +557,7 @@ class UdfCatalog:
     def custom_specs(self) -> Mapping[str, DataFusionUdfSpec]:
         """Return registered custom UDF specifications.
 
-        Returns
+        Returns:
         -------
         Mapping[str, DataFusionUdfSpec]
             Mapping of UDF identifiers to their specifications.
@@ -573,7 +571,7 @@ class UdfCatalog:
     def adapter(self) -> UdfCatalogAdapter:
         """Return a Registry-compatible adapter for custom UDF specs.
 
-        Returns
+        Returns:
         -------
         UdfCatalogAdapter
             Adapter for registry interfaces.
@@ -621,7 +619,7 @@ class UdfCatalog:
         func_id:
             Function identifier to check.
 
-        Returns
+        Returns:
         -------
         bool
             True if function exists in runtime catalog.
@@ -644,7 +642,7 @@ class UdfCatalog:
         prefer_builtin:
             If True, prefer builtin functions over custom UDFs.
 
-        Returns
+        Returns:
         -------
         ResolvedFunction | None
             Resolved function if found, None otherwise.
@@ -708,7 +706,7 @@ class UdfCatalog:
         allowed_tiers:
             Tuple of allowed tiers. If None, uses policy tier preference.
 
-        Returns
+        Returns:
         -------
         ResolvedFunction | None
             Resolved function if found within allowed tiers, None otherwise.
@@ -722,20 +720,14 @@ class UdfCatalog:
     def list_functions_by_tier(self, tier: UdfTier) -> tuple[str, ...]:
         """List all function IDs for a specific tier.
 
-        Parameters
-        ----------
-        tier:
-            UDF tier to filter by.
+        Args:
+            tier: Description.
 
-        Returns
-        -------
-        tuple[str, ...]
-            Tuple of function IDs in the specified tier.
+        Returns:
+            tuple[str, ...]: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when an unsupported tier is requested.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if tier != "builtin":
             msg = f"Unsupported UDF tier: {tier!r}."
@@ -746,7 +738,7 @@ class UdfCatalog:
     def get_tier_stats(self) -> Mapping[str, int]:
         """Get statistics on function counts by tier.
 
-        Returns
+        Returns:
         -------
         Mapping[str, int]
             Mapping of tier names to function counts.
@@ -765,10 +757,12 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
     def register(self, key: str, value: DataFusionUdfSpec) -> None:
         """Register a custom UDF spec by key.
 
-        Raises
-        ------
-        ValueError
-            Raised when the key does not match the spec function ID.
+        Args:
+            key: Description.
+            value: Description.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if key != value.func_id:
             msg = f"UdfCatalogAdapter: key {key!r} must match spec.func_id {value.func_id!r}."
@@ -778,7 +772,7 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
     def get(self, key: str) -> DataFusionUdfSpec | None:
         """Return a custom UDF spec when present.
 
-        Returns
+        Returns:
         -------
         DataFusionUdfSpec | None
             Custom UDF spec when available.
@@ -788,7 +782,7 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
     def __contains__(self, key: str) -> bool:
         """Return True when a custom UDF spec is registered.
 
-        Returns
+        Returns:
         -------
         bool
             True when a custom UDF spec is registered.
@@ -798,7 +792,7 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
     def __iter__(self) -> Iterator[str]:
         """Iterate over custom UDF identifiers.
 
-        Returns
+        Returns:
         -------
         Iterator[str]
             Iterator over custom UDF identifiers.
@@ -808,7 +802,7 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
     def __len__(self) -> int:
         """Return the number of registered custom UDF specs.
 
-        Returns
+        Returns:
         -------
         int
             Number of registered custom UDF specs.
@@ -818,7 +812,7 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
     def snapshot(self) -> Mapping[str, object]:
         """Return a mapping snapshot of custom UDF specs plus policy hash.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Mapping snapshot suitable for registry persistence.
@@ -832,7 +826,7 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
     def snapshot_struct(self) -> UdfCatalogSnapshot:
         """Return a structured snapshot for schema-aware serialization.
 
-        Returns
+        Returns:
         -------
         UdfCatalogSnapshot
             Structured snapshot with typed spec payloads.
@@ -846,12 +840,12 @@ class UdfCatalogAdapter(Registry[str, DataFusionUdfSpec], SnapshotRegistry[str, 
     def restore(self, snapshot: Mapping[str, object] | UdfCatalogSnapshot) -> None:
         """Restore custom UDF specs from a snapshot.
 
-        Raises
-        ------
-        TypeError
-            Raised when the snapshot payload has invalid types.
-        ValueError
-            Raised when the snapshot payload is mismatched.
+        Args:
+            snapshot: Description.
+
+        Raises:
+            TypeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
         """
         if isinstance(snapshot, UdfCatalogSnapshot):
             specs = snapshot.specs
@@ -896,7 +890,7 @@ def create_default_catalog(
     udf_specs:
         Optional mapping of function IDs to UDF specifications.
 
-    Returns
+    Returns:
     -------
     UdfCatalog
         Catalog with default configuration.
@@ -914,7 +908,7 @@ def create_strict_catalog(
     udf_specs:
         Optional mapping of function IDs to UDF specifications.
 
-    Returns
+    Returns:
     -------
     UdfCatalog
         Catalog with strict builtin-only configuration.
@@ -1001,7 +995,7 @@ def _first_return_type(value: tuple[str, ...] | None) -> str | None:
 def udf_planner_snapshot(snapshot: Mapping[str, object]) -> Mapping[str, object]:
     """Return planner-focused metadata for registered UDFs.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Planner-aware metadata payload for registered UDFs.
@@ -1046,7 +1040,7 @@ def udf_planner_snapshot(snapshot: Mapping[str, object]) -> Mapping[str, object]
 def rewrite_tag_index(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
     """Return a tag-to-function index for registry rewrite tags.
 
-    Returns
+    Returns:
     -------
     dict[str, tuple[str, ...]]
         Mapping of rewrite tag to registered function names.
@@ -1065,7 +1059,7 @@ def datafusion_udf_specs(
 ) -> tuple[DataFusionUdfSpec, ...]:
     """Return the canonical DataFusion UDF specs.
 
-    Returns
+    Returns:
     -------
     tuple[DataFusionUdfSpec, ...]
         Canonical DataFusion UDF specifications.
@@ -1168,7 +1162,7 @@ def _rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
 def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
     """Get a default UDF catalog with runtime builtin introspection.
 
-    Returns
+    Returns:
     -------
     UdfCatalog
         Default catalog with standard tier policy.
@@ -1185,7 +1179,7 @@ def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
 def get_strict_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
     """Get a strict UDF catalog that prefers builtins only.
 
-    Returns
+    Returns:
     -------
     UdfCatalog
         Catalog with strict builtin-only policy.

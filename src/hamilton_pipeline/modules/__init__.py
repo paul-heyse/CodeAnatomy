@@ -38,7 +38,7 @@ def _load_module(name: str) -> ModuleType:
 def load_all_modules() -> list[ModuleType]:
     """Return the canonical module list for the pipeline.
 
-    Returns
+    Returns:
     -------
     list[ModuleType]
         Loaded Hamilton pipeline modules.

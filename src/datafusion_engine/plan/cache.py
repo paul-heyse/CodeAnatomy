@@ -38,7 +38,7 @@ class PlanProtoCacheEntry(StructBaseHotPath, frozen=True):
     def cache_key(self) -> str:
         """Return the cache key for this entry.
 
-        Returns
+        Returns:
         -------
         str
             Cache key for the plan entry.
@@ -71,7 +71,7 @@ class PlanProtoCache:
         plan_identity_hash
             Stable identity hash for the requested plan.
 
-        Returns
+        Returns:
         -------
         PlanProtoCacheEntry | None
             Cached plan entry when available.
@@ -100,7 +100,7 @@ class PlanProtoCache:
         plan_identity_hash
             Stable identity hash for the requested plan.
 
-        Returns
+        Returns:
         -------
         bool
             True when the plan is present in the cache.
@@ -115,7 +115,7 @@ class PlanProtoCache:
     def snapshot(self) -> list[PlanProtoCacheEntry]:
         """Return a snapshot of cached plan entries.
 
-        Returns
+        Returns:
         -------
         list[PlanProtoCacheEntry]
             Cached entries captured from the backing store.
@@ -161,7 +161,7 @@ class PlanCacheKey(StructBaseHotPath, frozen=True):
     def as_key(self) -> str:
         """Return a stable cache key string.
 
-        Returns
+        Returns:
         -------
         str
             Stable cache key.
@@ -171,7 +171,7 @@ class PlanCacheKey(StructBaseHotPath, frozen=True):
     def composite_fingerprint(self) -> CompositeFingerprint:
         """Return a composite fingerprint for the cache key.
 
-        Returns
+        Returns:
         -------
         CompositeFingerprint
             Composite fingerprint for cache-key computation.
@@ -210,7 +210,7 @@ class PlanCacheEntry(StructBaseHotPath, frozen=True):
     def key(self) -> PlanCacheKey:
         """Return the cache key for this entry.
 
-        Returns
+        Returns:
         -------
         PlanCacheKey
             Cache key derived from the entry hashes.
@@ -249,7 +249,7 @@ class PlanCache:
     def get(self, key: PlanCacheKey) -> bytes | None:
         """Return cached plan bytes for the key when present.
 
-        Returns
+        Returns:
         -------
         bytes | None
             Cached plan bytes, or None when missing.
@@ -277,7 +277,7 @@ class PlanCache:
     def put_many(self, entries: list[PlanCacheEntry]) -> int:
         """Store multiple Substrait plan entries in the cache.
 
-        Returns
+        Returns:
         -------
         int
             Count of entries written.
@@ -293,7 +293,7 @@ class PlanCache:
     def contains(self, key: PlanCacheKey) -> bool:
         """Return whether the cache contains an entry for the key.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when the cache has the key.
@@ -309,7 +309,7 @@ class PlanCache:
     def snapshot(self) -> list[PlanCacheEntry]:
         """Return a list of cached plan entries.
 
-        Returns
+        Returns:
         -------
         list[PlanCacheEntry]
             Snapshot of cached entries.
@@ -327,7 +327,7 @@ class PlanCache:
     def evict_profile(self, profile_hash: str) -> int:
         """Evict cached plans for a profile hash.
 
-        Returns
+        Returns:
         -------
         int
             Count of evicted cache entries.

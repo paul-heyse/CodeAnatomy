@@ -77,7 +77,7 @@ class InputContract:
     def tag_policy(self) -> TagPolicy:
         """Return the TagPolicy for this input contract.
 
-        Returns
+        Returns:
         -------
         TagPolicy
             Tag policy describing this input contract.
@@ -142,7 +142,7 @@ _DELTA_OUTPUT_SPECS_BY_DATASET: dict[str, OutputMaterializationSpec] = {
 def delta_output_specs() -> tuple[OutputMaterializationSpec, ...]:
     """Return the canonical delta output materialization specs.
 
-    Returns
+    Returns:
     -------
     tuple[OutputMaterializationSpec, ...]
         Canonical materialization specs for delta outputs.
@@ -158,7 +158,7 @@ def delta_output_spec_for(dataset_name: str) -> OutputMaterializationSpec | None
     dataset_name
         Dataset name to resolve.
 
-    Returns
+    Returns:
     -------
     OutputMaterializationSpec | None
         Materialization spec for the dataset, if configured.
@@ -173,17 +173,12 @@ def validate_delta_output_payload(
 ) -> None:
     """Validate an output payload against the delta output contract.
 
-    Parameters
-    ----------
-    payload
-        Output payload to validate.
-    dataset_name
-        Dataset name for spec lookup.
+    Args:
+        payload: Description.
+        dataset_name: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the payload is missing required keys or values.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     spec = delta_output_spec_for(dataset_name)
     if spec is None:
@@ -277,7 +272,7 @@ def repo_files(
 ) -> tuple[TableLike, dict[str, object]]:
     """Load repo scan outputs as a TableLike plus metadata.
 
-    Returns
+    Returns:
     -------
     tuple[TableLike, dict[str, object]]
         Repo scan table and metadata payload.
@@ -319,7 +314,7 @@ def scip_tables(
 ) -> tuple[Mapping[str, TableLike], dict[str, object]]:
     """Load SCIP tables from an index.scip file.
 
-    Returns
+    Returns:
     -------
     tuple[Mapping[str, TableLike], dict[str, object]]
         Mapping of table names to tables plus metadata.
@@ -443,7 +438,7 @@ def _normalize_datasaver_return[F: Callable[..., object]](fn: F) -> F:
 def datasaver_dict() -> Callable[[F], F]:
     """Return a datasaver decorator that normalizes return type annotations.
 
-    Returns
+    Returns:
     -------
     Callable[[F], F]
         Decorator that annotates datasaver returns as dict payloads.
@@ -967,7 +962,7 @@ def write_cpg_delta_output(
 ) -> DataSaverDict:
     """Return metadata for Delta-backed CPG outputs.
 
-    Returns
+    Returns:
     -------
     JsonDict
         Output metadata payload.
@@ -1003,7 +998,7 @@ def write_normalize_outputs_delta(
 ) -> DataSaverDict:
     """Persist normalize output metadata as a Delta-backed artifact.
 
-    Returns
+    Returns:
     -------
     JsonDict
         Normalize output artifact metadata payload.
@@ -1088,7 +1083,7 @@ def write_extract_error_artifacts_delta(
 ) -> DataSaverDict:
     """Persist extract error artifacts as a Delta-backed artifact.
 
-    Returns
+    Returns:
     -------
     JsonDict
         Extract error artifact metadata payload.
@@ -1397,7 +1392,7 @@ def write_run_manifest_delta(
     adjacency_outputs
         Adjacency output artifacts bundle.
 
-    Returns
+    Returns:
     -------
     JsonDict
         Run manifest metadata payload.
@@ -1449,15 +1444,12 @@ def write_run_manifest_delta(
 def write_run_bundle_dir(output_config: OutputConfig, run_id: str) -> DataSaverDict:
     """Return stub metadata for run bundle directory.
 
-    Returns
-    -------
-    JsonDict
-        Stub metadata payload.
+    Args:
+        output_config: Description.
+        run_id: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when no output directory is configured.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     base = output_config.output_dir or output_config.work_dir
     if not base:

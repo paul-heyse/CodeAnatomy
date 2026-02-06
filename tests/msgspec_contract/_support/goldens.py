@@ -15,10 +15,13 @@ def _ensure_parent(path: Path) -> None:
 def assert_text_snapshot(*, path: Path, text: str, update: bool) -> None:
     """Compare text against a golden file, optionally updating.
 
-    Raises
-    ------
-    AssertionError
-        Raised when the golden snapshot is missing or mismatched.
+    Args:
+        path: Description.
+        text: Description.
+        update: Description.
+
+    Raises:
+        AssertionError: If the operation cannot be completed.
     """
     if not text.endswith("\n"):
         text += "\n"
@@ -53,7 +56,7 @@ def assert_bytes_snapshot_b64(*, path: Path, data: bytes, update: bool) -> None:
 def read_bytes_snapshot_b64(path: Path) -> bytes:
     """Read base64 snapshot and return raw bytes.
 
-    Returns
+    Returns:
     -------
     bytes
         Raw decoded bytes from the snapshot file.

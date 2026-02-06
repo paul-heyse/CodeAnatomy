@@ -32,7 +32,7 @@ def build_plan_bundle_for_df(
 ) -> DataFusionPlanBundle:
     """Build a plan bundle from a DataFrame using the incremental runtime.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Plan bundle compiled from the provided DataFrame.
@@ -52,7 +52,7 @@ def execute_plan_bundle(
 ) -> ExecutionResult:
     """Execute a plan bundle with scan unit overrides applied.
 
-    Returns
+    Returns:
     -------
     ExecutionResult
         Execution result for the plan bundle.
@@ -82,7 +82,7 @@ def execute_df_to_table(
 ) -> pa.Table:
     """Execute a DataFrame via plan bundle and return a materialized table.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Materialized table derived from plan-bundle execution.

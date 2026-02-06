@@ -23,7 +23,7 @@ class ExtractExecutionOptions:
     def as_mapping(self) -> Mapping[str, object]:
         """Return a merged mapping of execution flags.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Combined metadata defaults and feature flags.
@@ -62,7 +62,7 @@ def _metadata_defaults(template_name: str) -> dict[str, object]:
 def plan_requires_row(plan: EvidencePlan, row: ExtractMetadata) -> bool:
     """Return whether the evidence plan requires the dataset row.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the plan requires the dataset.
@@ -73,7 +73,7 @@ def plan_requires_row(plan: EvidencePlan, row: ExtractMetadata) -> bool:
 def plan_feature_flags(template_name: str, plan: EvidencePlan | None) -> dict[str, bool]:
     """Return feature-flag overrides derived from an evidence plan.
 
-    Returns
+    Returns:
     -------
     dict[str, bool]
         Feature flag values when a plan is provided.
@@ -136,7 +136,7 @@ def extractor_option_values(
 ) -> dict[str, object]:
     """Return merged extractor option values for a template.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Extractor option values derived from registry defaults and plan flags.
@@ -164,7 +164,7 @@ def rule_execution_options(
 ) -> ExtractExecutionOptions:
     """Return execution options for template gating.
 
-    Returns
+    Returns:
     -------
     ExtractExecutionOptions
         Execution options for stage gating.

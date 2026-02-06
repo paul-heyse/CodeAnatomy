@@ -31,7 +31,7 @@ LOCK_EXPIRE_SECONDS: float = 60.0
 def stable_cache_key(prefix: str, payload: Mapping[str, object]) -> str:
     """Return a stable string key for DiskCache usage.
 
-    Returns
+    Returns:
     -------
     str
         Stable cache key string.
@@ -43,7 +43,7 @@ def stable_cache_key(prefix: str, payload: Mapping[str, object]) -> str:
 def stable_cache_label(prefix: str, payload: Mapping[str, object]) -> str:
     """Return a stable label usable for cache directories or queue names.
 
-    Returns
+    Returns:
     -------
     str
         Stable label derived from the payload fingerprint.
@@ -57,7 +57,7 @@ def diskcache_profile_from_ctx(
 ) -> DiskCacheProfile | None:
     """Return the DiskCache profile for a runtime profile.
 
-    Returns
+    Returns:
     -------
     DiskCacheProfile | None
         DiskCache profile when configured.
@@ -72,7 +72,7 @@ def cache_for_extract(
 ) -> Cache | FanoutCache | None:
     """Return the DiskCache instance for extract workloads.
 
-    Returns
+    Returns:
     -------
     Cache | FanoutCache | None
         Cache instance for extract workloads.
@@ -88,7 +88,7 @@ def cache_for_kind_optional(
 ) -> Cache | FanoutCache | None:
     """Return a cache for the requested kind when configured.
 
-    Returns
+    Returns:
     -------
     Cache | FanoutCache | None
         Cache instance for the requested kind.
@@ -106,7 +106,7 @@ def cache_get(
 ) -> object | None:
     """Return a cache entry with retry enabled.
 
-    Returns
+    Returns:
     -------
     object | None
         Cached value or default when missing.
@@ -125,7 +125,7 @@ def cache_set(
 ) -> bool:
     """Set a cache entry with retry enabled.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the entry was stored.
@@ -157,7 +157,7 @@ class CacheSetOptions:
 def cache_ttl_seconds(profile: DiskCacheProfile | None, kind: DiskCacheKind) -> float | None:
     """Return the TTL in seconds for a cache kind when configured.
 
-    Returns
+    Returns:
     -------
     float | None
         TTL in seconds when configured.
@@ -170,7 +170,7 @@ def cache_ttl_seconds(profile: DiskCacheProfile | None, kind: DiskCacheKind) -> 
 def evict_extract_cache(profile: DiskCacheProfile | None, *, tag: str) -> int:
     """Evict extract cache entries for a tag.
 
-    Returns
+    Returns:
     -------
     int
         Count of evicted entries.
@@ -183,7 +183,7 @@ def evict_extract_cache(profile: DiskCacheProfile | None, *, tag: str) -> int:
 def evict_repo_scan_cache(profile: DiskCacheProfile | None, *, tag: str) -> int:
     """Evict repo scan cache entries for a tag.
 
-    Returns
+    Returns:
     -------
     int
         Count of evicted entries.
@@ -202,7 +202,7 @@ def cache_lock(
 ) -> Iterator[None]:
     """Return a cross-process lock for cache stampede protection.
 
-    Yields
+    Yields:
     ------
     None
         Context manager scope for the cache lock.

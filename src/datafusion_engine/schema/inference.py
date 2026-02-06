@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 class ColumnLineage:
     """Column-level lineage for a single output column.
 
-    Attributes
+    Attributes:
     ----------
     column_name : str
         Name of the output column.
@@ -59,7 +59,7 @@ class ColumnLineage:
 class SchemaInferenceResult:
     """Complete schema inference result from a DataFusion plan.
 
-    Attributes
+    Attributes:
     ----------
     output_schema : pa.Schema
         Arrow schema of the plan output.
@@ -80,33 +80,14 @@ class SchemaInferenceResult:
 def infer_schema_from_dataframe(df: DataFrame) -> pa.Schema:
     """Extract Arrow schema from a DataFusion DataFrame.
 
-    This function resolves the DataFrame's output schema using the schema()
-    method and converts it to PyArrow format when necessary. DataFusion may
-    return either a native DFSchema or a PyArrow Schema depending on version.
+    Args:
+        df: Description.
 
-    Parameters
-    ----------
-    df : DataFrame
-        DataFusion DataFrame to extract schema from.
+    Returns:
+        pa.Schema: Result.
 
-    Returns
-    -------
-    pa.Schema
-        Arrow schema representing the DataFrame output.
-
-    Raises
-    ------
-    TypeError
-        Raised when the schema cannot be resolved to an Arrow schema.
-
-    Examples
-    --------
-    >>> from datafusion import SessionContext
-    >>> ctx = SessionContext()
-    >>> df = ctx.sql("SELECT 1 as a, 'hello' as b")
-    >>> schema = infer_schema_from_dataframe(df)
-    >>> schema.names
-    ['a', 'b']
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     schema = df.schema()
     if isinstance(schema, pa.Schema):
@@ -126,30 +107,14 @@ def infer_schema_from_dataframe(df: DataFrame) -> pa.Schema:
 def infer_schema_from_logical_plan(plan: object) -> pa.Schema:
     """Extract Arrow schema from a DataFusion LogicalPlan.
 
-    This function walks the plan tree to find schema information. DataFusion
-    LogicalPlans carry schema metadata that can be extracted for validation
-    and contract generation.
+    Args:
+        plan: Description.
 
-    Parameters
-    ----------
-    plan : object
-        DataFusion LogicalPlan object (unoptimized or optimized).
+    Returns:
+        pa.Schema: Result.
 
-    Returns
-    -------
-    pa.Schema
-        Arrow schema derived from the plan output.
-
-    Raises
-    ------
-    TypeError
-        Raised when the schema cannot be extracted from the plan.
-
-    Notes
-    -----
-    The plan's schema() method may return a DFSchema (DataFusion native) or
-    an Arrow schema depending on DataFusion version. This function handles
-    both cases.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     schema_method = getattr(plan, "schema", None)
     if not callable(schema_method):
@@ -185,7 +150,7 @@ def _extract_fields_from_dfschema(schema: object) -> list[pa.Field]:
     schema : object
         DFSchema object to extract fields from.
 
-    Returns
+    Returns:
     -------
     list[pa.Field]
         Extracted Arrow fields, or empty list if extraction fails.
@@ -213,7 +178,7 @@ def _extract_fields_from_dfschema(schema: object) -> list[pa.Field]:
 def _safe_field_name(entry: object) -> str | None:
     """Extract field name from a DFField.
 
-    Returns
+    Returns:
     -------
     str | None
         Field name or None if unavailable.
@@ -235,7 +200,7 @@ def _safe_field_name(entry: object) -> str | None:
 def _safe_field_type(entry: object) -> pa.DataType | None:
     """Extract Arrow data type from a DFField.
 
-    Returns
+    Returns:
     -------
     pa.DataType | None
         Arrow data type or None if unavailable.
@@ -265,7 +230,7 @@ def _safe_field_type(entry: object) -> pa.DataType | None:
 def _safe_field_nullable(entry: object) -> bool:
     """Extract nullability from a DFField.
 
-    Returns
+    Returns:
     -------
     bool
         True if the field is nullable (defaults to True).
@@ -305,12 +270,12 @@ def infer_column_lineage(
     udf_snapshot : Mapping[str, object] | None
         Optional UDF registry snapshot for function resolution.
 
-    Returns
+    Returns:
     -------
     dict[str, ColumnLineage]
         Mapping from output column name to its lineage.
 
-    Examples
+    Examples:
     --------
     >>> lineage = infer_column_lineage(df)
     >>> for col_name, col_lineage in lineage.items():
@@ -327,7 +292,7 @@ def infer_column_lineage(
 def _optimized_logical_plan(df: DataFrame) -> object | None:
     """Extract optimized logical plan from a DataFrame.
 
-    Returns
+    Returns:
     -------
     object | None
         Optimized logical plan or None if unavailable.
@@ -346,7 +311,7 @@ def _optimized_logical_plan(df: DataFrame) -> object | None:
 def _empty_column_lineage(schema: pa.Schema) -> dict[str, ColumnLineage]:
     """Create empty column lineage for all schema fields.
 
-    Returns
+    Returns:
     -------
     dict[str, ColumnLineage]
         Mapping with empty lineage for each column.
@@ -367,7 +332,7 @@ def _column_lineage_from_report(
     report : LineageReport
         Lineage report from plan analysis.
 
-    Returns
+    Returns:
     -------
     dict[str, ColumnLineage]
         Column lineage for each output column.
@@ -399,7 +364,7 @@ def _column_refs_by_output_name(
 ) -> dict[str, set[tuple[str, str]]]:
     """Group column references by output column name.
 
-    Returns
+    Returns:
     -------
     dict[str, set[tuple[str, str]]]
         Mapping from output column to source (table, column) pairs.
@@ -463,7 +428,7 @@ def _extract_alias_or_column_name(text: str) -> str | None:
     - "expr AS alias" -> alias
     - "table.column" -> column
 
-    Returns
+    Returns:
     -------
     str | None
         Extracted column name or None.
@@ -497,7 +462,7 @@ def _transformations_for_column(
     report : LineageReport
         Lineage report from plan analysis.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Transformation expressions that contributed to this column.
@@ -536,12 +501,12 @@ def infer_schema_with_lineage(
     udf_snapshot : Mapping[str, object] | None
         Optional UDF registry snapshot for function resolution.
 
-    Returns
+    Returns:
     -------
     SchemaInferenceResult
         Complete inference result with schema and lineage.
 
-    Examples
+    Examples:
     --------
     >>> result = infer_schema_with_lineage(df)
     >>> print(f"Output columns: {result.output_schema.names}")
@@ -576,26 +541,15 @@ def infer_schema_from_plan_bundle(
 ) -> SchemaInferenceResult:
     """Extract schema inference from a DataFusionPlanBundle.
 
-    This function provides integration with the existing plan bundle
-    infrastructure. Plan bundles already contain optimized plans and
-    can be reused for schema inference.
+    Args:
+        bundle: Description.
+            udf_snapshot: Description.
 
-    Parameters
-    ----------
-    bundle : object
-        DataFusionPlanBundle containing plan and DataFrame.
-    udf_snapshot : Mapping[str, object] | None
-        Optional UDF registry snapshot for function resolution.
+    Returns:
+        SchemaInferenceResult: Result.
 
-    Returns
-    -------
-    SchemaInferenceResult
-        Complete inference result with schema and lineage.
-
-    Raises
-    ------
-    TypeError
-        Raised when the bundle lacks required attributes.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     df = getattr(bundle, "df", None)
     if df is None:
@@ -632,7 +586,7 @@ def schema_fingerprint_from_inference(result: SchemaInferenceResult) -> str:
     result : SchemaInferenceResult
         Schema inference result to fingerprint.
 
-    Returns
+    Returns:
     -------
     str
         Stable hash of the inference result.
@@ -661,7 +615,7 @@ def validate_inferred_schema(
     strict : bool
         If True, report extra columns as violations.
 
-    Returns
+    Returns:
     -------
     list[str]
         List of violation messages (empty if valid).

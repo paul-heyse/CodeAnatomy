@@ -55,7 +55,7 @@ def build_execution_plan_module(
 ) -> ModuleType:
     """Build a Hamilton module that provides the execution plan contract.
 
-    Returns
+    Returns:
     -------
     ModuleType
         Module containing plan-level nodes for Hamilton execution.

@@ -33,7 +33,7 @@ def resolve_service_name(default: str = _DEFAULT_SERVICE_NAME) -> str:
     default
         Default service name.
 
-    Returns
+    Returns:
     -------
     str
         Resolved service name.
@@ -64,7 +64,7 @@ def build_resource(service_name: str, options: ResourceOptions | None = None) ->
         Optional resource settings, including version, namespace, environment,
         instance ID, and additional attributes.
 
-    Returns
+    Returns:
     -------
     Resource
         OpenTelemetry resource with merged attributes.

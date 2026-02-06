@@ -40,7 +40,7 @@ def register_cdf_inputs(
 ) -> dict[str, str]:
     """Register CDF-backed inputs and return base-to-CDF name mapping.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping from base table names to CDF view names.
@@ -80,7 +80,7 @@ def register_cdf_inputs(
 def strip_cdf_metadata(df: DataFrame) -> DataFrame:
     """Drop Delta CDF metadata columns when present.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame with CDF metadata columns removed.

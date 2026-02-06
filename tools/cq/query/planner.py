@@ -36,7 +36,7 @@ class AstGrepRule(msgspec.Struct, frozen=True):
     Supports full ast-grep rule features including pattern objects and
     relational constraints.
 
-    Attributes
+    Attributes:
     ----------
     pattern
         Pattern to match (for simple patterns)
@@ -89,7 +89,7 @@ class AstGrepRule(msgspec.Struct, frozen=True):
     def requires_inline_rule(self) -> bool:
         """Check if this rule requires inline YAML rule execution.
 
-        Returns
+        Returns:
         -------
         bool
             True if rule has features requiring inline rule format.
@@ -109,12 +109,12 @@ class AstGrepRule(msgspec.Struct, frozen=True):
     def to_yaml_dict(self) -> dict[str, object]:
         """Convert to ast-grep YAML rule format.
 
-        Returns
+        Returns:
         -------
         dict
             Dictionary suitable for YAML serialization.
 
-        Notes
+        Notes:
         -----
         Handles both simple patterns and pattern objects with context.
         When context is provided, generates pattern object format:
@@ -193,7 +193,7 @@ def _apply_nth_child(rule_dict: dict[str, object], spec: NthChildSpec | None) ->
 class ToolPlan(msgspec.Struct, frozen=True):
     """Execution plan for a query.
 
-    Attributes
+    Attributes:
     ----------
     scope
         File scope constraints
@@ -267,7 +267,7 @@ def compile_query(query: Query) -> ToolPlan:
 
     Used by the CLI query command and bundle builders to create execution plans.
 
-    Returns
+    Returns:
     -------
     ToolPlan
         Execution plan for the query.
@@ -284,7 +284,7 @@ def _compile_entity_query(query: Query) -> ToolPlan:
 
     Used by ``compile_query`` when a query targets entities (functions, classes, etc.).
 
-    Returns
+    Returns:
     -------
     ToolPlan
         Execution plan for the entity query.
@@ -318,7 +318,7 @@ def _compile_pattern_query(query: Query) -> ToolPlan:
 
     Used by ``compile_query`` when a query uses ast-grep patterns.
 
-    Returns
+    Returns:
     -------
     ToolPlan
         Execution plan for the pattern query.
@@ -355,7 +355,7 @@ def _entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
 
     Used by ``_compile_entity_query`` to translate entity filters into ast-grep rules.
 
-    Returns
+    Returns:
     -------
     tuple[AstGrepRule, ...]
         One or more ast-grep rules representing the entity query.
@@ -400,7 +400,7 @@ def _entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
 def _rust_entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
     """Build ast-grep rules for Rust entity constraints.
 
-    Returns
+    Returns:
     -------
     tuple[AstGrepRule, ...]
         One or more ast-grep rules representing the Rust entity query.
@@ -455,7 +455,7 @@ def _apply_relational_constraints(
     constraints
         Relational constraints from the query.
 
-    Returns
+    Returns:
     -------
     AstGrepRule
         New rule with relational constraints applied.
@@ -541,7 +541,7 @@ def _determine_record_types(query: Query) -> set[str]:
 
     Used by ``_compile_entity_query`` to determine ast-grep extraction types.
 
-    Returns
+    Returns:
     -------
     set[str]
         Set of ast-grep record types required by the query.
@@ -566,7 +566,7 @@ def _needs_symtable(query: Query) -> bool:
 
     Used by plan compilation to decide if symtable analysis is needed.
 
-    Returns
+    Returns:
     -------
     bool
         True if symtable analysis is required.
@@ -588,7 +588,7 @@ def _needs_bytecode(query: Query) -> bool:
 
     Used by plan compilation to decide if bytecode inspection is needed.
 
-    Returns
+    Returns:
     -------
     bool
         True if bytecode analysis is required.
@@ -611,7 +611,7 @@ def scope_to_paths(scope: Scope, root: Path) -> list[Path]:
     root
         Repository root
 
-    Returns
+    Returns:
     -------
     list[Path]
         Paths to scan
@@ -632,7 +632,7 @@ def scope_to_globs(scope: Scope) -> list[str]:
 
     Used by the search executor to configure ast-grep include/exclude patterns.
 
-    Returns
+    Returns:
     -------
     list[str]
         Glob patterns for ast-grep (including exclusions).

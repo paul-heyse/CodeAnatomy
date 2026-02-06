@@ -98,7 +98,7 @@ class DeterminismTier(StrEnum):
 def parse_determinism_tier(value: DeterminismTier | str | None) -> DeterminismTier | None:
     """Parse a determinism tier from string or enum input.
 
-    Returns
+    Returns:
     -------
     DeterminismTier | None
         Parsed determinism tier when available.
@@ -129,7 +129,7 @@ def ensure_path(p: PathLike) -> Path:
     p:
         String or ``Path`` input to normalize.
 
-    Returns
+    Returns:
     -------
     pathlib.Path
         Normalized path instance.

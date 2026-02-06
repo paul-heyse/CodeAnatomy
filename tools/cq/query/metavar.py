@@ -21,12 +21,12 @@ def parse_metavariables(match_result: dict[str, object]) -> dict[str, MetaVarCap
     match_result
         Raw match result from ast-grep JSON output.
 
-    Returns
+    Returns:
     -------
     dict[str, MetaVarCapture]
         Map of metavariable name to capture info.
 
-    Notes
+    Notes:
     -----
     ast-grep returns metaVariables with structure:
     ```json
@@ -83,33 +83,14 @@ def parse_metavariables(match_result: dict[str, object]) -> dict[str, MetaVarCap
 def validate_pattern_metavars(pattern: str) -> list[str]:
     """Extract and validate metavariable names from pattern.
 
-    Parameters
-    ----------
-    pattern
-        ast-grep pattern string.
+    Args:
+        pattern: Query pattern containing metavariables.
 
-    Returns
-    -------
-    list[str]
-        List of metavariable names found (including $ prefix).
+    Returns:
+        list[str]: Extracted metavariable names.
 
-    Raises
-    ------
-    ValueError
-        If invalid metavariable syntax found.
-
-    Notes
-    -----
-    Valid metavariable forms:
-    - `$NAME`: Single named capture (UPPERCASE)
-    - `$$$NAME`: Multi capture (zero-or-more)
-    - `$$NAME`: Unnamed node capture
-    - `$_NAME`: Non-capturing wildcard
-
-    Invalid forms:
-    - `$lowercase`: Must be uppercase
-    - `$123`: Cannot start with digit
-    - `$KEBAB-CASE`: No hyphens allowed
+    Raises:
+        ValueError: If a metavariable name is invalid.
     """
     # Find all metavar-like patterns
     all_metavars = re.findall(r"\$+[A-Za-z_][A-Za-z0-9_-]*", pattern)
@@ -142,7 +123,7 @@ def apply_metavar_filters(
     filters
         Filters to apply.
 
-    Returns
+    Returns:
     -------
     bool
         True if all filters pass, False otherwise.
@@ -168,7 +149,7 @@ def get_metavar_kind(metavar: str) -> MetaVarKind:
     metavar
         Metavariable string (e.g., '$NAME', '$$$ARGS', '$$OP')
 
-    Returns
+    Returns:
     -------
     MetaVarKind
         The kind of metavariable: 'single', 'multi', or 'unnamed'.

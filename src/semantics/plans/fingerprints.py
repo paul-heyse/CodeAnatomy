@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class PlanFingerprint:
     """Fingerprint for a semantic view's execution plan.
 
-    Attributes
+    Attributes:
     ----------
     view_name
         Name of the semantic view.
@@ -50,7 +50,7 @@ class PlanFingerprint:
         other
             Another fingerprint to compare against.
 
-        Returns
+        Returns:
         -------
         bool
             True if fingerprints represent equivalent plans.
@@ -63,7 +63,7 @@ class PlanFingerprint:
     def composite_fingerprint(self) -> CompositeFingerprint:
         """Return a composite fingerprint for cache keys and diagnostics.
 
-        Returns
+        Returns:
         -------
         CompositeFingerprint
             Composite fingerprint for this plan.
@@ -81,7 +81,7 @@ class PlanFingerprint:
     def cache_key(self, *, prefix: str = "plan_fingerprint") -> str:
         """Return a deterministic cache key derived from the composite fingerprint.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic cache key.
@@ -99,7 +99,7 @@ def _hash_bytes(data: bytes, *, length: int = 32) -> str:
     length
         Number of hex characters to return.
 
-    Returns
+    Returns:
     -------
     str
         Truncated hex digest.
@@ -117,7 +117,7 @@ def _hash_string(s: str, *, length: int = 32) -> str:
     length
         Number of hex characters to return.
 
-    Returns
+    Returns:
     -------
     str
         Truncated hex digest.
@@ -135,7 +135,7 @@ def _extract_field_type(schema: object, idx: int) -> str:
     idx
         Field index.
 
-    Returns
+    Returns:
     -------
     str
         Field type as string, or "unknown" if unavailable.
@@ -163,7 +163,7 @@ def _schema_from_names(schema: object, names: list[object] | tuple[object, ...])
     names
         Field names.
 
-    Returns
+    Returns:
     -------
     str
         Canonical schema representation.
@@ -183,7 +183,7 @@ def _schema_to_string(schema: object) -> str:
     schema
         Schema object from DataFusion or PyArrow.
 
-    Returns
+    Returns:
     -------
     str
         Canonical string representation.
@@ -218,7 +218,7 @@ def _compute_schema_hash(df: DataFrame) -> str:
     df
         DataFrame to extract schema from.
 
-    Returns
+    Returns:
     -------
     str
         Schema hash string.
@@ -239,7 +239,7 @@ def _compute_logical_plan_hash(df: DataFrame) -> str:
     df
         DataFrame to extract plan from.
 
-    Returns
+    Returns:
     -------
     str
         Plan hash string.
@@ -278,7 +278,7 @@ def _plan_to_string(plan: object) -> str | None:
     plan
         Logical plan object from DataFusion.
 
-    Returns
+    Returns:
     -------
     str | None
         String representation, or None if unavailable.
@@ -373,7 +373,7 @@ def _encode_substrait_plan(
     optimized_plan
         Optimized logical plan to encode.
 
-    Returns
+    Returns:
     -------
     bytes | None
         Encoded Substrait bytes, or None if encoding fails.
@@ -400,7 +400,7 @@ def _compute_substrait_hash(
     df
         DataFrame to serialize to Substrait.
 
-    Returns
+    Returns:
     -------
     str | None
         Substrait hash, or None if unavailable.
@@ -444,7 +444,7 @@ def compute_plan_fingerprint(
     ctx
         Optional SessionContext for Substrait serialization.
 
-    Returns
+    Returns:
     -------
     PlanFingerprint
         Fingerprint with plan and schema hashes.
@@ -474,7 +474,7 @@ def fingerprints_match(a: PlanFingerprint, b: PlanFingerprint) -> bool:
     b
         Second fingerprint.
 
-    Returns
+    Returns:
     -------
     bool
         True if fingerprints match.

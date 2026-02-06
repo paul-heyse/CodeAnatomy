@@ -44,7 +44,7 @@ class Ordering:
     def unordered() -> Ordering:
         """Return an unordered ordering marker.
 
-        Returns
+        Returns:
         -------
         Ordering
             Unordered marker.
@@ -55,7 +55,7 @@ class Ordering:
     def implicit() -> Ordering:
         """Return an implicit ordering marker.
 
-        Returns
+        Returns:
         -------
         Ordering
             Implicit ordering marker.
@@ -71,7 +71,7 @@ class Ordering:
         keys:
             Explicit ordering keys.
 
-        Returns
+        Returns:
         -------
         Ordering
             Explicit ordering marker.

@@ -37,7 +37,7 @@ def file_changes_from_cdf(
     file_id_column : str
         Column name to use for file identifiers in the CDF table.
 
-    Returns
+    Returns:
     -------
     IncrementalFileChanges
         Change sets derived from CDF change types.
@@ -89,7 +89,7 @@ def _collect_file_ids(
 ) -> tuple[str, ...]:
     """Collect distinct file IDs for the requested CDF change types.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted, unique file identifiers.
@@ -108,7 +108,7 @@ def _cdf_change_predicate(change_types: tuple[str, ...]) -> Expr:
     Uses cdf_is_upsert and cdf_is_delete UDFs for semantic clarity.
     Falls back to in_list for mixed or custom change types.
 
-    Returns
+    Returns:
     -------
     Expr
         Filter predicate for the specified CDF change types.

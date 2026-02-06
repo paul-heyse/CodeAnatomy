@@ -8,7 +8,7 @@ This module provides semantic typing for CPG columns:
 Also re-exports column_types for backward compatibility:
 - ColumnType, TableType, infer_column_type, infer_table_type, TYPE_PATTERNS
 
-Example
+Example:
 -------
 >>> import pyarrow as pa
 >>> from semantics.types import AnnotatedSchema, SemanticType

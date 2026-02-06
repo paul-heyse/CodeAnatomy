@@ -78,7 +78,7 @@ class DeterminismValidationResult:
     def payload(self) -> dict[str, object]:
         """Return a diagnostics payload for determinism validation.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Serializable diagnostics payload.
@@ -118,7 +118,7 @@ class HamiltonEventRow:
     def to_row(self) -> dict[str, object]:
         """Return a row mapping ready for Arrow/Delta ingestion.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Row payload for ingestion.
@@ -148,7 +148,7 @@ def ensure_plan_artifacts_table(
 ) -> DatasetLocation | None:
     """Ensure the plan artifacts table exists and is registered.
 
-    Returns
+    Returns:
     -------
     DatasetLocation | None
         Location for the plan artifacts table when enabled.
@@ -185,7 +185,7 @@ def ensure_hamilton_events_table(
 ) -> DatasetLocation | None:
     """Ensure the Hamilton events table exists and is registered.
 
-    Returns
+    Returns:
     -------
     DatasetLocation | None
         Location for the Hamilton events table when enabled.
@@ -243,7 +243,7 @@ def _events_snapshot_as_lists(
 ) -> dict[str, list[object]]:
     """Convert event snapshot mappings into list-backed payloads.
 
-    Returns
+    Returns:
     -------
     dict[str, list[object]]
         Normalized snapshot entries with mutable payload lists.
@@ -271,7 +271,7 @@ def persist_plan_artifacts_for_views(
     request
         Plan artifact persistence request payload.
 
-    Returns
+    Returns:
     -------
     tuple[PlanArtifactRow, ...]
         Persisted plan artifact rows.
@@ -329,7 +329,7 @@ def validate_plan_determinism(
     view_name
         Optional view name to scope the validation query.
 
-    Returns
+    Returns:
     -------
     DeterminismValidationResult
         Result indicating whether the plan is deterministic.
@@ -460,7 +460,7 @@ def _determinism_validation_query(
 ) -> str:
     """Build SQL query for determinism validation.
 
-    Returns
+    Returns:
     -------
     str
         SQL query for determinism checks.
@@ -502,7 +502,7 @@ def persist_execution_artifact(
 ) -> PlanArtifactRow | None:
     """Persist an execution artifact row for a plan bundle.
 
-    Returns
+    Returns:
     -------
     PlanArtifactRow | None
         Persisted plan artifact row when storage is enabled.
@@ -558,7 +558,7 @@ def persist_write_artifact(
     request
         Write artifact request payload.
 
-    Returns
+    Returns:
     -------
     WriteArtifactRow | None
         Persisted write artifact row, or None if persistence is disabled.
@@ -617,15 +617,16 @@ def _write_artifact_table(
 ) -> int | None:
     """Write an artifact table via the unified write pipeline.
 
-    Returns
-    -------
-    int | None
-        Resolved Delta table version when available.
+    Args:
+        ctx: Description.
+            profile: Description.
+            request: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the requested write mode is unsupported.
+    Returns:
+        int | None: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
     from datafusion_engine.lineage.diagnostics import recorder_for_profile
@@ -671,15 +672,17 @@ def persist_plan_artifact_rows(
 ) -> tuple[PlanArtifactRow, ...]:
     """Persist plan artifact rows to the Delta-backed artifact store.
 
-    Returns
-    -------
-    tuple[PlanArtifactRow, ...]
-        Persisted plan artifact rows.
+    Args:
+        ctx: Description.
+            profile: Description.
+            rows: Description.
+            location: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Delta version cannot be resolved after write.
+    Returns:
+        tuple[PlanArtifactRow, ...]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     if not rows:
         return ()
@@ -720,7 +723,7 @@ def persist_hamilton_events(
 ) -> tuple[HamiltonEventRow, ...]:
     """Persist Hamilton lifecycle events to the Delta-backed artifact store.
 
-    Returns
+    Returns:
     -------
     tuple[HamiltonEventRow, ...]
         Persisted Hamilton event rows.
@@ -774,15 +777,17 @@ def persist_hamilton_event_rows(
 ) -> tuple[HamiltonEventRow, ...]:
     """Persist Hamilton event rows to the Delta-backed artifact store.
 
-    Returns
-    -------
-    tuple[HamiltonEventRow, ...]
-        Persisted Hamilton event rows.
+    Args:
+        ctx: Description.
+            profile: Description.
+            rows: Description.
+            location: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Delta version cannot be resolved after write.
+    Returns:
+        tuple[HamiltonEventRow, ...]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     if not rows:
         return ()
@@ -823,7 +828,7 @@ def build_plan_artifact_row(
 ) -> PlanArtifactRow:
     """Build a plan artifact row from a plan bundle and optional lineage.
 
-    Returns
+    Returns:
     -------
     PlanArtifactRow
         Serialized plan artifact row.

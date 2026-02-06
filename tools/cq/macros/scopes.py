@@ -132,7 +132,7 @@ def _extract_scopes(st: symtable.SymbolTable, file: str, parent_name: str = "") 
     parent_name : str
         Parent scope name for qualified naming.
 
-    Returns
+    Returns:
     -------
     list[ScopeInfo]
         Extracted scope information.
@@ -294,7 +294,7 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
     request : ScopeRequest
         Scopes request payload.
 
-    Returns
+    Returns:
     -------
     CqResult
         Analysis result.

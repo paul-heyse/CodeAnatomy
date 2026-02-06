@@ -42,13 +42,13 @@ class DataFusionRun:
     def next_commit_version(self) -> tuple[IdempotentWriteOptions, DataFusionRun]:
         """Return idempotent options and updated run for next commit.
 
-        Returns
+        Returns:
         -------
         tuple[IdempotentWriteOptions, DataFusionRun]
             Tuple of (idempotent_options, updated_run) where the run has
             an incremented commit sequence.
 
-        Examples
+        Examples:
         --------
         >>> run = start_run(label="test")
         >>> options, run = run.next_commit_version()
@@ -86,7 +86,7 @@ class DataFusionRun:
         sequence : int
             Commit sequence number to set.
 
-        Returns
+        Returns:
         -------
         DataFusionRun
             New run instance with the specified commit sequence.
@@ -104,7 +104,7 @@ class DataFusionRun:
     def payload(self) -> dict[str, object]:
         """Return a JSON-ready payload for diagnostics sinks.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             JSON-ready payload describing the run envelope.
@@ -142,7 +142,7 @@ def start_run(
     metadata:
         Optional metadata to attach to the run envelope.
 
-    Returns
+    Returns:
     -------
     DataFusionRun
         Run envelope with a unique run_id and start timestamp.
@@ -181,7 +181,7 @@ def finish_run(
     metadata:
         Optional additional metadata to merge into the run envelope.
 
-    Returns
+    Returns:
     -------
     DataFusionRun
         Updated run envelope with end timestamp and status.
@@ -215,12 +215,12 @@ def tracked_run(
     metadata:
         Optional metadata to attach to the run envelope.
 
-    Yields
+    Yields:
     ------
     DataFusionRun
         Run envelope with correlation ID.
 
-    Examples
+    Examples:
     --------
     >>> with tracked_run(label="query_execution", sink=diagnostics) as run:
     ...     df = ctx.sql("SELECT * FROM table")
@@ -260,12 +260,12 @@ def create_run_context(
     metadata : Mapping[str, object] | None
         Optional metadata to attach to the run envelope.
 
-    Returns
+    Returns:
     -------
     DataFusionRun
         Run context for tracking commits.
 
-    Examples
+    Examples:
     --------
     >>> # Create a new run context
     >>> run = create_run_context(label="data_pipeline")

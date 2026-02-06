@@ -12,7 +12,7 @@ from importlib.metadata import version as pkg_version
 def get_version() -> str:
     """Get the CodeAnatomy package version string.
 
-    Returns
+    Returns:
     -------
     str
         Version string, or "0.0.0-dev" if not installed.
@@ -23,7 +23,7 @@ def get_version() -> str:
 def get_version_info() -> dict[str, object]:
     """Get detailed version information.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Structured version payload.
@@ -44,7 +44,7 @@ def get_version_info() -> dict[str, object]:
 def version_command() -> int:
     """Show version and engine information.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

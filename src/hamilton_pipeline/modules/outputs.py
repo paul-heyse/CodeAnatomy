@@ -31,7 +31,7 @@ else:
 def run_id() -> str:
     """Return a run-scoped UUID for pipeline outputs.
 
-    Returns
+    Returns:
     -------
     str
         Unique run identifier.
@@ -55,7 +55,7 @@ def output_runtime_context(
     cache_context
         Cache configuration snapshot for the run.
 
-    Returns
+    Returns:
     -------
     OutputRuntimeContext
         Runtime and output configuration context.
@@ -86,7 +86,7 @@ def output_plan_context(
     materialized_outputs
         Output node names targeted for materialization.
 
-    Returns
+    Returns:
     -------
     OutputPlanContext
         Plan metadata context.
@@ -122,7 +122,7 @@ def output_plan_artifacts_context(
     plan_artifact_ids
         Mapping of plan artifact identifiers by dataset.
 
-    Returns
+    Returns:
     -------
     OutputPlanArtifactsContext
         Plan artifacts metadata container.
@@ -150,7 +150,7 @@ def primary_outputs(
     write_cpg_props_delta
         CPG props output artifact metadata.
 
-    Returns
+    Returns:
     -------
     PrimaryOutputs
         Bundle of primary output artifacts.
@@ -178,7 +178,7 @@ def adjacency_outputs(
     write_cpg_edges_by_dst_delta
         CPG edges-by-destination output artifact metadata.
 
-    Returns
+    Returns:
     -------
     AdjacencyOutputs
         Bundle of adjacency output artifacts.

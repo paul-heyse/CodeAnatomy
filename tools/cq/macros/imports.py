@@ -162,7 +162,7 @@ class ImportContext:
 def _file_to_module(file: str) -> str:
     """Convert file path to module name.
 
-    Returns
+    Returns:
     -------
     str
         Module name.
@@ -179,7 +179,7 @@ def _resolve_relative_import(
 ) -> str | None:
     """Resolve a relative import to absolute module name.
 
-    Returns
+    Returns:
     -------
     str | None
         Resolved absolute module name.
@@ -206,6 +206,7 @@ class ImportVisitor(ast.NodeVisitor):
     """Extract imports from a module."""
 
     def __init__(self, file: str) -> None:
+        """__init__."""
         self.file = file
         self.imports: list[ImportInfo] = []
 
@@ -254,7 +255,7 @@ class ImportVisitor(ast.NodeVisitor):
 def _find_import_cycles(deps: dict[str, ModuleDeps], internal_prefix: str) -> list[list[str]]:
     """Find import cycles in the dependency graph.
 
-    Returns
+    Returns:
     -------
     list[list[str]]
         Detected cycles.
@@ -482,7 +483,7 @@ def _filter_to_module(
 ) -> tuple[dict[str, ModuleDeps], list[ImportInfo]]:
     """Filter deps and imports to only those within specified module path.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, ModuleDeps], list[ImportInfo]]
         Filtered deps and imports.
@@ -603,7 +604,7 @@ def cmd_imports(request: ImportRequest) -> CqResult:
     request : ImportRequest
         Imports analysis request payload.
 
-    Returns
+    Returns:
     -------
     CqResult
         Analysis result.

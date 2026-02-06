@@ -36,7 +36,7 @@ class PlanArtifactBundle:
     def artifact_ids(self) -> dict[str, str]:
         """Return a mapping of artifact IDs for run manifests.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Mapping of artifact keys to deterministic IDs.
@@ -50,7 +50,7 @@ class PlanArtifactBundle:
 def build_plan_artifact_bundle(*, plan: ExecutionPlan, run_id: str) -> PlanArtifactBundle:
     """Build schedule/validation artifacts and deterministic IDs.
 
-    Returns
+    Returns:
     -------
     PlanArtifactBundle
         Bundle of schedule/validation envelopes with their IDs.

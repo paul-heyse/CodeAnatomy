@@ -41,7 +41,7 @@ def join_by_path(
     how
         Join type: "inner", "left", "right".
 
-    Returns
+    Returns:
     -------
     DataFrame
         Joined DataFrame with columns from both.
@@ -76,7 +76,7 @@ def join_by_span_overlap(
     right_sem
         Semantic schema for right DataFrame.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Joined DataFrame where spans overlap.
@@ -115,7 +115,7 @@ def join_by_span_contains(
         If True, left span contains right span.
         If False, right span contains left span.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Joined DataFrame where containment holds.

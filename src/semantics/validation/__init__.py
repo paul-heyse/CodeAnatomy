@@ -19,6 +19,7 @@ class SemanticInputValidationError(ValueError):
     """Raised when semantic input validation fails."""
 
     def __init__(self, validation: SemanticInputValidationResult) -> None:
+        """__init__."""
         self.validation = validation
         missing_tables = ", ".join(sorted(validation.missing_tables))
         missing_columns = {
@@ -39,22 +40,15 @@ def require_semantic_inputs(
 ) -> SemanticInputValidationResult:
     """Validate semantic inputs and raise when invalid.
 
-    Parameters
-    ----------
-    ctx
-        DataFusion session context.
-    input_mapping
-        Mapping of canonical input names to registered table names.
+    Args:
+        ctx: Description.
+            input_mapping: Description.
 
-    Returns
-    -------
-    SemanticInputValidationResult
-        Validation result when inputs are valid.
+    Returns:
+        SemanticInputValidationResult: Result.
 
-    Raises
-    ------
-    SemanticInputValidationError
-        Raised when semantic inputs are missing or invalid.
+    Raises:
+        SemanticInputValidationError: If the operation cannot be completed.
     """
     validation = validate_semantic_input_columns(ctx, input_mapping=input_mapping)
     if not validation.valid:

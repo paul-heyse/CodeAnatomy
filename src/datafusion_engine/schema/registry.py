@@ -124,7 +124,7 @@ def _bytecode_attrs_field(name: str = "attrs") -> pa.Field:
 def default_attrs_value() -> dict[str, str]:
     """Return the default attrs map from schema metadata.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Default attrs mapping derived from schema metadata.
@@ -2138,7 +2138,7 @@ def _mapping_from_registry[T](registry: ImmutableRegistry[str, T]) -> dict[str, 
 def relationship_schema_registry() -> MappingRegistryAdapter[str, pa.Schema]:
     """Return a registry adapter for relationship schemas.
 
-    Returns
+    Returns:
     -------
     MappingRegistryAdapter[str, pa.Schema]
         Read-only registry adapter for relationship schemas.
@@ -2152,7 +2152,7 @@ def relationship_schema_registry() -> MappingRegistryAdapter[str, pa.Schema]:
 def base_extract_schema_registry() -> MappingRegistryAdapter[str, pa.Schema]:
     """Return a registry adapter for base extract schemas.
 
-    Returns
+    Returns:
     -------
     MappingRegistryAdapter[str, pa.Schema]
         Read-only registry adapter for base extract schemas.
@@ -2166,7 +2166,7 @@ def base_extract_schema_registry() -> MappingRegistryAdapter[str, pa.Schema]:
 def nested_dataset_registry() -> MappingRegistryAdapter[str, NestedDatasetSpec]:
     """Return a registry adapter for nested dataset specs.
 
-    Returns
+    Returns:
     -------
     MappingRegistryAdapter[str, NestedDatasetSpec]
         Read-only registry adapter for nested dataset specs.
@@ -2180,7 +2180,7 @@ def nested_dataset_registry() -> MappingRegistryAdapter[str, NestedDatasetSpec]:
 def root_identity_registry() -> MappingRegistryAdapter[str, tuple[str, ...]]:
     """Return a registry adapter for root identity field specs.
 
-    Returns
+    Returns:
     -------
     MappingRegistryAdapter[str, tuple[str, ...]]
         Read-only registry adapter for root identity field specs.
@@ -2366,7 +2366,7 @@ CST_VIEW_NAMES: tuple[str, ...] = (
 def extract_base_schema_names() -> tuple[str, ...]:
     """Return extract base schema names in sorted order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted extract base schema name tuple.
@@ -2377,15 +2377,11 @@ def extract_base_schema_names() -> tuple[str, ...]:
 def extract_base_schema_for(name: str) -> pa.Schema:
     """Return the static extract base schema for a dataset name.
 
-    Returns
-    -------
-    pyarrow.Schema
-        Arrow schema for the extract dataset.
+    Args:
+        name: Description.
 
-    Raises
-    ------
-    KeyError
-        Raised when the dataset name is not registered.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(name)
     if schema is None:
@@ -2397,7 +2393,7 @@ def extract_base_schema_for(name: str) -> pa.Schema:
 def relationship_schema_names() -> tuple[str, ...]:
     """Return relationship schema names in sorted order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted relationship schema names.
@@ -2408,15 +2404,11 @@ def relationship_schema_names() -> tuple[str, ...]:
 def relationship_schema_for(name: str) -> pa.Schema:
     """Return the schema for a relationship dataset.
 
-    Returns
-    -------
-    pyarrow.Schema
-        Schema for the named relationship dataset.
+    Args:
+        name: Description.
 
-    Raises
-    ------
-    KeyError
-        Raised when the relationship schema name is not registered.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     schema = RELATIONSHIP_SCHEMA_BY_NAME.get(name)
     if schema is None:
@@ -2428,7 +2420,7 @@ def relationship_schema_for(name: str) -> pa.Schema:
 def extract_nested_dataset_names() -> tuple[str, ...]:
     """Return extract-derived nested dataset names in sorted order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted extract nested dataset name tuple.
@@ -2439,7 +2431,7 @@ def extract_nested_dataset_names() -> tuple[str, ...]:
 def extract_nested_schema_names() -> tuple[str, ...]:
     """Return intrinsic extract nested dataset names in sorted order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted intrinsic extract nested dataset name tuple.
@@ -2457,15 +2449,11 @@ def extract_nested_schema_names() -> tuple[str, ...]:
 def extract_nested_spec_for(name: str) -> NestedDatasetSpec:
     """Return the extract nested dataset spec for a name.
 
-    Returns
-    -------
-    NestedDatasetSpec
-        Nested dataset specification mapping.
+    Args:
+        name: Description.
 
-    Raises
-    ------
-    KeyError
-        Raised when the dataset name is not registered.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     spec = NESTED_DATASET_INDEX.get(name)
     if spec is None:
@@ -2477,7 +2465,7 @@ def extract_nested_spec_for(name: str) -> NestedDatasetSpec:
 def extract_datasets_for_path(root: str, path: str) -> tuple[str, ...]:
     """Return extract nested dataset names for a root/path pair.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted extract nested dataset name tuple for the path.
@@ -2495,7 +2483,7 @@ def extract_datasets_for_path(root: str, path: str) -> tuple[str, ...]:
 def extract_nested_path_for(name: str) -> tuple[str, str]:
     """Return the root schema name and path for an extract nested dataset.
 
-    Returns
+    Returns:
     -------
     tuple[str, str]
         Root schema name and nested path.
@@ -2507,7 +2495,7 @@ def extract_nested_path_for(name: str) -> tuple[str, str]:
 def extract_nested_context_for(name: str) -> Mapping[str, str]:
     """Return the context fields for an extract nested dataset.
 
-    Returns
+    Returns:
     -------
     Mapping[str, str]
         Mapping of output column name to nested context path.
@@ -2518,7 +2506,7 @@ def extract_nested_context_for(name: str) -> Mapping[str, str]:
 def extract_nested_role_for(name: str) -> Literal["intrinsic", "derived"]:
     """Return the nested role for an extract nested dataset.
 
-    Returns
+    Returns:
     -------
     Literal["intrinsic", "derived"]
         Dataset role label.
@@ -2529,7 +2517,7 @@ def extract_nested_role_for(name: str) -> Literal["intrinsic", "derived"]:
 def is_extract_nested_dataset(name: str) -> bool:
     """Return whether a name is a known extract nested dataset.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the dataset name is registered.
@@ -2540,7 +2528,7 @@ def is_extract_nested_dataset(name: str) -> bool:
 def is_extract_intrinsic_nested_dataset(name: str) -> bool:
     """Return whether an extract nested dataset is intrinsic.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the dataset is intrinsic.
@@ -2552,7 +2540,7 @@ def is_extract_intrinsic_nested_dataset(name: str) -> bool:
 def nested_dataset_names() -> tuple[str, ...]:
     """Return extract-derived nested dataset names in sorted order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted extract nested dataset name tuple.
@@ -2563,7 +2551,7 @@ def nested_dataset_names() -> tuple[str, ...]:
 def nested_schema_names() -> tuple[str, ...]:
     """Return intrinsic extract nested dataset names in sorted order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted intrinsic extract nested dataset name tuple.
@@ -2574,7 +2562,7 @@ def nested_schema_names() -> tuple[str, ...]:
 def nested_spec_for(name: str) -> NestedDatasetSpec:
     """Return the extract nested dataset spec for a name.
 
-    Returns
+    Returns:
     -------
     NestedDatasetSpec
         Nested dataset specification mapping.
@@ -2585,7 +2573,7 @@ def nested_spec_for(name: str) -> NestedDatasetSpec:
 def datasets_for_path(root: str, path: str) -> tuple[str, ...]:
     """Return extract nested dataset names registered for a root/path pair.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted extract nested dataset name tuple for the path.
@@ -2596,7 +2584,7 @@ def datasets_for_path(root: str, path: str) -> tuple[str, ...]:
 def nested_path_for(name: str) -> tuple[str, str]:
     """Return the root schema name and path for an extract nested dataset.
 
-    Returns
+    Returns:
     -------
     tuple[str, str]
         Root schema name and nested path.
@@ -2607,7 +2595,7 @@ def nested_path_for(name: str) -> tuple[str, str]:
 def nested_context_for(name: str) -> Mapping[str, str]:
     """Return the context fields for an extract nested dataset.
 
-    Returns
+    Returns:
     -------
     Mapping[str, str]
         Mapping of output column name to nested context path.
@@ -2618,7 +2606,7 @@ def nested_context_for(name: str) -> Mapping[str, str]:
 def nested_role_for(name: str) -> Literal["intrinsic", "derived"]:
     """Return the nested role for an extract nested dataset.
 
-    Returns
+    Returns:
     -------
     Literal["intrinsic", "derived"]
         Dataset role label.
@@ -2629,7 +2617,7 @@ def nested_role_for(name: str) -> Literal["intrinsic", "derived"]:
 def is_nested_dataset(name: str) -> bool:
     """Return whether a name is a known extract nested dataset.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the dataset name is registered.
@@ -2640,7 +2628,7 @@ def is_nested_dataset(name: str) -> bool:
 def is_intrinsic_nested_dataset(name: str) -> bool:
     """Return whether an extract nested dataset is intrinsic.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the dataset is intrinsic.
@@ -2663,17 +2651,16 @@ def _field_from_container(container: pa.Schema | pa.StructType, name: str) -> pa
 def struct_for_path(schema: pa.Schema, path: str) -> pa.StructType:
     """Resolve the struct type for a nested path.
 
-    Returns
-    -------
-    pyarrow.StructType
-        Struct type resolved at the nested path.
+    Args:
+        schema: Description.
+            path: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the path does not resolve to a struct.
-    ValueError
-        Raised when the path is empty.
+    Returns:
+        pa.StructType: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
     """
     if not path:
         msg = "Nested schema path cannot be empty."
@@ -2730,7 +2717,7 @@ def _append_schema_field(
 def extract_nested_schema_for(name: str) -> pa.Schema:
     """Return the static schema for an extract nested dataset.
 
-    Returns
+    Returns:
     -------
     pyarrow.Schema
         Arrow schema derived from the extract base schema.
@@ -2754,15 +2741,11 @@ def extract_nested_schema_for(name: str) -> pa.Schema:
 def extract_schema_for(name: str) -> pa.Schema:
     """Return the static schema for an extract base or nested dataset.
 
-    Returns
-    -------
-    pyarrow.Schema
-        Arrow schema for the extract dataset.
+    Args:
+        name: Description.
 
-    Raises
-    ------
-    KeyError
-        Raised when the dataset name is not registered.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     if name in _BASE_EXTRACT_SCHEMA_BY_NAME:
         return extract_base_schema_for(name)
@@ -2775,7 +2758,7 @@ def extract_schema_for(name: str) -> pa.Schema:
 def extract_schema_contract_for(name: str) -> SchemaContract:
     """Return the SchemaContract for an extract base or nested dataset.
 
-    Returns
+    Returns:
     -------
     SchemaContract
         Schema contract derived from the static extract schema.
@@ -2789,7 +2772,7 @@ def extract_schema_contract_for(name: str) -> SchemaContract:
 def schema_contract_for_table(ctx: SessionContext, *, table_name: str) -> SchemaContract:
     """Return the SchemaContract for a registered DataFusion table.
 
-    Returns
+    Returns:
     -------
     SchemaContract
         Schema contract derived from the catalog schema.
@@ -2822,7 +2805,7 @@ def identity_fields_for(
 ) -> tuple[str, ...]:
     """Return identity column names for a nested dataset.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Identity column names for the dataset.
@@ -2977,7 +2960,7 @@ def nested_base_df(
     table:
         Optional base table name to use instead of the root schema name.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame projecting the nested dataset rows.
@@ -3010,7 +2993,7 @@ def nested_view_spec(
 ) -> ViewRuntimeSpec:
     """Return a runtime view spec for a nested dataset.
 
-    Returns
+    Returns:
     -------
     ViewRuntimeSpec
         Runtime view specification derived from the registered base table.
@@ -3034,7 +3017,7 @@ def nested_view_specs(
 ) -> tuple[ViewRuntimeSpec, ...]:
     """Return runtime view specs for all nested datasets.
 
-    Returns
+    Returns:
     -------
     tuple[ViewRuntimeSpec, ...]
         Runtime view specifications for nested datasets.
@@ -3054,10 +3037,11 @@ def nested_view_specs(
 def validate_schema_metadata(schema: pa.Schema) -> None:
     """Validate required schema metadata tags.
 
-    Raises
-    ------
-    ValueError
-        Raised when required schema metadata is missing.
+    Args:
+        schema: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     meta = schema.metadata or {}
     if SCHEMA_META_NAME not in meta:
@@ -3773,10 +3757,11 @@ def _validate_cst_view_outputs(
 def validate_cst_views(ctx: SessionContext) -> None:
     """Validate CST view schemas using DataFusion introspection.
 
-    Raises
-    ------
-    ValueError
-        Raised when view schemas fail validation.
+    Args:
+        ctx: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     _ = ctx
     return
@@ -3824,10 +3809,11 @@ def validate_cst_views(ctx: SessionContext) -> None:
 def validate_required_cst_functions(ctx: SessionContext) -> None:
     """Validate required CST functions and signatures.
 
-    Raises
-    ------
-    ValueError
-        Raised when required functions or signatures are missing.
+    Args:
+        ctx: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
@@ -3853,10 +3839,11 @@ def validate_required_cst_functions(ctx: SessionContext) -> None:
 def validate_required_symtable_functions(ctx: SessionContext) -> None:
     """Validate required symtable functions and signatures.
 
-    Raises
-    ------
-    ValueError
-        Raised when required functions or signatures are missing.
+    Args:
+        ctx: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
@@ -3889,10 +3876,11 @@ def validate_required_symtable_functions(ctx: SessionContext) -> None:
 def validate_required_bytecode_functions(ctx: SessionContext) -> None:
     """Validate required bytecode functions and signatures.
 
-    Raises
-    ------
-    ValueError
-        Raised when required functions or signatures are missing.
+    Args:
+        ctx: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     errors: dict[str, str] = {}
     function_catalog = _function_catalog(ctx)
@@ -3925,10 +3913,11 @@ def validate_required_bytecode_functions(ctx: SessionContext) -> None:
 def validate_required_engine_functions(ctx: SessionContext) -> None:
     """Validate required engine-level functions.
 
-    Raises
-    ------
-    ValueError
-        Raised when required functions are missing.
+    Args:
+        ctx: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from datafusion_engine.udf.runtime import udf_backend_available
 
@@ -3951,11 +3940,11 @@ def validate_required_engine_functions(ctx: SessionContext) -> None:
 def validate_udf_info_schema_parity(ctx: SessionContext) -> None:
     """Validate UDF parity against information_schema.
 
-    Raises
-    ------
-    ValueError
-        Raised when registry entries are missing from information_schema or
-        parity checks fail.
+    Args:
+        ctx: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from datafusion_engine.udf.parity import udf_info_schema_parity_report
     from datafusion_engine.udf.runtime import fallback_udfs_active
@@ -3978,7 +3967,7 @@ def validate_udf_info_schema_parity(ctx: SessionContext) -> None:
 def registered_table_names(ctx: SessionContext) -> set[str]:
     """Return registered table names from information_schema.
 
-    Returns
+    Returns:
     -------
     set[str]
         Set of table names present in the session catalog.
@@ -3993,7 +3982,7 @@ def missing_schema_names(
 ) -> tuple[str, ...]:
     """Return missing schema names from information_schema.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted tuple of missing schema names.

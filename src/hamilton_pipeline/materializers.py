@@ -38,7 +38,7 @@ class TableSummarySaver(DataSaver):
     def applies_to(cls, type_: type) -> bool:
         """Return True when this saver can handle the given output type.
 
-        Returns
+        Returns:
         -------
         bool
             True when the saver applies to the output type.
@@ -82,7 +82,7 @@ class ParamTableSummarySaver(DataSaver):
     def applies_to(cls, type_: type) -> bool:
         """Return True when this saver can handle the given output type.
 
-        Returns
+        Returns:
         -------
         bool
             True when the saver applies to the output type.
@@ -126,7 +126,7 @@ register_adapter(ParamTableSummarySaver)
 def build_hamilton_materializers() -> list[materialization.MaterializerFactory]:
     """Return materializers used for Hamilton UI artifact capture.
 
-    Returns
+    Returns:
     -------
     list[materialization.MaterializerFactory]
         Materializer factories for table and parameter outputs.

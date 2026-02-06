@@ -61,7 +61,7 @@ def resolve_extension_module(
 ) -> tuple[str, object] | None:
     """Resolve the first extension module satisfying attribute requirements.
 
-    Returns
+    Returns:
     -------
     tuple[str, object] | None
         Resolved module name and module instance, or ``None`` when unavailable.
@@ -88,7 +88,7 @@ def select_context_candidate(
 ) -> tuple[tuple[str, object], ...]:
     """Return ordered context candidates for extension entrypoint probing.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[str, object], ...]
         Ordered ``(kind, context)`` pairs used for entrypoint invocation.
@@ -109,17 +109,18 @@ def invoke_entrypoint_with_adapted_context(
 ) -> tuple[ExtensionContextSelection, object]:
     """Invoke an extension entrypoint by probing ordered context candidates.
 
-    Returns
-    -------
-    tuple[ExtensionContextSelection, object]
-        Selected context metadata and entrypoint payload.
+    Args:
+        module_name: Description.
+            module: Description.
+            entrypoint: Description.
+            invocation: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the requested entrypoint is unavailable.
-    RuntimeError
-        Raised when every context candidate fails.
+    Returns:
+        tuple[ExtensionContextSelection, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
+            TypeError: If the operation cannot be completed.
     """
     fn = getattr(module, entrypoint, None)
     if not callable(fn):

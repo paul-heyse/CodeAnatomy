@@ -119,7 +119,7 @@ def _expr_table(df: DataFrame) -> ArrowTable:
 def _datafusion_type_name(dtype: pa.DataType) -> str:
     """Return the DataFusion SQL type name for an Arrow dtype.
 
-    Returns
+    Returns:
     -------
     str
         DataFusion SQL type name for the dtype.
@@ -627,7 +627,7 @@ def validate_table(
 ) -> SchemaValidationReport:
     """Validate an Arrow table against a schema spec.
 
-    Returns
+    Returns:
     -------
     SchemaValidationReport
         Validation report with invalid rows and stats.
@@ -679,7 +679,7 @@ def validate_schema_contract(
 ) -> SchemaValidationReport:
     """Validate a table against a SchemaContract definition.
 
-    Returns
+    Returns:
     -------
     SchemaValidationReport
         Validation report with invalid rows and stats.
@@ -696,7 +696,7 @@ def validate_schema_contract(
 def required_field_names(spec: TableSchemaSpec) -> tuple[str, ...]:
     """Return required field names (explicit or non-nullable).
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Required field names.
@@ -710,7 +710,7 @@ def required_field_names(spec: TableSchemaSpec) -> tuple[str, ...]:
 def missing_key_fields(keys: Sequence[str], *, missing_cols: Sequence[str]) -> tuple[str, ...]:
     """Return key fields missing from the available columns.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Missing key field names.

@@ -37,7 +37,7 @@ def register_arrow_table(
     ingest_hook
         Optional ingest hook for diagnostics.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFusion DataFrame for the registered table.

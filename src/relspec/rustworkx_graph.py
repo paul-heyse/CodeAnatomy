@@ -268,7 +268,7 @@ def build_task_graph_from_inferred_deps(
 ) -> TaskGraph:
     """Build a task graph from inferred dependencies.
 
-    Returns
+    Returns:
     -------
     TaskGraph
         Graph constructed from inferred dependencies.
@@ -338,7 +338,7 @@ def build_task_graph_from_views(
 ) -> TaskGraph:
     """Build a task graph from view nodes and their plan bundles.
 
-    Returns
+    Returns:
     -------
     TaskGraph
         Graph constructed from view node dependencies.
@@ -387,7 +387,7 @@ def task_graph_snapshot(
 ) -> TaskGraphSnapshot:
     """Return a deterministic snapshot of a task graph.
 
-    Returns
+    Returns:
     -------
     TaskGraphSnapshot
         Deterministic snapshot for hashing or diagnostics.
@@ -418,7 +418,7 @@ def task_graph_snapshot(
 def task_graph_signature(snapshot: TaskGraphSnapshot) -> str:
     """Return a stable signature for a task graph snapshot.
 
-    Returns
+    Returns:
     -------
     str
         Stable signature of the snapshot payload.
@@ -441,7 +441,7 @@ def task_graph_diagnostics(
 ) -> GraphDiagnostics:
     """Return cycle and visualization diagnostics for a task graph.
 
-    Returns
+    Returns:
     -------
     GraphDiagnostics
         Diagnostic payload for the graph.
@@ -524,15 +524,12 @@ def _dag_graph_diagnostics(
 def task_graph_node_label(graph: TaskGraph, node_idx: int) -> str:
     """Return a stable label for a task graph node.
 
-    Raises
-    ------
-    TypeError
-        Raised when the node payload is not a GraphNode.
+    Args:
+        graph: Description.
+        node_idx: Description.
 
-    Returns
-    -------
-    str
-        Node label prefixed with kind.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     node = graph.graph[node_idx]
     if not isinstance(node, GraphNode):
@@ -546,7 +543,7 @@ def task_graph_node_label(graph: TaskGraph, node_idx: int) -> str:
 def task_graph_node_link_json(graph: TaskGraph) -> str:
     """Return node-link JSON for a task graph.
 
-    Returns
+    Returns:
     -------
     str
         Node-link JSON string for the graph.
@@ -566,7 +563,7 @@ def task_graph_isolate_labels(
 ) -> tuple[str, ...]:
     """Return human-readable labels for isolated nodes.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted labels for isolates in the graph.
@@ -587,7 +584,7 @@ def task_graph_subgraph(
 ) -> TaskGraph:
     """Return a TaskGraph subgraph for selected node ids.
 
-    Returns
+    Returns:
     -------
     TaskGraph
         Subgraph with matching nodes and edges.
@@ -662,7 +659,7 @@ def task_graph_impact_subgraph(
 ) -> TaskGraph:
     """Return the impact subgraph for a set of task names.
 
-    Returns
+    Returns:
     -------
     TaskGraph
         Subgraph containing impacted tasks and related evidence nodes.
@@ -681,15 +678,11 @@ def task_graph_impact_subgraph(
 def task_dependency_graph(graph: TaskGraph) -> rx.PyDiGraph:
     """Return a task-only dependency graph derived from evidence edges.
 
-    Returns
-    -------
-    rx.PyDiGraph
-        Task-only dependency graph.
+    Args:
+        graph: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when a task node payload is not a TaskNode.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     tasks: list[TaskNode] = []
     for name in sorted(graph.task_idx):
@@ -730,15 +723,13 @@ def task_dependency_reduction(
 ) -> TaskDependencyReduction:
     """Return full and reduced task dependency graphs with signatures.
 
-    Returns
-    -------
-    TaskDependencyReduction
-        Reduction artifacts and signatures for dependency graphs.
+    Args:
+        graph: Description.
+        task_signatures: Description.
+        label: Description.
 
-    Raises
-    ------
-    RelspecValidationError
-        Raised when the dependency graph contains a cycle.
+    Raises:
+        RelspecValidationError: If the operation cannot be completed.
     """
     full_graph = task_dependency_graph(graph)
     if not rx.is_directed_acyclic_graph(full_graph):
@@ -777,7 +768,7 @@ def task_dependency_immediate_dominators(
 ) -> dict[str, str | None]:
     """Return immediate dominators for task dependency graphs.
 
-    Returns
+    Returns:
     -------
     dict[str, str | None]
         Mapping of task name to its immediate dominator task name.
@@ -805,7 +796,7 @@ def task_dependency_betweenness_centrality(
 ) -> dict[str, float]:
     """Return betweenness centrality for task dependency graphs.
 
-    Returns
+    Returns:
     -------
     dict[str, float]
         Mapping of task name to betweenness centrality.
@@ -857,7 +848,7 @@ def task_dependency_bridge_edges(
 ) -> tuple[tuple[str, str], ...]:
     """Return bridge edges for the undirected view of the dependency graph.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[str, str], ...]
         Sorted task-name pairs representing bridge edges.
@@ -890,7 +881,7 @@ def task_dependency_articulation_tasks(
 ) -> tuple[str, ...]:
     """Return articulation tasks for the undirected dependency graph.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted task names that are articulation points.
@@ -907,7 +898,7 @@ def task_dependency_articulation_tasks(
 def task_dependency_signature(snapshot: TaskDependencySnapshot) -> str:
     """Return a stable signature for a task dependency snapshot.
 
-    Returns
+    Returns:
     -------
     str
         Stable hash signature for the snapshot.
@@ -958,7 +949,7 @@ def task_dependency_critical_path(
 ) -> tuple[int, ...]:
     """Return the weighted critical path node indices for a dependency graph.
 
-    Returns
+    Returns:
     -------
     tuple[int, ...]
         Node indices along the weighted critical path.
@@ -977,7 +968,7 @@ def task_dependency_critical_path_length(
 ) -> float:
     """Return the weighted critical path length for a dependency graph.
 
-    Returns
+    Returns:
     -------
     float
         Weighted critical path length.
@@ -997,7 +988,7 @@ def task_dependency_critical_path_tasks(
 ) -> tuple[str, ...]:
     """Return the critical path as task names.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Task names along the critical path.

@@ -18,6 +18,13 @@ class CodeAnatomyHamiltonTracker(sdk_adapters.HamiltonTracker):
         run_tag_provider: Callable[[], dict[str, str]] | None = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            *args: Description.
+            run_tag_provider: Description.
+            **kwargs: Description.
+        """
         super().__init__(*args, **kwargs)
         self._run_tag_provider = run_tag_provider
 
@@ -31,7 +38,7 @@ class CodeAnatomyHamiltonTracker(sdk_adapters.HamiltonTracker):
     ) -> Any:
         """Attach run-scoped tags before graph execution.
 
-        Returns
+        Returns:
         -------
         Any
             Result from the base tracker pre-execute hook.
@@ -79,6 +86,13 @@ class CodeAnatomyAsyncHamiltonTracker(sdk_adapters.AsyncHamiltonTracker):
         run_tag_provider: Callable[[], dict[str, str]] | None = None,
         **kwargs: Any,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            *args: Description.
+            run_tag_provider: Description.
+            **kwargs: Description.
+        """
         super().__init__(*args, **kwargs)
         self._run_tag_provider = run_tag_provider
 
@@ -92,7 +106,7 @@ class CodeAnatomyAsyncHamiltonTracker(sdk_adapters.AsyncHamiltonTracker):
     ) -> Any:
         """Attach run-scoped tags before async graph execution.
 
-        Returns
+        Returns:
         -------
         Any
             Result from the base tracker pre-execute hook.

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 class InstructionFact:
     """Single bytecode instruction fact.
 
-    Attributes
+    Attributes:
     ----------
     offset
         Byte offset of instruction
@@ -62,7 +62,7 @@ def extract_instruction_facts(code: CodeType) -> list[InstructionFact]:
     code
         Python code object to analyze.
 
-    Returns
+    Returns:
     -------
     list[InstructionFact]
         List of instruction facts for all bytecode instructions.
@@ -132,7 +132,7 @@ class BytecodeIndex:
         code
             Python code object.
 
-        Returns
+        Returns:
         -------
         BytecodeIndex
             Indexed bytecode instructions.
@@ -175,7 +175,7 @@ class BytecodeIndex:
         regex
             If True, treat pattern as regex.
 
-        Returns
+        Returns:
         -------
         list[InstructionFact]
             Matching instructions.
@@ -202,7 +202,7 @@ class BytecodeIndex:
         max_effect
             Maximum stack effect (inclusive).
 
-        Returns
+        Returns:
         -------
         list[InstructionFact]
             Matching instructions.
@@ -221,7 +221,7 @@ class BytecodeIndex:
 class ExceptionEntry:
     """Exception table entry for a code object.
 
-    Attributes
+    Attributes:
     ----------
     start
         Start offset of protected range
@@ -250,12 +250,12 @@ def parse_exception_table(code: CodeType) -> list[ExceptionEntry]:
     code
         Python code object.
 
-    Returns
+    Returns:
     -------
     list[ExceptionEntry]
         Exception table entries.
 
-    Notes
+    Notes:
     -----
     Uses dis.findlinestarts internals and exception table parsing
     available in Python 3.11+.

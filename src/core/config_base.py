@@ -30,7 +30,7 @@ class FingerprintableConfig(Protocol):
     def fingerprint(self) -> str:
         """Return a deterministic fingerprint for the payload.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the payload.
@@ -46,7 +46,7 @@ def config_fingerprint(payload: Mapping[str, object]) -> str:
     payload
         Mapping of configuration values.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hexdigest for the payload.

@@ -92,15 +92,18 @@ def restore_delta_table(
 ) -> RestoreReport:
     """Restore a Delta table and return a report payload.
 
-    Returns
-    -------
-    RestoreReport
-        Restore report payload.
+    Args:
+        path: Delta table URI.
+        version: Optional version to restore to.
+        timestamp: Optional timestamp to restore to.
+        storage_options: Optional storage backend options.
+        allow_unsafe_restore: Whether to allow unsafe restore operations.
 
-    Raises
-    ------
-    ValueError
-        Raised when neither or both of version/timestamp are provided.
+    Returns:
+        RestoreReport: Result.
+
+    Raises:
+        ValueError: If neither or both `version` and `timestamp` are provided.
     """
     if version is None and timestamp is None:
         msg = "Either --version or --timestamp must be specified."
@@ -128,7 +131,7 @@ def restore_delta_table(
 def main(argv: Sequence[str] | None = None) -> int:
     """Run Delta restore with CLI-provided options.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code.

@@ -24,7 +24,7 @@ def resolve_determinism_alias(value: str | None) -> DeterminismTier | None:
     value
         Determinism tier alias string.
 
-    Returns
+    Returns:
     -------
     DeterminismTier | None
         Resolved determinism tier or None when not provided.

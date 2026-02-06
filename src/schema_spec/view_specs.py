@@ -70,7 +70,7 @@ def view_spec_from_builder(inputs: ViewSpecInputs) -> ViewSpec:
     inputs:
         DataFusion session context used to resolve the view schema.
 
-    Returns
+    Returns:
     -------
     ViewSpec
         View specification derived from a DataFusion builder.
@@ -92,7 +92,7 @@ def view_spec_from_sql(inputs: ViewSpecSqlInputs) -> ViewSpec:
     inputs
         Inputs defining a SQL-backed view.
 
-    Returns
+    Returns:
     -------
     ViewSpec
         View specification derived from the SQL query.

@@ -55,7 +55,7 @@ def build_batch_session(
 ) -> BatchEntityQuerySession:
     """Build a shared scan session for multiple entity queries.
 
-    Returns
+    Returns:
     -------
     BatchEntityQuerySession
         Session containing shared scan artifacts.
@@ -99,7 +99,7 @@ def build_batch_session(
 def filter_files_for_scope(files: list[Path], root: Path, scope: Scope) -> set[str]:
     """Filter a pre-tabulated file list by scope constraints.
 
-    Returns
+    Returns:
     -------
     set[str]
         Relative paths that satisfy the scope constraints.
@@ -123,7 +123,7 @@ def filter_files_for_scope(files: list[Path], root: Path, scope: Scope) -> set[s
 def select_files_by_rel(files_by_rel: dict[str, Path], rel_paths: set[str]) -> list[Path]:
     """Return file paths matching a set of relative paths.
 
-    Returns
+    Returns:
     -------
     list[pathlib.Path]
         File paths resolved from relative path keys.

@@ -53,7 +53,7 @@ class CDFMergeStrategy(StrEnum):
     These strategies determine how incremental results are combined with
     existing materialized data when performing incremental updates.
 
-    Attributes
+    Attributes:
     ----------
     APPEND
         Add new rows without removing anything. Suitable for insert-only
@@ -90,7 +90,7 @@ class CDFJoinSpec:
     This specification defines how two tables with potential CDF changes
     should be joined for incremental relationship recomputation.
 
-    Attributes
+    Attributes:
     ----------
     left_table
         Base table name for the join (may include CDF changes).
@@ -126,7 +126,7 @@ class CDFJoinSpec:
         If no filter policy is explicitly provided, returns a default policy
         that includes inserts and updates but excludes deletes.
 
-        Returns
+        Returns:
         -------
         CdfFilterPolicy
             The filter policy to use for CDF filtering.
@@ -152,12 +152,12 @@ def is_cdf_enabled(df: DataFrame, cdf_column: str = DEFAULT_CDF_COLUMN) -> bool:
     cdf_column
         Expected CDF column name. Defaults to ``_change_type``.
 
-    Returns
+    Returns:
     -------
     bool
         True if the CDF column exists in the DataFrame schema.
 
-    Examples
+    Examples:
     --------
     >>> if is_cdf_enabled(refs_df):
     ...     # Use incremental join path
@@ -180,7 +180,7 @@ def _has_cdf_column(schema_fields: list[object], cdf_column: str) -> bool:
     cdf_column
         Expected CDF column name.
 
-    Returns
+    Returns:
     -------
     bool
         True if the CDF column exists.
@@ -214,12 +214,12 @@ def _apply_cdf_filter(
     cdf_column
         Name of the CDF operation type column.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Filtered DataFrame with only the desired CDF change types.
 
-    Notes
+    Notes:
     -----
     This function checks for CDF column existence before filtering.
     DataFrames without CDF columns pass through unchanged, enabling
@@ -269,12 +269,12 @@ def build_incremental_join(
         Callable that performs the actual join operation.
         Typically ``SemanticCompiler.relate`` or similar.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Joined result with CDF rows filtered appropriately.
 
-    Notes
+    Notes:
     -----
     This is a simplified implementation for the semantic pipeline.
     Full incremental processing would require:
@@ -290,7 +290,7 @@ def build_incremental_join(
     The ``ctx`` parameter is included for future extensions that may
     need to register intermediate views or access session state.
 
-    Examples
+    Examples:
     --------
     >>> spec = CDFJoinSpec(
     ...     left_table="refs",
@@ -335,77 +335,18 @@ def apply_cdf_merge(
 ) -> DataFrame:
     """Apply a CDF merge strategy to combine existing and new data.
 
-    This function implements the core merge logic for incremental updates,
-    supporting multiple strategies for combining new changes with existing
-    materialized data.
+    Args:
+        existing: Description.
+            new_data: Description.
+            key_columns: Description.
+            strategy: Description.
+            partition_column: Description.
 
-    Parameters
-    ----------
-    existing
-        Existing DataFrame to merge into.
-    new_data
-        New data to merge.
-    key_columns
-        Columns that identify unique rows for merge operations.
-    strategy
-        Merge strategy to apply:
-        - APPEND: Add new rows without removing anything
-        - UPSERT: Update existing rows and insert new ones based on keys
-        - REPLACE: Replace all data matching partition column with new data
-        - DELETE_INSERT: Delete matching rows first, then insert new rows
-    partition_column
-        Optional column for partition-level replacement. Required when
-        using REPLACE strategy to scope the replacement operation.
+    Returns:
+        DataFrame: Result.
 
-    Returns
-    -------
-    DataFrame
-        Merged result according to the specified strategy.
-
-    Raises
-    ------
-    ValueError
-        If REPLACE strategy is used without specifying partition_column,
-        or if an unsupported merge strategy is provided.
-
-    Examples
-    --------
-    UPSERT merge (update existing, insert new):
-
-    >>> result = apply_cdf_merge(
-    ...     existing=base_df,
-    ...     new_data=incremental_df,
-    ...     key_columns=("file_id", "ref_id"),
-    ...     strategy=CDFMergeStrategy.UPSERT,
-    ... )
-
-    Partition replacement (replace all rows in affected partitions):
-
-    >>> result = apply_cdf_merge(
-    ...     existing=base_df,
-    ...     new_data=incremental_df,
-    ...     key_columns=("file_id", "ref_id"),
-    ...     strategy=CDFMergeStrategy.REPLACE,
-    ...     partition_column="file_id",
-    ... )
-
-    Notes
-    -----
-    The merge strategies have different semantics:
-
-    - **APPEND**: Simple union of existing and new data. No deduplication
-      is performed, making this suitable for insert-only workloads.
-
-    - **UPSERT**: Anti-join on key columns followed by union. Rows in
-      ``existing`` that match keys in ``new_data`` are removed, then
-      all ``new_data`` rows are added.
-
-    - **REPLACE**: Partition-level replacement. All rows in ``existing``
-      that match any partition value in ``new_data`` are removed, then
-      ``new_data`` rows are added. Requires ``partition_column``.
-
-    - **DELETE_INSERT**: Explicit two-phase operation using anti-join
-      on key columns (same as UPSERT but semantically different intent).
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from datafusion import col
 
@@ -470,12 +411,12 @@ def merge_incremental_results(
     strategy
         Merge strategy to apply. Defaults to UPSERT for backward compatibility.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Merged result with base rows replaced by incremental rows.
 
-    Notes
+    Notes:
     -----
     This function delegates to :func:`apply_cdf_merge` when the base table exists.
     For tables not yet in the session, returns the incremental data directly.
@@ -513,7 +454,7 @@ def incremental_join_enabled(
     cdf_column
         Expected CDF column name.
 
-    Returns
+    Returns:
     -------
     bool
         True if either DataFrame has CDF information.

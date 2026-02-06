@@ -23,7 +23,7 @@ def build_identity_payload(
     view
         Mapping describing the view definition identity.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Canonical identity payload.
@@ -42,7 +42,7 @@ def identity_fingerprint(payload: Mapping[str, object]) -> str:
     payload
         Identity payload mapping.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hash of the canonical MessagePack payload.
@@ -58,7 +58,7 @@ def schema_identity_payload(schema: SchemaLike) -> dict[str, object]:
     schema
         Arrow schema to capture.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Identity payload for the schema.
@@ -74,7 +74,7 @@ def schema_identity_hash(schema: SchemaLike) -> str:
     schema
         Arrow schema to fingerprint.
 
-    Returns
+    Returns:
     -------
     str
         Schema identity hash.

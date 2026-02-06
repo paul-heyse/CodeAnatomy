@@ -45,7 +45,7 @@ def canonical_output_name(internal_name: str) -> str:
     internal_name
         The internal view name used in semantic pipeline code.
 
-    Returns
+    Returns:
     -------
     str
         The canonical output name.
@@ -65,7 +65,7 @@ def internal_name(output_name: str) -> str:
     output_name
         The canonical output name.
 
-    Returns
+    Returns:
     -------
     str
         The internal view name without suffix.
@@ -84,7 +84,7 @@ def is_semantic_output(name: str) -> bool:
     name
         The view name to check.
 
-    Returns
+    Returns:
     -------
     bool
         True if the name is a canonical semantic output name.

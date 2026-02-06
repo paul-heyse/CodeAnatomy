@@ -10,7 +10,7 @@ Schema constraints are inferred from:
 - Arrow metadata: KEY_FIELDS_META and REQUIRED_NON_NULL_META
 - Optional heuristics for key field inference from naming patterns
 
-Example
+Example:
 -------
 >>> from datafusion import SessionContext
 >>> from datafusion_engine.schema.contract_population import (
@@ -76,7 +76,7 @@ _KEY_FIELD_SUFFIXES: tuple[str, ...] = (
 def _decode_field_metadata(metadata: dict[bytes, bytes] | None) -> dict[str, str]:
     """Decode Arrow field metadata into a string-keyed mapping.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Decoded metadata mapping.
@@ -97,7 +97,7 @@ def _field_spec_from_arrow_field(arrow_field: pa.Field) -> FieldSpec:
     arrow_field
         Arrow field to convert.
 
-    Returns
+    Returns:
     -------
     FieldSpec
         Field specification derived from the Arrow field.
@@ -129,7 +129,7 @@ def _infer_required_non_null_from_fields(
     exclude_key_fields
         Key fields to exclude from required_non_null (they are implicitly required).
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Non-nullable field names excluding key fields.
@@ -141,7 +141,7 @@ def _infer_required_non_null_from_fields(
 def _merge_field_names(*sources: Sequence[str]) -> tuple[str, ...]:
     """Merge field name sequences preserving order and removing duplicates.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Merged field names without duplicates.
@@ -172,7 +172,7 @@ def _infer_key_fields(
     suffixes
         Suffix patterns for key field names.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Inferred key field names.
@@ -215,7 +215,7 @@ def _resolve_version(identity: dict[str, str], default: int) -> int:
     default
         Default version to use.
 
-    Returns
+    Returns:
     -------
     int
         Resolved version number.
@@ -241,7 +241,7 @@ def _build_contract_extras(
     options
         Population options.
 
-    Returns
+    Returns:
     -------
     tuple[DedupeSpecSpec | None, tuple[SortKeySpec, ...]]
         Dedupe spec and canonical sort tuple.
@@ -272,7 +272,7 @@ def _resolve_key_fields(
     options
         Population options.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[str, ...], tuple[str, ...]]
         Tuple of (merged key fields, inferred key fields).
@@ -305,7 +305,7 @@ def _resolve_required_non_null(
     options
         Population options.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[str, ...], tuple[str, ...]]
         Tuple of (merged required, inferred required).
@@ -321,7 +321,7 @@ def _resolve_required_non_null(
 class ContractPopulationOptions:
     """Options controlling contract auto-population behavior.
 
-    Attributes
+    Attributes:
     ----------
     infer_required_non_null
         Infer required_non_null from non-nullable fields. Default True.
@@ -352,7 +352,7 @@ class ContractPopulationOptions:
 class ContractPopulationResult:
     """Result of contract population with diagnostic metadata.
 
-    Attributes
+    Attributes:
     ----------
     contract
         Populated ContractSpec instance.
@@ -393,7 +393,7 @@ def populate_contract_from_schema(
     options
         Population options controlling inference behavior.
 
-    Returns
+    Returns:
     -------
     ContractSpec
         Contract specification derived from the schema.
@@ -419,7 +419,7 @@ def populate_contract_from_schema_detailed(
     options
         Population options controlling inference behavior.
 
-    Returns
+    Returns:
     -------
     ContractPopulationResult
         Result containing contract and inference metadata.
@@ -481,28 +481,16 @@ def populate_contract_from_table(
 ) -> ContractSpec:
     """Populate a ContractSpec from a DataFusion registered table.
 
-    Retrieve the schema from the DataFusion catalog and derive a contract
-    specification with constraints inferred from schema metadata and
-    field nullability.
+    Args:
+        ctx: Description.
+            table_name: Description.
+            options: Description.
 
-    Parameters
-    ----------
-    ctx
-        DataFusion session context with the table registered.
-    table_name
-        Name of the registered table.
-    options
-        Population options controlling inference behavior.
+    Returns:
+        ContractSpec: Result.
 
-    Returns
-    -------
-    ContractSpec
-        Contract specification derived from the table schema.
-
-    Raises
-    ------
-    ValueError
-        Raised when attempting to populate contracts for semantic outputs.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if _is_semantic_output_name(table_name):
         msg = (
@@ -522,24 +510,16 @@ def populate_contract_from_table_detailed(
 ) -> ContractPopulationResult:
     """Populate a ContractSpec from a table with detailed provenance.
 
-    Parameters
-    ----------
-    ctx
-        DataFusion session context with the table registered.
-    table_name
-        Name of the registered table.
-    options
-        Population options controlling inference behavior.
+    Args:
+        ctx: Description.
+            table_name: Description.
+            options: Description.
 
-    Returns
-    -------
-    ContractPopulationResult
-        Result containing contract and inference metadata.
+    Returns:
+        ContractPopulationResult: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when attempting to populate contracts for semantic outputs.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if _is_semantic_output_name(table_name):
         msg = (
@@ -567,7 +547,7 @@ class ContractCatalogPopulator:
     table_options
         Per-table option overrides keyed by table name.
 
-    Example
+    Example:
     -------
     >>> populator = ContractCatalogPopulator(ctx, options)
     >>> catalog = populator.populate_for_tables(["table_a", "table_b"])
@@ -586,7 +566,7 @@ class ContractCatalogPopulator:
         table_name
             Name of the registered table.
 
-        Returns
+        Returns:
         -------
         ContractSpec
             Contract specification for the table.
@@ -604,7 +584,7 @@ class ContractCatalogPopulator:
         table_names
             Names of registered tables to populate contracts for.
 
-        Returns
+        Returns:
         -------
         ContractCatalogSpec
             Catalog of contract specifications keyed by table name.
@@ -620,7 +600,7 @@ class ContractCatalogPopulator:
         Queries the DataFusion catalog for registered table names and
         populates contracts for each.
 
-        Returns
+        Returns:
         -------
         ContractCatalogSpec
             Catalog of contract specifications for all tables.
@@ -637,7 +617,7 @@ class ContractCatalogPopulator:
     def results(self) -> dict[str, ContractPopulationResult]:
         """Return population results with inference metadata.
 
-        Returns
+        Returns:
         -------
         dict[str, ContractPopulationResult]
             Mapping of table names to detailed population results.

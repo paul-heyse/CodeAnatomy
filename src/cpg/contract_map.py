@@ -84,7 +84,7 @@ def prop_fields_from_catalog(
     prop_specs:
         Optional property catalog overrides.
 
-    Returns
+    Returns:
     -------
     tuple[PropFieldSpec, ...]
         Prop field specs validated against the catalog.

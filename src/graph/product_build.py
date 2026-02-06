@@ -131,7 +131,7 @@ class GraphProductBuildRequest:
 def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildResult:
     """Build the requested graph product and return typed outputs.
 
-    Returns
+    Returns:
     -------
     GraphProductBuildResult
         Typed outputs for the requested graph product.
@@ -393,7 +393,7 @@ def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
 def _resolve_output_dir(repo_root: Path, output_dir: PathLike | None) -> Path:
     """Resolve the output directory for registry exports.
 
-    Returns
+    Returns:
     -------
     Path
         Absolute output directory path.

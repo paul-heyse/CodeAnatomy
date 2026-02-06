@@ -55,7 +55,7 @@ class CacheRunSummary:
     def to_row(self) -> dict[str, object]:
         """Return a JSON-ready summary payload.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             JSON-ready representation of the summary.
@@ -87,7 +87,7 @@ class CacheSnapshotRegistryEntry:
     def to_row(self) -> dict[str, object]:
         """Return a JSON-ready snapshot registry row.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             JSON-ready representation of the registry entry.
@@ -110,7 +110,7 @@ def ensure_cache_run_summary_table(
 ) -> DatasetLocation | None:
     """Ensure the cache run summary table exists and is registered.
 
-    Returns
+    Returns:
     -------
     DatasetLocation | None
         Dataset location for the cache run summary table when available.
@@ -142,7 +142,7 @@ def record_cache_run_summary(
 ) -> int | None:
     """Append a cache run summary into the ledger table.
 
-    Returns
+    Returns:
     -------
     int | None
         Delta table version when recorded, if available.
@@ -200,7 +200,7 @@ def ensure_cache_snapshot_registry_table(
 ) -> DatasetLocation | None:
     """Ensure the cache snapshot registry table exists and is registered.
 
-    Returns
+    Returns:
     -------
     DatasetLocation | None
         Dataset location for the cache snapshot registry table when available.
@@ -232,7 +232,7 @@ def record_cache_snapshot_registry(
 ) -> int | None:
     """Append a cache snapshot registry entry.
 
-    Returns
+    Returns:
     -------
     int | None
         Delta table version when recorded, if available.
@@ -353,7 +353,7 @@ def _cache_snapshot_registry_schema() -> pa.Schema:
 def cache_run_summary_schema() -> pa.Schema:
     """Return the cache run summary schema.
 
-    Returns
+    Returns:
     -------
     pa.Schema
         Schema for cache run summary rows.
@@ -364,7 +364,7 @@ def cache_run_summary_schema() -> pa.Schema:
 def cache_snapshot_registry_schema() -> pa.Schema:
     """Return the cache snapshot registry schema.
 
-    Returns
+    Returns:
     -------
     pa.Schema
         Schema for cache snapshot registry rows.

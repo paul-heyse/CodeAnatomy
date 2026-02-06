@@ -23,7 +23,7 @@ require_datafusion()
 def _simple_ctx() -> SessionContext:
     """Return a simple DataFusion SessionContext for tests.
 
-    Returns
+    Returns:
     -------
     SessionContext
         A minimal SessionContext for testing.

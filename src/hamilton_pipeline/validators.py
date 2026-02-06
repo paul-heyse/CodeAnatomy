@@ -36,13 +36,14 @@ class TableSchemaValidator(dq_base.DataValidator):
     """Validate that a table-like object matches an expected schema."""
 
     def __init__(self, *, expected_columns: Sequence[str], importance: str = "warn") -> None:
+        """__init__."""
         super().__init__(importance)
         self._expected_columns = tuple(expected_columns)
 
     def applies_to(self, datatype: type[type]) -> bool:
         """Return whether the validator applies to the datatype.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` for any datatype.
@@ -54,7 +55,7 @@ class TableSchemaValidator(dq_base.DataValidator):
     def description(self) -> str:
         """Return a human-readable validator description.
 
-        Returns
+        Returns:
         -------
         str
             Validator description.
@@ -68,7 +69,7 @@ class TableSchemaValidator(dq_base.DataValidator):
     def name(cls) -> str:
         """Return the validator name.
 
-        Returns
+        Returns:
         -------
         str
             Validator name.
@@ -78,7 +79,7 @@ class TableSchemaValidator(dq_base.DataValidator):
     def validate(self, dataset: Any) -> dq_base.ValidationResult:
         """Validate that the dataset contains the expected columns.
 
-        Returns
+        Returns:
         -------
         ValidationResult
             Validation result payload.
@@ -113,13 +114,14 @@ class SchemaContractValidator(dq_base.DataValidator):
     """Validate a table-like output against a registered schema contract."""
 
     def __init__(self, *, dataset_name: str, importance: str = "warn") -> None:
+        """__init__."""
         super().__init__(importance)
         self._dataset_name = dataset_name
 
     def applies_to(self, datatype: type[type]) -> bool:
         """Return whether the validator applies to the datatype.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` for any datatype.
@@ -129,7 +131,7 @@ class SchemaContractValidator(dq_base.DataValidator):
     def description(self) -> str:
         """Return a human-readable validator description.
 
-        Returns
+        Returns:
         -------
         str
             Validator description.
@@ -140,7 +142,7 @@ class SchemaContractValidator(dq_base.DataValidator):
     def name(cls) -> str:
         """Return the validator name.
 
-        Returns
+        Returns:
         -------
         str
             Validator name.
@@ -150,7 +152,7 @@ class SchemaContractValidator(dq_base.DataValidator):
     def validate(self, dataset: Any) -> dq_base.ValidationResult:
         """Validate the dataset against its schema contract.
 
-        Returns
+        Returns:
         -------
         ValidationResult
             Validation result payload.
@@ -191,12 +193,13 @@ class NonEmptyTableValidator(dq_base.DataValidator):
     """Warn when a table-like output is empty."""
 
     def __init__(self, *, importance: str = "warn") -> None:
+        """__init__."""
         super().__init__(importance)
 
     def applies_to(self, datatype: type[type]) -> bool:
         """Return whether the validator applies to the datatype.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` for any datatype.
@@ -208,7 +211,7 @@ class NonEmptyTableValidator(dq_base.DataValidator):
     def description(self) -> str:
         """Return a human-readable validator description.
 
-        Returns
+        Returns:
         -------
         str
             Validator description.
@@ -219,7 +222,7 @@ class NonEmptyTableValidator(dq_base.DataValidator):
     def name(cls) -> str:
         """Return the validator name.
 
-        Returns
+        Returns:
         -------
         str
             Validator name.
@@ -229,7 +232,7 @@ class NonEmptyTableValidator(dq_base.DataValidator):
     def validate(self, dataset: Any) -> dq_base.ValidationResult:
         """Validate that the dataset has at least one row.
 
-        Returns
+        Returns:
         -------
         ValidationResult
             Validation result payload.

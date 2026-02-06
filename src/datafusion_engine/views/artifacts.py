@@ -42,7 +42,7 @@ def _coerce_payload_list(value: object, *, field: str) -> list[object]:
 class DataFusionViewArtifact(StructBaseCompat, frozen=True):
     """DataFusion-native view artifact using plan bundles.
 
-    Attributes
+    Attributes:
     ----------
     name : str
         View name.
@@ -73,7 +73,7 @@ class DataFusionViewArtifact(StructBaseCompat, frozen=True):
     def payload(self) -> dict[str, object]:
         """Return a JSON-ready payload for diagnostics and persistence.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             JSON-serializable payload for diagnostics and storage.
@@ -113,7 +113,7 @@ class DataFusionViewArtifact(StructBaseCompat, frozen=True):
         event_time_unix_ms
             Event timestamp in milliseconds.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Diagnostics-ready payload with serialized schema.
@@ -204,7 +204,7 @@ def build_view_artifact_from_bundle(
     request
         View artifact request payload.
 
-    Returns
+    Returns:
     -------
     DataFusionViewArtifact
         DataFusion-native view artifact.
@@ -242,20 +242,14 @@ VIEW_ARTIFACT_PAYLOAD_SCHEMA = pa.schema(
 def view_artifact_payload_table(rows: Sequence[Mapping[str, object]]) -> pa.Table:
     """Build a deterministic Arrow table for view artifact payloads.
 
-    Parameters
-    ----------
-    rows
-        View artifact payloads as dictionaries.
+    Args:
+        rows: Description.
 
-    Returns
-    -------
-    pyarrow.Table
-        Arrow table with the canonical view artifact schema.
+    Returns:
+        pa.Table: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when a payload is missing required fields.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     normalized: list[dict[str, object]] = []
     for row in rows:

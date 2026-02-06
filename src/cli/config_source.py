@@ -42,7 +42,7 @@ class ConfigValue:
     def to_dict(self) -> dict[str, object]:
         """Convert to dictionary representation.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Dictionary with value, source, and optional detail.
@@ -71,7 +71,7 @@ class ConfigWithSources:
     def to_dict(self) -> dict[str, dict[str, object]]:
         """Convert to dictionary representation.
 
-        Returns
+        Returns:
         -------
         dict[str, dict[str, object]]
             Nested dictionary with values and their sources.
@@ -81,7 +81,7 @@ class ConfigWithSources:
     def to_display_dict(self) -> dict[str, dict[str, object]]:
         """Convert to display-ready dictionary representation.
 
-        Returns
+        Returns:
         -------
         dict[str, dict[str, object]]
             Nested dictionary with values and their sources.
@@ -91,7 +91,7 @@ class ConfigWithSources:
     def to_flat_dict(self) -> dict[str, JsonValue]:
         """Get plain configuration values without source tracking.
 
-        Returns
+        Returns:
         -------
         dict[str, JsonValue]
             Plain key-value configuration dictionary.
@@ -101,7 +101,7 @@ class ConfigWithSources:
     def plain_values(self) -> dict[str, JsonValue]:
         """Alias for to_flat_dict().
 
-        Returns
+        Returns:
         -------
         dict[str, JsonValue]
             Plain key-value configuration dictionary.

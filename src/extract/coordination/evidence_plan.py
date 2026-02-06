@@ -29,7 +29,7 @@ class EvidencePlan:
     def requires_dataset(self, name: str) -> bool:
         """Return whether the dataset name is required.
 
-        Returns
+        Returns:
         -------
         bool
             True when the dataset is required by the evidence plan.
@@ -41,7 +41,7 @@ class EvidencePlan:
     def requires_template(self, template: str) -> bool:
         """Return whether any dataset for a template is required.
 
-        Returns
+        Returns:
         -------
         bool
             True when any dataset for the template is required.
@@ -58,7 +58,7 @@ class EvidencePlan:
     def required_columns_for(self, name: str) -> tuple[str, ...]:
         """Return required columns for a dataset name.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Required columns for the dataset, if any.
@@ -91,7 +91,7 @@ def compile_evidence_plan(
     telemetry_provider : Callable[[str], ScanTelemetry | None] | None
         Optional telemetry provider for scan telemetry capture.
 
-    Returns
+    Returns:
     -------
     EvidencePlan
         Evidence plan describing required datasets and columns.

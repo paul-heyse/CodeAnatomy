@@ -29,7 +29,7 @@ class CdfImpactRequest:
 def impacted_tasks_for_cdf(request: CdfImpactRequest) -> tuple[str, ...]:
     """Return tasks impacted by CDF changes in registered datasets.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Sorted task names impacted by datasets with CDF changes.

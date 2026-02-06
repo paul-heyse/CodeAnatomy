@@ -45,7 +45,7 @@ def export_cache_lineage_artifacts(
 ) -> CacheLineageSummary:
     """Export cache lineage details for a run into artifacts.
 
-    Returns
+    Returns:
     -------
     CacheLineageSummary
         Summary of records written and errors encountered.

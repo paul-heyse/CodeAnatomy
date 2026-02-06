@@ -304,7 +304,7 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
     def to_row(self) -> dict[str, object]:
         """Return a row mapping for Arrow/Delta ingestion.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Row mapping for ingestion.
@@ -381,7 +381,7 @@ class WriteArtifactRow(StructBaseCompat, frozen=True):
     def to_row(self) -> dict[str, object]:
         """Return a row mapping for Arrow/Delta ingestion.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Row mapping for ingestion.
@@ -446,7 +446,7 @@ class RuntimeProfileSnapshot(StructBaseCompat, frozen=True):
     def payload(self) -> dict[str, object]:
         """Return the snapshot payload for serialization.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Snapshot payload mapping.
@@ -597,7 +597,7 @@ def artifact_envelope_id(envelope: ArtifactEnvelopeBase) -> str:
     envelope
         Artifact envelope to hash.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hash of the msgpack payload.
@@ -608,7 +608,7 @@ def artifact_envelope_id(envelope: ArtifactEnvelopeBase) -> str:
 def artifact_schema_types() -> tuple[type[msgspec.Struct], ...]:
     """Return msgspec struct types exported as schema contracts.
 
-    Returns
+    Returns:
     -------
     tuple[type[msgspec.Struct], ...]
         msgspec struct types for schema export.
@@ -629,7 +629,7 @@ def export_artifact_schemas(output_dir: Path) -> tuple[Path, ...]:
     output_dir
         Directory to write schema files into.
 
-    Returns
+    Returns:
     -------
     tuple[Path, ...]
         Paths to the generated schema files.

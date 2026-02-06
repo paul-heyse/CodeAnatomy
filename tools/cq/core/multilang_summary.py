@@ -57,7 +57,7 @@ def normalize_language_partitions(
 ) -> dict[QueryLanguage, dict[str, object]]:
     """Normalize partition payloads in deterministic language order.
 
-    Returns
+    Returns:
     -------
     dict[QueryLanguage, dict[str, object]]
         Ordered per-language summary payloads.
@@ -86,7 +86,7 @@ def build_multilang_summary(
 ) -> dict[str, object]:
     """Build canonical multilang summary payload.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Summary dictionary with required multilang keys.
@@ -114,7 +114,7 @@ def partition_stats_from_result_summary(
 ) -> dict[str, object]:
     """Extract a compact language partition payload from a command summary.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Stable per-language stats map.
@@ -149,12 +149,12 @@ def partition_stats_from_result_summary(
 def assert_multilang_summary(summary: Mapping[str, object]) -> None:
     """Validate required multi-language summary fields.
 
-    Raises
-    ------
-    ValueError
-        Raised when required fields are missing or malformed.
-    TypeError
-        Raised when required fields have invalid runtime types.
+    Args:
+        summary: Description.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
+        ValueError: If the operation cannot be completed.
     """
     missing = [key for key in _REQUIRED_KEYS if key not in summary]
     if missing:

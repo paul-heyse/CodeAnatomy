@@ -15,7 +15,7 @@ High-signal code queries for LLM agents.
 /cq q "entity=function name=build_graph_product"
 
 # Rust entity query
-/cq q "entity=function lang=rust in=rust/"
+/cq q "entity=function lang=rust in=rust"
 
 # Multi-step execution (shared q-scan)
 /cq run --steps '[{"type":"search","query":"build_graph"},{"type":"q","query":"entity=function name=build_graph"},{"type":"calls","function":"build_graph"}]'
@@ -58,7 +58,6 @@ High-signal code queries for LLM agents.
 | `summary` | Condensed single-line output |
 | `mermaid` | Mermaid flowchart |
 | `mermaid-class` | Mermaid class diagram |
-| `mermaid-cfg` | Mermaid control-flow graph |
 | `dot` | Graphviz DOT |
 
 ## Dependencies

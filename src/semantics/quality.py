@@ -49,14 +49,14 @@ class SelectExpr:
 
     Used to specify output columns from relationship compilation.
 
-    Attributes
+    Attributes:
     ----------
     expr
         Expression spec to project.
     alias
         Output column name.
 
-    Examples
+    Examples:
     --------
     >>> from semantics.exprs import c, v
     >>> select = SelectExpr(c("ds_entity_id"), "src")
@@ -72,14 +72,14 @@ class OrderSpec:
 
     Used to specify ranking order for ambiguity resolution.
 
-    Attributes
+    Attributes:
     ----------
     expr
         Sort expression spec.
     direction
         Sort direction ("asc" or "desc").
 
-    Examples
+    Examples:
     --------
     >>> from semantics.exprs import c
     >>> order = OrderSpec(c("score"), direction="desc")
@@ -96,12 +96,12 @@ class HardPredicate:
     Hard predicates are required conditions that must be satisfied
     for a candidate pair to be considered. They filter before scoring.
 
-    Attributes
+    Attributes:
     ----------
     predicate
         Expression spec that returns a boolean.
 
-    Examples
+    Examples:
     --------
     >>> from semantics.exprs import is_not_null, eq
     >>> pred = HardPredicate(is_not_null("owner_def_id"))
@@ -119,7 +119,7 @@ class Feature:
     features represent soft matching signals, while quality features
     represent file-level quality adjustments.
 
-    Attributes
+    Attributes:
     ----------
     name
         Feature name (used as column alias).
@@ -130,7 +130,7 @@ class Feature:
     kind
         Feature kind: "evidence" or "quality".
 
-    Examples
+    Examples:
     --------
     >>> from semantics.exprs import case_eq
     >>> feature = Feature("kind_match", case_eq("owner_kind", "def_kind"), weight=5.0)
@@ -149,7 +149,7 @@ class SignalsSpec:
     Combines hard predicates, soft features, and base scores into a
     complete signal specification for relationship quality computation.
 
-    Attributes
+    Attributes:
     ----------
     base_score
         Base score before feature adjustments.
@@ -164,7 +164,7 @@ class SignalsSpec:
     quality_weight
         Weight for file quality contribution to confidence.
 
-    Examples
+    Examples:
     --------
     >>> from semantics.exprs import is_not_null, eq, case_eq
     >>> signals = SignalsSpec(
@@ -195,7 +195,7 @@ class RankSpec:
     Specifies how to rank candidates and select winners when multiple
     matches exist for the same source entity.
 
-    Attributes
+    Attributes:
     ----------
     ambiguity_key_expr
         Expression spec for grouping ambiguous matches.
@@ -210,7 +210,7 @@ class RankSpec:
     top_k
         Number of top matches to keep per group (when keep="best").
 
-    Examples
+    Examples:
     --------
     >>> from semantics.exprs import c
     >>> rank = RankSpec(
@@ -244,7 +244,7 @@ class QualityRelationshipSpec:
     RelationshipSpec in specs.py. Existing specs continue to work,
     and quality specs can be migrated incrementally.
 
-    Attributes
+    Attributes:
     ----------
     name
         Output name for the relationship view.
@@ -275,7 +275,7 @@ class QualityRelationshipSpec:
     file_quality_view
         Name of file quality view to join.
 
-    Examples
+    Examples:
     --------
     >>> from semantics.exprs import c, v, eq, is_not_null, case_eq
     >>> spec = QualityRelationshipSpec(

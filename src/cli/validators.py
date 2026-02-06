@@ -62,17 +62,12 @@ class ConditionalRequired:
     ) -> None:
         """Validate that required parameters are present when condition is met.
 
-        Parameters
-        ----------
-        *args
-            Positional args forwarded by cyclopts for parameter resolution.
-        resolved_params
-            Dictionary of resolved parameter values.
+        Args:
+            *args: Description.
+            **resolved_params: Description.
 
-        Raises
-        ------
-        ValueError
-            When required parameters are missing.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         params = _resolve_params(args, resolved_params)
         condition = params.get(self.condition_param)

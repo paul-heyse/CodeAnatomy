@@ -80,7 +80,7 @@ class _BindContext:
 def _arg_to_str(arg: ast.expr) -> str:
     """Convert argument expression to string.
 
-    Returns
+    Returns:
     -------
     str
         String representation of the argument expression.
@@ -273,7 +273,7 @@ def bind_call_to_params(
     callee : FnDecl
         Target function.
 
-    Returns
+    Returns:
     -------
     BoundCall
         Binding result.
@@ -318,7 +318,7 @@ def tainted_params_from_bound_call(
     tainted_args : set[int] | set[str]
         Tainted argument indices (positional) or values (expressions).
 
-    Returns
+    Returns:
     -------
     set[str]
         Parameter names that receive tainted values.
@@ -344,7 +344,7 @@ def expand_unknown_taint(bound: BoundCall) -> set[str]:
     bound : BoundCall
         Binding information.
 
-    Returns
+    Returns:
     -------
     set[str]
         Potentially tainted parameter names.

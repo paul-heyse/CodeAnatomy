@@ -144,7 +144,7 @@ class TestASTClassification:
     def python_source(self, tmp_path: Path) -> Path:
         """Create sample Python file for testing.
 
-        Returns
+        Returns:
         -------
         Path
             Path to a temporary Python source file.

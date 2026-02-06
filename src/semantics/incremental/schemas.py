@@ -14,7 +14,7 @@ from schema_spec.system import DatasetSpec, DeltaMaintenancePolicy, dataset_spec
 def incremental_dataset_specs() -> tuple[DatasetSpec, ...]:
     """Return incremental dataset specs derived from DataFusion.
 
-    Returns
+    Returns:
     -------
     tuple[object, ...]
         Dataset specs for incremental datasets.

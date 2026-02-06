@@ -17,7 +17,7 @@ from tools.cq.search.smart_search import smart_search
 def repo_root() -> Path:
     """Get repository root path.
 
-    Returns
+    Returns:
     -------
     Path
         Repository root directory.
@@ -29,7 +29,7 @@ def repo_root() -> Path:
 def toolchain() -> Toolchain:
     """Build a Toolchain instance for testing.
 
-    Returns
+    Returns:
     -------
     Toolchain
         Detected toolchain instance.
@@ -49,7 +49,7 @@ def _execute_query(query_text: str, toolchain: Toolchain, repo_root: Path) -> Cq
     repo_root : Path
         Repository root path.
 
-    Returns
+    Returns:
     -------
     CqResult
         Query execution result.

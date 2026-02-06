@@ -154,7 +154,7 @@ class DataFusionContextPool:
     ) -> Iterator[SessionContext]:
         """Yield a pooled SessionContext and clean up run-scoped artifacts.
 
-        Yields
+        Yields:
         ------
         SessionContext
             Session context borrowed from the pool for the caller's work.
@@ -170,7 +170,7 @@ class DataFusionContextPool:
     def next_run_prefix(self) -> str:
         """Return a deterministic run-scoped object prefix.
 
-        Returns
+        Returns:
         -------
         str
             Prefix used to identify temporary run-scoped objects.
@@ -292,7 +292,7 @@ class SessionFactory:
     def build_config(self) -> SessionConfig:
         """Return a SessionConfig configured from the runtime profile.
 
-        Returns
+        Returns:
         -------
         SessionConfig
             Configured SessionConfig instance.
@@ -406,7 +406,7 @@ class SessionFactory:
     def build_runtime_env(self) -> RuntimeEnvBuilder:
         """Return a RuntimeEnvBuilder configured from the runtime profile.
 
-        Returns
+        Returns:
         -------
         RuntimeEnvBuilder
             Configured runtime environment builder.
@@ -416,7 +416,7 @@ class SessionFactory:
     def build(self) -> SessionContext:
         """Return a SessionContext configured from the runtime profile.
 
-        Returns
+        Returns:
         -------
         SessionContext
             Configured SessionContext instance.

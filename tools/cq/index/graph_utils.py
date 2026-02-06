@@ -16,7 +16,7 @@ def _build_digraph(graph: dict[str, set[str]]) -> tuple[rx.PyDiGraph, list[str],
     graph : dict[str, set[str]]
         Adjacency dict: source -> set of targets.
 
-    Returns
+    Returns:
     -------
     tuple[rx.PyDiGraph, list[str], dict[str, int]]
         Graph, node list, and node-to-index mapping.
@@ -50,7 +50,7 @@ def find_sccs(graph: dict[str, set[str]]) -> list[list[str]]:
     graph : dict[str, set[str]]
         Adjacency dict: source -> set of targets.
 
-    Returns
+    Returns:
     -------
     list[list[str]]
         List of SCCs, each SCC is a list of nodes forming a cycle.
@@ -77,7 +77,7 @@ def find_simple_cycles(graph: dict[str, set[str]], *, max_cycles: int = 100) -> 
     max_cycles : int
         Maximum number of cycles to return.
 
-    Returns
+    Returns:
     -------
     list[list[str]]
         List of cycles, each cycle is a list of nodes.
@@ -106,7 +106,7 @@ def get_ancestors(graph: dict[str, set[str]], node: str) -> set[str]:
     node : str
         Node to find ancestors for.
 
-    Returns
+    Returns:
     -------
     set[str]
         All nodes that can reach the given node.
@@ -134,7 +134,7 @@ def get_descendants(graph: dict[str, set[str]], node: str) -> set[str]:
     node : str
         Node to find descendants for.
 
-    Returns
+    Returns:
     -------
     set[str]
         All nodes reachable from the given node.
@@ -160,7 +160,7 @@ def topological_sort(graph: dict[str, set[str]]) -> list[str] | None:
     graph : dict[str, set[str]]
         Adjacency dict: source -> set of targets.
 
-    Returns
+    Returns:
     -------
     list[str] | None
         Topological ordering or None if graph has cycles.

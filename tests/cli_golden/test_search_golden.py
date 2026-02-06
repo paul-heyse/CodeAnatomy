@@ -16,7 +16,7 @@ from tests.cli_golden._support.goldens import assert_text_snapshot
 def _capture_cq_help(tokens: list[str]) -> str:
     """Capture cq help output.
 
-    Returns
+    Returns:
     -------
     str
         Rendered help output.
@@ -35,7 +35,7 @@ def test_search_help(*, update_golden: bool) -> None:
 def _render_search_summary() -> str:
     """Render a minimal search summary to snapshot summary fields.
 
-    Returns
+    Returns:
     -------
     str
         Markdown summary output.

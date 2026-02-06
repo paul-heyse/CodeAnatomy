@@ -80,7 +80,7 @@ class DeltaQueryRequest:
 def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
     """Return Delta history/protocol snapshots and record diagnostics.
 
-    Returns
+    Returns:
     -------
     DeltaHistorySnapshot
         History and protocol snapshots for the Delta table.
@@ -130,15 +130,14 @@ def delta_history(request: DeltaHistoryRequest) -> DeltaHistorySnapshot:
 def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
     """Run Delta vacuum and record diagnostics.
 
-    Returns
-    -------
-    DeltaVacuumResult
-        Vacuum result payload.
+    Args:
+        request: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the retention guardrail is violated.
+    Returns:
+        DeltaVacuumResult: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     resolved = request.options or DeltaVacuumOptions()
     if resolved.enforce_retention_duration and (
@@ -189,7 +188,7 @@ def delta_vacuum(request: DeltaVacuumRequest) -> DeltaVacuumResult:
 def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     """Execute a DataFusion query against a Delta table.
 
-    Returns
+    Returns:
     -------
     RecordBatchReaderLike
         Streaming reader over the query results.

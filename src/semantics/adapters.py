@@ -38,7 +38,7 @@ DEFAULT_TASK_PRIORITY: int = 100
 class RelationshipProjectionOptions:
     """Options for projecting semantic outputs to legacy schema.
 
-    Attributes
+    Attributes:
     ----------
     entity_id_alias
         Output column name for entity ID (e.g., "ref_id", "def_id").
@@ -93,12 +93,12 @@ def legacy_relationship_projection(
     options
         Projection options specifying column mappings and defaults.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame projected to legacy relationship schema.
 
-    Notes
+    Notes:
     -----
     When ``use_computed_confidence`` or ``use_computed_score`` is True,
     the respective column is passed through from the input DataFrame
@@ -158,12 +158,12 @@ def legacy_relationship_projection_extended(
     options
         Projection options specifying column mappings and defaults.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame projected to extended legacy relationship schema.
 
-    Notes
+    Notes:
     -----
     When ``use_computed_confidence`` or ``use_computed_score`` is True,
     the respective column is passed through from the input DataFrame
@@ -234,7 +234,7 @@ def project_semantic_to_legacy(
     options
         Projection options specifying column mappings and defaults.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame projected to legacy relationship schema.
@@ -262,7 +262,7 @@ def _select_with_optional(
         If the column exists in df, it is selected; otherwise a null literal
         with the specified type is used.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame with required and optional columns.
@@ -290,7 +290,7 @@ def _df_column_names(df: DataFrame) -> tuple[str, ...]:
     df
         DataFrame to inspect.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Column names in schema order.

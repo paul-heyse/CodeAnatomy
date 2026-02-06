@@ -31,7 +31,7 @@ def collect_span_filters(
 ) -> list[dict[str, list[tuple[int, int]]]]:
     """Collect relational match spans for each query using a shared file parse.
 
-    Returns
+    Returns:
     -------
     list[dict[str, list[tuple[int, int]]]]
         Per-query mapping of file to match spans.

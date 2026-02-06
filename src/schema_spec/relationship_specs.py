@@ -43,7 +43,7 @@ SpecAccessor = Callable[["SessionContext | None"], DatasetSpec]
 class RelationshipData(StructBaseStrict, frozen=True):
     """Minimal data defining a relationship - everything else is derived.
 
-    Attributes
+    Attributes:
     ----------
     name
         Short relationship name without version suffix (e.g., "rel_name_symbol").
@@ -124,7 +124,7 @@ def _dedupe_keys_for_relationship(data: RelationshipData) -> tuple[str, ...]:
     data
         Relationship data with entity_id_col and optional override keys.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Complete dedupe key tuple.
@@ -144,7 +144,7 @@ def _canonical_sort_for_relationship(data: RelationshipData) -> tuple[SortKeySpe
     data
         Relationship data with entity_id_col and optional extra sort keys.
 
-    Returns
+    Returns:
     -------
     tuple[SortKeySpec, ...]
         Complete canonical sort specification.
@@ -171,7 +171,7 @@ def generate_relationship_contract_entry(
     spec
         DatasetSpec resolved from context for schema information.
 
-    Returns
+    Returns:
     -------
     ContractSpec
         Complete contract specification for the relationship.
@@ -207,7 +207,7 @@ def rel_name_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     ctx
         Optional SessionContext to resolve the schema.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset spec for name-to-symbol relationship rows.
@@ -230,7 +230,7 @@ def rel_import_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     ctx
         Optional SessionContext to resolve the schema.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset spec for import-to-symbol relationship rows.
@@ -253,7 +253,7 @@ def rel_def_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     ctx
         Optional SessionContext to resolve the schema.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset spec for definition-to-symbol relationship rows.
@@ -276,7 +276,7 @@ def rel_callsite_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     ctx
         Optional SessionContext to resolve the schema.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset spec for callsite-to-symbol relationship rows.
@@ -299,7 +299,7 @@ def relation_output_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     ctx
         Optional SessionContext to resolve the schema.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset spec for relation_output rows.
@@ -330,7 +330,7 @@ def relationship_dataset_specs(ctx: SessionContext | None = None) -> tuple[Datas
     ctx
         Optional SessionContext to resolve the schema.
 
-    Returns
+    Returns:
     -------
     tuple[DatasetSpec, ...]
         Relationship dataset specs sorted by name.
@@ -353,7 +353,7 @@ def relationship_contract_spec(ctx: SessionContext | None = None) -> ContractCat
     ctx
         Optional SessionContext to resolve the schema.
 
-    Returns
+    Returns:
     -------
     ContractCatalogSpec
         Contract catalog for relationship datasets.
@@ -383,7 +383,7 @@ def _constraint_key_sets(rows: Sequence[Mapping[str, object]]) -> list[tuple[str
     rows
         Rows from information_schema.key_column_usage query.
 
-    Returns
+    Returns:
     -------
     list[tuple[str, ...]]
         List of constraint key tuples.
@@ -418,7 +418,7 @@ def _expected_dedupe_keys(ctx: SessionContext | None) -> dict[str, tuple[str, ..
     ctx
         Optional SessionContext to resolve the schema.
 
-    Returns
+    Returns:
     -------
     dict[str, tuple[str, ...]]
         Mapping of table names to expected dedupe key tuples.
@@ -445,7 +445,7 @@ def relationship_constraint_errors(
     sql_options
         Optional SQL execution options.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Mapping of dataset name to constraint error details.

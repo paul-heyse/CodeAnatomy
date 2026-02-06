@@ -25,7 +25,7 @@ class SemanticRuntimeConfig:
     Owned by semantics module. DataFusion engine provides adapters
     to build this from DataFusionRuntimeProfile.
 
-    Attributes
+    Attributes:
     ----------
     output_locations
         Mapping of dataset names to output paths.
@@ -56,7 +56,7 @@ class SemanticRuntimeConfig:
         name
             Dataset name.
 
-        Returns
+        Returns:
         -------
         str | None
             Output path if configured.
@@ -73,7 +73,7 @@ class SemanticRuntimeConfig:
         default
             Default policy if not overridden.
 
-        Returns
+        Returns:
         -------
         CachePolicy
             Cache policy for the view.
@@ -85,7 +85,7 @@ class SemanticRuntimeConfig:
 class SemanticBuildOptions:
     """Options for semantic build operations.
 
-    Attributes
+    Attributes:
     ----------
     use_cdf
         Whether to enable CDF-aware incremental joins.

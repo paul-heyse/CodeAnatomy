@@ -10,7 +10,7 @@ import pyarrow as pa
 def string_field(name: str, *, nullable: bool = True) -> pa.Field:
     """Create a string field.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Configured string field.
@@ -21,7 +21,7 @@ def string_field(name: str, *, nullable: bool = True) -> pa.Field:
 def int64_field(name: str, *, nullable: bool = True) -> pa.Field:
     """Create an int64 field.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Configured int64 field.
@@ -32,7 +32,7 @@ def int64_field(name: str, *, nullable: bool = True) -> pa.Field:
 def int32_field(name: str, *, nullable: bool = True) -> pa.Field:
     """Create an int32 field.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Configured int32 field.
@@ -43,7 +43,7 @@ def int32_field(name: str, *, nullable: bool = True) -> pa.Field:
 def float64_field(name: str, *, nullable: bool = True) -> pa.Field:
     """Create a float64 field.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Configured float64 field.
@@ -54,7 +54,7 @@ def float64_field(name: str, *, nullable: bool = True) -> pa.Field:
 def bool_field(name: str, *, nullable: bool = True) -> pa.Field:
     """Create a boolean field.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Configured boolean field.
@@ -65,7 +65,7 @@ def bool_field(name: str, *, nullable: bool = True) -> pa.Field:
 def binary_field(name: str, *, nullable: bool = True) -> pa.Field:
     """Create a binary field.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Configured binary field.
@@ -82,7 +82,7 @@ def timestamp_field(
 ) -> pa.Field:
     """Create a timestamp field.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Configured timestamp field.
@@ -98,7 +98,7 @@ def list_field(
 ) -> pa.Field:
     """Create a list field.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Configured list field.
@@ -114,7 +114,7 @@ def struct_field(
 ) -> pa.Field:
     """Create a struct field.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Configured struct field.

@@ -21,7 +21,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def update_goldens(pytestconfig: pytest.Config) -> bool:
     """Return True when golden files should be regenerated.
 
-    Returns
+    Returns:
     -------
     bool
         True when golden files should be regenerated.

@@ -12,7 +12,7 @@ This module is the capstone integration point for:
 - Schema inference via DataFusion lineage (datafusion_engine.lineage.datafusion)
 - Nested type builders (datafusion_engine.arrow.nested)
 
-Example
+Example:
 -------
 Build an extraction schema with standard field bundles::
 
@@ -74,7 +74,7 @@ def _byte_span_bundle(prefix: str = "") -> FieldBundle:
     prefix
         Optional prefix for field names.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing bstart/bend byte offset fields.
@@ -97,7 +97,7 @@ def _structured_span_bundle(prefix: str = "") -> FieldBundle:
     prefix
         Optional prefix for field names.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing the nested span struct field.
@@ -117,7 +117,7 @@ def _line_col_span_bundle(prefix: str = "") -> FieldBundle:
     prefix
         Optional prefix for field names.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing line and column start/end fields.
@@ -157,7 +157,7 @@ class ExtractionSchemaBuilder:
     version
         Schema version number.
 
-    Attributes
+    Attributes:
     ----------
     _name : str
         Dataset name.
@@ -212,7 +212,7 @@ class ExtractionSchemaBuilder:
         include_repo
             Include the repo field. Default False.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -230,23 +230,15 @@ class ExtractionSchemaBuilder:
     def with_span(self, prefix: str = "", *, style: str = "byte") -> Self:
         """Add span fields to the schema.
 
-        Parameters
-        ----------
-        prefix
-            Optional prefix for span field names.
-        style
-            Span style: "byte" for bstart/bend, "structured" for nested span
-            struct, "line_col" for line/column pairs. Default "byte".
+        Args:
+            prefix: Description.
+                    style: Description.
 
-        Returns
-        -------
-        Self
-            Builder instance for chaining.
+        Returns:
+            Self: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when an unsupported span style is provided.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if style == "byte":
             self._bundles.append(_byte_span_bundle(prefix))
@@ -262,7 +254,7 @@ class ExtractionSchemaBuilder:
     def with_evidence_metadata(self) -> Self:
         """Add evidence metadata fields to the schema.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -278,7 +270,7 @@ class ExtractionSchemaBuilder:
         bundle
             Field bundle to add.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -294,7 +286,7 @@ class ExtractionSchemaBuilder:
         *bundles
             Field bundles to add.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -310,7 +302,7 @@ class ExtractionSchemaBuilder:
         *fields
             Field specifications to add.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -339,7 +331,7 @@ class ExtractionSchemaBuilder:
         metadata
             Optional field metadata.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -361,7 +353,7 @@ class ExtractionSchemaBuilder:
         *columns
             Column names that must not be null.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -377,7 +369,7 @@ class ExtractionSchemaBuilder:
         *columns
             Column names forming the deduplication key.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -388,7 +380,7 @@ class ExtractionSchemaBuilder:
     def build(self) -> TableSchemaSpec:
         """Build the final TableSchemaSpec.
 
-        Returns
+        Returns:
         -------
         TableSchemaSpec
             Constructed table schema specification.
@@ -430,7 +422,7 @@ class ExtractionSchemaBuilder:
 class DerivedSchemaInfo:
     """Information derived from DataFusion plan analysis.
 
-    Attributes
+    Attributes:
     ----------
     source_tables : tuple[str, ...]
         Table names referenced in the plan.
@@ -452,7 +444,7 @@ class DerivedSchemaInfo:
 class DerivationOptions:
     """Options for schema derivation from DataFusion plans.
 
-    Attributes
+    Attributes:
     ----------
     version : int
         Schema version number.
@@ -481,7 +473,7 @@ def _field_spec_from_arrow_field(arrow_field: pa.Field) -> FieldSpec:
     arrow_field
         PyArrow field definition.
 
-    Returns
+    Returns:
     -------
     FieldSpec
         Equivalent field specification.
@@ -515,7 +507,7 @@ def _derive_schema_info_from_plan(
     udf_snapshot
         Optional UDF snapshot for lineage analysis.
 
-    Returns
+    Returns:
     -------
     DerivedSchemaInfo
         Schema information derived from plan analysis.
@@ -557,32 +549,18 @@ def derive_extraction_schema(
 ) -> TableSchemaSpec:
     """Derive an extraction schema from a DataFusion source table.
 
-    Analyze the DataFusion plan for the source table and construct an
-    extraction schema that includes standard field bundles plus any
-    additional columns inferred from the plan.
+    Args:
+        extractor_name: Description.
+            source_table: Description.
+            ctx: Description.
+            options: Description.
+            udf_snapshot: Description.
 
-    Parameters
-    ----------
-    extractor_name
-        Name for the derived extraction schema.
-    source_table
-        Source table name registered in DataFusion.
-    ctx
-        DataFusion session context.
-    options
-        Derivation options controlling which bundles to include.
-    udf_snapshot
-        Optional UDF snapshot for lineage analysis.
+    Returns:
+        TableSchemaSpec: Result.
 
-    Returns
-    -------
-    TableSchemaSpec
-        Derived extraction schema specification.
-
-    Raises
-    ------
-    ValueError
-        Raised when the source table cannot be resolved or analyzed.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if options is None:
         options = DerivationOptions()
@@ -643,7 +621,7 @@ def _standard_extraction_field_names(
     include_evidence_metadata
         Include evidence metadata field names.
 
-    Returns
+    Returns:
     -------
     set[str]
         Set of standard field names.
@@ -679,7 +657,7 @@ def _standard_extraction_field_names(
 class ExtractionSchemaTemplate:
     """Template for common extraction schema patterns.
 
-    Attributes
+    Attributes:
     ----------
     name : str
         Template name (e.g., "ast", "cst", "bytecode").
@@ -709,7 +687,7 @@ class ExtractionSchemaTemplate:
 def _ast_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchemaBuilder:
     """Customize builder for AST extraction schemas.
 
-    Returns
+    Returns:
     -------
     ExtractionSchemaBuilder
         Builder with AST-specific fields added.
@@ -720,7 +698,7 @@ def _ast_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchemaBuil
 def _cst_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchemaBuilder:
     """Customize builder for CST extraction schemas.
 
-    Returns
+    Returns:
     -------
     ExtractionSchemaBuilder
         Builder with CST-specific fields added.
@@ -735,7 +713,7 @@ def _cst_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchemaBuil
 def _bytecode_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchemaBuilder:
     """Customize builder for bytecode extraction schemas.
 
-    Returns
+    Returns:
     -------
     ExtractionSchemaBuilder
         Builder with bytecode-specific fields added.
@@ -752,7 +730,7 @@ def _bytecode_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchem
 def _scip_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchemaBuilder:
     """Customize builder for SCIP extraction schemas.
 
-    Returns
+    Returns:
     -------
     ExtractionSchemaBuilder
         Builder with SCIP-specific fields added.
@@ -767,7 +745,7 @@ def _scip_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchemaBui
 def _tree_sitter_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchemaBuilder:
     """Customize builder for tree-sitter extraction schemas.
 
-    Returns
+    Returns:
     -------
     ExtractionSchemaBuilder
         Builder with tree-sitter-specific fields added.
@@ -782,7 +760,7 @@ def _tree_sitter_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSc
 def _repo_scan_template_hook(builder: ExtractionSchemaBuilder) -> ExtractionSchemaBuilder:
     """Customize builder for repo scan extraction schemas.
 
-    Returns
+    Returns:
     -------
     ExtractionSchemaBuilder
         Builder with repo-scan-specific fields added.
@@ -850,26 +828,17 @@ def build_schema_from_template(
 ) -> TableSchemaSpec:
     """Build an extraction schema from a template.
 
-    Parameters
-    ----------
-    template_name
-        Template name (e.g., "ast", "cst", "bytecode").
-    dataset_name
-        Name for the resulting dataset schema.
-    version
-        Schema version number.
-    extra_fields
-        Additional fields to append to the schema.
+    Args:
+        template_name: Description.
+            dataset_name: Description.
+            version: Description.
+            extra_fields: Description.
 
-    Returns
-    -------
-    TableSchemaSpec
-        Table schema specification built from the template.
+    Returns:
+        TableSchemaSpec: Result.
 
-    Raises
-    ------
-    KeyError
-        Raised when the template name is unknown.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     template = EXTRACTION_SCHEMA_TEMPLATES.get(template_name)
     if template is None:
@@ -913,7 +882,7 @@ def extraction_schema_to_arrow(spec: TableSchemaSpec) -> SchemaLike:
     spec
         Table schema specification.
 
-    Returns
+    Returns:
     -------
     SchemaLike
         Arrow schema with metadata applied.
@@ -938,7 +907,7 @@ def validate_extraction_schema(
     require_span
         Require span fields. Default False.
 
-    Returns
+    Returns:
     -------
     tuple[bool, list[str]]
         Tuple of (is_valid, list of validation errors).

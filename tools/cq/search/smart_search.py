@@ -93,7 +93,7 @@ def _get_context_helpers() -> tuple[
 ]:
     """Lazily import context helpers to avoid circular imports.
 
-    Returns
+    Returns:
     -------
     tuple[Callable[[int, list[tuple[int, int]], int], dict[str, int]], Callable[[list[str], int, int], str]]
         Context window and snippet helpers.
@@ -310,7 +310,7 @@ def build_candidate_searcher(
     exclude_globs
         File patterns to exclude.
 
-    Returns
+    Returns:
     -------
     tuple[list[str], str]
         Ripgrep command and effective pattern string.
@@ -412,7 +412,7 @@ def collect_candidates(  # noqa: PLR0913
     exclude_globs
         Optional exclude globs for the candidate pass.
 
-    Returns
+    Returns:
     -------
     tuple[list[RawMatch], SearchStats]
         Raw matches and collection statistics.
@@ -454,7 +454,7 @@ def classify_match(
     enable_symtable
         Whether to run symtable enrichment.
 
-    Returns
+    Returns:
     -------
     EnrichedMatch
         Fully classified and enriched match.
@@ -695,7 +695,7 @@ def _classify_file_role(file_path: str) -> str:
     file_path
         Relative file path.
 
-    Returns
+    Returns:
     -------
     str
         One of "src", "test", "doc", "lib", "other".
@@ -722,7 +722,7 @@ def compute_relevance_score(match: EnrichedMatch) -> float:
     match
         Enriched match to score.
 
-    Returns
+    Returns:
     -------
     float
         Relevance score (higher is better).
@@ -758,7 +758,7 @@ def _evidence_to_bucket(evidence_kind: str) -> str:
     evidence_kind
         Evidence kind string.
 
-    Returns
+    Returns:
     -------
     str
         Confidence bucket name.
@@ -782,7 +782,7 @@ def _category_message(category: MatchCategory, match: EnrichedMatch) -> str:
     match
         Enriched match.
 
-    Returns
+    Returns:
     -------
     str
         Human-readable message.
@@ -818,7 +818,7 @@ def build_finding(match: EnrichedMatch, _root: Path) -> Finding:
     _root
         Repository root (unused; kept for interface compatibility).
 
-    Returns
+    Returns:
     -------
     Finding
         Finding object.
@@ -897,7 +897,7 @@ def build_followups(
     mode
         Query mode.
 
-    Returns
+    Returns:
     -------
     list[Finding]
         Follow-up suggestions.
@@ -971,7 +971,7 @@ def build_summary(*args: object, **kwargs: object) -> dict[str, object]:
     Accepts either a ``SearchSummaryInputs`` instance or the legacy positional
     arguments (query, mode, stats, matches, limits) with keyword overrides.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Summary dictionary.
@@ -1105,7 +1105,7 @@ def build_sections(
     include_strings
         Include string/comment/docstring matches.
 
-    Returns
+    Returns:
     -------
     list[Section]
         Organized sections.
@@ -1480,7 +1480,7 @@ def smart_search(
         Optional overrides: mode, include_globs, exclude_globs, include_strings,
         limits, tc, argv.
 
-    Returns
+    Returns:
     -------
     CqResult
         Complete search results.

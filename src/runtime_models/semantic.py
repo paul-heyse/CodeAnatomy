@@ -29,7 +29,7 @@ class SemanticConfigRuntime(RuntimeBase):
     def overrides_for(self, table_name: str | None) -> Mapping[ColumnType, str]:
         """Return column-type overrides for the given table.
 
-        Returns
+        Returns:
         -------
         Mapping[ColumnType, str]
             Overrides for the table when configured.

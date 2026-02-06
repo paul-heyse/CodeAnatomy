@@ -34,7 +34,7 @@ class SemanticSchema:
     when column names change (bstart -> byte_start), the schema patterns
     update in one place and all downstream code adapts.
 
-    Attributes
+    Attributes:
     ----------
     column_types
         Mapping of column name to semantic type.
@@ -85,7 +85,7 @@ class SemanticSchema:
         config
             Optional semantic configuration overrides.
 
-        Returns
+        Returns:
         -------
         SemanticSchema
             Schema with discovered columns.
@@ -183,7 +183,7 @@ class SemanticSchema:
     def _has_path(self) -> bool:
         """Check if schema has a path column.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when a path column is present.
@@ -193,7 +193,7 @@ class SemanticSchema:
     def _has_span(self) -> bool:
         """Check if schema has complete span columns.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when both span start and end columns are present.
@@ -203,7 +203,7 @@ class SemanticSchema:
     def _has_entity_id(self) -> bool:
         """Check if schema has entity ID columns.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when entity ID columns are present.
@@ -213,7 +213,7 @@ class SemanticSchema:
     def _has_span_unit(self) -> bool:
         """Check if schema has span unit metadata.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when span unit metadata is present.
@@ -223,7 +223,7 @@ class SemanticSchema:
     def _has_symbol(self) -> bool:
         """Check if schema has symbol columns.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when symbol columns are present.
@@ -233,15 +233,11 @@ class SemanticSchema:
     def require_evidence(self, *, table: str) -> None:
         """Ensure the schema satisfies evidence requirements.
 
-        Parameters
-        ----------
-        table
-            Table name for error context.
+        Args:
+            table: Description.
 
-        Raises
-        ------
-        SemanticSchemaError
-            Raised when the schema is not evidence-compatible.
+        Raises:
+            SemanticSchemaError: If the operation cannot be completed.
         """
         if not self._is_evidence():
             msg = f"Table {table!r} is not an evidence table."
@@ -250,15 +246,11 @@ class SemanticSchema:
     def require_entity(self, *, table: str) -> None:
         """Ensure the schema satisfies entity requirements.
 
-        Parameters
-        ----------
-        table
-            Table name for error context.
+        Args:
+            table: Description.
 
-        Raises
-        ------
-        SemanticSchemaError
-            Raised when the schema is not entity-compatible.
+        Raises:
+            SemanticSchemaError: If the operation cannot be completed.
         """
         if not self._is_entity():
             msg = f"Table {table!r} is not an entity table."
@@ -267,15 +259,11 @@ class SemanticSchema:
     def require_symbol_source(self, *, table: str) -> None:
         """Ensure the schema satisfies symbol source requirements.
 
-        Parameters
-        ----------
-        table
-            Table name for error context.
+        Args:
+            table: Description.
 
-        Raises
-        ------
-        SemanticSchemaError
-            Raised when the schema is not symbol-source compatible.
+        Raises:
+            SemanticSchemaError: If the operation cannot be completed.
         """
         if not self._has_symbol():
             msg = f"Table {table!r} is not a symbol source table."
@@ -284,20 +272,14 @@ class SemanticSchema:
     def require_span_unit(self, *, table: str) -> str:
         """Ensure span unit metadata is available.
 
-        Parameters
-        ----------
-        table
-            Table name for error context.
+        Args:
+            table: Description.
 
-        Returns
-        -------
-        str
-            Span unit string.
+        Returns:
+            str: Result.
 
-        Raises
-        ------
-        SemanticSchemaError
-            Raised when span unit metadata is unavailable.
+        Raises:
+            SemanticSchemaError: If the operation cannot be completed.
         """
         if not self._has_span_unit():
             msg = f"Table {table!r} does not declare a span unit."
@@ -311,7 +293,7 @@ class SemanticSchema:
     def _is_evidence(self) -> bool:
         """Check if schema qualifies as evidence table.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when path and span columns are present.
@@ -321,7 +303,7 @@ class SemanticSchema:
     def _is_entity(self) -> bool:
         """Check if schema qualifies as entity table.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when evidence columns and entity IDs are present.
@@ -335,15 +317,11 @@ class SemanticSchema:
     def path_name(self) -> str:
         """Get the path column name.
 
-        Returns
-        -------
-        str
-            Path column name.
+        Returns:
+            str: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when no path column is present.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self._path is None:
             msg = "No path column found"
@@ -353,15 +331,11 @@ class SemanticSchema:
     def span_start_name(self) -> str:
         """Get the span start column name.
 
-        Returns
-        -------
-        str
-            Span start column name.
+        Returns:
+            str: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when no span start column is present.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self._span_start is None:
             msg = "No span start column found"
@@ -371,15 +345,11 @@ class SemanticSchema:
     def span_end_name(self) -> str:
         """Get the span end column name.
 
-        Returns
-        -------
-        str
-            Span end column name.
+        Returns:
+            str: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when no span end column is present.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self._span_end is None:
             msg = "No span end column found"
@@ -389,15 +359,11 @@ class SemanticSchema:
     def entity_id_name(self) -> str:
         """Get the first entity ID column name.
 
-        Returns
-        -------
-        str
-            Entity ID column name.
+        Returns:
+            str: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when no entity ID columns are present.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if not self._entity_ids:
             msg = "No entity ID column found"
@@ -407,15 +373,11 @@ class SemanticSchema:
     def symbol_name(self) -> str:
         """Get the first symbol column name.
 
-        Returns
-        -------
-        str
-            Symbol column name.
+        Returns:
+            str: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when no symbol columns are present.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if not self._symbols:
             msg = "No symbol column found"
@@ -425,7 +387,7 @@ class SemanticSchema:
     def text_names(self) -> tuple[str, ...]:
         """Get all text column names.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Text column names.
@@ -435,7 +397,7 @@ class SemanticSchema:
     def _span_start_candidates(self) -> tuple[str, ...]:
         """Return candidate span start columns in schema order.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Span start column candidates.
@@ -449,7 +411,7 @@ class SemanticSchema:
     def _span_end_candidates(self) -> tuple[str, ...]:
         """Return candidate span end columns in schema order.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Span end column candidates.
@@ -461,7 +423,7 @@ class SemanticSchema:
     def _has_ambiguous_span(self) -> bool:
         """Return True when multiple span candidates exist.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when multiple span candidates exist.
@@ -476,7 +438,7 @@ class SemanticSchema:
         prefix
             Prefix to apply to all column names.
 
-        Returns
+        Returns:
         -------
         SemanticSchema
             Prefixed semantic schema.
@@ -508,7 +470,7 @@ class SemanticSchema:
     def path_col(self) -> Expr:
         """Get path column expression.
 
-        Returns
+        Returns:
         -------
         Expr
             DataFusion column expression.
@@ -520,7 +482,7 @@ class SemanticSchema:
     def span_start_col(self) -> Expr:
         """Get span start column expression.
 
-        Returns
+        Returns:
         -------
         Expr
             DataFusion column expression.
@@ -530,7 +492,7 @@ class SemanticSchema:
     def span_end_col(self) -> Expr:
         """Get span end column expression.
 
-        Returns
+        Returns:
         -------
         Expr
             DataFusion column expression.
@@ -543,7 +505,7 @@ class SemanticSchema:
     def entity_id_col(self) -> Expr:
         """Get first entity ID column expression.
 
-        Returns
+        Returns:
         -------
         Expr
             DataFusion column expression.
@@ -555,7 +517,7 @@ class SemanticSchema:
     def symbol_col(self) -> Expr:
         """Get first symbol column expression.
 
-        Returns
+        Returns:
         -------
         Expr
             DataFusion column expression.
@@ -569,7 +531,7 @@ class SemanticSchema:
 
         Returns struct<start: i64, end: i64, unit: str>.
 
-        Returns
+        Returns:
         -------
         Expr
             Span struct expression.
@@ -587,7 +549,7 @@ class SemanticSchema:
         prefix
             Entity type prefix (e.g., "ref", "def", "call").
 
-        Returns
+        Returns:
         -------
         Expr
             stable_id(prefix, path, bstart, bend) expression.

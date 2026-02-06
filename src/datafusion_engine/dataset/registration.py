@@ -232,6 +232,13 @@ class DatasetInputSource:
         catalog: DatasetCatalog,
         runtime_profile: DataFusionRuntimeProfile | None,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            ctx: Description.
+            catalog: Description.
+            runtime_profile: Description.
+        """
         self._ctx = ctx
         self._catalog = catalog
         self._runtime_profile = runtime_profile
@@ -244,7 +251,7 @@ class DatasetInputSource:
     ) -> bool:
         """Return True when the input matches a dataset registry handle.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when the dataset handle is recognized.
@@ -261,15 +268,16 @@ class DatasetInputSource:
     ) -> DataFrame:
         """Build a DataFusion DataFrame for a dataset registry handle.
 
-        Returns
-        -------
-        datafusion.dataframe.DataFrame
-            DataFrame registered for the dataset handle.
+        Args:
+            input_item: Description.
+                    table_name: Description.
+                    **kwargs: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when the dataset handle is not recognized.
+        Returns:
+            DataFrame: Result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         _ = kwargs
         name = _dataset_name_from_input(input_item)
@@ -301,7 +309,7 @@ def dataset_input_plugin(
 ) -> Callable[[SessionContext], None]:
     """Return a SessionContext installer for dataset input sources.
 
-    Returns
+    Returns:
     -------
     Callable[[SessionContext], None]
         Installer that registers the dataset input source.
@@ -327,7 +335,7 @@ def dataset_input_plugin(
 def input_plugin_prefixes() -> tuple[str, ...]:
     """Return the registered input plugin prefixes.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Supported input plugin prefixes.
@@ -369,7 +377,7 @@ class DataFusionCachePolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for cache policy overrides.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing cache policy overrides.
@@ -383,7 +391,7 @@ class DataFusionCachePolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for cache policy overrides.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the cache policy.
@@ -477,7 +485,7 @@ _DEFAULT_SCAN_CONFIGS: dict[str, _ScanDefaults] = {
 def _schema_field_type(schema: SchemaLike, field: str) -> pa.DataType | None:
     """Return the Arrow type for a schema field, when available.
 
-    Returns
+    Returns:
     -------
     pyarrow.DataType | None
         Field type when available.
@@ -494,7 +502,7 @@ def _default_scan_options_for_dataset(
 ) -> DataFusionScanOptions | None:
     """Return default DataFusion scan options for supported datasets.
 
-    Returns
+    Returns:
     -------
     DataFusionScanOptions | None
         Default scan options when the dataset is supported.
@@ -531,7 +539,7 @@ def _default_scan_options_for_dataset(
 def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocation:
     """Attach default scan options to a dataset location.
 
-    Returns
+    Returns:
     -------
     DatasetLocation
         Dataset location with default scan options applied.
@@ -558,15 +566,14 @@ def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocatio
 def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOptions:
     """Resolve DataFusion registration hints for a dataset location.
 
-    Raises
-    ------
-    ValueError
-        Raised when an unsupported DataFusion provider is configured.
+    Args:
+        location: Description.
 
-    Returns
-    -------
-    DataFusionRegistryOptions
-        Registration options derived from the dataset location.
+    Returns:
+        DataFusionRegistryOptions: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     resolved = location.resolved
     scan = resolved.datafusion_scan
@@ -1128,7 +1135,7 @@ def register_dataset_df(
 ) -> DataFrame:
     """Register a dataset location with DataFusion and return a DataFrame.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame for the registered dataset.
@@ -1218,12 +1225,12 @@ def register_dataset_spec(
     runtime_profile : DataFusionRuntimeProfile | None
         Optional runtime profile used for registration defaults.
 
-    Notes
+    Notes:
     -----
     This function preserves the DatasetSpec's scan configuration without
     executing SQL DDL statements.
 
-    Examples
+    Examples:
     --------
     Register a Delta dataset spec:
 
@@ -2122,15 +2129,11 @@ def _delta_scan_snapshot_payload(snapshot: object | None) -> dict[str, object] |
 def provider_capsule_id(provider: object) -> str:
     """Return a stable identifier for a DataFusion table provider capsule.
 
-    Returns
-    -------
-    str
-        Capsule identifier string.
+    Args:
+        provider: Description.
 
-    Raises
-    ------
-    AttributeError
-        Raised when the provider does not expose a capsule.
+    Raises:
+        AttributeError: If the operation cannot be completed.
     """
     capsule = _table_provider_capsule(provider)
     if capsule is None:
@@ -2526,7 +2529,7 @@ def _sql_literal_for_field(value: str, *, dtype: pa.DataType) -> str | None:
 def _sql_bool_literal(value: str) -> str | None:
     """Return SQL boolean literal or None for invalid inputs.
 
-    Returns
+    Returns:
     -------
     str | None
         SQL boolean literal when valid.
@@ -2540,7 +2543,7 @@ def _sql_bool_literal(value: str) -> str | None:
 def _sql_int_literal(value: str) -> str | None:
     """Return SQL integer literal or None for invalid inputs.
 
-    Returns
+    Returns:
     -------
     str | None
         SQL integer literal when valid.
@@ -2554,7 +2557,7 @@ def _sql_int_literal(value: str) -> str | None:
 def _sql_float_literal(value: str) -> str | None:
     """Return SQL float literal or None for invalid inputs.
 
-    Returns
+    Returns:
     -------
     str | None
         SQL float literal when valid.
@@ -3422,7 +3425,7 @@ def _dataset_cache_partition_by(
 def cached_dataset_names(ctx: SessionContext) -> tuple[str, ...]:
     """Return cached dataset names for a SessionContext.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Cached dataset names sorted in ascending order.

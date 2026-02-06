@@ -38,7 +38,7 @@ class NormalizePolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for normalization policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing normalization policy settings.
@@ -51,7 +51,7 @@ class NormalizePolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for normalization policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -61,7 +61,7 @@ class NormalizePolicy(FingerprintableConfig):
     def apply(self, table: TableLike) -> TableLike:
         """Apply encoding and chunk normalization to a table.
 
-        Returns
+        Returns:
         -------
         TableLike
             Normalized table.
@@ -73,7 +73,7 @@ class NormalizePolicy(FingerprintableConfig):
 def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
     """Apply dictionary encoding to requested columns.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table with dictionary-encoded columns applied.
@@ -91,7 +91,7 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
 def encode_table(table: TableLike, *, columns: Sequence[str]) -> TableLike:
     """Dictionary-encode specified columns on a table.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table with encoded columns.

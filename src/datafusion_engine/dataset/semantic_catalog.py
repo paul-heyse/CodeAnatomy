@@ -26,38 +26,15 @@ def build_semantic_dataset_catalog(
 ) -> DatasetCatalog:
     """Merge semantic + extract dataset locations into unified catalog.
 
-    Builds a complete dataset catalog containing:
-    - Semantic pipeline outputs (normalization, relationships, CPG)
-    - Extract outputs (optional, when extract_output_root is provided)
+    Args:
+        semantic_output_root: Description.
+            extract_output_root: Description.
 
-    Parameters
-    ----------
-    semantic_output_root
-        Root directory for semantic output datasets. When provided,
-        all semantic dataset rows are registered with paths under
-        this root.
-    extract_output_root
-        Root directory for extract output datasets. When provided,
-        extract datasets are merged into the catalog.
+    Returns:
+        DatasetCatalog: Result.
 
-    Returns
-    -------
-    DatasetCatalog
-        Unified catalog containing all registered dataset locations.
-
-    Raises
-    ------
-    ValueError
-        Raised when semantic dataset rows are not using canonical output names.
-
-    Examples
-    --------
-    >>> catalog = build_semantic_dataset_catalog(
-    ...     semantic_output_root="/data/semantic",
-    ...     extract_output_root="/data/extract",
-    ... )
-    >>> catalog.has("cst_refs_norm_v1")
-    True
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from schema_spec.dataset_spec_ops import (
         dataset_spec_delta_cdf_policy,
@@ -125,22 +102,12 @@ def semantic_dataset_location(
 ) -> DatasetLocation:
     """Return a DatasetLocation for a single semantic dataset.
 
-    Parameters
-    ----------
-    name
-        Semantic dataset name to look up.
-    output_root
-        Root directory for semantic outputs.
+    Args:
+        name: Description.
+        output_root: Description.
 
-    Returns
-    -------
-    DatasetLocation
-        Location metadata for the semantic dataset.
-
-    Raises
-    ------
-    KeyError
-        Raised when the dataset name is not found in the semantic catalog.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     from schema_spec.dataset_spec_ops import (
         dataset_spec_delta_cdf_policy,

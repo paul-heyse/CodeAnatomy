@@ -23,7 +23,6 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 | `/cq q "all=..." / "any=..."` | Combined/alternative patterns | Logical composition of queries |
 | `/cq q "pattern='eval(\$X)'"` | Security pattern review | Identify security-sensitive constructs |
 | `/cq q --format mermaid` | Understanding code flow | Visual call graphs and class diagrams |
-| `/cq q --format mermaid-cfg` | Control flow analysis | Visualize function CFGs |
 | `/cq run` | Multi-step execution with shared scan | Batch analysis workflows |
 | `/cq chain` | Command chaining frontend | Quick multi-command analysis |
 | `/ast-grep` | Structural search/rewrites (not regex) | Pattern-based code transformation |
@@ -85,17 +84,15 @@ Pattern queries (`/cq q "pattern=..."`) use ast-grep for structural matching:
 
 ### Understanding Code with Visualization
 
-Use `--format mermaid`, `--format mermaid-class`, `--format mermaid-cfg`, or `--format dot` to visualize:
+Use `--format mermaid`, `--format mermaid-class`, or `--format dot` to visualize:
 - Call graphs before refactoring
 - Class hierarchies before inheritance changes
-- Control flow graphs for complex functions
 - Import dependencies before restructuring
 
 | Format | Use Case |
 |--------|----------|
 | `--format mermaid` | Call graphs, data flow |
 | `--format mermaid-class` | Class hierarchies, inheritance |
-| `--format mermaid-cfg` | Control flow within functions |
 | `--format dot` | Complex graphs for Graphviz |
 
 ```bash
@@ -103,10 +100,8 @@ Use `--format mermaid`, `--format mermaid-class`, `--format mermaid-cfg`, or `--
 /cq q "entity=function name=build_cpg expand=callers(depth=2)" --format mermaid
 
 # Class hierarchy diagram
-/cq q "entity=class in=src/semantics/" --format mermaid-class
+/cq q "entity=class in=src/semantics" --format mermaid-class
 
-# Control flow graph for a function
-/cq q "entity=function name=complex_fn" --format mermaid-cfg
 ```
 
 ### cq Global Options
@@ -114,7 +109,7 @@ Use `--format mermaid`, `--format mermaid-class`, `--format mermaid-cfg`, or `--
 All `/cq` commands support `--format` for output control:
 - `md` (default) - Markdown for Claude context
 - `json` - Structured JSON
-- `mermaid` / `mermaid-class` / `mermaid-cfg` - Visual diagrams
+- `mermaid` / `mermaid-class` - Visual diagrams
 
 Config via `.cq.toml` or `CQ_*` environment variables. See `tools/cq/README.md` for full options.
 

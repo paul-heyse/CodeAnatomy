@@ -33,7 +33,7 @@ def get_tracer(scope_name: str) -> trace.Tracer:
     scope_name
         Instrumentation scope name.
 
-    Returns
+    Returns:
     -------
     opentelemetry.trace.Tracer
         Tracer bound to the requested scope.
@@ -62,7 +62,7 @@ def set_root_span_context(span_context: SpanContext | None) -> None:
 def root_span_context() -> SpanContext | None:
     """Return the stored root span context, if any.
 
-    Returns
+    Returns:
     -------
     SpanContext | None
         Stored root span context.
@@ -73,7 +73,7 @@ def root_span_context() -> SpanContext | None:
 def root_span_link() -> Link | None:
     """Return a span link to the current root span context when available.
 
-    Returns
+    Returns:
     -------
     Link | None
         Link to the root span context when available.
@@ -116,7 +116,7 @@ def record_exception(span: Span, exc: Exception) -> None:
 def span_attributes(*, attrs: Mapping[str, object] | None = None) -> dict[str, AttributeValue]:
     """Return normalized attributes for direct use in span creation.
 
-    Returns
+    Returns:
     -------
     dict[str, AttributeValue]
         Normalized attributes for span creation.
@@ -160,10 +160,11 @@ def stage_span(
         Stage name for metrics and attributes.
     scope_name
         Instrumentation scope name.
-    attributes
+
+    Attributes:
         Optional span attributes.
 
-    Yields
+    Yields:
     ------
     Span
         The started span.
@@ -230,12 +231,13 @@ def root_span(
     ----------
     name
         Span name.
-    attributes
+
+    Attributes:
         Span attributes.
     scope_name
         Instrumentation scope name.
 
-    Yields
+    Yields:
     ------
     Span
         The started span.

@@ -174,29 +174,18 @@ def ensure_view_graph(
 ) -> Mapping[str, object]:
     """Install UDF platform (if needed) and register the semantic view graph.
 
-    Parameters
-    ----------
-    ctx
-        Active DataFusion session context.
-    runtime_profile
-        Runtime profile used for registration policies and diagnostics.
-    scan_units
-        Optional scan units that pin Delta versions and candidate files
-        before view registration.
-    semantic_ir
-        Compiled semantic IR artifact used to define view registration.
+    Args:
+        ctx: Description.
+            runtime_profile: Description.
+            scan_units: Description.
+            semantic_ir: Description.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Rust UDF snapshot used for view registration.
+    Returns:
+        Mapping[str, object]: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when the runtime profile is unavailable.
-    RuntimeError
-        Raised when required UDF snapshots are missing during registration.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
     """
     if runtime_profile is None:
         msg = "Runtime profile is required for view registration."

@@ -100,7 +100,7 @@ class TableSummary(TypedDict):
 def table_summary(table: TableLike) -> TableSummary:
     """Return a compact summary for a table suitable for manifest recording.
 
-    Returns
+    Returns:
     -------
     TableSummary
         Summary statistics for the table.
@@ -121,7 +121,7 @@ def dataset_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
     Table columns:
       dataset_name, rows, columns, schema_identity_hash
 
-    Returns
+    Returns:
     -------
     TableLike
         Dataset-level statistics table.
@@ -150,7 +150,7 @@ def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
     Table columns:
       dataset_name, column_name, type, null_count
 
-    Returns
+    Returns:
     -------
     TableLike
         Column-level statistics table.
@@ -176,7 +176,7 @@ def column_stats_table(tables: Mapping[str, TableLike | None]) -> TableLike:
 def empty_scan_telemetry_table() -> TableLike:
     """Return an empty scan telemetry table.
 
-    Returns
+    Returns:
     -------
     TableLike
         Empty scan telemetry table.
@@ -187,7 +187,7 @@ def empty_scan_telemetry_table() -> TableLike:
 def scan_telemetry_table(rows: Sequence[Mapping[str, object]]) -> TableLike:
     """Build a scan telemetry table from row mappings.
 
-    Returns
+    Returns:
     -------
     TableLike
         Scan telemetry table.
@@ -241,7 +241,7 @@ def _scan_payload_bytes(payload: Mapping[str, object], *, key: str) -> bytes:
 def encode_scan_telemetry_rows(rows: Sequence[Mapping[str, object]]) -> bytes:
     """Encode scan telemetry rows into MessagePack bytes.
 
-    Returns
+    Returns:
     -------
     bytes
         MessagePack payload for scan telemetry rows.
@@ -256,7 +256,7 @@ def list_fragments(
 ) -> list[ds.Fragment]:
     """Return dataset fragments, optionally filtered by a predicate.
 
-    Returns
+    Returns:
     -------
     list[ds.Fragment]
         Dataset fragments matching the predicate.
@@ -291,7 +291,7 @@ def list_fragments(
 def split_fragment_by_row_group(fragment: ds.Fragment) -> list[ds.Fragment]:
     """Split a fragment into row-group fragments when supported.
 
-    Returns
+    Returns:
     -------
     list[ds.Fragment]
         Row-group fragments or the original fragment when unsupported.
@@ -308,7 +308,7 @@ def row_group_fragments(
 ) -> list[ds.Fragment]:
     """Return row-group fragments for a dataset.
 
-    Returns
+    Returns:
     -------
     list[ds.Fragment]
         Row-group fragments or dataset fragments when unsupported.
@@ -323,7 +323,7 @@ def row_group_fragments(
 def row_group_count(fragments: Sequence[ds.Fragment]) -> int:
     """Return the total row-group count for supported fragments.
 
-    Returns
+    Returns:
     -------
     int
         Total row-group count.
@@ -375,7 +375,7 @@ def row_group_stats(
 ) -> list[JsonDict]:
     """Return row-group statistics for selected columns.
 
-    Returns
+    Returns:
     -------
     list[JsonDict]
         Row group statistics payloads.
@@ -433,7 +433,7 @@ def fragment_file_hints(
 ) -> tuple[str, ...]:
     """Return a small set of fragment path hints.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Tuple of path strings for fragment hints.
@@ -464,7 +464,7 @@ class ParquetMetadataSpec:
     ) -> str:
         """Write a _common_metadata sidecar file.
 
-        Returns
+        Returns:
         -------
         str
             Path to the written metadata file.
@@ -481,7 +481,7 @@ class ParquetMetadataSpec:
     ) -> str | None:
         """Write a _metadata sidecar file with row-group stats when available.
 
-        Returns
+        Returns:
         -------
         str | None
             Path to the written metadata file, or ``None`` when unavailable.
@@ -502,7 +502,7 @@ def parquet_metadata_collector(
 ) -> tuple[pq.FileMetaData, ...]:
     """Collect Parquet file metadata from dataset fragments.
 
-    Returns
+    Returns:
     -------
     tuple[pq.FileMetaData, ...]
         File metadata entries for the fragments.
@@ -523,7 +523,7 @@ def parquet_metadata_factory(
 ) -> ParquetMetadataSpec:
     """Return a ParquetMetadataSpec for a dataset.
 
-    Returns
+    Returns:
     -------
     ParquetMetadataSpec
         Metadata spec for sidecar generation.
@@ -546,7 +546,7 @@ def _metadata_schema(
 def scan_task_count(scanner: ds.Scanner) -> int:
     """Return the scan task count for a scanner.
 
-    Returns
+    Returns:
     -------
     int
         Number of scan tasks.
@@ -559,7 +559,7 @@ def take_row_group_fragments(
 ) -> list[ds.Fragment]:
     """Return a limited subset of row-group fragments.
 
-    Returns
+    Returns:
     -------
     list[ds.Fragment]
         Subset of row-group fragments, limited when requested.
@@ -575,7 +575,7 @@ def take_row_group_fragments(
 def empty_quality_table() -> TableLike:
     """Return an empty quality table.
 
-    Returns
+    Returns:
     -------
     TableLike
         Empty quality table with the canonical schema.
@@ -658,7 +658,7 @@ def quality_from_ids(
 ) -> TableLike:
     """Return quality rows for invalid IDs in the specified column.
 
-    Returns
+    Returns:
     -------
     TableLike
         Quality rows for invalid identifiers.
@@ -688,7 +688,7 @@ def quality_issue_rows(
 ) -> list[dict[str, object]]:
     """Normalize issue rows into the quality schema shape.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Normalized issue rows matching QUALITY_SCHEMA.
@@ -723,7 +723,7 @@ def record_quality_issue_counts(*, issue_kind: str, count: int) -> None:
 def concat_quality_tables(tables: Sequence[TableLike]) -> TableLike:
     """Concatenate quality tables, returning an empty table when none exist.
 
-    Returns
+    Returns:
     -------
     TableLike
         Concatenated quality table.

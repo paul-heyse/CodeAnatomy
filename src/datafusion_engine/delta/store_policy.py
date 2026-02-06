@@ -25,7 +25,7 @@ class DeltaStorePolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return canonical payload for fingerprinting.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload used for policy fingerprinting.
@@ -41,7 +41,7 @@ class DeltaStorePolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the policy.
 
-        Returns
+        Returns:
         -------
         str
             Fingerprint string for the policy.
@@ -52,7 +52,7 @@ class DeltaStorePolicy(FingerprintableConfig):
 def _canonical_table_uri(table_uri: str) -> str:
     """Return canonical URI for Delta table identity.
 
-    Returns
+    Returns:
     -------
     str
         Canonical URI string for stable table identity comparisons.
@@ -86,7 +86,7 @@ class StorageProfile:
     def to_datafusion_object_store_options(self) -> dict[str, str]:
         """Return DataFusion object-store registration options.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Object-store options for DataFusion registration.
@@ -96,7 +96,7 @@ class StorageProfile:
     def to_deltalake_options(self) -> dict[str, str]:
         """Return delta-rs storage options payload.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Storage options for delta-rs APIs.
@@ -106,7 +106,7 @@ class StorageProfile:
     def to_log_store_options(self) -> dict[str, str]:
         """Return delta-rs log-store options payload.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Log-store options for delta-rs APIs.
@@ -123,15 +123,17 @@ def resolve_storage_profile(
 ) -> StorageProfile:
     """Resolve the canonical storage profile for Delta table access.
 
-    Returns
-    -------
-    StorageProfile
-        Canonical storage profile for DataFusion and delta-rs interactions.
+    Args:
+        table_uri: Description.
+            policy: Description.
+            storage_options: Description.
+            log_storage_options: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when URI scheme or endpoint policy constraints are violated.
+    Returns:
+        StorageProfile: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     canonical_uri = _canonical_table_uri(table_uri)
     parsed = urlparse(canonical_uri) if "://" in canonical_uri else None
@@ -176,7 +178,7 @@ def resolve_delta_store_policy(
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Resolve effective storage and log-store options.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, str], dict[str, str]]
         Effective storage options and log-store options.
@@ -198,7 +200,7 @@ def resolve_store_options_for_location(
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Resolve store options for a dataset location.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, str], dict[str, str]]
         Effective storage and log-store options.
@@ -218,7 +220,7 @@ def apply_delta_store_policy(
 ) -> DatasetLocation:
     """Return a DatasetLocation with store policy applied.
 
-    Returns
+    Returns:
     -------
     DatasetLocation
         Dataset location with storage policies applied.
@@ -242,7 +244,7 @@ def apply_delta_store_policy(
 def delta_store_policy_hash(policy: DeltaStorePolicy | None) -> str | None:
     """Return a stable hash of the store policy.
 
-    Returns
+    Returns:
     -------
     str | None
         Stable hash string when policy is set, otherwise ``None``.

@@ -27,7 +27,7 @@ def save_artifact_json(
     filename : str | None
         Explicit filename. If None, generates timestamped name.
 
-    Returns
+    Returns:
     -------
     Artifact
         Reference to saved artifact.

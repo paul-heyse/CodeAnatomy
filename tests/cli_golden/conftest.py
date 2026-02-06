@@ -9,7 +9,7 @@ import pytest
 def update_golden(request: pytest.FixtureRequest) -> bool:
     """Fixture to check if golden files should be updated.
 
-    Returns
+    Returns:
     -------
     bool
         True if --update-golden was passed.

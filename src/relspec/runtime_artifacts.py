@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 class ViewReference:
     """Reference to a registered view in the execution context.
 
-    Attributes
+    Attributes:
     ----------
     name : str
         View name as registered in the context.
@@ -69,7 +69,7 @@ class ViewReference:
 class MaterializedTable:
     """Reference to a materialized table with metadata.
 
-    Attributes
+    Attributes:
     ----------
     name : str
         Table name.
@@ -144,7 +144,7 @@ class RuntimeArtifacts:
     Manages DataFusion context handles, materialized tables, view references,
     and schema caches. Mutable to allow progressive population during execution.
 
-    Attributes
+    Attributes:
     ----------
     execution : SessionRuntime | None
         DataFusion session runtime for materialization.
@@ -220,7 +220,7 @@ class RuntimeArtifacts:
         spec : ViewReference
             View reference metadata for the producing task.
 
-        Returns
+        Returns:
         -------
         ViewReference
             The registered view reference.
@@ -254,7 +254,7 @@ class RuntimeArtifacts:
         spec : MaterializedTableSpec
             Metadata describing the table's origin and storage.
 
-        Returns
+        Returns:
         -------
         MaterializedTable
             Metadata for the registered table.
@@ -312,7 +312,7 @@ class RuntimeArtifacts:
         spec : ExecutionArtifactSpec
             Metadata for the execution artifact.
 
-        Returns
+        Returns:
         -------
         ExecutionArtifact
             Execution artifact metadata for the output.
@@ -388,7 +388,7 @@ class RuntimeArtifacts:
     def cache_schemas(self, schemas: Mapping[str, SchemaLike]) -> int:
         """Cache multiple schemas in a batch.
 
-        Returns
+        Returns:
         -------
         int
             Count of schemas cached.
@@ -406,7 +406,7 @@ class RuntimeArtifacts:
     def evict_cache(self, *, tag: str) -> int:
         """Evict runtime cache entries for a tag.
 
-        Returns
+        Returns:
         -------
         int
             Count of evicted entries.
@@ -424,7 +424,7 @@ class RuntimeArtifacts:
         name : str
             Dataset name.
 
-        Returns
+        Returns:
         -------
         SchemaLike | None
             Cached schema or None if not found.
@@ -489,7 +489,7 @@ class RuntimeArtifacts:
         name : str
             Artifact name.
 
-        Returns
+        Returns:
         -------
         bool
             True if artifact exists.
@@ -508,7 +508,7 @@ class RuntimeArtifacts:
         name : str
             Artifact name.
 
-        Returns
+        Returns:
         -------
         str | None
             Source task name or None if not found.
@@ -524,7 +524,7 @@ class RuntimeArtifacts:
     def clone(self) -> RuntimeArtifacts:
         """Create a shallow copy for staged updates.
 
-        Returns
+        Returns:
         -------
         RuntimeArtifacts
             Shallow copy of this container.
@@ -545,7 +545,7 @@ class RuntimeArtifacts:
 class RuntimeArtifactsSummary:
     """Summary of runtime artifacts for observability.
 
-    Attributes
+    Attributes:
     ----------
     total_views : int
         Number of registered views.
@@ -798,7 +798,7 @@ def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:
     artifacts : RuntimeArtifacts
         Artifacts to summarize.
 
-    Returns
+    Returns:
     -------
     RuntimeArtifactsSummary
         Summary for observability.

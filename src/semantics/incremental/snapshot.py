@@ -41,7 +41,7 @@ def build_repo_snapshot(repo_files: TableLike) -> pa.Table:
       - size_bytes
       - mtime_ns
 
-    Returns
+    Returns:
     -------
     pa.Table
         Normalized snapshot table.
@@ -67,7 +67,7 @@ def read_repo_snapshot(
 ) -> pa.Table | None:
     """Load the previous repo snapshot when present.
 
-    Returns
+    Returns:
     -------
     pa.Table | None
         Snapshot table if it exists.
@@ -94,15 +94,16 @@ def write_repo_snapshot(
 ) -> DeltaWriteResult:
     """Persist the repo snapshot to the state store as Delta.
 
-    Returns
-    -------
-    DeltaWriteResult
-        Delta write result for the snapshot table.
+    Args:
+        store: Description.
+            snapshot: Description.
+            context: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Delta write result is unavailable.
+    Returns:
+        DeltaWriteResult: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     store.ensure_dirs()
     target = store.repo_snapshot_path()

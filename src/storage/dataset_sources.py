@@ -33,15 +33,8 @@ class OneShotDataset:
     def schema(self) -> SchemaLike:
         """Return the dataset schema.
 
-        Returns
-        -------
-        SchemaLike
-            Arrow schema for the dataset.
-
-        Raises
-        ------
-        ValueError
-            Raised when the dataset wrapper has no dataset or reader.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.reader is not None:
             return self.reader.schema
@@ -54,7 +47,7 @@ class OneShotDataset:
     def from_reader(cls, reader: pa.RecordBatchReader) -> OneShotDataset:
         """Create a one-shot wrapper around a record batch reader.
 
-        Returns
+        Returns:
         -------
         OneShotDataset
             Wrapper that enforces single-scan semantics.
@@ -64,15 +57,8 @@ class OneShotDataset:
     def consume(self) -> ds.Dataset:
         """Return the wrapped dataset, enforcing single-use semantics.
 
-        Returns
-        -------
-        pyarrow.dataset.Dataset
-            The wrapped dataset.
-
-        Raises
-        ------
-        ValueError
-            Raised when the dataset has already been scanned.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self._scanned:
             msg = "One-shot dataset has already been scanned."
@@ -88,15 +74,12 @@ class OneShotDataset:
     def scanner(self, *args: object, **kwargs: object) -> ds.Scanner:
         """Return a scanner while enforcing single-use semantics.
 
-        Returns
-        -------
-        pyarrow.dataset.Scanner
-            Scanner for the wrapped dataset.
+        Args:
+            *args: Description.
+            **kwargs: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when the dataset has already been scanned.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self._scanned:
             msg = "One-shot dataset has already been scanned."
@@ -116,15 +99,14 @@ class OneShotDataset:
     def __getattr__(self, name: str) -> object:
         """Delegate missing attributes to the underlying dataset.
 
-        Returns
-        -------
-        object
-            Attribute from the wrapped dataset.
+        Args:
+            name: Description.
 
-        Raises
-        ------
-        AttributeError
-            Raised when the dataset wrapper has no dataset to delegate to.
+        Returns:
+            object: Result.
+
+        Raises:
+            AttributeError: If the operation cannot be completed.
         """
         if self.dataset is None:
             raise AttributeError(name)
@@ -137,7 +119,7 @@ type DatasetLike = ds.Dataset | OneShotDataset
 def unwrap_dataset(dataset: DatasetLike) -> ds.Dataset:
     """Return a dataset, consuming one-shot wrappers when needed.
 
-    Returns
+    Returns:
     -------
     pyarrow.dataset.Dataset
         Dataset ready for scanning.
@@ -150,7 +132,7 @@ def unwrap_dataset(dataset: DatasetLike) -> ds.Dataset:
 def union_dataset(datasets: Sequence[ds.Dataset]) -> ds.Dataset:
     """Return a UnionDataset over multiple datasets.
 
-    Returns
+    Returns:
     -------
     pyarrow.dataset.Dataset
         Composite dataset spanning all inputs.
@@ -161,7 +143,7 @@ def union_dataset(datasets: Sequence[ds.Dataset]) -> ds.Dataset:
 def is_one_shot_dataset(value: object) -> bool:
     """Return whether the value is a one-shot dataset wrapper.
 
-    Returns
+    Returns:
     -------
     bool
         True when the value is a one-shot dataset wrapper.
@@ -186,7 +168,7 @@ class DatasetDiscoveryOptions:
     def promote_options(self) -> str:
         """Return the promote_options value for factory inspection.
 
-        Returns
+        Returns:
         -------
         str
             Promote options value for dataset discovery.
@@ -196,7 +178,7 @@ class DatasetDiscoveryOptions:
     def payload(self) -> JsonDict:
         """Return a JSON-ready payload for the discovery policy.
 
-        Returns
+        Returns:
         -------
         JsonDict
             JSON-ready discovery policy payload.
@@ -228,7 +210,7 @@ class DatasetSourceOptions:
     def discovery_payload(self) -> JsonDict | None:
         """Return discovery payload for telemetry artifacts.
 
-        Returns
+        Returns:
         -------
         JsonDict | None
             Telemetry payload for discovery settings, when applicable.
@@ -253,7 +235,7 @@ def open_dataset(
 ) -> DatasetLike:
     """Open a dataset for scanning.
 
-    Returns
+    Returns:
     -------
     DatasetLike
         Dataset ready for scanning.
@@ -268,15 +250,15 @@ def normalize_dataset_source(
 ) -> DatasetLike:
     """Normalize dataset sources into a pyarrow Dataset.
 
-    Returns
-    -------
-    DatasetLike
-        Normalized dataset instance.
+    Args:
+        source: Description.
+            options: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when a union dataset has no members or normalization fails.
+    Returns:
+        DatasetLike: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     resolved = options or DatasetSourceOptions()
     if resolved.dataset_format == "delta" and _requires_datafusion_provider(source):
@@ -425,7 +407,7 @@ def from_uri(
 ) -> tuple[pafs.FileSystem, str]:
     """Resolve a filesystem and path for URI-like sources.
 
-    Returns
+    Returns:
     -------
     tuple[pafs.FileSystem, str]
         Filesystem and normalized path.

@@ -30,7 +30,7 @@ def safe_cast(expr: Expr, dtype: CastType) -> Expr:
     dtype
         Target type expressed as a pyarrow.DataType or type string.
 
-    Returns
+    Returns:
     -------
     Expr
         Cast expression.

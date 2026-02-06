@@ -46,7 +46,7 @@ def execute_plan_bundle(
     options
         Optional execution options controlling overrides, artifacts, and telemetry.
 
-    Returns
+    Returns:
     -------
     PlanExecutionResult
         Execution result payload with artifacts and telemetry.
@@ -107,18 +107,16 @@ def _telemetry_payload(start_time: float, *, emit_telemetry: bool) -> dict[str, 
 def replay_substrait_bytes(ctx: SessionContext, payload: bytes) -> DataFrame:
     """Replay Substrait bytes into a DataFusion DataFrame.
 
-    Returns
-    -------
-    DataFrame
-        Replayed DataFusion DataFrame.
+    Args:
+        ctx: Description.
+            payload: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when Substrait replay support or DataFrame construction helpers
-        are unavailable.
-    ValueError
-        Raised when Substrait replay fails.
+    Returns:
+        DataFrame: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
     """
     try:
         from datafusion.substrait import Consumer as SubstraitConsumer
@@ -165,7 +163,7 @@ def validate_substrait_plan(
 ) -> Mapping[str, object]:
     """Validate Substrait bytes against a DataFusion DataFrame.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Validation payload with status, match, and diagnostics.
@@ -232,7 +230,7 @@ def _resolve_df_context(df: DataFrame) -> SessionContext | None:
 async def datafusion_to_async_batches(df: DataFrame) -> AsyncIterator[pa.RecordBatch]:
     """Yield RecordBatches asynchronously from a DataFusion DataFrame.
 
-    Yields
+    Yields:
     ------
     pa.RecordBatch
         Record batches from the DataFusion result.
@@ -252,7 +250,7 @@ async def datafusion_to_async_batches(df: DataFrame) -> AsyncIterator[pa.RecordB
 def datafusion_write_options(policy: DataFusionWritePolicy) -> DataFrameWriteOptions:
     """Return DataFusion write options derived from a write policy.
 
-    Returns
+    Returns:
     -------
     DataFrameWriteOptions
         DataFusion write options derived from the policy.

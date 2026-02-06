@@ -61,7 +61,7 @@ class TestRenderResult:
     def _make_result(self, tmp_path: Path) -> CqResult:
         """Create a minimal CqResult for testing.
 
-        Returns
+        Returns:
         -------
         CqResult
             A minimal CqResult for testing.

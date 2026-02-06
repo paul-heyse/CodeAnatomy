@@ -296,7 +296,7 @@ def build_struct(
 ) -> StructArrayLike:
     """Build a struct array from named child arrays.
 
-    Returns
+    Returns:
     -------
     StructArrayLike
         Struct array built from child arrays.
@@ -318,7 +318,7 @@ def build_struct(
 def build_list(offsets: ArrayLike, values: ArrayLike) -> ListArrayLike:
     """Build a list array from offsets and flat values.
 
-    Returns
+    Returns:
     -------
     ListArrayLike
         List array built from offsets and values.
@@ -336,7 +336,7 @@ def build_list_view(
 ) -> ListArrayLike:
     """Build a list_view array from offsets, sizes, and flat values.
 
-    Returns
+    Returns:
     -------
     ListArrayLike
         List view array built from offsets and sizes.
@@ -356,7 +356,7 @@ def build_list_of_structs(
 ) -> ListArrayLike:
     """Build a list<struct<...>> array from offsets and child arrays.
 
-    Returns
+    Returns:
     -------
     ListArrayLike
         List array with struct elements.
@@ -373,7 +373,7 @@ def list_array_from_lists(
 ) -> ArrayLike:
     """Build a list array from Python list values.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         List array with nested values materialized via nested builders.
@@ -410,7 +410,7 @@ def list_view_array_from_lists(
 ) -> ArrayLike:
     """Build a list_view array from Python list values.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         List view array with the requested element type.
@@ -436,7 +436,7 @@ def map_array_from_pairs(
 ) -> ArrayLike:
     """Build a map array from key/value pair sequences.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Map array with the provided key/value types.
@@ -462,7 +462,7 @@ def struct_array_from_dicts(
 ) -> ArrayLike:
     """Build a struct array from mapping values.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Struct array with inferred or explicit type.
@@ -542,7 +542,7 @@ def dense_union_array(
 ) -> ArrayLike:
     """Build a dense union array from type ids, offsets, and children.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Dense union array.
@@ -572,7 +572,7 @@ def sparse_union_array(
 ) -> ArrayLike:
     """Build a sparse union array from type ids and children.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Sparse union array.
@@ -598,17 +598,16 @@ def union_array_from_values(
 ) -> ArrayLike:
     """Build a union array from scalar values.
 
-    Returns
-    -------
-    ArrayLike
-        Union array built from the provided values.
+    Args:
+        values: Description.
+            union_type: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the dtype is not union-typed or values are unsupported.
-    ValueError
-        Raised when the union mode is unsupported.
+    Returns:
+        ArrayLike: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
     """
     if not patypes.is_union(union_type):
         msg = "union_array_from_values requires a union dtype."
@@ -659,17 +658,16 @@ def union_array_from_tagged_values(
 ) -> ArrayLike:
     """Build a union array from tagged values.
 
-    Returns
-    -------
-    ArrayLike
-        Union array built from tagged payloads.
+    Args:
+        values: Description.
+            union_type: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when union_type is not a union dtype.
-    ValueError
-        Raised when the union mode is unsupported.
+    Returns:
+        ArrayLike: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
     """
     if not patypes.is_union(union_type):
         msg = "union_array_from_tagged_values requires a union dtype."
@@ -722,7 +720,7 @@ def dictionary_array_from_values(
 ) -> ArrayLike:
     """Build a dictionary array with fallback for malformed values.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Dictionary array with malformed values coerced to nulls.
@@ -740,7 +738,7 @@ def dictionary_array_from_indices(
 ) -> ArrayLike:
     """Build a dictionary array from indices and dictionary values.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Dictionary array with explicit dictionary values.
@@ -754,7 +752,7 @@ def dictionary_array_from_indices(
 def nested_array_factory(field: FieldLike, values: Sequence[object | None]) -> ArrayLike:
     """Build a nested array for the provided field.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Array aligned to the field type.

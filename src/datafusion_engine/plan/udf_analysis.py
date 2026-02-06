@@ -18,7 +18,7 @@ def extract_udfs_from_logical_plan(
 ) -> frozenset[str]:
     """Extract UDF names referenced in a logical plan.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         UDF names referenced in the plan.
@@ -38,7 +38,7 @@ def extract_udfs_from_dataframe(
 ) -> frozenset[str]:
     """Extract UDF names from a DataFusion DataFrame.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         UDF names referenced in the DataFrame plan.
@@ -56,7 +56,7 @@ def extract_udfs_from_dataframe(
 def extract_udfs_from_plan_bundle(bundle: DataFusionPlanBundle) -> frozenset[str]:
     """Extract UDF names from a plan bundle.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         UDF names referenced in the bundle plans.
@@ -113,7 +113,7 @@ def derive_required_udfs_from_plans(
 ) -> frozenset[str]:
     """Derive all required UDFs from a collection of logical plans.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         Union of required UDFs for all plans.
@@ -131,7 +131,7 @@ def ensure_plan_udfs_available(
 ) -> frozenset[str]:
     """Ensure all UDFs required by a DataFrame plan are registered.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         UDF names required by the DataFrame plan.

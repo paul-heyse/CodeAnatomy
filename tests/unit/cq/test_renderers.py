@@ -22,7 +22,7 @@ def _make_result(
 ) -> CqResult:
     """Create a CqResult for testing.
 
-    Returns
+    Returns:
     -------
     CqResult
         Result payload for renderer tests.

@@ -1059,7 +1059,7 @@ def extract_ast(
 ) -> ExtractResult[TableLike]:
     """Extract a minimal AST fact set per file.
 
-    Returns
+    Returns:
     -------
     ExtractResult[TableLike]
         Tables of AST nodes, edges, and errors.
@@ -1100,7 +1100,7 @@ def extract_ast_plans(
 ) -> dict[str, DataFusionPlanBundle]:
     """Extract AST plans for nested file records.
 
-    Returns
+    Returns:
     -------
     dict[str, DataFusionPlanBundle]
         Plan bundle keyed by ``ast_files``.
@@ -1337,7 +1337,7 @@ def extract_ast_tables(
         Keyword-only arguments for extraction (repo_files, options, file_contexts, ctx, profile,
         prefer_reader).
 
-    Returns
+    Returns:
     -------
     dict[str, TableLike | RecordBatchReaderLike]
         Extracted AST outputs keyed by name.

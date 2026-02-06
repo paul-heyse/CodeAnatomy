@@ -65,17 +65,19 @@ def upsert_partitioned_dataset(
 ) -> str | None:
     """Upsert a partitioned dataset using the incremental delete set.
 
-    Returns
-    -------
-    str | None
-        Dataset path when updated, otherwise ``None``.
+    Args:
+        table: Description.
+            spec: Description.
+            base_dir: Description.
+            changes: Description.
+            context: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when required partition columns are missing.
-    RuntimeError
-        Raised when the Delta write result is unavailable.
+    Returns:
+        str | None: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
     """
     if spec.partition_column not in table.column_names:
         msg = f"Partition column {spec.partition_column!r} is required for dataset {spec.name!r}."
@@ -136,15 +138,17 @@ def write_overwrite_dataset(
 ) -> dict[str, str]:
     """Overwrite a dataset with schema enforcement.
 
-    Returns
-    -------
-    dict[str, str]
-        Mapping of dataset name to dataset path.
+    Args:
+        table: Description.
+            spec: Description.
+            state_store: Description.
+            context: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Delta write result is unavailable.
+    Returns:
+        dict[str, str]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     metadata = spec.commit_metadata
     data = coerce_delta_input(
@@ -195,7 +199,7 @@ def upsert_cpg_nodes(
 ) -> dict[str, str]:
     """Upsert CPG nodes into the incremental state store.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of dataset name to dataset path.
@@ -224,7 +228,7 @@ def upsert_cpg_edges(
 ) -> dict[str, str]:
     """Upsert CPG edges into the incremental state store.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of dataset name to dataset path.
@@ -253,7 +257,7 @@ def upsert_exported_defs(
 ) -> dict[str, str]:
     """Upsert exported definition partitions by file_id.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of dataset name to dataset path.
@@ -282,7 +286,7 @@ def upsert_module_index(
 ) -> dict[str, str]:
     """Upsert module index partitions by file_id.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of dataset name to dataset path.
@@ -311,7 +315,7 @@ def upsert_imports_resolved(
 ) -> dict[str, str]:
     """Upsert resolved import partitions by importer_file_id.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of dataset name to dataset path.
@@ -340,7 +344,7 @@ def upsert_extract_outputs(
 ) -> dict[str, str]:
     """Upsert extract outputs into the incremental state store.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of dataset names to dataset paths.
@@ -372,7 +376,7 @@ def upsert_normalize_outputs(
 ) -> dict[str, str]:
     """Upsert normalize outputs into the incremental state store.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of dataset names to dataset paths.

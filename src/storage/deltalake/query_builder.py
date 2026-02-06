@@ -41,15 +41,8 @@ def _warn_querybuilder_usage() -> None:
 def _require_query_builder() -> type[_QueryBuilderProtocol]:
     """Return the delta-rs QueryBuilder class.
 
-    Returns
-    -------
-    object
-        QueryBuilder class from delta-rs.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when deltalake.QueryBuilder is unavailable.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     try:
         from deltalake import QueryBuilder
@@ -62,15 +55,15 @@ def _require_query_builder() -> type[_QueryBuilderProtocol]:
 def open_delta_table(path: str, storage_options: Mapping[str, str] | None = None) -> DeltaTable:
     """Open a DeltaTable with optional storage options.
 
-    Returns
-    -------
-    DeltaTable
-        Opened DeltaTable instance.
+    Args:
+        path: Description.
+            storage_options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when deltalake.DeltaTable is unavailable.
+    Returns:
+        DeltaTable: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     try:
         from deltalake import DeltaTable
@@ -87,7 +80,7 @@ def execute_query(
 ) -> RecordBatchReader:
     """Execute SQL using the embedded QueryBuilder engine.
 
-    Returns
+    Returns:
     -------
     RecordBatchReader
         Record batch reader with query results.

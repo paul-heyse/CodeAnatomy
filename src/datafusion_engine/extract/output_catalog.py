@@ -17,7 +17,7 @@ def build_extract_output_catalog(*, output_root: str) -> DatasetCatalog:
     output_root
         Root directory for extract outputs.
 
-    Returns
+    Returns:
     -------
     DatasetCatalog
         Catalog of extract output dataset locations.

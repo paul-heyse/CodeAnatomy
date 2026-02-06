@@ -40,7 +40,7 @@ _EXPORTERS: dict[str, DiagnosticsExporters | None] = {"value": None}
 def diagnostics_bundle_enabled() -> bool:
     """Return whether diagnostics bundle capture is enabled.
 
-    Returns
+    Returns:
     -------
     bool
         True when diagnostics bundle capture is enabled.
@@ -147,7 +147,7 @@ def _log_payload(record: ReadableLogRecord) -> dict[str, object]:
 def _metric_payload(reader: InMemoryMetricReader | None) -> Mapping[str, object]:
     """Convert metric reader output into a mapping payload.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Parsed metrics payload (empty if no reader is available).
@@ -185,7 +185,7 @@ def _bundle_metadata(
 def snapshot_diagnostics() -> dict[str, object]:
     """Return a snapshot of spans, logs, and metrics for diagnostics.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Snapshot payload for diagnostics.
@@ -216,7 +216,7 @@ def write_run_diagnostics_bundle(
 ) -> Path | None:
     """Write OpenTelemetry diagnostics bundle to the run bundle directory.
 
-    Returns
+    Returns:
     -------
     Path | None
         Run bundle directory when written, otherwise None.

@@ -19,7 +19,7 @@ class DataFusionWritePolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the write policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing write policy settings.
@@ -33,7 +33,7 @@ class DataFusionWritePolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the write policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -43,7 +43,7 @@ class DataFusionWritePolicy(FingerprintableConfig):
     def payload(self) -> dict[str, object]:
         """Return a JSON-ready payload for the write policy.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Serialized write policy payload.

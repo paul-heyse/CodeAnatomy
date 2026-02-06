@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 def dataset_spec(name: str) -> DatasetSpec:
     """Return the DatasetSpec for the dataset name.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset specification for the name.
@@ -25,7 +25,7 @@ def dataset_spec(name: str) -> DatasetSpec:
 def dataset_schema(name: str) -> SchemaLike:
     """Return the Arrow schema for the dataset name.
 
-    Returns
+    Returns:
     -------
     SchemaLike
         Arrow schema for the dataset.
@@ -36,7 +36,7 @@ def dataset_schema(name: str) -> SchemaLike:
 def dataset_contract_spec(name: str) -> ContractSpec:
     """Return the ContractSpec for the dataset name.
 
-    Returns
+    Returns:
     -------
     ContractSpec
         Contract specification for the dataset.

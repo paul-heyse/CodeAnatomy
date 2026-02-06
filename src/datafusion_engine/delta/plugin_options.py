@@ -67,22 +67,12 @@ def delta_plugin_options_from_session(
 ) -> dict[str, object]:
     """Return plugin options with session-derived Delta scan config injected.
 
-    Parameters
-    ----------
-    ctx
-        DataFusion session context that supplies Delta scan defaults.
-    options
-        Optional plugin options to merge with the session defaults.
+    Args:
+        ctx: Description.
+        options: Description.
 
-    Returns
-    -------
-    dict[str, object]
-        Resolved plugin options with validated defaults applied.
-
-    Raises
-    ------
-    DataFusionEngineError
-        If options are invalid or defaults cannot be resolved.
+    Raises:
+        DataFusionEngineError: If the operation cannot be completed.
     """
     if options is None:
         resolved: dict[str, object] = {}
@@ -120,7 +110,7 @@ def delta_plugin_options_json(
     options
         Optional plugin options to merge with the session defaults.
 
-    Returns
+    Returns:
     -------
     str
         JSON-encoded plugin options.

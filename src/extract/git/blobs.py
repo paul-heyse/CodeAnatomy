@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 def open_repo_for_path(path: Path) -> pygit2.Repository | None:
     """Return a pygit2 repository for the given path when available.
 
-    Returns
+    Returns:
     -------
     pygit2.Repository | None
         Repository when available.
@@ -78,7 +78,7 @@ def read_blob_at_ref(
 ) -> bytes | None:
     """Read blob bytes at a ref and path, returning None when missing.
 
-    Returns
+    Returns:
     -------
     bytes | None
         Blob bytes when available.
@@ -121,7 +121,7 @@ class RepoBlobOptions:
 def default_repo_blob_options() -> RepoBlobOptions:
     """Return default RepoBlobOptions for repo blob extraction.
 
-    Returns
+    Returns:
     -------
     RepoBlobOptions
         Default repo blob options.
@@ -132,7 +132,7 @@ def default_repo_blob_options() -> RepoBlobOptions:
 def repo_file_blobs_query(repo_id: str | None) -> QuerySpec:
     """Return the QuerySpec for repo blob extraction.
 
-    Returns
+    Returns:
     -------
     QuerySpec
         QuerySpec for repo blob projection.
@@ -148,7 +148,7 @@ def _detect_encoding_and_decode(data: bytes) -> tuple[str, str | None]:
     data:
         Raw file bytes.
 
-    Returns
+    Returns:
     -------
     tuple[str, str | None]
         Detected encoding and decoded text (if available).
@@ -271,7 +271,7 @@ def scan_repo_blobs(
     prefer_reader:
         When True, return a streaming reader when possible.
 
-    Returns
+    Returns:
     -------
     TableLike | RecordBatchReaderLike
         Repo file blob output.
@@ -326,7 +326,7 @@ def scan_repo_blobs_plan(
 ) -> DataFusionPlanBundle:
     """Build the plan for repo blob extraction.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         DataFusion plan bundle emitting repo file blobs.

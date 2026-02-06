@@ -31,7 +31,7 @@ class QuerySpec(StructBaseStrict, frozen=True):
     def simple(*cols: str) -> QuerySpec:
         """Return a simple query spec from column names.
 
-        Returns
+        Returns:
         -------
         QuerySpec
             Query spec with only base projection columns.
@@ -42,7 +42,7 @@ class QuerySpec(StructBaseStrict, frozen=True):
 def query_for_schema(schema_names: Sequence[str]) -> QuerySpec:
     """Return a QuerySpec projecting the schema columns.
 
-    Returns
+    Returns:
     -------
     QuerySpec
         Query spec projecting the schema fields.
@@ -53,7 +53,7 @@ def query_for_schema(schema_names: Sequence[str]) -> QuerySpec:
 def apply_query_spec(df: DataFrame, *, spec: QuerySpec) -> DataFrame:
     """Apply a query spec to a DataFusion DataFrame.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFrame with projections and predicates applied.
@@ -77,7 +77,7 @@ def apply_projection(
 ) -> DataFrame:
     """Apply a projection with optional derived columns.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFrame with projected and derived columns applied.
@@ -121,7 +121,7 @@ def _apply_predicate(df: DataFrame, predicate: ExprSpec) -> DataFrame:
 def false_predicate() -> ExprSpec:
     """Return a predicate that is always false.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Expression spec that evaluates to false.
@@ -132,7 +132,7 @@ def false_predicate() -> ExprSpec:
 def in_set_expr(name: str, values: Sequence[str]) -> ExprSpec:
     """Return an in-set predicate expression spec.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Expression spec representing an IN predicate.

@@ -17,7 +17,7 @@ def iter_array_values(array: ArrayOrChunked) -> Iterator[object | None]:
     array
         Arrow array or chunked array to iterate.
 
-    Yields
+    Yields:
     ------
     object | None
         Native Python values for each element.
@@ -37,7 +37,7 @@ def iter_arrays(arrays: Sequence[ArrayOrChunked]) -> Iterator[tuple[object | Non
     arrays
         Arrays to iterate together.
 
-    Yields
+    Yields:
     ------
     tuple[object | None, ...]
         Row-wise tuples of values.
@@ -54,7 +54,7 @@ def iter_table_rows(table: pa.TableLike) -> Iterator[dict[str, object | None]]:
     table
         Table to iterate row-wise.
 
-    Yields
+    Yields:
     ------
     dict[str, object | None]
         Mapping of column name to row value.

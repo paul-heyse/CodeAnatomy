@@ -40,7 +40,7 @@ class ExitCode(IntEnum):
         exc
             Exception to classify.
 
-        Returns
+        Returns:
         -------
         ExitCode
             Exit code appropriate for the exception type.

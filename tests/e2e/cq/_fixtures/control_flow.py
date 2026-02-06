@@ -15,7 +15,7 @@ LOGGER = logging.getLogger(__name__)
 def simple_branch(x: int) -> str:
     """Return a label for a simple branch.
 
-    Returns
+    Returns:
     -------
     str
         Branch label based on input sign.
@@ -28,7 +28,7 @@ def simple_branch(x: int) -> str:
 def multiple_branches(x: int, y: int) -> str:
     """Return a label based on multiple branches.
 
-    Returns
+    Returns:
     -------
     str
         Label describing the relation between x and y.
@@ -43,7 +43,7 @@ def multiple_branches(x: int, y: int) -> str:
 def nested_conditions(a: int, b: int, c: int) -> str:
     """Return a label based on nested conditions.
 
-    Returns
+    Returns:
     -------
     str
         Label describing the positive/negative state.
@@ -60,7 +60,7 @@ def nested_conditions(a: int, b: int, c: int) -> str:
 def try_except_basic() -> int:
     """Return a value using try-except control flow.
 
-    Returns
+    Returns:
     -------
     int
         Result value or fallback on error.
@@ -76,7 +76,7 @@ def try_except_basic() -> int:
 def try_except_else_finally() -> str:
     """Return a value using try-except-else-finally.
 
-    Returns
+    Returns:
     -------
     str
         Success or error label.
@@ -94,7 +94,7 @@ def try_except_else_finally() -> str:
 def try_eval_single() -> str:
     """Return a value using eval within try/except.
 
-    Returns
+    Returns:
     -------
     str
         Success or error label.
@@ -109,7 +109,7 @@ def try_eval_single() -> str:
 def multiple_except_handlers() -> str:
     """Return a label from multiple exception handlers.
 
-    Returns
+    Returns:
     -------
     str
         Handler-specific label.
@@ -128,7 +128,7 @@ def multiple_except_handlers() -> str:
 def loop_with_break(items: list[int]) -> int:
     """Sum items until a negative value is seen.
 
-    Returns
+    Returns:
     -------
     int
         Sum of items before the break.
@@ -144,7 +144,7 @@ def loop_with_break(items: list[int]) -> int:
 def loop_with_continue(items: list[int]) -> int:
     """Sum odd items while skipping even values.
 
-    Returns
+    Returns:
     -------
     int
         Sum of odd items.
@@ -160,7 +160,7 @@ def loop_with_continue(items: list[int]) -> int:
 def while_with_else(n: int) -> str:
     """Return a label based on while loop search.
 
-    Returns
+    Returns:
     -------
     str
         Label for found or exhausted state.
@@ -176,7 +176,7 @@ def while_with_else(n: int) -> str:
 def nested_loops(matrix: list[list[int]]) -> int:
     """Return sentinel values based on nested loops.
 
-    Returns
+    Returns:
     -------
     int
         Sentinel value for early exit or success.
@@ -191,7 +191,7 @@ def nested_loops(matrix: list[list[int]]) -> int:
 async def async_control_flow(x: int) -> str:
     """Return a label using async control flow.
 
-    Returns
+    Returns:
     -------
     str
         Async branch label.
@@ -217,7 +217,7 @@ async def some_async_call(n: int) -> None:
 def match_statement(value: int | str) -> str:
     """Return a label using pattern matching.
 
-    Returns
+    Returns:
     -------
     str
         Label for the matched pattern.

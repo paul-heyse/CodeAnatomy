@@ -260,34 +260,15 @@ def install_rust_udf_platform(
 ) -> RustUdfPlatform:
     """Install planning-critical extension platform before plan-bundle construction.
 
-    This function installs the Rust UDF platform as a core planning feature.
-    Planner extensions (Rust UDFs, ExprPlanner, FunctionFactory) must be
-    installed before any DataFusion plan-bundle construction to ensure:
+    Args:
+        ctx: Description.
+            options: Description.
 
-    1. Required UDFs can be derived from logical plans
-    2. Domain syntax is routed through ExprPlanner
-    3. Function rewrites are applied via FunctionFactory
-    4. Table functions and relation planners are available
+    Returns:
+        RustUdfPlatform: Result.
 
-    This replaces legacy UDF enforcement paths with DataFusion-native
-    extension points.
-
-    Parameters
-    ----------
-    ctx:
-        DataFusion session context to configure.
-    options:
-        Optional platform installation configuration.
-
-    Returns
-    -------
-    RustUdfPlatform
-        Installation snapshot for diagnostics.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when strict installation is enabled and extensions fail to install.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     resolved = options or RustUdfPlatformOptions()
     from datafusion_engine.udf.runtime import validate_extension_capabilities
@@ -340,7 +321,7 @@ def install_rust_udf_platform(
 def native_udf_platform_available() -> bool:
     """Return whether native FunctionFactory/ExprPlanner hooks are available.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the native UDF platform hooks are available.
@@ -366,15 +347,17 @@ def ensure_rust_udfs(
 ) -> Mapping[str, object]:
     """Ensure Rust UDFs are registered via the unified platform.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Rust UDF registry snapshot.
+    Args:
+        ctx: Description.
+            enable_async: Description.
+            async_udf_timeout_ms: Description.
+            async_udf_batch_size: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust UDF registry snapshot is unavailable.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     platform = install_rust_udf_platform(
         ctx,

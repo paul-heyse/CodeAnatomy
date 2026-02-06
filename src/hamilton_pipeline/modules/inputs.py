@@ -85,7 +85,7 @@ def _cache_policy_profile_from_inputs(cache_policy_profile: str | None) -> str |
 def runtime_profile_name(runtime_profile_name_override: str | None = None) -> str:
     """Return the runtime profile name for execution.
 
-    Returns
+    Returns:
     -------
     str
         Runtime profile name (defaults to "default").
@@ -101,7 +101,7 @@ def determinism_override(
 ) -> DeterminismTier | None:
     """Return an optional determinism tier override.
 
-    Returns
+    Returns:
     -------
     DeterminismTier | None
         Override tier when requested, otherwise ``None``.
@@ -125,7 +125,7 @@ def runtime_profile_spec(
 ) -> RuntimeProfileSpec:
     """Return a resolved runtime profile spec.
 
-    Returns
+    Returns:
     -------
     RuntimeProfileSpec
         Runtime profile spec with determinism overrides applied.
@@ -201,7 +201,7 @@ def ctx(
 ) -> OutputRuntimeContext:
     """Return the output runtime context for caching and execution.
 
-    Returns
+    Returns:
     -------
     OutputRuntimeContext
         Runtime context for cache and output operations.
@@ -311,7 +311,7 @@ def _extract_output_catalog(
 def diagnostics_collector() -> DiagnosticsCollector:
     """Return a diagnostics collector for the run.
 
-    Returns
+    Returns:
     -------
     DiagnosticsCollector
         Collector for diagnostics events and artifacts.
@@ -329,7 +329,7 @@ def engine_session_runtime_inputs(
 ) -> EngineSessionRuntimeInputs:
     """Build runtime-focused inputs for the engine session.
 
-    Returns
+    Returns:
     -------
     EngineSessionRuntimeInputs
         Grouped runtime inputs for EngineSession construction.
@@ -350,7 +350,7 @@ def engine_session_observability_inputs(
 ) -> EngineSessionObservabilityInputs:
     """Build observability-focused inputs for the engine session.
 
-    Returns
+    Returns:
     -------
     EngineSessionObservabilityInputs
         Grouped observability inputs for EngineSession construction.
@@ -388,7 +388,7 @@ def engine_session(
 ) -> EngineSession:
     """Build an engine session for downstream execution surfaces.
 
-    Returns
+    Returns:
     -------
     EngineSession
         Session containing runtime surfaces and diagnostics wiring.
@@ -412,7 +412,7 @@ def semantic_runtime_config(
 ) -> SemanticRuntimeConfig:
     """Return semantic runtime configuration derived from the runtime profile.
 
-    Returns
+    Returns:
     -------
     SemanticRuntimeConfig
         Semantic runtime configuration derived from the profile.
@@ -430,7 +430,7 @@ def streaming_table_provider(
     This hook is reserved for Rust-backed StreamingTable providers. It is
     restricted to incremental/streaming pipeline runs only.
 
-    Returns
+    Returns:
     -------
     object | None
         Provider instance or None when disabled.
@@ -447,7 +447,7 @@ def streaming_table_provider(
 def adapter_execution_policy() -> AdapterExecutionPolicy:
     """Return the execution policy for adapter execution behavior.
 
-    Returns
+    Returns:
     -------
     AdapterExecutionPolicy
         Adapter execution policy configuration.
@@ -459,7 +459,7 @@ def adapter_execution_policy() -> AdapterExecutionPolicy:
 def relspec_param_values() -> JsonDict:
     """Return parameter values for relspec execution.
 
-    Returns
+    Returns:
     -------
     JsonDict
         Mapping of parameter names to values. Keys may be global ("threshold"),
@@ -473,7 +473,7 @@ def relspec_param_values() -> JsonDict:
 def pipeline_policy() -> PipelinePolicy:
     """Return the pipeline policy for rule execution.
 
-    Returns
+    Returns:
     -------
     PipelinePolicy
         Policy bundle for rule execution and diagnostics.
@@ -485,7 +485,7 @@ def pipeline_policy() -> PipelinePolicy:
 def param_table_delta_paths() -> Mapping[str, str] | None:
     """Return optional Delta table paths for param table replay.
 
-    Returns
+    Returns:
     -------
     Mapping[str, str] | None
         Mapping of logical param names to Delta table paths.
@@ -499,7 +499,7 @@ def python_extensions() -> list[str]:
 
     Override via execute(overrides={"python_extensions": [...]}).
 
-    Returns
+    Returns:
     -------
     list[str]
         Explicit Python extensions to add to discovery.
@@ -511,7 +511,7 @@ def python_extensions() -> list[str]:
 def include_untracked() -> bool:
     """Return whether to include untracked files in repo scope.
 
-    Returns
+    Returns:
     -------
     bool
         True to include untracked files.
@@ -523,7 +523,7 @@ def include_untracked() -> bool:
 def include_submodules() -> bool:
     """Return whether to include submodules in repo scope.
 
-    Returns
+    Returns:
     -------
     bool
         True to include submodules.
@@ -535,7 +535,7 @@ def include_submodules() -> bool:
 def include_worktrees() -> bool:
     """Return whether to include worktrees in repo scope.
 
-    Returns
+    Returns:
     -------
     bool
         True to include worktrees.
@@ -547,7 +547,7 @@ def include_worktrees() -> bool:
 def follow_symlinks() -> bool:
     """Return whether to follow symlinks in repo scope.
 
-    Returns
+    Returns:
     -------
     bool
         True to follow symlinks.
@@ -559,7 +559,7 @@ def follow_symlinks() -> bool:
 def external_interface_depth() -> Literal["metadata", "full"]:
     """Return the external interface extraction depth.
 
-    Returns
+    Returns:
     -------
     str
         Depth policy for external interface extraction.
@@ -571,7 +571,7 @@ def external_interface_depth() -> Literal["metadata", "full"]:
 def max_files() -> int:
     """Return the default maximum number of files to scan.
 
-    Returns
+    Returns:
     -------
     int
         Maximum file count for repository scanning.
@@ -586,7 +586,7 @@ def max_files() -> int:
 def cache_salt() -> str:
     """Return a manual cache-busting salt for repo-dependent nodes.
 
-    Returns
+    Returns:
     -------
     str
         Cache salt string used to invalidate cached outputs when changed.
@@ -600,7 +600,7 @@ def output_dir() -> str | None:
 
     Override to materialize artifacts.
 
-    Returns
+    Returns:
     -------
     str | None
         Output directory path, or None to disable.
@@ -614,7 +614,7 @@ def work_dir() -> str | None:
 
     Override if you want all intermediate datasets written somewhere specific.
 
-    Returns
+    Returns:
     -------
     str | None
         Working directory path, or None for automatic selection.
@@ -628,7 +628,7 @@ def scip_identity_overrides() -> ScipIdentityOverrides:
 
     Override via execute(overrides={"scip_identity_overrides": ScipIdentityOverrides(...)}).
 
-    Returns
+    Returns:
     -------
     ScipIdentityOverrides
         Identity overrides for SCIP project metadata.
@@ -646,7 +646,7 @@ def scip_index_config() -> ScipIndexConfig:
 
     Override via execute(overrides={"scip_index_config": ScipIndexConfig(...)}).
 
-    Returns
+    Returns:
     -------
     ScipIndexConfig
         Indexing configuration.
@@ -660,7 +660,7 @@ def scip_parse_options() -> SCIPParseOptions:
 
     Override via execute(overrides={"scip_parse_options": SCIPParseOptions(...)}).
 
-    Returns
+    Returns:
     -------
     SCIPParseOptions
         Parsing options for SCIP index decoding.
@@ -674,7 +674,7 @@ def scip_extract_options() -> ScipExtractOptions:
 
     Override via execute(overrides={"scip_extract_options": ScipExtractOptions(...)}).
 
-    Returns
+    Returns:
     -------
     ScipExtractOptions
         Extract options for SCIP table materialization.
@@ -686,7 +686,7 @@ def scip_extract_options() -> ScipExtractOptions:
 def enable_tree_sitter() -> bool:
     """Return whether tree-sitter extraction is enabled.
 
-    Returns
+    Returns:
     -------
     bool
         True to enable tree-sitter extraction.
@@ -700,7 +700,7 @@ def relspec_mode() -> Literal["memory", "filesystem"]:
 
     Override via execute(overrides={"relspec_mode": "filesystem"}).
 
-    Returns
+    Returns:
     -------
     str
         Relationship spec mode ("memory" or "filesystem").
@@ -712,7 +712,7 @@ def relspec_mode() -> Literal["memory", "filesystem"]:
 def overwrite_intermediate_datasets() -> bool:
     """Return whether to overwrite intermediate datasets on disk.
 
-    Returns
+    Returns:
     -------
     bool
         True to delete and rewrite intermediate datasets.
@@ -742,7 +742,7 @@ class RepoScopeFlags:
 def repo_scope_globs() -> RepoScopeGlobs:
     """Bundle repository scope globs.
 
-    Returns
+    Returns:
     -------
     RepoScopeGlobs
         Include/exclude glob bundle.
@@ -760,7 +760,7 @@ def repo_scope_flags(
 ) -> RepoScopeFlags:
     """Bundle repository scope flags.
 
-    Returns
+    Returns:
     -------
     RepoScopeFlags
         Boolean scope flags.
@@ -782,7 +782,7 @@ def repo_scope_config(
 ) -> RepoScopeConfig:
     """Bundle repository scope configuration.
 
-    Returns
+    Returns:
     -------
     RepoScopeConfig
         Repository scope configuration bundle.
@@ -808,7 +808,7 @@ def repo_scan_config(
 ) -> RepoScanConfig:
     """Bundle repository scan configuration.
 
-    Returns
+    Returns:
     -------
     RepoScanConfig
         Repository scan configuration bundle.
@@ -841,7 +841,7 @@ def relspec_config(
 ) -> RelspecConfig:
     """Bundle relationship-spec configuration.
 
-    Returns
+    Returns:
     -------
     RelspecConfig
         Relationship-spec configuration bundle.
@@ -859,7 +859,7 @@ def output_config_overrides(
 ) -> OutputConfigOverrides:
     """Bundle output configuration overrides.
 
-    Returns
+    Returns:
     -------
     OutputConfigOverrides
         Output configuration overrides bundle.
@@ -928,15 +928,16 @@ def output_config(
 ) -> OutputConfig:
     """Bundle output configuration values.
 
-    Returns
-    -------
-    OutputConfig
-        Output configuration bundle.
+    Args:
+        work_dir: Description.
+            output_dir: Description.
+            output_config_overrides: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the output storage policy is not Delta.
+    Returns:
+        OutputConfig: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     storage_policy = output_config_overrides.output_storage_policy or OutputStoragePolicy()
     if storage_policy.format != "delta":
@@ -987,7 +988,7 @@ def cache_context(
 ) -> CacheRuntimeContext:
     """Return cache configuration details for run manifests.
 
-    Returns
+    Returns:
     -------
     CacheRuntimeContext
         Cache configuration snapshot for the run.
@@ -1011,7 +1012,7 @@ def cache_context(
 def materialized_outputs(requested_outputs: Sequence[str] | None = None) -> tuple[str, ...]:
     """Return the ordered list of materialized output nodes.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Ordered output node names targeted for materialization.
@@ -1026,7 +1027,7 @@ def execution_surface_policy(
 ) -> MaterializationPolicy:
     """Return the execution surface policy for plan materialization.
 
-    Returns
+    Returns:
     -------
     MaterializationPolicy
         Policy describing streaming and writer strategy preferences.
@@ -1067,7 +1068,7 @@ def incremental_overrides(
 ) -> IncrementalOverrides:
     """Bundle incremental override values.
 
-    Returns
+    Returns:
     -------
     IncrementalOverrides
         Overrides bundle for incremental configuration.
@@ -1089,7 +1090,7 @@ def incremental_git_overrides(
 ) -> IncrementalGitOverrides:
     """Bundle incremental git override values.
 
-    Returns
+    Returns:
     -------
     IncrementalGitOverrides
         Overrides bundle for incremental git configuration.
@@ -1109,15 +1110,16 @@ def incremental_config(
 ) -> SemanticIncrementalConfig:
     """Bundle incremental configuration values.
 
-    Returns
-    -------
-    SemanticIncrementalConfig
-        Incremental configuration bundle.
+    Args:
+        repo_root: Description.
+            incremental_overrides: Description.
+            incremental_git_overrides: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the impact strategy is unsupported.
+    Returns:
+        SemanticIncrementalConfig: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     enabled = bool(incremental_overrides.enabled) or _incremental_pipeline_enabled()
     state_dir = incremental_overrides.state_dir or env_value("CODEANATOMY_STATE_DIR")
@@ -1167,7 +1169,7 @@ def incremental_config(
 def tree_sitter_config(*, enable_tree_sitter: bool) -> TreeSitterConfig:
     """Bundle tree-sitter configuration values.
 
-    Returns
+    Returns:
     -------
     TreeSitterConfig
         Tree-sitter configuration bundle.

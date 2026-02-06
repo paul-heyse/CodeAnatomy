@@ -28,7 +28,7 @@ class SchemaEvolutionPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for schema evolution policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing schema evolution policy settings.
@@ -38,7 +38,7 @@ class SchemaEvolutionPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for schema evolution policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -79,24 +79,16 @@ def enforce_schema_policy(
 ) -> str:
     """Enforce schema evolution policy against existing Delta table.
 
-    Parameters
-    ----------
-    expected_schema
-        Schema for the new semantic output.
-    dataset_location
-        Delta dataset location metadata.
-    policy
-        Schema evolution policy (strict or additive).
+    Args:
+        expected_schema: Description.
+            dataset_location: Description.
+            policy: Description.
 
-    Returns
-    -------
-    str
-        Schema identity hash for the expected schema.
+    Returns:
+        str: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when schema evolution policy validation fails.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     request = DeltaSchemaRequest(
         path=str(dataset_location.path),

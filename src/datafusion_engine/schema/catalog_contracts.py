@@ -32,7 +32,7 @@ def information_schema_snapshot(
 ) -> InformationSchemaSnapshot:
     """Return information_schema snapshots for a table.
 
-    Returns
+    Returns:
     -------
     InformationSchemaSnapshot
         Snapshot of information_schema columns and constraints.
@@ -50,15 +50,15 @@ def schema_contract_from_information_schema(
 ) -> SchemaContract:
     """Build a SchemaContract from information_schema metadata.
 
-    Returns
-    -------
-    SchemaContract
-        Schema contract derived from information_schema metadata.
+    Args:
+        ctx: Description.
+            table_name: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when information_schema metadata is unavailable.
+    Returns:
+        SchemaContract: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     snapshot = information_schema_snapshot(ctx, table_name=table_name)
     if not snapshot.columns:
@@ -84,7 +84,7 @@ def contract_violations_for_schema(
 ) -> list[ValidationViolation]:
     """Return violations comparing an Arrow schema to a SchemaContract.
 
-    Returns
+    Returns:
     -------
     list[ValidationViolation]
         Violations detected when comparing the schema to the contract.

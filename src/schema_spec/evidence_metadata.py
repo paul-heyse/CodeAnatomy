@@ -38,7 +38,7 @@ def evidence_metadata_bundle() -> FieldBundle:
     The bundle includes provenance columns for tracking extraction source,
     priority ordering, confidence scores, and resolution methodology.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle containing evidence metadata field specs.
@@ -79,7 +79,7 @@ def evidence_struct_type() -> DataTypeLike:
     Use this when embedding evidence metadata as a nested struct column
     rather than flat top-level columns.
 
-    Returns
+    Returns:
     -------
     DataTypeLike
         PyArrow struct type for evidence metadata.
@@ -90,7 +90,7 @@ def evidence_struct_type() -> DataTypeLike:
 def evidence_metadata_field_names() -> tuple[str, ...]:
     """Return the canonical evidence metadata field names.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Field names in canonical order.
@@ -104,7 +104,7 @@ def evidence_metadata_defaults() -> dict[str, object]:
     Use these defaults when constructing evidence rows without explicit
     provenance information.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Mapping of field name to default value.

@@ -26,20 +26,18 @@ def index(
     ] = False,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
 ) -> int:
-    """Index management (deprecated - caching has been removed).
+    """Handle deprecated index management flags.
 
-    The caching infrastructure has been removed from cq.
-    This command is a no-op placeholder.
+    Args:
+        rebuild: Deprecated rebuild flag.
+        status: Deprecated status flag.
+        ctx: Injected CLI context.
 
-    Returns
-    -------
-    int
-        Process exit code.
+    Returns:
+        int: Process status code.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     # Parameters rebuild and status are deprecated placeholders - intentionally unused
     del rebuild, status
@@ -64,20 +62,18 @@ def cache(
     ] = False,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
 ) -> int:
-    """Cache management (deprecated - caching has been removed).
+    """Handle deprecated cache management flags.
 
-    The caching infrastructure has been removed from cq.
-    This command is a no-op placeholder.
+    Args:
+        stats: Deprecated stats flag.
+        clear: Deprecated clear flag.
+        ctx: Injected CLI context.
 
-    Returns
-    -------
-    int
-        Process exit code.
+    Returns:
+        int: Process status code.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     # Parameters stats and clear are deprecated placeholders - intentionally unused
     del stats, clear
@@ -103,17 +99,16 @@ def schema(
 ) -> int:
     """Emit msgspec JSON Schema for CQ types.
 
-    Returns
-    -------
-    int
-        Process exit code.
+    Args:
+        kind: Schema kind to emit (`result`, `query`, or `components`).
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
-    ValueError
-        Raised when an unknown schema kind is requested.
+    Returns:
+        int: Process status code.
+
+    Raises:
+        RuntimeError: If command context is not injected.
+        ValueError: If `kind` is not one of the supported schema kinds.
     """
     from tools.cq.core.codec import dumps_json_value
     from tools.cq.core.schema_export import cq_result_schema, cq_schema_components, query_schema

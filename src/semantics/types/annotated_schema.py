@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 class AnnotatedColumn:
     """A column with semantic type annotation.
 
-    Attributes
+    Attributes:
     ----------
     name
         Column name.
@@ -57,7 +57,7 @@ class AnnotatedSchema:
     Provides methods for querying columns by semantic type or compatibility
     group, enabling programmatic join inference.
 
-    Attributes
+    Attributes:
     ----------
     columns
         Tuple of annotated columns.
@@ -78,7 +78,7 @@ class AnnotatedSchema:
         name
             Column name.
 
-        Returns
+        Returns:
         -------
         AnnotatedColumn
             Annotated column.
@@ -93,7 +93,7 @@ class AnnotatedSchema:
         name
             Column name.
 
-        Returns
+        Returns:
         -------
         bool
             True if column exists.
@@ -103,7 +103,7 @@ class AnnotatedSchema:
     def __len__(self) -> int:
         """Return number of columns.
 
-        Returns
+        Returns:
         -------
         int
             Number of columns in the schema.
@@ -113,7 +113,7 @@ class AnnotatedSchema:
     def __iter__(self) -> Iterator[AnnotatedColumn]:
         """Iterate over columns.
 
-        Returns
+        Returns:
         -------
         Iterator[AnnotatedColumn]
             Iterator over AnnotatedColumn instances.
@@ -124,7 +124,7 @@ class AnnotatedSchema:
     def column_names(self) -> tuple[str, ...]:
         """Get all column names.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Column names in order.
@@ -141,7 +141,7 @@ class AnnotatedSchema:
         default
             Default value if not found.
 
-        Returns
+        Returns:
         -------
         AnnotatedColumn | None
             Annotated column or default.
@@ -156,7 +156,7 @@ class AnnotatedSchema:
         sem_type
             Semantic type to filter by.
 
-        Returns
+        Returns:
         -------
         tuple[AnnotatedColumn, ...]
             Columns with the specified semantic type.
@@ -173,7 +173,7 @@ class AnnotatedSchema:
         group
             Compatibility group to filter by.
 
-        Returns
+        Returns:
         -------
         tuple[AnnotatedColumn, ...]
             Columns in the specified group.
@@ -183,7 +183,7 @@ class AnnotatedSchema:
     def join_key_columns(self) -> tuple[AnnotatedColumn, ...]:
         """Get columns that are join keys.
 
-        Returns
+        Returns:
         -------
         tuple[AnnotatedColumn, ...]
             Columns marked as join keys in standard columns.
@@ -199,7 +199,7 @@ class AnnotatedSchema:
     def partition_key_columns(self) -> tuple[AnnotatedColumn, ...]:
         """Get columns that are partition keys.
 
-        Returns
+        Returns:
         -------
         tuple[AnnotatedColumn, ...]
             Columns marked as partition keys in standard columns.
@@ -220,7 +220,7 @@ class AnnotatedSchema:
         sem_type
             Semantic type to check for.
 
-        Returns
+        Returns:
         -------
         bool
             True if any column has the semantic type.
@@ -235,7 +235,7 @@ class AnnotatedSchema:
         group
             Compatibility group to check for.
 
-        Returns
+        Returns:
         -------
         bool
             True if any column is in the group.
@@ -250,7 +250,7 @@ class AnnotatedSchema:
         other
             Another annotated schema.
 
-        Returns
+        Returns:
         -------
         set[CompatibilityGroup]
             Groups present in both schemas.
@@ -275,7 +275,7 @@ class AnnotatedSchema:
         other
             Another annotated schema.
 
-        Returns
+        Returns:
         -------
         list[tuple[str, str]]
             List of (self_column, other_column) pairs that can be joined.
@@ -306,7 +306,7 @@ class AnnotatedSchema:
         schema
             PyArrow schema.
 
-        Returns
+        Returns:
         -------
         AnnotatedSchema
             Annotated schema with inferred semantic types.
@@ -335,7 +335,7 @@ class AnnotatedSchema:
         df
             DataFusion DataFrame.
 
-        Returns
+        Returns:
         -------
         AnnotatedSchema
             Annotated schema with inferred semantic types.
@@ -345,7 +345,7 @@ class AnnotatedSchema:
     def to_arrow(self) -> pa.Schema:
         """Return the PyArrow schema representation.
 
-        Returns
+        Returns:
         -------
         pa.Schema
             Arrow schema derived from annotated columns.

@@ -62,7 +62,7 @@ class ParamTablePolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the param table policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing param table policy settings.
@@ -75,7 +75,7 @@ class ParamTablePolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the param table policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -138,7 +138,7 @@ class ParamTableRegistry:
     ) -> ParamTableRegistry:
         """Build a registry from raw spec mappings.
 
-        Returns
+        Returns:
         -------
         ParamTableRegistry
             Registry initialized with the provided specs.
@@ -152,17 +152,16 @@ class ParamTableRegistry:
     def register_values(self, logical_name: str, values: Sequence[object]) -> ParamTableArtifact:
         """Register values for a param table and return the artifact.
 
-        Returns
-        -------
-        ParamTableArtifact
-            Materialized param table artifact.
+        Args:
+            logical_name: Description.
+                    values: Description.
 
-        Raises
-        ------
-        KeyError
-            Raised when the logical name is not registered.
-        ValueError
-            Raised when the spec key column is missing from the schema.
+        Returns:
+            ParamTableArtifact: Result.
+
+        Raises:
+            KeyError: If the operation cannot be completed.
+                    ValueError: If the operation cannot be completed.
         """
         spec = self.specs.get(logical_name)
         if spec is None:
@@ -195,7 +194,7 @@ class ParamTableRegistry:
     def datafusion_tables(self, ctx: SessionContext) -> dict[str, DataFrame]:
         """Return DataFusion DataFrames for registered param tables.
 
-        Returns
+        Returns:
         -------
         dict[str, datafusion.dataframe.DataFrame]
             DataFrames keyed by logical name.
@@ -225,24 +224,16 @@ def resolve_param_bindings(
 ) -> DataFusionParamBindings:
     """Resolve scalar and table-like parameter bindings.
 
-    Parameters
-    ----------
-    values
-        Parameter values keyed by name.
-    allowlist
-        Optional allowlist of permitted parameter names.
-    validate_names
-        Whether to validate parameter names against identifier rules.
+    Args:
+        values: Description.
+            allowlist: Description.
+            validate_names: Description.
 
-    Returns
-    -------
-    DataFusionParamBindings
-        Resolved scalar and table-like parameter bindings.
+    Returns:
+        DataFusionParamBindings: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when a parameter name is invalid or not allowlisted.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not values:
         return DataFusionParamBindings(param_values={}, named_tables={})
@@ -318,15 +309,12 @@ _SCOPE_RE = re.compile(r"[^A-Za-z0-9_]+")
 def param_table_name(policy: ParamTablePolicy, logical_name: str) -> str:
     """Return the physical table name for a param logical name.
 
-    Returns
-    -------
-    str
-        Physical table name.
+    Args:
+        policy: Description.
+        logical_name: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the logical name is invalid.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not _IDENT_RE.match(logical_name):
         msg = f"Invalid param logical name: {logical_name!r}."
@@ -352,7 +340,7 @@ def param_signature_from_array(
 ) -> str:
     """Return a stable signature for a parameter list from Arrow values.
 
-    Returns
+    Returns:
     -------
     str
         Deterministic parameter signature.
@@ -374,7 +362,7 @@ def param_signature_from_array(
 def scalar_param_signature(values: Mapping[str, object]) -> str:
     """Return a stable signature for scalar parameter values.
 
-    Returns
+    Returns:
     -------
     str
         Deterministic signature for scalar parameters.
@@ -398,15 +386,12 @@ def _param_values_array(
 def build_param_table(spec: ParamTableSpec, values: Sequence[object]) -> pa.Table:
     """Return an Arrow table for a parameter spec.
 
-    Returns
-    -------
-    pyarrow.Table
-        Arrow table with parameter values.
+    Args:
+        spec: Description.
+        values: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the spec key column is missing from the schema.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if spec.key_col not in spec.schema.names:
         msg = f"ParamTableSpec missing key column: {spec.key_col!r}."
@@ -418,7 +403,7 @@ def build_param_table(spec: ParamTableSpec, values: Sequence[object]) -> pa.Tabl
 def unique_values(values: pa.Array | pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
     """Return unique values from an array-like input.
 
-    Returns
+    Returns:
     -------
     pyarrow.Array | pyarrow.ChunkedArray
         Array with unique values preserved.

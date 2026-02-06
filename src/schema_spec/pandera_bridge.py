@@ -100,7 +100,7 @@ def dataframe_model_for_spec(
 ) -> type[Any] | None:
     """Return a pandera DataFrameModel for the schema spec when possible.
 
-    Returns
+    Returns:
     -------
     type[Any] | None
         Generated DataFrameModel class when column names are valid identifiers.
@@ -152,7 +152,7 @@ def field_to_pandera_dtype(field: FieldSpec) -> Any:
     field
         Field specification describing the column type.
 
-    Returns
+    Returns:
     -------
     Any
         Pandas dtype object usable with pandera.
@@ -177,24 +177,16 @@ def to_pandera_schema(
 ) -> Any:
     """Build a pandera DataFrameSchema from a table schema spec.
 
-    Parameters
-    ----------
-    spec
-        Table schema specification to convert.
-    policy
-        Optional validation policy (unused beyond configuration).
-    constraints
-        Optional constraint expressions for minimal checks.
+    Args:
+        spec: Description.
+            policy: Description.
+            constraints: Description.
 
-    Returns
-    -------
-    Any
-        Pandera DataFrameSchema instance.
+    Returns:
+        Any: Result.
 
-    Raises
-    ------
-    TypeError
-        Raised when the pandera polars backend is unavailable.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     import pandera.polars as pa_schema
 
@@ -297,7 +289,7 @@ def validate_dataframe[TDF](
     constraints
         Optional constraint expressions for minimal checks.
 
-    Returns
+    Returns:
     -------
     TDF
         Original dataframe-like object after validation.
@@ -341,7 +333,7 @@ def validate_dataframe[TDF](
 def validate_with_policy[TDF](request: DataframeValidationRequest[TDF]) -> TDF:
     """Validate a dataframe-like object and emit diagnostics on failure.
 
-    Returns
+    Returns:
     -------
     TDF
         Original dataframe-like object after validation.
@@ -376,7 +368,7 @@ def validation_policy_payload(policy: ValidationPolicySpec | None) -> Mapping[st
     policy
         Validation policy to serialize.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object] | None
         Serializable policy payload when defined.

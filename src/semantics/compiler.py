@@ -108,7 +108,7 @@ class _QualityOutputContext:
 class TableInfo:
     """Analyzed table with semantic information.
 
-    Attributes
+    Attributes:
     ----------
     name
         Table name in the session context.
@@ -144,7 +144,7 @@ class TableInfo:
         config
             Optional semantic configuration overrides.
 
-        Returns
+        Returns:
         -------
         TableInfo
             Analyzed table.
@@ -429,7 +429,7 @@ class SemanticCompiler:
         name
             Table name in the session context.
 
-        Returns
+        Returns:
         -------
         TableInfo
             Analyzed table information.
@@ -447,7 +447,7 @@ class SemanticCompiler:
         name
             Table name.
 
-        Returns
+        Returns:
         -------
         TableInfo
             Table information.
@@ -463,7 +463,7 @@ class SemanticCompiler:
     def normalize_from_spec(self, spec: SemanticTableSpec) -> DataFrame:
         """Apply normalization rules using an explicit table spec.
 
-        Returns
+        Returns:
         -------
         DataFrame
             Normalized DataFrame with canonical columns.
@@ -573,25 +573,15 @@ class SemanticCompiler:
     def normalize(self, table_name: str, *, prefix: str) -> DataFrame:
         """Apply normalization rules to an evidence table.
 
-        Rule 1: IF PATH + SPAN THEN derive entity_id
-        Rule 2: IF SPAN_START + SPAN_END THEN derive span struct
+        Args:
+            table_name: Description.
+                    prefix: Description.
 
-        Parameters
-        ----------
-        table_name
-            Name of extraction table.
-        prefix
-            Entity type prefix (e.g., "ref", "def").
+        Returns:
+            DataFrame: Result.
 
-        Returns
-        -------
-        DataFrame
-            Normalized DataFrame with entity_id and span columns.
-
-        Raises
-        ------
-        SemanticSchemaError
-            Raised when schema inference is ambiguous or incompatible.
+        Raises:
+            SemanticSchemaError: If the operation cannot be completed.
         """
         with stage_span(
             "semantics.normalize",
@@ -656,28 +646,17 @@ class SemanticCompiler:
     ) -> DataFrame:
         """Apply text normalization to text columns.
 
-        Rule 3: IF TEXT columns THEN utf8_normalize(text, form)
+        Args:
+            table_name: Description.
+                    columns: Description.
+                    options: Description.
 
-        Parameters
-        ----------
-        table_name
-            Table name.
-        columns
-            Specific columns to normalize. If None, normalizes all TEXT columns.
-        options
-            Normalization options for form, casefolding, and output naming.
+        Returns:
+            DataFrame: Result.
 
-        Returns
-        -------
-        DataFrame
-            DataFrame with normalized text columns.
-
-        Raises
-        ------
-        ValueError
-            Raised when output suffix is empty.
-        SemanticSchemaError
-            Raised when required text columns are missing or collide.
+        Raises:
+            SemanticSchemaError: If the operation cannot be completed.
+                    ValueError: If the operation cannot be completed.
         """
         resolved = options or TextNormalizationOptions()
         with stage_span(
@@ -763,7 +742,7 @@ class SemanticCompiler:
         options
             Relationship inference options and filters.
 
-        Returns
+        Returns:
         -------
         DataFrame
             Relationship table with schema:
@@ -910,24 +889,15 @@ class SemanticCompiler:
     ) -> DataFrame:
         """Union tables with a discriminator column.
 
-        Rule 8: IF tables have compatible schemas THEN union with discriminator.
+        Args:
+            table_names: Description.
+                    discriminator: Description.
 
-        Parameters
-        ----------
-        table_names
-            List of table names to union.
-        discriminator
-            Name of the discriminator column.
+        Returns:
+            DataFrame: Result.
 
-        Returns
-        -------
-        DataFrame
-            Unioned DataFrame with discriminator column.
-
-        Raises
-        ------
-        SemanticSchemaError
-            Raised when the union inputs are invalid or incompatible.
+        Raises:
+            SemanticSchemaError: If the operation cannot be completed.
         """
         from datafusion import lit
 
@@ -975,7 +945,7 @@ class SemanticCompiler:
     ) -> DataFrame:
         """Union node tables after canonical projection.
 
-        Returns
+        Returns:
         -------
         DataFrame
             Unioned node DataFrame.
@@ -1005,7 +975,7 @@ class SemanticCompiler:
     ) -> DataFrame:
         """Union edge tables after canonical projection.
 
-        Returns
+        Returns:
         -------
         DataFrame
             Unioned edge DataFrame.
@@ -1051,7 +1021,7 @@ class SemanticCompiler:
         aggregate
             Mapping of output column name to input column for array_agg.
 
-        Returns
+        Returns:
         -------
         DataFrame
             Aggregated DataFrame.
@@ -1105,7 +1075,7 @@ class SemanticCompiler:
         descending
             If True, keep highest score. If False, keep lowest.
 
-        Returns
+        Returns:
         -------
         DataFrame
             Deduplicated DataFrame.
@@ -1175,7 +1145,7 @@ class SemanticCompiler:
     def build_join_group(self, group: SemanticIRJoinGroup) -> DataFrame:
         """Build a shared join group for multiple relationships.
 
-        Returns
+        Returns:
         -------
         DataFrame
             Joined DataFrame with left/right prefixes.
@@ -1206,7 +1176,7 @@ class SemanticCompiler:
         file_quality_df
             Optional file quality DataFrame for confidence adjustment.
 
-        Returns
+        Returns:
         -------
         DataFrame
             Compiled relationship output.
@@ -1666,7 +1636,7 @@ class SemanticCompiler:
         joined
             Optional pre-joined DataFrame with left/right prefixes.
 
-        Returns
+        Returns:
         -------
         DataFrame
             Compiled relationship with confidence, score, and ambiguity_group_id.

@@ -39,7 +39,7 @@ class DataFusionSqlPolicy(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the SQL policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing SQL policy settings.
@@ -53,7 +53,7 @@ class DataFusionSqlPolicy(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return fingerprint for the SQL policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -63,7 +63,7 @@ class DataFusionSqlPolicy(StructBaseStrict, frozen=True):
     def to_sql_options(self) -> SQLOptions:
         """Return SQLOptions matching this policy.
 
-        Returns
+        Returns:
         -------
         datafusion.SQLOptions
             SQL options configured from the policy settings.
@@ -132,15 +132,12 @@ def resolve_sql_policy(
 ) -> DataFusionSqlPolicy:
     """Return a SQL policy from the preset matrix.
 
-    Returns
-    -------
-    DataFusionSqlPolicy
-        SQL policy resolved from presets or fallback.
+    Args:
+        name: Description.
+        fallback: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the policy name is unknown.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if name is None:
         return fallback or DataFusionSqlPolicy()
@@ -254,7 +251,7 @@ def compile_options_runtime(
     spec
         Serializable compile options spec.
 
-    Returns
+    Returns:
     -------
     DataFusionCompileOptionsRuntime
         Validated runtime compile options.
@@ -275,7 +272,7 @@ def compile_options_from_spec(
     spec
         Serializable compile options spec.
 
-    Returns
+    Returns:
     -------
     DataFusionCompileOptions
         Runtime compile options for execution.

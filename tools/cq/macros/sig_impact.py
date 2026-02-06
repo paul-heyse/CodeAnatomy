@@ -81,7 +81,7 @@ def _parse_signature(sig: str) -> list[SigParam]:
     sig : str
         Signature string to parse.
 
-    Returns
+    Returns:
     -------
     list[SigParam]
         Parsed parameter list.
@@ -169,7 +169,7 @@ def _classify_call(
     new_params : list[SigParam]
         New signature parameters.
 
-    Returns
+    Returns:
     -------
     tuple[str, str]
         (bucket, reason) where bucket is 'would_break', 'ambiguous', or 'ok'.
@@ -230,7 +230,7 @@ def _collect_sites(
     limits : SearchLimits | None
         Search limits (defaults to INTERACTIVE profile).
 
-    Returns
+    Returns:
     -------
     list[CallSite]
         Collected call sites.
@@ -322,7 +322,7 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
     request : SigImpactRequest
         Signature impact request payload.
 
-    Returns
+    Returns:
     -------
     CqResult
         Analysis result with call sites classified.

@@ -41,7 +41,7 @@ def hash_expr_spec_factory(
 ) -> HashExprSpec:
     """Return a HashExprSpec from normalized inputs.
 
-    Returns
+    Returns:
     -------
     HashExprSpec
         Normalized hash expression specification.
@@ -113,7 +113,7 @@ _HASH_SPECS: dict[str, HashExprSpec] = {
 def hash_spec(name: str) -> HashExprSpec:
     """Return a hash spec by registry key.
 
-    Returns
+    Returns:
     -------
     HashExprSpec
         Hash specification for the key.
@@ -127,7 +127,7 @@ _NULL_SEPARATOR = "\x1f"
 def stable_id(prefix: str, *parts: str | None) -> str:
     """Build a deterministic string ID.
 
-    Returns
+    Returns:
     -------
     str
         Stable identifier with the requested prefix.
@@ -141,7 +141,7 @@ def stable_id(prefix: str, *parts: str | None) -> str:
 def span_id(path: str, bstart: int, bend: int, kind: str | None = None) -> str:
     """Build a stable ID for a source span.
 
-    Returns
+    Returns:
     -------
     str
         Stable span identifier.
@@ -154,7 +154,7 @@ def span_id(path: str, bstart: int, bend: int, kind: str | None = None) -> str:
 def hash_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> ExprSpec:
     """Return an expression spec for a HashExprSpec.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Expression spec for the hash identifier.
@@ -165,7 +165,7 @@ def hash_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> ExprSpec
 def stable_id_expr_ir(*, spec: HashExprSpec, use_128: bool | None = None) -> ExprSpec:
     """Return an expression spec for stable_id identifiers.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Expression spec for stable_id identifiers.
@@ -181,7 +181,7 @@ def masked_stable_id_expr_ir(
 ) -> ExprSpec:
     """Return a stable_id expression spec with required-column masking.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Masked expression spec for stable_id identifiers.
@@ -202,7 +202,7 @@ def masked_hash_expr_ir(
 ) -> ExprSpec:
     """Return an expression spec with required-column masking.
 
-    Returns
+    Returns:
     -------
     ExprSpec
         Masked expression spec for hash identifiers.
@@ -225,15 +225,15 @@ def hash_expr_ir_from_parts(
 ) -> ExprSpec:
     """Return an expression spec for expression parts.
 
-    Returns
-    -------
-    ExprSpec
-        Expression spec for hashing the provided parts.
+    Args:
+        prefix: Description.
+        parts: Description.
+        null_sentinel: Description.
+        as_string: Description.
+        use_128: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when no parts are provided for a string identifier hash.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     prepared = [_coalesced_expr(_require_expr_ir(spec), null_sentinel) for spec in parts]
     if as_string and prefix:
@@ -267,15 +267,15 @@ def stable_id_expr_ir_from_parts(
 ) -> ExprSpec:
     """Return a stable_id expression spec for expression parts.
 
-    Returns
-    -------
-    ExprSpec
-        Expression spec for stable_id identifiers.
+    Args:
+        prefix: Description.
+        parts: Description.
+        null_sentinel: Description.
+        as_string: Description.
+        use_128: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when no identifier parts are provided.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not as_string:
         return hash_expr_ir_from_parts(

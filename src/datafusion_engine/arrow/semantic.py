@@ -133,7 +133,7 @@ def _extension_type(info: SemanticTypeInfo) -> pa.DataType:
 def semantic_type_metadata(info: SemanticTypeInfo) -> dict[bytes, bytes]:
     """Return canonical metadata for a semantic type.
 
-    Returns
+    Returns:
     -------
     dict[bytes, bytes]
         Encoded metadata mapping for the semantic type.
@@ -150,7 +150,7 @@ def span_metadata(
 ) -> dict[bytes, bytes]:
     """Return metadata for span-typed fields.
 
-    Returns
+    Returns:
     -------
     dict[bytes, bytes]
         Metadata mapping for span semantic types.
@@ -174,7 +174,7 @@ def node_id_metadata(
 ) -> dict[bytes, bytes]:
     """Return metadata for node-id semantic types.
 
-    Returns
+    Returns:
     -------
     dict[bytes, bytes]
         Metadata mapping for node id semantic types.
@@ -191,7 +191,7 @@ def edge_id_metadata(
 ) -> dict[bytes, bytes]:
     """Return metadata for edge-id semantic types.
 
-    Returns
+    Returns:
     -------
     dict[bytes, bytes]
         Metadata mapping for edge id semantic types.
@@ -208,7 +208,7 @@ def span_id_metadata(
 ) -> dict[bytes, bytes]:
     """Return metadata for span-id semantic types.
 
-    Returns
+    Returns:
     -------
     dict[bytes, bytes]
         Metadata mapping for span id semantic types.
@@ -222,7 +222,7 @@ def span_id_metadata(
 def span_type() -> pa.DataType:
     """Return the registered Span extension type.
 
-    Returns
+    Returns:
     -------
     pyarrow.DataType
         Extension data type for spans.
@@ -233,7 +233,7 @@ def span_type() -> pa.DataType:
 def byte_span_type() -> pa.DataType:
     """Return the registered ByteSpan extension type.
 
-    Returns
+    Returns:
     -------
     pyarrow.DataType
         Extension data type for byte spans.
@@ -244,7 +244,7 @@ def byte_span_type() -> pa.DataType:
 def node_id_type() -> pa.DataType:
     """Return the registered NodeId extension type.
 
-    Returns
+    Returns:
     -------
     pyarrow.DataType
         Extension data type for node ids.
@@ -255,7 +255,7 @@ def node_id_type() -> pa.DataType:
 def edge_id_type() -> pa.DataType:
     """Return the registered EdgeId extension type.
 
-    Returns
+    Returns:
     -------
     pyarrow.DataType
         Extension data type for edge ids.
@@ -266,7 +266,7 @@ def edge_id_type() -> pa.DataType:
 def span_id_type() -> pa.DataType:
     """Return the registered SpanId extension type.
 
-    Returns
+    Returns:
     -------
     pyarrow.DataType
         Extension data type for span ids.
@@ -277,7 +277,7 @@ def span_id_type() -> pa.DataType:
 def semantic_type_for_field_name(name: str) -> SemanticTypeInfo | None:
     """Return the semantic type info for a field name when matched.
 
-    Returns
+    Returns:
     -------
     SemanticTypeInfo | None
         Semantic type info when a field name is recognized.
@@ -299,7 +299,7 @@ def semantic_type_for_field_name(name: str) -> SemanticTypeInfo | None:
 def apply_semantic_types(schema: pa.Schema) -> pa.Schema:
     """Return a schema with semantic extension types and metadata applied.
 
-    Returns
+    Returns:
     -------
     pyarrow.Schema
         Schema with semantic types applied to matching fields.

@@ -30,7 +30,7 @@ def _gil_disabled() -> bool:
 def gil_disabled() -> bool:
     """Return True when running without the GIL.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when Python is running without the GIL.
@@ -41,7 +41,7 @@ def gil_disabled() -> bool:
 def supports_fork() -> bool:
     """Return True when the multiprocessing runtime can safely use fork.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the fork start method is available and the process
@@ -91,7 +91,7 @@ def parallel_map(
 ) -> Iterator[U]:
     """Map items in parallel, preferring processes unless free-threaded.
 
-    Yields
+    Yields:
     ------
     U
         Results produced by applying the function to each item.
@@ -123,7 +123,7 @@ def resolve_max_workers(
 ) -> int:
     """Resolve max_workers using runtime defaults when unset.
 
-    Returns
+    Returns:
     -------
     int
         Effective worker count.

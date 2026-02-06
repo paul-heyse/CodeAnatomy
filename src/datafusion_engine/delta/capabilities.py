@@ -51,7 +51,7 @@ def probe_delta_entrypoint(
     The probe validates that the requested entrypoint exists and then executes a
     canonical probe entrypoint to validate context adaptation deterministically.
 
-    Returns
+    Returns:
     -------
     DeltaExtensionCompatibility
         Availability/compatibility status plus diagnostic payload.
@@ -150,7 +150,7 @@ def is_delta_extension_compatible(
 ) -> DeltaExtensionCompatibility:
     """Return whether the Delta extension entrypoint can be invoked safely.
 
-    Returns
+    Returns:
     -------
     DeltaExtensionCompatibility
         Availability/compatibility status plus error details if any.
@@ -169,7 +169,7 @@ def resolve_delta_extension_module(
 ) -> DeltaExtensionModule | None:
     """Return a Delta extension module matching the requested symbols.
 
-    Returns
+    Returns:
     -------
     DeltaExtensionModule | None
         Resolved extension module metadata, or ``None`` when unavailable.
@@ -193,7 +193,7 @@ def delta_context_candidates(
 ) -> tuple[tuple[str, object], ...]:
     """Return ordered context candidates for Delta extension entrypoints.
 
-    Returns
+    Returns:
     -------
     tuple[tuple[str, object], ...]
         Ordered (kind, context) candidates to probe.
@@ -216,7 +216,7 @@ def invoke_delta_entrypoint(
 ) -> tuple[str, object]:
     """Invoke a Delta entrypoint with context adaptation and rich errors.
 
-    Returns
+    Returns:
     -------
     tuple[str, object]
         Tuple containing the successful context kind and the payload.

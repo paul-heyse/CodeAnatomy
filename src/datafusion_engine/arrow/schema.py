@@ -8,7 +8,7 @@ import pyarrow as pa
 def id_field(name: str = "id", *, nullable: bool = False) -> pa.Field:
     """Return standard identifier field (string).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Identifier field definition.
@@ -19,7 +19,7 @@ def id_field(name: str = "id", *, nullable: bool = False) -> pa.Field:
 def version_field(name: str = "version", *, nullable: bool = False) -> pa.Field:
     """Return version field (int32).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Version field definition.
@@ -30,7 +30,7 @@ def version_field(name: str = "version", *, nullable: bool = False) -> pa.Field:
 def timestamp_field(name: str = "timestamp", *, nullable: bool = True) -> pa.Field:
     """Return timestamp field (timestamp[us]).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Timestamp field definition.
@@ -41,7 +41,7 @@ def timestamp_field(name: str = "timestamp", *, nullable: bool = True) -> pa.Fie
 def task_name_field(name: str = "task_name", *, nullable: bool = False) -> pa.Field:
     """Return task name field (string).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Task name field definition.
@@ -52,7 +52,7 @@ def task_name_field(name: str = "task_name", *, nullable: bool = False) -> pa.Fi
 def fingerprint_field(name: str = "fingerprint", *, nullable: bool = False) -> pa.Field:
     """Return fingerprint field (string).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Fingerprint field definition.
@@ -67,7 +67,7 @@ def plan_fingerprint_field(
 ) -> pa.Field:
     """Return plan fingerprint field (string).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Plan fingerprint field definition.
@@ -82,7 +82,7 @@ def dataset_name_field(
 ) -> pa.Field:
     """Return dataset name field (string).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Dataset name field definition.
@@ -93,7 +93,7 @@ def dataset_name_field(
 def path_field(name: str = "path", *, nullable: bool = False) -> pa.Field:
     """Return file path field (string).
 
-    Returns
+    Returns:
     -------
     pa.Field
         File path field definition.
@@ -104,7 +104,7 @@ def path_field(name: str = "path", *, nullable: bool = False) -> pa.Field:
 def line_field(name: str = "line", *, nullable: bool = False) -> pa.Field:
     """Return line number field (int32).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Line number field definition.
@@ -115,7 +115,7 @@ def line_field(name: str = "line", *, nullable: bool = False) -> pa.Field:
 def column_field(name: str = "column", *, nullable: bool = True) -> pa.Field:
     """Return column number field (int32).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Column number field definition.
@@ -126,7 +126,7 @@ def column_field(name: str = "column", *, nullable: bool = True) -> pa.Field:
 def byte_offset_field(name: str, *, nullable: bool = False) -> pa.Field:
     """Return byte offset field (int64).
 
-    Returns
+    Returns:
     -------
     pa.Field
         Byte offset field definition.
@@ -145,7 +145,7 @@ def map_entry_type(*, with_kind: bool = True) -> pa.StructType:
     with_kind
         When True, include a value_kind field for type-tagging.
 
-    Returns
+    Returns:
     -------
     pa.StructType
         Struct type for map entries.
@@ -165,7 +165,7 @@ def versioned_entries_schema(
 ) -> pa.Schema:
     """Return a versioned entries schema.
 
-    Returns
+    Returns:
     -------
     pa.Schema
         Schema with version and entries fields.
@@ -182,7 +182,7 @@ def versioned_entries_schema(
 def string_list_schema(*, version_type: pa.DataType | None = None) -> pa.Schema:
     """Return a versioned string list schema.
 
-    Returns
+    Returns:
     -------
     pa.Schema
         Schema for versioned string lists.
@@ -207,7 +207,7 @@ def versioned_metadata_schema(
     schema_version
         Schema version for metadata.
 
-    Returns
+    Returns:
     -------
     pa.Schema
         Metadata schema with version and identifier fields.
@@ -220,7 +220,7 @@ def versioned_metadata_schema(
 def plan_fingerprint_entry_type() -> pa.StructType:
     """Return a struct type for plan fingerprint entries.
 
-    Returns
+    Returns:
     -------
     pa.StructType
         Struct type for plan fingerprint entries.

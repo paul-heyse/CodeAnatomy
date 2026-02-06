@@ -34,7 +34,7 @@ class InferredDeps(StructBaseStrict, frozen=True):
     Captures table and column-level dependencies by analyzing the actual
     query plan rather than relying on declared inputs.
 
-    Attributes
+    Attributes:
     ----------
     task_name : str
         Name of the task these dependencies apply to.
@@ -76,7 +76,7 @@ class InferredDeps(StructBaseStrict, frozen=True):
 class InferredDepsInputs:
     """Inputs needed to infer dependencies from a DataFusion plan bundle.
 
-    Attributes
+    Attributes:
     ----------
     task_name : str
         Name of the task these dependencies apply to.
@@ -113,7 +113,7 @@ def infer_deps_from_plan_bundle(
     inputs : InferredDepsInputs
         Dependency inference inputs including plan bundle and task metadata.
 
-    Returns
+    Returns:
     -------
     InferredDeps
         Inferred dependencies extracted from DataFusion plan.
@@ -210,26 +210,16 @@ def infer_deps_from_view_nodes(
 ) -> tuple[InferredDeps, ...]:
     """Infer dependencies for view nodes using DataFusion plan bundles.
 
-    Requires DataFusion plan bundles for lineage extraction.
+    Args:
+        nodes: Description.
+            ctx: Description.
+            snapshot: Description.
 
-    Parameters
-    ----------
-    nodes : Sequence[ViewNode]
-        View nodes with plan bundles attached (plan_bundle preferred).
-    ctx : SessionContext | None
-        Optional session context used for registry lookups.
-    snapshot : Mapping[str, object] | None
-        Optional Rust UDF snapshot used for required UDF validation.
+    Returns:
+        tuple[InferredDeps, ...]: Result.
 
-    Returns
-    -------
-    tuple[InferredDeps, ...]
-        Inferred dependency records for each view node.
-
-    Raises
-    ------
-    ValueError
-        Raised when a view node lacks a plan bundle.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     inferred: list[InferredDeps] = []
     for node in nodes:

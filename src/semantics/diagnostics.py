@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 def _table_exists(ctx: SessionContext, name: str) -> bool:
     """Check if a table exists in the session context.
 
-    Returns
+    Returns:
     -------
     bool
         True if table exists, False otherwise.
@@ -173,7 +173,7 @@ def build_relationship_quality_metrics(
     target_column
         Column name containing target entity identifiers.
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         Quality metrics DataFrame with columns:
@@ -191,7 +191,7 @@ def build_relationship_quality_metrics(
 
         Returns None if table doesn't exist.
 
-    Notes
+    Notes:
     -----
     Requires the relationship table to have `confidence` and `score` columns.
     If these columns don't exist, appropriate defaults are used.
@@ -284,7 +284,7 @@ def build_file_coverage_report(
     base_table
         Name of the base file table (default: "repo_files_v1").
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         Coverage report DataFrame with columns:
@@ -394,7 +394,7 @@ def build_ambiguity_analysis(
     source_column
         Column containing source entity identifiers.
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         Ambiguity analysis DataFrame with columns:
@@ -486,7 +486,7 @@ def build_ambiguity_analysis(
 def build_relationship_candidates_view(ctx: SessionContext) -> DataFrame:
     """Build relationship candidate diagnostics view.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Relationship candidates view.
@@ -517,7 +517,7 @@ def build_relationship_candidates_view(ctx: SessionContext) -> DataFrame:
 def build_relationship_decisions_view(ctx: SessionContext) -> DataFrame:
     """Build relationship decision diagnostics view.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Relationship decisions view.
@@ -528,7 +528,7 @@ def build_relationship_decisions_view(ctx: SessionContext) -> DataFrame:
 def build_schema_anomalies_view(ctx: SessionContext) -> DataFrame:
     """Build schema anomalies diagnostics view.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Schema anomaly view with contract violations.
@@ -569,7 +569,7 @@ def build_schema_anomalies_view(ctx: SessionContext) -> DataFrame:
 def semantic_diagnostic_view_builders() -> dict[str, Callable[[SessionContext], DataFrame]]:
     """Return DataFrame builders for semantic diagnostic views.
 
-    Returns
+    Returns:
     -------
     dict[str, Callable[[SessionContext], DataFrame]]
         Mapping of diagnostic view names to builder callables.
@@ -595,7 +595,7 @@ def semantic_diagnostic_view_builders() -> dict[str, Callable[[SessionContext], 
 def dataframe_row_count(df: DataFrame) -> int:
     """Return a row count for a DataFusion DataFrame.
 
-    Returns
+    Returns:
     -------
     int
         Row count for the DataFrame.
@@ -623,7 +623,7 @@ def semantic_quality_issue_batches(
 ) -> Sequence[SemanticIssueBatch]:
     """Return issue batches for a diagnostic view.
 
-    Returns
+    Returns:
     -------
     Sequence[SemanticIssueBatch]
         Issue batches for diagnostics emission.
@@ -732,7 +732,7 @@ def build_quality_summary(
     relationship_names
         List of relationship table names to analyze.
 
-    Returns
+    Returns:
     -------
     DataFrame | None
         Combined quality summary DataFrame, or None if no tables exist.

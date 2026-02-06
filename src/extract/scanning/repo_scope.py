@@ -63,7 +63,7 @@ class RepoScope:
 def default_repo_scope_options() -> RepoScopeOptions:
     """Return default RepoScopeOptions.
 
-    Returns
+    Returns:
     -------
     RepoScopeOptions
         Default scope options.
@@ -74,15 +74,15 @@ def default_repo_scope_options() -> RepoScopeOptions:
 def resolve_repo_scope(path: PathLike, options: RepoScopeOptions) -> RepoScope:
     """Resolve a RepoScope for the given path.
 
-    Returns
-    -------
-    RepoScope
-        Resolved repository scope.
+    Args:
+        path: Description.
+            options: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the path is not inside a git workdir.
+    Returns:
+        RepoScope: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     git_ctx = open_git_context(ensure_path(path))
     if git_ctx is None or git_ctx.repo.workdir is None:
@@ -108,7 +108,7 @@ def resolve_repo_scope(path: PathLike, options: RepoScopeOptions) -> RepoScope:
 def scope_rule_lines(scope: RepoScope, options: RepoScopeOptions) -> tuple[list[str], list[str]]:
     """Return include/exclude rule lines for a scope.
 
-    Returns
+    Returns:
     -------
     tuple[list[str], list[str]]
         Include and exclude rule lines.

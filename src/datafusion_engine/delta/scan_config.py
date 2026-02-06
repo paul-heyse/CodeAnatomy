@@ -30,7 +30,7 @@ def resolve_delta_scan_options(
 ) -> DeltaScanOptions | None:
     """Return Delta scan options for a dataset location.
 
-    Returns
+    Returns:
     -------
     DeltaScanOptions | None
         Delta scan options derived from the dataset location, when present.
@@ -48,7 +48,7 @@ def delta_scan_config_snapshot(
 ) -> DeltaScanConfigSnapshot | None:
     """Return a snapshot payload for Delta scan configuration.
 
-    Returns
+    Returns:
     -------
     DeltaScanConfigSnapshot | None
         Snapshot payload for the scan configuration, when available.
@@ -64,7 +64,7 @@ def delta_scan_config_snapshot_from_options(
 ) -> DeltaScanConfigSnapshot | None:
     """Return a snapshot payload for Delta scan configuration options.
 
-    Returns
+    Returns:
     -------
     DeltaScanConfigSnapshot | None
         Snapshot payload for the scan configuration, when available.
@@ -88,7 +88,7 @@ def delta_scan_config_identity_payload(
 ) -> DeltaScanConfigIdentity | None:
     """Return a canonical identity payload for a Delta scan config snapshot.
 
-    Returns
+    Returns:
     -------
     DeltaScanConfigIdentity | None
         Canonical identity payload, when available.
@@ -109,7 +109,7 @@ def delta_scan_config_identity_payload(
 def delta_scan_identity_hash(snapshot: DeltaScanConfigSnapshot | None) -> str | None:
     """Return a deterministic identity hash for a Delta scan config snapshot.
 
-    Returns
+    Returns:
     -------
     str | None
         Identity hash for the snapshot payload, when available.

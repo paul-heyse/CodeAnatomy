@@ -27,7 +27,7 @@ class MaterializationPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the materialization policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing materialization policy settings.
@@ -41,7 +41,7 @@ class MaterializationPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the materialization policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.

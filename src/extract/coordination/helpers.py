@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 def ast_def_nodes(nodes: TableLike) -> TableLike:
     """Return AST node rows that represent definitions.
 
-    Returns
+    Returns:
     -------
     TableLike
         Table filtered to function/class definitions.
@@ -83,7 +83,7 @@ def ast_def_nodes(nodes: TableLike) -> TableLike:
 def requires_evidence(plan: EvidencePlan | None, name: str) -> bool:
     """Return whether an evidence plan requires a dataset.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the dataset is required.
@@ -96,7 +96,7 @@ def requires_evidence(plan: EvidencePlan | None, name: str) -> bool:
 def requires_evidence_template(plan: EvidencePlan | None, template: str) -> bool:
     """Return whether an evidence plan requires a template.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the template is required.
@@ -109,7 +109,7 @@ def requires_evidence_template(plan: EvidencePlan | None, template: str) -> bool
 def required_extractors(plan: EvidencePlan | None) -> tuple[ExtractorSpec, ...]:
     """Return extractor specs required by an evidence plan.
 
-    Returns
+    Returns:
     -------
     tuple[ExtractorSpec, ...]
         Extractor specs needed for the plan.
@@ -122,7 +122,7 @@ def required_extractors(plan: EvidencePlan | None) -> tuple[ExtractorSpec, ...]:
 def template_outputs(plan: EvidencePlan | None, template: str) -> tuple[str, ...]:
     """Return output aliases for a template given an evidence plan.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Output aliases for the template, or empty when not required.
@@ -141,7 +141,7 @@ def ast_def_nodes_plan(
 ) -> DataFusionPlanBundle:
     """Return a plan bundle filtered to AST definition nodes.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Plan bundle filtered to function/class definitions.

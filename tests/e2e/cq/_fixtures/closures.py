@@ -11,7 +11,7 @@ from collections.abc import Callable
 def outer_function(x: int) -> Callable[[int], int]:
     """Create a closure that captures the input value.
 
-    Returns
+    Returns:
     -------
     callable
         Closure that adds the captured value.
@@ -21,7 +21,7 @@ def outer_function(x: int) -> Callable[[int], int]:
     def inner_closure(y: int) -> int:
         """Add the captured value to the input.
 
-        Returns
+        Returns:
         -------
         int
             Sum of the captured value and input.
@@ -34,7 +34,7 @@ def outer_function(x: int) -> Callable[[int], int]:
 def generator_closure(items: list[int]) -> Callable[[], int | None]:
     """Create a closure over generator state.
 
-    Returns
+    Returns:
     -------
     callable
         Closure that returns successive items or None.
@@ -44,7 +44,7 @@ def generator_closure(items: list[int]) -> Callable[[], int | None]:
     def next_item() -> int | None:
         """Return the next item from the captured list.
 
-        Returns
+        Returns:
         -------
         int | None
             Next item in the list or None when exhausted.
@@ -68,7 +68,7 @@ class ClosureFactory:
     def create_multiplier(self) -> Callable[[int], int]:
         """Create a closure that captures self.multiplier.
 
-        Returns
+        Returns:
         -------
         callable
             Closure that multiplies by the captured factor.
@@ -78,7 +78,7 @@ class ClosureFactory:
         def multiply(x: int) -> int:
             """Multiply by the captured multiplier.
 
-            Returns
+            Returns:
             -------
             int
                 Product of input and multiplier.
@@ -91,7 +91,7 @@ class ClosureFactory:
 def nested_three_levels() -> Callable[[], Callable[[], str]]:
     """Create a nested closure chain.
 
-    Returns
+    Returns:
     -------
     callable
         Closure returning the deepest nested function.
@@ -101,7 +101,7 @@ def nested_three_levels() -> Callable[[], Callable[[], str]]:
     def level_two() -> Callable[[], str]:
         """Return the next nested closure.
 
-        Returns
+        Returns:
         -------
         callable
             Closure returning the final string builder.
@@ -111,7 +111,7 @@ def nested_three_levels() -> Callable[[], Callable[[], str]]:
         def level_three() -> str:
             """Return the composed nested string.
 
-            Returns
+            Returns:
             -------
             str
                 Composed nested string.
@@ -126,7 +126,7 @@ def nested_three_levels() -> Callable[[], Callable[[], str]]:
 def no_closure_function(x: int) -> int:
     """Return a computed value without closures.
 
-    Returns
+    Returns:
     -------
     int
         Computed result.
@@ -137,7 +137,7 @@ def no_closure_function(x: int) -> int:
 def closure_with_cells() -> tuple[Callable[[], int], Callable[[], int]]:
     """Return multiple closures sharing cell variables.
 
-    Returns
+    Returns:
     -------
     tuple[callable, callable]
         Increment and getter closures over the same counter.
@@ -147,7 +147,7 @@ def closure_with_cells() -> tuple[Callable[[], int], Callable[[], int]]:
     def increment() -> int:
         """Increment the captured counter.
 
-        Returns
+        Returns:
         -------
         int
             Updated counter value.
@@ -159,7 +159,7 @@ def closure_with_cells() -> tuple[Callable[[], int], Callable[[], int]]:
     def get_count() -> int:
         """Return the captured counter.
 
-        Returns
+        Returns:
         -------
         int
             Current counter value.

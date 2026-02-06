@@ -164,7 +164,7 @@ _FALLBACK_UDF_OBJECTS: dict[str, ScalarUDF] = {}
 def fallback_udf_specs() -> Mapping[str, FallbackUdfSpec]:
     """Return the fallback UDF specification registry.
 
-    Returns
+    Returns:
     -------
     Mapping[str, FallbackUdfSpec]
         Snapshot of fallback UDF specs keyed by name.
@@ -175,7 +175,7 @@ def fallback_udf_specs() -> Mapping[str, FallbackUdfSpec]:
 def fallback_udf_snapshot() -> dict[str, object]:
     """Return a synthetic Rust UDF registry snapshot for fallback mode.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Snapshot payload mirroring the Rust UDF registry keys.
@@ -214,7 +214,7 @@ def fallback_udf_snapshot() -> dict[str, object]:
 def fallback_udf_names() -> tuple[str, ...]:
     """Return the registered fallback UDF names.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Registered fallback UDF names.
@@ -249,7 +249,7 @@ def _registered_fallback_names() -> tuple[str, ...]:
 def fallback_expr(name: str, *args: object, **kwargs: object) -> Expr | None:
     """Return an Expr backed by a fallback UDF, when available.
 
-    Returns
+    Returns:
     -------
     Expr | None
         Expression backed by a fallback UDF, or ``None`` when unavailable.

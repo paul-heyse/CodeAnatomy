@@ -6,7 +6,7 @@ from tests.fixtures.repos.mini_repo.foo import Greeter, add
 def build_message(name: str) -> str:
     """Build a greeting using helper functions.
 
-    Returns
+    Returns:
     -------
     str
         Greeting message.

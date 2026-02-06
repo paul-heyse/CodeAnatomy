@@ -18,7 +18,7 @@ from tools.cq.search.profiles import SearchLimits
 def cq_result_schema() -> dict[str, Any]:
     """Return JSON Schema for CQ result output.
 
-    Returns
+    Returns:
     -------
     dict[str, Any]
         JSON Schema for the result model.
@@ -29,7 +29,7 @@ def cq_result_schema() -> dict[str, Any]:
 def query_schema() -> dict[str, Any]:
     """Return JSON Schema for CQ query IR.
 
-    Returns
+    Returns:
     -------
     dict[str, Any]
         JSON Schema for the query model.
@@ -40,7 +40,7 @@ def query_schema() -> dict[str, Any]:
 def cq_schema_components() -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
     """Return schema and components for CQ result + query IR.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, Any], dict[str, Any]]
         Schema and components sections.

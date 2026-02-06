@@ -25,7 +25,7 @@ class CommonFilters(CqStruct, frozen=True):
     def has_filters(self) -> bool:
         """Check if any filters are configured.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when at least one filter is set.
@@ -116,7 +116,7 @@ class RunOptions(CommonFilters, frozen=True):
 def options_from_params[T](params: Any, *, type_: type[T]) -> T:
     """Convert a CLI params dataclass into a CQ options struct.
 
-    Returns
+    Returns:
     -------
     T
         Parsed options struct of the requested type.

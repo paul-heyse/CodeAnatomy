@@ -124,7 +124,7 @@ class NodeIntervalIndex:
 
         Used by node-based classification to resolve a cursor location.
 
-        Returns
+        Returns:
         -------
         SgNode | None
             Innermost node containing the position, or None if not found.
@@ -217,7 +217,7 @@ def _record_to_category(record: SgRecord) -> MatchCategory | None:
 
     Used by record-based classification to label search evidence.
 
-    Returns
+    Returns:
     -------
     MatchCategory | None
         Match category for the record, or None if not mapped.
@@ -238,7 +238,7 @@ def _record_contains(record: SgRecord, line: int, col: int) -> bool:
 
     Used by record classification to filter matches by cursor position.
 
-    Returns
+    Returns:
     -------
     bool
         True if the record span contains the provided position.
@@ -259,7 +259,7 @@ def _extract_def_name_from_record(record: SgRecord) -> str | None:
 
     Used by classifier utilities to label definition records.
 
-    Returns
+    Returns:
     -------
     str | None
         Extracted name, or None if not a definition.
@@ -301,12 +301,12 @@ def detect_query_mode(query: str, *, force_mode: QueryMode | None = None) -> Que
     force_mode
         Explicit mode override from CLI flag.
 
-    Returns
+    Returns:
     -------
     QueryMode
         Detected or forced query mode.
 
-    Notes
+    Notes:
     -----
     Auto-detection favors "identifier" for symbol-like input, including
     dotted names (e.g., `module.symbol`). Regex is only selected when
@@ -343,12 +343,12 @@ def classify_heuristic(line: str, col: int, match_text: str) -> HeuristicResult:
     match_text
         The matched text.
 
-    Returns
+    Returns:
     -------
     HeuristicResult
         Classification result with confidence and skip flag.
 
-    Notes
+    Notes:
     -----
     O(1) complexity using simple string operations.
     Handles the common cases that don't need AST parsing.
@@ -422,7 +422,7 @@ def get_record_context(
 
     Used by classification to cache parsed ast-grep records per file.
 
-    Returns
+    Returns:
     -------
     RecordContext
         Cached record context for the file.
@@ -485,7 +485,7 @@ def get_node_index(
 
     Used by node-based classification to avoid repeated AST walks.
 
-    Returns
+    Returns:
     -------
     NodeIntervalIndex
         Cached node interval index for the file.
@@ -504,7 +504,7 @@ def _resolve_sg_root_path(sg_root: SgRoot) -> Path | None:
 
     Used by node classification to connect an in-memory tree to its file path.
 
-    Returns
+    Returns:
     -------
     Path | None
         Cached path if available.
@@ -539,7 +539,7 @@ def _find_node_at_position(
 
     Uses a cached span index when possible to avoid full tree walks.
 
-    Returns
+    Returns:
     -------
     SgNode | None
         Most specific node containing the position, if any.
@@ -562,7 +562,7 @@ def _find_containing_scope(node: SgNode) -> str | None:
     node
         Starting AST node.
 
-    Returns
+    Returns:
     -------
     str | None
         Name of containing scope, or None.
@@ -599,7 +599,7 @@ def _is_docstring_context(node: SgNode) -> bool:
     node
         String AST node.
 
-    Returns
+    Returns:
     -------
     bool
         True if node is a docstring.
@@ -642,7 +642,7 @@ def classify_from_node(
     lang
         Query language used for parser/node-kind semantics.
 
-    Returns
+    Returns:
     -------
     NodeClassification | None
         Classification result, or None if no classifiable node found.
@@ -708,7 +708,7 @@ def classify_from_records(
     lang
         Query language used for record extraction semantics.
 
-    Returns
+    Returns:
     -------
     NodeClassification | None
         Classification result, or None if no record matches.
@@ -766,7 +766,7 @@ def enrich_with_symtable(
     line
         Line number for scope resolution.
 
-    Returns
+    Returns:
     -------
     SymtableEnrichment | None
         Binding information, or None if lookup fails.
@@ -795,7 +795,7 @@ def enrich_with_symtable_from_table(
     line
         Line number for scope resolution.
 
-    Returns
+    Returns:
     -------
     SymtableEnrichment | None
         Binding information, or None if lookup fails.
@@ -809,7 +809,7 @@ def enrich_with_symtable_from_table(
 
         Used by ``enrich_with_symtable_from_table`` to locate the closest scope.
 
-        Returns
+        Returns:
         -------
         symtable.SymbolTable | None
             Innermost scope containing ``target_line``.
@@ -847,7 +847,7 @@ def get_symtable_table(file_path: Path, source: str) -> symtable.SymbolTable | N
 
     Used by symtable enrichment to reuse parsed symbol tables.
 
-    Returns
+    Returns:
     -------
     symtable.SymbolTable | None
         Cached or newly created symbol table, or None on syntax errors.
@@ -877,7 +877,7 @@ def get_def_lines_cached(
     lang
         Query language used to select definition prefixes.
 
-    Returns
+    Returns:
     -------
     list[tuple[int, int]]
         (line_number, indent) tuples for def/async def lines.
@@ -919,7 +919,7 @@ def get_sg_root(
     lang
         Query language used by ast-grep parsing.
 
-    Returns
+    Returns:
     -------
     SgRoot | None
         Parsed AST root, or None on error.
@@ -946,7 +946,7 @@ def get_cached_source(file_path: Path) -> str | None:
     file_path
         Path to the file.
 
-    Returns
+    Returns:
     -------
     str | None
         File source, or None on error.

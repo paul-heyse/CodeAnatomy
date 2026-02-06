@@ -31,7 +31,7 @@ class FindingCriteria:
     def matches(self, finding: Finding) -> bool:
         """Return True when the finding satisfies all populated criteria.
 
-        Returns
+        Returns:
         -------
         bool
             True when the finding matches the configured criteria.
@@ -53,7 +53,7 @@ class FindingCriteria:
     def summary(self) -> str:
         """Summarize the criteria for error reporting.
 
-        Returns
+        Returns:
         -------
         str
             Human-readable criteria summary.
@@ -98,15 +98,11 @@ def _build_error_message(criteria: FindingCriteria, total_findings: int) -> str:
 def _find_repo_root() -> Path:
     """Find the CodeAnatomy repository root.
 
-    Returns
-    -------
-    Path
-        Absolute path to repository root.
+    Returns:
+        Path: Result.
 
-    Raises
-    ------
-    RuntimeError
-        If repository root cannot be determined.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     current = Path(__file__).resolve()
     while current != current.parent:
@@ -121,7 +117,7 @@ def _find_repo_root() -> Path:
 def repo_root() -> Path:
     """Provide the CodeAnatomy repository root Path.
 
-    Returns
+    Returns:
     -------
     Path
         Absolute path to the repository root.
@@ -138,12 +134,12 @@ def run_command(repo_root: Path) -> Callable[[list[str]], subprocess.CompletedPr
     repo_root : Path
         Repository root fixture.
 
-    Returns
+    Returns:
     -------
     Callable[[list[str]], subprocess.CompletedProcess[str]]
         Function that runs commands and returns CompletedProcess.
 
-    Examples
+    Examples:
     --------
     >>> result = run_command(["cq", "q", "entity=function name=foo"])
     >>> assert result.returncode == 0
@@ -157,7 +153,7 @@ def run_command(repo_root: Path) -> Callable[[list[str]], subprocess.CompletedPr
         args : list[str]
             Command arguments (e.g., ["cq", "q", "entity=function"]).
 
-        Returns
+        Returns:
         -------
         subprocess.CompletedProcess[str]
             Completed process with stdout, stderr, returncode.
@@ -185,12 +181,12 @@ def run_query(
     run_command : Callable
         Command runner fixture.
 
-    Returns
+    Returns:
     -------
     Callable[[str], CqResult]
         Function that executes a query and returns parsed CqResult.
 
-    Examples
+    Examples:
     --------
     >>> result = run_query("entity=function name=build_graph_product")
     >>> assert result.run.macro == "q"
@@ -199,20 +195,14 @@ def run_query(
     def _query(query_string: str) -> CqResult:
         """Execute a cq query and parse the JSON result.
 
-        Parameters
-        ----------
-        query_string : str
-            Query string (e.g., "entity=function name=foo").
+        Args:
+            query_string: Description.
 
-        Returns
-        -------
-        CqResult
-            Parsed query result.
+        Returns:
+            CqResult: Result.
 
-        Raises
-        ------
-        RuntimeError
-            If command fails or JSON parsing fails.
+        Raises:
+            RuntimeError: If the operation cannot be completed.
         """
         from tools.cq.core.schema import CqResult
 
@@ -248,12 +238,12 @@ def run_query(
 def assert_finding_exists() -> Callable[..., Finding]:
     """Provide a helper to assert a finding with specific criteria exists.
 
-    Returns
+    Returns:
     -------
     Callable[..., Finding]
         Function that searches for and returns a matching finding.
 
-    Examples
+    Examples:
     --------
     >>> finding = assert_finding_exists(result, category="call_site", file="graph.py")
     >>> assert finding.anchor.file == "graph.py"
@@ -270,30 +260,19 @@ def assert_finding_exists() -> Callable[..., Finding]:
     ) -> Finding:
         """Assert a finding matching criteria exists in result.
 
-        Parameters
-        ----------
-        result : CqResult
-            Query result to search.
-        category : str | None
-            Required category value.
-        message_contains : str | None
-            Substring that must appear in message.
-        file : str | None
-            Required file path (in anchor).
-        severity : str | None
-            Required severity level.
-        **detail_checks : str | int | bool
-            Additional key=value checks in finding.details.
+        Args:
+            result: Description.
+                    category: Description.
+                    message_contains: Description.
+                    file: Description.
+                    severity: Description.
+                    **detail_checks: Description.
 
-        Returns
-        -------
-        Finding
-            First matching finding.
+        Returns:
+            Finding: Result.
 
-        Raises
-        ------
-        AssertionError
-            If no matching finding is found.
+        Raises:
+            AssertionError: If the operation cannot be completed.
         """
         criteria = FindingCriteria(
             category=category,
@@ -320,12 +299,12 @@ def update_golden(request: pytest.FixtureRequest) -> bool:
     request : pytest.FixtureRequest
         Pytest request fixture.
 
-    Returns
+    Returns:
     -------
     bool
         True if --update-golden was passed, False otherwise.
 
-    Examples
+    Examples:
     --------
     >>> if update_golden:
     ...     write_golden(result)

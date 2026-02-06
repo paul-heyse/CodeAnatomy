@@ -41,7 +41,7 @@ _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, Unico
 def is_tree_sitter_rust_available() -> bool:
     """Return whether tree-sitter Rust enrichment dependencies are available.
 
-    Returns
+    Returns:
     -------
     bool
         True when runtime dependencies for Rust tree-sitter enrichment exist.
@@ -166,7 +166,7 @@ def enrich_rust_context(
     max_scope_depth
         Maximum ancestor levels to inspect.
 
-    Returns
+    Returns:
     -------
     dict[str, object] | None
         Best-effort context payload, or ``None`` when unavailable.

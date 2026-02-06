@@ -19,15 +19,16 @@ def chain(
 ) -> CliResult:
     """Execute chained CQ commands via the shared run engine.
 
-    Returns
-    -------
-    CliResult
-        CLI result wrapper with the run result.
+    Args:
+        *tokens: Command tokens and delimiters from the CLI.
+        delimiter: Token used to split command segments.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when context is missing or no segments are provided.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If context is missing or no chain segments are provided.
     """
     if ctx is None:
         msg = "Context not injected"

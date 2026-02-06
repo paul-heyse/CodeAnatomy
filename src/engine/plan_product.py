@@ -34,15 +34,8 @@ class PlanProduct:
     def value(self) -> TableLike | RecordBatchReaderLike:
         """Return the underlying table or stream value.
 
-        Returns
-        -------
-        TableLike | RecordBatchReaderLike
-            The stream when available, otherwise the table.
-
-        Raises
-        ------
-        ValueError
-            Raised when neither a stream nor table is present.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.stream is not None:
             return self.stream
@@ -54,15 +47,8 @@ class PlanProduct:
     def materialize_table(self) -> TableLike:
         """Return a table, materializing from the stream when needed.
 
-        Returns
-        -------
-        TableLike
-            Materialized Arrow table.
-
-        Raises
-        ------
-        ValueError
-            Raised when neither a stream nor table is present.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if self.table is not None:
             return self.table

@@ -17,6 +17,7 @@ class CoercionError(ValueError):
     """Raised when strict coercion fails."""
 
     def __init__(self, value: object, target_type: str, reason: str | None = None) -> None:
+        """__init__."""
         self.value = value
         self.target_type = target_type
         message = f"Cannot coerce {type(value).__name__} to {target_type}"
@@ -28,7 +29,7 @@ class CoercionError(ValueError):
 def coerce_int(value: object) -> int | None:
     """Coerce value to int, returning None for unconvertible values.
 
-    Returns
+    Returns:
     -------
     int | None
         Coerced integer or None if conversion fails.
@@ -52,7 +53,7 @@ def coerce_int(value: object) -> int | None:
 def coerce_float(value: object) -> float | None:
     """Coerce value to float, returning None for unconvertible values.
 
-    Returns
+    Returns:
     -------
     float | None
         Coerced float or None if conversion fails.
@@ -74,7 +75,7 @@ def coerce_float(value: object) -> float | None:
 def coerce_bool(value: object) -> bool | None:
     """Coerce value to bool, returning None for unconvertible values.
 
-    Returns
+    Returns:
     -------
     bool | None
         Coerced bool or None if conversion fails.
@@ -97,7 +98,7 @@ def coerce_bool(value: object) -> bool | None:
 def coerce_str(value: object) -> str | None:
     """Coerce value to string, returning None for None.
 
-    Returns
+    Returns:
     -------
     str | None
         Coerced string or None if value is None.
@@ -110,7 +111,7 @@ def coerce_str(value: object) -> str | None:
 def coerce_str_list(value: object) -> list[str]:
     """Coerce value to list of non-empty strings.
 
-    Returns
+    Returns:
     -------
     list[str]
         List of non-empty strings.
@@ -125,7 +126,7 @@ def coerce_str_list(value: object) -> list[str]:
 def coerce_str_tuple(value: object) -> tuple[str, ...]:
     """Coerce value to tuple of non-empty strings.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Tuple of non-empty strings.
@@ -136,7 +137,7 @@ def coerce_str_tuple(value: object) -> tuple[str, ...]:
 def coerce_mapping_list(value: object) -> Sequence[Mapping[str, object]] | None:
     """Coerce value to sequence of mappings.
 
-    Returns
+    Returns:
     -------
     Sequence[Mapping[str, object]] | None
         Sequence of mappings or None if conversion fails.
@@ -160,7 +161,7 @@ def coerce_to_recordbatch_reader(value: object) -> RecordBatchReaderLike | None:
         - RecordBatch (wrapped in reader)
         - Sequence[RecordBatch] (wrapped in reader)
 
-    Returns
+    Returns:
     -------
     RecordBatchReaderLike | None
         RecordBatchReader or None if coercion fails.
@@ -195,15 +196,15 @@ def coerce_to_recordbatch_reader(value: object) -> RecordBatchReaderLike | None:
 def raise_for_int(value: object, *, context: str = "") -> int:
     """Coerce value to int, raising CoercionError on failure.
 
-    Returns
-    -------
-    int
-        Coerced integer value.
+    Args:
+        value: Description.
+            context: Description.
 
-    Raises
-    ------
-    CoercionError
-        Raised when value cannot be coerced to int.
+    Returns:
+        int: Result.
+
+    Raises:
+        CoercionError: If the operation cannot be completed.
     """
     result = coerce_int(value)
     if result is None:
@@ -214,15 +215,15 @@ def raise_for_int(value: object, *, context: str = "") -> int:
 def raise_for_float(value: object, *, context: str = "") -> float:
     """Coerce value to float, raising CoercionError on failure.
 
-    Returns
-    -------
-    float
-        Coerced float value.
+    Args:
+        value: Description.
+            context: Description.
 
-    Raises
-    ------
-    CoercionError
-        Raised when value cannot be coerced to float.
+    Returns:
+        float: Result.
+
+    Raises:
+        CoercionError: If the operation cannot be completed.
     """
     result = coerce_float(value)
     if result is None:
@@ -233,15 +234,15 @@ def raise_for_float(value: object, *, context: str = "") -> float:
 def raise_for_bool(value: object, *, context: str = "") -> bool:
     """Coerce value to bool, raising CoercionError on failure.
 
-    Returns
-    -------
-    bool
-        Coerced bool value.
+    Args:
+        value: Description.
+            context: Description.
 
-    Raises
-    ------
-    CoercionError
-        Raised when value cannot be coerced to bool.
+    Returns:
+        bool: Result.
+
+    Raises:
+        CoercionError: If the operation cannot be completed.
     """
     result = coerce_bool(value)
     if result is None:
@@ -252,15 +253,15 @@ def raise_for_bool(value: object, *, context: str = "") -> bool:
 def raise_for_str(value: object, *, context: str = "") -> str:
     """Coerce value to str, raising CoercionError when value is None.
 
-    Returns
-    -------
-    str
-        Coerced string value.
+    Args:
+        value: Description.
+            context: Description.
 
-    Raises
-    ------
-    CoercionError
-        Raised when value is None.
+    Returns:
+        str: Result.
+
+    Raises:
+        CoercionError: If the operation cannot be completed.
     """
     if value is None:
         raise CoercionError(value, "str", context or "value is None")

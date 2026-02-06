@@ -49,12 +49,12 @@ def scip_to_byte_offsets(
     line_index_table
         Table/view name for line index rows (line_start_byte + line_text).
 
-    Returns
+    Returns:
     -------
     DataFrame
         SCIP occurrences with ``bstart``/``bend`` columns.
 
-    Notes
+    Notes:
     -----
     Missing input tables or required UDFs return an empty normalized table
     so downstream builds can continue while diagnostics capture the gaps.

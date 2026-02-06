@@ -191,7 +191,7 @@ def json_default(obj: object) -> object:
     obj
         Object to encode.
 
-    Returns
+    Returns:
     -------
     object
         JSON-serializable value.
@@ -209,7 +209,7 @@ def json_schema(struct: type[msgspec.Struct]) -> Mapping[str, object]:
     struct
         msgspec struct type.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         JSON Schema payload.
@@ -231,7 +231,7 @@ def export_json_schemas(
     output_dir
         Directory to write schema files into.
 
-    Returns
+    Returns:
     -------
     tuple[Path, ...]
         Paths to the generated schema files.
@@ -255,7 +255,7 @@ def validation_error_payload(exc: msgspec.ValidationError) -> dict[str, str]:
     exc
         ValidationError raised by msgspec decoding/conversion.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Normalized error payload containing type, summary, and optional path.
@@ -285,7 +285,7 @@ def dumps_json(obj: object, *, pretty: bool = False) -> bytes:
     pretty
         Whether to format with indentation.
 
-    Returns
+    Returns:
     -------
     bytes
         JSON payload.
@@ -306,7 +306,7 @@ def dumps_json_sorted(obj: object, *, pretty: bool = False) -> bytes:
     pretty
         Whether to format with indentation.
 
-    Returns
+    Returns:
     -------
     bytes
         JSON payload with sorted keys.
@@ -329,7 +329,7 @@ def loads_json[T](buf: bytes | str, *, target_type: type[T], strict: bool = True
     strict
         Whether to enforce strict decoding.
 
-    Returns
+    Returns:
     -------
     T
         Decoded payload.
@@ -354,7 +354,7 @@ def decode_json_lines[T](buf: bytes, *, target_type: type[T], strict: bool = Tru
     strict
         Whether to enforce strict decoding.
 
-    Returns
+    Returns:
     -------
     list[T]
         Decoded payloads.
@@ -375,7 +375,7 @@ def dumps_msgpack(obj: object) -> bytes:
     obj
         Object to serialize.
 
-    Returns
+    Returns:
     -------
     bytes
         MessagePack payload.
@@ -395,7 +395,7 @@ def loads_msgpack[T](buf: bytes, *, target_type: type[T], strict: bool = True) -
     strict
         Whether to enforce strict decoding.
 
-    Returns
+    Returns:
     -------
     T
         Decoded payload.
@@ -430,7 +430,7 @@ def encode_json_lines(items: list[object]) -> bytes:
     items
         Items to serialize.
 
-    Returns
+    Returns:
     -------
     bytes
         JSON Lines payload.
@@ -458,7 +458,7 @@ def convert[T](
     from_attributes
         Whether to read attributes from objects.
 
-    Returns
+    Returns:
     -------
     T
         Converted payload.
@@ -489,7 +489,7 @@ def convert_from_attributes[T](
     strict
         Whether to enforce strict conversion.
 
-    Returns
+    Returns:
     -------
     T
         Converted payload.
@@ -512,7 +512,7 @@ def to_builtins(obj: object, *, str_keys: bool = True) -> object:
     str_keys
         Whether to coerce mapping keys to strings.
 
-    Returns
+    Returns:
     -------
     object
         Builtin-friendly representation.
@@ -528,7 +528,7 @@ def to_builtins(obj: object, *, str_keys: bool = True) -> object:
 def to_builtins_mapping(obj: object, *, str_keys: bool = True) -> Mapping[str, object]:
     """Convert an object into a JSON-friendly mapping payload.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Mapping payload with string keys.
@@ -547,7 +547,7 @@ def to_builtins_sorted(obj: object, *, str_keys: bool = True) -> object:
     str_keys
         Whether to coerce mapping keys to strings.
 
-    Returns
+    Returns:
     -------
     object
         Builtin-friendly representation with sorted mapping keys.
@@ -576,7 +576,7 @@ def ensure_raw(payload: bytes | msgspec.Raw, *, copy: bool = False) -> msgspec.R
     copy
         Whether to detach the Raw buffer with ``Raw.copy()``.
 
-    Returns
+    Returns:
     -------
     msgspec.Raw
         Raw wrapper for the payload.
@@ -593,7 +593,7 @@ def is_unset(value: object) -> bool:
     value
         Value to inspect.
 
-    Returns
+    Returns:
     -------
     bool
         True when the value is msgspec.UNSET.
@@ -611,7 +611,7 @@ def coalesce_unset[T](value: T | msgspec.UnsetType, default: T) -> T:
     default
         Default to use when value is msgspec.UNSET.
 
-    Returns
+    Returns:
     -------
     T
         Value or the provided default.
@@ -629,7 +629,7 @@ def coalesce_unset_or_none[T](value: T | msgspec.UnsetType | None, default: T) -
     default
         Default to use when value is msgspec.UNSET or None.
 
-    Returns
+    Returns:
     -------
     T
         Value or the provided default.
@@ -645,7 +645,7 @@ def unset_to_none[T](value: T | msgspec.UnsetType | None) -> T | None:
     value
         Value that may be msgspec.UNSET.
 
-    Returns
+    Returns:
     -------
     T | None
         Value or None when the input was msgspec.UNSET.

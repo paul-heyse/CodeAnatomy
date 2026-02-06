@@ -53,7 +53,7 @@ class DeltaProviderContract:
         gate
             Optional Delta feature gate to enforce.
 
-        Returns
+        Returns:
         -------
         DeltaProviderRequest
             Provider request populated from the contract.
@@ -83,7 +83,7 @@ class DeltaCdfContract:
     def to_request(self) -> DeltaCdfRequest:
         """Return a CDF provider request derived from this contract.
 
-        Returns
+        Returns:
         -------
         DeltaCdfRequest
             Provider request populated from the contract.
@@ -128,7 +128,7 @@ def build_delta_provider_contract(
     runtime_profile
         Optional runtime profile used to resolve scan defaults.
 
-    Returns
+    Returns:
     -------
     DeltaProviderContract
         Contract containing scan configuration and snapshot metadata.
@@ -157,7 +157,7 @@ def build_delta_cdf_contract(location: DatasetLocation) -> DeltaCdfContract:
     location
         Dataset location describing the Delta table.
 
-    Returns
+    Returns:
     -------
     DeltaCdfContract
         Contract containing CDF scan configuration and snapshot metadata.
@@ -229,6 +229,13 @@ class DeltaSchemaMismatchError(ValueError):
         expected_hash: str | None,
         actual_hash: str | None,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            table_uri: Description.
+            expected_hash: Description.
+            actual_hash: Description.
+        """
         msg = (
             "Delta schema mismatch for "
             f"{table_uri!r}: expected={expected_hash!r}, actual={actual_hash!r}."
@@ -244,7 +251,7 @@ def delta_schema_identity_hash(request: DeltaSchemaRequest) -> str | None:
     request
         Delta schema request describing the table and snapshot.
 
-    Returns
+    Returns:
     -------
     str | None
         Schema identity hash when available.
@@ -265,15 +272,16 @@ def enforce_schema_evolution(
 ) -> str | None:
     """Enforce schema evolution gating for Delta tables.
 
-    Returns
-    -------
-    str | None
-        Actual schema identity hash when available.
+    Args:
+        request: Description.
+            expected_schema_hash: Description.
+            allow_evolution: Description.
 
-    Raises
-    ------
-    DeltaSchemaMismatchError
-        Raised when schema evolution is disallowed and hashes differ.
+    Returns:
+        str | None: Result.
+
+    Raises:
+        DeltaSchemaMismatchError: If the operation cannot be completed.
     """
     actual_hash = delta_schema_identity_hash(request)
     if expected_schema_hash is None or actual_hash is None:

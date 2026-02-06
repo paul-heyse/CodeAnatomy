@@ -38,7 +38,7 @@ def _handle_type_like(obj: object) -> object:
 def _normalize_repr(text: str) -> str:
     """Remove runtime-specific address fragments from repr-like strings.
 
-    Returns
+    Returns:
     -------
     str
         Normalized string representation without runtime addresses.
@@ -53,7 +53,7 @@ def stable_stringify(
 ) -> str:
     """Stringify values while removing nondeterministic runtime addresses.
 
-    Returns
+    Returns:
     -------
     str
         Stable string representation with address fragments removed.
@@ -202,7 +202,7 @@ def inspect_to_builtins(
 ) -> object:
     """Convert msgspec inspection objects into builtin-friendly payloads.
 
-    Returns
+    Returns:
     -------
     object
         Builtin-friendly representation of the inspection payload.

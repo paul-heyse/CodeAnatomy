@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 class ViewNode:
     """Declarative view definition with explicit dependencies.
 
-    Attributes
+    Attributes:
     ----------
     name : str
         View name for registration.
@@ -85,7 +85,7 @@ def view_graph_registry(
 ) -> MappingRegistryAdapter[str, ViewNode]:
     """Return a registry adapter for view graph nodes.
 
-    Returns
+    Returns:
     -------
     MappingRegistryAdapter[str, ViewNode]
         Registry adapter populated with the provided view nodes.
@@ -105,6 +105,12 @@ class SchemaContractViolationError(ValueError):
         table_name: str,
         violations: Sequence[ValidationViolation],
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            table_name: Description.
+            violations: Description.
+        """
         self.table_name = table_name
         self.violations = tuple(violations)
         details = [
@@ -210,10 +216,15 @@ def register_view_graph(
 ) -> None:
     """Register a dependency-sorted view graph on a SessionContext.
 
-    Raises
-    ------
-    ValueError
-        Raised when artifact recording is required without a runtime profile.
+    Args:
+        ctx: Description.
+        nodes: Description.
+        snapshot: Description.
+        runtime_options: Description.
+        options: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     resolved = options or ViewGraphOptions()
     runtime = runtime_options or ViewGraphRuntimeOptions()
@@ -1167,7 +1178,7 @@ def _deps_from_plan_bundle(bundle: DataFusionPlanBundle) -> tuple[str, ...]:
     bundle : DataFusionPlanBundle
         Plan bundle with optimized logical plan.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Dependency names inferred from the plan bundle.

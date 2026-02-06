@@ -95,7 +95,7 @@ def _span_end(span: Mapping[str, object]) -> int:
 def build_diagnostics_report(snapshot: Mapping[str, object]) -> DiagnosticsReport:
     """Build a diagnostics report from a snapshot payload.
 
-    Returns
+    Returns:
     -------
     DiagnosticsReport
         Structured report data derived from the snapshot.
@@ -133,7 +133,7 @@ def write_run_diagnostics_report(
 ) -> Path:
     """Write a diagnostics report to the run bundle directory.
 
-    Returns
+    Returns:
     -------
     Path
         Path to the rendered Markdown report.

@@ -25,7 +25,7 @@ def _resource_detectors_explicit() -> bool:
 def resolve_service_instance_id() -> str:
     """Return a stable service.instance.id for the current process.
 
-    Returns
+    Returns:
     -------
     str
         Stable instance identifier for this process.
@@ -39,7 +39,7 @@ def resolve_service_instance_id() -> str:
 def resolve_detector_names() -> tuple[str, ...]:
     """Resolve the detector names to run based on env configuration.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Detector names to enable.
@@ -70,7 +70,7 @@ def build_detected_resource(resource: Resource) -> Resource:
     resource
         Base resource to enrich with detectors.
 
-    Returns
+    Returns:
     -------
     Resource
         Resource enriched with detector data.
@@ -91,7 +91,7 @@ def merge_resource_overrides(resource: Resource, overrides: Mapping[str, str] | 
     overrides
         Override attributes to apply last.
 
-    Returns
+    Returns:
     -------
     Resource
         Resource with overrides merged.

@@ -4,7 +4,7 @@ Provide a builder pattern for constructing complex nested Arrow types (structs,
 lists, maps) in a consistent, type-safe manner. Common nested type templates
 are pre-defined for reuse across the codebase.
 
-Examples
+Examples:
 --------
 Build a custom struct type:
 
@@ -61,7 +61,7 @@ class NestedTypeBuilder:
     Accumulate field definitions and build struct types, schemas, or individual
     nested types. Supports chaining via fluent interface.
 
-    Attributes
+    Attributes:
     ----------
     fields : list[pa.Field]
         Accumulated field definitions.
@@ -90,7 +90,7 @@ class NestedTypeBuilder:
         metadata
             Optional field metadata.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -120,7 +120,7 @@ class NestedTypeBuilder:
         metadata
             Optional field metadata.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -150,7 +150,7 @@ class NestedTypeBuilder:
         metadata
             Optional field metadata.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -187,7 +187,7 @@ class NestedTypeBuilder:
         metadata
             Optional field metadata.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -220,7 +220,7 @@ class NestedTypeBuilder:
         options
             Optional map field options.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -264,7 +264,7 @@ class NestedTypeBuilder:
         metadata
             Optional field metadata.
 
-        Returns
+        Returns:
         -------
         Self
             Builder instance for chaining.
@@ -277,7 +277,7 @@ class NestedTypeBuilder:
     def build_struct(self) -> pa.StructType:
         """Build a struct type from accumulated fields.
 
-        Returns
+        Returns:
         -------
         pa.StructType
             Struct type containing all added fields.
@@ -292,7 +292,7 @@ class NestedTypeBuilder:
         metadata
             Optional schema-level metadata.
 
-        Returns
+        Returns:
         -------
         pa.Schema
             Arrow schema containing all added fields.
@@ -317,7 +317,7 @@ class NestedTypeBuilder:
         metadata
             Optional field metadata.
 
-        Returns
+        Returns:
         -------
         pa.Field
             Field with struct type containing all added fields.
@@ -350,7 +350,7 @@ def nested_field(
     metadata
         Optional field metadata.
 
-    Returns
+    Returns:
     -------
     pa.Field
         Field with struct data type.
@@ -377,7 +377,7 @@ def list_of(
     large
         Use large_list for >2GB arrays. Default False.
 
-    Returns
+    Returns:
     -------
     pa.ListType | pa.LargeListType
         Arrow list data type.
@@ -399,7 +399,7 @@ def list_of_structs(
     large
         Use large_list for >2GB arrays. Default False.
 
-    Returns
+    Returns:
     -------
     pa.ListType | pa.LargeListType
         Arrow list data type with struct elements.
@@ -425,7 +425,7 @@ def map_of(
     keys_sorted
         Whether keys are sorted. Default False.
 
-    Returns
+    Returns:
     -------
     pa.MapType
         Arrow map data type.
@@ -445,7 +445,7 @@ def line_col_struct_builder() -> NestedTypeBuilder:
     - line0: int32 (0-indexed line number)
     - col: int32 (column position)
 
-    Returns
+    Returns:
     -------
     NestedTypeBuilder
         Builder configured for line/column struct.
@@ -460,7 +460,7 @@ def line_col_struct_builder() -> NestedTypeBuilder:
 def line_col_struct_type() -> pa.StructType:
     """Return the line/column position struct type.
 
-    Returns
+    Returns:
     -------
     pa.StructType
         Struct type for line/column positions.
@@ -475,7 +475,7 @@ def byte_span_struct_builder() -> NestedTypeBuilder:
     - byte_start: int32 (byte offset from file start)
     - byte_len: int32 (length in bytes)
 
-    Returns
+    Returns:
     -------
     NestedTypeBuilder
         Builder configured for byte span struct.
@@ -493,7 +493,7 @@ def byte_span_struct_type() -> pa.StructType:
     This matches the canonical BYTE_SPAN_STORAGE type used throughout
     the codebase for byte-level span representation.
 
-    Returns
+    Returns:
     -------
     pa.StructType
         Struct type for byte spans.
@@ -511,7 +511,7 @@ def span_struct_builder() -> NestedTypeBuilder:
     - col_unit: string (e.g., "byte", "char")
     - byte_span: struct(byte_start: int32, byte_len: int32)
 
-    Returns
+    Returns:
     -------
     NestedTypeBuilder
         Builder configured for full span struct.
@@ -532,7 +532,7 @@ def span_struct_type() -> pa.StructType:
     This matches the canonical SPAN_STORAGE type used throughout the
     codebase for source location representation.
 
-    Returns
+    Returns:
     -------
     pa.StructType
         Struct type for full spans with line/col and byte positions.
@@ -546,7 +546,7 @@ def attrs_map_type() -> DataTypeLike:
     This is Map(Utf8, Utf8), matching ATTRS_T used throughout the
     schema registry for key-value attribute storage.
 
-    Returns
+    Returns:
     -------
     pa.MapType
         Map type for string key-value attributes.
@@ -562,7 +562,7 @@ def string_list_type(*, large: bool = False) -> DataTypeLike:
     large
         Use large_list for >2GB arrays. Default False.
 
-    Returns
+    Returns:
     -------
     pa.ListType | pa.LargeListType
         List type containing string elements.
@@ -578,7 +578,7 @@ def int32_list_type(*, large: bool = False) -> DataTypeLike:
     large
         Use large_list for >2GB arrays. Default False.
 
-    Returns
+    Returns:
     -------
     pa.ListType | pa.LargeListType
         List type containing int32 elements.
@@ -594,7 +594,7 @@ def int64_list_type(*, large: bool = False) -> DataTypeLike:
     large
         Use large_list for >2GB arrays. Default False.
 
-    Returns
+    Returns:
     -------
     pa.ListType | pa.LargeListType
         List type containing int64 elements.

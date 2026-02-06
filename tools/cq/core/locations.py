@@ -38,7 +38,7 @@ def span_from_rg_match(
 ) -> SourceSpan:
     """Build a SourceSpan from ripgrep match coordinates.
 
-    Returns
+    Returns:
     -------
     SourceSpan
         Normalized span for the match.

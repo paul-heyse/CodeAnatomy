@@ -69,15 +69,14 @@ def _require_str_attr(opts: object | None, attr: str, label: str) -> str:
 def compile_chain_segments(groups: Iterable[list[str]]) -> RunPlan:
     """Compile token groups into a RunPlan.
 
-    Returns
-    -------
-    RunPlan
-        Run plan containing one step per command group.
+    Args:
+        groups: Token groups representing chained CQ commands.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when a chain segment is empty or invalid.
+    Returns:
+        RunPlan: Normalized run plan built from the chain.
+
+    Raises:
+        RuntimeError: If a segment is empty or cannot be parsed.
     """
     steps: list[RunStep] = []
     for group in groups:

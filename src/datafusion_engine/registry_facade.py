@@ -83,15 +83,11 @@ class RegistrationPhaseOrchestrator:
     def run(phases: Sequence[RegistrationPhase]) -> None:
         """Run registration phases in order, enforcing prerequisites.
 
-        Parameters
-        ----------
-        phases
-            Ordered registration phases to validate and execute.
+        Args:
+            phases: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when phases are duplicated or prerequisites are missing.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         seen: set[str] = set()
         for phase in phases:
@@ -146,6 +142,14 @@ class RegistryFacade:
         udf_registry: UdfCatalogAdapter | None = None,
         view_registry: DataFusionViewRegistry | None = None,
     ) -> None:
+        """Initialize the instance.
+
+        Args:
+            dataset_catalog: Description.
+            provider_registry: Description.
+            udf_registry: Description.
+            view_registry: Description.
+        """
         self._datasets = dataset_catalog
         self._providers = provider_registry
         self._udfs = udf_registry
@@ -163,15 +167,17 @@ class RegistryFacade:
     ) -> DataFrame:
         """Register a dataset and return the DataFrame.
 
-        Returns
-        -------
-        DataFrame
-            DataFrame for the registered dataset.
+        Args:
+            name: Description.
+                    location: Description.
+                    cache_policy: Description.
+                    overwrite: Description.
 
-        Raises
-        ------
-        RuntimeError
-            Raised when the provider registry does not return a DataFrame.
+        Returns:
+            DataFrame: Result.
+
+        Raises:
+            RuntimeError: If the operation cannot be completed.
         """
         checkpoint = self._checkpoint_optional()
         df: DataFrame | None = None
@@ -218,7 +224,7 @@ class RegistryFacade:
     ) -> RegistrationResult:
         """Register a dataset and return a result payload.
 
-        Returns
+        Returns:
         -------
         RegistrationResult
             Registration outcome payload.
@@ -249,7 +255,7 @@ class RegistryFacade:
     def register_udf(self, *, key: str, spec: DataFusionUdfSpec) -> RegistrationResult:
         """Register a custom UDF spec in the metadata registry.
 
-        Returns
+        Returns:
         -------
         RegistrationResult
             Registration outcome payload.
@@ -291,7 +297,7 @@ class RegistryFacade:
     def register_view(self, *, name: str, artifact: DataFusionViewArtifact) -> RegistrationResult:
         """Register a view artifact when a view registry is available.
 
-        Returns
+        Returns:
         -------
         RegistrationResult
             Registration outcome payload.
@@ -371,7 +377,7 @@ def registry_facade_for_context(
 ) -> RegistryFacade:
     """Return a RegistryFacade bound to a session context.
 
-    Returns
+    Returns:
     -------
     RegistryFacade
         Registry facade bound to the provided context.

@@ -35,7 +35,7 @@ _TEMPLATE_NAMES: tuple[str, ...] = (
 def dataset_template_specs() -> tuple[DatasetTemplateSpec, ...]:
     """Return extract dataset template specs in registry order.
 
-    Returns
+    Returns:
     -------
     tuple[DatasetTemplateSpec, ...]
         Dataset template specs for metadata expansion.
@@ -791,15 +791,14 @@ def expand_dataset_templates(
 ) -> tuple[DatasetRowRecord, ...]:
     """Expand dataset template specs into row record mappings.
 
-    Returns
-    -------
-    tuple[Mapping[str, object], ...]
-        Expanded dataset row records.
+    Args:
+        specs: Description.
 
-    Raises
-    ------
-    KeyError
-        Raised when a template name is unknown.
+    Returns:
+        tuple[DatasetRowRecord, ...]: Result.
+
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     records: list[DatasetRowRecord] = []
     for spec in specs:
@@ -814,7 +813,7 @@ def expand_dataset_templates(
 def template(name: str) -> ExtractorTemplate:
     """Return the extractor template by name.
 
-    Returns
+    Returns:
     -------
     ExtractorTemplate
         Template configuration for the extractor.
@@ -825,7 +824,7 @@ def template(name: str) -> ExtractorTemplate:
 def config(name: str) -> ExtractorConfigSpec:
     """Return the extractor configuration by name.
 
-    Returns
+    Returns:
     -------
     ExtractorConfigSpec
         Configuration for the extractor.
@@ -836,7 +835,7 @@ def config(name: str) -> ExtractorConfigSpec:
 def flag_default(flag: str, *, fallback: bool = True) -> bool:
     """Return the default value for a feature flag.
 
-    Returns
+    Returns:
     -------
     bool
         Default flag value when configured, else fallback.

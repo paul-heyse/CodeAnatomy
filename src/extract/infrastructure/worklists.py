@@ -40,7 +40,7 @@ def worklist_builder(
 ) -> Callable[[SessionContext], DataFrame]:
     """Return a DataFusion DataFrame builder for a dataset worklist.
 
-    Returns
+    Returns:
     -------
     Callable[[SessionContext], datafusion.DataFrame]
         DataFrame builder representing the worklist query.
@@ -94,7 +94,7 @@ def iter_worklist_contexts(request: WorklistRequest) -> Iterable[FileContext]:
     request:
         Worklist request inputs including repo files, output dataset, and options.
 
-    Yields
+    Yields:
     ------
     FileContext
         File contexts matching the worklist query.
@@ -282,7 +282,7 @@ def _execute_expr_stream(
 def worklist_queue_name(*, output_table: str, repo_id: str | None) -> str | None:
     """Return a stable queue name for persistent worklists.
 
-    Returns
+    Returns:
     -------
     str | None
         Stable queue name derived from the repo and output table, or ``None``

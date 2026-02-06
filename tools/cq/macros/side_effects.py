@@ -108,7 +108,7 @@ def _safe_unparse(node: ast.AST) -> str:
 def _is_main_guard(node: ast.If) -> bool:
     """Check if an If node is `if __name__ == "__main__":`.
 
-    Returns
+    Returns:
     -------
     bool
         True if this is a main guard block.
@@ -143,6 +143,7 @@ class SideEffectVisitor(ast.NodeVisitor):
     """Detect side effects at module top level."""
 
     def __init__(self, file: str) -> None:
+        """__init__."""
         self.file = file
         self.effects: list[SideEffect] = []
         self._in_def = 0  # Nesting depth in function/class
@@ -361,7 +362,7 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
     request : SideEffectsRequest
         Side effects request payload.
 
-    Returns
+    Returns:
     -------
     CqResult
         Analysis result.

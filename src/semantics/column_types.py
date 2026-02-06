@@ -59,7 +59,7 @@ def infer_column_type(
     patterns
         Ordered pattern/type pairs to use for inference.
 
-    Returns
+    Returns:
     -------
     ColumnType
         Inferred semantic type.
@@ -96,7 +96,7 @@ def infer_table_type(column_types: AbstractSet[ColumnType]) -> TableType:
     column_types
         Set of column types present in the table.
 
-    Returns
+    Returns:
     -------
     TableType
         Derived table type.

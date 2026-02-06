@@ -37,7 +37,7 @@ def semantic_runtime_from_profile(
     profile
         DataFusion runtime profile with configuration.
 
-    Returns
+    Returns:
     -------
     SemanticRuntimeConfig
         Semantic runtime configuration extracted from profile.
@@ -101,7 +101,7 @@ def apply_semantic_runtime_config(
     semantic_config
         Semantic runtime configuration to apply.
 
-    Returns
+    Returns:
     -------
     DataFusionRuntimeProfile
         Updated profile with semantic settings applied.

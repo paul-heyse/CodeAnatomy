@@ -9,15 +9,11 @@ class Alpha:
     def do_work(self) -> int:
         """Call a method name that exists on another class.
 
-        Returns
-        -------
-        int
-            Result of the collide call.
+        Returns:
+            int: Result.
 
-        Raises
-        ------
-        TypeError
-            Raised when collide is not callable.
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         from collections.abc import Callable
         from typing import cast
@@ -36,7 +32,7 @@ class Beta:
     def collide(self) -> int:
         """Return a constant value.
 
-        Returns
+        Returns:
         -------
         int
             Constant value used by tests.

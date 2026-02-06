@@ -133,7 +133,7 @@ def record_batch_reader_from_row_batches(
 ) -> pa.RecordBatchReader:
     """Return a RecordBatchReader aligned to the dataset schema.
 
-    Returns
+    Returns:
     -------
     pyarrow.RecordBatchReader
         Reader yielding schema-aligned record batches.
@@ -148,7 +148,7 @@ def record_batch_reader_from_rows(
 ) -> pa.RecordBatchReader:
     """Return a RecordBatchReader aligned to the dataset schema.
 
-    Returns
+    Returns:
     -------
     pyarrow.RecordBatchReader
         Reader yielding schema-aligned record batches.
@@ -165,7 +165,7 @@ def datafusion_plan_from_reader(
 ) -> DataFusionPlanBundle:
     """Return a DataFusion plan bundle for a RecordBatchReader.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         DataFusion plan bundle backed by the registered reader.
@@ -183,7 +183,7 @@ def extract_plan_from_reader(
 ) -> DataFusionPlanBundle:
     """Return an extract plan bundle for a RecordBatchReader.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Extract plan bundle with registry query and evidence projection applied.
@@ -210,7 +210,7 @@ def raw_plan_from_rows(
 ) -> DataFusionPlanBundle:
     """Return a raw plan bundle for a row iterator.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Extract plan bundle without registry query or evidence projection applied.
@@ -228,7 +228,7 @@ def extract_plan_from_rows(
 ) -> DataFusionPlanBundle:
     """Return an extract plan bundle for a row iterator.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Extract plan bundle with registry query and evidence projection applied.
@@ -251,7 +251,7 @@ def extract_plan_from_row_batches(
 ) -> DataFusionPlanBundle:
     """Return an extract plan bundle for row batches.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Extract plan bundle with registry query and evidence projection applied.
@@ -293,7 +293,7 @@ def _stage_enabled(condition: str, execution: ExtractExecutionOptions) -> bool:
 def apply_query_and_project(request: _ExtractProjectionRequest) -> DataFusionPlanBundle:
     """Apply registry query and evidence projection to a DataFusion table.
 
-    Returns
+    Returns:
     -------
     DataFusionPlanBundle
         Plan bundle with query and evidence projection applied.
@@ -393,15 +393,12 @@ def extract_dataset_location_or_raise(
 ) -> DatasetLocation:
     """Return the extract dataset location, raising when missing.
 
-    Returns
-    -------
-    DatasetLocation
-        Dataset location registered for the extract dataset.
+    Args:
+        name: Description.
+        runtime_profile: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the DataFusion runtime or dataset location is unavailable.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     location = runtime_profile.catalog_ops.dataset_location(name)
     if location is None:
@@ -605,7 +602,7 @@ def materialize_extract_plan(
 ) -> TableLike | pa.RecordBatchReader:
     """Materialize an extract plan bundle and normalize at the Arrow boundary.
 
-    Returns
+    Returns:
     -------
     TableLike | pyarrow.RecordBatchReader
         Materialized and normalized extract output.
@@ -674,7 +671,7 @@ def materialize_extract_reader(
 ) -> TableLike | RecordBatchReaderLike:
     """Materialize an extract plan derived from a reader.
 
-    Returns
+    Returns:
     -------
     TableLike | RecordBatchReaderLike
         Materialized extract output.
@@ -800,10 +797,13 @@ def _validate_extract_schema_contract(
 ) -> None:
     """Validate extract outputs against the expected ABI schema.
 
-    Raises
-    ------
-    TypeError
-        Raised when the expected schema cannot be resolved.
+    Args:
+        name: Description.
+        schema: Description.
+        runtime_profile: Description.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if runtime_profile.catalog_ops.dataset_location(name) is None:
         return

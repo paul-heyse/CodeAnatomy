@@ -120,7 +120,7 @@ class FindingsTableOptions(CqStruct, frozen=True):
 def _extract_scoring_from_details(details: DetailPayload) -> tuple[float, str, float, str, str]:
     """Extract scoring fields from finding details.
 
-    Returns
+    Returns:
     -------
     tuple[float, str, float, str, str]
         (impact_score, impact_bucket, confidence_score, confidence_bucket, evidence_kind)
@@ -141,7 +141,7 @@ def _extract_scoring_from_details(details: DetailPayload) -> tuple[float, str, f
 def _finding_to_record(finding: Finding, context: FindingRecordContext) -> FindingRecord:
     """Convert a Finding to a FindingRecord.
 
-    Returns
+    Returns:
     -------
     FindingRecord
         Flattened record representation.
@@ -181,7 +181,7 @@ def flatten_result(result: CqResult) -> list[FindingRecord]:
     result : CqResult
         The analysis result to flatten.
 
-    Returns
+    Returns:
     -------
     list[FindingRecord]
         Flattened finding records.
@@ -246,7 +246,7 @@ def build_frame(records: list[FindingRecord]) -> pl.DataFrame:
     records : list[FindingRecord]
         Flattened finding records.
 
-    Returns
+    Returns:
     -------
     pl.DataFrame
         DataFrame with all finding data.
@@ -323,7 +323,7 @@ def _match_pattern(value: str | None, pattern: str) -> bool:
     pattern : str
         Pattern (glob with *, **, ? or regex starting with ~).
 
-    Returns
+    Returns:
     -------
     bool
         True if value matches pattern.
@@ -352,7 +352,7 @@ def apply_filters(df: pl.DataFrame, opts: FindingsTableOptions | None = None) ->
     opts : FindingsTableOptions | None
         Filter configuration (include/exclude/impact/confidence/severity/limit).
 
-    Returns
+    Returns:
     -------
     pl.DataFrame
         Filtered DataFrame.
@@ -419,7 +419,7 @@ def rehydrate_result(original: CqResult, filtered_df: pl.DataFrame) -> CqResult:
     filtered_df : pl.DataFrame
         Filtered DataFrame.
 
-    Returns
+    Returns:
     -------
     CqResult
         New CqResult with only filtered findings.

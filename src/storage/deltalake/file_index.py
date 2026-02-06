@@ -15,7 +15,7 @@ from datafusion_engine.arrow.interop import empty_table_for_schema
 class FileIndexEntry:
     """Typed representation of a Delta file index entry.
 
-    Attributes
+    Attributes:
     ----------
     path : str
         Relative path to the data file.
@@ -50,7 +50,7 @@ class FileIndexEntry:
         row : dict[str, Any]
             Row data from the file index table.
 
-        Returns
+        Returns:
         -------
         FileIndexEntry
             Typed file index entry.
@@ -69,24 +69,16 @@ class FileIndexEntry:
 def _parse_int_field(value: object, *, field: str) -> int:
     """Coerce optional numeric payloads into integer values.
 
-    Parameters
-    ----------
-    value
-        Raw payload value that should represent an integer.
-    field
-        Field label used in error messages.
+    Args:
+        value: Description.
+            field: Description.
 
-    Returns
-    -------
-    int
-        Integer value with ``None`` mapped to ``0``.
+    Returns:
+        int: Result.
 
-    Raises
-    ------
-    TypeError
-        Raised when the payload is not numeric or string-like.
-    ValueError
-        Raised when a string payload cannot be parsed as an integer.
+    Raises:
+        TypeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
     """
     if value is None:
         return 0
@@ -109,20 +101,14 @@ def build_delta_file_index_from_add_actions(
 ) -> pa.Table:
     """Build a file index table from Rust control-plane add actions.
 
-    Parameters
-    ----------
-    add_actions
-        Add action payloads returned by the Rust Delta control plane.
+    Args:
+        add_actions: Description.
 
-    Returns
-    -------
-    pa.Table
-        Normalized file index table compatible with pruning utilities.
+    Returns:
+        pa.Table: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when required add action fields are missing.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not add_actions:
         return _empty_file_index_table()
@@ -171,7 +157,7 @@ def _normalize_file_index(raw_table: pa.Table) -> pa.Table:
     raw_table : pa.Table
         Raw table from get_add_actions.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Normalized file index table.
@@ -252,7 +238,7 @@ def _extract_stats(stats_column: pa.Array) -> tuple[pa.Array, pa.Array]:
     stats_column : pa.Array
         Stats column from add actions (may be string JSON or struct).
 
-    Returns
+    Returns:
     -------
     tuple[pa.Array, pa.Array]
         Min and max statistics as map arrays.
@@ -354,7 +340,7 @@ def _extract_stats_column(context: ColumnResolveContext) -> tuple[pa.Array, pa.A
 def _empty_file_index_table() -> pa.Table:
     """Create an empty file index table with the correct schema.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Empty file index table.

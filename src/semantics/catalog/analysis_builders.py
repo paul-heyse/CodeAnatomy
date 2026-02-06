@@ -41,7 +41,7 @@ _USE_PREFIXES: tuple[str, ...] = ("LOAD_",)
 def _arrow_cast(expr: Expr, data_type: str) -> Expr:
     """Cast an expression to an Arrow data type.
 
-    Returns
+    Returns:
     -------
     Expr
         Cast expression.
@@ -52,7 +52,7 @@ def _arrow_cast(expr: Expr, data_type: str) -> Expr:
 def _null_expr(data_type: str) -> Expr:
     """Return a null expression with the specified Arrow data type.
 
-    Returns
+    Returns:
     -------
     Expr
         Null expression with the specified type.
@@ -63,7 +63,7 @@ def _null_expr(data_type: str) -> Expr:
 def _coalesce_cols(df: DataFrame, *col_names: str, default_expr: Expr | None = None) -> Expr:
     """Coalesce multiple columns, falling back to a default expression.
 
-    Returns
+    Returns:
     -------
     Expr
         Coalesced expression.
@@ -82,7 +82,7 @@ def _coalesce_cols(df: DataFrame, *col_names: str, default_expr: Expr | None = N
 def _hash_part(expr: Expr, *, null_sentinel: str) -> Expr:
     """Normalize a hash part by casting to Utf8 and coalescing nulls.
 
-    Returns
+    Returns:
     -------
     Expr
         Normalized hash-part expression.
@@ -93,7 +93,7 @@ def _hash_part(expr: Expr, *, null_sentinel: str) -> Expr:
 def _normalized_text(expr: Expr) -> Expr:
     """Normalize UTF-8 text with the canonical UDF.
 
-    Returns
+    Returns:
     -------
     Expr
         Normalized text expression.
@@ -104,15 +104,16 @@ def _normalized_text(expr: Expr) -> Expr:
 def _stable_id_expr(prefix: str, parts: Sequence[Expr], *, null_sentinel: str) -> Expr:
     """Build a stable identifier from normalized parts.
 
-    Returns
-    -------
-    Expr
-        Stable identifier expression.
+    Args:
+        prefix: Description.
+            parts: Description.
+            null_sentinel: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when no expression parts are provided.
+    Returns:
+        Expr: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not parts:
         msg = "stable identifiers require at least one part."
@@ -138,7 +139,7 @@ def _span_expr(
     col_unit
         Optional column unit expression (defaults to "byte").
 
-    Returns
+    Returns:
     -------
     Expr
         Span struct expression from span_make UDF.
@@ -155,7 +156,7 @@ def type_exprs_df_builder(ctx: SessionContext) -> DataFrame:
     ctx : SessionContext
         DataFusion session context with registered base tables.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame for normalized type expressions.
@@ -218,7 +219,7 @@ def type_nodes_df_builder(ctx: SessionContext) -> DataFrame:
     ctx : SessionContext
         DataFusion session context with registered base tables.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame for normalized type nodes.
@@ -286,7 +287,7 @@ def cfg_blocks_df_builder(ctx: SessionContext) -> DataFrame:
     ctx : SessionContext
         DataFusion session context with registered base tables.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame for normalized CFG blocks.
@@ -338,7 +339,7 @@ def cfg_edges_df_builder(ctx: SessionContext) -> DataFrame:
     ctx : SessionContext
         DataFusion session context with registered base tables.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame for normalized CFG edges.
@@ -407,7 +408,7 @@ def def_use_events_df_builder(ctx: SessionContext) -> DataFrame:
     ctx : SessionContext
         DataFusion session context with registered base tables.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame for bytecode def/use events.
@@ -429,7 +430,7 @@ def reaching_defs_df_builder(ctx: SessionContext) -> DataFrame:
     ctx : SessionContext
         DataFusion session context with registered base tables.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame for reaching-def edges.
@@ -491,12 +492,12 @@ def diagnostics_df_builder(ctx: SessionContext) -> DataFrame:
     ctx : SessionContext
         DataFusion session context with registered base tables.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame for normalized diagnostics.
 
-    Notes
+    Notes:
     -----
     This is a simplified version. Full implementation would need:
     - Line index joins for CST and SCIP diagnostics
@@ -558,7 +559,7 @@ def span_errors_df_builder(ctx: SessionContext) -> DataFrame:
     ctx : SessionContext
         DataFusion session context with registered base tables.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame for span error rows.
@@ -569,7 +570,7 @@ def span_errors_df_builder(ctx: SessionContext) -> DataFrame:
 def file_quality_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame for file quality signals.
 
-    Returns
+    Returns:
     -------
     DataFrame
         File quality DataFrame.
@@ -582,15 +583,14 @@ def file_quality_df_builder(ctx: SessionContext) -> DataFrame:
 def relationship_quality_metrics_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame summarizing relationship quality metrics.
 
-    Returns
-    -------
-    DataFrame
-        Relationship quality metrics DataFrame.
+    Args:
+        ctx: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when no metrics can be generated.
+    Returns:
+        DataFrame: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from semantics.diagnostics import build_relationship_quality_metrics
     from semantics.spec_registry import relationship_names
@@ -617,15 +617,14 @@ def relationship_quality_metrics_df_builder(ctx: SessionContext) -> DataFrame:
 def relationship_ambiguity_report_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame summarizing relationship ambiguity metrics.
 
-    Returns
-    -------
-    DataFrame
-        Relationship ambiguity report DataFrame.
+    Args:
+        ctx: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when no reports can be generated.
+    Returns:
+        DataFrame: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from semantics.diagnostics import build_ambiguity_analysis
     from semantics.spec_registry import relationship_names
@@ -651,7 +650,7 @@ def relationship_ambiguity_report_df_builder(ctx: SessionContext) -> DataFrame:
 def relationship_candidates_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame of relationship candidates for diagnostics.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Relationship candidates diagnostic DataFrame.
@@ -664,7 +663,7 @@ def relationship_candidates_df_builder(ctx: SessionContext) -> DataFrame:
 def relationship_decisions_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame of relationship decisions for diagnostics.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Relationship decisions diagnostic DataFrame.
@@ -677,7 +676,7 @@ def relationship_decisions_df_builder(ctx: SessionContext) -> DataFrame:
 def schema_anomalies_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame of schema anomaly diagnostics.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Schema anomaly diagnostic DataFrame.
@@ -690,15 +689,14 @@ def schema_anomalies_df_builder(ctx: SessionContext) -> DataFrame:
 def file_coverage_report_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame reporting extraction coverage per file.
 
-    Returns
-    -------
-    DataFrame
-        File coverage report DataFrame.
+    Args:
+        ctx: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the file index is unavailable.
+    Returns:
+        DataFrame: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from semantics.diagnostics import build_file_coverage_report
 
@@ -712,7 +710,7 @@ def file_coverage_report_df_builder(ctx: SessionContext) -> DataFrame:
 def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
     """Build a DataFrame of exported definitions for incremental analysis.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Exported definitions DataFrame.

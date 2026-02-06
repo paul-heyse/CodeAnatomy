@@ -45,7 +45,7 @@ def _span(
 def sample_repo(tmp_path: Path) -> Path:
     """Create a temporary directory with sample Python files.
 
-    Returns
+    Returns:
     -------
     Path
         Path to the sample repository root.

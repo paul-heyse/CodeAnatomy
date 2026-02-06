@@ -89,7 +89,7 @@ RULES_BY_RECORD_TYPE: dict[RecordType, tuple[RuleSpec, ...]] = {
 def get_rules_for_types(record_types: set[RecordType] | None) -> tuple[RuleSpec, ...]:
     """Get Rust rules for specific record types.
 
-    Returns
+    Returns:
     -------
     tuple[RuleSpec, ...]
         Rust rules filtered to the requested record types.
@@ -106,7 +106,7 @@ def get_rules_for_types(record_types: set[RecordType] | None) -> tuple[RuleSpec,
 def get_all_rule_ids() -> frozenset[str]:
     """Get all Rust rule IDs.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         All known Rust rule identifiers.

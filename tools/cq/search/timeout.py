@@ -23,29 +23,18 @@ def search_sync_with_timeout[T](
 ) -> T:
     """Execute a synchronous function with a timeout.
 
-    Parameters
-    ----------
-    fn : Callable[..., T]
-        Function to execute
-    timeout : float
-        Timeout in seconds
-    args : tuple[object, ...] | None, optional
-        Positional arguments to pass to fn
-    kwargs : dict[str, object] | None, optional
-        Keyword arguments to pass to fn
+    Args:
+        fn: Callable to run.
+        timeout: Timeout in seconds; `0` means no timeout.
+        args: Positional arguments for `fn`.
+        kwargs: Keyword arguments for `fn`.
 
-    Returns
-    -------
-    T
-        Result from fn
+    Returns:
+        T: Return value from `fn`.
 
-    Raises
-    ------
-    ValueError
-        If timeout is negative
-    TimeoutError
-        If the function execution exceeds the timeout
-
+    Raises:
+        TimeoutError: If execution exceeds the timeout.
+        ValueError: If `timeout` is negative.
     """
     if timeout < 0:
         msg = "Timeout must be positive"
@@ -69,25 +58,16 @@ async def search_async_with_timeout[T](
 ) -> T:
     """Execute an awaitable with a timeout.
 
-    Parameters
-    ----------
-    coro : Awaitable[T]
-        Coroutine or awaitable to execute
-    timeout_seconds : float
-        Timeout in seconds
+    Args:
+        coro: Awaitable to run.
+        timeout_seconds: Timeout in seconds; `0` means no timeout.
 
-    Returns
-    -------
-    T
-        Result from the awaitable
+    Returns:
+        T: Awaited result.
 
-    Raises
-    ------
-    ValueError
-        If timeout is negative
-    TimeoutError
-        If the execution exceeds the timeout
-
+    Raises:
+        TimeoutError: If execution exceeds the timeout.
+        ValueError: If `timeout_seconds` is negative.
     """
     if timeout_seconds < 0:
         msg = "Timeout must be positive"

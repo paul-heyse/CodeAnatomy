@@ -36,7 +36,7 @@ def datafusion_from_arrow(
 ) -> DataFrame:
     """Register Arrow-like input and return a DataFusion DataFrame.
 
-    Returns
+    Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFrame for the registered table.

@@ -31,7 +31,7 @@ class OutputBundleSpec:
     def ordered_outputs(self) -> tuple[str, ...]:
         """Return outputs in registry ordering.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Output aliases in order.
@@ -41,7 +41,7 @@ class OutputBundleSpec:
     def dataset_name_for_output(self, output: str) -> str | None:
         """Return the dataset name for an output alias.
 
-        Returns
+        Returns:
         -------
         str | None
             Dataset name, or ``None`` when the output is derived-only.
@@ -142,7 +142,7 @@ for _bundle in _OUTPUT_BUNDLES.values():
 def bundle(name: str) -> FieldBundle:
     """Return a bundle by name.
 
-    Returns
+    Returns:
     -------
     FieldBundle
         Bundle definition for the name.
@@ -153,7 +153,7 @@ def bundle(name: str) -> FieldBundle:
 def output_bundle(name: str) -> OutputBundleSpec:
     """Return an output bundle spec by name.
 
-    Returns
+    Returns:
     -------
     OutputBundleSpec
         Output bundle definition for the name.
@@ -164,7 +164,7 @@ def output_bundle(name: str) -> OutputBundleSpec:
 def output_bundles() -> tuple[OutputBundleSpec, ...]:
     """Return all output bundle specs.
 
-    Returns
+    Returns:
     -------
     tuple[OutputBundleSpec, ...]
         Output bundle specs in registry order.
@@ -175,7 +175,7 @@ def output_bundles() -> tuple[OutputBundleSpec, ...]:
 def output_bundle_outputs(name: str) -> tuple[str, ...]:
     """Return the outputs for an output bundle.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Output names in bundle order.
@@ -186,15 +186,11 @@ def output_bundle_outputs(name: str) -> tuple[str, ...]:
 def dataset_name_for_output(output: str) -> str | None:
     """Return dataset name for an extract output alias.
 
-    Returns
-    -------
-    str | None
-        Dataset name, or ``None`` when the output is derived-only.
+    Args:
+        output: Description.
 
-    Raises
-    ------
-    KeyError
-        Raised when the output alias is unknown.
+    Raises:
+        KeyError: If the operation cannot be completed.
     """
     if output in _OUTPUT_SKIP:
         return None

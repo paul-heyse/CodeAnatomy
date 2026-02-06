@@ -41,6 +41,14 @@ class TreeSitterCache:
     """Small LRU cache of parsed trees for incremental parsing."""
 
     def __init__(self, *, max_entries: int) -> None:
+        """__init__.
+
+        Args:
+            max_entries: Description.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
+        """
         if max_entries < 1:
             msg = "TreeSitterCache max_entries must be >= 1."
             raise ValueError(msg)
@@ -56,7 +64,7 @@ class TreeSitterCache:
     ) -> TreeSitterParseResult:
         """Parse source bytes with incremental cache support.
 
-        Returns
+        Returns:
         -------
         TreeSitterParseResult
             Parsed tree, changed ranges, and incremental usage flag.

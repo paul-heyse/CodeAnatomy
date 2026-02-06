@@ -40,7 +40,7 @@ _FINGERPRINTS_DIRNAME = "dataset_fingerprints"
 def _fingerprints_path(state_store: StateStore) -> Path:
     """Return the dataset fingerprint metadata path.
 
-    Returns
+    Returns:
     -------
     Path
         Path to the fingerprint metadata file.
@@ -55,7 +55,7 @@ def read_dataset_fingerprints(
 ) -> dict[str, str]:
     """Read the dataset fingerprint mapping from the state store.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of dataset names to fingerprint hashes.
@@ -129,7 +129,7 @@ def output_fingerprint_change_table(
 ) -> pa.Table:
     """Return a table describing output fingerprint changes.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Table aligned to ``inc_output_fingerprint_changes_v1``.

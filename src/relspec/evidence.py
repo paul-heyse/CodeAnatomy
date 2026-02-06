@@ -112,7 +112,7 @@ class EvidenceCatalog:
     def clone(self) -> EvidenceCatalog:
         """Return a shallow copy for staged updates.
 
-        Returns
+        Returns:
         -------
         EvidenceCatalog
             Copy of the evidence catalog.
@@ -134,7 +134,7 @@ class EvidenceCatalog:
         sources : Sequence[str]
             Sources required for a task.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` when all sources are available.
@@ -144,7 +144,7 @@ class EvidenceCatalog:
     def supports_cdf(self, name: str) -> bool | None:
         """Return whether the dataset supports change data feed.
 
-        Returns
+        Returns:
         -------
         bool | None
             True/False when metadata is available, otherwise ``None``.
@@ -185,7 +185,7 @@ def evidence_requirements_from_views(
 ) -> EvidenceRequirements:
     """Return evidence requirements aggregated from view nodes.
 
-    Returns
+    Returns:
     -------
     EvidenceRequirements
         Aggregated evidence requirements for the selected views.
@@ -215,7 +215,7 @@ def initial_evidence_from_views(
 ) -> EvidenceCatalog:
     """Build initial evidence catalog seeded from view requirements.
 
-    Returns
+    Returns:
     -------
     EvidenceCatalog
         Evidence catalog with known sources registered.
@@ -495,7 +495,7 @@ def known_dataset_specs(
 ) -> tuple[DatasetSpec, ...]:
     """Return dataset specs discovered from known registries.
 
-    Returns
+    Returns:
     -------
     tuple[DatasetSpec, ...]
         Dataset specs collected across extract/normalize/incremental registries.

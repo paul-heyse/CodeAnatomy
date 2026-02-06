@@ -23,7 +23,7 @@ SGCONFIG_PATH = REPO_ROOT / "tools" / "cq" / "astgrep" / "sgconfig.yml"
 def ast_grep_available() -> bool:
     """Check if ast-grep is available.
 
-    Returns
+    Returns:
     -------
     bool
         True when ast-grep is available.

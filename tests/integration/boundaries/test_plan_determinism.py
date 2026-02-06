@@ -27,7 +27,7 @@ def setup_module() -> None:
 def determinism_deps() -> tuple[InferredDeps, ...]:
     """InferredDeps with explicit plan fingerprints for determinism testing.
 
-    Returns
+    Returns:
     -------
     tuple[InferredDeps, ...]
         Stable dependency set used to assert deterministic graph behavior.

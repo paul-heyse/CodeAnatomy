@@ -75,7 +75,7 @@ class ParsedQStep:
 def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = False) -> CqResult:
     """Execute a RunPlan and return the merged CQ result.
 
-    Returns
+    Returns:
     -------
     CqResult
         Aggregated run result for all steps.

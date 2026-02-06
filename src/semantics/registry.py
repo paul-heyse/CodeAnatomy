@@ -210,7 +210,7 @@ _NORMALIZATION_BY_SOURCE: Final[dict[str, SemanticNormalizationSpec]] = {
 def semantic_table_registry() -> MappingRegistryAdapter[str, SemanticTableSpec]:
     """Return a registry adapter for semantic table specs.
 
-    Returns
+    Returns:
     -------
     MappingRegistryAdapter[str, SemanticTableSpec]
         Read-only registry adapter for semantic table specs.
@@ -221,7 +221,7 @@ def semantic_table_registry() -> MappingRegistryAdapter[str, SemanticTableSpec]:
 def semantic_normalization_registry() -> MappingRegistryAdapter[str, SemanticNormalizationSpec]:
     """Return a registry adapter for semantic normalization specs.
 
-    Returns
+    Returns:
     -------
     MappingRegistryAdapter[str, SemanticNormalizationSpec]
         Read-only registry adapter for semantic normalization specs.
@@ -233,7 +233,7 @@ def semantic_normalization_registry() -> MappingRegistryAdapter[str, SemanticNor
 def normalization_spec_for_output(output_name: str) -> SemanticNormalizationSpec | None:
     """Return the normalization spec for a given output view name.
 
-    Returns
+    Returns:
     -------
     SemanticNormalizationSpec | None
         Normalization spec when registered, otherwise ``None``.
@@ -244,7 +244,7 @@ def normalization_spec_for_output(output_name: str) -> SemanticNormalizationSpec
 def normalization_spec_for_source(source_table: str) -> SemanticNormalizationSpec | None:
     """Return the normalization spec for a given source table name.
 
-    Returns
+    Returns:
     -------
     SemanticNormalizationSpec | None
         Normalization spec when registered, otherwise ``None``.
@@ -255,7 +255,7 @@ def normalization_spec_for_source(source_table: str) -> SemanticNormalizationSpe
 def normalization_output_name(source_table: str) -> str:
     """Return the canonical normalization output name for a source table.
 
-    Returns
+    Returns:
     -------
     str
         Canonical normalization output name.
@@ -269,7 +269,7 @@ def normalization_output_name(source_table: str) -> str:
 def normalization_output_names(*, include_nodes_only: bool = False) -> tuple[str, ...]:
     """Return normalization output names in registry order.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Normalization output names in registry order.
@@ -283,7 +283,7 @@ def normalization_output_names(*, include_nodes_only: bool = False) -> tuple[str
 def spec_for_table(table: str) -> SemanticTableSpec | None:
     """Return a semantic spec for the table name when registered.
 
-    Returns
+    Returns:
     -------
     SemanticTableSpec | None
         Semantic table spec when registered, otherwise ``None``.
@@ -302,7 +302,7 @@ RELATIONSHIP_SPECS: Final[tuple[QualityRelationshipSpec, ...]] = (
 def semantic_relationship_registry() -> MappingRegistryAdapter[str, QualityRelationshipSpec]:
     """Return a registry adapter for semantic relationship specs.
 
-    Returns
+    Returns:
     -------
     MappingRegistryAdapter[str, QualityRelationshipSpec]
         Read-only registry adapter for semantic relationship specs.
@@ -314,7 +314,7 @@ def semantic_relationship_registry() -> MappingRegistryAdapter[str, QualityRelat
 def spec_for_relationship(name: str) -> QualityRelationshipSpec | None:
     """Return a relationship spec by name when registered.
 
-    Returns
+    Returns:
     -------
     QualityRelationshipSpec | None
         Relationship spec when registered, otherwise ``None``.
@@ -328,7 +328,7 @@ def spec_for_relationship(name: str) -> QualityRelationshipSpec | None:
 def relationship_names() -> tuple[str, ...]:
     """Return names of all registered relationships.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Registered relationship names.
@@ -361,7 +361,7 @@ class SemanticModel:
     def relationship_names(self) -> tuple[str, ...]:
         """Return names of all registered relationships.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Registered relationship names.
@@ -372,7 +372,7 @@ class SemanticModel:
     def dataset_rows() -> tuple[SemanticDatasetRow, ...]:
         """Return semantic dataset rows generated from the model.
 
-        Returns
+        Returns:
         -------
         tuple[SemanticDatasetRow, ...]
             Dataset rows in dependency order.
@@ -384,7 +384,7 @@ class SemanticModel:
     def cpg_node_specs(self) -> tuple[NodePlanSpec, ...]:
         """Return CPG node plan specs generated from the model.
 
-        Returns
+        Returns:
         -------
         tuple[NodePlanSpec, ...]
             CPG node plan specs.
@@ -405,7 +405,7 @@ class SemanticModel:
         source_columns_lookup
             Optional lookup for source columns by table name.
 
-        Returns
+        Returns:
         -------
         tuple[PropTableSpec, ...]
             CPG prop table specs.
@@ -417,7 +417,7 @@ class SemanticModel:
     def cpg_entity_specs(self) -> tuple[CpgEntitySpec, ...]:
         """Return CPG entity specs generated from the model.
 
-        Returns
+        Returns:
         -------
         tuple[CpgEntitySpec, ...]
             CPG entity specs for node and prop emission.
@@ -429,7 +429,7 @@ class SemanticModel:
     def normalization_output_names(self, *, include_nodes_only: bool = False) -> tuple[str, ...]:
         """Return normalization output names in model order.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Normalization output names from the semantic model.
@@ -506,7 +506,7 @@ def _build_output_specs() -> tuple[SemanticOutputSpec, ...]:
 def build_semantic_model() -> SemanticModel:
     """Build the canonical semantic model from registry specs.
 
-    Returns
+    Returns:
     -------
     SemanticModel
         Unified semantic model.

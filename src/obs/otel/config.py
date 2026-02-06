@@ -96,7 +96,7 @@ class OtelConfig:
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return canonical payload for fingerprinting.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload used for configuration fingerprinting.
@@ -146,7 +146,7 @@ class OtelConfig:
     def fingerprint(self) -> str:
         """Return a stable fingerprint for the config.
 
-        Returns
+        Returns:
         -------
         str
             Fingerprint string for the configuration.
@@ -822,7 +822,7 @@ def resolve_otel_config(
 ) -> OtelConfig:
     """Resolve configuration from environment variables.
 
-    Returns
+    Returns:
     -------
     OtelConfig
         Resolved configuration values.

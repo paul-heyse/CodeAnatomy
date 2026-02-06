@@ -28,15 +28,16 @@ def report(
 ) -> CliResult:
     """Run target-scoped report bundles.
 
-    Returns
-    -------
-    CliResult
-        Report results with context and filters.
+    Args:
+        preset: Bundle preset to run.
+        opts: Parsed report options.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        If the CLI context was not injected.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.core.bundles import BundleContext, parse_target_spec, run_bundle

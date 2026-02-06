@@ -18,15 +18,15 @@ def run(
 ) -> CliResult:
     """Execute a multi-step CQ run plan.
 
-    Returns
-    -------
-    CliResult
-        CLI result wrapper with the run result.
+    Args:
+        opts: Optional run-plan options.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when context is missing.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.core.run_context import RunContext
     from tools.cq.core.schema import mk_result, ms

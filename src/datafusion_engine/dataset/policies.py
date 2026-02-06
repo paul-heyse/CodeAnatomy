@@ -53,7 +53,7 @@ _DEFAULT_DELTA_SCAN = DeltaScanOptions(
 def resolve_dataset_policies(request: DatasetPolicyRequest) -> ResolvedDatasetPolicies:
     """Resolve dataset policies using precedence rules.
 
-    Returns
+    Returns:
     -------
     ResolvedDatasetPolicies
         Resolved policy bundle for the dataset.
@@ -97,7 +97,7 @@ def resolve_validation_policies(
 ) -> tuple[ArrowValidationOptions | None, ValidationPolicySpec | None]:
     """Resolve validation policies with override precedence.
 
-    Returns
+    Returns:
     -------
     tuple[ArrowValidationOptions | None, ValidationPolicySpec | None]
         Validation and dataframe-validation policies.
@@ -118,7 +118,7 @@ def resolve_datafusion_scan_options(
 ) -> DataFusionScanOptions | None:
     """Resolve DataFusion scan options with ordering defaults.
 
-    Returns
+    Returns:
     -------
     DataFusionScanOptions | None
         Resolved DataFusion scan options.
@@ -152,7 +152,7 @@ def resolve_delta_policy_bundle(
 ) -> DeltaPolicyBundle | None:
     """Resolve Delta policy bundle with override precedence.
 
-    Returns
+    Returns:
     -------
     DeltaPolicyBundle | None
         Resolved Delta policy bundle.
@@ -167,7 +167,7 @@ def merge_delta_policy_bundle(
 ) -> DeltaPolicyBundle | None:
     """Merge Delta policy bundles with override precedence.
 
-    Returns
+    Returns:
     -------
     DeltaPolicyBundle | None
         Merged policy bundle.
@@ -197,7 +197,7 @@ def resolve_delta_scan_options(
 ) -> DeltaScanOptions | None:
     """Resolve Delta scan options with defaults and overrides.
 
-    Returns
+    Returns:
     -------
     DeltaScanOptions | None
         Resolved Delta scan options.
@@ -223,7 +223,7 @@ def apply_scan_policy_defaults(
 ) -> tuple[DataFusionScanOptions | None, DeltaScanOptions | None]:
     """Apply scan policy defaults to scan options.
 
-    Returns
+    Returns:
     -------
     tuple[DataFusionScanOptions | None, DeltaScanOptions | None]
         Updated scan options after applying the scan policy.

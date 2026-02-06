@@ -34,7 +34,7 @@ class CdfCursor(
     processing. Uses ``StructBaseCompat`` for forward compatibility with
     future schema additions.
 
-    Attributes
+    Attributes:
     ----------
     dataset_name : str
         Name of the dataset this cursor tracks.
@@ -64,12 +64,12 @@ class CdfCursor(
         version
             Delta table version to record.
 
-        Returns
+        Returns:
         -------
         CdfCursor
             New cursor instance.
 
-        Examples
+        Examples:
         --------
         >>> cursor = CdfCursor.create("my_dataset", 5)
         >>> cursor.dataset_name
@@ -82,10 +82,12 @@ class CdfCursor(
     def __setattr__(self, name: str, value: object) -> None:
         """Prevent mutation of frozen cursor instances.
 
-        Raises
-        ------
-        FrozenInstanceError
-            Raised on any mutation attempt.
+        Args:
+            name: Description.
+            value: Description.
+
+        Raises:
+            FrozenInstanceError: If the operation cannot be completed.
         """
         _ = (name, value)
         raise FrozenInstanceError
@@ -101,7 +103,7 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
     Uses ``StructBaseStrict`` to enforce strict field validation, ensuring
     cursor file paths are always valid.
 
-    Attributes
+    Attributes:
     ----------
     cursors_path : Path
         Path to the directory containing cursor files.
@@ -125,7 +127,7 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
         dataset_name
             Name of the dataset.
 
-        Returns
+        Returns:
         -------
         Path
             Path to the cursor file.
@@ -160,7 +162,7 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
         dataset_name
             Name of the dataset.
 
-        Returns
+        Returns:
         -------
         CdfCursor | None
             Cursor if it exists and is valid, ``None`` otherwise.
@@ -181,7 +183,7 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
         dataset_name
             Name of the dataset.
 
-        Returns
+        Returns:
         -------
         bool
             ``True`` if cursor file exists, ``False`` otherwise.
@@ -209,7 +211,7 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
         Scans the cursor directory for all cursor files and attempts to
         load each one. Invalid cursor files are silently skipped.
 
-        Returns
+        Returns:
         -------
         list[CdfCursor]
             List of all successfully loaded cursors.
@@ -243,12 +245,12 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
         version
             New Delta table version to record.
 
-        Returns
+        Returns:
         -------
         CdfCursor
             The updated cursor instance.
 
-        Examples
+        Examples:
         --------
         >>> store = CdfCursorStore(cursors_path=Path("/tmp/cursors"))
         >>> cursor = store.update_version("my_dataset", 10)
@@ -276,12 +278,12 @@ class CdfCursorStore(StructBaseStrict, frozen=True):
         dataset_name
             Name of the dataset.
 
-        Returns
+        Returns:
         -------
         int | None
             Next version to read from, or ``None`` if no cursor exists.
 
-        Examples
+        Examples:
         --------
         >>> store = CdfCursorStore(cursors_path=Path("/tmp/cursors"))
         >>> store.update_version("my_dataset", 5)

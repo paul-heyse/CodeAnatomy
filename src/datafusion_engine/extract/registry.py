@@ -97,7 +97,7 @@ _TYPED_SCHEMA_OVERRIDES: dict[str, pa.Schema] = {
 def extract_metadata(name: str) -> ExtractMetadata:
     """Return extract metadata for a dataset name.
 
-    Returns
+    Returns:
     -------
     ExtractMetadata
         Extract metadata for the dataset.
@@ -109,7 +109,7 @@ def extract_metadata(name: str) -> ExtractMetadata:
 def dataset_schema(name: str) -> SchemaLike:
     """Return a schema for extract datasets based on metadata fields.
 
-    Returns
+    Returns:
     -------
     SchemaLike
         Arrow schema with string-typed columns for metadata fields.
@@ -137,7 +137,7 @@ def dataset_schema(name: str) -> SchemaLike:
 def dataset_spec(name: str) -> DatasetSpec:
     """Return the DatasetSpec for the dataset name.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset specification for the name.
@@ -182,7 +182,7 @@ def _extract_maintenance_policy(schema: SchemaLike) -> DeltaMaintenancePolicy:
 def dataset_metadata_spec(name: str) -> SchemaMetadataSpec:
     """Return metadata spec for the dataset name.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata specification for the dataset.
@@ -198,7 +198,7 @@ def dataset_metadata_with_options(
 ) -> SchemaMetadataSpec:
     """Return metadata spec merged with runtime options.
 
-    Returns
+    Returns:
     -------
     SchemaMetadataSpec
         Metadata spec with runtime defaults applied.
@@ -216,7 +216,7 @@ def dataset_schema_policy(
 ) -> SchemaPolicy:
     """Return a schema policy derived from the dataset schema.
 
-    Returns
+    Returns:
     -------
     SchemaPolicy
         Policy configured from dataset metadata.
@@ -239,7 +239,7 @@ def dataset_query(
 ) -> QuerySpec:
     """Return a simple query spec for extract datasets.
 
-    Returns
+    Returns:
     -------
     QuerySpec
         Query spec projecting all declared columns.
@@ -277,15 +277,16 @@ def dataset_query(
 def normalize_options[T](name: str, options: object | None, options_type: type[T]) -> T:
     """Normalize extractor options into a typed options payload.
 
-    Returns
-    -------
-    T
-        Normalized options instance.
+    Args:
+        name: Description.
+            options: Description.
+            options_type: Description.
 
-    Raises
-    ------
-    TypeError
-        If options are not a mapping or an instance of the expected options type.
+    Returns:
+        T: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if isinstance(options, options_type):
         return options
@@ -302,7 +303,7 @@ def normalize_options[T](name: str, options: object | None, options_type: type[T
 def extractor_defaults(name: str) -> dict[str, object]:
     """Return extractor defaults for a dataset name.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Defaults defined by the extract template, if any.
@@ -317,15 +318,16 @@ def extractor_defaults(name: str) -> dict[str, object]:
 def _build_options[T](name: str, options_type: type[T], values: Mapping[str, object]) -> T:
     """Build an options payload from normalized values.
 
-    Returns
-    -------
-    T
-        Options instance created from the mapping.
+    Args:
+        name: Description.
+            options_type: Description.
+            values: Description.
 
-    Raises
-    ------
-    TypeError
-        If the options payload cannot be constructed.
+    Returns:
+        T: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     try:
         return options_type(**dict(values))

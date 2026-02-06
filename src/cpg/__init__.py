@@ -27,15 +27,14 @@ __all__ = [
 def __getattr__(name: str) -> object:
     """Lazy-load DataFusion-native CPG builders.
 
-    Returns
-    -------
-    object
-        The requested attribute.
+    Args:
+        name: Description.
 
-    Raises
-    ------
-    AttributeError
-        If the attribute is not found.
+    Returns:
+        object: Result.
+
+    Raises:
+        AttributeError: If the operation cannot be completed.
     """
     if name in {
         "build_cpg_nodes_df",

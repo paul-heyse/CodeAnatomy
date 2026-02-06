@@ -45,7 +45,7 @@ class StatsFilter:
 class FilePruningPolicy(FingerprintableConfig):
     """File pruning policy with partition and statistics filters.
 
-    Attributes
+    Attributes:
     ----------
     partition_filters : list[PartitionFilter]
         Partition-value filters applied to partition values.
@@ -59,10 +59,8 @@ class FilePruningPolicy(FingerprintableConfig):
     def __post_init__(self) -> None:
         """Validate policy values.
 
-        Raises
-        ------
-        TypeError
-            Raised when partition or stats filters are not lists.
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         if not isinstance(self.partition_filters, list):
             msg = "partition_filters must be a list of PartitionFilter entries"
@@ -74,7 +72,7 @@ class FilePruningPolicy(FingerprintableConfig):
     def has_filters(self) -> bool:
         """Check if any filters are defined.
 
-        Returns
+        Returns:
         -------
         bool
             True if partition or stats filters are present.
@@ -84,7 +82,7 @@ class FilePruningPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the file pruning policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing file pruning policy settings.
@@ -117,7 +115,7 @@ class FilePruningPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the file pruning policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -127,7 +125,7 @@ class FilePruningPolicy(FingerprintableConfig):
     def to_predicate(self) -> Expr | None:
         """Convert policy filters to a DataFusion predicate expression.
 
-        Returns
+        Returns:
         -------
         Expr | None
             Combined predicate expression, or None if no filters are defined.
@@ -149,7 +147,7 @@ class FilePruningPolicy(FingerprintableConfig):
 class FilePruningResult:
     """Result of file pruning evaluation.
 
-    Attributes
+    Attributes:
     ----------
     candidate_count : int
         Number of files that passed pruning filters.
@@ -170,7 +168,7 @@ class FilePruningResult:
     def pruned_percentage(self) -> float:
         """Calculate the percentage of files pruned.
 
-        Returns
+        Returns:
         -------
         float
             Percentage of files pruned (0-100).
@@ -183,7 +181,7 @@ class FilePruningResult:
     def retention_percentage(self) -> float:
         """Calculate the percentage of files retained.
 
-        Returns
+        Returns:
         -------
         float
             Percentage of files retained (0-100).
@@ -211,7 +209,7 @@ def evaluate_filters_against_index(
     ctx : SessionContext
         DataFusion session context for predicate evaluation.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Filtered file index table with only candidate files.
@@ -244,7 +242,7 @@ def select_candidate_files(
     policy : FilePruningPolicy
         Pruning policy with partition and statistics filters.
 
-    Returns
+    Returns:
     -------
     list[str]
         List of file paths that pass the filters.
@@ -302,7 +300,7 @@ def evaluate_and_select_files(
         Optional DataFusion session context for predicate-based filtering.
         If None, uses Python filtering.
 
-    Returns
+    Returns:
     -------
     FilePruningResult
         Pruning result with candidate files and statistics.

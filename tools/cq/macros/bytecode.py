@@ -105,7 +105,7 @@ def _walk_code_objects(
     prefix : str
         Prefix for qualified naming.
 
-    Yields
+    Yields:
     ------
     tuple[str, CodeType]
         Qualified name and code object.
@@ -130,7 +130,7 @@ def _analyze_code_object(co: CodeType, file: str) -> BytecodeSurface:
     file : str
         File path.
 
-    Returns
+    Returns:
     -------
     BytecodeSurface
         Analysis results.
@@ -383,7 +383,7 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
     request : BytecodeSurfaceRequest
         Bytecode request payload.
 
-    Returns
+    Returns:
     -------
     CqResult
         Analysis result.

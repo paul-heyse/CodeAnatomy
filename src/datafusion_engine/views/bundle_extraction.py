@@ -19,15 +19,14 @@ if TYPE_CHECKING:
 def arrow_schema_from_df(df: DataFrame) -> pa.Schema:
     """Extract a PyArrow schema from a DataFusion DataFrame.
 
-    Returns
-    -------
-    pyarrow.Schema
-        Resolved schema for the DataFrame.
+    Args:
+        df: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the schema cannot be resolved to a PyArrow schema.
+    Returns:
+        pa.Schema: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     schema = df.schema()
     if isinstance(schema, pa.Schema):
@@ -44,15 +43,14 @@ def arrow_schema_from_df(df: DataFrame) -> pa.Schema:
 def extract_lineage_from_bundle(bundle: DataFusionPlanBundle) -> LineageReport:
     """Extract a lineage report from a DataFusion plan bundle.
 
-    Returns
-    -------
-    LineageReport
-        Lineage report derived from the optimized logical plan.
+    Args:
+        bundle: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the plan bundle lacks an optimized logical plan.
+    Returns:
+        LineageReport: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if bundle.optimized_logical_plan is None:
         msg = "DataFusion plan bundle missing optimized logical plan."
@@ -77,7 +75,7 @@ def resolve_required_udfs_from_bundle(
     snapshot
         UDF snapshot used to resolve canonical names.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Required UDF names in canonical form.

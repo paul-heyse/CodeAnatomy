@@ -443,7 +443,7 @@ def get_rules_for_types(record_types: set[RecordType] | None) -> tuple[RuleSpec,
     record_types
         Set of record types to get rules for. If None, returns all rules.
 
-    Returns
+    Returns:
     -------
     tuple[RuleSpec, ...]
         Rules matching the requested record types.
@@ -462,7 +462,7 @@ def get_rules_for_types(record_types: set[RecordType] | None) -> tuple[RuleSpec,
 def get_all_rule_ids() -> frozenset[str]:
     """Get all rule IDs.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         Set of all rule IDs.

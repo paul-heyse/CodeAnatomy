@@ -85,7 +85,7 @@ def resolve_dataset_provider(request: DatasetResolutionRequest) -> DatasetResolu
     request : DatasetResolutionRequest
         Dataset resolution request payload.
 
-    Returns
+    Returns:
     -------
     DatasetResolution
         Resolved dataset provider bundle.
@@ -363,7 +363,7 @@ def apply_scan_unit_overrides(
 def scan_units_hash(scan_units: Sequence[ScanUnit]) -> str:
     """Return a stable identity hash for a collection of scan units.
 
-    Returns
+    Returns:
     -------
     str
         Stable identity hash for the scan units.

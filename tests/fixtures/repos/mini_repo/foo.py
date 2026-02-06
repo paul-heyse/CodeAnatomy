@@ -11,7 +11,7 @@ class Greeter:
     def greet(self, name: str) -> str:
         """Return a greeting string.
 
-        Returns
+        Returns:
         -------
         str
             Greeting text.
@@ -22,7 +22,7 @@ class Greeter:
 def add(a: int, b: int) -> int:
     """Return the sum of two integers.
 
-    Returns
+    Returns:
     -------
     int
         Sum of a and b.

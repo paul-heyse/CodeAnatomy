@@ -38,7 +38,7 @@ def scope_for_layer(layer: str | None) -> str:
     layer
         Hamilton node layer tag.
 
-    Returns
+    Returns:
     -------
     str
         Instrumentation scope name.

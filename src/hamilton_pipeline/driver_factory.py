@@ -145,7 +145,7 @@ def _patch_hamilton_file_metadata() -> None:
 def default_modules() -> list[ModuleType]:
     """Return the default Hamilton module set for the pipeline.
 
-    Returns
+    Returns:
     -------
     list[ModuleType]
         Default module list for the pipeline.
@@ -323,7 +323,7 @@ def driver_config_fingerprint(config: Mapping[str, JsonValue]) -> str:
     that caches by config fingerprint.
     :contentReference[oaicite:2]{index=2}
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 fingerprint for the config.
@@ -342,7 +342,7 @@ def driver_cache_key(
 ) -> str:
     """Compute a plan-aware driver cache key.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 fingerprint for the config and plan signature.
@@ -434,12 +434,12 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     ``registry_specs.view_graph_nodes()`` - the single source of truth for
     all view definitions including semantic views.
 
-    Returns
+    Returns:
     -------
     ViewGraphContext
         Resolved view graph context with runtime metadata.
 
-    See Also
+    See Also:
     --------
     datafusion_engine.views.registry_specs._semantics_view_nodes : Semantic view registration.
     hamilton_pipeline.modules.subdags : Hamilton consumer of semantic outputs.
@@ -656,7 +656,7 @@ def _tracker_value(
 ) -> object | None:
     """Return a tracker config value from config or environment.
 
-    Returns
+    Returns:
     -------
     object | None
         Config value resolved from config or environment.
@@ -670,7 +670,7 @@ def _tracker_value(
 def _tracker_project_id(value: object | None) -> int | None:
     """Coerce the tracker project id from config sources.
 
-    Returns
+    Returns:
     -------
     int | None
         Parsed project id when available.
@@ -685,7 +685,7 @@ def _tracker_project_id(value: object | None) -> int | None:
 def _tracker_username(value: object | None) -> str | None:
     """Coerce the tracker username from config sources.
 
-    Returns
+    Returns:
     -------
     str | None
         Parsed username when available.
@@ -698,7 +698,7 @@ def _tracker_username(value: object | None) -> str | None:
 def _tracker_dag_name(value: object | None) -> str:
     """Return a non-empty DAG name or fall back to the default.
 
-    Returns
+    Returns:
     -------
     str
         DAG name for tracker registration.
@@ -711,7 +711,7 @@ def _tracker_dag_name(value: object | None) -> str:
 def _tracker_tags(value: object | None) -> dict[str, str]:
     """Return normalized tracker tags from config sources.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Normalized tags payload.
@@ -738,7 +738,7 @@ def _maybe_build_tracker_adapter(
       Builder().with_modules(...).with_config(...).with_adapters(tracker).build()
       :contentReference[oaicite:3]{index=3}
 
-    Returns
+    Returns:
     -------
     object | None
         Tracker adapter when enabled and available.
@@ -1337,7 +1337,7 @@ def _threadpool_adapter(
 ) -> HamiltonGraphAdapter:
     """Build a threadpool graph adapter.
 
-    Returns
+    Returns:
     -------
     object
         Threadpool graph adapter instance.
@@ -1372,7 +1372,7 @@ def _ray_adapter(
 ) -> HamiltonGraphAdapter:
     """Build a Ray graph adapter.
 
-    Returns
+    Returns:
     -------
     object
         Ray graph adapter instance.
@@ -1402,15 +1402,15 @@ def _dask_adapter(
 ) -> HamiltonGraphAdapter:
     """Build a Dask graph adapter.
 
-    Returns
-    -------
-    object
-        Dask graph adapter instance.
+    Args:
+        options: Description.
+            executor_config: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the Dask dependency is missing.
+    Returns:
+        HamiltonGraphAdapter: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from hamilton import base as hamilton_base
     from hamilton.plugins import h_dask
@@ -1495,7 +1495,7 @@ class CachePolicyProfile(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for cache policy defaults.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing cache policy defaults.
@@ -1511,7 +1511,7 @@ class CachePolicyProfile(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for cache policy defaults.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -1781,7 +1781,7 @@ def build_plan_context(
 ) -> PlanContext:
     """Build the plan context used by driver builders.
 
-    Returns
+    Returns:
     -------
     PlanContext
         Resolved execution plan context.
@@ -1845,7 +1845,7 @@ def build_plan_context(
 def build_driver_builder(plan_ctx: PlanContext) -> DriverBuilder:
     """Build a synchronous driver builder from a plan context.
 
-    Returns
+    Returns:
     -------
     DriverBuilder
         Builder wrapper for synchronous drivers.
@@ -1933,7 +1933,7 @@ def build_driver(*, request: DriverBuildRequest) -> driver.Driver:
       - cache.opt_in: bool (if True, default_behavior="disable")
       - hamilton.enable_tracker and tracker config keys
 
-    Returns
+    Returns:
     -------
     driver.Driver
         Built Hamilton driver instance.
@@ -1953,8 +1953,7 @@ def _relation_output_schema(session_runtime: SessionRuntime) -> SchemaLike:
 
 @dataclass
 class DriverFactory:
-    """
-    Caches built Hamilton Drivers by plan-aware fingerprint.
+    """Caches built Hamilton Drivers by plan-aware fingerprint.
 
     Use this when embedding the pipeline into a service where config changes
     are relatively infrequent but executions are frequent.
@@ -1974,7 +1973,7 @@ class DriverFactory:
     ) -> driver.Driver:
         """Return a cached driver for the given config.
 
-        Returns
+        Returns:
         -------
         driver.Driver
             Cached or newly built Hamilton driver.

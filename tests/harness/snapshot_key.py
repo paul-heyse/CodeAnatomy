@@ -8,7 +8,7 @@ from storage.deltalake.delta import snapshot_key_for_table
 def snapshot_key_payload(table_uri: str, version: int) -> dict[str, object]:
     """Build a normalized snapshot-key payload.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Canonical URI and resolved table version for snapshot identity.

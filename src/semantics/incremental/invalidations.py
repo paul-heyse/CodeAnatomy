@@ -71,7 +71,7 @@ class InvalidationSnapshot:
     def to_payload(self) -> dict[str, object]:
         """Return an Arrow-friendly payload for snapshot persistence.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Payload suitable for IPC serialization.
@@ -101,7 +101,7 @@ def build_invalidation_snapshot(
 ) -> InvalidationSnapshot:
     """Build the current invalidation snapshot.
 
-    Returns
+    Returns:
     -------
     InvalidationSnapshot
         Snapshot of plan fingerprints + runtime metadata.
@@ -124,15 +124,15 @@ def read_invalidation_snapshot(
 ) -> InvalidationSnapshot | None:
     """Read the prior invalidation snapshot if present.
 
-    Returns
-    -------
-    InvalidationSnapshot | None
-        Snapshot when present, otherwise None.
+    Args:
+        state_store: Description.
+            context: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the snapshot payload is invalid.
+    Returns:
+        InvalidationSnapshot | None: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     path = state_store.invalidation_snapshot_path()
     if not path.exists():
@@ -164,7 +164,7 @@ def write_invalidation_snapshot(
 ) -> str:
     """Persist the invalidation snapshot to the state store.
 
-    Returns
+    Returns:
     -------
     str
         Delta table path for the snapshot.
@@ -197,7 +197,7 @@ def diff_invalidation_snapshots(
 ) -> tuple[str, ...]:
     """Return reason codes for invalidation differences.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Reason codes describing invalidation triggers.
@@ -224,7 +224,7 @@ def check_state_store_invalidation(
 ) -> InvalidationResult:
     """Compare the current snapshot to the stored snapshot.
 
-    Returns
+    Returns:
     -------
     InvalidationResult
         Result describing whether invalidation is required.

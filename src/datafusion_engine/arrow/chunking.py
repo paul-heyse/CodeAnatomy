@@ -20,7 +20,7 @@ class ChunkPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the chunk policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing chunk policy settings.
@@ -33,7 +33,7 @@ class ChunkPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the chunk policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -43,7 +43,7 @@ class ChunkPolicy(FingerprintableConfig):
     def apply(self, table: TableLike) -> TableLike:
         """Apply dictionary unification and chunk combination.
 
-        Returns
+        Returns:
         -------
         TableLike
             Normalized table with unified dictionaries and combined chunks.

@@ -67,7 +67,7 @@ class FunctionParameter:
     def to_payload(self) -> dict[str, str]:
         """Return a payload representation.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Function parameter payload.
@@ -89,7 +89,7 @@ class RulePrimitive:
     def to_payload(self) -> dict[str, object]:
         """Return a payload representation.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Rule primitive payload.
@@ -163,7 +163,7 @@ class FunctionFactoryPolicy(FingerprintableConfig):
     def to_payload(self) -> dict[str, object]:
         """Return a payload mapping for the policy.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Policy payload mapping.
@@ -178,7 +178,7 @@ class FunctionFactoryPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the FunctionFactory policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing FunctionFactory policy settings.
@@ -188,7 +188,7 @@ class FunctionFactoryPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the FunctionFactory policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -211,17 +211,12 @@ def _policy_payload(policy: FunctionFactoryPolicy) -> bytes:
 def _load_extension() -> object:
     """Import the native DataFusion extension module.
 
-    Returns
-    -------
-    object
-        Imported DataFusion extension module.
+    Returns:
+        object: Result.
 
-    Raises
-    ------
-    ImportError
-        Raised when the extension module cannot be imported.
-    ModuleNotFoundError
-        Raised when a nested dependency import fails.
+    Raises:
+        ImportError: If the operation cannot be completed.
+            ModuleNotFoundError: If the operation cannot be completed.
     """
     for module_name in ("datafusion._internal", "datafusion_ext"):
         try:
@@ -241,10 +236,12 @@ def _load_extension() -> object:
 def _install_native_function_factory(ctx: SessionContext, *, payload: bytes) -> None:
     """Install the native FunctionFactory into the session.
 
-    Raises
-    ------
-    TypeError
-        Raised when the extension does not expose an install hook.
+    Args:
+        ctx: Description.
+        payload: Description.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     module = _load_extension()
     install = getattr(module, "install_function_factory", None)
@@ -281,7 +278,7 @@ def _fallback_install_function_factory(ctx: SessionContext, *, payload: bytes) -
 def function_factory_fallback_active(ctx: SessionContext) -> bool:
     """Return True when the fallback function factory is active for ctx.
 
-    Returns
+    Returns:
     -------
     bool
         True when a fallback function factory was installed.
@@ -296,17 +293,12 @@ def install_function_factory(
 ) -> None:
     """Install FunctionFactory hooks for global rule primitives.
 
-    Parameters
-    ----------
-    ctx:
-        DataFusion SessionContext for future registration hooks.
-    policy:
-        Optional policy for primitive registration.
+    Args:
+        ctx: Description.
+        policy: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the DataFusion extension entrypoint is unavailable.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     payload = _policy_payload(policy or FunctionFactoryPolicy())
     try:
@@ -329,7 +321,7 @@ def function_factory_payloads(
 ) -> Mapping[str, object]:
     """Return a structured payload for observability and tests.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Structured payload of function factory policy settings.
@@ -345,7 +337,7 @@ def function_factory_policy_hash(
 ) -> str:
     """Return the fingerprint hash for a snapshot-derived policy.
 
-    Returns
+    Returns:
     -------
     str
         Fingerprint hash for the derived policy.
@@ -368,7 +360,7 @@ def function_factory_policy_from_snapshot(
     allow_async:
         Whether async UDF execution should be enabled.
 
-    Returns
+    Returns:
     -------
     FunctionFactoryPolicy
         Policy derived from the snapshot metadata.
@@ -421,7 +413,7 @@ def _normalize_udf_volatility(value: str | None) -> UdfVolatility:
     value:
         Volatility value from the UDF specification.
 
-    Returns
+    Returns:
     -------
     UdfVolatility
         Normalized volatility literal.
@@ -442,7 +434,7 @@ def create_udaf_spec(spec: UdafSpecInput) -> RulePrimitive:
     spec:
         UDAF specification input describing the aggregate function.
 
-    Returns
+    Returns:
     -------
     RulePrimitive
         Rule primitive specification for the UDAF.
@@ -473,7 +465,7 @@ def create_udwf_spec(spec: UdwfSpecInput) -> RulePrimitive:
     spec:
         UDWF specification input describing the window function.
 
-    Returns
+    Returns:
     -------
     RulePrimitive
         Rule primitive specification for the UDWF.
@@ -527,20 +519,14 @@ def register_function(
 def build_create_function_sql(*, config: CreateFunctionConfig) -> str:
     """Build CREATE FUNCTION statements as SQL text.
 
-    Parameters
-    ----------
-    config
-        Function configuration including name, args, return type, and body.
+    Args:
+        config: Description.
 
-    Returns
-    -------
-    str
-        CREATE FUNCTION SQL string.
+    Returns:
+        str: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when the function body is missing or the return type is invalid.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not config.body_sql:
         msg = "CREATE FUNCTION requires a function body."

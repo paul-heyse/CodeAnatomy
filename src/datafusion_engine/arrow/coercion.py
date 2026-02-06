@@ -15,7 +15,7 @@ def storage_type(data_type: pa.DataType) -> pa.DataType:
     data_type
         PyArrow data type, possibly containing ExtensionTypes.
 
-    Returns
+    Returns:
     -------
     pa.DataType
         The underlying storage type with ExtensionTypes unwrapped.
@@ -72,7 +72,7 @@ def storage_schema(schema: pa.Schema) -> pa.Schema:
     schema
         PyArrow schema, possibly containing ExtensionTypes.
 
-    Returns
+    Returns:
     -------
     pa.Schema
         Schema with all ExtensionTypes unwrapped to storage types.
@@ -92,7 +92,7 @@ def coerce_table_to_storage(table: pa.Table) -> pa.Table:
     table
         PyArrow table, possibly containing ExtensionTypes.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Table with all columns cast to storage types.
@@ -111,7 +111,7 @@ def to_arrow_table(value: object) -> pa.Table:
     value
         Table-like input or RecordBatchReader-like input.
 
-    Returns
+    Returns:
     -------
     pa.Table
         Converted table.

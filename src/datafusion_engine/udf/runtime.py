@@ -199,7 +199,7 @@ def _extension_module_with_capabilities() -> ModuleType | None:
 def extension_capabilities_snapshot() -> Mapping[str, object] | None:
     """Return the Rust extension capabilities snapshot when available.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object] | None
         Snapshot payload or ``None`` when unavailable.
@@ -216,7 +216,7 @@ def extension_capabilities_snapshot() -> Mapping[str, object] | None:
 def extension_capabilities_report() -> dict[str, object]:
     """Return compatibility report for the Rust extension ABI snapshot.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Compatibility report including snapshot and errors.
@@ -257,15 +257,14 @@ def extension_capabilities_report() -> dict[str, object]:
 def validate_extension_capabilities(*, strict: bool = True) -> dict[str, object]:
     """Validate extension ABI snapshot and optionally raise on mismatch.
 
-    Returns
-    -------
-    dict[str, object]
-        Compatibility report payload.
+    Args:
+        strict: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when strict validation is enabled and the ABI is incompatible.
+    Returns:
+        dict[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     report = extension_capabilities_report()
     if strict and not report.get("compatible", False):
@@ -277,7 +276,7 @@ def validate_extension_capabilities(*, strict: bool = True) -> dict[str, object]
 def udf_backend_available() -> bool:
     """Return whether the native CodeAnatomy UDF backend is available.
 
-    Returns
+    Returns:
     -------
     bool
         True when native UDF hooks can be registered.
@@ -294,7 +293,7 @@ def udf_backend_available() -> bool:
 def fallback_udfs_active(ctx: SessionContext) -> bool:
     """Return whether fallback Python UDFs were installed for a context.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when fallback UDFs are registered for the context.
@@ -334,7 +333,7 @@ def _fallback_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
 def _mutable_mapping(payload: Mapping[str, object], key: str) -> dict[str, object]:
     """Return a mutable mapping from a payload entry.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Mutable mapping for the requested key.
@@ -490,7 +489,7 @@ def snapshot_function_names(
     include_custom
         Whether to include custom UDF names.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         Function names extracted from the snapshot.
@@ -509,7 +508,7 @@ def snapshot_function_names(
 def snapshot_parameter_names(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
     """Return a mapping of UDF parameter names from a registry snapshot.
 
-    Returns
+    Returns:
     -------
     dict[str, tuple[str, ...]]
         Mapping of function name to parameter names.
@@ -531,7 +530,7 @@ def snapshot_parameter_names(snapshot: Mapping[str, object]) -> dict[str, tuple[
 def snapshot_return_types(snapshot: Mapping[str, object]) -> dict[str, tuple[str, ...]]:
     """Return a mapping of UDF return types from a registry snapshot.
 
-    Returns
+    Returns:
     -------
     dict[str, tuple[str, ...]]
         Mapping of function name to return type names.
@@ -552,7 +551,7 @@ def snapshot_return_types(snapshot: Mapping[str, object]) -> dict[str, tuple[str
 def snapshot_alias_mapping(snapshot: Mapping[str, object]) -> dict[str, str]:
     """Return alias-to-canonical mapping from a registry snapshot.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of alias name to canonical name.
@@ -631,12 +630,12 @@ def _validate_signature_metadata(
 def validate_rust_udf_snapshot(snapshot: Mapping[str, object]) -> None:
     """Validate structural requirements for a Rust UDF snapshot.
 
-    Raises
-    ------
-    TypeError
-        Raised when snapshot fields use invalid types.
-    ValueError
-        Raised when required snapshot keys or metadata are missing.
+    Args:
+        snapshot: Description.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
+        ValueError: If the operation cannot be completed.
     """
     try:
         _validate_required_snapshot_keys(snapshot)
@@ -670,10 +669,12 @@ def validate_required_udfs(
 ) -> None:
     """Validate required UDFs against a registry snapshot.
 
-    Raises
-    ------
-    ValueError
-        Raised when required UDFs or signature metadata are missing.
+    Args:
+        snapshot: Description.
+        required: Description.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if not required:
         return
@@ -706,7 +707,7 @@ def validate_required_udfs(
 def udf_names_from_snapshot(snapshot: Mapping[str, object]) -> frozenset[str]:
     """Return all UDF names derived from a registry snapshot.
 
-    Returns
+    Returns:
     -------
     frozenset[str]
         Canonical UDF names present in the snapshot.
@@ -740,7 +741,7 @@ def rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     ctx
         DataFusion session context.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Registry snapshot payload for diagnostics.
@@ -768,15 +769,11 @@ def rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
 def _validated_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     """Return a validated Rust UDF snapshot for a session.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Snapshot payload validated for required keys and metadata.
+    Args:
+        ctx: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust UDF snapshot was not validated.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     snapshot = rust_udf_snapshot(ctx)
     if ctx not in _RUST_UDF_VALIDATED:
@@ -793,7 +790,7 @@ def rust_udf_docs(ctx: SessionContext) -> Mapping[str, object]:
     ctx
         DataFusion session context.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Documentation snapshot payload for diagnostics.
@@ -824,15 +821,11 @@ def _normalize_snapshot_value(value: object) -> object:
 def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> Mapping[str, object]:
     """Return a normalized Rust UDF snapshot payload for hashing/serialization.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Normalized snapshot payload.
+    Args:
+        snapshot: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the normalized payload is not a mapping.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     validate_rust_udf_snapshot(snapshot)
     normalized = _normalize_snapshot_value(snapshot)
@@ -845,7 +838,7 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> Mapping[str, ob
 def rust_udf_snapshot_bytes(snapshot: Mapping[str, object]) -> bytes:
     """Return a deterministic msgpack payload for a Rust UDF snapshot.
 
-    Returns
+    Returns:
     -------
     bytes
         Serialized snapshot payload.
@@ -857,7 +850,7 @@ def rust_udf_snapshot_bytes(snapshot: Mapping[str, object]) -> bytes:
 def rust_udf_snapshot_hash(snapshot: Mapping[str, object]) -> str:
     """Return a stable hash for a Rust UDF snapshot payload.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hash of the snapshot payload.
@@ -916,15 +909,17 @@ def register_rust_udfs(
 ) -> Mapping[str, object]:
     """Ensure Rust UDF snapshots are available for a session context.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Snapshot payload for diagnostics.
+    Args:
+        ctx: Description.
+            enable_async: Description.
+            async_udf_timeout_ms: Description.
+            async_udf_batch_size: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when async UDF policy configuration is invalid.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     try:
         policy = _async_udf_policy(
@@ -1150,7 +1145,7 @@ def udf_audit_payload(snapshot: Mapping[str, object]) -> dict[str, object]:
     snapshot
         Rust UDF snapshot mapping.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Diagnostics payload for volatility and fast-path audit.

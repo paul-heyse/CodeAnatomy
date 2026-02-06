@@ -46,7 +46,6 @@ to a queryable graph using Hamilton DAG + DataFusion.
 | `/cq q "not=..."` | Pattern exclusion | `/cq q "entity=function not.has='pass'"` |
 | `/cq q "pattern='eval(\$X)'"` | Security pattern scan | `/cq q "pattern='eval(\$X)'"` |
 | `/cq q --format mermaid` | Visualize code structure | `/cq q "entity=function expand=callers" --format mermaid` |
-| `/cq q --format mermaid-cfg` | Control flow graphs | `/cq q "entity=function name=fn" --format mermaid-cfg` |
 | `/cq run` | Multi-step execution (shared scan) | `/cq run --steps '[{"type":"q",...},{"type":"calls",...}]'` |
 | `/cq run` | Plan file execution | `/cq run --plan analysis.toml` |
 | `/cq chain` | Command chaining | `/cq chain q "..." AND calls foo AND search foo` |
@@ -154,13 +153,13 @@ imports, comments, etc.
 /cq q "entity=function name=~^build"
 
 # Find callers of functions in a module
-/cq q "entity=function in=src/semantics/ expand=callers"
+/cq q "entity=function in=src/semantics expand=callers"
 
 # Understand import structure before refactoring
-/cq q "entity=import in=src/extract/"
+/cq q "entity=import in=src/extract"
 
 # Rust entity queries (Rust-only scope)
-/cq q "entity=function lang=rust in=rust/"
+/cq q "entity=function lang=rust in=rust"
 /cq q "entity=class name=~^Arrow lang=rust"
 ```
 
@@ -188,7 +187,7 @@ Pattern queries find structural code patterns without false positives from strin
 /cq q "entity=function inside='class Config'"
 
 # Find closures before extraction
-/cq q "entity=function scope=closure in=src/semantics/"
+/cq q "entity=function scope=closure in=src/semantics"
 
 # Rust pattern queries (Rust-only scope)
 /cq q "pattern='pub fn \$F(\$$$) -> \$R' lang=rust"
@@ -239,7 +238,7 @@ Pattern queries find structural code patterns without false positives from strin
 /cq q "entity=function bytecode.opname=LOAD_GLOBAL"
 
 # Visualize control flow
-/cq q "entity=function name=complex_fn" --format mermaid-cfg
+/cq q "entity=function name=complex_fn" --format mermaid
 ```
 
 ### Query Selection Guide
@@ -303,7 +302,7 @@ All `/cq` commands support global options:
 
 | Option | Env Var | Description |
 |--------|---------|-------------|
-| `--format` | `CQ_FORMAT` | Output format (md, json, mermaid, mermaid-class, mermaid-cfg, dot) |
+| `--format` | `CQ_FORMAT` | Output format (md, json, mermaid, mermaid-class, dot) |
 | `--root` | `CQ_ROOT` | Repository root path |
 | `--verbose` | `CQ_VERBOSE` | Verbosity level (0-3) |
 
@@ -325,8 +324,8 @@ The `cq index` and `cq cache` admin commands are deprecated stubs that print dep
 - **Pattern disambiguation** - Use `context`/`selector` for ambiguous patterns
 - **Relational constraints** - Find code in specific contexts (inside classes, containing patterns)
 - **Scope filtering** - Identify closures before extraction
-- **Visualization** - Call graphs, class diagrams, and CFGs via `--format mermaid*`
-- **Bytecode analysis** - Query opcodes, build CFGs, analyze stack effects
+- **Visualization** - Call graphs and class diagrams via `--format mermaid` / `mermaid-class`
+- **Bytecode analysis** - Query opcodes, analyze stack effects
 - **Pattern queries** - Structural search without string/comment false positives
 
 ---

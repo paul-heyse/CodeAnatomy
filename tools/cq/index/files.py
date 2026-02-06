@@ -56,7 +56,7 @@ class UntrackedScanConfig:
 def build_repo_file_index(repo_context: RepoContext) -> RepoFileIndex:
     """Build repo file index with tracked set and ignore spec.
 
-    Returns
+    Returns:
     -------
     RepoFileIndex
         Indexed repository metadata for filtering and tabulation.
@@ -81,7 +81,7 @@ def tabulate_files(
 ) -> FileTabulationResult:
     """Tabulate repo files including tracked and likely-to-be-tracked untracked files.
 
-    Returns
+    Returns:
     -------
     FileTabulationResult
         Tabulated files and optional filter decisions.

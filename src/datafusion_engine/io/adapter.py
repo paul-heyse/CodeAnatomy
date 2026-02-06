@@ -112,7 +112,7 @@ class DataFusionIOAdapter:
         Runtime profile containing execution policy and diagnostics sink.
         If None, uses default execution policy.
 
-    Examples
+    Examples:
     --------
     >>> from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     >>> profile = DataFusionRuntimeProfile()
@@ -145,7 +145,7 @@ class DataFusionIOAdapter:
         host
             Optional host identifier for the object store.
 
-        Notes
+        Notes:
         -----
         This method records a diagnostics artifact when a diagnostics
         sink is configured in the runtime profile.
@@ -192,7 +192,7 @@ class DataFusionIOAdapter:
             If True, deregister existing table with the same name before
             registering. Defaults to False.
 
-        Notes
+        Notes:
         -----
         If a table with the same name already exists and overwrite is
         False, DataFusion will raise an error during registration.
@@ -244,18 +244,12 @@ class DataFusionIOAdapter:
     ) -> None:
         """Register a listing table with diagnostics capture.
 
-        Parameters
-        ----------
-        registration
-            Listing table registration configuration.
-        overwrite
-            If True, deregister existing table with the same name before
-            registering. Defaults to False.
+        Args:
+            registration: Description.
+            overwrite: Description.
 
-        Raises
-        ------
-        TypeError
-            Raised when the session context does not support listing tables.
+        Raises:
+            TypeError: If the operation cannot be completed.
         """
         if overwrite and self.ctx.table_exist(registration.name):
             self._deregister_table(registration.name)
@@ -456,7 +450,7 @@ class DataFusionIOAdapter:
         dataset
             PyArrow Dataset to register.
 
-        Notes
+        Notes:
         -----
         PyArrow Datasets provide efficient access to partitioned data
         with predicate and projection pushdown capabilities.
@@ -484,7 +478,7 @@ class DataFusionIOAdapter:
         name
             Table name to deregister.
 
-        Notes
+        Notes:
         -----
         This is an internal helper method used by overwrite operations.
         """
@@ -536,7 +530,7 @@ class DataFusionIOAdapter:
         payload
             Artifact payload containing metadata to record.
 
-        Notes
+        Notes:
         -----
         This method is a no-op if no diagnostics sink is configured.
         """

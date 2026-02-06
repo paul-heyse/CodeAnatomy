@@ -27,7 +27,7 @@ class OutputFormat(StrEnum):
     def __str__(self) -> str:
         """Return the CLI token.
 
-        Returns
+        Returns:
         -------
         str
             String value used by the CLI.
@@ -45,7 +45,7 @@ class ImpactBucket(StrEnum):
     def __str__(self) -> str:
         """Return the CLI token.
 
-        Returns
+        Returns:
         -------
         str
             String value used by the CLI.
@@ -63,7 +63,7 @@ class ConfidenceBucket(StrEnum):
     def __str__(self) -> str:
         """Return the CLI token.
 
-        Returns
+        Returns:
         -------
         str
             String value used by the CLI.
@@ -81,7 +81,7 @@ class SeverityLevel(StrEnum):
     def __str__(self) -> str:
         """Return the CLI token.
 
-        Returns
+        Returns:
         -------
         str
             String value used by the CLI.
@@ -99,7 +99,7 @@ class QueryLanguageToken(StrEnum):
     def __str__(self) -> str:
         """Return the CLI token.
 
-        Returns
+        Returns:
         -------
         str
             String value used by the CLI.
@@ -118,7 +118,7 @@ class ReportPreset(StrEnum):
     def __str__(self) -> str:
         """Return the CLI token.
 
-        Returns
+        Returns:
         -------
         str
             String value used by the CLI.
@@ -163,7 +163,7 @@ def comma_separated_list[T](type_: Callable[[str], T]) -> Callable[..., list[T]]
     type_
         Callable that converts a single token to the target type.
 
-    Returns
+    Returns:
     -------
     Callable
         A converter function for cyclopts.
@@ -172,15 +172,20 @@ def comma_separated_list[T](type_: Callable[[str], T]) -> Callable[..., list[T]]
     def convert(*args: object) -> list[T]:
         """Convert input to list of typed values.
 
-        Parameters
-        ----------
-        args
-            Converter inputs as (value) or (hint, value).
+                Parameters
+                ----------
 
-        Returns
-        -------
-        list[T]
-            Converted list.
+        Args:
+                    Converter inputs as (value) or (hint, value).
+
+                    *args: TODO.
+                    convert: TODO.
+
+        Returns:
+                -------
+                list[T]
+                    Converted list.
+
         """
         value = _converter_value(args)
         return [type_(item) for item in _iter_token_values(value)]
@@ -198,7 +203,7 @@ def comma_separated_enum[T](enum_type: Callable[[str], T]) -> Callable[..., list
     enum_type
         Callable that converts a single token to the enum type.
 
-    Returns
+    Returns:
     -------
     Callable
         A converter function for cyclopts.
@@ -207,15 +212,20 @@ def comma_separated_enum[T](enum_type: Callable[[str], T]) -> Callable[..., list
     def convert(*args: object) -> list[T]:
         """Convert input to list of enum values.
 
-        Parameters
-        ----------
-        args
-            Converter inputs as (value) or (hint, value).
+                Parameters
+                ----------
 
-        Returns
-        -------
-        list[T]
-            Converted list of enum values.
+        Args:
+                    Converter inputs as (value) or (hint, value).
+
+                    *args: TODO.
+                    convert: TODO.
+
+        Returns:
+                -------
+                list[T]
+                    Converted list of enum values.
+
         """
         value = _converter_value(args)
         return [enum_type(item) for item in _iter_token_values(value)]

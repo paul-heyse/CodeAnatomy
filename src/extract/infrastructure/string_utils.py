@@ -8,7 +8,7 @@ from collections.abc import Sequence
 def normalize_string_items(items: Sequence[object]) -> list[str | None]:
     """Normalize a sequence of values into optional strings.
 
-    Returns
+    Returns:
     -------
     list[str | None]
         Normalized string values.

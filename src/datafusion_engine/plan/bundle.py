@@ -126,7 +126,7 @@ class DataFusionPlanBundle:
 
     This is the single source of truth for DataFusion plan information,
 
-    Attributes
+    Attributes:
     ----------
     df : DataFrame
         The DataFusion DataFrame for this plan.
@@ -163,7 +163,7 @@ class DataFusionPlanBundle:
     def display_logical_plan(self) -> str | None:
         """Return a string representation of the logical plan.
 
-        Returns
+        Returns:
         -------
         str | None
             Indented logical plan display, or None if unavailable.
@@ -173,7 +173,7 @@ class DataFusionPlanBundle:
     def display_optimized_plan(self) -> str | None:
         """Return a string representation of the optimized logical plan.
 
-        Returns
+        Returns:
         -------
         str | None
             Indented optimized plan display, or None if unavailable.
@@ -183,7 +183,7 @@ class DataFusionPlanBundle:
     def display_execution_plan(self) -> str | None:
         """Return a string representation of the physical execution plan.
 
-        Returns
+        Returns:
         -------
         str | None
             Indented execution plan display, or None if unavailable.
@@ -195,7 +195,7 @@ class DataFusionPlanBundle:
     def graphviz(self) -> str | None:
         """Return GraphViz DOT representation of the optimized plan.
 
-        Returns
+        Returns:
         -------
         str | None
             GraphViz DOT string, or None if unavailable.
@@ -214,20 +214,14 @@ def _delta_inputs_from_scan_units(
 ) -> tuple[DeltaInputPin, ...]:
     """Derive DeltaInputPin entries from scan units.
 
-    Parameters
-    ----------
-    scan_units
-        Scan units with optional Delta version pins.
+    Args:
+        scan_units: Description.
 
-    Returns
-    -------
-    tuple[DeltaInputPin, ...]
-        DeltaInputPin entries derived from scan units with version information.
+    Returns:
+        tuple[DeltaInputPin, ...]: Result.
 
-    Raises
-    ------
-    ValueError
-        When conflicting Delta versions exist for the same dataset.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     pins: dict[str, DeltaInputPin] = {}
     for unit in scan_units:
@@ -280,7 +274,7 @@ def _delta_pin_state_from_pin(
 ]:
     """Build a comparable state tuple from a Delta pin.
 
-    Returns
+    Returns:
     -------
     tuple
         Tuple of comparable pin fields used for conflict detection.
@@ -303,30 +297,16 @@ def build_plan_bundle(
 ) -> DataFusionPlanBundle:
     """Build a canonical plan bundle from a DataFusion DataFrame.
 
-    This is the single entrypoint for plan construction. All execution
-    and scheduling paths should use this function.
+    Args:
+        ctx: Description.
+            df: Description.
+            options: Description.
 
-    Planner extensions (UDFs, ExprPlanner, FunctionFactory) should be
-    installed in the SessionContext before calling this function.
+    Returns:
+        DataFusionPlanBundle: Result.
 
-    Parameters
-    ----------
-    ctx : SessionContext
-        DataFusion session context for plan operations.
-    df : DataFrame
-        DataFusion DataFrame to build the plan from.
-    options : PlanBundleOptions | None
-        Optional bundle options controlling plan capture.
-
-    Returns
-    -------
-    DataFusionPlanBundle
-        Canonical plan artifact for execution and scheduling.
-
-    Raises
-    ------
-    ValueError
-        Raised when session runtime information is unavailable or Substrait is disabled.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     with stage_span(
         "planning.plan_bundle",
@@ -401,7 +381,7 @@ def _plan_proto_data(
     payload
         Wrapped plan proto payload.
 
-    Returns
+    Returns:
     -------
     bytes | None
         Raw proto bytes when available.
@@ -536,15 +516,16 @@ def _plan_core_components(
 ) -> _PlanCoreComponents:
     """Collect core logical/physical plan objects.
 
-    Returns
-    -------
-    _PlanCoreComponents
-        Core plan objects for bundling.
+    Args:
+        ctx: Description.
+            df: Description.
+            options: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when Substrait computation is disabled.
+    Returns:
+        _PlanCoreComponents: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     t0 = time.perf_counter()
     logical = cast("DataFusionLogicalPlan", _safe_logical_plan(df))
@@ -613,7 +594,7 @@ def _capture_explain_artifacts(
 ) -> _ExplainArtifacts:
     """Capture explain outputs for plan artifacts.
 
-    Returns
+    Returns:
     -------
     _ExplainArtifacts
         Explain outputs captured for the bundle.
@@ -650,7 +631,7 @@ def _environment_artifacts(
 ) -> _EnvironmentArtifacts:
     """Capture planning environment snapshots.
 
-    Returns
+    Returns:
     -------
     _EnvironmentArtifacts
         Environment artifacts for fingerprints and diagnostics.
@@ -711,7 +692,7 @@ def _planning_env_snapshot(
     session_runtime
         Session runtime used to resolve profile settings.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Planning environment snapshot payload.
@@ -795,7 +776,7 @@ def _planning_env_hash(snapshot: Mapping[str, object]) -> str:
 def _rulepack_snapshot(ctx: SessionContext) -> Mapping[str, object] | None:
     """Return a snapshot of planner rulepacks when available.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object] | None
         Rulepack metadata payload, or ``None`` when unavailable.
@@ -876,7 +857,7 @@ def _merged_delta_inputs_for_bundle(
 ) -> tuple[DeltaInputPin, ...]:
     """Resolve Delta input pins for plan fingerprinting.
 
-    Returns
+    Returns:
     -------
     tuple[DeltaInputPin, ...]
         Merged Delta input pins from explicit inputs and scan units.
@@ -895,7 +876,7 @@ def _merged_delta_inputs_for_bundle(
 def _explain_rows_from_text(text: str) -> tuple[dict[str, object], ...] | None:
     """Parse explain output text into row dictionaries when possible.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]] | None
         Parsed row payloads or ``None`` when parsing fails.
@@ -922,7 +903,7 @@ def _explain_rows_from_text(text: str) -> tuple[dict[str, object], ...] | None:
 def _plan_proto_bytes(plan: object | None, *, enabled: bool) -> bytes | None:
     """Serialize a plan to proto bytes when supported.
 
-    Returns
+    Returns:
     -------
     bytes | None
         Serialized proto bytes when supported.
@@ -947,7 +928,7 @@ def _plan_proto_bytes(plan: object | None, *, enabled: bool) -> bytes | None:
 def _proto_serialization_enabled() -> bool:
     """Return True when plan proto serialization should be attempted.
 
-    Returns
+    Returns:
     -------
     bool
         True when plan proto serialization should be attempted.
@@ -1020,7 +1001,7 @@ def _normalize_json_mapping(value: object | None) -> dict[str, JsonValue] | None
 def _udf_planner_snapshot(snapshot: Mapping[str, object]) -> Mapping[str, object] | None:
     """Return a normalized UDF planner metadata snapshot when available.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object] | None
         Normalized UDF planner metadata payload.
@@ -1043,7 +1024,7 @@ def _plan_artifacts_from_components(
 ) -> PlanArtifacts:
     """Assemble PlanArtifacts from captured components.
 
-    Returns
+    Returns:
     -------
     PlanArtifacts
         Serializable plan artifacts.
@@ -1360,7 +1341,7 @@ def _merge_delta_inputs(
 
     Explicit pins take precedence over scan-unit derived pins.
 
-    Returns
+    Returns:
     -------
     tuple[DeltaInputPin, ...]
         Merged delta input pins sorted by dataset name.
@@ -1479,7 +1460,7 @@ def _plan_identity_payload(inputs: _PlanIdentityInputs) -> Mapping[str, object]:
 def _safe_logical_plan(df: DataFrame) -> object | None:
     """Safely extract the logical plan from a DataFrame.
 
-    Returns
+    Returns:
     -------
     object | None
         Logical plan, or None if unavailable.
@@ -1496,7 +1477,7 @@ def _safe_logical_plan(df: DataFrame) -> object | None:
 def _safe_optimized_logical_plan(df: DataFrame) -> object | None:
     """Safely extract the optimized logical plan from a DataFrame.
 
-    Returns
+    Returns:
     -------
     object | None
         Optimized logical plan, or None if unavailable.
@@ -1513,7 +1494,7 @@ def _safe_optimized_logical_plan(df: DataFrame) -> object | None:
 def _safe_execution_plan(df: DataFrame) -> object | None:
     """Safely extract the execution plan from a DataFrame.
 
-    Returns
+    Returns:
     -------
     object | None
         Execution plan, or None if unavailable.
@@ -1583,18 +1564,15 @@ def _public_substrait_bytes(
 def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
     """Convert an optimized plan to Substrait bytes.
 
-    Uses DataFusion's Substrait Producer to serialize the plan for
-    portable storage and fingerprinting.
+    Args:
+        ctx: Description.
+            optimized: Description.
 
-    Returns
-    -------
-    bytes
-        Substrait plan bytes.
+    Returns:
+        bytes: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when Substrait serialization is unavailable.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if SubstraitProducer is None:
         msg = "Substrait producer is unavailable."
@@ -1623,7 +1601,7 @@ def _capture_explain_analyze(
     session_runtime
         Session runtime controlling explain settings.
 
-    Returns
+    Returns:
     -------
     ExplainCapture | None
         Captured explain output, or ``None`` when disabled.
@@ -1643,24 +1621,16 @@ def _substrait_validation_payload(
 ) -> Mapping[str, object] | None:
     """Validate Substrait bytes and return the validation payload.
 
-    Parameters
-    ----------
-    substrait_bytes
-        Serialized Substrait plan bytes.
-    df
-        DataFusion DataFrame used for cross-validation.
-    ctx
-        Session context used for replay validation.
+    Args:
+        substrait_bytes: Description.
+            df: Description.
+            ctx: Description.
 
-    Returns
-    -------
-    Mapping[str, object] | None
-        Validation payload from the Substrait validator.
+    Returns:
+        Mapping[str, object] | None: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when validation fails.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from datafusion_engine.plan.execution import validate_substrait_plan
 
@@ -1750,7 +1720,7 @@ def _information_schema_snapshot(
     session_runtime
         Optional session runtime for policy-aware introspection.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Snapshot payload containing settings, tables, columns, and routines.
@@ -1789,7 +1759,7 @@ def _information_schema_hash(snapshot: Mapping[str, object]) -> str:
     snapshot
         Information schema snapshot payload.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hash of the snapshot payload.
@@ -1836,7 +1806,7 @@ def _hash_plan(inputs: PlanFingerprintInputs) -> str:
     Substrait bytes are required for reproducibility. The fingerprint also
     incorporates session settings, UDF requirements, and Delta input pins.
 
-    Returns
+    Returns:
     -------
     str
         Stable plan fingerprint.
@@ -2080,7 +2050,7 @@ def _manifest_resolved_version(row: Mapping[str, object]) -> int:
 def _plan_display(plan: object | None, *, method: str) -> str | None:
     """Extract a display string from a plan object.
 
-    Returns
+    Returns:
     -------
     str | None
         Display string for the plan, if available.
@@ -2101,7 +2071,7 @@ def _plan_display(plan: object | None, *, method: str) -> str | None:
 def _plan_pgjson(plan: object | None) -> str | None:
     """Extract PostgreSQL JSON representation from a plan when available.
 
-    Returns
+    Returns:
     -------
     str | None
         PG-JSON representation when available.
@@ -2209,7 +2179,7 @@ def _plan_details(
 ) -> dict[str, object]:
     """Collect plan details for diagnostics.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Diagnostic plan metadata.
@@ -2271,7 +2241,7 @@ def _plan_manifest_payload(
 def _plan_graphviz(plan: object | None) -> str | None:
     """Extract GraphViz representation from a plan.
 
-    Returns
+    Returns:
     -------
     str | None
         GraphViz DOT string, if available.
@@ -2290,7 +2260,7 @@ def _plan_graphviz(plan: object | None) -> str | None:
 def _plan_partition_count(plan: object | None) -> int | None:
     """Extract partition count from an execution plan.
 
-    Returns
+    Returns:
     -------
     int | None
         Partition count, if available.
@@ -2318,7 +2288,7 @@ def _repartition_count_from_display(plan_display: str | None) -> int | None:
     plan_display
         Physical plan display string produced by DataFusion.
 
-    Returns
+    Returns:
     -------
     int | None
         Count of repartition operators, or ``None`` if unavailable.
@@ -2333,7 +2303,7 @@ def _repartition_count_from_display(plan_display: str | None) -> int | None:
 def _dynamic_filter_count_from_display(plan_display: str | None) -> int | None:
     """Count dynamic filter operators from a physical plan display string.
 
-    Returns
+    Returns:
     -------
     int | None
         Count of dynamic filter operators, or ``None`` if unavailable.
@@ -2348,7 +2318,7 @@ def _dynamic_filter_count_from_display(plan_display: str | None) -> int | None:
 def _plan_statistics_payload(plan: object | None) -> Mapping[str, object] | None:
     """Return a summary of execution plan statistics when available.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object] | None
         Normalized statistics payload, or ``None`` if unavailable.
@@ -2379,7 +2349,7 @@ def _plan_statistics_payload(plan: object | None) -> Mapping[str, object] | None
 def _normalize_statistics_payload(stats: object) -> Mapping[str, object] | None:
     """Normalize a statistics object into a JSON-ready payload.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object] | None
         Normalized statistics payload, or ``None`` when empty.
@@ -2400,7 +2370,7 @@ def _normalize_statistics_payload(stats: object) -> Mapping[str, object] | None:
 def _statistics_value(value: object) -> object:
     """Normalize a statistics value for JSON serialization.
 
-    Returns
+    Returns:
     -------
     object
         JSON-ready statistics value.

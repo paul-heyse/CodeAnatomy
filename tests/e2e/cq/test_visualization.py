@@ -17,7 +17,7 @@ from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMe
 def _make_run_meta() -> RunMeta:
     """Create a minimal RunMeta for testing.
 
-    Returns
+    Returns:
     -------
     RunMeta
         Minimal run metadata for tests.

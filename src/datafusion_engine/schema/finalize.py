@@ -109,7 +109,7 @@ class Contract:
     def with_versioned_schema(self) -> SchemaLike:
         """Return the schema with contract metadata attached.
 
-        Returns
+        Returns:
         -------
         SchemaLike
             Schema with contract metadata attached.
@@ -122,7 +122,7 @@ class Contract:
     def available_fields(self) -> tuple[str, ...]:
         """Return all visible field names (columns + virtual fields).
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Visible field names.
@@ -161,7 +161,7 @@ def _list_str_array(values: list[list[str]]) -> ArrayLike:
     values:
         Nested string values to convert.
 
-    Returns
+    Returns:
     -------
     ArrayLike
         Array of list<string> values.
@@ -222,7 +222,7 @@ class ErrorArtifactSpec:
     def append_detail_columns(self, table: TableLike, result: InvariantResult) -> TableLike:
         """Append error detail columns for a single invariant result.
 
-        Returns
+        Returns:
         -------
         TableLike
             Table with error detail columns appended.
@@ -250,7 +250,7 @@ class ErrorArtifactSpec:
     ) -> TableLike:
         """Build the error table for failed invariants.
 
-        Returns
+        Returns:
         -------
         TableLike
             Error rows with detail columns.
@@ -275,7 +275,7 @@ class ErrorArtifactSpec:
     def build_stats_table(errors: TableLike) -> TableLike:
         """Build the error statistics table.
 
-        Returns
+        Returns:
         -------
         TableLike
             Per-error-code counts.
@@ -313,7 +313,7 @@ def _required_non_null_results(
 ) -> tuple[list[InvariantResult], ArrayLike]:
     """Return invariant results and combined mask for required non-null checks.
 
-    Returns
+    Returns:
     -------
     tuple[list[InvariantResult], ArrayLike]
         Invariant results and combined bad-row mask.
@@ -352,7 +352,7 @@ def _collect_invariant_results(
 ) -> tuple[list[InvariantResult], ArrayLike]:
     """Collect invariant results and the combined bad-row mask.
 
-    Returns
+    Returns:
     -------
     tuple[list[InvariantResult], ArrayLike]
         Invariant results and combined bad-row mask.
@@ -410,7 +410,7 @@ def _build_error_table(
 ) -> TableLike:
     """Build the error table for failed invariants.
 
-    Returns
+    Returns:
     -------
     TableLike
         Error table with detail columns.
@@ -421,7 +421,7 @@ def _build_error_table(
 def _build_stats_table(errors: TableLike, *, error_spec: ErrorArtifactSpec) -> TableLike:
     """Build the error statistics table.
 
-    Returns
+    Returns:
     -------
     TableLike
         Error statistics table.
@@ -715,7 +715,7 @@ def _build_alignment_table(
     error_rows:
         Number of error rows.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Alignment summary table.
@@ -750,7 +750,7 @@ def finalize(
     options:
         Optional finalize options for error specs, transforms, and chunk policies.
 
-    Returns
+    Returns:
     -------
     FinalizeResult
         Finalized table bundle.
@@ -832,7 +832,7 @@ def normalize_only(
 ) -> TableLike:
     """Normalize a table using finalize schema policy without invariants.
 
-    Returns
+    Returns:
     -------
     TableLike
         Normalized (aligned/encoded) table.
@@ -893,7 +893,7 @@ class FinalizeContext:
     ) -> FinalizeResult:
         """Finalize a table using the stored contract and options.
 
-        Returns
+        Returns:
         -------
         FinalizeResult
             Finalized table bundle.

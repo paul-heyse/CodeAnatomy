@@ -81,7 +81,7 @@ _OUTPUT_TO_TEMPLATE: dict[str, str] = {
 def extractor_spec(name: str) -> ExtractorSpec:
     """Return an extractor spec by name.
 
-    Returns
+    Returns:
     -------
     ExtractorSpec
         Extractor spec for the name.
@@ -92,7 +92,7 @@ def extractor_spec(name: str) -> ExtractorSpec:
 def extractor_specs() -> tuple[ExtractorSpec, ...]:
     """Return all extractor specs in registry order.
 
-    Returns
+    Returns:
     -------
     tuple[ExtractorSpec, ...]
         Extractor specs.
@@ -103,7 +103,7 @@ def extractor_specs() -> tuple[ExtractorSpec, ...]:
 def extractor_for_output(output: str) -> ExtractorSpec | None:
     """Return the extractor spec responsible for an output.
 
-    Returns
+    Returns:
     -------
     ExtractorSpec | None
         Extractor spec, or None when unknown.
@@ -117,7 +117,7 @@ def extractor_for_output(output: str) -> ExtractorSpec | None:
 def outputs_for_template(template: str) -> tuple[str, ...]:
     """Return outputs for a template.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Output aliases for the template.
@@ -128,7 +128,7 @@ def outputs_for_template(template: str) -> tuple[str, ...]:
 def select_extractors_for_outputs(outputs: Iterable[str]) -> tuple[ExtractorSpec, ...]:
     """Return extractor specs required for the outputs.
 
-    Returns
+    Returns:
     -------
     tuple[ExtractorSpec, ...]
         Extractor specs required for the outputs.

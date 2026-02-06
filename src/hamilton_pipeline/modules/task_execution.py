@@ -175,7 +175,7 @@ def runtime_artifacts(
 ) -> RuntimeArtifacts:
     """Return the runtime artifacts container for task execution.
 
-    Returns
+    Returns:
     -------
     RuntimeArtifacts
         Runtime artifacts container.
@@ -201,7 +201,7 @@ def plan_scan_inputs(
 ) -> PlanScanInputs:
     """Bundle scan-unit context for deterministic task execution.
 
-    Returns
+    Returns:
     -------
     PlanScanInputs
         Scan-unit context and hash for the execution run.
@@ -237,7 +237,7 @@ def plan_scan_inputs(
 def scan_unit_stream(plan_scan_units: tuple[ScanUnit, ...]) -> Parallelizable[ScanUnit]:
     """Yield scan units for dynamic parallel execution.
 
-    Yields
+    Yields:
     ------
     ScanUnit
         Scan unit payloads for dynamic execution.
@@ -259,7 +259,7 @@ def scan_unit_execution(
 ) -> tuple[str, TableLike]:
     """Execute a single scan unit and return its table keyed by scan unit.
 
-    Returns
+    Returns:
     -------
     tuple[str, TableLike]
         Scan unit key and corresponding table.
@@ -289,7 +289,7 @@ def scan_unit_results_by_key__dynamic(
 ) -> Mapping[str, TableLike]:
     """Collect scan unit results into a mapping.
 
-    Returns
+    Returns:
     -------
     Mapping[str, TableLike]
         Mapping of scan unit keys to executed tables.
@@ -308,7 +308,7 @@ def scan_unit_results_by_key__dynamic(
 def scan_unit_results_by_key__static() -> Mapping[str, TableLike]:
     """Return an empty mapping when dynamic scan units are disabled.
 
-    Returns
+    Returns:
     -------
     Mapping[str, TableLike]
         Empty mapping placeholder.
@@ -337,7 +337,7 @@ def scan_unit_results_by_key(
 ) -> Mapping[str, TableLike]:
     """Resolve scan unit results based on the dynamic execution config.
 
-    Returns
+    Returns:
     -------
     Mapping[str, TableLike]
         Resolved scan unit results mapping.
@@ -374,7 +374,7 @@ def task_execution_inputs(
     task_execution_runtime_config
         Runtime configuration inputs for task execution.
 
-    Returns
+    Returns:
     -------
     TaskExecutionInputs
         Bundled inputs for task execution.
@@ -429,7 +429,7 @@ def task_execution_runtime_config(
     scip_execution_config
         SCIP execution inputs (index path + extract options).
 
-    Returns
+    Returns:
     -------
     TaskExecutionRuntimeConfig
         Bundled runtime configuration inputs.
@@ -463,7 +463,7 @@ def scip_execution_config(
     scip_extract_options
         Options for SCIP extraction.
 
-    Returns
+    Returns:
     -------
     ScipExecutionConfig
         Bundled SCIP execution inputs.
@@ -979,15 +979,17 @@ def execute_task_from_catalog(
 ) -> TableLike:
     """Execute a single view task from a catalog.
 
-    Returns
-    -------
-    TableLike
-        Materialized table output.
+    Args:
+        inputs: Description.
+            dependencies: Description.
+            plan_signature: Description.
+            spec: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the plan signature is inconsistent or the view is missing.
+    Returns:
+        TableLike: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     _touch_dependencies(dependencies)
     runtime = inputs.runtime

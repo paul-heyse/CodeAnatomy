@@ -60,7 +60,7 @@ class CacheInventoryEntry:
     def to_row(self) -> dict[str, object]:
         """Return a JSON-ready row payload.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             JSON-ready representation of the inventory entry.
@@ -90,7 +90,7 @@ def ensure_cache_inventory_table(
 ) -> DatasetLocation | None:
     """Ensure the cache inventory table exists and is registered.
 
-    Returns
+    Returns:
     -------
     DatasetLocation | None
         Dataset location for the cache inventory table when available.
@@ -149,7 +149,7 @@ def record_cache_inventory_entry(
         Optional session context to reuse for inventory writes. If not provided,
         the runtime profile session context is used.
 
-    Returns
+    Returns:
     -------
     int | None
         Delta table version when recorded, if available.
@@ -252,7 +252,7 @@ def _cache_inventory_schema() -> pa.Schema:
 def delta_report_file_count(report: Mapping[str, object] | None) -> int | None:
     """Extract a file count from a Delta write report payload.
 
-    Returns
+    Returns:
     -------
     int | None
         File count when present in the payload.
@@ -300,7 +300,7 @@ def _coerce_int(value: object) -> int | None:
 def cache_inventory_schema() -> pa.Schema:
     """Return the cache inventory table schema.
 
-    Returns
+    Returns:
     -------
     pa.Schema
         Arrow schema for the cache inventory table.

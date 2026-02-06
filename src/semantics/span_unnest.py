@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 def ast_span_unnest_df_builder(ctx: SessionContext) -> DataFrame:
     """Build the AST span unnest view with byte-based spans.
 
-    Returns
+    Returns:
     -------
     DataFrame
         AST span-unnest DataFrame.
@@ -32,7 +32,7 @@ def ast_span_unnest_df_builder(ctx: SessionContext) -> DataFrame:
 def ts_span_unnest_df_builder(ctx: SessionContext) -> DataFrame:
     """Build the tree-sitter span unnest view with byte-based spans.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Tree-sitter span-unnest DataFrame.
@@ -48,7 +48,7 @@ def ts_span_unnest_df_builder(ctx: SessionContext) -> DataFrame:
 def symtable_span_unnest_df_builder(ctx: SessionContext) -> DataFrame:
     """Build the symtable span unnest view with byte-based spans.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Symtable span-unnest DataFrame.
@@ -67,7 +67,7 @@ def symtable_span_unnest_df_builder(ctx: SessionContext) -> DataFrame:
 def py_bc_instruction_span_unnest_df_builder(ctx: SessionContext) -> DataFrame:
     """Build the bytecode instruction span unnest view with byte-based spans.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Bytecode instruction span-unnest DataFrame.
@@ -83,7 +83,7 @@ def py_bc_instruction_span_unnest_df_builder(ctx: SessionContext) -> DataFrame:
 def _select_span_fields(df: DataFrame) -> DataFrame:
     """Project the normalized span fields for downstream joins.
 
-    Returns
+    Returns:
     -------
     DataFrame
         DataFrame selecting only span-related fields.

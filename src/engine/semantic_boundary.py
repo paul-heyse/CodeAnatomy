@@ -13,22 +13,12 @@ def ensure_semantic_views_registered(
 ) -> None:
     """Raise if required semantic views are not registered.
 
-    This function enforces the boundary between semantic definition (which
-    owns view registration) and engine execution (which only consumes views).
-    When engine attempts to materialize a semantic view, this guardrail
-    ensures the view was properly registered by the semantic layer.
+    Args:
+        ctx: Description.
+        view_names: Description.
 
-    Parameters
-    ----------
-    ctx
-        DataFusion session context.
-    view_names
-        Optional list of view names to check. Defaults to semantic model outputs.
-
-    Raises
-    ------
-    ValueError
-        If any required semantic views are missing from the session.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     from semantics.registry import SEMANTIC_MODEL
 
@@ -51,7 +41,7 @@ def is_semantic_view(view_name: str) -> bool:
     view_name
         View name to check.
 
-    Returns
+    Returns:
     -------
     bool
         True if the view is a semantic view managed by the semantics layer.

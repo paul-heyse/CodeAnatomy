@@ -3,7 +3,7 @@
 This module provides auto-generation of Mermaid diagrams and Markdown
 documentation from semantic explain-plan artifacts or the semantic IR.
 
-Example
+Example:
 -------
 >>> from semantics.docs import export_graph_documentation
 >>>

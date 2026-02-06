@@ -73,7 +73,7 @@ class ParamBundle:
     def list_values(self, name: str) -> tuple[object, ...]:
         """Return list values for a param name.
 
-        Returns
+        Returns:
         -------
         tuple[object, ...]
             List parameter values, or an empty tuple when missing.
@@ -202,7 +202,7 @@ class RelationshipOutputTables:
     def as_dict(self) -> dict[str, TableLike]:
         """Return the relationship outputs as a name->table mapping.
 
-        Returns
+        Returns:
         -------
         dict[str, TableLike]
             Mapping of relationship output names to tables.
@@ -226,7 +226,7 @@ class CpgOutputTables:
     def as_dict(self) -> dict[str, TableLike]:
         """Return the CPG outputs as a name->table mapping.
 
-        Returns
+        Returns:
         -------
         dict[str, TableLike]
             Mapping of CPG output names to tables.

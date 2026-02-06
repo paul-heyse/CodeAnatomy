@@ -14,7 +14,7 @@ MAX_SECTION_FINDINGS = 50
 def _severity_icon(severity: str) -> str:
     """Return icon for severity level.
 
-    Returns
+    Returns:
     -------
     str
         Severity icon prefix.
@@ -36,7 +36,7 @@ def _format_finding(f: Finding, *, show_anchor: bool = True) -> str:
     show_anchor : bool
         Whether to include source location.
 
-    Returns
+    Returns:
     -------
     str
         Markdown-formatted line(s), including context snippet if available.
@@ -83,7 +83,7 @@ def _format_section(s: Section) -> str:
     s : Section
         Section to format.
 
-    Returns
+    Returns:
     -------
     str
         Markdown-formatted section.
@@ -107,7 +107,7 @@ def _format_section(s: Section) -> str:
 def _render_summary(summary: dict[str, object]) -> list[str]:
     """Render summary section lines.
 
-    Returns
+    Returns:
     -------
     list[str]
         Summary section lines.
@@ -131,7 +131,7 @@ def _render_summary(summary: dict[str, object]) -> list[str]:
 def _render_key_findings(findings: list[Finding]) -> list[str]:
     """Render key findings section lines.
 
-    Returns
+    Returns:
     -------
     list[str]
         Key findings section lines.
@@ -147,7 +147,7 @@ def _render_key_findings(findings: list[Finding]) -> list[str]:
 def _render_sections(sections: list[Section]) -> list[str]:
     """Render section blocks.
 
-    Returns
+    Returns:
     -------
     list[str]
         Rendered section lines.
@@ -162,7 +162,7 @@ def _render_sections(sections: list[Section]) -> list[str]:
 def _render_evidence(findings: list[Finding]) -> list[str]:
     """Render evidence section lines.
 
-    Returns
+    Returns:
     -------
     list[str]
         Evidence section lines.
@@ -182,7 +182,7 @@ def _render_evidence(findings: list[Finding]) -> list[str]:
 def _render_artifacts(artifacts: list[Artifact]) -> list[str]:
     """Render artifact section lines.
 
-    Returns
+    Returns:
     -------
     list[str]
         Artifact section lines.
@@ -198,7 +198,7 @@ def _render_artifacts(artifacts: list[Artifact]) -> list[str]:
 def _render_footer(result: CqResult) -> list[str]:
     """Render report footer lines.
 
-    Returns
+    Returns:
     -------
     list[str]
         Footer lines.
@@ -215,7 +215,7 @@ def render_markdown(result: CqResult) -> str:
     result : CqResult
         Analysis result to render.
 
-    Returns
+    Returns:
     -------
     str
         Markdown-formatted report.
@@ -233,7 +233,7 @@ def render_markdown(result: CqResult) -> str:
 def _get_impact_confidence_summary(findings: list[Finding]) -> tuple[str, str]:
     """Get overall impact and confidence from findings.
 
-    Returns
+    Returns:
     -------
     tuple[str, str]
         (impact_bucket, confidence_bucket) based on findings.
@@ -266,7 +266,7 @@ def render_summary(result: CqResult) -> str:
     result : CqResult
         Analysis result to render.
 
-    Returns
+    Returns:
     -------
     str
         Condensed summary output.

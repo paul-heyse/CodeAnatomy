@@ -535,7 +535,7 @@ def meta_launcher(
 ) -> int:
     """Meta launcher for config selection and context injection.
 
-    Returns
+    Returns:
     -------
     int
         Exit status code from command execution.

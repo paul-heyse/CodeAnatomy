@@ -83,7 +83,7 @@ class RelationshipSpec(StructBaseStrict, frozen=True):
     - "contains": One span fully contains another (e.g., definition contains symbol)
     - "ownership": Logical ownership relationship (treated as overlap for joins)
 
-    Attributes
+    Attributes:
     ----------
     name
         Output name for the relationship view (e.g., "rel_name_symbol").
@@ -99,7 +99,7 @@ class RelationshipSpec(StructBaseStrict, frozen=True):
         Optional SQL filter expression applied after the join.
         Uses column names from both tables (e.g., "is_read = true").
 
-    Examples
+    Examples:
     --------
     >>> spec = RelationshipSpec(
     ...     name="rel_name_symbol",
@@ -121,7 +121,7 @@ class RelationshipSpec(StructBaseStrict, frozen=True):
     def join_type(self) -> Literal["overlap", "contains"]:
         """Derive the join type from the hint.
 
-        Returns
+        Returns:
         -------
         Literal["overlap", "contains"]
             The join type to use for span-based joins.
@@ -134,7 +134,7 @@ class RelationshipSpec(StructBaseStrict, frozen=True):
     def to_strategy_type(self) -> JoinStrategyType:
         """Convert hint to a JoinStrategyType for inference.
 
-        Returns
+        Returns:
         -------
         JoinStrategyType
             The strategy type hint for join inference.

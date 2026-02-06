@@ -166,7 +166,7 @@ EDGE_KIND_SPECS: tuple[EdgeKindSpec, ...] = (
 def edge_kind_required_props() -> dict[str, set[str]]:
     """Return required relation-output props by edge kind name.
 
-    Returns
+    Returns:
     -------
     dict[str, set[str]]
         Mapping of edge kind identifiers to required property names.
@@ -177,15 +177,11 @@ def edge_kind_required_props() -> dict[str, set[str]]:
 def validate_edge_kind_requirements(schema: SchemaLike) -> None:
     """Validate edge-kind requirements against relation output schema.
 
-    Parameters
-    ----------
-    schema:
-        Relation output schema to validate against.
+    Args:
+        schema: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when required edge props are missing from the schema.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     available = _schema_names(schema)
     errors: list[str] = []

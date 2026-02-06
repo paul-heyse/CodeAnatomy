@@ -92,7 +92,7 @@ def _normalize_commit_metadata(
 def canonical_table_uri(table_uri: str) -> str:
     """Return a canonical URI form for Delta snapshot identity keys.
 
-    Returns
+    Returns:
     -------
     str
         Canonicalized table URI suitable for snapshot identity keys.
@@ -124,7 +124,7 @@ class SnapshotKey:
 def snapshot_key_for_table(table_uri: str, version: int) -> SnapshotKey:
     """Return a stable snapshot key for a table URI/version pair.
 
-    Returns
+    Returns:
     -------
     SnapshotKey
         Stable snapshot identity for the URI/version pair.
@@ -456,7 +456,7 @@ def query_delta_sql(
 ) -> RecordBatchReaderLike:
     """Execute SQL over Delta tables using runtime sessions by default.
 
-    Returns
+    Returns:
     -------
     RecordBatchReaderLike
         Query results as a record batch reader.
@@ -574,7 +574,7 @@ class IdempotentWriteOptions:
     Uses Delta Lake's CommitProperties to tag commits with app_id and version,
     enabling safe retries where duplicate commits are ignored.
 
-    Attributes
+    Attributes:
     ----------
     app_id : str
         Unique application/pipeline identifier (e.g., run_id).
@@ -602,7 +602,7 @@ class DeltaCdfOptions:
 def cdf_options_to_spec(options: DeltaCdfOptions | None) -> DeltaCdfOptionsSpec | None:
     """Return a DeltaCdfOptionsSpec payload for control-plane requests.
 
-    Returns
+    Returns:
     -------
     DeltaCdfOptionsSpec | None
         Control-plane CDF options payload.
@@ -626,15 +626,11 @@ def cdf_options_to_spec(options: DeltaCdfOptions | None) -> DeltaCdfOptionsSpec 
 def cdf_options_from_spec(options: DeltaCdfOptionsSpec | None) -> DeltaCdfOptions | None:
     """Return storage-layer DeltaCdfOptions from a control-plane spec.
 
-    Returns
-    -------
-    DeltaCdfOptions | None
-        Storage-layer CDF options.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when the input is not a DeltaCdfOptionsSpec.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     if options is None:
         return None
@@ -828,15 +824,14 @@ def delta_table_version(
 ) -> int | None:
     """Return the latest Delta table version when the table exists.
 
-    Returns
-    -------
-    int | None
-        Latest Delta table version, or None if not a Delta table.
+    Args:
+        path: Description.
+        storage_options: Description.
+        log_storage_options: Description.
+        gate: Description.
 
-    Raises
-    ------
-    DataFusionEngineError
-        Re-raised when metadata lookup fails for non-plugin reasons.
+    Raises:
+        DataFusionEngineError: If the operation cannot be completed.
     """
     attrs = _storage_span_attributes(
         operation="metadata",
@@ -892,7 +887,7 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
     request
         Schema lookup request with optional snapshot pins and feature gate.
 
-    Returns
+    Returns:
     -------
     pyarrow.Schema | None
         Arrow schema for the Delta table or ``None`` when the table does not exist.
@@ -926,15 +921,14 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
 def read_delta_table(request: DeltaReadRequest) -> RecordBatchReaderLike:
     """Read a Delta table at a specific version or timestamp.
 
-    Returns
-    -------
-    RecordBatchReaderLike
-        Streaming reader containing the requested Delta snapshot.
+    Args:
+        request: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when the Delta provider is unavailable or the request is invalid.
+    Returns:
+        RecordBatchReaderLike: Result.
+
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if request.version is not None and request.timestamp is not None:
         msg = "Delta read request must set either version or timestamp, not both."
@@ -1013,7 +1007,7 @@ def read_delta_table(request: DeltaReadRequest) -> RecordBatchReaderLike:
 def read_delta_table_eager(request: DeltaReadRequest) -> pa.Table:
     """Read a Delta table and materialize into an Arrow table.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Materialized Arrow table containing the requested Delta snapshot.
@@ -1031,7 +1025,7 @@ def delta_table_features(
 ) -> dict[str, str] | None:
     """Return Delta table feature configuration values when present.
 
-    Returns
+    Returns:
     -------
     dict[str, str] | None
         Feature configuration values or ``None`` if no features are set.
@@ -1086,7 +1080,7 @@ def delta_cdf_enabled(
 ) -> bool:
     """Return True when Delta CDF is enabled for the table.
 
-    Returns
+    Returns:
     -------
     bool
         True when Change Data Feed is enabled.
@@ -1120,7 +1114,7 @@ def delta_commit_metadata(
 ) -> dict[str, str] | None:
     """Return custom commit metadata for the latest Delta table version.
 
-    Returns
+    Returns:
     -------
     dict[str, str] | None
         Custom commit metadata or ``None`` when not present.
@@ -1159,7 +1153,7 @@ def delta_history_snapshot(
 ) -> dict[str, object] | None:
     """Return the latest Delta history entry.
 
-    Returns
+    Returns:
     -------
     dict[str, object] | None
         History entry payload or ``None`` when unavailable.
@@ -1208,7 +1202,7 @@ def delta_protocol_snapshot(
 ) -> DeltaProtocolSnapshot | None:
     """Return Delta protocol versions and active feature flags.
 
-    Returns
+    Returns:
     -------
     dict[str, object] | None
         Protocol payload or ``None`` when unavailable.
@@ -1259,15 +1253,15 @@ def enable_delta_features(
 ) -> dict[str, str]:
     """Enable Delta table features by setting table properties.
 
-    Returns
-    -------
-    dict[str, str]
-        Properties applied to the Delta table.
+    Args:
+        options: Description.
+            features: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane property update fails.
+    Returns:
+        dict[str, str]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     storage = merged_storage_options(options.storage_options, options.log_storage_options)
     if (
@@ -1364,15 +1358,15 @@ def delta_add_constraints(
 ) -> Mapping[str, object]:
     """Add Delta check constraints via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            constraints: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     if not constraints:
         return {}
@@ -1427,15 +1421,16 @@ def delta_drop_constraints(
 ) -> Mapping[str, object]:
     """Drop Delta check constraints via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            constraints: Description.
+            raise_if_not_exists: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     if not constraints:
         return {}
@@ -1491,15 +1486,16 @@ def enable_delta_column_mapping(
 ) -> Mapping[str, object]:
     """Enable Delta column mapping via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            mode: Description.
+            allow_protocol_versions_increase: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_column_mapping"):
         ctx, request = _feature_enable_request(options)
@@ -1537,15 +1533,15 @@ def enable_delta_deletion_vectors(
 ) -> Mapping[str, object]:
     """Enable Delta deletion vectors via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            allow_protocol_versions_increase: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_deletion_vectors"):
         ctx, request = _feature_enable_request(options)
@@ -1582,15 +1578,15 @@ def enable_delta_row_tracking(
 ) -> Mapping[str, object]:
     """Enable Delta row tracking via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            allow_protocol_versions_increase: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_row_tracking"):
         ctx, request = _feature_enable_request(options)
@@ -1627,15 +1623,15 @@ def enable_delta_change_data_feed(
 ) -> Mapping[str, object]:
     """Enable Delta Change Data Feed via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            allow_protocol_versions_increase: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_change_data_feed"):
         ctx, request = _feature_enable_request(options)
@@ -1672,15 +1668,15 @@ def enable_delta_generated_columns(
 ) -> Mapping[str, object]:
     """Enable Delta generated columns via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            allow_protocol_versions_increase: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_generated_columns"):
         ctx, request = _feature_enable_request(options)
@@ -1717,15 +1713,15 @@ def enable_delta_invariants(
 ) -> Mapping[str, object]:
     """Enable Delta invariants via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            allow_protocol_versions_increase: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_invariants"):
         ctx, request = _feature_enable_request(options)
@@ -1762,15 +1758,15 @@ def enable_delta_check_constraints(
 ) -> Mapping[str, object]:
     """Enable Delta check constraints via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            allow_protocol_versions_increase: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_check_constraints"):
         ctx, request = _feature_enable_request(options)
@@ -1808,15 +1804,16 @@ def enable_delta_in_commit_timestamps(
 ) -> Mapping[str, object]:
     """Enable Delta in-commit timestamps via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            enablement_version: Description.
+            enablement_timestamp: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_in_commit_timestamps"):
         ctx, request = _feature_enable_request(options)
@@ -1854,15 +1851,15 @@ def enable_delta_v2_checkpoints(
 ) -> Mapping[str, object]:
     """Enable Delta v2 checkpoints via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
+            allow_protocol_versions_increase: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_v2_checkpoints"):
         ctx, request = _feature_enable_request(options)
@@ -1897,15 +1894,14 @@ def enable_delta_vacuum_protocol_check(
 ) -> Mapping[str, object]:
     """Enable Delta vacuum protocol checks via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_vacuum_protocol_check"):
         ctx, request = _feature_enable_request(options)
@@ -1938,15 +1934,14 @@ def enable_delta_checkpoint_protection(
 ) -> Mapping[str, object]:
     """Enable Delta checkpoint protection via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="enable_checkpoint_protection"):
         ctx, request = _feature_enable_request(options)
@@ -1977,15 +1972,14 @@ def disable_delta_change_data_feed(
 ) -> Mapping[str, object]:
     """Disable Delta Change Data Feed via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_change_data_feed"):
         ctx, request = _feature_enable_request(options)
@@ -2016,15 +2010,14 @@ def disable_delta_deletion_vectors(
 ) -> Mapping[str, object]:
     """Disable Delta deletion vectors via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_deletion_vectors"):
         ctx, request = _feature_enable_request(options)
@@ -2055,15 +2048,14 @@ def disable_delta_row_tracking(
 ) -> Mapping[str, object]:
     """Disable Delta row tracking via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_row_tracking"):
         ctx, request = _feature_enable_request(options)
@@ -2094,15 +2086,14 @@ def disable_delta_in_commit_timestamps(
 ) -> Mapping[str, object]:
     """Disable Delta in-commit timestamps via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_in_commit_timestamps"):
         ctx, request = _feature_enable_request(options)
@@ -2133,15 +2124,14 @@ def disable_delta_vacuum_protocol_check(
 ) -> Mapping[str, object]:
     """Disable Delta vacuum protocol checks via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_vacuum_protocol_check"):
         ctx, request = _feature_enable_request(options)
@@ -2174,15 +2164,14 @@ def disable_delta_column_mapping(
 ) -> Mapping[str, object]:
     """Disable Delta column mapping via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_column_mapping"):
         ctx, request = _feature_enable_request(options)
@@ -2216,15 +2205,14 @@ def disable_delta_generated_columns(
 ) -> Mapping[str, object]:
     """Disable Delta generated columns via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_generated_columns"):
         ctx, request = _feature_enable_request(options)
@@ -2258,15 +2246,14 @@ def disable_delta_invariants(
 ) -> Mapping[str, object]:
     """Disable Delta invariants via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_invariants"):
         ctx, request = _feature_enable_request(options)
@@ -2300,15 +2287,14 @@ def disable_delta_check_constraints(
 ) -> Mapping[str, object]:
     """Disable Delta check constraints via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_check_constraints"):
         ctx, request = _feature_enable_request(options)
@@ -2342,15 +2328,14 @@ def disable_delta_v2_checkpoints(
 ) -> Mapping[str, object]:
     """Disable Delta v2 checkpoints via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_v2_checkpoints"):
         ctx, request = _feature_enable_request(options)
@@ -2384,15 +2369,14 @@ def disable_delta_checkpoint_protection(
 ) -> Mapping[str, object]:
     """Disable Delta checkpoint protection via the Rust control plane.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane mutation report payload.
+    Args:
+        options: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     with _feature_control_span(options, operation="disable_checkpoint_protection"):
         ctx, request = _feature_enable_request(options)
@@ -2427,7 +2411,7 @@ def vacuum_delta(
 ) -> list[str]:
     """Run a Delta vacuum to remove stale files.
 
-    Returns
+    Returns:
     -------
     list[str]
         Files eligible for deletion (or removed when ``dry_run`` is False).
@@ -2514,7 +2498,7 @@ def create_delta_checkpoint(
 ) -> Mapping[str, object]:
     """Create a checkpoint for a Delta table.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane maintenance report payload.
@@ -2595,15 +2579,18 @@ def cleanup_delta_log(
 ) -> Mapping[str, object]:
     """Delete expired Delta log files.
 
-    Returns
-    -------
-    Mapping[str, object]
-        Control-plane maintenance report payload.
+    Args:
+        path: Description.
+            storage_options: Description.
+            log_storage_options: Description.
+            runtime_profile: Description.
+            dataset_name: Description.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane cleanup call fails.
+    Returns:
+        Mapping[str, object]: Result.
+
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     attrs = _storage_span_attributes(
         operation="cleanup_metadata",
@@ -2662,7 +2649,7 @@ def coerce_delta_table(
 ) -> TableLike:
     """Apply schema transforms and encoding policies to Delta inputs.
 
-    Returns
+    Returns:
     -------
     TableLike
         Transformed Arrow table ready for Delta writes.
@@ -2697,7 +2684,7 @@ def coerce_delta_input(
 ) -> DeltaInput:
     """Normalize Delta inputs with explicit streaming behavior.
 
-    Returns
+    Returns:
     -------
     DeltaInput
         Normalized input wrapper with schema and optional row count.
@@ -2745,26 +2732,17 @@ def read_delta_cdf(
 ) -> RecordBatchReaderLike:
     """Read change data feed from a Delta table.
 
-    Parameters
-    ----------
-    table_path : str
-        Path to the Delta table.
-    storage_options : StorageOptions | None
-        Storage options for Delta table access.
-    log_storage_options : StorageOptions | None
-        Log-store options for Delta table access.
-    cdf_options : DeltaCdfOptions | None
-        Options for CDF read (version range, columns, etc.).
+    Args:
+        table_path: Description.
+            storage_options: Description.
+            log_storage_options: Description.
+            cdf_options: Description.
 
-    Returns
-    -------
-    RecordBatchReaderLike
-        Streaming reader with CDF changes.
+    Returns:
+        RecordBatchReaderLike: Result.
 
-    Raises
-    ------
-    ValueError
-        If CDF is not enabled on the Delta table.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     resolved_options = cdf_options or DeltaCdfOptions()
     attrs = _storage_span_attributes(
@@ -2824,7 +2802,7 @@ def read_delta_cdf_eager(
 ) -> pa.Table:
     """Read change data feed and materialize into an Arrow table.
 
-    Returns
+    Returns:
     -------
     pyarrow.Table
         Materialized Arrow table with CDF changes.
@@ -2852,7 +2830,7 @@ def delta_delete_where(
     request
         Delete request describing target table and predicate.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -2958,7 +2936,7 @@ def delta_merge_arrow(
     request
         Merge request describing source data and predicates.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Control-plane mutation report payload.
@@ -3128,17 +3106,15 @@ def _record_delta_merge_artifacts(
 def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
     """Validate incoming data against Delta table constraints.
 
-    Returns
-    -------
-    list[str]
-        Constraint violation messages when present.
+    Args:
+        request: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when datafusion._internal is unavailable or Delta inputs are invalid.
-    TypeError
-        Raised when the delta data checker entrypoint is missing.
+    Returns:
+        list[str]: Result.
+
+    Raises:
+        TypeError: If the operation cannot be completed.
+            ValueError: If the operation cannot be completed.
     """
     attrs = _storage_span_attributes(
         operation="data_check",
@@ -3346,7 +3322,7 @@ def build_commit_properties(
 ) -> CommitProperties | None:
     """Return CommitProperties for Delta writes when needed.
 
-    Returns
+    Returns:
     -------
     CommitProperties | None
         Commit properties with app transaction and custom metadata when provided.
@@ -3372,26 +3348,14 @@ def idempotent_commit_properties(
 ) -> CommitProperties:
     """Return standardized commit properties for deterministic Delta writes.
 
-    Parameters
-    ----------
-    operation
-        Operation label for commit metadata.
-    mode
-        Write mode label for commit metadata.
-    idempotent
-        Optional idempotent write options for app transactions.
-    extra_metadata
-        Extra metadata entries merged into the commit metadata payload.
+    Args:
+        operation: Description.
+        mode: Description.
+        idempotent: Description.
+        extra_metadata: Description.
 
-    Returns
-    -------
-    CommitProperties
-        Commit properties with standardized metadata and optional app transaction.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when commit metadata is empty after normalization.
+    Raises:
+        RuntimeError: If the operation cannot be completed.
     """
     metadata: dict[str, str] = {
         "codeanatomy_operation": str(operation),

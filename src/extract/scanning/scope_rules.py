@@ -26,7 +26,7 @@ class ScopeRuleSet:
     def signature(self) -> str:
         """Return a stable signature for the rule set.
 
-        Returns
+        Returns:
         -------
         str
             Stable signature hash.
@@ -52,7 +52,7 @@ def build_scope_rules(
 ) -> ScopeRuleSet:
     """Compile a scope rule set from include/exclude lines.
 
-    Returns
+    Returns:
     -------
     ScopeRuleSet
         Compiled scope rules.
@@ -76,7 +76,7 @@ def build_scope_rules(
 def check_scope_path(path: str, rules: ScopeRuleSet) -> ScopeRuleDecision:
     """Return a scope decision for a path.
 
-    Returns
+    Returns:
     -------
     ScopeRuleDecision
         Scope decision payload.
@@ -105,7 +105,7 @@ def check_scope_path(path: str, rules: ScopeRuleSet) -> ScopeRuleDecision:
 def explain_scope_paths(paths: Iterable[str], rules: ScopeRuleSet) -> Mapping[str, object]:
     """Return detailed pathspec match diagnostics.
 
-    Returns
+    Returns:
     -------
     Mapping[str, object]
         Detailed pathspec match payloads.

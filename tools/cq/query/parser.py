@@ -227,12 +227,12 @@ def parse_query(query_string: str) -> Query:
     query_string
         Query string in key=value format.
 
-    Returns
+    Returns:
     -------
     Query
         Parsed query object.
 
-    Examples
+    Examples:
     --------
     >>> q = parse_query("entity=function name=foo")
     >>> q.entity
@@ -269,7 +269,7 @@ def _tokenize(query_string: str) -> dict[str, str]:
 
     Used by ``parse_query`` to normalize the CLI query string before parsing.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Mapping of token keys to token values.
@@ -295,17 +295,14 @@ def _tokenize(query_string: str) -> dict[str, str]:
 def _parse_entity_query(tokens: dict[str, str]) -> Query:
     """Parse an entity-based query from tokens.
 
-    Used by ``parse_query`` when an ``entity=`` selector is present.
+    Args:
+        tokens: Tokenized query key/value map.
 
-    Returns
-    -------
-    Query
-        Query configured for entity-based execution.
+    Returns:
+        Query: Parsed entity query.
 
-    Raises
-    ------
-    QueryParseError
-        If required entity fields are missing or invalid.
+    Raises:
+        QueryParseError: If the entity query is invalid.
     """
     entity_str = tokens.get("entity")
     if not entity_str:
@@ -328,7 +325,7 @@ def _parse_pattern_query(tokens: dict[str, str]) -> Query:
 
     Used by ``parse_query`` when a ``pattern`` token is present.
 
-    Returns
+    Returns:
     -------
     Query
         Query configured for ast-grep pattern execution.
@@ -346,25 +343,14 @@ def _parse_pattern_query(tokens: dict[str, str]) -> Query:
 def _parse_pattern_object(tokens: dict[str, str]) -> PatternSpec:
     """Parse pattern object from tokens.
 
-    Handles both simple patterns and full pattern objects with context/selector.
-    Supports dot-notation: pattern.context, pattern.selector, pattern.strictness
+    Args:
+        tokens: Tokenized query key/value map.
 
-    Used by ``_parse_pattern_query`` to build the pattern IR.
+    Returns:
+        PatternSpec: Parsed pattern specification.
 
-    Parameters
-    ----------
-    tokens
-        Tokenized key-value pairs from query string.
-
-    Returns
-    -------
-    PatternSpec
-        Parsed pattern specification.
-
-    Raises
-    ------
-    QueryParseError
-        If required pattern is missing.
+    Raises:
+        QueryParseError: If required pattern fields are missing or invalid.
     """
     # Check for pattern object notation (pattern.context, pattern.selector)
     context = tokens.get("pattern.context") or tokens.get("context")
@@ -400,17 +386,14 @@ def _parse_pattern_object(tokens: dict[str, str]) -> PatternSpec:
 def _parse_entity(entity_str: str) -> EntityType:
     """Parse and validate entity type.
 
-    Used by ``_parse_entity_query`` to validate CLI entity selectors.
+    Args:
+        entity_str: Candidate entity token.
 
-    Returns
-    -------
-    EntityType
-        Validated entity type.
+    Returns:
+        EntityType: Validated entity type.
 
-    Raises
-    ------
-    QueryParseError
-        If the entity type is not supported.
+    Raises:
+        QueryParseError: If the entity token is unsupported.
     """
     valid_entities: tuple[EntityType, ...] = (
         "function",
@@ -431,17 +414,14 @@ def _parse_entity(entity_str: str) -> EntityType:
 def _parse_strictness(strictness_str: str) -> StrictnessMode:
     """Parse and validate strictness mode.
 
-    Used by ``_parse_pattern_object`` to validate ``strictness=`` tokens.
+    Args:
+        strictness_str: Candidate strictness token.
 
-    Returns
-    -------
-    StrictnessMode
-        Validated strictness mode.
+    Returns:
+        StrictnessMode: Validated strictness mode.
 
-    Raises
-    ------
-    QueryParseError
-        If the strictness mode is not supported.
+    Raises:
+        QueryParseError: If the strictness token is unsupported.
     """
     valid_modes: tuple[StrictnessMode, ...] = ("cst", "smart", "ast", "relaxed", "signature")
     valid_mode_set = set(valid_modes)
@@ -454,17 +434,14 @@ def _parse_strictness(strictness_str: str) -> StrictnessMode:
 def _parse_relational_op(op_str: str) -> RelationalOp:
     """Parse and validate relational operator.
 
-    Used by ``_parse_relational_constraints`` to validate relation keys.
+    Args:
+        op_str: Candidate relational operator token.
 
-    Returns
-    -------
-    RelationalOp
-        Validated relational operator.
+    Returns:
+        RelationalOp: Validated relational operator.
 
-    Raises
-    ------
-    QueryParseError
-        If the operator is not supported.
+    Raises:
+        QueryParseError: If the operator token is unsupported.
     """
     valid_ops: tuple[RelationalOp, ...] = ("inside", "has", "precedes", "follows")
     valid_op_set = set(valid_ops)
@@ -485,7 +462,7 @@ def _parse_relational_constraints(tokens: dict[str, str]) -> tuple[RelationalCon
 
     Used by ``_parse_entity_query`` and ``_parse_pattern_query`` for relational filters.
 
-    Returns
+    Returns:
     -------
     tuple[RelationalConstraint, ...]
         Parsed relational constraint list.
@@ -526,7 +503,7 @@ def _parse_scope_filter(tokens: dict[str, str]) -> ScopeFilter | None:
 
     Used by ``_parse_entity_query`` to add symtable-driven scope filters.
 
-    Returns
+    Returns:
     -------
     ScopeFilter | None
         Parsed scope filter, or None if not present.
@@ -556,7 +533,7 @@ def _parse_decorator_filter(tokens: dict[str, str]) -> DecoratorFilter | None:
 
     Used by ``_parse_entity_query`` to add decorator constraints.
 
-    Returns
+    Returns:
     -------
     DecoratorFilter | None
         Parsed decorator filter, or None if not present.
@@ -585,7 +562,7 @@ def _parse_joins(tokens: dict[str, str]) -> tuple[JoinConstraint, ...]:
 
     Used by ``_parse_entity_query`` to build join constraints.
 
-    Returns
+    Returns:
     -------
     tuple[JoinConstraint, ...]
         Parsed join constraints.
@@ -612,20 +589,14 @@ def _parse_joins(tokens: dict[str, str]) -> tuple[JoinConstraint, ...]:
 def _parse_expanders(expand_str: str) -> tuple[Expander, ...]:
     """Parse expander specifications.
 
-    Format: kind(depth=N) or just kind for depth=1
-    Multiple expanders separated by comma.
+    Args:
+        expand_str: Raw expander string.
 
-    Used by ``_parse_entity_query`` to translate ``expand=`` arguments.
+    Returns:
+        tuple[Expander, ...]: Parsed expander sequence.
 
-    Returns
-    -------
-    tuple[Expander, ...]
-        Parsed expander specifications.
-
-    Raises
-    ------
-    QueryParseError
-        If the expander format or depth is invalid.
+    Raises:
+        QueryParseError: If the expander string is invalid.
     """
     expanders: list[Expander] = []
 
@@ -659,7 +630,7 @@ def _split_expanders(expand_str: str) -> list[str]:
 
     Used by ``_parse_expanders`` to segment ``expand=`` specs.
 
-    Returns
+    Returns:
     -------
     list[str]
         Raw expander string segments.
@@ -690,17 +661,14 @@ def _split_expanders(expand_str: str) -> list[str]:
 def _parse_expander_kind(kind_str: str) -> ExpanderKind:
     """Parse and validate expander kind.
 
-    Used by ``_parse_expanders`` to validate expander kinds.
+    Args:
+        kind_str: Candidate expander kind token.
 
-    Returns
-    -------
-    ExpanderKind
-        Validated expander kind.
+    Returns:
+        ExpanderKind: Validated expander kind.
 
-    Raises
-    ------
-    QueryParseError
-        If the expander kind is not supported.
+    Raises:
+        QueryParseError: If the expander kind is unsupported.
     """
     valid_kinds: tuple[ExpanderKind, ...] = (
         "callers",
@@ -720,17 +688,14 @@ def _parse_expander_kind(kind_str: str) -> ExpanderKind:
 def _parse_expander_params(params_str: str) -> int:
     """Parse expander parameters (depth=N).
 
-    Used by ``_parse_expanders`` to parse depth settings.
+    Args:
+        params_str: Raw expander parameter string.
 
-    Returns
-    -------
-    int
-        Parsed depth value.
+    Returns:
+        int: Parsed expansion depth.
 
-    Raises
-    ------
-    QueryParseError
-        If the depth parameter is malformed.
+    Raises:
+        QueryParseError: If expander parameters are malformed.
     """
     if not params_str:
         return 1
@@ -749,7 +714,7 @@ def _parse_scope(tokens: dict[str, str]) -> Scope:
 
     Used by ``_parse_entity_query`` and ``_parse_pattern_query`` to apply in/exclude/globs.
 
-    Returns
+    Returns:
     -------
     Scope
         Parsed scope constraints.
@@ -767,17 +732,14 @@ def _parse_scope(tokens: dict[str, str]) -> Scope:
 def _parse_fields(fields_str: str) -> tuple[FieldType, ...]:
     """Parse and validate field types.
 
-    Used by ``_parse_entity_query`` and ``_parse_pattern_query`` to validate field lists.
+    Args:
+        fields_str: Comma-separated field list.
 
-    Returns
-    -------
-    tuple[FieldType, ...]
-        Parsed field list.
+    Returns:
+        tuple[FieldType, ...]: Validated output fields.
 
-    Raises
-    ------
-    QueryParseError
-        If any field name is not supported.
+    Raises:
+        QueryParseError: If any field token is unsupported.
     """
     valid_fields: tuple[FieldType, ...] = (
         "def",
@@ -807,15 +769,14 @@ def _parse_fields(fields_str: str) -> tuple[FieldType, ...]:
 def _parse_query_language_scope(lang_str: str | None) -> QueryLanguageScope:
     """Parse and validate query language scope token.
 
-    Returns
-    -------
-    QueryLanguageScope
-        Normalized query language scope.
+    Args:
+        lang_str: Requested query language scope.
 
-    Raises
-    ------
-    QueryParseError
-        If the language scope token is not supported.
+    Returns:
+        QueryLanguageScope: Validated language scope.
+
+    Raises:
+        QueryParseError: If language scope parsing fails.
     """
     try:
         return parse_query_language_scope(lang_str)
@@ -840,7 +801,7 @@ def _parse_metavar_filters(tokens: dict[str, str]) -> tuple[MetaVarFilter, ...]:
 
     Used by ``_parse_entity_query`` and ``_parse_pattern_query`` for metavariable filters.
 
-    Returns
+    Returns:
     -------
     tuple[MetaVarFilter, ...]
         Filters to apply on metavariable captures.
@@ -886,27 +847,14 @@ def _parse_metavar_filters(tokens: dict[str, str]) -> tuple[MetaVarFilter, ...]:
 def _parse_composite_rule(tokens: dict[str, str]) -> CompositeRule | None:
     """Parse composite rule from tokens.
 
-    Handles:
-    - all='pattern1,pattern2'
-    - any='pattern1,pattern2'
-    - not='pattern'
+    Args:
+        tokens: Tokenized query key/value map.
 
-    Parameters
-    ----------
-    tokens
-        Tokenized query string.
+    Returns:
+        CompositeRule | None: Parsed composite rule, if provided.
 
-    Used by ``_parse_entity_query`` and ``_parse_pattern_query`` for composite rules.
-
-    Returns
-    -------
-    CompositeRule | None
-        Parsed composite rule, or None if not present.
-
-    Raises
-    ------
-    QueryParseError
-        If the composite rule is invalid (e.g., ``not`` with multiple patterns).
+    Raises:
+        QueryParseError: If composite rule syntax is invalid.
     """
     for op in _COMPOSITE_OPS:
         value = tokens.get(op)
@@ -934,7 +882,7 @@ def _split_composite_patterns(value: str) -> list[str]:
     value
         Value string, possibly containing brackets like [p1,p2]
 
-    Returns
+    Returns:
     -------
     list[str]
         Individual patterns.
@@ -988,7 +936,7 @@ def _parse_nth_child(tokens: dict[str, str]) -> NthChildSpec | None:
 
     Used by ``_parse_entity_query`` and ``_parse_pattern_query`` to parse nthChild specs.
 
-    Returns
+    Returns:
     -------
     NthChildSpec | None
         Parsed nthChild spec, or None if not present.

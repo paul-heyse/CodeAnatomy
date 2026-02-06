@@ -44,7 +44,7 @@ def resolve_scip_identity(
     project_namespace_override:
         Optional project namespace override.
 
-    Returns
+    Returns:
     -------
     ScipIdentity
         Resolved SCIP identity values.

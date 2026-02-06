@@ -33,7 +33,7 @@ class BlameHunk:
 def resolve_mailmap(repo: pygit2.Repository) -> pygit2.Mailmap | None:
     """Return the repository mailmap when available.
 
-    Returns
+    Returns:
     -------
     pygit2.Mailmap | None
         Mailmap when available.
@@ -50,7 +50,7 @@ def resolve_signature(
 ) -> pygit2.Signature:
     """Resolve a signature using the repository mailmap.
 
-    Returns
+    Returns:
     -------
     pygit2.Signature
         Resolved signature.
@@ -69,7 +69,7 @@ def blame_hunks(
 ) -> tuple[BlameHunk, ...]:
     """Return simplified blame hunks for a file path.
 
-    Returns
+    Returns:
     -------
     tuple[BlameHunk, ...]
         Blame hunks for the file path.
@@ -123,7 +123,7 @@ def diff_paths(
 ) -> GitDeltaPaths | None:
     """Return changed/deleted paths between two refs, or None on failure.
 
-    Returns
+    Returns:
     -------
     GitDeltaPaths | None
         Delta path summary when available.

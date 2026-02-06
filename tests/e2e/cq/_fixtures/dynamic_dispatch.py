@@ -13,7 +13,7 @@ from typing import Any
 def uses_getattr(obj: Any, attr_name: str) -> Any:
     """Return a dynamically accessed attribute.
 
-    Returns
+    Returns:
     -------
     Any
         Attribute value from getattr.
@@ -24,7 +24,7 @@ def uses_getattr(obj: Any, attr_name: str) -> Any:
 def uses_getattr_with_default(obj: Any, attr_name: str, default: Any = None) -> Any:
     """Return a dynamically accessed attribute with default.
 
-    Returns
+    Returns:
     -------
     Any
         Attribute value or default.
@@ -40,7 +40,7 @@ def uses_setattr(obj: Any, attr_name: str, value: Any) -> None:
 def uses_hasattr(obj: Any, attr_name: str) -> bool:
     """Return whether an attribute exists.
 
-    Returns
+    Returns:
     -------
     bool
         True when attribute is present.
@@ -51,7 +51,7 @@ def uses_hasattr(obj: Any, attr_name: str) -> bool:
 def uses_eval_dangerous(code: str) -> Any:
     """Evaluate dynamic code and return the result.
 
-    Returns
+    Returns:
     -------
     Any
         Result of eval.
@@ -67,7 +67,7 @@ def uses_exec_dangerous(code: str) -> None:
 def uses_compile_and_exec(code: str) -> Any:
     """Compile code and evaluate it.
 
-    Returns
+    Returns:
     -------
     Any
         Result of eval on compiled code.
@@ -79,7 +79,7 @@ def uses_compile_and_exec(code: str) -> Any:
 def uses_pickle_load(filepath: str) -> Any:
     """Load a pickled object from a file path.
 
-    Returns
+    Returns:
     -------
     Any
         Deserialized object.
@@ -91,7 +91,7 @@ def uses_pickle_load(filepath: str) -> Any:
 def uses_pickle_loads(data: bytes) -> Any:
     """Load a pickled object from bytes.
 
-    Returns
+    Returns:
     -------
     Any
         Deserialized object.
@@ -105,7 +105,7 @@ class DynamicDispatcher:
     def dispatch(self, method_name: str, *args: Any) -> Any:
         """Dispatch to a method by name.
 
-        Returns
+        Returns:
         -------
         Any
             Result of the dispatched method.
@@ -116,7 +116,7 @@ class DynamicDispatcher:
     def __getattr__(self, name: str) -> Any:
         """Return a placeholder for missing attributes.
 
-        Returns
+        Returns:
         -------
         Any
             Placeholder string for missing attributes.
@@ -127,7 +127,7 @@ class DynamicDispatcher:
 def forwarding_with_args(*args: Any, **kwargs: Any) -> Any:
     """Forward arguments to the target function.
 
-    Returns
+    Returns:
     -------
     Any
         Result of the target call.
@@ -138,7 +138,7 @@ def forwarding_with_args(*args: Any, **kwargs: Any) -> Any:
 def forwarding_partial(*args: Any, extra: int = 10) -> Any:
     """Forward arguments with an extra parameter.
 
-    Returns
+    Returns:
     -------
     Any
         Result of the target call.
@@ -149,7 +149,7 @@ def forwarding_partial(*args: Any, extra: int = 10) -> Any:
 def some_target(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
     """Return forwarded arguments as a tuple.
 
-    Returns
+    Returns:
     -------
     tuple[Any, ...]
         Combined positional and keyword values.
@@ -160,7 +160,7 @@ def some_target(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
 def safe_function(x: int, y: int) -> int:
     """Return the sum of two integers.
 
-    Returns
+    Returns:
     -------
     int
         Sum of inputs.
@@ -171,7 +171,7 @@ def safe_function(x: int, y: int) -> int:
 def uses_globals() -> dict[str, Any]:
     """Return the globals dictionary.
 
-    Returns
+    Returns:
     -------
     dict[str, Any]
         Module globals mapping.
@@ -182,7 +182,7 @@ def uses_globals() -> dict[str, Any]:
 def uses_locals() -> dict[str, Any]:
     """Return the locals dictionary.
 
-    Returns
+    Returns:
     -------
     dict[str, Any]
         Local variables mapping.

@@ -106,15 +106,12 @@ def normalize_dictionaries(
 ) -> TableLike:
     """Return a table with unified dictionaries and normalized chunks.
 
-    Returns
-    -------
-    TableLike
-        Table with unified dictionary columns.
+    Args:
+        table: Description.
+        combine_chunks: Description.
 
-    Raises
-    ------
-    TypeError
-        Raised when dictionary casting or encoding is unsupported.
+    Raises:
+        TypeError: If the operation cannot be completed.
     """
     try:
         names, columns, dict_cols, decoded_schema = _decode_dictionary_columns(table)

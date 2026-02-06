@@ -30,7 +30,7 @@ class TreeSitterQueryPack:
     def metadata(self) -> dict[str, str]:
         """Return query pack metadata for diagnostics.
 
-        Returns
+        Returns:
         -------
         dict[str, str]
             Metadata fields describing the compiled query pack.
@@ -103,7 +103,7 @@ _PY_QUERY_SPECS: tuple[QuerySpec, ...] = (
 def compile_query_pack(language: Language) -> TreeSitterQueryPack:
     """Compile and validate the Python query pack.
 
-    Returns
+    Returns:
     -------
     TreeSitterQueryPack
         Compiled query pack and metadata.

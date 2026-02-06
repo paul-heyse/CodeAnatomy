@@ -56,7 +56,7 @@ class RuntimeProfileSpec(StructBaseStrict, frozen=True):
     def runtime_profile_snapshot(self) -> RuntimeProfileSnapshot:
         """Return a unified runtime profile snapshot.
 
-        Returns
+        Returns:
         -------
         RuntimeProfileSnapshot
             Snapshot combining deterministic profile metadata.
@@ -71,7 +71,7 @@ class RuntimeProfileSpec(StructBaseStrict, frozen=True):
     def runtime_profile_hash(self) -> str:
         """Return a stable hash of the unified runtime profile.
 
-        Returns
+        Returns:
         -------
         str
             Hash for the runtime profile snapshot.
@@ -238,7 +238,7 @@ def runtime_profile_snapshot(
 ) -> RuntimeProfileSnapshot:
     """Return a runtime profile snapshot for diagnostics and metadata.
 
-    Returns
+    Returns:
     -------
     RuntimeProfileSnapshot
         Snapshot describing DataFusion runtime settings.
@@ -270,7 +270,7 @@ def engine_runtime_artifact(
 ) -> dict[str, object]:
     """Return an engine runtime artifact payload for diagnostics.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Diagnostics payload for engine runtime settings.
@@ -458,7 +458,7 @@ def resolve_runtime_profile(
 ) -> RuntimeProfileSpec:
     """Return a runtime profile spec for the requested profile name.
 
-    Returns
+    Returns:
     -------
     RuntimeProfileSpec
         Resolved runtime profile spec.
@@ -483,7 +483,7 @@ def resolve_runtime_profile(
 def runtime_profile_snapshot_payload(profile: DataFusionRuntimeProfile) -> dict[str, object]:
     """Return a snapshot payload for profile diagnostics.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Builtins-only payload suitable for diagnostics.

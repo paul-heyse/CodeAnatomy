@@ -34,12 +34,12 @@ def build_config_chain(
     no_config
         If True, skip all config file loading (env vars only).
 
-    Returns
+    Returns:
     -------
     list[Any]
         List of config providers for cyclopts (Env, Toml, etc.).
 
-    Examples
+    Examples:
     --------
     >>> # Normal usage with pyproject.toml
     >>> providers = build_config_chain()
@@ -80,7 +80,7 @@ def load_typed_config(
     no_config
         If True, skip loading configuration.
 
-    Returns
+    Returns:
     -------
     CqConfig | None
         Parsed configuration, or None if no config is available.
@@ -162,7 +162,7 @@ def _collect_env_overrides() -> dict[str, object]:
 def load_typed_env_config() -> CqConfig | None:
     """Load typed config overrides from CQ_* environment variables.
 
-    Returns
+    Returns:
     -------
     CqConfig | None
         Parsed configuration, or None if no environment values are set.

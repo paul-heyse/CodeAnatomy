@@ -78,13 +78,14 @@ class SamplingRuleSampler(Sampler):
     _ATTRIBUTE_KEY = "otel.sampling.rule"
 
     def __init__(self, delegate: Sampler, rule: str) -> None:
+        """__init__."""
         self._delegate = delegate
         self._rule = rule
 
     def should_sample(self, *args: object, **kwargs: object) -> SamplingResult:
         """Apply the delegate sampler and attach the sampling rule attribute.
 
-        Returns
+        Returns:
         -------
         SamplingResult
             Sampling decision with a stamped sampling rule attribute.
@@ -106,7 +107,7 @@ class SamplingRuleSampler(Sampler):
     def get_description(self) -> str:
         """Return a human-readable description of the sampler.
 
-        Returns
+        Returns:
         -------
         str
             Description of the sampler.
@@ -117,7 +118,7 @@ class SamplingRuleSampler(Sampler):
 def wrap_sampler(base: Sampler, *, rule: str | None) -> Sampler:
     """Wrap a sampler with sampling rule stamping when configured.
 
-    Returns
+    Returns:
     -------
     Sampler
         The base sampler or a wrapper that stamps the sampling rule.

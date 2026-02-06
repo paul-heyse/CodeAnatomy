@@ -26,7 +26,7 @@ def hash_sha256_hex(payload: bytes, *, length: int | None = None) -> str:
     length
         Optional length of hex digest to return.
 
-    Returns
+    Returns:
     -------
     str
         Hex digest string (possibly truncated).
@@ -43,7 +43,7 @@ def hash64_from_text(value: str) -> int:
     value
         Input string to hash.
 
-    Returns
+    Returns:
     -------
     int
         Deterministic signed 64-bit hash value.
@@ -61,7 +61,7 @@ def hash128_from_text(value: str) -> str:
     value
         Input string to hash.
 
-    Returns
+    Returns:
     -------
     str
         Deterministic 128-bit hex digest string.
@@ -82,7 +82,7 @@ def hash_msgpack_default(payload: object) -> str:
     payload
         Payload to encode.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hexdigest.
@@ -98,7 +98,7 @@ def hash_msgpack_canonical(payload: object) -> str:
     payload
         Payload to encode.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hexdigest.
@@ -136,7 +136,7 @@ def hash_json_default(payload: object, *, str_keys: bool = False) -> str:
     str_keys
         Whether to coerce mapping keys to strings.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hexdigest.
@@ -154,7 +154,7 @@ def hash_json_canonical(payload: object, *, str_keys: bool = False) -> str:
     str_keys
         Whether to coerce mapping keys to strings.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hexdigest.
@@ -172,7 +172,7 @@ def hash_json_stdlib(payload: object, *, sort_keys: bool = False) -> str:
     sort_keys
         Whether to sort keys in dictionaries.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hexdigest.
@@ -194,7 +194,7 @@ def hash_settings(settings: Mapping[str, str]) -> str:
     settings
         Settings mapping.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hexdigest.
@@ -225,7 +225,7 @@ class CacheKeyBuilder:
         value
             Component value.
 
-        Returns
+        Returns:
         -------
         CacheKeyBuilder
             The updated builder instance.
@@ -236,7 +236,7 @@ class CacheKeyBuilder:
     def build(self) -> str:
         """Return the cache key string.
 
-        Returns
+        Returns:
         -------
         str
             Cache key string.
@@ -258,7 +258,7 @@ def hash_storage_options(
     log_storage_options
         Log storage options mapping.
 
-    Returns
+    Returns:
     -------
     str | None
         SHA-256 hexdigest or None when no options are present.
@@ -287,7 +287,7 @@ def hash_file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
     chunk_size
         Read chunk size in bytes.
 
-    Returns
+    Returns:
     -------
     str
         SHA-256 hexdigest.

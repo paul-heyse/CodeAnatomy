@@ -37,15 +37,14 @@ LANGUAGE_RIPGREP_TYPES: dict[QueryLanguage, RipgrepLanguageType] = {
 def parse_query_language(value: str) -> QueryLanguage:
     """Parse a concrete language token.
 
-    Returns
-    -------
-    QueryLanguage
-        Parsed concrete language.
+    Args:
+        value: Candidate language token.
 
-    Raises
-    ------
-    ValueError
-        Raised when the token is not supported.
+    Returns:
+        QueryLanguage: Normalized concrete query language.
+
+    Raises:
+        ValueError: If the language token is not supported.
     """
     normalized = value.strip().lower()
     if normalized not in SUPPORTED_QUERY_LANGUAGES:
@@ -60,15 +59,14 @@ def parse_query_language(value: str) -> QueryLanguage:
 def parse_query_language_scope(value: str | None) -> QueryLanguageScope:
     """Parse a language scope token, defaulting to ``auto`` when omitted.
 
-    Returns
-    -------
-    QueryLanguageScope
-        Parsed language scope.
+    Args:
+        value: Candidate language scope token, or `None`.
 
-    Raises
-    ------
-    ValueError
-        Raised when the token is not supported.
+    Returns:
+        QueryLanguageScope: Normalized language scope.
+
+    Raises:
+        ValueError: If the scope token is not supported.
     """
     if value is None:
         return DEFAULT_QUERY_LANGUAGE_SCOPE
@@ -85,10 +83,8 @@ def parse_query_language_scope(value: str | None) -> QueryLanguageScope:
 def expand_language_scope(scope: QueryLanguageScope) -> tuple[QueryLanguage, ...]:
     """Expand a scope into ordered concrete languages.
 
-    Returns
-    -------
-    tuple[QueryLanguage, ...]
-        Ordered concrete languages for the given scope.
+    Returns:
+        tuple[QueryLanguage, ...]: Ordered concrete languages for the given scope.
     """
     if scope == "auto":
         return ("python", "rust")
@@ -98,10 +94,8 @@ def expand_language_scope(scope: QueryLanguageScope) -> tuple[QueryLanguage, ...
 def primary_language(scope: QueryLanguageScope) -> QueryLanguage:
     """Return the primary language for scoring/tie-break defaults.
 
-    Returns
-    -------
-    QueryLanguage
-        Primary language for the scope.
+    Returns:
+        QueryLanguage: Primary language for the scope.
     """
     return expand_language_scope(scope)[0]
 
@@ -109,7 +103,7 @@ def primary_language(scope: QueryLanguageScope) -> QueryLanguage:
 def file_extensions_for_language(lang: QueryLanguage) -> tuple[str, ...]:
     """Return extensions for a concrete language.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Supported source extensions.
@@ -120,7 +114,7 @@ def file_extensions_for_language(lang: QueryLanguage) -> tuple[str, ...]:
 def file_extensions_for_scope(scope: QueryLanguageScope) -> tuple[str, ...]:
     """Return merged extensions for a language scope.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         De-duplicated extensions across all scoped languages.
@@ -136,7 +130,7 @@ def file_extensions_for_scope(scope: QueryLanguageScope) -> tuple[str, ...]:
 def file_globs_for_language(lang: QueryLanguage) -> list[str]:
     """Return summary globs for a concrete language.
 
-    Returns
+    Returns:
     -------
     list[str]
         Summary glob patterns for the language.
@@ -147,7 +141,7 @@ def file_globs_for_language(lang: QueryLanguage) -> list[str]:
 def file_globs_for_scope(scope: QueryLanguageScope) -> list[str]:
     """Return merged summary globs for a language scope.
 
-    Returns
+    Returns:
     -------
     list[str]
         De-duplicated summary globs across all scoped languages.
@@ -163,7 +157,7 @@ def file_globs_for_scope(scope: QueryLanguageScope) -> list[str]:
 def ripgrep_type_for_language(lang: QueryLanguage) -> RipgrepLanguageType:
     """Return ripgrep type token for a concrete language.
 
-    Returns
+    Returns:
     -------
     RipgrepLanguageType
         Ripgrep type token.
@@ -174,7 +168,7 @@ def ripgrep_type_for_language(lang: QueryLanguage) -> RipgrepLanguageType:
 def ripgrep_types_for_scope(scope: QueryLanguageScope) -> tuple[RipgrepLanguageType, ...]:
     """Return ordered ripgrep type tokens for a language scope.
 
-    Returns
+    Returns:
     -------
     tuple[RipgrepLanguageType, ...]
         Ordered ripgrep type tokens for all languages in scope.

@@ -34,7 +34,7 @@ _TEST_SECTION_COUNT = 2
 def _make_finding(**overrides: object) -> Finding:
     """Create a test finding with scoring details.
 
-    Returns
+    Returns:
     -------
     Finding
         Constructed finding instance.
@@ -83,7 +83,7 @@ def _make_result(
 ) -> CqResult:
     """Create a test CqResult.
 
-    Returns
+    Returns:
     -------
     CqResult
         Minimal result for testing.
@@ -106,7 +106,7 @@ def _make_result(
 def _make_test_df() -> pl.DataFrame:
     """Create a test DataFrame with various findings.
 
-    Returns
+    Returns:
     -------
     pl.DataFrame
         DataFrame with representative findings.

@@ -28,7 +28,7 @@ def normalize_storage_options(
     fallback_log_to_storage
         Whether to mirror storage options into log storage when absent.
 
-    Returns
+    Returns:
     -------
     tuple[dict[str, str] | None, dict[str, str] | None]
         Normalized storage and log storage mappings (or ``None`` when empty).
@@ -48,7 +48,7 @@ def merged_storage_options(
 ) -> dict[str, str] | None:
     """Return a merged storage options mapping.
 
-    Returns
+    Returns:
     -------
     dict[str, str] | None
         Combined storage option mapping, or ``None`` when empty.

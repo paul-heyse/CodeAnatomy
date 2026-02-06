@@ -68,7 +68,7 @@ class CompatibilityGroup(StrEnum):
 class SemanticColumnSpec:
     """Specification for a semantically typed column.
 
-    Attributes
+    Attributes:
     ----------
     name
         Canonical column name.
@@ -175,7 +175,7 @@ def _matches_pattern(lower_name: str, column_name: str, pattern: tuple[str, ...]
     - "contains:word" - lower_name contains word
     - "contains:word1+word2" - lower_name contains both words
 
-    Returns
+    Returns:
     -------
     bool
         True if any pattern matches.
@@ -222,7 +222,7 @@ def infer_semantic_type(column_name: str) -> SemanticType:
     column_name
         Column name to classify.
 
-    Returns
+    Returns:
     -------
     SemanticType
         Inferred semantic type.
@@ -245,7 +245,7 @@ def compatibility_groups_for_semantic_type(
 ) -> tuple[CompatibilityGroup, ...]:
     """Return compatibility groups for a semantic type.
 
-    Returns
+    Returns:
     -------
     tuple[CompatibilityGroup, ...]
         Compatibility groups for the semantic type.
@@ -261,7 +261,7 @@ def get_compatibility_groups(column_name: str) -> tuple[CompatibilityGroup, ...]
     column_name
         Column name to look up.
 
-    Returns
+    Returns:
     -------
     tuple[CompatibilityGroup, ...]
         Compatibility groups the column belongs to.
@@ -282,7 +282,7 @@ def columns_are_joinable(left_col: str, right_col: str) -> bool:
     right_col
         Right column name.
 
-    Returns
+    Returns:
     -------
     bool
         True if columns share at least one compatibility group.

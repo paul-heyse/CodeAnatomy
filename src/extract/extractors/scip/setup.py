@@ -35,22 +35,15 @@ class ScipProtoLoadError(RuntimeError):
 def load_scip_pb2_from_build(build_dir: Path) -> ModuleType:
     """Load the scip_pb2 module from the build/scip directory.
 
-    Parameters
-    ----------
-    build_dir:
-        Path to the build/scip directory.
+    Args:
+        build_dir: Description.
 
-    Returns
-    -------
-    types.ModuleType
-        Loaded scip_pb2 module.
+    Returns:
+        ModuleType: Result.
 
-    Raises
-    ------
-    FileNotFoundError
-        Raised when scip_pb2.py is missing.
-    ScipProtoLoadError
-        Raised when the module spec cannot be loaded.
+    Raises:
+        FileNotFoundError: If the operation cannot be completed.
+            ScipProtoLoadError: If the operation cannot be completed.
     """
     module_path = build_dir / "scip_pb2.py"
     if not module_path.exists():
@@ -68,22 +61,15 @@ def load_scip_pb2_from_build(build_dir: Path) -> ModuleType:
 def ensure_scip_pb2(repo_root: Path, build_dir: Path) -> Path:
     """Ensure scip_pb2.py exists under build/scip, generating it if missing.
 
-    Parameters
-    ----------
-    repo_root:
-        Repository root path.
-    build_dir:
-        Build/scip directory path.
+    Args:
+        repo_root: Description.
+            build_dir: Description.
 
-    Returns
-    -------
-    pathlib.Path
-        Path to the scip_pb2.py file.
+    Returns:
+        Path: Result.
 
-    Raises
-    ------
-    FileNotFoundError
-        Raised when the codegen script or generated module is missing.
+    Raises:
+        FileNotFoundError: If the operation cannot be completed.
     """
     module_path = build_dir / "scip_pb2.py"
     if module_path.exists():
@@ -135,7 +121,7 @@ def ensure_scip_build_dir(repo_root: Path, output_dir: str) -> Path:
     output_dir:
         Output directory path (relative to repo_root unless absolute).
 
-    Returns
+    Returns:
     -------
     pathlib.Path
         Resolved build directory path.
@@ -160,7 +146,7 @@ def resolve_scip_paths(
     index_path_override:
         Optional override for index.scip path.
 
-    Returns
+    Returns:
     -------
     ScipIndexPaths
         Resolved build directory and index path.
@@ -177,7 +163,7 @@ def resolve_scip_paths(
 def scip_environment_payload() -> list[dict[str, object]]:
     """Return a scip-python environment payload for installed distributions.
 
-    Returns
+    Returns:
     -------
     list[dict[str, object]]
         Environment payload entries with package names, versions, and files.
@@ -205,7 +191,7 @@ def write_scip_environment_json(path: Path) -> Path:
     path:
         Output path for the environment JSON file.
 
-    Returns
+    Returns:
     -------
     pathlib.Path
         Resolved output path.
@@ -234,7 +220,7 @@ def build_scip_index_options(
     config:
         Indexing configuration.
 
-    Returns
+    Returns:
     -------
     SCIPIndexOptions
         Fully populated scip-python invocation options.

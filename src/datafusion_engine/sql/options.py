@@ -43,7 +43,7 @@ def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOpti
     profile
         Optional runtime profile used to resolve SQL policy.
 
-    Returns
+    Returns:
     -------
     SQLOptions
         SQL options for use with DataFusion contexts.
@@ -57,7 +57,7 @@ def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOpti
 def safe_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
     """Return read-only SQL options for guardrail execution.
 
-    Returns
+    Returns:
     -------
     SQLOptions
         SQL options that disallow DDL/DML statements.
@@ -74,7 +74,7 @@ def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) 
     profile
         Optional runtime profile used to resolve SQL policy.
 
-    Returns
+    Returns:
     -------
     SQLOptions
         SQL options for statement execution.
@@ -90,7 +90,7 @@ def planning_sql_options(profile: DataFusionRuntimeProfile | None) -> SQLOptions
     profile
         Optional runtime profile used to resolve SQL policy.
 
-    Returns
+    Returns:
     -------
     SQLOptions
         SQL options for planning contexts.

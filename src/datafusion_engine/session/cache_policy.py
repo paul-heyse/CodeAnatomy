@@ -12,7 +12,7 @@ from serde_msgspec import StructBaseStrict
 class CachePolicyConfig(StructBaseStrict, frozen=True):
     """Explicit cache policy settings for DataFusion.
 
-    Attributes
+    Attributes:
     ----------
     listing_cache_size
         Cache size for listing table files.
@@ -29,7 +29,7 @@ class CachePolicyConfig(StructBaseStrict, frozen=True):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for cache policy settings.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing cache policy settings.
@@ -43,7 +43,7 @@ class CachePolicyConfig(StructBaseStrict, frozen=True):
     def fingerprint(self) -> str:
         """Return fingerprint for cache policy settings.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -66,7 +66,7 @@ def cache_policy_settings(policy: CachePolicyConfig) -> dict[str, str]:
     policy
         Cache policy configuration.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         DataFusion config settings for cache limits.

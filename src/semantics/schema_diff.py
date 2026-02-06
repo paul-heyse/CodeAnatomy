@@ -63,7 +63,7 @@ class SchemaDiff:
     def summary_lines(self) -> tuple[str, ...]:
         """Return human-readable diff summary lines.
 
-        Returns
+        Returns:
         -------
         tuple[str, ...]
             Summary lines describing schema changes.
@@ -104,7 +104,7 @@ class SchemaDiff:
 def diff_contract_specs(source: ContractSpec, target: ContractSpec) -> SchemaDiff:
     """Return a SchemaDiff for two contract specs.
 
-    Returns
+    Returns:
     -------
     SchemaDiff
         Diff summary for the contract specs.
@@ -115,7 +115,7 @@ def diff_contract_specs(source: ContractSpec, target: ContractSpec) -> SchemaDif
 def diff_table_schema(source: TableSchemaSpec, target: TableSchemaSpec) -> SchemaDiff:
     """Return a SchemaDiff between two table schema specs.
 
-    Returns
+    Returns:
     -------
     SchemaDiff
         Diff summary for the table schemas.

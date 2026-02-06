@@ -72,12 +72,12 @@ def py_bc_line_table_with_bytes(
     line_index_table
         Table/view name for line index rows (line_start_byte + line_text).
 
-    Returns
+    Returns:
     -------
     DataFrame
         Bytecode line rows with line index byte offsets attached.
 
-    Notes
+    Notes:
     -----
     Missing input tables return an empty result so downstream builds can
     continue while diagnostics capture the gaps.

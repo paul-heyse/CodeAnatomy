@@ -13,7 +13,7 @@ __all__ = ["CliContext", "CliResult", "main"]
 def main() -> int:
     """Run the CLI application.
 
-    Returns
+    Returns:
     -------
     int
         Exit code.

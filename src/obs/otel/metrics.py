@@ -82,7 +82,7 @@ class GaugeStore:
     def snapshot_values(self) -> dict[str, float]:
         """Return the latest gauge values as a mapping.
 
-        Returns
+        Returns:
         -------
         dict[str, float]
             Snapshot of gauge values keyed by attribute string.
@@ -143,7 +143,7 @@ def _with_run_id(payload: dict[str, object]) -> dict[str, object]:
 def metric_views() -> list[View]:
     """Return default metric Views for the OTel MeterProvider.
 
-    Returns
+    Returns:
     -------
     list[View]
         Configured metric views for CodeAnatomy instruments.
@@ -622,7 +622,7 @@ def record_storage_operation(
 def metrics_snapshot() -> dict[str, object]:
     """Return a snapshot of gauge metrics for diagnostics.
 
-    Returns
+    Returns:
     -------
     dict[str, object]
         Mapping of gauge names to their latest values.

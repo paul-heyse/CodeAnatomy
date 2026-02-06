@@ -20,7 +20,7 @@ class RelationOutputSpec:
     the canonical relation_output schema, mapping source and destination
     columns and providing constant values for edge classification.
 
-    Attributes
+    Attributes:
     ----------
     src_col
         Source column name to map to "src" in output.
@@ -60,7 +60,7 @@ def relation_output_projection(
     spec
         Projection specification defining column mappings.
 
-    Returns
+    Returns:
     -------
     DataFrame
         Projected DataFrame matching relation_output schema.

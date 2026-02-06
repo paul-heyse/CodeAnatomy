@@ -35,7 +35,7 @@ class TagPolicy(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the tag policy.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload describing tag policy settings.
@@ -61,7 +61,7 @@ class TagPolicy(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the tag policy.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint for the policy.
@@ -71,20 +71,11 @@ class TagPolicy(FingerprintableConfig):
     def as_tags(self, *, artifact: str | None = None) -> dict[str, str | list[str]]:
         """Return a normalized tag payload.
 
-        Parameters
-        ----------
-        artifact
-            Override artifact name for this tag policy.
+        Args:
+            artifact: Description.
 
-        Returns
-        -------
-        dict[str, str | list[str]]
-            Tag payload for Hamilton metadata.
-
-        Raises
-        ------
-        ValueError
-            Raised when no artifact name is available.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         resolved_artifact = artifact or self.artifact
         if resolved_artifact is None:
@@ -125,7 +116,7 @@ def apply_tag(policy: TagPolicy) -> Callable[[F], F]:
     policy
         Tag policy to apply.
 
-    Returns
+    Returns:
     -------
     Callable[[F], F]
         Decorator that injects Hamilton tags.
@@ -149,7 +140,7 @@ def tag_outputs_payloads(
     policies
         Mapping of output name to TagPolicy.
 
-    Returns
+    Returns:
     -------
     dict[str, dict[str, str | list[str]]]
         Tag payloads keyed by output name.
@@ -177,7 +168,7 @@ def tag_outputs_by_name(
     kind
         Tag kind for each output.
 
-    Returns
+    Returns:
     -------
     dict[str, dict[str, str | list[str]]]
         Tag payloads keyed by output name.

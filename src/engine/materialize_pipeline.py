@@ -81,7 +81,7 @@ class MaterializationCacheDecision(FingerprintableConfig):
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the cache decision.
 
-        Returns
+        Returns:
         -------
         Mapping[str, object]
             Payload for fingerprint computation.
@@ -97,7 +97,7 @@ class MaterializationCacheDecision(FingerprintableConfig):
     def fingerprint(self) -> str:
         """Return fingerprint for the cache decision.
 
-        Returns
+        Returns:
         -------
         str
             Deterministic fingerprint.
@@ -205,7 +205,7 @@ def resolve_materialization_cache_decision(
         Optional semantic cache policy. When provided, takes precedence over
         engine heuristics for cache decisions.
 
-    Returns
+    Returns:
     -------
     MaterializationCacheDecision
         Cache policy for the materialization.
@@ -221,7 +221,7 @@ def resolve_materialization_cache_decision(
 def resolve_prefer_reader(*, policy: MaterializationPolicy) -> bool:
     """Return the prefer_reader flag for plan execution.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when plan execution should prefer streaming readers.
@@ -278,26 +278,17 @@ def build_view_product(
 ) -> PlanProduct:
     """Execute a registered view and return a PlanProduct wrapper.
 
-    Parameters
-    ----------
-    view_name
-        Registered view name to materialize.
-    session_runtime
-        Planning-ready DataFusion session runtime.
-    policy
-        Execution policy controlling streaming preferences.
-    view_id
-        Optional identifier to use for diagnostics.
+    Args:
+        view_name: Description.
+            session_runtime: Description.
+            policy: Description.
+            view_id: Description.
 
-    Returns
-    -------
-    PlanProduct
-        Plan product with stream or table output.
+    Returns:
+        PlanProduct: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when the runtime profile or view registration is missing.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     configure_otel(
         service_name="codeanatomy",

@@ -54,7 +54,7 @@ class RegistrationMetadata(StructBaseStrict, frozen=True):
     def payload(self) -> dict[str, object]:
         """Return a serializable diagnostics payload.
 
-        Returns
+        Returns:
         -------
         dict[str, object]
             Payload suitable for logging and persistence.
@@ -121,24 +121,16 @@ class ProviderRegistry(
     ) -> RegistrationMetadata:
         """Register a table from a TableSpec.
 
-        Parameters
-        ----------
-        spec
-            Table specification with schema, location, and format.
-        overwrite
-            Whether to overwrite an existing registration.
-        cache_policy
-            Optional cache policy to apply during registration.
+        Args:
+            spec: Description.
+                    overwrite: Description.
+                    cache_policy: Description.
 
-        Returns
-        -------
-        RegistrationMetadata
-            Metadata about the registration event.
+        Returns:
+            RegistrationMetadata: Result.
 
-        Raises
-        ------
-        ValueError
-            When table already registered and overwrite is False.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if spec.name in self._registrations and not overwrite:
             msg = f"Table {spec.name!r} already registered. Use overwrite=True."
@@ -158,24 +150,16 @@ class ProviderRegistry(
     ) -> RegistrationMetadata:
         """Register a Delta table with version pinning support.
 
-        Parameters
-        ----------
-        spec
-            Table specification for a Delta table.
-        overwrite
-            Whether to overwrite an existing registration.
-        cache_policy
-            Optional cache policy to apply during registration.
+        Args:
+            spec: Description.
+                    overwrite: Description.
+                    cache_policy: Description.
 
-        Returns
-        -------
-        RegistrationMetadata
-            Metadata about the registration event.
+        Returns:
+            RegistrationMetadata: Result.
 
-        Raises
-        ------
-        ValueError
-            When spec.format is not 'delta' or when table already registered.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         if spec.format != "delta":
             msg = f"Expected delta format, got {spec.format!r}"
@@ -191,24 +175,16 @@ class ProviderRegistry(
     ) -> DataFrame:
         """Register a table and return the DataFrame.
 
-        Parameters
-        ----------
-        spec
-            Table specification with schema, location, and format.
-        overwrite
-            Whether to overwrite an existing registration.
-        cache_policy
-            Optional cache policy to apply during registration.
+        Args:
+            spec: Description.
+                    overwrite: Description.
+                    cache_policy: Description.
 
-        Returns
-        -------
-        DataFrame
-            DataFrame for the registered table.
+        Returns:
+            DataFrame: Result.
 
-        Raises
-        ------
-        ValueError
-            When table already registered and overwrite is False.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         from datafusion_engine.schema.introspection import table_names_snapshot
         from datafusion_engine.session.helpers import deregister_table
@@ -235,15 +211,17 @@ class ProviderRegistry(
     ) -> DataFrame:
         """Register a dataset location via a derived TableSpec.
 
-        Returns
-        -------
-        DataFrame
-            DataFrame for the registered table.
+        Args:
+            name: Description.
+                    location: Description.
+                    overwrite: Description.
+                    cache_policy: Description.
 
-        Raises
-        ------
-        ValueError
-            Raised when schema resolution fails for the dataset location.
+        Returns:
+            DataFrame: Result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         from datafusion_engine.dataset.registry import resolve_dataset_schema
         from datafusion_engine.tables.spec import table_spec_from_location
@@ -271,7 +249,7 @@ class ProviderRegistry(
     def get(self, key: str) -> RegistrationMetadata | None:
         """Return registration metadata for a table name when present.
 
-        Returns
+        Returns:
         -------
         RegistrationMetadata | None
             Registration metadata when available.
@@ -281,7 +259,7 @@ class ProviderRegistry(
     def __contains__(self, key: str) -> bool:
         """Return True when a table name is registered.
 
-        Returns
+        Returns:
         -------
         bool
             True when the table name is registered.
@@ -291,7 +269,7 @@ class ProviderRegistry(
     def __iter__(self) -> Iterator[str]:
         """Iterate over registered table names.
 
-        Returns
+        Returns:
         -------
         Iterator[str]
             Iterator over registered table names.
@@ -301,7 +279,7 @@ class ProviderRegistry(
     def __len__(self) -> int:
         """Return the count of registered tables.
 
-        Returns
+        Returns:
         -------
         int
             Count of registered tables.
@@ -311,7 +289,7 @@ class ProviderRegistry(
     def snapshot(self) -> Mapping[str, RegistrationMetadata]:
         """Return a snapshot of registration metadata.
 
-        Returns
+        Returns:
         -------
         Mapping[str, RegistrationMetadata]
             Snapshot of registration metadata.
@@ -325,7 +303,7 @@ class ProviderRegistry(
     def udf_registry_hash(self) -> str | None:
         """Return the current UDF registry snapshot hash.
 
-        Returns
+        Returns:
         -------
         str | None
             Hash of the UDF registry, or None if unavailable.
@@ -345,7 +323,7 @@ class ProviderRegistry(
     def registrations(self) -> Mapping[str, RegistrationMetadata]:
         """Return all current registrations.
 
-        Returns
+        Returns:
         -------
         Mapping[str, RegistrationMetadata]
             Read-only view of registered tables.
@@ -360,7 +338,7 @@ class ProviderRegistry(
         name
             Table name to check.
 
-        Returns
+        Returns:
         -------
         bool
             True if table is registered.
@@ -375,17 +353,15 @@ class ProviderRegistry(
     ) -> tuple[DataFrame, RegistrationMetadata]:
         """Perform the actual table registration.
 
-        This method handles the DataFusion-specific registration logic.
+        Args:
+            spec: Description.
+                    cache_policy: Description.
 
-        Returns
-        -------
-        tuple[DataFrame, RegistrationMetadata]
-            DataFrame and metadata for the registration event.
+        Returns:
+            tuple[DataFrame, RegistrationMetadata]: Result.
 
-        Raises
-        ------
-        ValueError
-            Raised when the runtime profile is missing.
+        Raises:
+            ValueError: If the operation cannot be completed.
         """
         from datafusion_engine.dataset.registration import (
             _build_registration_context,
@@ -454,7 +430,7 @@ class ProviderRegistry(
 def _compute_snapshot_hash(snapshot: Mapping[str, object]) -> str:
     """Compute a stable hash for a UDF snapshot.
 
-    Returns
+    Returns:
     -------
     str
         Short hash for the snapshot payload.

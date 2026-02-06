@@ -68,7 +68,7 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
 │  core/findings_table.py - Polars-based filtering + rehydration    │
 │  core/report.py       - Markdown rendering                        │
 │  core/artifacts.py    - JSON artifact persistence                 │
-│  core/toolchain.py    - External tool detection (rpygrep, ast-grep) │
+│  core/toolchain.py    - External tool detection (rg, ast-grep)      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -98,7 +98,6 @@ All cq commands accept these global options, handled by the meta-app launcher.
 | `summary` | Single-line summary | CI/CD integration |
 | `mermaid` | Mermaid flowchart syntax | Call graph visualization |
 | `mermaid-class` | Mermaid class diagram syntax | Class hierarchy visualization |
-| `mermaid-cfg` | Mermaid control flow graph | Function CFG visualization |
 | `dot` | Graphviz DOT syntax | Complex graph export |
 
 ### Configuration Precedence
@@ -116,7 +115,7 @@ Create `.cq.toml` in your repository root:
 
 ```toml
 [cq]
-# Output format (md, json, both, summary, mermaid, mermaid-class, mermaid-cfg, dot)
+# Output format (md, json, both, summary, mermaid, mermaid-class, dot)
 format = "md"
 
 # Verbosity level (0-3)
@@ -261,7 +260,7 @@ The default tool for finding code patterns with semantic enrichment.
 All commands support filtering options; see **Filtering Options** for details.
 
 **How it works:**
-1. **Candidate Generation**: rpygrep scans files for pattern matches
+1. **Candidate Generation**: Native rg process scans files for pattern matches
 2. **Heuristic Classification**: O(1) line-based pattern detection (comment, import, def)
 3. **AST Classification**: ast-grep-py node lookup for structural context
 4. **Symtable Enrichment**: Optional scope analysis for high-value matches
@@ -852,7 +851,7 @@ The planner generates ripgrep patterns to prefilter files:
 
 | Parameter | Example | Description |
 |-----------|---------|-------------|
-| `in=` | `in=src/semantics/` | Search only in directory |
+| `in=` | `in=src/semantics` | Search only in directory |
 | `exclude=` | `exclude=tests,venv` | Exclude directories (comma-separated) |
 
 **Expanders:**
@@ -910,13 +909,13 @@ Hazards are detected automatically in macro commands (`calls`, `impact`). For `q
 /cq q "entity=import name=~pandas"
 
 # Find functions in a directory
-/cq q "entity=function in=src/semantics/"
+/cq q "entity=function in=src/semantics"
 
 # Find functions by pattern with caller analysis
 /cq q "entity=function name=~^compile expand=callers(depth=2)"
 
 # Class definitions with def info
-/cq q "entity=class fields=def in=src/"
+/cq q "entity=class fields=def in=src"
 
 # Limit results
 /cq q "entity=import limit=20"
@@ -1025,8 +1024,7 @@ cq detects and uses external tools:
 
 | Tool | Required | Purpose |
 |------|----------|---------|
-| `rg` (ripgrep) | Yes | Fast file search for candidates (used by rpygrep) |
-| `rpygrep` | Yes | Python search engine for smart search and prefilters |
+| `rg` (ripgrep) | Yes | Fast file search for candidates (native process execution) |
 | `ast-grep-py` | Yes | Structural matching for `q` and classification |
 | Python | Yes | AST parsing, symtable, bytecode |
 
@@ -1039,7 +1037,7 @@ brew install ripgrep
 apt install ripgrep
 
 # Python packages
-pip install rpygrep ast-grep-py
+pip install ast-grep-py
 ```
 
 ---
@@ -1571,7 +1569,7 @@ Filter functions by scope characteristics using Python's symtable module. Essent
 /cq q "entity=function scope=closure"
 
 # Find closures in a specific directory
-/cq q "entity=function scope=closure in=src/semantics/"
+/cq q "entity=function scope=closure in=src/semantics"
 
 # Find functions capturing a specific variable
 /cq q "entity=function captures=config"
@@ -1580,7 +1578,7 @@ Filter functions by scope characteristics using Python's symtable module. Essent
 /cq q "entity=function has_cells=true"
 
 # Find module-level functions only
-/cq q "entity=function scope=toplevel in=src/"
+/cq q "entity=function scope=toplevel in=src"
 ```
 
 ### Understanding Scope Output
@@ -1777,9 +1775,6 @@ cq can build control flow and data flow graphs from bytecode:
 **Visualization:**
 
 ```bash
-# Control flow graph as Mermaid
-/cq q "entity=function name=complex_fn" --format mermaid-cfg
-
 # Include block metadata
 /cq q "entity=function name=fn fields=cfg_blocks" --format json
 ```
@@ -1941,7 +1936,7 @@ Hazards apply confidence penalties to call site resolution:
 /cq q "pattern='eval(\$X)'"
 
 # Find functions with definition info in a directory
-/cq q "entity=function in=src/ fields=def"
+/cq q "entity=function in=src fields=def"
 
 # Combine with pattern search
 /cq q "pattern='eval(\$X)'"
@@ -1998,7 +1993,7 @@ flowchart TD
 
 ```bash
 # Generate class diagram for a module
-/cq q "entity=class in=src/semantics/" --format mermaid-class
+/cq q "entity=class in=src/semantics" --format mermaid-class
 ```
 
 Output:
@@ -2038,7 +2033,7 @@ dot -Tpng graph.dot -o graph.png
 /cq q "entity=class name=~^Semantic expand=bases" --format mermaid-class
 
 # Export full call graph
-/cq q "entity=function in=src/semantics/ expand=callees" --format dot
+/cq q "entity=function in=src/semantics expand=callees" --format dot
 ```
 
 ---
@@ -2111,7 +2106,7 @@ entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS]
 /cq sig-impact function_name --to "function_name(new, sig)"
 
 # Find all closures before extracting functions
-/cq q "entity=function scope=closure in=src/module/"
+/cq q "entity=function scope=closure in=src/module"
 
 # Visualize call hierarchy
 /cq q "entity=function name=target expand=callers(depth=3)" --format mermaid
@@ -2130,7 +2125,7 @@ entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS]
 /cq q "entity=decorator decorator_count_min=3"
 
 # Understand class hierarchy
-/cq q "entity=class in=src/semantics/" --format mermaid-class
+/cq q "entity=class in=src/semantics" --format mermaid-class
 ```
 
 ### Debugging Patterns

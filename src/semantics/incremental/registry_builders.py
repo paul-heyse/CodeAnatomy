@@ -33,7 +33,7 @@ _INCREMENTAL_VALIDATION_POLICY = ValidationPolicySpec(enabled=True, lazy=True, s
 def build_table_spec(row: DatasetRow) -> TableSchemaSpec:
     """Build the TableSchemaSpec for a dataset row.
 
-    Returns
+    Returns:
     -------
     TableSchemaSpec
         Table schema specification for the dataset row.
@@ -54,7 +54,7 @@ def build_contract_spec(
 ) -> ContractSpec | None:
     """Build the ContractSpec for a dataset row.
 
-    Returns
+    Returns:
     -------
     ContractSpec | None
         Contract spec or ``None`` when no contract row is provided.
@@ -73,7 +73,7 @@ def build_contract_spec(
 def build_dataset_spec(row: DatasetRow) -> DatasetSpec:
     """Build the DatasetSpec for a dataset row.
 
-    Returns
+    Returns:
     -------
     DatasetSpec
         Dataset specification for the row.

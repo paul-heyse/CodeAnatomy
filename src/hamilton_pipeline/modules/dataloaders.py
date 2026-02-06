@@ -157,12 +157,12 @@ def scip_index_path(
 ) -> str | None:
     """Return the resolved path to index.scip, running scip-python when needed.
 
-    Returns
+    Returns:
     -------
     str | None
         Resolved index.scip path when available.
 
-    Notes
+    Notes:
     -----
     Indexing failures are recorded as diagnostics events and return ``None``
     so builds can proceed with clear extraction quality signals.
@@ -229,7 +229,7 @@ def scip_index_path(
 def empty_scip_tables() -> Mapping[str, TableLike]:
     """Return an empty SCIP table mapping for repo-only runs.
 
-    Returns
+    Returns:
     -------
     Mapping[str, TableLike]
         Empty mapping placeholder.
@@ -251,7 +251,7 @@ def source_catalog_inputs(
 ) -> Mapping[str, TableLike]:
     """Bundle source tables for plan compilation.
 
-    Returns
+    Returns:
     -------
     Mapping[str, TableLike]
         Mapping of source names to table-like inputs.

@@ -25,7 +25,7 @@ class SymbolKey:
     def __str__(self) -> str:
         """Render the symbol key in ``module_path:qualname`` form.
 
-        Returns
+        Returns:
         -------
         str
             Serialized symbol key.
@@ -38,7 +38,7 @@ class SymbolKey:
 
         Used by symbol resolution utilities when deserializing keys.
 
-        Returns
+        Returns:
         -------
         SymbolKey
             Parsed symbol key.
@@ -67,7 +67,7 @@ class ImportBinding:
 
         Used by import resolution to map aliases back to source names.
 
-        Returns
+        Returns:
         -------
         str
             Original name as defined in the source module.
@@ -103,7 +103,7 @@ class SymbolTable:
         records
             All ast-grep records
 
-        Returns
+        Returns:
         -------
         SymbolTable
             Built symbol table
@@ -136,7 +136,7 @@ class SymbolTable:
         name
             Name being referenced
 
-        Returns
+        Returns:
         -------
         SgRecord | None
             Definition record or None if unresolved
@@ -162,7 +162,7 @@ class SymbolTable:
 
         Used by ``resolve`` when a name resolves via an import binding.
 
-        Returns
+        Returns:
         -------
         SgRecord | None
             Definition record if resolved.
@@ -185,7 +185,7 @@ def _build_symbol_key(record: SgRecord) -> SymbolKey | None:
 
     Used by ``SymbolTable.from_records`` to index definition records.
 
-    Returns
+    Returns:
     -------
     SymbolKey | None
         Symbol key for the record, or None if no name is found.
@@ -206,7 +206,7 @@ def _extract_def_name(record: SgRecord) -> str | None:
 
     Used by ``_build_symbol_key`` to derive a qualname.
 
-    Returns
+    Returns:
     -------
     str | None
         Definition name if one is found.
@@ -225,14 +225,14 @@ def _extract_def_name(record: SgRecord) -> str | None:
 def _file_to_module_path(file_path: str) -> str:
     """Convert file path to module-style path.
 
-    Examples
+    Examples:
     --------
         src/cli/app.py -> src/cli/app
         src/cli/__init__.py -> src/cli
 
     Used by symbol resolution to align file paths with import paths.
 
-    Returns
+    Returns:
     -------
     str
         Module-style path without ``.py`` or ``/__init__`` suffixes.
@@ -255,7 +255,7 @@ def _parse_import(record: SgRecord) -> list[ImportBinding]:
 
     Used by ``SymbolTable.from_records`` to track imports.
 
-    Returns
+    Returns:
     -------
     list[ImportBinding]
         Import bindings extracted from the record.
@@ -352,7 +352,7 @@ def resolve_call_target(
     symbol_table
         Symbol table for resolution
 
-    Returns
+    Returns:
     -------
     tuple[SgRecord | None, str]
         Tuple of (resolved definition or None, resolution status)
@@ -379,7 +379,7 @@ def _extract_call_target(call: SgRecord) -> str:
 
     Used by ``resolve_call_target`` to normalize call expressions.
 
-    Returns
+    Returns:
     -------
     str
         Extracted call target name, or empty string if unknown.
@@ -405,7 +405,7 @@ def _is_builtin(name: str) -> bool:
 
     Used by ``resolve_call_target`` to short-circuit builtin calls.
 
-    Returns
+    Returns:
     -------
     bool
         True if the name is a builtin.

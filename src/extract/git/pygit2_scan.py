@@ -15,15 +15,11 @@ if TYPE_CHECKING:
 def repo_status_paths(scope: RepoScope) -> Mapping[str, int]:
     """Return repository status flags keyed by path.
 
-    Returns
-    -------
-    Mapping[str, int]
-        Mapping of path to pygit2 status flags.
+    Args:
+        scope: Description.
 
-    Raises
-    ------
-    ValueError
-        Raised when repository status cannot be read.
+    Raises:
+        ValueError: If the operation cannot be completed.
     """
     if scope.repo.workdir is None:
         msg = "Repository workdir is required for status-based scans."
@@ -48,7 +44,7 @@ def repo_status_paths(scope: RepoScope) -> Mapping[str, int]:
 def iter_repo_candidate_paths(scope: RepoScope) -> list[str]:
     """Return candidate repo paths from status and index.
 
-    Returns
+    Returns:
     -------
     list[str]
         Sorted repo-relative paths.
@@ -62,7 +58,7 @@ def iter_repo_candidate_paths(scope: RepoScope) -> list[str]:
 def iter_repo_files_pygit2(scope: RepoScope) -> list[str]:
     """Return sorted repo-relative paths using pygit2 status.
 
-    Returns
+    Returns:
     -------
     list[str]
         Sorted repo-relative paths.

@@ -41,15 +41,16 @@ def impact(
 ) -> CliResult:
     """Trace data flow from a function parameter.
 
-    Returns
-    -------
-    CliResult
-        Structured command result.
+    Args:
+        function: Function name to analyze.
+        opts: Parsed CLI options for impact analysis.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected or required options are missing.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.impact import ImpactRequest, cmd_impact
@@ -84,15 +85,16 @@ def calls(
 ) -> CliResult:
     """Census all call sites for a function.
 
-    Returns
-    -------
-    CliResult
-        Structured command result.
+    Args:
+        function: Function name to analyze.
+        opts: Optional shared filter options.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.calls import cmd_calls
@@ -122,15 +124,15 @@ def imports(
 ) -> CliResult:
     """Analyze import structure and cycles.
 
-    Returns
-    -------
-    CliResult
-        Structured command result.
+    Args:
+        opts: Optional imports-specific options.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.imports import ImportRequest, cmd_imports
@@ -162,15 +164,15 @@ def exceptions(
 ) -> CliResult:
     """Analyze exception handling patterns.
 
-    Returns
-    -------
-    CliResult
-        Structured command result.
+    Args:
+        opts: Optional exception-analysis options.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.exceptions import cmd_exceptions
@@ -201,15 +203,16 @@ def sig_impact(
 ) -> CliResult:
     """Analyze impact of a signature change.
 
-    Returns
-    -------
-    CliResult
-        Structured command result.
+    Args:
+        symbol: Function symbol to analyze.
+        opts: Parsed signature-impact options.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected or `--to` is missing.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
@@ -242,15 +245,15 @@ def side_effects(
 ) -> CliResult:
     """Detect import-time side effects.
 
-    Returns
-    -------
-    CliResult
-        Structured command result.
+    Args:
+        opts: Optional side-effects options.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
@@ -282,15 +285,16 @@ def scopes(
 ) -> CliResult:
     """Analyze scope capture (closures).
 
-    Returns
-    -------
-    CliResult
-        Structured command result.
+    Args:
+        target: File path or symbol to inspect for closure capture.
+        opts: Optional shared filter options.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
@@ -322,15 +326,16 @@ def bytecode_surface(
 ) -> CliResult:
     """Analyze bytecode for hidden dependencies.
 
-    Returns
-    -------
-    CliResult
-        Structured command result.
+    Args:
+        target: File path or symbol to inspect.
+        opts: Optional bytecode-surface options.
+        ctx: Injected CLI context.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when CLI context is unavailable.
+    Returns:
+        CliResult: Renderable command result payload.
+
+    Raises:
+        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface

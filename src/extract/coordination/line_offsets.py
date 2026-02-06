@@ -17,7 +17,7 @@ class LineOffsets:
     def from_bytes(cls, data: bytes) -> LineOffsets:
         """Build line offsets from raw bytes.
 
-        Returns
+        Returns:
         -------
         LineOffsets
             Line offset mapping for the buffer.
@@ -31,7 +31,7 @@ class LineOffsets:
     def point_from_byte(self, byte_offset: int) -> tuple[int, int]:
         """Return (line0, col) for a byte offset.
 
-        Returns
+        Returns:
         -------
         tuple[int, int]
             Line/column pair for the byte offset.
@@ -47,7 +47,7 @@ class LineOffsets:
     def byte_offset(self, line0: int | None, col: int | None) -> int | None:
         """Return byte offset for a (line0, col) pair.
 
-        Returns
+        Returns:
         -------
         int | None
             Byte offset when available.

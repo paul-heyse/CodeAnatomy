@@ -26,7 +26,7 @@ def _entity_specs(model: SemanticModel) -> tuple[CpgEntitySpec, ...]:
 def build_node_plan_specs(model: SemanticModel) -> tuple[NodePlanSpec, ...]:
     """Build node plan specs for all node-emitting entities.
 
-    Returns
+    Returns:
     -------
     tuple[NodePlanSpec, ...]
         Node plan specs for configured entities.
@@ -42,7 +42,7 @@ def build_node_plan_specs(model: SemanticModel) -> tuple[NodePlanSpec, ...]:
 def node_plan_specs() -> tuple[NodePlanSpec, ...]:
     """Return node plan specs for all node-emitting entities.
 
-    Returns
+    Returns:
     -------
     tuple[NodePlanSpec, ...]
         Node plan specs for configured entities.
@@ -59,22 +59,15 @@ def build_prop_table_specs(
 ) -> tuple[PropTableSpec, ...]:
     """Build prop table specs for all prop-emitting entities.
 
-    Parameters
-    ----------
-    model
-        Semantic model providing CPG entity specs.
-    source_columns_lookup:
-        Optional function returning source columns for a table name.
+    Args:
+        model: Semantic model containing entity specs.
+        source_columns_lookup: Optional lookup for source columns by table name.
 
-    Returns
-    -------
-    tuple[PropTableSpec, ...]
-        Prop table specs for configured entities.
+    Returns:
+        tuple[PropTableSpec, ...]: Result.
 
-    Raises
-    ------
-    ValueError
-        Raised when a prop table spec fails to build.
+    Raises:
+        ValueError: If a prop spec cannot be converted to a prop table.
     """
     specs: list[PropTableSpec] = []
     for spec in _entity_specs(model):
@@ -98,7 +91,7 @@ def prop_table_specs(
 ) -> tuple[PropTableSpec, ...]:
     """Return prop table specs for all prop-emitting entities.
 
-    Returns
+    Returns:
     -------
     tuple[PropTableSpec, ...]
         Prop table specs for configured entities.
@@ -115,7 +108,7 @@ def prop_table_specs(
 def scip_role_flag_prop_spec() -> PropTableSpec:
     """Return prop spec for SCIP role flag properties.
 
-    Returns
+    Returns:
     -------
     PropTableSpec
         Prop table spec for role flags.
@@ -141,7 +134,7 @@ def scip_role_flag_prop_spec() -> PropTableSpec:
 def edge_prop_spec() -> PropTableSpec:
     """Return prop spec for edge metadata properties.
 
-    Returns
+    Returns:
     -------
     PropTableSpec
         Prop table spec for edge metadata.

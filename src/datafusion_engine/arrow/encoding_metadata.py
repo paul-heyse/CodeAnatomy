@@ -20,7 +20,7 @@ def dict_field_metadata(
 ) -> dict[str, str]:
     """Return metadata for dictionary-encoded field specs.
 
-    Returns
+    Returns:
     -------
     dict[str, str]
         Metadata mapping for dictionary encoding.

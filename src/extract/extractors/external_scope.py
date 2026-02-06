@@ -56,7 +56,7 @@ class ExternalInterface:
     def to_row(self) -> dict[str, str | None]:
         """Return a row payload for this interface.
 
-        Returns
+        Returns:
         -------
         dict[str, str | None]
             Row payload for the external interface dataset.
@@ -80,7 +80,7 @@ def extract_python_external(
 ) -> ExtractResult[TableLike]:
     """Extract external Python interfaces from unified imports.
 
-    Returns
+    Returns:
     -------
     ExtractResult[TableLike]
         Extracted external interface table.
@@ -373,7 +373,7 @@ def extract_python_external_tables(
 ) -> Mapping[str, TableLike | RecordBatchReaderLike]:
     """Extract external interface tables as a name-keyed bundle.
 
-    Returns
+    Returns:
     -------
     Mapping[str, TableLike | RecordBatchReaderLike]
         Output tables keyed by dataset name.

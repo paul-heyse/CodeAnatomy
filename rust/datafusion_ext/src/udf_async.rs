@@ -182,7 +182,7 @@ impl AsyncScalarUDFImpl for AsyncEchoUdf {
 
     async fn invoke_async_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let policy = self.policy;
-        let handle = async_runtime::runtime_handle().spawn(async move {
+        let handle = async_runtime::runtime_handle()?.spawn(async move {
             let value = args.args.first().ok_or_else(|| {
                 DataFusionError::Plan("async_echo expects exactly one argument".into())
             })?;

@@ -19,13 +19,13 @@ use std::future::Future;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::pyarrow::ToPyArrow;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::Volatility;
-use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::pyarrow::ToPyArrow;
 use datafusion_ffi::table_provider::{FFI_TableProvider, ForeignTableProvider};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -40,13 +40,13 @@ use datafusion_ext::async_runtime::shared_runtime;
 
 /// Utility to get the Tokio Runtime from Python
 #[inline]
-pub(crate) fn get_tokio_runtime() -> &'static Runtime {
+pub(crate) fn get_tokio_runtime() -> PyDataFusionResult<&'static Runtime> {
     // NOTE: Other pyo3 python libraries have had issues with using tokio
     // behind a forking app-server like `gunicorn`
     // If we run into that problem, in the future we can look to `delta-rs`
     // which adds a check in that disallows calls from a forked process
     // https://github.com/delta-io/delta-rs/blob/87010461cfe01563d91a4b9cd6fa468e2ad5f283/python/src/utils.rs#L10-L31
-    shared_runtime()
+    shared_runtime().map_err(PyDataFusionError::from)
 }
 
 #[inline]
@@ -76,7 +76,7 @@ where
     F: Future + Send,
     F::Output: Send,
 {
-    let runtime = get_tokio_runtime();
+    let runtime = get_tokio_runtime().map_err(PyErr::from)?;
     const INTERVAL_CHECK_SIGNALS: Duration = Duration::from_millis(1_000);
 
     py.detach(|| {
@@ -110,7 +110,7 @@ where
     F: Future<Output = datafusion::common::Result<T>> + Send + 'static,
     T: Send + 'static,
 {
-    let rt = get_tokio_runtime();
+    let rt = get_tokio_runtime()?;
     let handle: JoinHandle<datafusion::common::Result<T>> = rt.spawn(fut);
     // Wait for the join handle while respecting Python signal handling.
     // We handle errors in two steps so `?` maps the error types correctly:

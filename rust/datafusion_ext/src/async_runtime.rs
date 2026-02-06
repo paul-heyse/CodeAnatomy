@@ -1,30 +1,39 @@
 use std::future::Future;
 use std::sync::OnceLock;
 
+use datafusion_common::{DataFusionError, Result};
 use tokio::runtime::{Handle, Runtime};
 use tokio::task::JoinHandle;
 
-static SHARED_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+static SHARED_RUNTIME: OnceLock<std::result::Result<Runtime, String>> = OnceLock::new();
 
-pub fn shared_runtime() -> &'static Runtime {
-    SHARED_RUNTIME.get_or_init(|| Runtime::new().expect("shared tokio runtime"))
+pub fn shared_runtime() -> Result<&'static Runtime> {
+    match SHARED_RUNTIME.get_or_init(|| Runtime::new().map_err(|err| err.to_string())) {
+        Ok(runtime) => Ok(runtime),
+        Err(message) => Err(DataFusionError::Execution(format!(
+            "Failed to initialize shared Tokio runtime: {message}"
+        ))),
+    }
 }
 
-pub fn runtime_handle() -> Handle {
-    Handle::try_current().unwrap_or_else(|_| shared_runtime().handle().clone())
+pub fn runtime_handle() -> Result<Handle> {
+    match Handle::try_current() {
+        Ok(handle) => Ok(handle),
+        Err(_) => Ok(shared_runtime()?.handle().clone()),
+    }
 }
 
-pub fn spawn<F, T>(future: F) -> JoinHandle<T>
+pub fn spawn<F, T>(future: F) -> Result<JoinHandle<T>>
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    runtime_handle().spawn(future)
+    Ok(runtime_handle()?.spawn(future))
 }
 
-pub fn block_on<F, T>(future: F) -> T
+pub fn block_on<F, T>(future: F) -> Result<T>
 where
     F: Future<Output = T>,
 {
-    shared_runtime().block_on(future)
+    Ok(shared_runtime()?.block_on(future))
 }

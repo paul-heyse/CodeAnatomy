@@ -554,11 +554,7 @@ def _runtime_capability_summary(logs: Sequence[Mapping[str, object]]) -> dict[st
         return {"total": 0}
     latest = max(
         rows,
-        key=lambda row: (
-            int(row.get("event_time_unix_ms", 0))
-            if isinstance(row.get("event_time_unix_ms"), int)
-            else 0
-        ),
+        key=_event_time_unix_ms,
     )
     plugin_path = None
     plugin_manifest = latest.get("plugin_manifest")
@@ -576,6 +572,13 @@ def _runtime_capability_summary(logs: Sequence[Mapping[str, object]]) -> dict[st
         "delta_module": latest.get("delta_module"),
         "plugin_path": plugin_path,
     }
+
+
+def _event_time_unix_ms(row: Mapping[str, object]) -> int:
+    value = row.get("event_time_unix_ms")
+    if isinstance(value, int):
+        return value
+    return 0
 
 
 def _delta_log_health_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:

@@ -5987,61 +5987,18 @@ class DataFusionRuntimeProfile(
         )
 
     def _runtime_capabilities_payload(self, ctx: SessionContext) -> dict[str, object]:
-        from datafusion_engine.delta.capabilities import is_delta_extension_compatible
-
-        try:
-            from datafusion_engine.udf.runtime import extension_capabilities_report
-
-            extension_capabilities = extension_capabilities_report()
-        except (ImportError, RuntimeError, TypeError, ValueError):
-            extension_capabilities = {}
-        compatibility = is_delta_extension_compatible(
-            ctx,
-            entrypoint="delta_provider_from_session",
-            require_non_fallback=self.features.enforce_delta_ffi_provider,
+        from datafusion_engine.extensions.runtime_capabilities import (
+            build_runtime_capabilities_snapshot,
+            runtime_capabilities_payload,
         )
-        plugin_manifest: Mapping[str, object] | None = None
-        capabilities_snapshot: Mapping[str, object] | None = None
-        plugin_error: str | None = None
-        try:
-            datafusion_ext = importlib.import_module("datafusion_ext")
-        except ImportError as exc:
-            plugin_error = str(exc)
-        else:
-            plugin_manifest_fn = getattr(datafusion_ext, "plugin_manifest", None)
-            if callable(plugin_manifest_fn):
-                try:
-                    payload = plugin_manifest_fn()
-                except (RuntimeError, TypeError, ValueError) as exc:
-                    plugin_error = str(exc)
-                else:
-                    if isinstance(payload, Mapping):
-                        plugin_manifest = dict(payload)
-            capabilities_snapshot_fn = getattr(datafusion_ext, "capabilities_snapshot", None)
-            if callable(capabilities_snapshot_fn):
-                try:
-                    payload = capabilities_snapshot_fn()
-                except (RuntimeError, TypeError, ValueError):
-                    payload = None
-                if isinstance(payload, Mapping):
-                    capabilities_snapshot = dict(payload)
-        return {
-            "event_time_unix_ms": int(time.time() * 1000),
-            "profile_name": self.policies.config_policy_name,
-            "settings_hash": self.settings_hash(),
-            "strict_native_provider_enabled": self.features.enforce_delta_ffi_provider,
-            "delta_entrypoint": compatibility.entrypoint,
-            "delta_module": compatibility.module,
-            "delta_ctx_kind": compatibility.ctx_kind,
-            "delta_probe_result": compatibility.probe_result,
-            "delta_compatible": compatibility.compatible,
-            "delta_available": compatibility.available,
-            "delta_error": compatibility.error,
-            "extension_capabilities": extension_capabilities,
-            "plugin_manifest": plugin_manifest,
-            "capabilities_snapshot": capabilities_snapshot,
-            "plugin_error": plugin_error,
-        }
+
+        snapshot = build_runtime_capabilities_snapshot(
+            ctx,
+            profile_name=self.policies.config_policy_name,
+            settings_hash=self.settings_hash(),
+            strict_native_provider_enabled=self.features.enforce_delta_ffi_provider,
+        )
+        return runtime_capabilities_payload(snapshot)
 
     def _record_cache_diagnostics(self, ctx: SessionContext) -> None:
         """Record cache configuration and state diagnostics.
@@ -6742,7 +6699,8 @@ class DataFusionRuntimeProfile(
     def _cache_key(self) -> str:
         if self.execution.session_context_key:
             return self.execution.session_context_key
-        return self.telemetry_payload_hash()
+        # Use the full runtime fingerprint so distinct profiles do not alias.
+        return self.fingerprint()
 
     def context_cache_key(self) -> str:
         """Return a stable cache key for the session context.

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Unpack, cast
 
 import msgspec
 
@@ -66,7 +66,14 @@ from tools.cq.search.classifier import (
 )
 from tools.cq.search.collector import RgCollector
 from tools.cq.search.context import SmartSearchContext
-from tools.cq.search.models import SearchConfig, SearchKwargs
+from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
+from tools.cq.search.models import (
+    CandidateSearchKwargs,
+    CandidateSearchRequest,
+    SearchConfig,
+    SearchKwargs,
+    SearchRequest,
+)
 from tools.cq.search.multilang_diagnostics import (
     build_cross_language_diagnostics,
     build_language_capabilities,
@@ -164,12 +171,6 @@ class RawMatch(CqStruct, frozen=True):
     def col(self) -> int:
         """Return the start column for backward compatibility."""
         return self.span.start_col
-
-
-class CandidateSearchKwargs(TypedDict, total=False):
-    lang_scope: QueryLanguageScope
-    include_globs: list[str] | None
-    exclude_globs: list[str] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,14 +349,23 @@ def build_candidate_searcher(
     tuple[list[str], str]
         Ripgrep command and effective pattern string.
     """
-    config = SearchConfig(
+    request = CandidateSearchRequest(
         root=root,
         query=query,
         mode=mode,
-        lang_scope=kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
         limits=limits,
+        lang_scope=kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
         include_globs=kwargs.get("include_globs"),
         exclude_globs=kwargs.get("exclude_globs"),
+    )
+    config = SearchConfig(
+        root=request.root,
+        query=request.query,
+        mode=request.mode,
+        lang_scope=request.lang_scope,
+        limits=request.limits,
+        include_globs=request.include_globs,
+        exclude_globs=request.exclude_globs,
         include_strings=False,
         argv=[],
         tc=None,
@@ -416,7 +426,7 @@ def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchSta
     )
 
 
-def collect_candidates(
+def collect_candidates(  # noqa: PLR0913
     root: Path,
     *,
     pattern: str,
@@ -792,12 +802,13 @@ def _maybe_rust_tree_sitter_enrichment(
         return None
     byte_start, byte_end = abs_range
     try:
-        return enrich_rust_context_by_byte_range(
+        payload = enrich_rust_context_by_byte_range(
             source,
             byte_start=byte_start,
             byte_end=byte_end,
             cache_key=str(file_path),
         )
+        return normalize_rust_payload(payload)
     except _RUST_ENRICHMENT_ERRORS:
         return None
 
@@ -843,7 +854,7 @@ def _maybe_python_enrichment(
         return None
     byte_start, byte_end = abs_range
     try:
-        return enrich_python_context_by_byte_range(
+        payload = enrich_python_context_by_byte_range(
             sg_root,
             source_bytes,
             byte_start,
@@ -853,6 +864,7 @@ def _maybe_python_enrichment(
             resolved_line=resolved_python.line if resolved_python is not None else None,
             resolved_col=resolved_python.col if resolved_python is not None else None,
         )
+        return normalize_python_payload(payload)
     except _PYTHON_ENRICHMENT_ERRORS:
         return None
 
@@ -1484,27 +1496,40 @@ def _build_search_context(
     query: str,
     kwargs: SearchKwargs,
 ) -> SmartSearchContext:
-    started = kwargs.get("started_ms")
+    request = SearchRequest(
+        root=root,
+        query=query,
+        mode=kwargs.get("mode"),
+        lang_scope=kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
+        include_globs=kwargs.get("include_globs"),
+        exclude_globs=kwargs.get("exclude_globs"),
+        include_strings=bool(kwargs.get("include_strings", False)),
+        limits=kwargs.get("limits"),
+        tc=kwargs.get("tc"),
+        argv=kwargs.get("argv"),
+        started_ms=kwargs.get("started_ms"),
+    )
+    started = request.started_ms
     if started is None:
         started = ms()
-    limits = kwargs.get("limits") or SMART_SEARCH_LIMITS
-    argv = kwargs.get("argv") or ["search", query]
+    limits = request.limits or SMART_SEARCH_LIMITS
+    argv = request.argv or ["search", query]
 
     # Clear caches from previous runs
     clear_caches()
 
-    actual_mode = detect_query_mode(query, force_mode=kwargs.get("mode"))
+    actual_mode = detect_query_mode(request.query, force_mode=request.mode)
     return SearchConfig(
-        root=root,
-        query=query,
+        root=request.root,
+        query=request.query,
         mode=actual_mode,
-        lang_scope=kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
+        lang_scope=request.lang_scope,
         limits=limits,
-        include_globs=kwargs.get("include_globs"),
-        exclude_globs=kwargs.get("exclude_globs"),
-        include_strings=bool(kwargs.get("include_strings", False)),
+        include_globs=request.include_globs,
+        exclude_globs=request.exclude_globs,
+        include_strings=request.include_strings,
         argv=argv,
-        tc=kwargs.get("tc"),
+        tc=request.tc,
         started_ms=started,
     )
 

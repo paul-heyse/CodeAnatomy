@@ -22,13 +22,6 @@ from tools.cq.search.classifier import (
 )
 from tools.cq.search.models import SearchConfig
 from tools.cq.search.profiles import AUDIT, DEFAULT, INTERACTIVE, LITERAL, SearchLimits
-from tools.cq.search.smart_search import (
-    SMART_SEARCH_LIMITS,
-    EnrichedMatch,
-    RawMatch,
-    SearchStats,
-    smart_search,
-)
 from tools.cq.search.timeout import search_async_with_timeout, search_sync_with_timeout
 
 __all__ = [
@@ -36,14 +29,10 @@ __all__ = [
     "DEFAULT",
     "INTERACTIVE",
     "LITERAL",
-    "SMART_SEARCH_LIMITS",
-    "EnrichedMatch",
     "MatchCategory",
     "QueryMode",
-    "RawMatch",
     "SearchConfig",
     "SearchLimits",
-    "SearchStats",
     "classify_from_node",
     "classify_from_records",
     "classify_heuristic",
@@ -55,5 +44,4 @@ __all__ = [
     "search_async_with_timeout",
     "search_content",
     "search_sync_with_timeout",
-    "smart_search",
 ]

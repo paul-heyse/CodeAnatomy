@@ -364,30 +364,15 @@ def _apply_rust_fallback(result: CqResult, root: Path) -> CqResult:
     Returns:
         The mutated result with Rust fallback data merged in.
     """
-    from tools.cq.core.multilang_summary import (
-        build_multilang_summary,
-        partition_stats_from_result_summary,
-    )
-    from tools.cq.macros._rust_fallback import rust_fallback_search
+    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
 
     pattern = "static mut \\|lazy_static\\|thread_local\\|unsafe "
-    rust_findings, capability_diags, rust_stats = rust_fallback_search(
-        root,
-        pattern,
+    return apply_rust_macro_fallback(
+        result=result,
+        root=root,
+        pattern=pattern,
         macro_name="side-effects",
     )
-    result.evidence.extend(rust_findings)
-    result.key_findings.extend(capability_diags)
-
-    existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
-    py_stats = partition_stats_from_result_summary(existing_summary)
-    result.summary = build_multilang_summary(
-        common=existing_summary,
-        lang_scope="auto",
-        language_order=None,
-        languages={"python": py_stats, "rust": rust_stats},
-    )
-    return result
 
 
 def cmd_side_effects(request: SideEffectsRequest) -> CqResult:

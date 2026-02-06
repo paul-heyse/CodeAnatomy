@@ -11,6 +11,13 @@ from ast_grep_py import SgRoot
 
 from tools.cq.core.locations import byte_offset_to_line_col
 from tools.cq.search.classifier import get_node_index
+from tools.cq.search.enrichment.core import (
+    append_source,
+    has_value,
+    merge_gap_fill_payload,
+    normalize_rust_payload,
+    set_degraded,
+)
 from tools.cq.search.tree_sitter_rust import enrich_rust_context_by_byte_range as _ts_enrich
 
 if TYPE_CHECKING:
@@ -46,13 +53,8 @@ _RUST_TEST_ATTRS: frozenset[str] = frozenset(
     }
 )
 
-_METADATA_KEYS: frozenset[str] = frozenset(
-    {
-        "enrichment_status",
-        "enrichment_sources",
-        "degrade_reason",
-        "language",
-    }
+_CROSSCHECK_METADATA_KEYS: frozenset[str] = frozenset(
+    {"enrichment_status", "enrichment_sources", "degrade_reason", "language"}
 )
 
 
@@ -83,16 +85,6 @@ def _get_sg_root(source: str, *, cache_key: str | None) -> SgRoot:
 def clear_rust_enrichment_cache() -> None:
     """Clear ast-grep parse cache for Rust enrichment."""
     _AST_CACHE.clear()
-
-
-def _has_value(value: object) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, (list, tuple, set, dict)):
-        return bool(value)
-    return True
 
 
 def _node_text(node: SgNode | None) -> str | None:
@@ -158,7 +150,7 @@ def _extract_visibility(item: SgNode) -> str:
     return "private"
 
 
-def _extract_function_signature(node: SgNode) -> dict[str, object]:
+def _extract_function_signature(node: SgNode) -> dict[str, object]:  # noqa: C901
     result: dict[str, object] = {}
     if node.kind() != "function_item":
         return result
@@ -285,7 +277,7 @@ def _extract_attributes(node: SgNode) -> list[str]:
     return attrs
 
 
-def _classify_item_role(
+def _classify_item_role(  # noqa: C901, PLR0911
     node: SgNode,
     scope: SgNode | None,
     *,
@@ -341,16 +333,10 @@ def _canonicalize_tree_sitter_payload(payload: dict[str, object] | None) -> dict
 
 
 def _merge_gap_fill(primary: dict[str, object], secondary: dict[str, object]) -> dict[str, object]:
-    merged = dict(primary)
-    for key, value in secondary.items():
-        if key in _METADATA_KEYS:
-            continue
-        if key not in merged or not _has_value(merged.get(key)):
-            merged[key] = value
-    return merged
+    return merge_gap_fill_payload(primary, secondary)
 
 
-def _build_ast_grep_payload(
+def _build_ast_grep_payload(  # noqa: C901, PLR0914
     source: str,
     *,
     byte_start: int,
@@ -394,13 +380,12 @@ def _build_ast_grep_payload(
         "mod_item",
     }:
         def_target = scope
+    attrs: list[str] = []
     if def_target is not None:
         payload["visibility"] = _extract_visibility(def_target)
         attrs = _extract_attributes(def_target)
         if attrs:
             payload["attributes"] = attrs
-    else:
-        attrs = []
 
     fn_target = (
         node
@@ -450,16 +435,16 @@ def _crosscheck_mismatches(
 ) -> list[dict[str, object]]:
     mismatches: list[dict[str, object]] = []
     for key in sorted(set(ast_payload).intersection(ts_payload)):
-        if key in _METADATA_KEYS:
+        if key in _CROSSCHECK_METADATA_KEYS:
             continue
         left = ast_payload.get(key)
         right = ts_payload.get(key)
-        if _has_value(left) and _has_value(right) and left != right:
+        if has_value(left) and has_value(right) and left != right:
             mismatches.append({"field": key, "ast_grep": left, "tree_sitter": right})
     return mismatches
 
 
-def enrich_rust_context_by_byte_range(
+def enrich_rust_context_by_byte_range(  # noqa: C901, PLR0912
     source: str,
     *,
     byte_start: int,
@@ -502,37 +487,26 @@ def enrich_rust_context_by_byte_range(
             )
         )
     except _ENRICHMENT_ERRORS:
-        ts_payload = {}
+        ts_payload: dict[str, object] = {}
 
     if ast_payload is None and not ts_payload:
         return None
 
     if ast_payload is None:
         merged = dict(ts_payload)
-        sources = merged.get("enrichment_sources")
-        source_list = list(sources) if isinstance(sources, list) else []
-        if "tree_sitter" not in source_list:
-            source_list.append("tree_sitter")
-        merged["enrichment_sources"] = source_list
+        append_source(merged, "tree_sitter")
         merged.setdefault("enrichment_status", "applied")
         merged.setdefault("language", "rust")
-        return merged
+        return normalize_rust_payload(merged)
 
     merged = _merge_gap_fill(ast_payload, ts_payload)
-    raw_sources = merged.get("enrichment_sources")
-    source_list: list[str] = (
-        [source for source in raw_sources if isinstance(source, str)]
-        if isinstance(raw_sources, list)
-        else []
-    )
-    if ts_payload and "tree_sitter" not in source_list:
-        source_list.append("tree_sitter")
-    merged["enrichment_sources"] = source_list
+    if ts_payload:
+        append_source(merged, "tree_sitter")
 
     ast_status = str(ast_payload.get("enrichment_status", "applied"))
     ts_status = str(ts_payload.get("enrichment_status", "applied"))
     if ast_status == "degraded" or ts_status == "degraded":
-        merged["enrichment_status"] = "degraded"
+        set_degraded(merged, "upstream degraded")
         reasons: list[str] = []
         ast_reason = ast_payload.get("degrade_reason")
         ts_reason = ts_payload.get("degrade_reason")
@@ -547,15 +521,9 @@ def enrich_rust_context_by_byte_range(
         mismatches = _crosscheck_mismatches(ast_payload, ts_payload)
         if mismatches:
             merged["crosscheck_mismatches"] = mismatches
-            merged["enrichment_status"] = "degraded"
-            reason = merged.get("degrade_reason")
-            suffix = "crosscheck mismatch"
-            if isinstance(reason, str) and reason:
-                merged["degrade_reason"] = f"{reason}; {suffix}"
-            else:
-                merged["degrade_reason"] = suffix
+            set_degraded(merged, "crosscheck mismatch")
 
-    return merged
+    return normalize_rust_payload(merged)
 
 
 def lint_rust_enrichment_schema() -> list[str]:

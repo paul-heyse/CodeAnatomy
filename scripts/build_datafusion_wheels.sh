@@ -67,6 +67,8 @@ if [ ! -f "${plugin_lib}" ]; then
   exit 1
 fi
 
+plugin_filename="$(basename "${plugin_lib}")"
+
 mkdir -p rust/datafusion_ext_py/plugin
 cp -f "${plugin_lib}" rust/datafusion_ext_py/plugin/
 
@@ -150,6 +152,82 @@ if [ "$(uname -s)" = "Linux" ]; then
   esac
 fi
 
+# Ensure the plugin shared library is embedded in the ext wheel payload.
+# We include both `datafusion_ext/<lib>` (preferred lookup path) and
+# `datafusion_ext/plugin/<lib>` (legacy compatibility path), then rewrite RECORD.
+uv run python - <<PY
+from __future__ import annotations
+
+import base64
+import csv
+import hashlib
+import tempfile
+import zipfile
+from pathlib import Path
+
+wheel_path = Path("${datafusion_ext_wheel}")
+plugin_src = Path("${plugin_lib}").resolve()
+plugin_name = "${plugin_filename}"
+
+if not wheel_path.exists():
+    raise SystemExit(f"DataFusion-ext wheel not found: {wheel_path}")
+if not plugin_src.exists():
+    raise SystemExit(f"Plugin library not found: {plugin_src}")
+
+def digest_sha256(data: bytes) -> str:
+    digest = hashlib.sha256(data).digest()
+    encoded = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return f"sha256={encoded}"
+
+plugin_bytes = plugin_src.read_bytes()
+with tempfile.TemporaryDirectory() as tmpdir:
+    root = Path(tmpdir)
+    with zipfile.ZipFile(wheel_path) as archive:
+        archive.extractall(root)
+
+    package_dir = root / "datafusion_ext"
+    if not package_dir.exists():
+        raise SystemExit(
+            "Expected a datafusion_ext package directory in the built wheel payload."
+        )
+
+    direct_target = package_dir / plugin_name
+    direct_target.write_bytes(plugin_bytes)
+
+    compat_dir = package_dir / "plugin"
+    compat_dir.mkdir(parents=True, exist_ok=True)
+    compat_target = compat_dir / plugin_name
+    compat_target.write_bytes(plugin_bytes)
+
+    dist_infos = sorted(root.glob("*.dist-info"))
+    if len(dist_infos) != 1:
+        raise SystemExit(f"Expected exactly one .dist-info directory, found {len(dist_infos)}")
+    record_path = dist_infos[0] / "RECORD"
+    if not record_path.exists():
+        raise SystemExit("Wheel RECORD file is missing.")
+
+    rows: list[tuple[str, str, str]] = []
+    for file_path in sorted(path for path in root.rglob("*") if path.is_file()):
+        rel_path = file_path.relative_to(root).as_posix()
+        if file_path == record_path:
+            continue
+        payload = file_path.read_bytes()
+        rows.append((rel_path, digest_sha256(payload), str(len(payload))))
+    rows.append((record_path.relative_to(root).as_posix(), "", ""))
+
+    with record_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerows(rows)
+
+    rebuilt_path = wheel_path.with_suffix(".rebuilt.whl")
+    if rebuilt_path.exists():
+        rebuilt_path.unlink()
+    with zipfile.ZipFile(rebuilt_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path in sorted(path for path in root.rglob("*") if path.is_file()):
+            archive.write(file_path, file_path.relative_to(root).as_posix())
+    rebuilt_path.replace(wheel_path)
+PY
+
 echo "Selected wheel artifacts:"
 echo "  datafusion    : ${datafusion_wheel}"
 echo "  datafusion_ext: ${datafusion_ext_wheel}"
@@ -180,6 +258,14 @@ with tempfile.TemporaryDirectory() as tmpdir:
         archive.extractall(tmpdir)
     with zipfile.ZipFile(ext_path) as archive:
         archive.extractall(tmpdir)
+        ext_entries = archive.namelist()
+    plugin_entries = [
+        entry
+        for entry in ext_entries
+        if "df_plugin_codeanatomy" in entry and entry.endswith((".so", ".dylib", ".dll"))
+    ]
+    if not plugin_entries:
+        raise SystemExit("datafusion_ext wheel is missing embedded plugin shared library.")
     sys.path.insert(0, tmpdir)
     # Ensure the extension module is importable under the expected package.
     importlib.import_module("datafusion._internal")
@@ -306,6 +392,10 @@ manifest = {
     "datafusion_python_features": features,
     "datafusion_version": wheel_version(datafusion_wheel),
     "plugin_path": "${plugin_abs_path}",
+    "wheel_plugin_paths": [
+        f"datafusion_ext/${plugin_filename}",
+        f"datafusion_ext/plugin/${plugin_filename}",
+    ],
     "wheel_paths": {
         "datafusion": str(datafusion_wheel),
         "datafusion_ext": str(datafusion_ext_wheel),

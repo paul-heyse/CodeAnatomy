@@ -113,6 +113,11 @@ All `/cq` commands support `--format` for output control:
 
 Config via `.cq.toml` or `CQ_*` environment variables. See `tools/cq/README.md` for full options.
 
+CQ model boundary policy:
+- Use `msgspec.Struct` for serialized CQ contracts crossing module boundaries.
+- Keep parser/cache handles as runtime-only objects.
+- Avoid `pydantic` in CQ hot paths (`tools/cq/search`, `tools/cq/query`, `tools/cq/run`).
+
 ## Build & Development Commands
 
 ```bash

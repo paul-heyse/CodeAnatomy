@@ -65,6 +65,19 @@ High-signal code queries for LLM agents.
 Smart search uses native `rg` process execution plus AST enrichment.
 Ensure `rg` is installed and available on `PATH`.
 
+## Model Boundaries
+
+- Use `msgspec.Struct` for serialized CQ contracts that cross module boundaries
+  (for example `tools/cq/search/contracts.py` and
+  `tools/cq/search/enrichment/contracts.py`).
+- Keep parser handles, AST nodes, and cache state as runtime-only objects
+  (protocols/dataclasses/regular classes), not serialized contract types.
+- Serialize typed contracts at boundary points only (for example when building
+  `CqResult.summary`), so internal code stays strongly typed and output remains
+  mapping-compatible.
+- Do not introduce `pydantic` in CQ hot paths (`tools/cq/search`, `tools/cq/query`,
+  `tools/cq/run`); reserve it for explicit external-input adapters if needed.
+
 ## Command Coverage
 
 - Cross-language (`auto/python/rust` scope): `search`, `q`, `run`, `chain`.

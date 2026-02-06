@@ -868,29 +868,14 @@ def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> Cq
     Returns:
         The mutated result with Rust fallback data merged in.
     """
-    from tools.cq.core.multilang_summary import (
-        build_multilang_summary,
-        partition_stats_from_result_summary,
-    )
-    from tools.cq.macros._rust_fallback import rust_fallback_search
+    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
 
-    rust_findings, capability_diags, rust_stats = rust_fallback_search(
-        root,
-        function_name,
+    return apply_rust_macro_fallback(
+        result=result,
+        root=root,
+        pattern=function_name,
         macro_name="impact",
     )
-    result.evidence.extend(rust_findings)
-    result.key_findings.extend(capability_diags)
-
-    existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
-    py_stats = partition_stats_from_result_summary(existing_summary)
-    result.summary = build_multilang_summary(
-        common=existing_summary,
-        lang_scope="auto",
-        language_order=None,
-        languages={"python": py_stats, "rust": rust_stats},
-    )
-    return result
 
 
 def cmd_impact(request: ImpactRequest) -> CqResult:

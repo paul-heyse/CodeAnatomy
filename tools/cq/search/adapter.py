@@ -11,33 +11,9 @@ from tools.cq.query.language import (
 )
 from tools.cq.search.classifier import QueryMode
 from tools.cq.search.profiles import DEFAULT, SearchLimits
+from tools.cq.search.rg_events import as_match_data, match_line_number, match_line_text, match_path
 from tools.cq.search.rg_native import run_rg_json
 from tools.cq.search.timeout import search_sync_with_timeout
-
-
-def _extract_path(data: dict[str, object]) -> str | None:
-    path_obj = data.get("path")
-    if not isinstance(path_obj, dict):
-        return None
-    text = path_obj.get("text")
-    if isinstance(text, str):
-        return text
-    return None
-
-
-def _extract_line_number(data: dict[str, object]) -> int | None:
-    value = data.get("line_number")
-    if isinstance(value, int):
-        return value
-    return None
-
-
-def _extract_line_text(data: dict[str, object]) -> str:
-    lines_obj = data.get("lines")
-    if not isinstance(lines_obj, dict):
-        return ""
-    text = lines_obj.get("text")
-    return text if isinstance(text, str) else ""
 
 
 def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
@@ -116,9 +92,10 @@ def find_files_with_pattern(
         return []
     seen: set[Path] = set()
     for event in proc.events:
-        if event.type != "match" or not isinstance(event.data, dict):
+        data = as_match_data(event)
+        if data is None:
             continue
-        rel_path = _extract_path(event.data)
+        rel_path = match_path(data)
         if rel_path is None:
             continue
         seen.add((root / rel_path).resolve())
@@ -165,10 +142,11 @@ def find_call_candidates(
 
     results: list[tuple[Path, int]] = []
     for event in proc.events:
-        if event.type != "match" or not isinstance(event.data, dict):
+        data = as_match_data(event)
+        if data is None:
             continue
-        rel_path = _extract_path(event.data)
-        line = _extract_line_number(event.data)
+        rel_path = match_path(data)
+        line = match_line_number(data)
         if rel_path is None or line is None:
             continue
         results.append(((root / rel_path).resolve(), line))
@@ -230,13 +208,14 @@ def search_content(
         return []
     results: list[tuple[Path, int, str]] = []
     for event in proc.events:
-        if event.type != "match" or not isinstance(event.data, dict):
+        data = as_match_data(event)
+        if data is None:
             continue
-        rel_path = _extract_path(event.data)
-        line = _extract_line_number(event.data)
+        rel_path = match_path(data)
+        line = match_line_number(data)
         if rel_path is None or line is None:
             continue
-        results.append(((root / rel_path).resolve(), line, _extract_line_text(event.data)))
+        results.append(((root / rel_path).resolve(), line, match_line_text(data)))
         if len(results) >= limits.max_total_matches:
             break
     return results

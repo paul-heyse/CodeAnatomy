@@ -133,7 +133,7 @@ def _result_match_count(result: CqResult) -> int:
     return len(result.key_findings)
 
 
-def merge_language_cq_results(
+def merge_language_cq_results(  # noqa: PLR0913
     *,
     scope: QueryLanguageScope,
     results: Mapping[QueryLanguage, CqResult],
@@ -220,8 +220,8 @@ def merge_language_cq_results(
                 "severity": finding.severity,
                 "message": finding.message,
                 "intent": "unspecified",
-                "languages": [],
-                "counts": {},
+                "languages": cast("list[str]", []),
+                "counts": cast("dict[str, int]", {}),
                 "remediation": "",
             }
             for finding in diag_findings

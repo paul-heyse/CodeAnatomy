@@ -23,9 +23,16 @@ from hashlib import blake2b
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import msgspec
-
 from tools.cq.core.locations import byte_offset_to_line_col
+from tools.cq.search.enrichment.core import (
+    append_source as _append_enrichment_source,
+)
+from tools.cq.search.enrichment.core import (
+    enforce_payload_budget as _enforce_shared_payload_budget,
+)
+from tools.cq.search.enrichment.core import (
+    payload_size_hint as _shared_payload_size_hint,
+)
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
@@ -1681,15 +1688,17 @@ def _append_source(payload: dict[str, object], source_name: str) -> None:
     source_name
         The source name to add if not already present.
     """
-    raw = payload.get("enrichment_sources")
-    sources: list[str] = list(raw) if isinstance(raw, list) else []
-    if source_name not in sources:
-        sources.append(source_name)
-        payload["enrichment_sources"] = sources
+    _append_enrichment_source(payload, source_name)
 
 
 def _promote_enrichment_node(node: SgNode) -> SgNode:
-    """Promote low-signal nodes (like identifiers) to richer enclosing nodes."""
+    """Promote low-signal nodes (like identifiers) to richer enclosing nodes.
+
+    Returns:
+    -------
+    SgNode
+        Preferred enclosing node for enrichment extraction.
+    """
     current = node
     depth = 0
     while current is not None and depth < _MAX_PARENT_DEPTH:
@@ -1716,7 +1725,7 @@ def _payload_size_hint(payload: dict[str, object]) -> int:
     int
         Encoded payload size in bytes.
     """
-    return len(msgspec.json.encode(payload))
+    return _shared_payload_size_hint(payload)
 
 
 def _enforce_payload_budget(payload: dict[str, object]) -> tuple[list[str], int]:
@@ -1727,10 +1736,6 @@ def _enforce_payload_budget(payload: dict[str, object]) -> tuple[list[str], int]
     tuple[list[str], int]
         Removed keys and final payload size.
     """
-    dropped: list[str] = []
-    if _payload_size_hint(payload) <= _MAX_PAYLOAD_BYTES:
-        return dropped, _payload_size_hint(payload)
-
     drop_order = (
         "scope_chain",
         "decorators",
@@ -1741,14 +1746,11 @@ def _enforce_payload_budget(payload: dict[str, object]) -> tuple[list[str], int]
         "call_target",
         "structural_context",
     )
-    for key in drop_order:
-        if key not in payload:
-            continue
-        payload.pop(key, None)
-        dropped.append(key)
-        if _payload_size_hint(payload) <= _MAX_PAYLOAD_BYTES:
-            break
-    return dropped, _payload_size_hint(payload)
+    return _enforce_shared_payload_budget(
+        payload,
+        max_payload_bytes=_MAX_PAYLOAD_BYTES,
+        drop_order=drop_order,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1837,7 +1839,7 @@ def enrich_python_context(
     return payload
 
 
-def enrich_python_context_by_byte_range(
+def enrich_python_context_by_byte_range(  # noqa: PLR0913
     sg_root: SgRoot,
     source_bytes: bytes,
     byte_start: int,

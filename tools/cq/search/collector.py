@@ -8,7 +8,19 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.locations import SourceSpan, byte_col_to_char_col, span_from_rg_match
 from tools.cq.search.profiles import SearchLimits
-from tools.cq.search.rg_events import RgEvent
+from tools.cq.search.rg_events import (
+    RgEvent,
+    RgMatchData,
+    RgSubmatch,
+    RgSummaryData,
+    as_match_data,
+    as_summary_data,
+    match_line_number,
+    match_line_text,
+    match_path,
+    submatch_text,
+    summary_stats,
+)
 
 if TYPE_CHECKING:
     from tools.cq.search.smart_search import RawMatch
@@ -44,35 +56,36 @@ class RgCollector:
     def handle_event(self, event: RgEvent) -> None:
         """Dispatch a decoded ripgrep event."""
         if event.type == "summary":
-            if isinstance(event.data, dict):
-                self.handle_summary(event.data)
+            data = as_summary_data(event)
+            if data is not None:
+                self.handle_summary(data)
             return
         if event.type != "match":
             return
-        if isinstance(event.data, dict):
-            self.handle_match(event.data)
+        data = as_match_data(event)
+        if data is not None:
+            self.handle_match(data)
 
-    def handle_summary(self, data: dict[str, object]) -> None:
+    def handle_summary(self, data: RgSummaryData) -> None:
         """Record summary stats from a ripgrep JSON payload."""
-        stats = data.get("stats")
+        stats = summary_stats(data)
         if isinstance(stats, dict):
             self.summary_stats = stats
 
-    def handle_match(self, data: dict[str, object]) -> None:
+    def handle_match(self, data: RgMatchData) -> None:
         """Process a ripgrep JSON match payload into RawMatch entries."""
         if self.max_matches_hit or self.max_files_hit:
             return
-        file_path = self._extract_file_path(data)
+        file_path = match_path(data)
         if not file_path or not self._allow_file(file_path):
             return
 
-        line_number = data.get("line_number")
-        if not isinstance(line_number, int):
+        line_number = match_line_number(data)
+        if line_number is None:
             return
 
-        line_text = self._extract_line_text(data)
-        submatches_raw = data.get("submatches")
-        submatches: list[object] = submatches_raw if isinstance(submatches_raw, list) else []
+        line_text = match_line_text(data)
+        submatches = data.submatches
 
         if submatches:
             for i, submatch in enumerate(submatches):
@@ -113,24 +126,6 @@ class RgCollector:
         self.seen_files.add(file_path)
         return True
 
-    @staticmethod
-    def _extract_file_path(data: dict[str, object]) -> str | None:
-        path_data = data.get("path", {})
-        if isinstance(path_data, dict):
-            file_path = path_data.get("text") or path_data.get("bytes")
-            if isinstance(file_path, str):
-                return file_path
-        return None
-
-    @staticmethod
-    def _extract_line_text(data: dict[str, object]) -> str:
-        lines_data = data.get("lines", {})
-        if isinstance(lines_data, dict):
-            text_value = lines_data.get("text")
-            if isinstance(text_value, str):
-                return text_value
-        return ""
-
     def _max_matches_reached(self) -> bool:
         if len(self.matches) >= self.limits.max_total_matches:
             self.truncated = True
@@ -143,23 +138,16 @@ class RgCollector:
         line_text: str,
         file_path: str,
         line_number: int,
-        submatch: object,
+        submatch: RgSubmatch,
         index: int,
     ) -> None:
-        if not isinstance(submatch, dict):
-            return
-        start = submatch.get("start")
-        end = submatch.get("end")
+        start = submatch.start
+        end = submatch.end
         if not isinstance(start, int) or not isinstance(end, int):
             return
         char_start = byte_col_to_char_col(line_text, start)
         char_end = byte_col_to_char_col(line_text, end)
-        match_text = ""
-        match_data = submatch.get("match", {})
-        if isinstance(match_data, dict):
-            text_value = match_data.get("text")
-            if isinstance(text_value, str):
-                match_text = text_value
+        match_text = submatch_text(submatch, line_text)
         if not match_text and line_text:
             match_text = line_text[char_start:char_end]
         self._append_match(

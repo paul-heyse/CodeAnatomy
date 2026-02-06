@@ -56,7 +56,9 @@ class TestBuildCapabilityDiagnostics:
         assert diags[0].category == "capability_limitation"
         assert "rust" in diags[0].message
         assert "not supported" in diags[0].message
-        assert diags[0].details.data["code"].startswith("ML_CAP_")
+        code = diags[0].details.data["code"]
+        assert isinstance(code, str)
+        assert code.startswith("ML_CAP_")
 
     def test_diagnostics_for_partial_support(self) -> None:
         """Test diagnostic generation for partially supported features."""

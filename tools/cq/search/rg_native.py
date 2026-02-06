@@ -114,7 +114,7 @@ def build_rg_command(
     return command
 
 
-def run_rg_json(
+def run_rg_json(  # noqa: PLR0913
     *,
     root: Path,
     pattern: str,

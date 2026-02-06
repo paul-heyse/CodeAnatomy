@@ -46,7 +46,9 @@ def test_ast_grep_precedence_over_tree_sitter(monkeypatch: pytest.MonkeyPatch) -
     assert payload.get("call_target") == "build_graph"
     # tree-sitter should still gap-fill missing keys.
     assert payload.get("macro_name") == "println"
-    assert "tree_sitter" in payload.get("enrichment_sources", [])
+    enrichment_sources = payload.get("enrichment_sources")
+    assert isinstance(enrichment_sources, list)
+    assert "tree_sitter" in enrichment_sources
 
 
 def test_crosscheck_mode_emits_mismatch_details(monkeypatch: pytest.MonkeyPatch) -> None:

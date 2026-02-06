@@ -3,29 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TypedDict
+from typing import TYPE_CHECKING
 
-from tools.cq.query.language import (
-    QueryLanguage,
-    QueryLanguageScope,
-    expand_language_scope,
+from tools.cq.query.language import QueryLanguage, QueryLanguageScope, expand_language_scope
+from tools.cq.search.contracts import (
+    CrossLanguageDiagnostic,
+    LanguageCapabilities,
+    LanguagePartitionStats,
+    SearchSummaryContract,
+    coerce_diagnostics,
+    coerce_language_capabilities,
+    coerce_language_partitions,
+    summary_contract_to_dict,
 )
 
-
-class LanguagePartitionStats(TypedDict, total=False):
-    """Per-language summary partition payload."""
-
-    matches: int
-    files_scanned: int
-    scanned_files: int
-    scanned_files_is_estimate: bool
-    matched_files: int
-    total_matches: int
-    truncated: bool
-    timed_out: bool
-    caps_hit: str
-    error: str
-
+if TYPE_CHECKING:
+    from tools.cq.search.contracts import EnrichmentTelemetry
 
 _REQUIRED_KEYS: tuple[str, ...] = (
     "lang_scope",
@@ -66,25 +59,25 @@ def normalize_language_partitions(
     ordered_languages = (
         tuple(language_order) if language_order is not None else expand_language_scope(scope)
     )
-    normalized: dict[QueryLanguage, dict[str, object]] = {}
-    for lang in ordered_languages:
-        payload = languages.get(lang)
-        normalized[lang] = dict(payload) if payload is not None else {}
-    # Preserve additional languages not in ordered scope (defensive).
-    for lang, payload in languages.items():
-        if lang not in normalized:
-            normalized[lang] = dict(payload)
-    return normalized
+    normalized = coerce_language_partitions(
+        language_order=ordered_languages,
+        partitions=languages,
+    )
+    from tools.cq.core.serialization import to_builtins
+
+    return {lang: dict(to_builtins(partition)) for lang, partition in normalized.items()}
 
 
-def build_multilang_summary(
+def build_multilang_summary(  # noqa: PLR0913
     *,
     common: Mapping[str, object] | None,
     lang_scope: QueryLanguageScope,
     language_order: Sequence[QueryLanguage] | None,
     languages: Mapping[QueryLanguage, Mapping[str, object]],
-    cross_language_diagnostics: Sequence[Mapping[str, object]] | None = None,
-    language_capabilities: Mapping[str, object] | None = None,
+    cross_language_diagnostics: Sequence[CrossLanguageDiagnostic | Mapping[str, object]]
+    | None = None,
+    language_capabilities: LanguageCapabilities | Mapping[str, object] | None = None,
+    enrichment_telemetry: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build canonical multilang summary payload.
 
@@ -93,25 +86,35 @@ def build_multilang_summary(
     dict[str, object]
         Summary dictionary with required multilang keys.
     """
-    summary: dict[str, object] = dict(common) if common is not None else {}
     ordered_languages = (
         tuple(language_order) if language_order is not None else expand_language_scope(lang_scope)
     )
-    summary["lang_scope"] = lang_scope
-    summary["language_order"] = list(ordered_languages)
-    summary["languages"] = normalize_language_partitions(
-        scope=lang_scope,
-        language_order=ordered_languages,
-        languages=languages,
+    contract = SearchSummaryContract(
+        lang_scope=lang_scope,
+        language_order=list(ordered_languages),
+        languages=coerce_language_partitions(
+            language_order=ordered_languages,
+            partitions=languages,
+        ),
+        cross_language_diagnostics=coerce_diagnostics(cross_language_diagnostics),
+        language_capabilities=coerce_language_capabilities(language_capabilities),
+        enrichment_telemetry=(
+            None
+            if enrichment_telemetry is None
+            else _coerce_enrichment_telemetry(enrichment_telemetry)
+        ),
     )
-    summary["cross_language_diagnostics"] = [
-        dict(item) for item in (cross_language_diagnostics or ())
-    ]
-    summary["language_capabilities"] = (
-        dict(language_capabilities) if language_capabilities is not None else {}
-    )
+    summary = summary_contract_to_dict(contract, common=common)
     assert_multilang_summary(summary)
     return summary
+
+
+def _coerce_enrichment_telemetry(
+    payload: Mapping[str, object],
+) -> EnrichmentTelemetry | None:
+    from tools.cq.search.contracts import EnrichmentTelemetry
+
+    return EnrichmentTelemetry.from_mapping(payload)
 
 
 def partition_stats_from_result_summary(
@@ -133,24 +136,28 @@ def partition_stats_from_result_summary(
     if matches == 0:
         matches = _coerce_int(summary.get("total_matches"), fallback_matches)
 
-    payload: dict[str, object] = {
-        "matches": matches,
-        "files_scanned": files_scanned,
-        "scanned_files": _coerce_int(summary.get("scanned_files"), files_scanned),
-        "scanned_files_is_estimate": _coerce_bool(
+    payload = LanguagePartitionStats(
+        matches=matches,
+        files_scanned=files_scanned,
+        scanned_files=_coerce_int(summary.get("scanned_files"), files_scanned),
+        scanned_files_is_estimate=_coerce_bool(
             summary.get("scanned_files_is_estimate"),
             default=False,
         ),
-        "matched_files": _coerce_int(summary.get("matched_files"), 0),
-        "total_matches": _coerce_int(summary.get("total_matches"), matches),
-        "timed_out": _coerce_bool(summary.get("timed_out"), default=False),
-        "truncated": _coerce_bool(summary.get("truncated"), default=False),
-        "caps_hit": str(summary.get("caps_hit", "none")),
-    }
-    error = summary.get("error")
-    if isinstance(error, str) and error:
-        payload["error"] = error
-    return payload
+        matched_files=_coerce_int(summary.get("matched_files"), 0),
+        total_matches=_coerce_int(summary.get("total_matches"), matches),
+        timed_out=_coerce_bool(summary.get("timed_out"), default=False),
+        truncated=_coerce_bool(summary.get("truncated"), default=False),
+        caps_hit=str(summary.get("caps_hit", "none")),
+        error=(
+            str(summary.get("error"))
+            if isinstance(summary.get("error"), str) and str(summary.get("error"))
+            else None
+        ),
+    )
+    from tools.cq.core.serialization import to_builtins
+
+    return dict(to_builtins(payload))
 
 
 def assert_multilang_summary(summary: Mapping[str, object]) -> None:

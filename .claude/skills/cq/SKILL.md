@@ -47,6 +47,15 @@ cq supports searching and querying Rust code (`.rs` files) alongside Python.
 Language scope defaults to `auto` (search both Python and Rust); use `--lang rust` or
 `lang=rust` to narrow scope.
 
+## Contract and Runtime Policy
+
+- Use `msgspec.Struct` for CQ serialized contracts that move between modules
+  (`tools/cq/search/contracts.py`, `tools/cq/search/enrichment/contracts.py`).
+- Keep runtime parser/cache objects as runtime-only types; do not force them
+  into serialized contract models.
+- In CQ hot paths (`tools/cq/search`, `tools/cq/query`, `tools/cq/run`), avoid
+  `pydantic`; use typed runtime objects and boundary serialization instead.
+
 ### Supported Commands for Rust
 
 | Command | Rust Support | How to Use |

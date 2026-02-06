@@ -1213,32 +1213,17 @@ def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> Cq
     Returns:
         The mutated result with Rust fallback data merged in.
     """
-    from tools.cq.core.multilang_summary import (
-        build_multilang_summary,
-        partition_stats_from_result_summary,
-    )
-    from tools.cq.macros._rust_fallback import rust_fallback_search
-
-    rust_findings, capability_diags, rust_stats = rust_fallback_search(
-        root,
-        function_name,
-        macro_name="calls",
-    )
-    result.evidence.extend(rust_findings)
-    result.key_findings.extend(capability_diags)
+    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
 
     existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
-    py_stats = partition_stats_from_result_summary(
-        existing_summary,
-        fallback_matches=existing_summary.get("total_sites", 0),  # type: ignore[arg-type]
+    fallback_matches = existing_summary.get("total_sites")
+    return apply_rust_macro_fallback(
+        result=result,
+        root=root,
+        pattern=function_name,
+        macro_name="calls",
+        fallback_matches=fallback_matches if isinstance(fallback_matches, int) else 0,
     )
-    result.summary = build_multilang_summary(
-        common=existing_summary,
-        lang_scope="auto",
-        language_order=None,
-        languages={"python": py_stats, "rust": rust_stats},
-    )
-    return result
 
 
 def cmd_calls(

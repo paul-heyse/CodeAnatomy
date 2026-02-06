@@ -72,6 +72,9 @@ Smart Search automatically:
 - Use `/cq calls` or `/cq impact` before refactors.
 - Use `/cq run` for multi-step workflows to avoid repeated scans.
 - Use `rg` only for non-Python assets or explicit raw text needs.
+- For CQ internals, use `msgspec` contracts for serialized cross-module payloads
+  and keep parser/cache objects as runtime-only types; avoid `pydantic` in CQ
+  hot paths (`tools/cq/search`, `tools/cq/query`, `tools/cq/run`).
 
 Only use pattern queries (`/cq q "pattern=..."`) when you need:
 - Exact AST-level structural matching

@@ -7,6 +7,12 @@ from typing import TYPE_CHECKING, Literal
 
 from tools.cq.core.schema import DetailPayload, Finding
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope, expand_language_scope
+from tools.cq.search.contracts import (
+    CapabilitySupport,
+    CrossLanguageDiagnostic,
+    LanguageCapabilities,
+    diagnostics_to_dicts,
+)
 
 if TYPE_CHECKING:
     from tools.cq.query.ir import Query
@@ -103,16 +109,27 @@ def diagnostic_payload_from_finding(finding: Finding) -> dict[str, object]:
     languages = details.get("languages")
     counts = details.get("counts")
     remediation = details.get("remediation")
-    payload: dict[str, object] = {
-        "code": str(code) if code is not None else "ML000",
-        "severity": finding.severity,
-        "message": finding.message,
-        "intent": str(intent) if intent is not None else "unspecified",
-        "languages": list(languages) if isinstance(languages, list) else [],
-        "counts": dict(counts) if isinstance(counts, dict) else {},
-        "remediation": str(remediation) if remediation is not None else "",
-    }
-    return payload
+    payload = CrossLanguageDiagnostic(
+        code=str(code) if code is not None else "ML000",
+        severity=finding.severity,
+        message=finding.message,
+        intent=str(intent) if intent is not None else "unspecified",
+        languages=[str(item) for item in languages] if isinstance(languages, list) else [],
+        counts={
+            str(k): v
+            for k, v in (counts.items() if isinstance(counts, dict) else ())
+            if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)
+        },
+        remediation=str(remediation) if remediation is not None else "",
+        feature=str(details.get("feature")) if details.get("feature") is not None else None,
+        language=str(details.get("language")) if details.get("language") is not None else None,
+        capability_level=(
+            str(details.get("capability_level"))
+            if details.get("capability_level") is not None
+            else None
+        ),
+    )
+    return diagnostics_to_dicts([payload])[0]
 
 
 def diagnostics_to_summary_payload(findings: Sequence[Finding]) -> list[dict[str, object]]:
@@ -234,21 +251,30 @@ def build_language_capabilities(
         Language capability summary for Python, Rust, and shared support.
     """
     _ = lang_scope
-    python_caps: dict[str, object] = {}
-    rust_caps: dict[str, object] = {}
+    python_caps: dict[str, CapabilitySupport] = {}
+    rust_caps: dict[str, CapabilitySupport] = {}
     shared_caps: dict[str, bool] = {}
     for summary_key, feature_key in _SUMMARY_CAPABILITY_FEATURES.items():
         levels = _language_levels(feature_key)
         py_level = levels.get("python", "none")
         rs_level = levels.get("rust", "none")
-        python_caps[summary_key] = {"supported": py_level != "none", "level": py_level}
-        rust_caps[summary_key] = {"supported": rs_level != "none", "level": rs_level}
+        python_caps[summary_key] = CapabilitySupport(
+            supported=py_level != "none",
+            level=py_level,
+        )
+        rust_caps[summary_key] = CapabilitySupport(
+            supported=rs_level != "none",
+            level=rs_level,
+        )
         shared_caps[summary_key] = py_level != "none" and rs_level != "none"
-    return {
-        "python": python_caps,
-        "rust": rust_caps,
-        "shared": shared_caps,
-    }
+    from tools.cq.core.serialization import to_builtins
+
+    capabilities = LanguageCapabilities(
+        python=python_caps,
+        rust=rust_caps,
+        shared=shared_caps,
+    )
+    return dict(to_builtins(capabilities))
 
 
 def features_from_query(query: Query) -> list[str]:

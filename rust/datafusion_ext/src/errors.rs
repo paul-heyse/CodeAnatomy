@@ -29,12 +29,9 @@ impl Error for ExtError {}
 
 crate::impl_error_from!(ExtError, ArrowError, Arrow);
 crate::impl_error_from!(ExtError, DataFusionError, DataFusion, |err| Box::new(err));
-crate::impl_error_from!(
-    ExtError,
-    deltalake::errors::DeltaTableError,
-    Delta,
-    |err| err.to_string()
-);
+crate::impl_error_from!(ExtError, deltalake::errors::DeltaTableError, Delta, |err| {
+    err.to_string()
+});
 
 pub type ExtResult<T> = std::result::Result<T, ExtError>;
 

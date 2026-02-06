@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
 import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
@@ -16,6 +15,18 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 from datafusion_engine.session.cache_policy import cache_policy_settings
+from datafusion_engine.session.delta_session_builder import (
+    build_delta_session_context as _build_delta_session_context_impl,
+)
+from datafusion_engine.session.delta_session_builder import (
+    build_runtime_policy_options as _build_runtime_policy_options_impl,
+)
+from datafusion_engine.session.delta_session_builder import (
+    parse_runtime_size as _parse_runtime_size_impl,
+)
+from datafusion_engine.session.delta_session_builder import (
+    split_runtime_settings as _split_runtime_settings_impl,
+)
 from datafusion_engine.session.helpers import deregister_table
 
 
@@ -121,6 +132,24 @@ def _apply_explain_analyze_level(
     return config.set("datafusion.explain.analyze_level", level)
 
 
+def _split_runtime_settings(
+    settings: Mapping[str, str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    return _split_runtime_settings_impl(settings)
+
+
+def _parse_runtime_size(value: object) -> int | None:
+    return _parse_runtime_size_impl(value)
+
+
+def _build_delta_runtime_policy_options(
+    module: object | None,
+    runtime_settings: Mapping[str, str],
+) -> tuple[object | None, dict[str, object] | None]:
+    bridge = _build_runtime_policy_options_impl(module, runtime_settings)
+    return bridge.options, bridge.payload
+
+
 @dataclass(frozen=True)
 class _DeltaSessionBuildResult:
     ctx: SessionContext | None
@@ -128,6 +157,7 @@ class _DeltaSessionBuildResult:
     installed: bool
     error: str | None
     cause: Exception | None
+    runtime_policy_bridge: Mapping[str, object] | None = None
 
 
 @dataclass
@@ -199,87 +229,14 @@ def _build_delta_session_context(
     profile: DataFusionRuntimeProfile,
     runtime_env: RuntimeEnvBuilder,
 ) -> _DeltaSessionBuildResult:
-    from datafusion_engine.session.runtime import delta_runtime_env_options
-
-    available = True
-    error: str | None = None
-    cause: Exception | None = None
-    builder: object | None = None
-    builder_module: str | None = None
-    for module_name in ("datafusion._internal", "datafusion_ext"):
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError as exc:
-            available = False
-            error = str(exc)
-            cause = exc
-            continue
-        builder = getattr(module, "delta_session_context", None)
-        if callable(builder):
-            builder_module = module_name
-            break
-        error = f"{module_name}.delta_session_context is unavailable."
-        cause = TypeError(error)
-        builder = None
-    if builder is None:
-        return _DeltaSessionBuildResult(
-            ctx=None,
-            available=available,
-            installed=False,
-            error=error,
-            cause=cause,
-        )
-    builder_fn = cast(
-        "Callable[[list[tuple[str, str]], RuntimeEnvBuilder | None, object | None], SessionContext]",
-        builder,
-    )
-    try:
-        settings = profile.settings_payload()
-        if builder_module == "datafusion_ext":
-            settings = {
-                key: value
-                for key, value in settings.items()
-                if not key.startswith("datafusion.runtime.")
-            }
-        settings["datafusion.catalog.information_schema"] = str(
-            profile.catalog.enable_information_schema
-        ).lower()
-        delta_runtime = delta_runtime_env_options(profile)
-        runtime_arg: RuntimeEnvBuilder | None = runtime_env
-        if builder_module == "datafusion_ext":
-            runtime_arg = None
-        ctx = builder_fn(
-            list(settings.items()),
-            runtime_arg,
-            delta_runtime,
-        )
-    except (RuntimeError, TypeError, ValueError) as exc:
-        return _DeltaSessionBuildResult(
-            ctx=None,
-            available=available,
-            installed=False,
-            error=str(exc),
-            cause=exc,
-        )
-    if not isinstance(ctx, SessionContext) and hasattr(ctx, "table") and not hasattr(ctx, "ctx"):
-        wrapper = SessionContext.__new__(SessionContext)
-        wrapper.ctx = ctx
-        ctx = wrapper
-    if not isinstance(ctx, SessionContext):
-        message = "Delta session context must return a SessionContext."
-        return _DeltaSessionBuildResult(
-            ctx=None,
-            available=available,
-            installed=False,
-            error=message,
-            cause=TypeError(message),
-        )
+    result = _build_delta_session_context_impl(profile, runtime_env)
     return _DeltaSessionBuildResult(
-        ctx=ctx,
-        available=available,
-        installed=True,
-        error=None,
-        cause=None,
+        ctx=result.ctx,
+        available=result.available,
+        installed=result.installed,
+        error=result.error,
+        cause=result.cause,
+        runtime_policy_bridge=result.runtime_policy_bridge,
     )
 
 
@@ -435,6 +392,7 @@ class SessionFactory:
             available=result.available,
             installed=result.installed,
             error=result.error,
+            runtime_policy_bridge=result.runtime_policy_bridge,
         )
         if result.error is not None:
             msg = "Delta session defaults require datafusion._internal or datafusion_ext."

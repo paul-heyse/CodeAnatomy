@@ -93,7 +93,10 @@ pub(crate) fn expand_string_signatures(arg_types: &[DataType]) -> Vec<TypeSignat
 }
 
 pub(crate) fn is_string_type(dtype: &DataType) -> bool {
-    matches!(dtype, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+    matches!(
+        dtype,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
 }
 
 pub(crate) fn expect_arg_len(
@@ -146,7 +149,9 @@ pub(crate) fn ensure_list_arg(name: &str, arg_type: &DataType) -> Result<()> {
     if matches!(arg_type, DataType::List(_)) {
         Ok(())
     } else {
-        Err(DataFusionError::Plan(format!("{name} expects a list input")))
+        Err(DataFusionError::Plan(format!(
+            "{name} expects a list input"
+        )))
     }
 }
 
@@ -502,8 +507,9 @@ pub(crate) fn span_metadata_from_scalars(
     };
     metadata.insert("line_base".to_string(), line_base.to_string());
     let col_unit = match scalar_argument(args, 3) {
-        Some(value) => scalar_to_string(value)?
-            .unwrap_or_else(|| defaults.span_default_col_unit.clone()),
+        Some(value) => {
+            scalar_to_string(value)?.unwrap_or_else(|| defaults.span_default_col_unit.clone())
+        }
         None => defaults.span_default_col_unit.clone(),
     };
     metadata.insert("col_unit".to_string(), col_unit);

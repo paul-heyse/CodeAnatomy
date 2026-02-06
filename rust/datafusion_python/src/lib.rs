@@ -53,6 +53,7 @@ pub mod store;
 pub mod table;
 pub mod unparser;
 
+pub mod codeanatomy_ext;
 #[cfg(feature = "substrait")]
 pub mod substrait;
 #[allow(clippy::borrow_deref_ref)]
@@ -62,7 +63,6 @@ mod udf;
 pub mod udtf;
 mod udwf;
 pub mod utils;
-pub mod codeanatomy_ext;
 pub use datafusion_ext::delta_control_plane;
 pub use datafusion_ext::delta_maintenance;
 pub use datafusion_ext::delta_mutations;
@@ -73,9 +73,9 @@ pub use datafusion_ext::function_factory;
 pub use datafusion_ext::function_rewrite;
 pub use datafusion_ext::registry_snapshot;
 pub use datafusion_ext::udaf_builtin;
+pub use datafusion_ext::udf as udf_ext;
 #[cfg(feature = "async-udf")]
 pub use datafusion_ext::udf_async;
-pub use datafusion_ext::udf as udf_ext;
 pub use datafusion_ext::udf_config;
 pub use datafusion_ext::udf_docs;
 pub use datafusion_ext::udf_registry;

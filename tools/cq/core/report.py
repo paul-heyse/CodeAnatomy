@@ -67,10 +67,15 @@ def _format_finding(f: Finding, *, show_anchor: bool = True) -> str:
             header = f"  Context (lines {start}-{end}):"
         else:
             header = "  Context:"
-        # Indent the code block
+        # Indent the code block with language-aware syntax highlighting
+        lang = (
+            f.details.get("language", "python")
+            if isinstance(f.details.get("language"), str)
+            else "python"
+        )
         snippet_lines = context_snippet.split("\n")
         indented_snippet = "\n".join(f"  {line}" for line in snippet_lines)
-        return f"{base_line}\n{header}\n  ```python\n{indented_snippet}\n  ```"
+        return f"{base_line}\n{header}\n  ```{lang}\n{indented_snippet}\n  ```"
 
     return base_line
 

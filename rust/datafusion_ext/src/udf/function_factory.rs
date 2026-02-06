@@ -8,11 +8,8 @@ use datafusion::config::ConfigOptions;
 use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result};
 
-#[cfg(feature = "async-udf")]
-use crate::udf_async;
 use crate::compat::{ScalarUDF, Signature, Volatility};
 use crate::udf::common::{expand_string_signatures, is_string_type, SignatureEqHash};
-use crate::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 use crate::udf::{
     cdf::{CdfChangeRankUdf, CdfIsDeleteUdf, CdfIsUpsertUdf},
     collection::{ListCompactUdf, ListUniqueSortedUdf, MapGetDefaultUdf, MapNormalizeUdf},
@@ -23,12 +20,14 @@ use crate::udf::{
     metadata::{ArrowMetadataUdf, CpgScoreUdf},
     position::{ColToByteUdf, PositionEncodingUdf},
     span::{
-        IntervalAlignScoreUdf, SpanContainsUdf, SpanIdUdf, SpanLenUdf, SpanMakeUdf,
-        SpanOverlapsUdf,
+        IntervalAlignScoreUdf, SpanContainsUdf, SpanIdUdf, SpanLenUdf, SpanMakeUdf, SpanOverlapsUdf,
     },
     string::{QNameNormalizeUdf, SemanticTagUdf, Utf8NormalizeUdf, Utf8NullIfBlankUdf},
     struct_ops::StructPickUdf,
 };
+#[cfg(feature = "async-udf")]
+use crate::udf_async;
+use crate::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 
 #[derive(Debug)]
 struct FunctionParameter {
@@ -56,10 +55,7 @@ struct FunctionFactoryPolicy {
 
 const POLICY_SCHEMA_VERSION: i32 = 1;
 
-pub fn install_function_factory_native(
-    ctx: &SessionContext,
-    policy_ipc: &[u8],
-) -> Result<()> {
+pub fn install_function_factory_native(ctx: &SessionContext, policy_ipc: &[u8]) -> Result<()> {
     let policy = policy_from_ipc(policy_ipc)?;
     touch_policy_fields(&policy);
     register_primitives(ctx, &policy)?;
@@ -241,10 +237,7 @@ fn list_field<'a>(array: &'a StructArray, name: &str) -> Result<&'a ListArray> {
         .ok_or_else(|| DataFusionError::Plan(format!("Invalid {name} field type.")))
 }
 
-fn bool_field<'a>(
-    array: &'a StructArray,
-    name: &str,
-) -> Result<&'a arrow::array::BooleanArray> {
+fn bool_field<'a>(array: &'a StructArray, name: &str) -> Result<&'a arrow::array::BooleanArray> {
     let column = array
         .column_by_name(name)
         .ok_or_else(|| DataFusionError::Plan(format!("Missing {name} field.")))?;
@@ -464,7 +457,10 @@ fn signature_from_arg_types(arg_types: Vec<DataType>, volatility: Volatility) ->
     if arg_types.is_empty() {
         return Signature::nullary(volatility);
     }
-    if arg_types.iter().all(|dtype| matches!(dtype, DataType::Null)) {
+    if arg_types
+        .iter()
+        .all(|dtype| matches!(dtype, DataType::Null))
+    {
         return Signature::any(arg_types.len(), volatility);
     }
     let has_string = arg_types.iter().any(is_string_type);
@@ -499,7 +495,9 @@ fn volatility_from_str(value: &str) -> Result<Volatility> {
 fn dtype_from_str(value: &str) -> Result<DataType> {
     let text = normalize_type(value)?;
     parse_type_signature(&text).map_err(|err| {
-        DataFusionError::Plan(format!("Unsupported dtype in primitive policy: {value} ({err})"))
+        DataFusionError::Plan(format!(
+            "Unsupported dtype in primitive policy: {value} ({err})"
+        ))
     })
 }
 
@@ -548,12 +546,17 @@ fn simple_type_from_str(text: &str) -> Option<DataType> {
         "string" | "utf8" => Some(DataType::Utf8),
         "large_string" | "large_utf8" => Some(DataType::LargeUtf8),
         "utf8view" | "utf8_view" => Some(DataType::Utf8View),
-        "timestamp" => Some(DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)),
+        "timestamp" => Some(DataType::Timestamp(
+            arrow::datatypes::TimeUnit::Microsecond,
+            None,
+        )),
         "date32" => Some(DataType::Date32),
         "date64" => Some(DataType::Date64),
         "time32" => Some(DataType::Time32(arrow::datatypes::TimeUnit::Second)),
         "time64" => Some(DataType::Time64(arrow::datatypes::TimeUnit::Microsecond)),
-        "interval" => Some(DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano)),
+        "interval" => Some(DataType::Interval(
+            arrow::datatypes::IntervalUnit::MonthDayNano,
+        )),
         _ => None,
     }
 }
@@ -563,9 +566,9 @@ fn parse_container_type(text: &str) -> Result<Option<DataType>> {
     let Some((prefix, inner)) = value.split_once('<') else {
         return Ok(None);
     };
-    let inner = inner.strip_suffix('>').ok_or_else(|| {
-        DataFusionError::Plan(format!("Invalid type signature: {value}"))
-    })?;
+    let inner = inner
+        .strip_suffix('>')
+        .ok_or_else(|| DataFusionError::Plan(format!("Invalid type signature: {value}")))?;
     let inner = inner.trim();
     match prefix {
         "list" => Ok(Some(DataType::List(Arc::new(Field::new(

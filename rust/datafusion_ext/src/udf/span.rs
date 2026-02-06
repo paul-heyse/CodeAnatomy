@@ -18,9 +18,9 @@ use crate::compat::{
 };
 use crate::udf::common::{
     all_scalars, columnar_result, columnar_to_bool, columnar_to_i32, columnar_to_i64,
-    columnar_to_optional_strings, columnar_to_strings, eval_udf_on_literals,
-    span_metadata_from_scalars, span_struct_type, signature_with_names, stable_id_value,
-    user_defined_signature, variadic_any_signature, PART_SEPARATOR, NULL_SENTINEL, SignatureEqHash,
+    columnar_to_optional_strings, columnar_to_strings, eval_udf_on_literals, signature_with_names,
+    span_metadata_from_scalars, span_struct_type, stable_id_value, user_defined_signature,
+    variadic_any_signature, SignatureEqHash, NULL_SENTINEL, PART_SEPARATOR,
 };
 use crate::udf_config::CodeAnatomyUdfConfig;
 
@@ -329,7 +329,11 @@ impl ScalarUDFImpl for SpanLenUdf {
             }
             builder.append_value(bend.value(row) - bstart.value(row));
         }
-        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "span_len")
+        columnar_result(
+            Arc::new(builder.finish()) as ArrayRef,
+            all_scalar,
+            "span_len",
+        )
     }
 }
 
@@ -366,7 +370,11 @@ impl ScalarUDFImpl for IntervalAlignScoreUdf {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
-        Ok(Arc::new(Field::new(self.name(), DataType::Float64, nullable)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Float64,
+            nullable,
+        )))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -390,8 +398,7 @@ impl ScalarUDFImpl for IntervalAlignScoreUdf {
         let num_rows = if all_scalar { 1 } else { args.number_rows };
         let left_start_values =
             columnar_to_i64(left_start, num_rows, "interval_align_score left_start")?;
-        let left_end_values =
-            columnar_to_i64(left_end, num_rows, "interval_align_score left_end")?;
+        let left_end_values = columnar_to_i64(left_end, num_rows, "interval_align_score left_end")?;
         let right_start_values =
             columnar_to_i64(right_start, num_rows, "interval_align_score right_start")?;
         let right_end_values =
@@ -521,13 +528,19 @@ impl ScalarUDFImpl for SpanOverlapsUdf {
             }
             let left_adjusted_end =
                 adjusted_end(left_end.value(row), span_end_exclusive(left_exclusive, row));
-            let right_adjusted_end =
-                adjusted_end(right_end.value(row), span_end_exclusive(right_exclusive, row));
+            let right_adjusted_end = adjusted_end(
+                right_end.value(row),
+                span_end_exclusive(right_exclusive, row),
+            );
             let overlaps = left_start.value(row) < right_adjusted_end
                 && right_start.value(row) < left_adjusted_end;
             builder.append_value(overlaps);
         }
-        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "span_overlaps")
+        columnar_result(
+            Arc::new(builder.finish()) as ArrayRef,
+            all_scalar,
+            "span_overlaps",
+        )
     }
 }
 
@@ -635,13 +648,19 @@ impl ScalarUDFImpl for SpanContainsUdf {
             }
             let left_adjusted_end =
                 adjusted_end(left_end.value(row), span_end_exclusive(left_exclusive, row));
-            let right_adjusted_end =
-                adjusted_end(right_end.value(row), span_end_exclusive(right_exclusive, row));
+            let right_adjusted_end = adjusted_end(
+                right_end.value(row),
+                span_end_exclusive(right_exclusive, row),
+            );
             let contains = left_start.value(row) <= right_start.value(row)
                 && right_adjusted_end <= left_adjusted_end;
             builder.append_value(contains);
         }
-        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "span_contains")
+        columnar_result(
+            Arc::new(builder.finish()) as ArrayRef,
+            all_scalar,
+            "span_contains",
+        )
     }
 }
 
@@ -734,7 +753,11 @@ impl ScalarUDFImpl for SpanIdUdf {
             }
             builder.append_value(stable_id_value(prefix, &joined));
         }
-        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "span_id")
+        columnar_result(
+            Arc::new(builder.finish()) as ArrayRef,
+            all_scalar,
+            "span_id",
+        )
     }
 }
 

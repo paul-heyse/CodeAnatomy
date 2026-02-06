@@ -10,9 +10,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Expr;
 
-use crate::{
-    async_runtime, delta_control_plane, macros::TableUdfSpec, table_udfs,
-};
+use crate::{async_runtime, delta_control_plane, macros::TableUdfSpec, table_udfs};
 
 const READ_DELTA_TABLE_FUNCTION: &str = "read_delta";
 const READ_DELTA_CDF_TABLE_FUNCTION: &str = "read_delta_cdf";

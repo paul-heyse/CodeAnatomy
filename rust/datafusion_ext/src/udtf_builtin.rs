@@ -11,8 +11,8 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Expr;
 use datafusion_functions_table::all_default_table_functions;
 
-use crate::{table_udfs, macros::TableUdfSpec};
 use crate::registry_snapshot;
+use crate::{macros::TableUdfSpec, table_udfs};
 
 const REGISTRY_TABLE_FUNCTION: &str = "udf_registry";
 const DOCS_TABLE_FUNCTION: &str = "udf_docs";

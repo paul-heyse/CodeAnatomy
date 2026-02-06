@@ -511,6 +511,7 @@ def record_delta_session_defaults(
     available: bool,
     installed: bool,
     error: str | None,
+    runtime_policy_bridge: Mapping[str, object] | None = None,
 ) -> None:
     """Record delta session defaults metadata for a profile."""
     if profile.diagnostics.diagnostics_sink is None:
@@ -522,6 +523,9 @@ def record_delta_session_defaults(
             "available": available,
             "installed": installed,
             "error": error,
+            "runtime_policy_bridge": (
+                dict(runtime_policy_bridge) if runtime_policy_bridge is not None else None
+            ),
         },
     )
 

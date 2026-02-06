@@ -105,9 +105,11 @@ impl PartitionEvaluator for RustPartitionEvaluator {
             let py_num_rows = num_rows.into_pyobject(py)?;
             let py_args = PyTuple::new(py, vec![py_values.as_any(), &py_num_rows])?;
 
-            let value = self.evaluator.bind(py).call_method1("evaluate_all", py_args)?;
-            let array_data =
-                ArrayData::from_pyarrow_bound(&value).map_err(py_datafusion_err)?;
+            let value = self
+                .evaluator
+                .bind(py)
+                .call_method1("evaluate_all", py_args)?;
+            let array_data = ArrayData::from_pyarrow_bound(&value).map_err(py_datafusion_err)?;
             Ok::<ArrayRef, pyo3::PyErr>(make_array(array_data))
         })
         .map_err(to_datafusion_err)
@@ -158,8 +160,7 @@ impl PartitionEvaluator for RustPartitionEvaluator {
                 .evaluator
                 .bind(py)
                 .call_method1("evaluate_all_with_rank", py_args)?;
-            let array_data =
-                ArrayData::from_pyarrow_bound(&value).map_err(py_datafusion_err)?;
+            let array_data = ArrayData::from_pyarrow_bound(&value).map_err(py_datafusion_err)?;
             Ok::<ArrayRef, pyo3::PyErr>(make_array(array_data))
         })
         .map_err(to_datafusion_err)

@@ -4,10 +4,10 @@ use datafusion::execution::context::SessionContext;
 use datafusion_common::Result;
 use datafusion_expr::{AggregateUDF, WindowUDF};
 
+pub use crate::macros::{ScalarUdfSpec, TableUdfSpec};
 #[cfg(feature = "async-udf")]
 use crate::udf_async;
 use crate::{scalar_udfs, table_udfs};
-pub use crate::macros::{ScalarUdfSpec, TableUdfSpec};
 use crate::{udaf_builtin, udf, udtf_builtin, udtf_sources, udwf_builtin};
 
 pub fn scalar_udf_specs() -> Vec<ScalarUdfSpec> {
@@ -160,6 +160,9 @@ mod tests {
 
     #[test]
     fn registry_has_table_functions() {
-        assert!(table_udf_specs().is_empty(), "expected no custom table UDFs");
+        assert!(
+            table_udf_specs().is_empty(),
+            "expected no custom table UDFs"
+        );
     }
 }

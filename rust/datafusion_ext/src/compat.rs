@@ -4,14 +4,6 @@
 //! upgrading DataFusion to reduce churn across UDF modules.
 
 pub use datafusion_expr::{
-    ColumnarValue,
-    Documentation,
-    Expr,
-    ReturnFieldArgs,
-    ScalarFunctionArgs,
-    ScalarUDF,
-    ScalarUDFImpl,
-    Signature,
-    TypeSignature,
-    Volatility,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };

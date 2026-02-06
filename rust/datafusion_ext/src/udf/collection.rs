@@ -171,7 +171,11 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
                 builder.append_null();
             }
         }
-        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "map_get_default")
+        columnar_result(
+            Arc::new(builder.finish()) as ArrayRef,
+            all_scalar,
+            "map_get_default",
+        )
     }
 }
 
@@ -265,8 +269,7 @@ impl ScalarUDFImpl for MapNormalizeUdf {
                 &args.args[1],
                 "map_normalize key_case must be a scalar literal",
             )?;
-            scalar_to_string(&scalar)?
-                .unwrap_or_else(|| self.policy.map_normalize_key_case.clone())
+            scalar_to_string(&scalar)?.unwrap_or_else(|| self.policy.map_normalize_key_case.clone())
         } else {
             self.policy.map_normalize_key_case.clone()
         };
@@ -339,7 +342,11 @@ impl ScalarUDFImpl for MapNormalizeUdf {
             }
             builder.append(true)?;
         }
-        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "map_normalize")
+        columnar_result(
+            Arc::new(builder.finish()) as ArrayRef,
+            all_scalar,
+            "map_normalize",
+        )
     }
 
     fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
@@ -446,7 +453,11 @@ impl ScalarUDFImpl for ListCompactUdf {
             }
             builder.append(true);
         }
-        columnar_result(Arc::new(builder.finish()) as ArrayRef, all_scalar, "list_compact")
+        columnar_result(
+            Arc::new(builder.finish()) as ArrayRef,
+            all_scalar,
+            "list_compact",
+        )
     }
 }
 

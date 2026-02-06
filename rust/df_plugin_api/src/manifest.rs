@@ -1,5 +1,5 @@
-use abi_stable::StableAbi;
 use abi_stable::std_types::{RString, RVec};
+use abi_stable::StableAbi;
 
 pub const DF_PLUGIN_ABI_MAJOR: u16 = 1;
 pub const DF_PLUGIN_ABI_MINOR: u16 = 1;

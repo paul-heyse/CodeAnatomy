@@ -5,8 +5,8 @@ use arrow::array::{ArrayRef, StringBuilder};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::lit;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_macros::user_doc;
 
 use crate::compat::{
@@ -14,11 +14,10 @@ use crate::compat::{
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use crate::udf::common::{
-    columnar_to_optional_strings, ensure_map_arg, expand_string_signatures,
-    expect_arg_len_exact, field_from_first_arg_typed, literal_scalar, normalize_semantic_type,
-    normalize_text, scalar_argument_string, scalar_columnar_value, scalar_to_bool,
-    scalar_to_string, signature_with_names, variadic_any_signature, DEFAULT_NORMALIZE_FORM,
-    SignatureEqHash,
+    columnar_to_optional_strings, ensure_map_arg, expand_string_signatures, expect_arg_len_exact,
+    field_from_first_arg_typed, literal_scalar, normalize_semantic_type, normalize_text,
+    scalar_argument_string, scalar_columnar_value, scalar_to_bool, scalar_to_string,
+    signature_with_names, variadic_any_signature, SignatureEqHash, DEFAULT_NORMALIZE_FORM,
 };
 use crate::udf_config::CodeAnatomyUdfConfig;
 
@@ -236,8 +235,7 @@ impl ScalarUDFImpl for Utf8NormalizeUdf {
                 &args.args[1],
                 "utf8_normalize form must be a scalar literal",
             )?;
-            scalar_to_string(&scalar)?
-                .unwrap_or_else(|| self.policy.utf8_normalize_form.clone())
+            scalar_to_string(&scalar)?.unwrap_or_else(|| self.policy.utf8_normalize_form.clone())
         } else {
             self.policy.utf8_normalize_form.clone()
         };
@@ -437,13 +435,15 @@ impl ScalarUDFImpl for QNameNormalizeUdf {
             .iter()
             .all(|value| matches!(value, ColumnarValue::Scalar(_)))
         {
-            let symbol = scalar_to_string(
-                &scalar_columnar_value(&args.args[0], "qname_normalize symbol literal")?,
-            )?;
+            let symbol = scalar_to_string(&scalar_columnar_value(
+                &args.args[0],
+                "qname_normalize symbol literal",
+            )?)?;
             let module = if args.args.len() >= 2 {
-                scalar_to_string(
-                    &scalar_columnar_value(&args.args[1], "qname_normalize module literal")?,
-                )?
+                scalar_to_string(&scalar_columnar_value(
+                    &args.args[1],
+                    "qname_normalize module literal",
+                )?)?
             } else {
                 None
             };
@@ -456,7 +456,9 @@ impl ScalarUDFImpl for QNameNormalizeUdf {
                     } else {
                         let normalized_module = module
                             .as_deref()
-                            .map(|module| normalize_text(module, DEFAULT_NORMALIZE_FORM, true, true))
+                            .map(|module| {
+                                normalize_text(module, DEFAULT_NORMALIZE_FORM, true, true)
+                            })
                             .filter(|module| !module.is_empty());
                         if normalized_symbol.contains('.') || normalized_module.is_none() {
                             Some(normalized_symbol)

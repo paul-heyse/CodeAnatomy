@@ -120,13 +120,7 @@ pub async fn load_delta_table(
     timestamp: Option<String>,
     session_ctx: Option<&SessionContext>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let builder = delta_table_builder(
-        table_uri,
-        storage_options,
-        version,
-        timestamp,
-        session_ctx,
-    )?;
+    let builder = delta_table_builder(table_uri, storage_options, version, timestamp, session_ctx)?;
     builder.load().await
 }
 
@@ -220,7 +214,8 @@ fn files_matching_predicate(
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
-        let expr = session.create_physical_expr(predicate, &log_data.read_schema().to_dfschema()?)?;
+        let expr =
+            session.create_physical_expr(predicate, &log_data.read_schema().to_dfschema()?)?;
         let pruning_predicate = PruningPredicate::try_new(expr, log_data.read_schema())?;
         let mask = pruning_predicate.prune(&log_data)?;
         Ok(log_data
@@ -278,26 +273,36 @@ pub async fn delta_provider_from_session(
     let log_store = table.log_store();
     let session_state = session_ctx.state();
     let scan_config = scan_config_from_session(&session_state, Some(&eager_snapshot), overrides)?;
-    let mut provider = DeltaTableProvider::try_new(eager_snapshot.clone(), log_store, scan_config.clone())?;
+    let mut provider =
+        DeltaTableProvider::try_new(eager_snapshot.clone(), log_store, scan_config.clone())?;
     let mut add_payloads: Option<Vec<DeltaAddActionPayload>> = None;
     let mut predicate_error: Option<String> = None;
     if let Some(predicate) = predicate {
         match eager_snapshot.parse_predicate_expression(predicate, &session_state) {
-            Ok(expr) => match files_matching_predicate(&session_state, eager_snapshot.log_data(), &[expr]) {
-                Ok(add_actions) => {
-                    provider = provider.with_files(add_actions.clone());
-                    add_payloads = Some(add_actions.into_iter().map(delta_add_payload).collect());
+            Ok(expr) => {
+                match files_matching_predicate(&session_state, eager_snapshot.log_data(), &[expr]) {
+                    Ok(add_actions) => {
+                        provider = provider.with_files(add_actions.clone());
+                        add_payloads =
+                            Some(add_actions.into_iter().map(delta_add_payload).collect());
+                    }
+                    Err(err) => {
+                        predicate_error = Some(err.to_string());
+                    }
                 }
-                Err(err) => {
-                    predicate_error = Some(err.to_string());
-                }
-            },
+            }
             Err(err) => {
                 predicate_error = Some(err.to_string());
             }
         }
     }
-    Ok((provider, snapshot, scan_config, add_payloads, predicate_error))
+    Ok((
+        provider,
+        snapshot,
+        scan_config,
+        add_payloads,
+        predicate_error,
+    ))
 }
 
 pub async fn delta_cdf_provider(

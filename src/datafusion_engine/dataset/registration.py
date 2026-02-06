@@ -81,8 +81,10 @@ from datafusion_engine.delta.protocol import (
     delta_protocol_compatibility,
 )
 from datafusion_engine.delta.provider_artifacts import (
+    RegistrationProviderArtifactInput,
     build_delta_provider_build_result,
     delta_scan_snapshot_payload,
+    provider_build_request_from_registration_context,
 )
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.identity import schema_identity_hash
@@ -1947,26 +1949,22 @@ def _delta_provider_artifact_payload(
     *,
     context: _DeltaProviderArtifactContext,
 ) -> dict[str, object]:
-    pruned_files_count = len(context.add_actions) if context.add_actions is not None else None
-    pruning_applied = context.add_actions is not None
-    delta_scan_ignored = context.registration_path == "ddl" and context.delta_scan is not None
     compatibility = is_delta_extension_compatible(
         ctx,
         entrypoint="delta_table_provider_from_session",
         require_non_fallback=bool(context.strict_native_provider_enabled),
     )
-    return build_delta_provider_build_result(
-        table_uri=str(location.path),
-        dataset_format=location.format,
-        provider_kind="delta",
-        dataset_name=context.dataset_name,
-        provider_mode=context.provider_mode,
-        strict_native_provider_enabled=context.strict_native_provider_enabled,
-        strict_native_provider_violation=context.strict_native_provider_violation,
-        ffi_table_provider=context.ffi_table_provider,
-        predicate=context.predicate,
-        compatibility=compatibility,
-        registration_path=context.registration_path,
+    request = provider_build_request_from_registration_context(
+        RegistrationProviderArtifactInput(
+            table_uri=str(location.path),
+            dataset_format=location.format,
+            provider_kind="delta",
+            compatibility=compatibility,
+            context=context,
+        )
+    )
+    request = replace(
+        request,
         delta_version=location.delta_version,
         delta_timestamp=location.delta_timestamp,
         delta_log_storage_options=(
@@ -1975,17 +1973,8 @@ def _delta_provider_artifact_payload(
         delta_storage_options=(
             dict(location.storage_options) if location.storage_options else None
         ),
-        delta_scan_options=context.delta_scan,
-        delta_scan_effective=context.delta_scan_effective,
-        delta_scan_snapshot=context.delta_scan_snapshot,
-        delta_scan_identity_hash=context.delta_scan_identity_hash,
-        delta_snapshot=context.snapshot,
-        delta_scan_ignored=delta_scan_ignored,
-        delta_pruning_predicate=context.predicate,
-        delta_pruning_error=context.predicate_error,
-        delta_pruning_applied=pruning_applied,
-        delta_pruned_files=pruned_files_count,
-    ).as_payload()
+    )
+    return build_delta_provider_build_result(request).as_payload()
 
 
 def _record_delta_log_health(

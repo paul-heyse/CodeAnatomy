@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "python")]
 use pyo3::prelude::pyclass;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "python", pyclass(get_all, set_all))]

@@ -102,9 +102,7 @@ def test_single_file_repo_produces_cpg_nodes(minimal_python_repo: Path) -> None:
 
     # Verify path references the test file
     paths = nodes_df["path"].to_pylist()
-    assert any(
-        "example.py" in str(p) for p in paths
-    ), "Expected nodes referencing example.py"
+    assert any("example.py" in str(p) for p in paths), "Expected nodes referencing example.py"
 
 
 @pytest.mark.e2e
@@ -142,9 +140,7 @@ def test_entity_ids_are_deterministic(minimal_python_repo: Path) -> None:
     entity_ids2 = sorted(nodes2_df["entity_id"].to_pylist())
 
     # Verify identical entity IDs
-    assert (
-        entity_ids1 == entity_ids2
-    ), "Entity IDs should be deterministic across builds"
+    assert entity_ids1 == entity_ids2, "Entity IDs should be deterministic across builds"
     assert len(entity_ids1) > 0, "Expected at least one entity ID"
 
 
@@ -191,16 +187,12 @@ def test_byte_spans_within_file_bounds(minimal_python_repo: Path) -> None:
         assert bstart >= 0, f"Invalid bstart {bstart} < 0 at row {i}"
 
         # Verify bend is at least bstart
-        assert (
-            bend >= bstart
-        ), f"Invalid span: bend {bend} < bstart {bstart} at row {i}"
+        assert bend >= bstart, f"Invalid span: bend {bend} < bstart {bstart} at row {i}"
 
         # bend <= file size (when path is known)
         for known_path, size in file_sizes.items():
             if known_path.endswith(path) or path.endswith(known_path):
-                assert (
-                    bend <= size
-                ), f"bend {bend} exceeds file size {size} for {path} at row {i}"
+                assert bend <= size, f"bend {bend} exceeds file size {size} for {path} at row {i}"
                 break
 
 

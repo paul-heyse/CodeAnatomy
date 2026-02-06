@@ -132,11 +132,15 @@ def _populate_run_summary_metadata(
     *,
     total_steps: int,
 ) -> None:
-    if isinstance(merged.summary.get("query"), str) and isinstance(merged.summary.get("mode"), str):
-        return
-    mode, query = _derive_run_summary_metadata(executed_results, total_steps=total_steps)
-    merged.summary.setdefault("mode", mode)
-    merged.summary.setdefault("query", query)
+    if not (
+        isinstance(merged.summary.get("query"), str) and isinstance(merged.summary.get("mode"), str)
+    ):
+        mode, query = _derive_run_summary_metadata(executed_results, total_steps=total_steps)
+        merged.summary.setdefault("mode", mode)
+        merged.summary.setdefault("query", query)
+    lang_scope, language_order = _derive_run_scope_metadata(executed_results)
+    merged.summary.setdefault("lang_scope", lang_scope)
+    merged.summary.setdefault("language_order", list(language_order))
 
 
 def _derive_run_summary_metadata(
@@ -175,6 +179,48 @@ def _derive_run_summary_metadata(
         return unique_modes[0], f"multi-step plan ({total_steps} steps)"
 
     return "run", f"multi-step plan ({total_steps} steps)"
+
+
+def _derive_scope_from_orders(
+    language_orders: list[tuple[QueryLanguage, ...]],
+) -> QueryLanguageScope | None:
+    languages = {lang for order in language_orders for lang in order}
+    if languages == {"python"}:
+        return "python"
+    if languages == {"rust"}:
+        return "rust"
+    if languages:
+        return "auto"
+    return None
+
+
+def _derive_run_scope_metadata(
+    executed_results: list[tuple[str, CqResult]],
+) -> tuple[QueryLanguageScope, tuple[QueryLanguage, ...]]:
+    scopes: list[QueryLanguageScope] = []
+    language_orders: list[tuple[QueryLanguage, ...]] = []
+    for _, result in executed_results:
+        summary = result.summary
+        raw_scope = summary.get("lang_scope")
+        if raw_scope in {"auto", "python", "rust"}:
+            scopes.append(cast("QueryLanguageScope", raw_scope))
+        raw_order = summary.get("language_order")
+        if isinstance(raw_order, list):
+            normalized = tuple(
+                cast("QueryLanguage", item) for item in raw_order if item in {"python", "rust"}
+            )
+            if normalized:
+                language_orders.append(normalized)
+
+    unique_scopes = list(dict.fromkeys(scopes))
+    if len(unique_scopes) == 1:
+        scope = unique_scopes[0]
+    elif len(unique_scopes) > 1:
+        scope = DEFAULT_QUERY_LANGUAGE_SCOPE
+    else:
+        inferred = _derive_scope_from_orders(language_orders)
+        scope = inferred if inferred is not None else DEFAULT_QUERY_LANGUAGE_SCOPE
+    return scope, expand_language_scope(scope)
 
 
 def _execute_q_steps(
@@ -386,6 +432,7 @@ def _execute_entity_q_steps(
             paths=step.scope_paths,
             scope_globs=step.scope_globs,
             argv=ctx.argv,
+            query_text=step.step.query,
             match_spans=spans,
             symtable=session.symtable,
         )
@@ -446,6 +493,7 @@ def _execute_pattern_q_steps(
             root=ctx.root,
             files=files,
             argv=ctx.argv,
+            query_text=step.step.query,
         )
         try:
             result = execute_pattern_query_with_files(request)
@@ -492,6 +540,13 @@ def _result_match_count(result: CqResult | None) -> int:
     if isinstance(matches, int):
         return matches
     return len(result.key_findings)
+
+
+def _result_lang_scope(result: CqResult) -> QueryLanguageScope | None:
+    value = result.summary.get("lang_scope")
+    if value in {"auto", "python", "rust"}:
+        return cast("QueryLanguageScope", value)
+    return None
 
 
 def _build_collapse_diagnostics(
@@ -543,6 +598,14 @@ def _normalize_single_group_result(result: CqResult) -> CqResult:
     mode = _result_query_mode(result)
     if mode is not None:
         result.summary.setdefault("mode", mode)
+    lang_scope = _result_lang_scope(result)
+    if lang_scope is None:
+        lang = _result_language(result)
+        if lang is not None:
+            lang_scope = lang
+    if lang_scope is not None:
+        result.summary.setdefault("lang_scope", lang_scope)
+        result.summary.setdefault("language_order", list(expand_language_scope(lang_scope)))
     result.summary.pop("lang", None)
     result.summary.pop("query_text", None)
     return result
@@ -550,10 +613,11 @@ def _normalize_single_group_result(result: CqResult) -> CqResult:
 
 def _collect_collapse_group_metadata(
     group: list[CqResult],
-) -> tuple[dict[QueryLanguage, CqResult], str, str | None]:
+) -> tuple[dict[QueryLanguage, CqResult], str, str | None, QueryLanguageScope | None]:
     lang_results: dict[QueryLanguage, CqResult] = {}
     query_text = ""
     mode: str | None = None
+    lang_scope: QueryLanguageScope | None = None
     for result in group:
         lang = _result_language(result)
         if lang is not None and lang not in lang_results:
@@ -564,20 +628,33 @@ def _collect_collapse_group_metadata(
                 query_text = candidate
         if mode is None:
             mode = _result_query_mode(result)
-    return lang_results, query_text, mode
+        if lang_scope is None:
+            lang_scope = _result_lang_scope(result)
+    if lang_scope is None:
+        if len(lang_results) == 1:
+            lang_scope = next(iter(lang_results))
+        elif len(lang_results) > 1:
+            lang_scope = DEFAULT_QUERY_LANGUAGE_SCOPE
+    return lang_results, query_text, mode, lang_scope
 
 
-def _summary_common_for_collapse(query_text: str, mode: str | None) -> dict[str, object]:
+def _summary_common_for_collapse(
+    query_text: str,
+    mode: str | None,
+    lang_scope: QueryLanguageScope | None,
+) -> dict[str, object]:
     summary_common: dict[str, object] = {}
     if query_text:
         summary_common["query"] = query_text
     if mode is not None:
         summary_common["mode"] = mode
+    if lang_scope is not None:
+        summary_common["lang_scope"] = lang_scope
     return summary_common
 
 
 def _merge_collapsed_q_group(group: list[CqResult], *, ctx: CliContext) -> CqResult:
-    lang_results, query_text, mode = _collect_collapse_group_metadata(group)
+    lang_results, query_text, mode, lang_scope = _collect_collapse_group_metadata(group)
     diagnostics = _build_collapse_diagnostics(lang_results, query_text)
     run = runmeta_for_scope_merge(
         macro="q",
@@ -595,7 +672,7 @@ def _merge_collapsed_q_group(group: list[CqResult], *, ctx: CliContext) -> CqRes
             language_capabilities=build_language_capabilities(
                 lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE
             ),
-            summary_common=_summary_common_for_collapse(query_text, mode),
+            summary_common=_summary_common_for_collapse(query_text, mode, lang_scope),
         )
     )
 

@@ -22,3 +22,4 @@ class QueryExecutionContext(CqStruct, frozen=True):
     root: Path
     argv: list[str]
     started_ms: float
+    query_text: str | None = None

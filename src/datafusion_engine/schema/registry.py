@@ -3096,17 +3096,32 @@ def _require_semantic_type(
     table_name: str,
     column_name: str,
     expected: str,
+    allow_row_probe_fallback: bool = True,
 ) -> None:
-    meta_key = SEMANTIC_TYPE_META.decode("utf-8")
-    df = ctx.table(table_name).select(
-        udf_expr("arrow_metadata", col(column_name), meta_key).alias("semantic_type")
-    )
-    rows = df.limit(1).to_arrow_table().to_pylist()
-    semantic_type = rows[0].get("semantic_type") if rows else None
+    try:
+        table_schema = ctx.table(table_name).schema()
+    except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+        msg = f"Unable to resolve schema for {table_name!r}: {exc}"
+        raise ValueError(msg) from exc
+    arrow_schema = _arrow_schema_from_dfschema(table_schema)
+    semantic_type: str | None = None
+    if arrow_schema is not None:
+        try:
+            field = arrow_schema.field(column_name)
+        except KeyError as exc:
+            msg = f"Missing required column {table_name}.{column_name}."
+            raise ValueError(msg) from exc
+        semantic_type = _semantic_type_from_field_metadata(field)
+    if semantic_type is None and allow_row_probe_fallback:
+        semantic_type = _semantic_type_via_row_probe(
+            ctx,
+            table_name=table_name,
+            column_name=column_name,
+        )
     if semantic_type is None:
         msg = f"Missing semantic type metadata on {table_name}.{column_name}."
         raise ValueError(msg)
-    if str(semantic_type) != expected:
+    if semantic_type != expected:
         msg = (
             f"Semantic type mismatch for {table_name}.{column_name}: "
             f"expected {expected!r}, got {semantic_type!r}."
@@ -3114,9 +3129,37 @@ def _require_semantic_type(
         raise ValueError(msg)
 
 
+def _semantic_type_from_field_metadata(field: pa.Field) -> str | None:
+    metadata = field.metadata or {}
+    raw = metadata.get(SEMANTIC_TYPE_META)
+    if raw is None:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return str(raw)
+
+
+def _semantic_type_via_row_probe(
+    ctx: SessionContext,
+    *,
+    table_name: str,
+    column_name: str,
+) -> str | None:
+    meta_key = SEMANTIC_TYPE_META.decode("utf-8")
+    df = ctx.table(table_name).select(
+        udf_expr("arrow_metadata", col(column_name), meta_key).alias("semantic_type")
+    )
+    rows = df.limit(1).to_arrow_table().to_pylist()
+    semantic_type = rows[0].get("semantic_type") if rows else None
+    if semantic_type is None:
+        return None
+    return str(semantic_type)
+
+
 def _semantic_validation_tables() -> tuple[str, ...]:
     tables = set(extract_base_schema_names())
-    tables.update({"cpg_nodes_v1", "cpg_edges_v1"})
+    tables.update({"cpg_nodes", "cpg_edges"})
     return tuple(sorted(tables))
 
 
@@ -3124,6 +3167,7 @@ def validate_semantic_types(
     ctx: SessionContext,
     *,
     table_names: Sequence[str] | None = None,
+    allow_row_probe_fallback: bool = True,
 ) -> None:
     """Validate semantic type metadata for known tables."""
     names = table_names or _semantic_validation_tables()
@@ -3142,6 +3186,7 @@ def validate_semantic_types(
                 table_name=name,
                 column_name=column_name,
                 expected=semantic.name,
+                allow_row_probe_fallback=allow_row_probe_fallback,
             )
 
 

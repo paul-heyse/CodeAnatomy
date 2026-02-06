@@ -262,6 +262,28 @@ def test_render_code_overview_falls_back_for_run_query_mode() -> None:
     assert "- Mode: `run`" in output
 
 
+def test_render_code_overview_derives_language_scope_from_step_summaries() -> None:
+    run = RunMeta(
+        macro="run",
+        argv=["cq", "run"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=5.0,
+        toolchain={},
+    )
+    result = CqResult(
+        run=run,
+        summary={
+            "step_summaries": {
+                "q_0": {"lang_scope": "python"},
+                "q_1": {"lang_scope": "python"},
+            }
+        },
+    )
+    output = render_markdown(result)
+    assert "- Language Scope: `python`" in output
+
+
 def test_render_code_overview_falls_back_for_macro_query_mode() -> None:
     run = RunMeta(
         macro="calls",

@@ -21,7 +21,11 @@ from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
-from tools.cq.core.requests import MergeResultsRequest
+from tools.cq.core.multilang_summary import (
+    build_multilang_summary,
+    partition_stats_from_result_summary,
+)
+from tools.cq.core.requests import MergeResultsRequest, SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -223,9 +227,18 @@ def _query_text(query: Query) -> str:
     return " ".join(parts) if parts else "q"
 
 
-def _summary_common_for_query(query: Query) -> dict[str, object]:
+def _summary_common_for_query(
+    query: Query,
+    *,
+    query_text: str | None = None,
+) -> dict[str, object]:
+    text = (
+        query_text.strip()
+        if isinstance(query_text, str) and query_text.strip()
+        else _query_text(query)
+    )
     common: dict[str, object] = {
-        "query": _query_text(query),
+        "query": text,
         "mode": _query_mode(query),
     }
     if query.pattern_spec is not None:
@@ -237,10 +250,36 @@ def _summary_common_for_query(query: Query) -> dict[str, object]:
     return common
 
 
+def _summary_common_for_context(ctx: QueryExecutionContext) -> dict[str, object]:
+    return _summary_common_for_query(ctx.query, query_text=ctx.query_text)
+
+
+def _finalize_single_scope_summary(ctx: QueryExecutionContext, result: CqResult) -> None:
+    if ctx.query.lang_scope == "auto":
+        return
+    lang = ctx.query.primary_language
+    common = dict(result.summary)
+    partition = partition_stats_from_result_summary(
+        result.summary,
+        fallback_matches=_count_result_matches(result),
+    )
+    result.summary = build_multilang_summary(
+        SummaryBuildRequest(
+            common=common,
+            lang_scope=ctx.query.lang_scope,
+            language_order=(lang,),
+            languages={lang: partition},
+            cross_language_diagnostics=[],
+            language_capabilities=build_language_capabilities(lang_scope=ctx.query.lang_scope),
+        )
+    )
+
+
 def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
     result = mk_result(_build_runmeta(ctx))
-    result.summary.update(_summary_common_for_query(ctx.query))
+    result.summary.update(_summary_common_for_context(ctx))
     result.summary["error"] = message
+    _finalize_single_scope_summary(ctx, result)
     return result
 
 
@@ -477,6 +516,7 @@ def execute_plan(
     tc: Toolchain,
     root: Path,
     argv: list[str] | None = None,
+    query_text: str | None = None,
 ) -> CqResult:
     """Execute a ToolPlan and return results.
 
@@ -499,7 +539,13 @@ def execute_plan(
         Query results
     """
     if query.lang_scope == "auto":
-        return _execute_auto_scope_plan(query, tc=tc, root=root, argv=argv or [])
+        return _execute_auto_scope_plan(
+            query,
+            tc=tc,
+            root=root,
+            argv=argv or [],
+            query_text=query_text,
+        )
 
     ctx = QueryExecutionContext(
         plan=plan,
@@ -508,6 +554,7 @@ def execute_plan(
         root=root,
         argv=argv or [],
         started_ms=ms(),
+        query_text=query_text,
     )
     return _execute_single_context(ctx)
 
@@ -524,6 +571,7 @@ def _execute_auto_scope_plan(
     tc: Toolchain,
     root: Path,
     argv: list[str],
+    query_text: str | None = None,
 ) -> CqResult:
 
     results = execute_by_language_scope(
@@ -536,7 +584,14 @@ def _execute_auto_scope_plan(
             argv=argv,
         ),
     )
-    return _merge_auto_scope_results(query, results, root=root, argv=argv, tc=tc)
+    return _merge_auto_scope_results(
+        query,
+        results,
+        root=root,
+        argv=argv,
+        tc=tc,
+        query_text=query_text,
+    )
 
 
 def _run_scoped_auto_query(
@@ -581,6 +636,7 @@ def _merge_auto_scope_results(
     root: Path,
     argv: list[str],
     tc: Toolchain,
+    query_text: str | None = None,
 ) -> CqResult:
     diagnostics = build_cross_language_diagnostics(
         lang_scope=query.lang_scope,
@@ -609,7 +665,7 @@ def _merge_auto_scope_results(
             diagnostics=diagnostics,
             diagnostic_payloads=diagnostic_payloads,
             language_capabilities=language_capabilities,
-            summary_common=_summary_common_for_query(query),
+            summary_common=_summary_common_for_query(query, query_text=query_text),
         )
     )
 
@@ -627,10 +683,11 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
         return state
 
     result = mk_result(_build_runmeta(ctx))
-    result.summary.update(_summary_common_for_query(ctx.query))
+    result.summary.update(_summary_common_for_context(ctx))
     _apply_entity_handlers(state, result)
     result.summary["files_scanned"] = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
+    _finalize_single_scope_summary(ctx, result)
     return result
 
 
@@ -649,6 +706,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         root=request.root,
         argv=request.argv,
         started_ms=ms(),
+        query_text=request.query_text,
     )
     scan_ctx = _build_scan_context(request.records)
     candidates = _build_entity_candidates(scan_ctx, request.records)
@@ -668,10 +726,11 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         candidates=candidates,
     )
     result = mk_result(_build_runmeta(ctx))
-    result.summary.update(_summary_common_for_query(ctx.query))
+    result.summary.update(_summary_common_for_context(ctx))
     _apply_entity_handlers(state, result, symtable=request.symtable)
     result.summary["files_scanned"] = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
+    _finalize_single_scope_summary(ctx, result)
     return result
 
 
@@ -696,7 +755,7 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     )
 
     result = mk_result(_build_runmeta(ctx))
-    result.summary.update(_summary_common_for_query(ctx.query))
+    result.summary.update(_summary_common_for_context(ctx))
     result.key_findings.extend(findings)
 
     if state.ctx.query.scope_filter and findings:
@@ -714,6 +773,7 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     result.summary["matches"] = len(result.key_findings)
     result.summary["files_scanned"] = len({r.file for r in records})
     _maybe_add_pattern_explain(state, result)
+    _finalize_single_scope_summary(ctx, result)
     return result
 
 
@@ -732,6 +792,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
         root=request.root,
         argv=request.argv,
         started_ms=ms(),
+        query_text=request.query_text,
     )
     if not request.files:
         result = _empty_result(ctx, "No files match scope after filtering")
@@ -756,7 +817,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     )
 
     result = mk_result(_build_runmeta(ctx))
-    result.summary.update(_summary_common_for_query(ctx.query))
+    result.summary.update(_summary_common_for_context(ctx))
     result.key_findings.extend(findings)
 
     if state.ctx.query.scope_filter and findings:
@@ -774,6 +835,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     result.summary["matches"] = len(result.key_findings)
     result.summary["files_scanned"] = len({r.file for r in records})
     _maybe_add_pattern_explain(state, result)
+    _finalize_single_scope_summary(ctx, result)
     return result
 
 

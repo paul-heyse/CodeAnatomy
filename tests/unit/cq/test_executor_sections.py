@@ -74,3 +74,39 @@ def test_auto_scope_summary_uses_multilang_partitions(tmp_path: Path) -> None:
     assert "rust" in languages
     assert isinstance(languages["python"], dict)
     assert "query" not in languages["python"]
+
+
+def test_single_scope_summary_uses_canonical_multilang_keys(tmp_path: Path) -> None:
+    """Explicit language scope should keep canonical multilang summary fields."""
+    (tmp_path / "a.py").write_text("def target():\n    return 1\n", encoding="utf-8")
+    tc = Toolchain.detect()
+    query = parse_query("entity=function name=target lang=python")
+    plan = compile_query(query)
+    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+
+    assert result.summary["lang_scope"] == "python"
+    assert result.summary["language_order"] == ["python"]
+    languages = result.summary["languages"]
+    assert isinstance(languages, dict)
+    assert set(languages) == {"python"}
+    assert isinstance(languages["python"], dict)
+
+
+def test_query_text_preserved_when_provided(tmp_path: Path) -> None:
+    """Execute plan should preserve caller-provided query text in summary."""
+    (tmp_path / "a.py").write_text("def target():\n    return 1\n", encoding="utf-8")
+    tc = Toolchain.detect()
+    query_text = "entity=function name=target lang=python in=a.py"
+    query = parse_query(query_text)
+    plan = compile_query(query)
+    result = execute_plan(
+        plan=plan,
+        query=query,
+        tc=tc,
+        root=tmp_path,
+        argv=["cq", "q", query_text],
+        query_text=query_text,
+    )
+
+    assert result.summary["query"] == query_text
+    assert result.summary["mode"] == "entity"

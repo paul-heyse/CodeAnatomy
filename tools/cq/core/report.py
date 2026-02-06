@@ -316,6 +316,27 @@ def _format_language_scope(summary: dict[str, object]) -> str:
     language_order = summary.get("language_order")
     if isinstance(language_order, list) and language_order:
         return f"`{', '.join(str(item) for item in language_order)}`"
+    step_summaries = summary.get("step_summaries")
+    if isinstance(step_summaries, dict):
+        scopes: set[str] = set()
+        ordered: list[str] = []
+        for step_summary in step_summaries.values():
+            if not isinstance(step_summary, dict):
+                continue
+            step_scope = step_summary.get("lang_scope")
+            if isinstance(step_scope, str) and step_scope:
+                scopes.add(step_scope)
+            step_order = step_summary.get("language_order")
+            if isinstance(step_order, list):
+                for item in step_order:
+                    if isinstance(item, str) and item in {"python", "rust"} and item not in ordered:
+                        ordered.append(item)
+        if len(scopes) == 1:
+            return f"`{next(iter(scopes))}`"
+        if len(scopes) > 1:
+            return "`auto`"
+        if ordered:
+            return f"`{', '.join(ordered)}`"
     return _na("language_scope_missing")
 
 

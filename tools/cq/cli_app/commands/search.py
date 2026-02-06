@@ -23,7 +23,7 @@ def search(
     """Search for code patterns with semantic enrichment.
 
     Smart Search provides semantically-enriched, grouped results using:
-    - rpygrep for high-performance candidate generation
+    - native ripgrep (`rg`) for candidate generation
     - ast-grep for AST-level classification
     - symtable for scope analysis
 
@@ -45,7 +45,7 @@ def search(
     RuntimeError
         Raised when CLI context is unavailable.
     """
-    from tools.cq.query.language import parse_query_language
+    from tools.cq.query.language import parse_query_language_scope
     from tools.cq.search.classifier import QueryMode
     from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
 
@@ -73,7 +73,7 @@ def search(
         ctx.root,
         query,
         mode=mode,
-        lang=parse_query_language(options.lang),
+        lang_scope=parse_query_language_scope(options.lang),
         include_globs=include_globs if include_globs else None,
         exclude_globs=list(options.exclude) if options.exclude else None,
         include_strings=options.include_strings,

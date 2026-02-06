@@ -219,7 +219,7 @@ def _collect_sites(
     symbol: str,
     limits: SearchLimits | None = None,
 ) -> list[CallSite]:
-    """Collect call sites for a symbol using rpygrep.
+    """Collect call sites for a symbol using ripgrep.
 
     Parameters
     ----------

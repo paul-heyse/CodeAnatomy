@@ -26,6 +26,7 @@ class SearchStepCli:
     literal: bool = False
     include_strings: bool = False
     in_dir: str | None = None
+    lang_scope: str = "auto"
 
 
 @dataclass(frozen=True)

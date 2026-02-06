@@ -1,6 +1,6 @@
 """Timeout utilities for search operations.
 
-Provides synchronous and asynchronous timeout wrappers for rpygrep operations.
+Provides synchronous and asynchronous timeout wrappers for ripgrep operations.
 """
 
 from __future__ import annotations

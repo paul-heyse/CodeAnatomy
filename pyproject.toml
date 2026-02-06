@@ -10,7 +10,6 @@ dependencies = [
     "datafusion>=50.1.0",
     "datafusion_ext>=0.1.0",
     "rustworkx>=0.17.1",
-    "rpygrep>=0.2.1",
     "pyyaml>=6.0.3",
     "protobuf>=6.33.2",
     "grpcio-tools>=1.76.0",

@@ -34,8 +34,8 @@ def test_batch_q_steps_scan_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ctx = CliContext.build(argv=["cq", "run"], root=tmp_path)
     plan = RunPlan(
         steps=(
-            QStep(query="entity=function name=foo"),
-            QStep(query="entity=class name=Bar"),
+            QStep(query="entity=function name=foo lang=python"),
+            QStep(query="entity=class name=Bar lang=python"),
         )
     )
 
@@ -49,7 +49,7 @@ def test_batch_equivalence_single_query(tmp_path: Path) -> None:
     (tmp_path / "b.py").write_text("def bar():\n    return 2\n", encoding="utf-8")
 
     ctx = CliContext.build(argv=["cq", "run"], root=tmp_path)
-    query_string = "entity=function name=foo"
+    query_string = "entity=function name=foo lang=python"
     parsed = parse_query(query_string)
     plan = compile_query(parsed)
     single = execute_plan(plan=plan, query=parsed, tc=ctx.toolchain, root=ctx.root, argv=ctx.argv)

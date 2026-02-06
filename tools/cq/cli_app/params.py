@@ -129,8 +129,8 @@ class SearchParams(FilterParams):
     in_dir: Annotated[str | None, Parameter(name="--in", help="Restrict to directory")] = None
     lang: Annotated[
         QueryLanguageToken,
-        Parameter(name="--lang", help="Search language (python or rust)"),
-    ] = QueryLanguageToken.python
+        Parameter(name="--lang", help="Search language scope (auto, python, rust)"),
+    ] = QueryLanguageToken.auto
 
 
 @dataclass(kw_only=True)

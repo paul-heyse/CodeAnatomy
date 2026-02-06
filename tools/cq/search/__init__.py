@@ -1,4 +1,4 @@
-"""Search module for rpygrep integration.
+"""Search module for native ripgrep integration.
 
 Provides timeout utilities, search profiles, adapter functions, and smart search.
 """

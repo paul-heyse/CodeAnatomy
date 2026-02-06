@@ -5,24 +5,26 @@
     {
       "anchor": {
         "col": 0,
-        "end_col": 37,
-        "end_line": 474,
+        "end_col": 39,
+        "end_line": 466,
         "file": "tools/cq/query/executor.py",
-        "line": 433
+        "line": 428
       },
       "category": "definition",
       "details": {
         "data": {
-          "calls_within": 6,
+          "calls_within": 4,
           "kind": "function",
+          "language": "python",
           "name": "execute_plan"
         },
+        "kind": "definition",
         "score": {
           "confidence_bucket": "high",
           "confidence_score": 0.95,
           "evidence_kind": "resolved_ast",
           "impact_bucket": "low",
-          "impact_score": 0.0545
+          "impact_score": 0.0455
         }
       },
       "message": "function: execute_plan",
@@ -36,15 +38,31 @@
     "schema_version": "cq.v1",
     "toolchain": {
       "python": "3.13.12",
-      "rpygrep": "0.2.1",
+      "rg": "ripgrep 15.0.0",
       "sgpy": "0.40.5"
     }
   },
   "sections": [],
   "summary": {
-    "files_scanned": 1,
-    "matches": 1,
-    "total_calls": 482,
-    "total_defs": 88
+    "cross_language_diagnostics": [],
+    "lang_scope": "auto",
+    "language_order": [
+      "python",
+      "rust"
+    ],
+    "languages": {
+      "python": {
+        "files_scanned": 1,
+        "matches": 1,
+        "total_calls": 499,
+        "total_defs": 90
+      },
+      "rust": {
+        "files_scanned": 0,
+        "matches": 0,
+        "total_calls": 0,
+        "total_defs": 0
+      }
+    }
   }
 }

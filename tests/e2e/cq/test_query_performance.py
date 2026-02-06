@@ -47,7 +47,7 @@ def test_query_latency_cold(toolchain: Toolchain, repo_root: Path) -> None:
     repo_root : Path
         Repository root path.
     """
-    query_text = "entity=function name=Toolchain"
+    query_text = "entity=function name=Toolchain lang=python"
     query = parse_query(query_text)
     plan = compile_query(query)
 
@@ -74,7 +74,7 @@ def test_query_latency_warm(
         Repository root path.
     """
     # Warm the cache first
-    query_text = "entity=function name=Toolchain"
+    query_text = "entity=function name=Toolchain lang=python"
     query = parse_query(query_text)
     plan = compile_query(query)
     _ = execute_plan(plan, query, toolchain, repo_root)
@@ -101,7 +101,7 @@ def test_index_build_time(toolchain: Toolchain, repo_root: Path) -> None:
     """
     start = time.perf_counter()
     # Trigger index build by executing a query
-    query_text = "entity=class"
+    query_text = "entity=class lang=python"
     query = parse_query(query_text)
     plan = compile_query(query)
     _ = execute_plan(plan, query, toolchain, repo_root)
@@ -124,9 +124,9 @@ def test_query_scaling_simple(toolchain: Toolchain, repo_root: Path) -> None:
         Repository root path.
     """
     queries = [
-        "entity=function",
-        "entity=class",
-        "entity=function name=execute",
+        "entity=function lang=python",
+        "entity=class lang=python",
+        "entity=function name=execute lang=python",
     ]
 
     timings = []

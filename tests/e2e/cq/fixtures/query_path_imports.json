@@ -14,9 +14,11 @@
       "details": {
         "data": {
           "kind": "from_import",
+          "language": "python",
           "name": "Path",
           "text": "from pathlib import Path"
-        }
+        },
+        "kind": "from_import"
       },
       "message": "from_import: Path",
       "severity": "info"
@@ -29,14 +31,29 @@
     "schema_version": "cq.v1",
     "toolchain": {
       "python": "3.13.12",
-      "rpygrep": "0.2.1",
+      "rg": "ripgrep 15.0.0",
       "sgpy": "0.40.5"
     }
   },
   "sections": [],
   "summary": {
-    "files_scanned": 1,
-    "matches": 1,
-    "total_imports": 7
+    "cross_language_diagnostics": [],
+    "lang_scope": "auto",
+    "language_order": [
+      "python",
+      "rust"
+    ],
+    "languages": {
+      "python": {
+        "files_scanned": 1,
+        "matches": 1,
+        "total_imports": 7
+      },
+      "rust": {
+        "files_scanned": 0,
+        "matches": 0,
+        "total_imports": 0
+      }
+    }
   }
 }

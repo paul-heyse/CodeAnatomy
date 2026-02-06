@@ -22,14 +22,14 @@ from tools.cq.query.execution_requests import (
 from tools.cq.query.executor import (
     execute_entity_query_from_records,
     execute_pattern_query_with_files,
+    execute_plan,
 )
 from tools.cq.query.ir import Query, Scope
 from tools.cq.query.language import (
-    DEFAULT_QUERY_LANGUAGE,
+    DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
-    disabled_language_message,
-    file_extensions_for_language,
-    is_query_language_enabled,
+    QueryLanguageScope,
+    file_extensions_for_scope,
 )
 from tools.cq.query.parser import QueryParseError, parse_query
 from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
@@ -205,9 +205,10 @@ def _prepare_q_step(
         return _handle_query_parse_error(step, step_id, plan, ctx, exc)
 
     query = _apply_run_scope(query, plan)
-    if not is_query_language_enabled(query.lang):
-        msg = disabled_language_message(query.lang)
-        return step_id, _error_result(step_id, "q", RuntimeError(msg), ctx), True
+    if query.lang_scope == "auto":
+        auto_plan = compile_query(query)
+        auto_result = execute_plan(auto_plan, query, ctx.toolchain, ctx.root, ctx.argv)
+        return step_id, auto_result, False
     tool_plan = compile_query(query)
     scope_paths = scope_to_paths(tool_plan.scope, ctx.root)
     if not scope_paths:
@@ -254,7 +255,7 @@ def _execute_entity_q_steps(
 
     union_paths = _unique_paths([path for step in steps for path in step.scope_paths])
     record_types = _union_record_types(steps)
-    lang = steps[0].plan.lang if steps else DEFAULT_QUERY_LANGUAGE
+    lang = steps[0].plan.lang if steps else "python"
     session = build_batch_session(
         root=ctx.root,
         tc=ctx.toolchain,
@@ -317,8 +318,8 @@ def _execute_pattern_q_steps(
             for step in steps
         ]
     union_paths = _unique_paths([path for step in steps for path in step.scope_paths])
-    lang = steps[0].plan.lang if steps else DEFAULT_QUERY_LANGUAGE
-    pattern_files = _tabulate_files(ctx.root, union_paths, lang=lang)
+    lang = steps[0].plan.lang if steps else "python"
+    pattern_files = _tabulate_files(ctx.root, union_paths, lang_scope=lang)
     files_by_rel: dict[str, Path] = {}
     for path in pattern_files:
         try:
@@ -395,10 +396,6 @@ def _execute_search_step(step: SearchStep, plan: RunPlan, ctx: CliContext) -> Cq
     include_globs = _build_search_includes(plan.in_dir, step.in_dir)
     exclude_globs = list(plan.exclude) if plan.exclude else None
 
-    if not is_query_language_enabled(step.lang):
-        msg = disabled_language_message(step.lang)
-        raise RuntimeError(msg)
-
     return smart_search(
         ctx.root,
         step.query,
@@ -406,7 +403,7 @@ def _execute_search_step(step: SearchStep, plan: RunPlan, ctx: CliContext) -> Cq
         include_globs=include_globs,
         exclude_globs=exclude_globs,
         include_strings=step.include_strings,
-        lang=step.lang,
+        lang_scope=step.lang_scope,
         limits=SMART_SEARCH_LIMITS,
         tc=ctx.toolchain,
         argv=ctx.argv,
@@ -423,7 +420,7 @@ def _execute_search_fallback(query: str, plan: RunPlan, ctx: CliContext) -> CqRe
         include_globs=include_globs,
         exclude_globs=exclude_globs,
         include_strings=False,
-        lang=DEFAULT_QUERY_LANGUAGE,
+        lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
         limits=SMART_SEARCH_LIMITS,
         tc=ctx.toolchain,
         argv=ctx.argv,
@@ -645,7 +642,7 @@ def _tabulate_files(
     root: Path,
     paths: list[Path],
     *,
-    lang: QueryLanguage,
+    lang_scope: QueryLanguageScope,
 ) -> list[Path]:
     from tools.cq.index.files import build_repo_file_index, tabulate_files
     from tools.cq.index.repo import resolve_repo_context
@@ -656,7 +653,7 @@ def _tabulate_files(
         repo_index,
         paths,
         None,
-        extensions=file_extensions_for_language(lang),
+        extensions=file_extensions_for_scope(lang_scope),
     )
     return result.files
 

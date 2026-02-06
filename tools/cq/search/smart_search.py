@@ -1,8 +1,4 @@
-"""Smart Search pipeline for semantically-enriched code search.
-
-Integrates rpygrep candidate generation with ast-grep classification
-and symtable enrichment to provide grouped, ranked search results.
-"""
+"""Smart Search pipeline for semantically-enriched code search."""
 
 from __future__ import annotations
 
@@ -12,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict, Unpack, cast
+from typing import TypedDict, Unpack, cast
 
 import msgspec
 
@@ -25,18 +21,18 @@ from tools.cq.core.schema import (
     Finding,
     ScoreDetails,
     Section,
-    mk_result,
     ms,
 )
 from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE,
-    RUST_QUERY_ENABLE_ENV,
+    DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
-    disabled_language_message,
-    file_globs_for_language,
-    is_query_language_enabled,
+    QueryLanguageScope,
+    expand_language_scope,
+    file_globs_for_scope,
     ripgrep_type_for_language,
+    ripgrep_types_for_scope,
 )
 from tools.cq.search.classifier import (
     HeuristicResult,
@@ -59,12 +55,7 @@ from tools.cq.search.collector import RgCollector
 from tools.cq.search.context import SmartSearchContext
 from tools.cq.search.models import SearchConfig, SearchKwargs
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
-from tools.cq.search.rg_events import decode_rg_event
-from tools.cq.search.timeout import search_sync_with_timeout
-
-if TYPE_CHECKING:
-    from rpygrep import RipGrepSearch
-
+from tools.cq.search.rg_native import build_rg_command, run_rg_json
 
 # Derive smart search limits from INTERACTIVE profile
 SMART_SEARCH_LIMITS = msgspec.structs.replace(
@@ -99,7 +90,7 @@ def _get_context_helpers() -> tuple[
 
 
 class RawMatch(CqStruct, frozen=True):
-    """Raw match from rpygrep candidate generation.
+    """Raw match from ripgrep candidate generation.
 
     Parameters
     ----------
@@ -141,7 +132,7 @@ class RawMatch(CqStruct, frozen=True):
 
 
 class CandidateSearchKwargs(TypedDict, total=False):
-    lang: QueryLanguage
+    lang_scope: QueryLanguageScope
     include_globs: list[str] | None
     exclude_globs: list[str] | None
 
@@ -151,6 +142,8 @@ class SearchSummaryInputs:
     config: SearchConfig
     stats: SearchStats
     matches: list[EnrichedMatch]
+    languages: tuple[QueryLanguage, ...]
+    language_stats: dict[QueryLanguage, SearchStats]
     file_globs: list[str] | None = None
     limit: int | None = None
     pattern: str | None = None
@@ -241,6 +234,7 @@ class EnrichedMatch(CqStruct, frozen=True):
     context_window: dict[str, int] | None = None
     context_snippet: str | None = None
     symtable: SymtableEnrichment | None = None
+    language: QueryLanguage = "python"
 
     @property
     def file(self) -> str:
@@ -280,8 +274,8 @@ def build_candidate_searcher(
     mode: QueryMode,
     limits: SearchLimits,
     **kwargs: Unpack[CandidateSearchKwargs],
-) -> tuple[RipGrepSearch, str]:
-    """Build rpygrep searcher for candidate generation.
+) -> tuple[list[str], str]:
+    """Build native ``rg`` command for candidate generation.
 
     Parameters
     ----------
@@ -300,14 +294,14 @@ def build_candidate_searcher(
 
     Returns
     -------
-    tuple[RipGrepSearch, str]
-        Configured searcher and effective pattern string.
+    tuple[list[str], str]
+        Ripgrep command and effective pattern string.
     """
     config = SearchConfig(
         root=root,
         query=query,
         mode=mode,
-        lang=kwargs.get("lang", DEFAULT_QUERY_LANGUAGE),
+        lang_scope=kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
         limits=limits,
         include_globs=kwargs.get("include_globs"),
         exclude_globs=kwargs.get("exclude_globs"),
@@ -319,62 +313,26 @@ def build_candidate_searcher(
     return _build_candidate_searcher(config)
 
 
-def _build_candidate_searcher(config: SearchConfig) -> tuple[RipGrepSearch, str]:
-    from rpygrep import RipGrepSearch
-
-    search_type = ripgrep_type_for_language(config.lang)
-    searcher = (
-        RipGrepSearch()
-        .set_working_directory(config.root)
-        .add_safe_defaults()
-        .include_type(search_type)
-        .case_sensitive(_CASE_SENSITIVE_DEFAULT)
-        .before_context(1)
-        .after_context(1)
-        .max_count(config.limits.max_matches_per_file)
-        .max_depth(config.limits.max_depth)
-        .max_file_size(config.limits.max_file_size_bytes)
-        .as_json()
-    )
-
+def _build_candidate_searcher(config: SearchConfig) -> tuple[list[str], str]:
     if config.mode == QueryMode.IDENTIFIER:
         # Word boundary match for identifiers
         pattern = rf"\b{re.escape(config.query)}\b"
-        searcher = searcher.add_pattern(pattern)
     elif config.mode == QueryMode.LITERAL:
         # Exact literal match (non-regex)
         pattern = config.query
-        searcher = searcher.patterns_are_not_regex().add_pattern(config.query)
     else:
         # User-provided regex (pass through)
         pattern = config.query
-        searcher = searcher.add_pattern(config.query)
 
-    # Add include globs
-    include_globs = config.include_globs or []
-    for glob in include_globs:
-        searcher = searcher.include_glob(glob)
-
-    # Add exclude globs
-    exclude_globs = config.exclude_globs or []
-    for glob in exclude_globs:
-        searcher = searcher.exclude_glob(glob)
-
-    return searcher, pattern
-
-
-def _collect_candidates(
-    searcher: RipGrepSearch,
-    limits: SearchLimits,
-) -> RgCollector:
-    collector = RgCollector(limits=limits, match_factory=RawMatch)
-    for line in searcher.run_direct():
-        event = decode_rg_event(line)
-        if event is None:
-            continue
-        collector.handle_event(event)
-    collector.finalize()
-    return collector
+    command = build_rg_command(
+        pattern=pattern,
+        mode=config.mode,
+        lang_types=tuple(ripgrep_types_for_scope(config.lang_scope)),
+        include_globs=config.include_globs or [],
+        exclude_globs=config.exclude_globs or [],
+        limits=config.limits,
+    )
+    return command, pattern
 
 
 def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchStats:
@@ -407,37 +365,54 @@ def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchSta
     )
 
 
-def collect_candidates(
-    searcher: RipGrepSearch,
+def collect_candidates(  # noqa: PLR0913
+    root: Path,
+    *,
+    pattern: str,
+    mode: QueryMode,
     limits: SearchLimits,
+    lang: QueryLanguage,
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
 ) -> tuple[list[RawMatch], SearchStats]:
-    """Execute rpygrep search and collect raw matches.
+    """Execute native ``rg`` search and collect raw matches.
 
     Parameters
     ----------
-    searcher
-        Configured rpygrep searcher.
+    root
+        Repository root path.
+    pattern
+        Effective pattern passed to ripgrep.
+    mode
+        Search mode.
     limits
         Search safety limits.
+    lang
+        Concrete language partition for this candidate pass.
+    include_globs
+        Optional include globs for the candidate pass.
+    exclude_globs
+        Optional exclude globs for the candidate pass.
 
     Returns
     -------
     tuple[list[RawMatch], SearchStats]
         Raw matches and collection statistics.
     """
-    try:
-        collector = search_sync_with_timeout(
-            lambda: _collect_candidates(searcher, limits),
-            limits.timeout_seconds,
-        )
-    except TimeoutError:
-        collector = RgCollector(limits=limits, match_factory=RawMatch)
-        timed_out = True
-    else:
-        timed_out = False
-
+    proc = run_rg_json(
+        root=root,
+        pattern=pattern,
+        mode=mode,
+        lang_types=(ripgrep_type_for_language(lang),),
+        include_globs=include_globs or [],
+        exclude_globs=exclude_globs or [],
+        limits=limits,
+    )
+    collector = RgCollector(limits=limits, match_factory=RawMatch)
+    for event in proc.events:
+        collector.handle_event(event)
     collector.finalize()
-    stats = _build_search_stats(collector, timed_out=timed_out)
+    stats = _build_search_stats(collector, timed_out=proc.timed_out)
     return collector.matches, stats
 
 
@@ -453,7 +428,7 @@ def classify_match(
     Parameters
     ----------
     raw
-        Raw match from rpygrep.
+        Raw match from ripgrep.
     root
         Repository root for file resolution.
     lang
@@ -472,7 +447,7 @@ def classify_match(
     heuristic = classify_heuristic(raw.text, raw.col, match_text)
 
     if heuristic.skip_deeper and heuristic.category is not None:
-        return _build_heuristic_enriched(raw, heuristic, match_text)
+        return _build_heuristic_enriched(raw, heuristic, match_text, lang=lang)
 
     file_path = root / raw.file
     classification = _resolve_match_classification(raw, file_path, heuristic, root, lang=lang)
@@ -494,6 +469,7 @@ def classify_match(
         match_text,
         classification,
         enrichment,
+        lang=lang,
     )
 
 
@@ -501,6 +477,8 @@ def _build_heuristic_enriched(
     raw: RawMatch,
     heuristic: HeuristicResult,
     match_text: str,
+    *,
+    lang: QueryLanguage,
 ) -> EnrichedMatch:
     category = heuristic.category or "text_match"
     return EnrichedMatch(
@@ -510,6 +488,7 @@ def _build_heuristic_enriched(
         category=category,
         confidence=heuristic.confidence,
         evidence_kind="heuristic",
+        language=lang,
     )
 
 
@@ -636,6 +615,8 @@ def _build_enriched_match(
     match_text: str,
     classification: ClassificationResult,
     enrichment: MatchEnrichment,
+    *,
+    lang: QueryLanguage,
 ) -> EnrichedMatch:
     return EnrichedMatch(
         span=raw.span,
@@ -649,6 +630,7 @@ def _build_enriched_match(
         context_window=enrichment.context_window,
         context_snippet=enrichment.context_snippet,
         symtable=enrichment.symtable,
+        language=lang,
     )
 
 
@@ -812,6 +794,7 @@ def _build_match_data(match: EnrichedMatch) -> dict[str, object]:
     data: dict[str, object] = {
         "match_text": match.match_text,
         "line_text": match.text,
+        "language": match.language,
     }
     if match.context_window:
         data["context_window"] = match.context_window
@@ -959,7 +942,10 @@ def _coerce_summary_inputs(
         root=Path(),
         query=cast("str", query),
         mode=cast("QueryMode", mode),
-        lang=cast("QueryLanguage", kwargs.get("lang", DEFAULT_QUERY_LANGUAGE)),
+        lang_scope=cast(
+            "QueryLanguageScope",
+            kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
+        ),
         limits=cast("SearchLimits", limits),
         include_globs=cast("list[str] | None", kwargs.get("include")),
         exclude_globs=cast("list[str] | None", kwargs.get("exclude")),
@@ -968,10 +954,14 @@ def _coerce_summary_inputs(
         tc=None,
         started_ms=0.0,
     )
+    languages = tuple(expand_language_scope(config.lang_scope))
+    default_stats = cast("SearchStats", stats)
     return SearchSummaryInputs(
         config=config,
-        stats=cast("SearchStats", stats),
+        stats=default_stats,
         matches=cast("list[EnrichedMatch]", matches),
+        languages=languages,
+        language_stats=dict.fromkeys(languages, default_stats),
         file_globs=cast("list[str] | None", kwargs.get("file_globs")),
         limit=cast("int | None", kwargs.get("limit")),
         pattern=cast("str | None", kwargs.get("pattern")),
@@ -980,11 +970,34 @@ def _coerce_summary_inputs(
 
 def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
     config = inputs.config
+    language_stats = {
+        lang: {
+            "scanned_files": stat.scanned_files,
+            "scanned_files_is_estimate": stat.scanned_files_is_estimate,
+            "matched_files": stat.matched_files,
+            "total_matches": stat.total_matches,
+            "timed_out": stat.timed_out,
+            "truncated": stat.truncated,
+            "caps_hit": (
+                "timeout"
+                if stat.timed_out
+                else (
+                    "max_files"
+                    if stat.max_files_hit
+                    else ("max_total_matches" if stat.max_matches_hit else "none")
+                )
+            ),
+        }
+        for lang, stat in inputs.language_stats.items()
+    }
     return {
         "query": config.query,
         "mode": config.mode.value,
-        "lang": config.lang,
-        "file_globs": inputs.file_globs or file_globs_for_language(config.lang),
+        "lang_scope": config.lang_scope,
+        "language_order": list(inputs.languages),
+        "languages": language_stats,
+        "cross_language_diagnostics": [],
+        "file_globs": inputs.file_globs or file_globs_for_scope(config.lang_scope),
         "include": config.include_globs or [],
         "exclude": config.exclude_globs or [],
         "context_lines": {"before": 1, "after": 1},
@@ -1218,7 +1231,7 @@ def _build_search_context(
         root=root,
         query=query,
         mode=actual_mode,
-        lang=kwargs.get("lang", DEFAULT_QUERY_LANGUAGE),
+        lang_scope=kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
         limits=limits,
         include_globs=kwargs.get("include_globs"),
         exclude_globs=kwargs.get("exclude_globs"),
@@ -1231,33 +1244,165 @@ def _build_search_context(
 
 def _run_candidate_phase(
     ctx: SmartSearchContext,
+    *,
+    lang: QueryLanguage,
 ) -> tuple[list[RawMatch], SearchStats, str]:
-    searcher, pattern = _build_candidate_searcher(ctx)
-    raw_matches, stats = collect_candidates(searcher, ctx.limits)
+    pattern = rf"\b{re.escape(ctx.query)}\b" if ctx.mode == QueryMode.IDENTIFIER else ctx.query
+    raw_matches, stats = collect_candidates(
+        ctx.root,
+        pattern=pattern,
+        mode=ctx.mode,
+        limits=ctx.limits,
+        lang=lang,
+        include_globs=ctx.include_globs,
+        exclude_globs=ctx.exclude_globs,
+    )
     return raw_matches, stats, pattern
 
 
 def _run_classification_phase(
-    ctx: SmartSearchContext, raw_matches: list[RawMatch]
+    ctx: SmartSearchContext,
+    *,
+    lang: QueryLanguage,
+    raw_matches: list[RawMatch],
 ) -> list[EnrichedMatch]:
-    return [classify_match(raw, ctx.root, lang=ctx.lang) for raw in raw_matches]
+    return [classify_match(raw, ctx.root, lang=lang) for raw in raw_matches]
+
+
+@dataclass(frozen=True, slots=True)
+class _LanguageSearchResult:
+    lang: QueryLanguage
+    raw_matches: list[RawMatch]
+    stats: SearchStats
+    pattern: str
+    enriched_matches: list[EnrichedMatch]
+
+
+def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchResult]:
+    results: list[_LanguageSearchResult] = []
+    for lang in expand_language_scope(ctx.lang_scope):
+        raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang)
+        enriched = _run_classification_phase(ctx, lang=lang, raw_matches=raw_matches)
+        results.append(
+            _LanguageSearchResult(
+                lang=lang,
+                raw_matches=raw_matches,
+                stats=stats,
+                pattern=pattern,
+                enriched_matches=enriched,
+            )
+        )
+    return results
+
+
+def _merge_language_matches(
+    *,
+    partition_results: list[_LanguageSearchResult],
+    lang_scope: QueryLanguageScope,
+) -> list[EnrichedMatch]:
+    priority = {lang: idx for idx, lang in enumerate(expand_language_scope(lang_scope))}
+    merged: list[EnrichedMatch] = []
+    for partition in partition_results:
+        merged.extend(partition.enriched_matches)
+    merged.sort(
+        key=lambda match: (
+            priority.get(match.language, 99),
+            -compute_relevance_score(match),
+            match.file,
+            match.line,
+            match.col,
+        )
+    )
+    return merged
+
+
+def _is_python_oriented_query(query: str) -> bool:
+    lowered = query.lower()
+    hints = (
+        "def ",
+        "async def ",
+        "class ",
+        "decorator",
+        "symtable",
+        "bytecode",
+    )
+    return any(hint in lowered for hint in hints)
+
+
+def _build_cross_language_diagnostics(
+    *,
+    query: str,
+    lang_scope: QueryLanguageScope,
+    python_matches: int,
+    rust_matches: int,
+) -> list[Finding]:
+    if lang_scope != "auto":
+        return []
+    if not _is_python_oriented_query(query):
+        return []
+    if python_matches > 0 or rust_matches == 0:
+        return []
+    return [
+        Finding(
+            category="cross_language_hint",
+            message=(
+                "Python-oriented query produced no Python matches; "
+                "Rust matches were found."
+            ),
+            severity="warning",
+            details=DetailPayload(
+                kind="cross_language_hint",
+                data={
+                    "python_matches": python_matches,
+                    "rust_matches": rust_matches,
+                },
+            ),
+        )
+    ]
 
 
 def _assemble_smart_search_result(
     ctx: SmartSearchContext,
-    stats: SearchStats,
-    enriched_matches: list[EnrichedMatch],
-    pattern: str,
+    partition_results: list[_LanguageSearchResult],
 ) -> CqResult:
+    enriched_matches = _merge_language_matches(
+        partition_results=partition_results,
+        lang_scope=ctx.lang_scope,
+    )
+    language_stats = {result.lang: result.stats for result in partition_results}
+    patterns = {result.lang: result.pattern for result in partition_results}
+    merged_stats = SearchStats(
+        scanned_files=sum(stat.scanned_files for stat in language_stats.values()),
+        matched_files=sum(stat.matched_files for stat in language_stats.values()),
+        total_matches=sum(stat.total_matches for stat in language_stats.values()),
+        scanned_files_is_estimate=any(
+            stat.scanned_files_is_estimate for stat in language_stats.values()
+        ),
+        truncated=any(stat.truncated for stat in language_stats.values()),
+        timed_out=any(stat.timed_out for stat in language_stats.values()),
+        max_files_hit=any(stat.max_files_hit for stat in language_stats.values()),
+        max_matches_hit=any(stat.max_matches_hit for stat in language_stats.values()),
+    )
     summary_inputs = SearchSummaryInputs(
         config=ctx,
-        stats=stats,
+        stats=merged_stats,
         matches=enriched_matches,
-        file_globs=file_globs_for_language(ctx.lang),
+        languages=tuple(expand_language_scope(ctx.lang_scope)),
+        language_stats=language_stats,
+        file_globs=file_globs_for_scope(ctx.lang_scope),
         limit=ctx.limits.max_total_matches,
-        pattern=pattern,
+        pattern=patterns.get("python") or next(iter(patterns.values()), None),
     )
     summary = build_summary(summary_inputs)
+    python_matches = sum(1 for match in enriched_matches if match.language == "python")
+    rust_matches = sum(1 for match in enriched_matches if match.language == "rust")
+    diagnostics = _build_cross_language_diagnostics(
+        query=ctx.query,
+        lang_scope=ctx.lang_scope,
+        python_matches=python_matches,
+        rust_matches=rust_matches,
+    )
+    summary["cross_language_diagnostics"] = [finding.message for finding in diagnostics]
     sections = build_sections(
         enriched_matches,
         ctx.root,
@@ -1265,6 +1410,8 @@ def _assemble_smart_search_result(
         ctx.mode,
         include_strings=ctx.include_strings,
     )
+    if diagnostics:
+        sections.append(Section(title="Cross-Language Diagnostics", findings=diagnostics))
 
     run_ctx = RunContext.from_parts(
         root=ctx.root,
@@ -1278,24 +1425,9 @@ def _assemble_smart_search_result(
         run=run,
         summary=summary,
         sections=sections,
-        key_findings=sections[0].findings[:5] if sections else [],
+        key_findings=(sections[0].findings[:5] if sections else []) + diagnostics,
         evidence=[build_finding(m, ctx.root) for m in enriched_matches[:MAX_EVIDENCE]],
     )
-
-
-def _disabled_language_result(ctx: SmartSearchContext) -> CqResult:
-    run_ctx = RunContext.from_parts(
-        root=ctx.root,
-        argv=ctx.argv,
-        tc=ctx.tc,
-        started_ms=ctx.started_ms,
-    )
-    result = mk_result(run_ctx.to_runmeta("search"))
-    result.summary["error"] = disabled_language_message(ctx.lang)
-    result.summary["lang"] = ctx.lang
-    result.summary["feature_flag"] = RUST_QUERY_ENABLE_ENV
-    return result
-
 
 def smart_search(
     root: Path,
@@ -1320,11 +1452,8 @@ def smart_search(
         Complete search results.
     """
     ctx = _build_search_context(root, query, kwargs)
-    if not is_query_language_enabled(ctx.lang):
-        return _disabled_language_result(ctx)
-    raw_matches, stats, pattern = _run_candidate_phase(ctx)
-    enriched_matches = _run_classification_phase(ctx, raw_matches)
-    return _assemble_smart_search_result(ctx, stats, enriched_matches, pattern)
+    partition_results = _run_language_partitions(ctx)
+    return _assemble_smart_search_result(ctx, partition_results)
 
 
 __all__ = [

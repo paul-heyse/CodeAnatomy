@@ -19,7 +19,12 @@ from tools.cq.query.ir import (
     RelationalConstraint,
     Scope,
 )
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
+from tools.cq.query.language import (
+    DEFAULT_QUERY_LANGUAGE,
+    DEFAULT_QUERY_LANGUAGE_SCOPE,
+    QueryLanguage,
+    QueryLanguageScope,
+)
 
 if TYPE_CHECKING:
     from tools.cq.query.ir import StrictnessMode
@@ -207,7 +212,9 @@ class ToolPlan(msgspec.Struct, frozen=True):
     is_pattern_query
         Whether this is a pattern-based query
     lang
-        Query language for parsing and scan routing.
+        Concrete query language for parsing and scan routing.
+    lang_scope
+        Language scope requested by the caller.
     """
 
     scope: Scope = msgspec.field(default_factory=Scope)
@@ -219,6 +226,7 @@ class ToolPlan(msgspec.Struct, frozen=True):
     sg_rules: tuple[AstGrepRule, ...] = ()
     is_pattern_query: bool = False
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
+    lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
 
 
 _ENTITY_RECORDS: dict[str, set[str]] = {
@@ -300,7 +308,8 @@ def _compile_entity_query(query: Query) -> ToolPlan:
         explain=query.explain,
         sg_rules=sg_rules,
         is_pattern_query=False,
-        lang=query.lang,
+        lang=query.primary_language,
+        lang_scope=query.lang_scope,
     )
 
 
@@ -336,7 +345,8 @@ def _compile_pattern_query(query: Query) -> ToolPlan:
         explain=query.explain,
         sg_rules=(rule,),
         is_pattern_query=True,
-        lang=query.lang,
+        lang=query.primary_language,
+        lang_scope=query.lang_scope,
     )
 
 
@@ -352,7 +362,7 @@ def _entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
     """
     assert query.entity is not None
 
-    if query.lang == "rust":
+    if query.primary_language == "rust":
         return _rust_entity_to_ast_grep_rules(query)
 
     # Python defaults

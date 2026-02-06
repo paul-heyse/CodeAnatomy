@@ -92,6 +92,7 @@ class SeverityLevel(StrEnum):
 class QueryLanguageToken(StrEnum):
     """Supported query language tokens."""
 
+    auto = "auto"
     python = "python"
     rust = "rust"
 

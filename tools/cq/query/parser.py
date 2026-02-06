@@ -32,7 +32,11 @@ from tools.cq.query.ir import (
     Scope,
     ScopeFilter,
 )
-from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage, parse_query_language
+from tools.cq.query.language import (
+    DEFAULT_QUERY_LANGUAGE_SCOPE,
+    QueryLanguageScope,
+    parse_query_language_scope,
+)
 
 if TYPE_CHECKING:
     from tools.cq.query.ir import EntityType, ExpanderKind, FieldType, RelationalOp, StrictnessMode
@@ -102,7 +106,7 @@ class _EntityQueryState:
     metavar_filters: tuple[MetaVarFilter, ...] = ()
     composite: CompositeRule | None = None
     nth_child: NthChildSpec | None = None
-    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
+    lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
 
     def build(self) -> Query:
         return Query(
@@ -120,7 +124,7 @@ class _EntityQueryState:
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
-            lang=self.lang,
+            lang_scope=self.lang_scope,
         )
 
 
@@ -135,7 +139,7 @@ class _PatternQueryState:
     metavar_filters: tuple[MetaVarFilter, ...] = ()
     composite: CompositeRule | None = None
     nth_child: NthChildSpec | None = None
-    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
+    lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
 
     def build(self) -> Query:
         return Query(
@@ -148,7 +152,7 @@ class _PatternQueryState:
             metavar_filters=self.metavar_filters,
             composite=self.composite,
             nth_child=self.nth_child,
-            lang=self.lang,
+            lang_scope=self.lang_scope,
         )
 
 
@@ -191,8 +195,7 @@ def _handle_explain(tokens: dict[str, str], state: Any) -> None:
 
 
 def _handle_lang(tokens: dict[str, str], state: Any) -> None:
-    lang_value = tokens.get("lang", DEFAULT_QUERY_LANGUAGE)
-    state.lang = _parse_query_language(lang_value)
+    state.lang_scope = _parse_query_language_scope(tokens.get("lang"))
 
 
 _ENTITY_TOKEN_HANDLERS: dict[str, _TokenHandler] = {
@@ -801,24 +804,24 @@ def _parse_fields(fields_str: str) -> tuple[FieldType, ...]:
     return tuple(fields) if fields else ("def",)
 
 
-def _parse_query_language(lang_str: str) -> QueryLanguage:
-    """Parse and validate query language token.
+def _parse_query_language_scope(lang_str: str | None) -> QueryLanguageScope:
+    """Parse and validate query language scope token.
 
     Returns
     -------
-    str
-        Normalized query language.
+    QueryLanguageScope
+        Normalized query language scope.
 
     Raises
     ------
     QueryParseError
-        If the language token is not supported.
+        If the language scope token is not supported.
     """
     try:
-        return parse_query_language(lang_str)
+        return parse_query_language_scope(lang_str)
     except ValueError as exc:
-        valid = ("python", "rust")
-        msg = _invalid_query_language_message(lang_str, valid)
+        valid = ("auto", "python", "rust")
+        msg = _invalid_query_language_message(str(lang_str), valid)
         raise QueryParseError(msg) from exc
 
 

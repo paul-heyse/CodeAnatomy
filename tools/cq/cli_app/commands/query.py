@@ -93,7 +93,7 @@ def q(
         parsed_query = parse_query(query_string)
     except QueryParseError as e:
         if not has_tokens:
-            from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE
+            from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
             from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
 
             # Build include globs from include patterns
@@ -103,7 +103,7 @@ def q(
                 ctx.root,
                 query_string,
                 mode=None,  # Auto-detect
-                lang=DEFAULT_QUERY_LANGUAGE,
+                lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
                 include_globs=include_globs,
                 exclude_globs=options.exclude if options.exclude else None,
                 include_strings=False,

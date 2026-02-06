@@ -3,40 +3,31 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "python")]
+use pyo3::prelude::pyclass;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "python", pyo3::pyclass)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct DeltaAppTransaction {
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub app_id: String,
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub version: i64,
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub last_updated: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "python", pyo3::pyclass)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct DeltaCommitOptions {
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub metadata: HashMap<String, String>,
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub app_transaction: Option<DeltaAppTransaction>,
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub max_retries: Option<i64>,
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub create_checkpoint: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "python", pyo3::pyclass)]
+#[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 pub struct DeltaFeatureGate {
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub min_reader_version: Option<i32>,
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub min_writer_version: Option<i32>,
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub required_reader_features: Vec<String>,
-    #[cfg_attr(feature = "python", pyo3(get, set))]
     pub required_writer_features: Vec<String>,
 }

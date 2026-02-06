@@ -92,7 +92,7 @@ def expand_language_scope(scope: QueryLanguageScope) -> tuple[QueryLanguage, ...
     """
     if scope == "auto":
         return ("python", "rust")
-    return (cast("QueryLanguage", scope),)
+    return (scope,)
 
 
 def primary_language(scope: QueryLanguageScope) -> QueryLanguage:

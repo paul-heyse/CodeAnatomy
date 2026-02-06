@@ -9,9 +9,7 @@ import msgspec
 from tools.cq.core.schema import CqResult
 
 
-def test_rust_query_available_without_feature_gate(
-    run_query: Callable[[str], CqResult]
-) -> None:
+def test_rust_query_available_without_feature_gate(run_query: Callable[[str], CqResult]) -> None:
     """Rust queries should execute without feature-gate toggles."""
     result = run_query("entity=function lang=rust in=tests/e2e/cq/_fixtures/")
     assert "error" not in result.summary

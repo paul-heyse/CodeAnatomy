@@ -23,6 +23,7 @@ from tools.cq.search.smart_search import (
     compute_relevance_score,
     smart_search,
 )
+from tools.cq.search.tree_sitter_rust import is_tree_sitter_rust_available
 
 
 def _span(
@@ -441,6 +442,25 @@ class TestBuildSummary:
         assert summary["truncated"] is True
         assert summary["caps_hit"] == "max_total_matches"
 
+    def test_summary_multilang_contract_keys(self) -> None:
+        """Summary should expose canonical multilang contract keys."""
+        stats = SearchStats(
+            scanned_files=1,
+            matched_files=1,
+            total_matches=1,
+        )
+        summary = build_summary(
+            "build_graph",
+            QueryMode.IDENTIFIER,
+            stats,
+            [],
+            SMART_SEARCH_LIMITS,
+        )
+        assert summary["lang_scope"] == "auto"
+        assert summary["language_order"] == ["python", "rust"]
+        assert isinstance(summary["languages"], dict)
+        assert isinstance(summary["cross_language_diagnostics"], list)
+
 
 class TestBuildSections:
     """Tests for section construction."""
@@ -617,6 +637,67 @@ class TestSmartSearch:
         monkeypatch.setattr(smart_search_module, "MAX_EVIDENCE", 1)
         result = smart_search_module.smart_search(sample_repo, "build_graph")
         assert len(result.evidence) <= 1
+
+    def test_multilang_order_is_python_first(self, tmp_path: Path) -> None:
+        """Merged evidence should prefer Python before Rust for tied relevance."""
+        (tmp_path / "a.py").write_text("def build_graph():\n    return 1\n", encoding="utf-8")
+        (tmp_path / "b.rs").write_text("fn build_graph() -> i32 { 1 }\n", encoding="utf-8")
+        clear_caches()
+        result = smart_search(tmp_path, "build_graph")
+        summary = cast("Mapping[str, object]", result.summary)
+        assert summary["language_order"] == ["python", "rust"]
+        assert result.evidence
+        assert result.evidence[0].details.get("language") == "python"
+
+    def test_cross_language_warning_for_python_intent_rust_only(self, tmp_path: Path) -> None:
+        """Python-oriented text with Rust-only matches should emit a warning."""
+        (tmp_path / "only.rs").write_text("// decorator\nfn f() {}\n", encoding="utf-8")
+        clear_caches()
+        result = smart_search(tmp_path, "decorator")
+        diagnostics = cast("list[object]", result.summary["cross_language_diagnostics"])
+        assert diagnostics
+        assert any(
+            "Python-oriented query produced no Python matches" in str(item) for item in diagnostics
+        )
+
+    @pytest.mark.skipif(
+        not is_tree_sitter_rust_available(),
+        reason="tree-sitter-rust is not available in this environment",
+    )
+    def test_rust_tree_sitter_enrichment_attached(self, tmp_path: Path) -> None:
+        """Rust findings should include optional tree-sitter enrichment details."""
+        (tmp_path / "lib.rs").write_text(
+            'fn build_graph() {\n    println!("x");\n}\n',
+            encoding="utf-8",
+        )
+        clear_caches()
+        result = smart_search(tmp_path, "build_graph", lang_scope="rust")
+        assert result.evidence
+        detail_data = result.evidence[0].details.data if result.evidence[0].details else None
+        assert isinstance(detail_data, dict)
+        assert "rust_tree_sitter" in detail_data
+
+    def test_rust_tree_sitter_fail_open(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tree-sitter enrichment failures must not break core search results."""
+        (tmp_path / "lib.rs").write_text(
+            'fn build_graph() {\n    println!("x");\n}\n',
+            encoding="utf-8",
+        )
+        clear_caches()
+        import importlib
+
+        smart_search_module = importlib.import_module("tools.cq.search.smart_search")
+
+        def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
+            msg = "forced enrichment failure"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(smart_search_module, "enrich_rust_context", _boom)
+        result = smart_search_module.smart_search(tmp_path, "build_graph", lang_scope="rust")
+        assert result.summary["query"] == "build_graph"
+        assert result.evidence
 
 
 class TestCandidateSearcher:

@@ -1477,8 +1477,9 @@ def _execute_external_ddl(
     ddl: str,
     sql_options: SQLOptions,
 ) -> None:
-    allow_statements = True
-    resolved_options = sql_options.with_allow_statements(allow_statements)
+    # Internal dataset registration requires DDL even when service SQL
+    # surfaces are configured read-only for user-facing execution paths.
+    resolved_options = sql_options.with_allow_ddl(allow=True).with_allow_statements(allow=True)
     try:
         ddl_df = ctx.sql_with_options(ddl, resolved_options)
     except (RuntimeError, TypeError, ValueError) as exc:
@@ -1697,7 +1698,10 @@ def _register_delta_provider(
         context.ctx,
         name=context.name,
         supports_insert=state.resolution.provider_kind != "delta_cdf",
-        supports_cdf=state.resolution.provider_kind == "delta_cdf",
+        supports_cdf=(
+            state.resolution.provider_kind == "delta_cdf"
+            or context.location.delta_cdf_options is not None
+        ),
     )
     return _maybe_cache(context, result.df), result.cache_prefix
 
@@ -1913,6 +1917,7 @@ def _record_delta_snapshot_if_applicable(
             schema_identity_hash=schema_identity_hash_value,
             ddl_fingerprint=ddl_fingerprint,
         ),
+        ctx=context.ctx,
     )
 
 
@@ -3294,7 +3299,8 @@ def _register_delta_cache_for_dataset(
     ).cache_key()
     safe_name = context.name.replace("/", "_").replace(":", "_")
     cache_path = str(cache_root / f"{safe_name}__{cache_key}")
-    schema = arrow_schema_from_df(df)
+    cached_df = _strip_delta_file_column_for_cache(df, location=context.location)
+    schema = arrow_schema_from_df(cached_df)
     schema_hash = schema_identity_hash(schema)
     partition_by = _dataset_cache_partition_by(schema, location=context.location)
     from datafusion_engine.cache.commit_metadata import (
@@ -3331,7 +3337,7 @@ def _register_delta_cache_for_dataset(
     ) as (_span, set_result):
         result = pipeline.write(
             WriteRequest(
-                source=df,
+                source=cached_df,
                 destination=cache_path,
                 format=WriteFormat.DELTA,
                 mode=WriteMode.OVERWRITE,
@@ -3377,6 +3383,22 @@ def _register_delta_cache_for_dataset(
         ctx=context.ctx,
     )
     return context.ctx.table(context.name)
+
+
+def _strip_delta_file_column_for_cache(
+    df: DataFrame,
+    *,
+    location: DatasetLocation,
+) -> DataFrame:
+    scan = location.resolved.delta_scan
+    if scan is None or not scan.file_column_name:
+        return df
+    schema = df.schema()
+    names = schema.names if hasattr(schema, "names") else tuple(field.name for field in schema)
+    file_column = scan.file_column_name
+    if file_column not in names:
+        return df
+    return df.drop(file_column)
 
 
 def _dataset_cache_partition_by(
@@ -3449,6 +3471,7 @@ def _resolve_cache_policy(
     enabled = cache_policy.enabled if cache_policy is not None else None
     max_columns = cache_policy.max_columns if cache_policy is not None else None
     storage = cache_policy.storage if cache_policy is not None else "memory"
+    base_cache_enabled = options.cache if cache_policy is None else True
     if runtime_profile is not None:
         if enabled is None:
             enabled = runtime_profile.features.cache_enabled
@@ -3459,7 +3482,7 @@ def _resolve_cache_policy(
     if max_columns is None:
         max_columns = DEFAULT_CACHE_MAX_COLUMNS
     return DataFusionCacheSettings(
-        enabled=options.cache and enabled,
+        enabled=base_cache_enabled and enabled,
         max_columns=max_columns,
         storage=storage,
     )

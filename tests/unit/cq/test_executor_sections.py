@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.query.executor import FileIntervalIndex, _build_callers_section
+from tools.cq.core.toolchain import Toolchain
+from tools.cq.query.executor import FileIntervalIndex, _build_callers_section, execute_plan
+from tools.cq.query.parser import parse_query
+from tools.cq.query.planner import compile_query
 from tools.cq.query.sg_parser import SgRecord
 
 
@@ -50,3 +53,22 @@ def test_callers_section_respects_file_boundaries() -> None:
     assert finding.details.get("caller") == "caller"
     assert finding.anchor is not None
     assert finding.anchor.file == "b.py"
+
+
+def test_auto_scope_summary_uses_multilang_partitions(tmp_path: Path) -> None:
+    """Auto-scope query summary should expose per-language stats partitions only."""
+    (tmp_path / "a.py").write_text("def target():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "b.rs").write_text("fn target() -> i32 { 1 }\n", encoding="utf-8")
+    tc = Toolchain.detect()
+    query = parse_query("entity=function name=target lang=auto")
+    plan = compile_query(query)
+    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+
+    assert result.summary["lang_scope"] == "auto"
+    assert result.summary["language_order"] == ["python", "rust"]
+    languages = result.summary["languages"]
+    assert isinstance(languages, dict)
+    assert "python" in languages
+    assert "rust" in languages
+    assert isinstance(languages["python"], dict)
+    assert "query" not in languages["python"]

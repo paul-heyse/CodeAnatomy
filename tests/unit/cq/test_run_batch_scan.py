@@ -64,3 +64,37 @@ def test_batch_equivalence_single_query(tmp_path: Path) -> None:
         }
 
     assert normalize(single) == normalize(batched)
+
+
+def test_batch_q_steps_auto_scope_collapses_per_parent_step(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Auto-scope q steps should batch per language and collapse to parent step ids."""
+    (tmp_path / "a.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("def bar():\n    return 2\n", encoding="utf-8")
+
+    calls = 0
+    real_scan = batch_queries.scan_files
+
+    def wrapped(files: list[Path], rules: tuple[RuleSpec, ...], root: Path) -> list[SgRecord]:
+        nonlocal calls
+        calls += 1
+        return real_scan(files, rules, root)
+
+    monkeypatch.setattr(batch_queries, "scan_files", wrapped)
+
+    ctx = CliContext.build(argv=["cq", "run"], root=tmp_path)
+    plan = RunPlan(
+        steps=(
+            QStep(id="q_auto_0", query="entity=function name=foo lang=auto"),
+            QStep(id="q_auto_1", query="entity=function name=bar lang=auto"),
+        )
+    )
+    result = execute_run_plan(plan, ctx)
+
+    # Python files only => one shared scan for python partition.
+    assert calls == 1
+    steps = result.summary.get("steps")
+    assert isinstance(steps, list)
+    assert steps.count("q_auto_0") == 1
+    assert steps.count("q_auto_1") == 1

@@ -49,24 +49,28 @@ def register_cdf_inputs(
         DatasetRegistrationOptions,
         register_dataset_df,
     )
+    from datafusion_engine.tables.metadata import table_provider_metadata
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     mapping: dict[str, str] = {}
     for name in table_names:
         location = runtime_profile.catalog_ops.dataset_location(name)
-        if location is None:
-            continue
-        provider = resolve_datafusion_provider(location)
-        if provider != "delta_cdf":
-            continue
         cdf_name = f"{name}__cdf"
-        register_dataset_df(
-            ctx,
-            name=cdf_name,
-            location=location,
-            options=DatasetRegistrationOptions(runtime_profile=runtime_profile),
-        )
-        cdf_df = ctx.table(cdf_name)
+        metadata = table_provider_metadata(id(ctx), table_name=name)
+        supports_cdf = bool(metadata.supports_cdf) if metadata is not None else False
+        provider = resolve_datafusion_provider(location) if location is not None else None
+        if location is not None and provider == "delta_cdf":
+            register_dataset_df(
+                ctx,
+                name=cdf_name,
+                location=location,
+                options=DatasetRegistrationOptions(runtime_profile=runtime_profile),
+            )
+            cdf_df = ctx.table(cdf_name)
+        elif supports_cdf:
+            cdf_df = ctx.table(name)
+        else:
+            continue
         cleaned = strip_cdf_metadata(cdf_df)
         adapter.register_view(cdf_name, cleaned, overwrite=True, temporary=False)
         mapping[name] = cdf_name

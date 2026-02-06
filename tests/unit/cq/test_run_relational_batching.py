@@ -50,3 +50,39 @@ def test_relational_batching_parses_each_file_once(
         if finding.anchor is not None
     }
     assert {"alpha.py", "beta.py"}.issubset(files)
+
+
+def test_relational_batching_auto_scope_still_uses_shared_parse(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Auto scope should keep relational span parsing shared for Python partitions."""
+    (tmp_path / "alpha.py").write_text(
+        "def outer_alpha():\n    def inner_alpha():\n        return 1\n    return inner_alpha()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "beta.py").write_text(
+        "def outer_beta():\n    def inner_beta():\n        return 2\n    return inner_beta()\n",
+        encoding="utf-8",
+    )
+
+    parse_calls = 0
+    real_sgroot = batch_spans.SgRoot
+
+    def counting_sgroot(src: str, language: str) -> object:
+        nonlocal parse_calls
+        parse_calls += 1
+        return real_sgroot(src, language)
+
+    monkeypatch.setattr(batch_spans, "SgRoot", counting_sgroot)
+
+    ctx = CliContext.build(argv=["cq", "run"], root=tmp_path)
+    plan = RunPlan(
+        steps=(
+            QStep(id="rel_auto_0", query="entity=function inside='def outer_alpha' lang=auto"),
+            QStep(id="rel_auto_1", query="entity=function inside='def outer_beta' lang=auto"),
+        )
+    )
+    execute_run_plan(plan, ctx)
+
+    # Python partition parses each file once.
+    assert parse_calls == 2

@@ -194,6 +194,7 @@ def record_delta_snapshot(
     profile: DataFusionRuntimeProfile | None,
     *,
     artifact: DeltaSnapshotArtifact,
+    ctx: SessionContext | None = None,
 ) -> int | None:
     """Persist a Delta snapshot artifact row when enabled.
 
@@ -204,9 +205,9 @@ def record_delta_snapshot(
     """
     if profile is None:
         return None
-    ctx = profile.session_context()
+    active_ctx = ctx or profile.session_context()
     location = _ensure_observability_table(
-        ctx,
+        active_ctx,
         profile,
         name=DELTA_SNAPSHOT_TABLE_NAME,
         schema=_delta_snapshot_schema(),
@@ -237,7 +238,7 @@ def record_delta_snapshot(
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
-            ctx=ctx,
+            ctx=active_ctx,
             runtime_profile=profile,
             location=location,
             schema=_delta_snapshot_schema(),
@@ -252,6 +253,7 @@ def record_delta_mutation(
     profile: DataFusionRuntimeProfile | None,
     *,
     artifact: DeltaMutationArtifact,
+    ctx: SessionContext | None = None,
 ) -> int | None:
     """Persist a Delta mutation artifact row when enabled.
 
@@ -262,9 +264,9 @@ def record_delta_mutation(
     """
     if profile is None:
         return None
-    ctx = profile.session_context()
+    active_ctx = ctx or profile.session_context()
     location = _ensure_observability_table(
-        ctx,
+        active_ctx,
         profile,
         name=DELTA_MUTATION_TABLE_NAME,
         schema=_delta_mutation_schema(),
@@ -301,7 +303,7 @@ def record_delta_mutation(
     }
     return _append_observability_row(
         _AppendObservabilityRequest(
-            ctx=ctx,
+            ctx=active_ctx,
             runtime_profile=profile,
             location=location,
             schema=_delta_mutation_schema(),
@@ -693,7 +695,9 @@ def _append_observability_row(request: _AppendObservabilityRequest) -> int | Non
                         },
                     )
                 )
-            except _OBSERVABILITY_APPEND_ERRORS as retry_exc:  # pragma: no cover - defensive fail-open path
+            except (
+                _OBSERVABILITY_APPEND_ERRORS
+            ) as retry_exc:  # pragma: no cover - defensive fail-open path
                 _record_append_failure(request, retry_exc)
                 return None
         else:

@@ -971,6 +971,9 @@ def clear_caches() -> None:
     _symtable_cache.clear()
     _record_context_cache.clear()
     _node_index_cache.clear()
+    from tools.cq.search.tree_sitter_rust import clear_tree_sitter_rust_cache
+
+    clear_tree_sitter_rust_cache()
 
 
 __all__ = [

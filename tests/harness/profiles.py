@@ -78,7 +78,13 @@ def conformance_profile_with_sink(
 
 @lru_cache(maxsize=1)
 def strict_native_provider_supported() -> bool:
-    """Return whether strict non-fallback Delta provider probing is compatible."""
+    """Return whether strict non-fallback Delta provider probing is compatible.
+
+    Returns
+    -------
+    bool
+        `True` when strict native provider probing is both available and compatible.
+    """
     profile = DataFusionRuntimeProfile(
         features=FeatureGatesConfig(
             enable_schema_registry=False,

@@ -7418,6 +7418,10 @@ def read_delta_as_reader(
     pyarrow.RecordBatchReader
         Streaming reader for the Delta table via DataFusion's Delta table provider.
     """
+    if delta_scan is None:
+        delta_scan = DeltaScanOptions(schema_force_view_types=False)
+    elif delta_scan.schema_force_view_types is None:
+        delta_scan = msgspec.structs.replace(delta_scan, schema_force_view_types=False)
     profile = DataFusionRuntimeProfile()
     ctx = profile.session_context()
     from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
@@ -7448,9 +7452,15 @@ def read_delta_as_reader(
     from datafusion_engine.tables.metadata import TableProviderCapsule
 
     df = ctx.read_table(TableProviderCapsule(resolution.provider))
-    from arrow_utils.core.streaming import to_reader
-
-    return to_reader(df)
+    batches = df.collect()
+    if batches:
+        table = pa.Table.from_batches(batches)
+    else:
+        schema = df.schema()
+        table = pa.Table.from_batches([], schema=schema)
+    if "__delta_rs_path" in table.column_names:
+        table = table.drop(["__delta_rs_path"])
+    return pa.RecordBatchReader.from_batches(table.schema, table.to_batches())
 
 
 def dataset_spec_from_context(

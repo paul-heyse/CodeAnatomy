@@ -28,6 +28,8 @@ Reference guidance used:
 - `.codex/skills/datafusion-and-deltalake-stack/reference/deltalake.md`
 - `.codex/skills/datafusion-and-deltalake-stack/reference/deltalake_datafusionmixins.md`
 - `.codex/skills/datafusion-and-deltalake-stack/reference/deltalake_datafusion_integration.md`
+- `.codex/skills/datafusion-and-deltalake-stack/reference/datafusion_deltalake_advanced_rust_integration.md`
+- `.codex/skills/datafusion-and-deltalake-stack/reference/datafusion_rust_UDFs.md`
 - `docs/python_library_reference/msgspec.md`
 
 ---
@@ -117,6 +119,29 @@ Reference guidance used:
   - 105 top-level `def/class` declarations
 - `src/storage/deltalake/__init__.py` still exports a broad, mixed surface (feature control, reads/writes, pruning/indexing, compatibility APIs).
 
+## 1.5 Rust integration gaps discovered in follow-on review (priority additions, not deletions)
+
+### G) External UDTF registration is a stub
+- Evidence:
+  - `rust/datafusion_ext/src/udtf_sources.rs` currently returns `Ok(())` in `register_external_udtfs(...)` without registering any table functions.
+  - `rust/datafusion_ext/src/udf_registry.rs` still invokes this function during registry setup.
+- Conclusion:
+  - This is the highest-impact missing Rust integration seam for Delta-specific table functions.
+
+### H) Custom table UDF registry is intentionally empty today
+- Evidence:
+  - `table_udf_specs()` returns `table_udfs![]` in `rust/datafusion_ext/src/udf_registry.rs`.
+  - Existing test asserts `table_udf_specs().is_empty()`.
+- Conclusion:
+  - The current registry shape is compatible with expansion, but no custom external table functions are currently shipped.
+
+### I) Plugin table-function exports are narrower than the native session surface
+- Evidence:
+  - `rust/df_plugin_codeanatomy/src/lib.rs` builds plugin table-function exports from `table_udf_specs()` only.
+  - Native path separately registers builtins and source UDTFs via `udtf_builtin` and `udtf_sources`.
+- Conclusion:
+  - Plugin and native table-function capability surfaces should be unified to avoid drift.
+
 ---
 
 ## 2) Additional Architecture Improvements for Best-in-Class DataFusion + DeltaLake
@@ -178,6 +203,48 @@ Given known checkpoint/cleanup hazards documented in integration references:
 - making it the only emitter for both DataFusion object-store config and delta-rs storage options
 - adding immutable profile provenance/fingerprint into all provider/write artifacts
 - forbidding any direct ad-hoc options dict construction outside a single adapter layer
+
+## 2.8 Prioritize Delta-oriented UDTF completion (before adding more scalar/UDAF functions)
+Implement external table functions in `rust/datafusion_ext/src/udtf_sources.rs` as first-class registration targets:
+- `read_delta(...)` (version/timestamp aware table reader)
+- `read_delta_cdf(...)` (CDF relation surface)
+- `delta_snapshot(...)` (snapshot metadata relation)
+- `delta_add_actions(...)` (file/action metadata relation)
+
+Design requirements:
+- use strict literal/constant argument parsing and explicit coercion/validation
+- return `TableProvider` implementations with clear pushdown capability declarations
+- align signatures and behavior with existing native control-plane operations to avoid duplicate semantics
+
+Rationale:
+- This addresses the single largest missing Rust/DataFusion integration seam while leveraging existing control-plane primitives already implemented in Rust.
+
+## 2.9 Add Rust-side runtime/cache policy bridge exported to Python
+Extend runtime/session construction surfaces (notably `delta_session_context(...)`) to support policy-driven runtime wiring from Python:
+- named cache policy/profile selection
+- object-store retry/timeout/backoff policy controls where Rust-level integration is required
+- immutable runtime policy snapshots emitted with diagnostics artifacts
+
+Rationale:
+- Advanced guidance shows Python-only runtime hooks are insufficient for custom cache injection and some object-store controls; this needs a Rust bridge to remain deterministic.
+
+## 2.10 Add structured execution metrics export (Arrow-native, not text-only)
+Add a Rust observability function that emits execution/operator metrics as typed rows:
+- expose a stable Arrow/IPC payload for per-operator metrics and query summary
+- avoid relying only on textual `EXPLAIN` output parsing for machine checks
+- integrate payload into diagnostics report synthesis and failure artifacts
+
+Rationale:
+- Enables deterministic regression checks and better production debugging without brittle text parsing.
+
+## 2.11 Unify native and plugin table-function export lanes
+Ensure plugin exports and native registration produce the same intended table-function capability set:
+- remove divergence between plugin `build_table_functions()` and native runtime registration
+- include external/builtin table functions consistently across both paths
+- add explicit capability snapshot checks for parity
+
+Rationale:
+- Prevents capability drift between deployment modes and simplifies test expectations.
 
 ---
 
@@ -262,6 +329,21 @@ From `msgspec.md` and current `serde_msgspec` policy:
 - Compat decode tests for persisted artifacts (unknown-field tolerant where intended).
 - JSON Schema snapshot tests for boundary specs.
 
+## 4.4 Rust/DataFusion integration tests to add
+- UDTF conformance tests:
+  - SQL + programmatic invocation coverage for `read_delta`, `read_delta_cdf`, `delta_snapshot`, `delta_add_actions`
+  - argument validation/coercion failures are structured and non-panicking
+  - pushdown capability assertions for returned providers
+- Registry/discovery parity tests:
+  - information schema / function discovery includes newly registered table functions where applicable
+  - plugin export parity checks against native registration surface
+- Runtime/cache policy bridge tests:
+  - session construction applies named runtime/cache profiles deterministically
+  - policy payloads are serialized into diagnostics artifacts
+- Structured metrics contract tests:
+  - Arrow/IPC metrics payload shape is stable
+  - key execution counters/operators are present for representative query plans
+
 ---
 
 ## 5) Decision-Ready Conclusions
@@ -277,3 +359,10 @@ From `msgspec.md` and current `serde_msgspec` policy:
    - one canonical spec per boundary concept,
    - no duplicated dataclass/spec model pairs,
    - clear spec-vs-runtime separation enforced by module boundaries.
+5. **Highest-priority Rust follow-on is UDTF surface completion**:
+   - implement external Delta UDTFs first,
+   - unify plugin/native table-function exports,
+   - add structured metrics and runtime/cache policy bridge.
+6. **Additional scalar/UDAF/UDWF expansion is lower priority**:
+   - current Rust function surface is already substantial,
+   - immediate ROI is in missing table-function and observability/runtime seams.

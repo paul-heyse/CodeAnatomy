@@ -125,14 +125,14 @@ def read_invalidation_snapshot(
     """Read the prior invalidation snapshot if present.
 
     Args:
-        state_store: Description.
-            context: Description.
+        state_store: Incremental state store.
+        context: Delta access context.
 
     Returns:
         InvalidationSnapshot | None: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If invalidation snapshot payload cannot be decoded.
     """
     path = state_store.invalidation_snapshot_path()
     if not path.exists():

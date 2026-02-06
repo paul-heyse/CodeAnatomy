@@ -273,15 +273,15 @@ def enforce_schema_evolution(
     """Enforce schema evolution gating for Delta tables.
 
     Args:
-        request: Description.
-            expected_schema_hash: Description.
-            allow_evolution: Description.
+        request: Delta schema request.
+        expected_schema_hash: Expected schema identity hash.
+        allow_evolution: Whether schema drift is allowed.
 
     Returns:
         str | None: Result.
 
     Raises:
-        DeltaSchemaMismatchError: If the operation cannot be completed.
+        DeltaSchemaMismatchError: If schema hashes differ and evolution is disallowed.
     """
     actual_hash = delta_schema_identity_hash(request)
     if expected_schema_hash is None or actual_hash is None:

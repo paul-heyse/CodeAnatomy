@@ -261,14 +261,14 @@ def install_rust_udf_platform(
     """Install planning-critical extension platform before plan-bundle construction.
 
     Args:
-        ctx: Description.
-            options: Description.
+        ctx: DataFusion session context.
+        options: Optional platform installation options.
 
     Returns:
         RustUdfPlatform: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If strict mode is enabled and required hooks fail.
     """
     resolved = options or RustUdfPlatformOptions()
     from datafusion_engine.udf.runtime import validate_extension_capabilities
@@ -348,16 +348,16 @@ def ensure_rust_udfs(
     """Ensure Rust UDFs are registered via the unified platform.
 
     Args:
-        ctx: Description.
-            enable_async: Description.
-            async_udf_timeout_ms: Description.
-            async_udf_batch_size: Description.
+        ctx: DataFusion session context.
+        enable_async: Whether async UDF execution is enabled.
+        async_udf_timeout_ms: Optional async UDF timeout override.
+        async_udf_batch_size: Optional async UDF batch-size override.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If the platform does not return a registry snapshot.
     """
     platform = install_rust_udf_platform(
         ctx,

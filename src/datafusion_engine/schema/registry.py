@@ -2652,15 +2652,15 @@ def struct_for_path(schema: pa.Schema, path: str) -> pa.StructType:
     """Resolve the struct type for a nested path.
 
     Args:
-        schema: Description.
-            path: Description.
+        schema: Root schema to traverse.
+        path: Dot-delimited nested field path.
 
     Returns:
         pa.StructType: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
-            ValueError: If the operation cannot be completed.
+        TypeError: If a non-struct field is traversed before path resolution completes.
+        ValueError: If `path` is empty.
     """
     if not path:
         msg = "Nested schema path cannot be empty."

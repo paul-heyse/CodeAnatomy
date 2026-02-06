@@ -108,15 +108,15 @@ def replay_substrait_bytes(ctx: SessionContext, payload: bytes) -> DataFrame:
     """Replay Substrait bytes into a DataFusion DataFrame.
 
     Args:
-        ctx: Description.
-            payload: Description.
+        ctx: DataFusion session context.
+        payload: Serialized substrait payload.
 
     Returns:
         DataFrame: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
-            ValueError: If the operation cannot be completed.
+        TypeError: If required substrait APIs are missing.
+        ValueError: If substrait support is unavailable.
     """
     try:
         from datafusion.substrait import Consumer as SubstraitConsumer

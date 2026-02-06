@@ -51,14 +51,14 @@ def schema_contract_from_information_schema(
     """Build a SchemaContract from information_schema metadata.
 
     Args:
-        ctx: Description.
-            table_name: Description.
+        ctx: DataFusion session context.
+        table_name: Registered table name.
 
     Returns:
         SchemaContract: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If information schema columns are unavailable.
     """
     snapshot = information_schema_snapshot(ctx, table_name=table_name)
     if not snapshot.columns:

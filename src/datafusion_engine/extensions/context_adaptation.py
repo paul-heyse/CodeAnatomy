@@ -110,17 +110,17 @@ def invoke_entrypoint_with_adapted_context(
     """Invoke an extension entrypoint by probing ordered context candidates.
 
     Args:
-        module_name: Description.
-            module: Description.
-            entrypoint: Description.
-            invocation: Description.
+        module_name: Extension module name for diagnostics.
+        module: Imported extension module object.
+        entrypoint: Entrypoint attribute name.
+        invocation: Invocation payload with candidate contexts.
 
     Returns:
         tuple[ExtensionContextSelection, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
-            TypeError: If the operation cannot be completed.
+        RuntimeError: If all context invocation attempts fail.
+        TypeError: If the entrypoint is missing or not callable.
     """
     fn = getattr(module, entrypoint, None)
     if not callable(fn):

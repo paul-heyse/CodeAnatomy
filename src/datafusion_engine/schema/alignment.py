@@ -39,17 +39,17 @@ def align_to_schema(
     """Align and cast a table to a target schema.
 
     Args:
-        table: Description.
-            schema: Description.
-            safe_cast: Description.
-            on_error: Description.
-            keep_extra_columns: Description.
+        table: Input Arrow table-like object.
+        schema: Target Arrow schema.
+        safe_cast: Whether casts should be safe.
+        on_error: Error-handling policy.
+        keep_extra_columns: Whether non-schema input columns are preserved.
 
     Returns:
         tuple[TableLike, AlignmentInfo]: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If `on_error='keep'` is requested.
     """
     if on_error == "keep":
         msg = "on_error='keep' is not supported by DataFusion alignment."
@@ -120,16 +120,16 @@ def align_table_to_contract(
     """Align a table to a SchemaContract.
 
     Args:
-        table: Description.
-            contract: Description.
-            safe_cast: Description.
-            on_error: Description.
+        table: Input Arrow table-like object.
+        contract: Schema contract to align against.
+        safe_cast: Whether casts should be safe.
+        on_error: Error-handling policy.
 
     Returns:
         TableLike: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If `contract` is not a `SchemaContract`.
     """
     from datafusion_engine.schema.contracts import EvolutionPolicy, SchemaContract
 

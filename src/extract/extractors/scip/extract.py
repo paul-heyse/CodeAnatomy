@@ -256,15 +256,15 @@ def run_scip_python_index(
     """Run scip-python to produce an index.scip file.
 
     Args:
-        opts: Description.
-            on_complete: Description.
+        opts: SCIP indexing options.
+        on_complete: Optional callback invoked with the run report.
 
     Returns:
         Path: Result.
 
     Raises:
-        FileNotFoundError: If the operation cannot be completed.
-            RuntimeError: If the operation cannot be completed.
+        FileNotFoundError: If `scip-python` is not available in PATH.
+        RuntimeError: If indexing fails or output cannot be produced.
     """
     with stage_span(
         "extract.scip_index",
@@ -424,14 +424,14 @@ def parse_index_scip(index_path: Path, parse_opts: SCIPParseOptions | None = Non
     """Parse index.scip into a protobuf Index object.
 
     Args:
-        index_path: Description.
-            parse_opts: Description.
+        index_path: Path to `index.scip`.
+        parse_opts: Optional SCIP parse options.
 
     Returns:
         object: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If scip protobuf support is unavailable.
     """
     normalized_opts = normalize_options("scip", parse_opts, SCIPParseOptions)
     if normalized_opts.build_dir is None:

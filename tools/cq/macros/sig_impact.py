@@ -314,6 +314,46 @@ def _append_evidence(
         )
 
 
+def _apply_rust_fallback(
+    result: CqResult,
+    root: Path,
+    symbol: str,
+) -> CqResult:
+    """Append Rust fallback findings and multilang summary to a sig-impact result.
+
+    Args:
+        result: Existing Python-only CqResult.
+        root: Repository root path.
+        symbol: Symbol name searched for.
+
+    Returns:
+        The mutated result with Rust fallback data merged in.
+    """
+    from tools.cq.core.multilang_summary import (
+        build_multilang_summary,
+        partition_stats_from_result_summary,
+    )
+    from tools.cq.macros._rust_fallback import rust_fallback_search
+
+    rust_findings, capability_diags, rust_stats = rust_fallback_search(
+        root,
+        symbol,
+        macro_name="sig-impact",
+    )
+    result.evidence.extend(rust_findings)
+    result.key_findings.extend(capability_diags)
+
+    existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
+    py_stats = partition_stats_from_result_summary(existing_summary)
+    result.summary = build_multilang_summary(
+        common=existing_summary,
+        lang_scope="auto",
+        language_order=None,
+        languages={"python": py_stats, "rust": rust_stats},
+    )
+    return result
+
+
 def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
     """Analyze impact of changing a function signature.
 
@@ -416,4 +456,4 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
     _append_bucket_sections(result, buckets, request.symbol, scoring_details)
     _append_evidence(result, all_sites, new_params, request.symbol, scoring_details)
 
-    return result
+    return _apply_rust_fallback(result, request.root, request.symbol)

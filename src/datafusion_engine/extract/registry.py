@@ -278,15 +278,15 @@ def normalize_options[T](name: str, options: object | None, options_type: type[T
     """Normalize extractor options into a typed options payload.
 
     Args:
-        name: Description.
-            options: Description.
-            options_type: Description.
+        name: Extractor name.
+        options: Options object or mapping override.
+        options_type: Target options dataclass/type.
 
     Returns:
         T: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If options cannot be coerced to `options_type`.
     """
     if isinstance(options, options_type):
         return options
@@ -319,15 +319,15 @@ def _build_options[T](name: str, options_type: type[T], values: Mapping[str, obj
     """Build an options payload from normalized values.
 
     Args:
-        name: Description.
-            options_type: Description.
-            values: Description.
+        name: Extractor name.
+        options_type: Target options dataclass/type.
+        values: Normalized values to pass into `options_type`.
 
     Returns:
         T: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If constructing `options_type` fails.
     """
     try:
         return options_type(**dict(values))

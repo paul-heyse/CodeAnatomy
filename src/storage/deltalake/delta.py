@@ -1254,14 +1254,14 @@ def enable_delta_features(
     """Enable Delta table features by setting table properties.
 
     Args:
-        options: Description.
-            features: Description.
+        options: Delta feature mutation options.
+        features: Table properties to apply.
 
     Returns:
         dict[str, str]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If setting table properties fails.
     """
     storage = merged_storage_options(options.storage_options, options.log_storage_options)
     if (
@@ -1359,14 +1359,14 @@ def delta_add_constraints(
     """Add Delta check constraints via the Rust control plane.
 
     Args:
-        options: Description.
-            constraints: Description.
+        options: Delta feature mutation options.
+        constraints: Constraint name-to-expression mapping.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If adding constraints fails.
     """
     if not constraints:
         return {}
@@ -1422,15 +1422,15 @@ def delta_drop_constraints(
     """Drop Delta check constraints via the Rust control plane.
 
     Args:
-        options: Description.
-            constraints: Description.
-            raise_if_not_exists: Description.
+        options: Delta feature mutation options.
+        constraints: Constraint names to drop.
+        raise_if_not_exists: Whether missing constraints should raise.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If dropping constraints fails.
     """
     if not constraints:
         return {}
@@ -1487,15 +1487,15 @@ def enable_delta_column_mapping(
     """Enable Delta column mapping via the Rust control plane.
 
     Args:
-        options: Description.
-            mode: Description.
-            allow_protocol_versions_increase: Description.
+        options: Delta feature mutation options.
+        mode: Column mapping mode.
+        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If enabling column mapping fails.
     """
     with _feature_control_span(options, operation="enable_column_mapping"):
         ctx, request = _feature_enable_request(options)
@@ -1534,14 +1534,14 @@ def enable_delta_deletion_vectors(
     """Enable Delta deletion vectors via the Rust control plane.
 
     Args:
-        options: Description.
-            allow_protocol_versions_increase: Description.
+        options: Delta feature mutation options.
+        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If enabling deletion vectors fails.
     """
     with _feature_control_span(options, operation="enable_deletion_vectors"):
         ctx, request = _feature_enable_request(options)
@@ -1579,14 +1579,14 @@ def enable_delta_row_tracking(
     """Enable Delta row tracking via the Rust control plane.
 
     Args:
-        options: Description.
-            allow_protocol_versions_increase: Description.
+        options: Delta feature mutation options.
+        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If enabling row tracking fails.
     """
     with _feature_control_span(options, operation="enable_row_tracking"):
         ctx, request = _feature_enable_request(options)
@@ -1624,14 +1624,14 @@ def enable_delta_change_data_feed(
     """Enable Delta Change Data Feed via the Rust control plane.
 
     Args:
-        options: Description.
-            allow_protocol_versions_increase: Description.
+        options: Delta feature mutation options.
+        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If enabling change data feed fails.
     """
     with _feature_control_span(options, operation="enable_change_data_feed"):
         ctx, request = _feature_enable_request(options)
@@ -1669,14 +1669,14 @@ def enable_delta_generated_columns(
     """Enable Delta generated columns via the Rust control plane.
 
     Args:
-        options: Description.
-            allow_protocol_versions_increase: Description.
+        options: Delta feature mutation options.
+        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If enabling generated columns fails.
     """
     with _feature_control_span(options, operation="enable_generated_columns"):
         ctx, request = _feature_enable_request(options)
@@ -1714,14 +1714,14 @@ def enable_delta_invariants(
     """Enable Delta invariants via the Rust control plane.
 
     Args:
-        options: Description.
-            allow_protocol_versions_increase: Description.
+        options: Delta feature mutation options.
+        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If enabling invariants fails.
     """
     with _feature_control_span(options, operation="enable_invariants"):
         ctx, request = _feature_enable_request(options)
@@ -1759,14 +1759,14 @@ def enable_delta_check_constraints(
     """Enable Delta check constraints via the Rust control plane.
 
     Args:
-        options: Description.
-            allow_protocol_versions_increase: Description.
+        options: Delta feature mutation options.
+        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If enabling check constraints fails.
     """
     with _feature_control_span(options, operation="enable_check_constraints"):
         ctx, request = _feature_enable_request(options)
@@ -1805,15 +1805,15 @@ def enable_delta_in_commit_timestamps(
     """Enable Delta in-commit timestamps via the Rust control plane.
 
     Args:
-        options: Description.
-            enablement_version: Description.
-            enablement_timestamp: Description.
+        options: Delta feature mutation options.
+        enablement_version: Optional enablement version.
+        enablement_timestamp: Optional enablement timestamp.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If enabling in-commit timestamps fails.
     """
     with _feature_control_span(options, operation="enable_in_commit_timestamps"):
         ctx, request = _feature_enable_request(options)
@@ -1852,14 +1852,14 @@ def enable_delta_v2_checkpoints(
     """Enable Delta v2 checkpoints via the Rust control plane.
 
     Args:
-        options: Description.
-            allow_protocol_versions_increase: Description.
+        options: Delta feature mutation options.
+        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If enabling v2 checkpoints fails.
     """
     with _feature_control_span(options, operation="enable_v2_checkpoints"):
         ctx, request = _feature_enable_request(options)
@@ -2580,17 +2580,17 @@ def cleanup_delta_log(
     """Delete expired Delta log files.
 
     Args:
-        path: Description.
-            storage_options: Description.
-            log_storage_options: Description.
-            runtime_profile: Description.
-            dataset_name: Description.
+        path: Delta table path.
+        storage_options: Optional storage options.
+        log_storage_options: Optional log-store options.
+        runtime_profile: Optional runtime profile.
+        dataset_name: Optional dataset name for diagnostics.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If metadata cleanup fails.
     """
     attrs = _storage_span_attributes(
         operation="cleanup_metadata",
@@ -2733,16 +2733,16 @@ def read_delta_cdf(
     """Read change data feed from a Delta table.
 
     Args:
-        table_path: Description.
-            storage_options: Description.
-            log_storage_options: Description.
-            cdf_options: Description.
+        table_path: Delta table path.
+        storage_options: Optional storage options.
+        log_storage_options: Optional log-store options.
+        cdf_options: Optional CDF read options.
 
     Returns:
         RecordBatchReaderLike: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If CDF read options are invalid.
     """
     resolved_options = cdf_options or DeltaCdfOptions()
     attrs = _storage_span_attributes(
@@ -3107,14 +3107,14 @@ def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:
     """Validate incoming data against Delta table constraints.
 
     Args:
-        request: Description.
+        request: Delta data-check request.
 
     Returns:
         list[str]: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
-            ValueError: If the operation cannot be completed.
+        TypeError: If table value types cannot be validated.
+        ValueError: If Delta constraints are violated.
     """
     attrs = _storage_span_attributes(
         operation="data_check",

@@ -27,14 +27,14 @@ def build_semantic_dataset_catalog(
     """Merge semantic + extract dataset locations into unified catalog.
 
     Args:
-        semantic_output_root: Description.
-            extract_output_root: Description.
+        semantic_output_root: Optional root directory for semantic outputs.
+        extract_output_root: Optional root directory for extract outputs.
 
     Returns:
         DatasetCatalog: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If a semantic dataset row is not canonically named.
     """
     from schema_spec.dataset_spec_ops import (
         dataset_spec_delta_cdf_policy,

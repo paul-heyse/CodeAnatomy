@@ -55,6 +55,7 @@ from tools.cq.run.spec import (
     step_type,
 )
 from tools.cq.search.multilang_diagnostics import (
+    build_capability_diagnostics,
     build_cross_language_diagnostics,
     is_python_oriented_query_text,
 )
@@ -421,6 +422,35 @@ def _result_match_count(result: CqResult | None) -> int:
     return len(result.key_findings)
 
 
+def _build_collapse_diagnostics(
+    lang_results: dict[QueryLanguage, CqResult],
+    query_text: str,
+) -> list[Finding]:
+    """Build cross-language and capability diagnostics for collapsed results.
+
+    Returns:
+        Combined list of cross-language hint and capability limitation findings.
+    """
+    diagnostics: list[Finding] = list(
+        build_cross_language_diagnostics(
+            lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+            python_matches=_result_match_count(lang_results.get("python")),
+            rust_matches=_result_match_count(lang_results.get("rust")),
+            python_oriented=is_python_oriented_query_text(query_text),
+        )
+    )
+    cap_features: list[str] = []
+    if query_text:
+        cap_features.append("pattern_query")
+    diagnostics.extend(
+        build_capability_diagnostics(
+            features=cap_features,
+            lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+        )
+    )
+    return diagnostics
+
+
 def _collapse_parent_q_results(
     step_results: list[tuple[str, CqResult]],
     *,
@@ -456,12 +486,7 @@ def _collapse_parent_q_results(
                 if isinstance(candidate, str):
                     query_text = candidate
 
-        diagnostics = build_cross_language_diagnostics(
-            lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-            python_matches=_result_match_count(lang_results.get("python")),
-            rust_matches=_result_match_count(lang_results.get("rust")),
-            python_oriented=is_python_oriented_query_text(query_text),
-        )
+        diagnostics = _build_collapse_diagnostics(lang_results, query_text)
         run = runmeta_for_scope_merge(
             macro="q",
             root=ctx.root,

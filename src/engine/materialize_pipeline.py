@@ -279,16 +279,16 @@ def build_view_product(
     """Execute a registered view and return a PlanProduct wrapper.
 
     Args:
-        view_name: Description.
-            session_runtime: Description.
-            policy: Description.
-            view_id: Description.
+        view_name: Registered view name to execute.
+        session_runtime: Session runtime to execute with.
+        policy: Materialization policy.
+        view_id: Optional explicit view identifier.
 
     Returns:
         PlanProduct: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If the target view is not registered.
     """
     configure_otel(
         service_name="codeanatomy",

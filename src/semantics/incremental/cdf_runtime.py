@@ -231,17 +231,17 @@ def read_cdf_changes(
     """Read Delta CDF changes using the shared incremental runtime.
 
     Args:
-        context: Description.
-            dataset_path: Description.
-            dataset_name: Description.
-            cursor_store: Description.
-            filter_policy: Description.
+        context: Delta access context.
+        dataset_path: Dataset table path.
+        dataset_name: Dataset logical name.
+        cursor_store: CDF cursor state store.
+        filter_policy: Optional CDF filter policy.
 
     Returns:
         CdfReadResult | None: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If CDF state cannot be initialized.
     """
     profile = context.runtime.profile
     profile_location = profile.catalog_ops.dataset_location(dataset_name)

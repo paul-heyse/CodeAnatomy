@@ -105,15 +105,15 @@ def _stable_id_expr(prefix: str, parts: Sequence[Expr], *, null_sentinel: str) -
     """Build a stable identifier from normalized parts.
 
     Args:
-        prefix: Description.
-            parts: Description.
-            null_sentinel: Description.
+        prefix: Stable ID namespace prefix.
+        parts: Expression parts used for ID generation.
+        null_sentinel: Sentinel used for null part values.
 
     Returns:
         Expr: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If no parts are provided.
     """
     if not parts:
         msg = "stable identifiers require at least one part."

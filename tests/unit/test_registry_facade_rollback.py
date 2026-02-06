@@ -38,10 +38,10 @@ class FailingProviderRegistry(MutableRegistry[str, RegistrationMetadata]):
         """Register a dataset location, optionally raising to simulate failure.
 
         Args:
-            name: Description.
-                    location: Description.
-                    overwrite: Description.
-                    cache_policy: Description.
+            name: Dataset name.
+            location: Dataset location.
+            overwrite: Whether to overwrite existing registration.
+            cache_policy: Optional cache policy.
 
         Returns:
             DataFrame: Result.

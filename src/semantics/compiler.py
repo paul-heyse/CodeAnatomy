@@ -574,14 +574,14 @@ class SemanticCompiler:
         """Apply normalization rules to an evidence table.
 
         Args:
-            table_name: Description.
-                    prefix: Description.
+            table_name: Input evidence table name.
+            prefix: Entity prefix used for generated IDs.
 
         Returns:
             DataFrame: Result.
 
         Raises:
-            SemanticSchemaError: If the operation cannot be completed.
+            SemanticSchemaError: If schema normalization cannot be resolved.
         """
         with stage_span(
             "semantics.normalize",
@@ -647,16 +647,16 @@ class SemanticCompiler:
         """Apply text normalization to text columns.
 
         Args:
-            table_name: Description.
-                    columns: Description.
-                    options: Description.
+            table_name: Input table name.
+            columns: Optional subset of text columns to normalize.
+            options: Optional text normalization settings.
 
         Returns:
             DataFrame: Result.
 
         Raises:
-            SemanticSchemaError: If the operation cannot be completed.
-                    ValueError: If the operation cannot be completed.
+            SemanticSchemaError: If semantic schema lookup fails.
+            ValueError: If requested text columns are invalid.
         """
         resolved = options or TextNormalizationOptions()
         with stage_span(
@@ -890,14 +890,14 @@ class SemanticCompiler:
         """Union tables with a discriminator column.
 
         Args:
-            table_names: Description.
-                    discriminator: Description.
+            table_names: Table names to union.
+            discriminator: Name of discriminator column.
 
         Returns:
             DataFrame: Result.
 
         Raises:
-            SemanticSchemaError: If the operation cannot be completed.
+            SemanticSchemaError: If table schemas are incompatible.
         """
         from datafusion import lit
 

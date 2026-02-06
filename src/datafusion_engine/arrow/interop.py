@@ -578,14 +578,14 @@ def coerce_table_like(
     """Coerce Arrow-like inputs into table or reader representations.
 
     Args:
-        obj: Description.
-            requested_schema: Description.
+        obj: Arrow-like object to coerce.
+        requested_schema: Optional schema passed to C stream/array providers.
 
     Returns:
         TableLike | RecordBatchReaderLike: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If the input cannot be coerced into a table-like object.
     """
     if isinstance(obj, (TableLike, RecordBatchReaderLike)):
         return obj

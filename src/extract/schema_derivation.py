@@ -231,14 +231,14 @@ class ExtractionSchemaBuilder:
         """Add span fields to the schema.
 
         Args:
-            prefix: Description.
-                    style: Description.
+            prefix: Optional field-name prefix.
+            style: Span encoding style (`byte`, `structured`, or `line_col`).
 
         Returns:
             Self: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If `style` is unsupported.
         """
         if style == "byte":
             self._bundles.append(_byte_span_bundle(prefix))
@@ -550,17 +550,17 @@ def derive_extraction_schema(
     """Derive an extraction schema from a DataFusion source table.
 
     Args:
-        extractor_name: Description.
-            source_table: Description.
-            ctx: Description.
-            options: Description.
-            udf_snapshot: Description.
+        extractor_name: Extractor identifier.
+        source_table: Source table name to inspect.
+        ctx: DataFusion session context.
+        options: Optional derivation options.
+        udf_snapshot: Optional UDF snapshot for lineage extraction.
 
     Returns:
         TableSchemaSpec: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If source table lookup or schema derivation fails.
     """
     if options is None:
         options = DerivationOptions()
@@ -829,16 +829,16 @@ def build_schema_from_template(
     """Build an extraction schema from a template.
 
     Args:
-        template_name: Description.
-            dataset_name: Description.
-            version: Description.
-            extra_fields: Description.
+        template_name: Template name from `EXTRACTION_SCHEMA_TEMPLATES`.
+        dataset_name: Dataset name for the resulting schema.
+        version: Schema version value.
+        extra_fields: Optional additional field specs.
 
     Returns:
         TableSchemaSpec: Result.
 
     Raises:
-        KeyError: If the operation cannot be completed.
+        KeyError: If `template_name` is unknown.
     """
     template = EXTRACTION_SCHEMA_TEMPLATES.get(template_name)
     if template is None:

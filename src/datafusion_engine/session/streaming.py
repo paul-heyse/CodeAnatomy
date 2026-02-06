@@ -266,15 +266,15 @@ class StreamingExecutor:
         """Execute SQL and return streaming result.
 
         Args:
-            sql: Description.
-                    sql_options: Description.
-                    **params: Description.
+            sql: SQL text to execute.
+            sql_options: Optional SQL execution options override.
+            **params: Parameter bindings supplied by caller.
 
         Returns:
             StreamingExecutionResult: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If scalar SQL parameters are provided for streaming execution.
         """
         resolved_options = sql_options or self.sql_options
         from datafusion_engine.tables.param import register_table_params, resolve_param_bindings

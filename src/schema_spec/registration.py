@@ -67,15 +67,15 @@ def register_dataset(
     """Build a dataset spec from the provided inputs.
 
     Args:
-        table_spec: Description.
-            registration: Description.
-            **table_kwargs: Description.
+        table_spec: Optional table schema spec.
+        registration: Optional dataset registration metadata.
+        **table_kwargs: Table spec construction keyword args.
 
     Returns:
         DatasetSpec: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If required dataset registration inputs are missing.
     """
     registration = registration or DatasetRegistration()
     if table_spec is None:

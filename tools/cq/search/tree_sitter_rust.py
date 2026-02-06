@@ -2,6 +2,13 @@
 
 This module is best-effort only. Any parser or runtime failure must degrade
 to ``None`` so core search/query behavior remains unchanged.
+
+Enrichment Contract
+-------------------
+All fields produced by this module are strictly additive.
+They never affect: confidence scores, match counts, category classification,
+or relevance ranking.
+They may affect: containing_scope display (used only for grouping in output).
 """
 
 from __future__ import annotations
@@ -35,6 +42,8 @@ _SCOPE_KINDS: tuple[str, ...] = (
 
 _TREE_CACHE: dict[str, Tree] = {}
 _DEFAULT_SCOPE_DEPTH = 24
+_MAX_SCOPE_NODES = 256
+MAX_SOURCE_BYTES = 5 * 1024 * 1024  # 5 MB
 _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 
 
@@ -123,12 +132,16 @@ def _scope_chain(node: Node, source_bytes: bytes, *, max_depth: int) -> list[str
     chain: list[str] = []
     current: Node | None = node
     depth = 0
+    nodes_visited = 0
     while current is not None and depth < max_depth:
+        if nodes_visited >= _MAX_SCOPE_NODES:
+            break
         if current.type in _SCOPE_KINDS:
             name = _scope_name(current, source_bytes)
             chain.append(f"{current.type}:{name}" if name else current.type)
         current = current.parent
         depth += 1
+        nodes_visited += 1
     return chain
 
 
@@ -171,9 +184,7 @@ def enrich_rust_context(
     dict[str, object] | None
         Best-effort context payload, or ``None`` when unavailable.
     """
-    if not is_tree_sitter_rust_available():
-        return None
-    if line < 1:
+    if not is_tree_sitter_rust_available() or line < 1 or col < 0 or len(source) > MAX_SOURCE_BYTES:
         return None
 
     try:
@@ -201,6 +212,7 @@ def enrich_rust_context(
 
 
 __all__ = [
+    "MAX_SOURCE_BYTES",
     "clear_tree_sitter_rust_cache",
     "enrich_rust_context",
     "is_tree_sitter_rust_available",

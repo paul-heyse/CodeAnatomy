@@ -618,15 +618,15 @@ def _write_artifact_table(
     """Write an artifact table via the unified write pipeline.
 
     Args:
-        ctx: Description.
-            profile: Description.
-            request: Description.
+        ctx: DataFusion session context.
+        profile: Active runtime profile.
+        request: Artifact table write request payload.
 
     Returns:
         int | None: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If the artifact write mode is unsupported.
     """
     from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
     from datafusion_engine.lineage.diagnostics import recorder_for_profile
@@ -673,16 +673,16 @@ def persist_plan_artifact_rows(
     """Persist plan artifact rows to the Delta-backed artifact store.
 
     Args:
-        ctx: Description.
-            profile: Description.
-            rows: Description.
-            location: Description.
+        ctx: DataFusion session context.
+        profile: Active runtime profile.
+        rows: Plan artifact rows to persist.
+        location: Optional pre-resolved artifact location.
 
     Returns:
         tuple[PlanArtifactRow, ...]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If the resulting Delta version cannot be resolved.
     """
     if not rows:
         return ()
@@ -778,16 +778,16 @@ def persist_hamilton_event_rows(
     """Persist Hamilton event rows to the Delta-backed artifact store.
 
     Args:
-        ctx: Description.
-            profile: Description.
-            rows: Description.
-            location: Description.
+        ctx: DataFusion session context.
+        profile: Active runtime profile.
+        rows: Hamilton event rows to persist.
+        location: Optional pre-resolved artifact location.
 
     Returns:
         tuple[HamiltonEventRow, ...]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If the resulting Delta version cannot be resolved.
     """
     if not rows:
         return ()

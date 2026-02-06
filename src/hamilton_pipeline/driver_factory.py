@@ -1403,14 +1403,14 @@ def _dask_adapter(
     """Build a Dask graph adapter.
 
     Args:
-        options: Description.
-            executor_config: Description.
+        options: Executor configuration mapping.
+        executor_config: Optional executor config object.
 
     Returns:
         HamiltonGraphAdapter: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If Dask extras are unavailable.
     """
     from hamilton import base as hamilton_base
     from hamilton.plugins import h_dask

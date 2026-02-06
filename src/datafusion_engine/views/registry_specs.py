@@ -475,17 +475,17 @@ def _semantics_view_nodes(
     """Build semantic pipeline view nodes with inferred dependencies.
 
     Args:
-        ctx: Description.
-            snapshot: Description.
-            runtime_profile: Description.
-            runtime_config: Description.
-            semantic_ir: Description.
+        ctx: DataFusion session context.
+        snapshot: UDF snapshot payload.
+        runtime_profile: Optional runtime profile.
+        runtime_config: Optional semantic runtime config.
+        semantic_ir: Semantic IR for view planning.
 
     Returns:
         list[ViewNode]: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If runtime profile or runtime config is missing.
     """
     from datafusion_engine.io.adapter import DataFusionIOAdapter
 

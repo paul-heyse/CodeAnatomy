@@ -482,15 +482,15 @@ def populate_contract_from_table(
     """Populate a ContractSpec from a DataFusion registered table.
 
     Args:
-        ctx: Description.
-            table_name: Description.
-            options: Description.
+        ctx: DataFusion session context.
+        table_name: Registered table name.
+        options: Optional contract population options.
 
     Returns:
         ContractSpec: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If semantic output tables are used with catalog schema population.
     """
     if _is_semantic_output_name(table_name):
         msg = (
@@ -511,15 +511,15 @@ def populate_contract_from_table_detailed(
     """Populate a ContractSpec from a table with detailed provenance.
 
     Args:
-        ctx: Description.
-            table_name: Description.
-            options: Description.
+        ctx: DataFusion session context.
+        table_name: Registered table name.
+        options: Optional contract population options.
 
     Returns:
         ContractPopulationResult: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If semantic output tables are used with catalog schema population.
     """
     if _is_semantic_output_name(table_name):
         msg = (

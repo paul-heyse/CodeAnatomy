@@ -825,7 +825,7 @@ entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS] [expand=KIND(depth=N)] [field
 
 > **Note:** `limit=N` is enforced for pattern queries only. Entity queries do not currently cap results via `limit`.
 
-**Entity Types:**
+**Entity Types (Python, default):**
 
 | Entity | ast-grep Kinds | Description |
 |--------|---------------|-------------|
@@ -836,6 +836,18 @@ entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS] [expand=KIND(depth=N)] [field
 | `method` | function (not class-context validated) | Matches all functions, not just methods |
 | `module` | — | Not implemented (always empty) |
 | `decorator` | — | Decorated definitions (see Decorator Queries) |
+
+**Entity Types (Rust, with `lang=rust`):**
+
+| Entity | ast-grep Kinds | Description |
+|--------|---------------|-------------|
+| `function` | function_item | `fn` declarations |
+| `class` | struct_item, enum_item, trait_item | struct/enum/trait definitions |
+| `import` | use_declaration | `use` declarations |
+| `callsite` | call_expression, macro_invocation | Function calls and macro invocations |
+| `method` | function_item (impl-scoped) | `fn` inside `impl` blocks |
+| `module` | mod_item | Rust module declarations (partial) |
+| `decorator` | — | Not applicable (Rust has no decorators) |
 
 **Name Patterns:**
 
@@ -1025,8 +1037,10 @@ cq detects and uses external tools:
 | Tool | Required | Purpose |
 |------|----------|---------|
 | `rg` (ripgrep) | Yes | Fast file search for candidates (native process execution) |
-| `ast-grep-py` | Yes | Structural matching for `q` and classification |
+| `ast-grep-py` | Yes | Structural matching for `q` and classification (Python and Rust) |
 | Python | Yes | AST parsing, symtable, bytecode |
+
+**Rust Capability Note:** Rust support uses ast-grep for structural queries (entity search, pattern matching, relational constraints). Deep analysis commands that depend on Python-specific tooling (symtable, dis, AST walkers) are not available for Rust. See the Rust Limitations section below for details.
 
 **Installation:**
 ```bash
@@ -1039,6 +1053,36 @@ apt install ripgrep
 # Python packages
 pip install ast-grep-py
 ```
+
+---
+
+## Rust Limitations
+
+Rust support in cq covers structural queries (entity search, pattern matching, relational constraints) via ast-grep. However, several capabilities are Python-only due to their reliance on Python-specific tooling:
+
+**Python-only commands (no Rust support):**
+
+| Command | Reason |
+|---------|--------|
+| `calls` | Requires Python AST walker and symtable for call resolution |
+| `impact` | Requires Python AST taint analysis |
+| `sig-impact` | Requires Python AST signature parsing and call binding |
+| `imports` | Requires Python `ast` module for import graph construction |
+| `exceptions` | Requires Python AST for raise/except analysis |
+| `side-effects` | Requires Python AST for module-level effect detection |
+| `scopes` | Requires Python `symtable` for closure/scope analysis |
+| `bytecode-surface` | Requires Python `dis` module for bytecode inspection |
+
+**Partial Rust support:**
+
+| Feature | Limitation |
+|---------|-----------|
+| `calls` macro for Rust | Provides location-only results with low confidence scores |
+| `module` entity | Rust `mod_item` declarations only (partial coverage) |
+| Scope filtering | Not available (Python symtable only) |
+| Bytecode queries | Not available (Python dis only) |
+
+**Capability diagnostics:** When a command has limited or no Rust support, cq automatically includes diagnostic messages in results indicating what capabilities are unavailable and why.
 
 ---
 

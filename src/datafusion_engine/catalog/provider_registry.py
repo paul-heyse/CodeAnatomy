@@ -122,15 +122,15 @@ class ProviderRegistry(
         """Register a table from a TableSpec.
 
         Args:
-            spec: Description.
-                    overwrite: Description.
-                    cache_policy: Description.
+            spec: Table spec to register.
+            overwrite: Whether to overwrite an existing registration.
+            cache_policy: Optional cache policy override.
 
         Returns:
             RegistrationMetadata: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If the table is already registered and overwrite is false.
         """
         if spec.name in self._registrations and not overwrite:
             msg = f"Table {spec.name!r} already registered. Use overwrite=True."
@@ -151,15 +151,15 @@ class ProviderRegistry(
         """Register a Delta table with version pinning support.
 
         Args:
-            spec: Description.
-                    overwrite: Description.
-                    cache_policy: Description.
+            spec: Delta table spec to register.
+            overwrite: Whether to overwrite an existing registration.
+            cache_policy: Optional cache policy override.
 
         Returns:
             RegistrationMetadata: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If the spec format is not `delta`.
         """
         if spec.format != "delta":
             msg = f"Expected delta format, got {spec.format!r}"
@@ -176,15 +176,15 @@ class ProviderRegistry(
         """Register a table and return the DataFrame.
 
         Args:
-            spec: Description.
-                    overwrite: Description.
-                    cache_policy: Description.
+            spec: Table spec to register.
+            overwrite: Whether to overwrite an existing registration.
+            cache_policy: Optional cache policy override.
 
         Returns:
             DataFrame: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If a conflicting registration exists and overwrite is false.
         """
         from datafusion_engine.schema.introspection import table_names_snapshot
         from datafusion_engine.session.helpers import deregister_table
@@ -212,16 +212,16 @@ class ProviderRegistry(
         """Register a dataset location via a derived TableSpec.
 
         Args:
-            name: Description.
-                    location: Description.
-                    overwrite: Description.
-                    cache_policy: Description.
+            name: Logical table name.
+            location: Dataset location descriptor.
+            overwrite: Whether to overwrite an existing registration.
+            cache_policy: Optional cache policy override.
 
         Returns:
             DataFrame: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If dataset schema inference fails.
         """
         from datafusion_engine.dataset.registry import resolve_dataset_schema
         from datafusion_engine.tables.spec import table_spec_from_location
@@ -354,14 +354,14 @@ class ProviderRegistry(
         """Perform the actual table registration.
 
         Args:
-            spec: Description.
-                    cache_policy: Description.
+            spec: Table spec to register.
+            cache_policy: Optional cache policy override.
 
         Returns:
             tuple[DataFrame, RegistrationMetadata]: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If runtime profile is not configured.
         """
         from datafusion_engine.dataset.registration import (
             _build_registration_context,

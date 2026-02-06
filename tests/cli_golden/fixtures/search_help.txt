@@ -1,12 +1,6 @@
 Usage: cq search [OPTIONS] QUERY
 
-Search for code patterns with semantic enrichment.                                                                      
-
-Smart Search provides semantically-enriched, grouped results using:                                                     
-
- • native ripgrep (rg) for candidate generation                                                                         
- • ast-grep for AST-level classification                                                                                
- • symtable for scope analysis
+Search for code patterns with semantic enrichment.
 
 ╭─ Parameters ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ *  QUERY --query                           Search query [env var: CQ_SEARCH_QUERY] [required]                        │

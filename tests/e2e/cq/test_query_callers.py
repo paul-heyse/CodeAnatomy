@@ -121,13 +121,21 @@ def test_callers_of_nonexistent_function(
     """
     result = run_query("entity=function name=this_function_does_not_exist_xyz expand=callers")
 
-    # Collect all findings
-    all_findings = result.key_findings + result.evidence
+    # Collect all non-diagnostic findings
+    all_findings = [
+        f
+        for f in result.key_findings + result.evidence
+        if f.category not in {"capability_limitation", "cross_language_hint"}
+    ]
     for section in result.sections:
-        all_findings.extend(section.findings)
+        all_findings.extend(
+            f
+            for f in section.findings
+            if f.category not in {"capability_limitation", "cross_language_hint"}
+        )
 
-    # Should have no findings
-    assert len(all_findings) == 0, "Expected no findings for nonexistent function"
+    # Should have no entity findings (capability diagnostics are expected)
+    assert len(all_findings) == 0, "Expected no entity findings for nonexistent function"
 
     # Run should still be valid
     assert result.run.macro == "q"

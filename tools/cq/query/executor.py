@@ -55,7 +55,9 @@ from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_
 from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
 from tools.cq.search import SearchLimits, find_files_with_pattern
 from tools.cq.search.multilang_diagnostics import (
+    build_capability_diagnostics,
     build_cross_language_diagnostics,
+    features_from_query,
     is_python_oriented_query_ir,
 )
 from tools.cq.utils.interval_index import FileIntervalIndex, IntervalIndex
@@ -550,6 +552,11 @@ def _merge_auto_scope_results(
         rust_matches=_count_result_matches(results.get("rust")),
         python_oriented=is_python_oriented_query_ir(query),
     )
+    capability_diagnostics = build_capability_diagnostics(
+        features=features_from_query(query),
+        lang_scope=query.lang_scope,
+    )
+    diagnostics = list(diagnostics) + capability_diagnostics
     run = runmeta_for_scope_merge(
         macro="q",
         root=root,

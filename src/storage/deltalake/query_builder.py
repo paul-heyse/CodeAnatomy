@@ -56,14 +56,14 @@ def open_delta_table(path: str, storage_options: Mapping[str, str] | None = None
     """Open a DeltaTable with optional storage options.
 
     Args:
-        path: Description.
-            storage_options: Description.
+        path: Delta table path or URI.
+        storage_options: Optional storage backend options.
 
     Returns:
         DeltaTable: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If `deltalake.DeltaTable` is unavailable.
     """
     try:
         from deltalake import DeltaTable

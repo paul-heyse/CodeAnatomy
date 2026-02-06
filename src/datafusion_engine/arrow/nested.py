@@ -599,15 +599,15 @@ def union_array_from_values(
     """Build a union array from scalar values.
 
     Args:
-        values: Description.
-            union_type: Description.
+        values: Scalar values to encode as a union array.
+        union_type: Target union type definition.
 
     Returns:
         ArrayLike: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
-            ValueError: If the operation cannot be completed.
+        TypeError: If `union_type` is not a union dtype.
+        ValueError: If the union mode is unsupported.
     """
     if not patypes.is_union(union_type):
         msg = "union_array_from_values requires a union dtype."
@@ -659,15 +659,15 @@ def union_array_from_tagged_values(
     """Build a union array from tagged values.
 
     Args:
-        values: Description.
-            union_type: Description.
+        values: Tagged values to encode as a union array.
+        union_type: Target union type definition.
 
     Returns:
         ArrayLike: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
-            ValueError: If the operation cannot be completed.
+        TypeError: If `union_type` is not a union dtype.
+        ValueError: If the union mode is unsupported.
     """
     if not patypes.is_union(union_type):
         msg = "union_array_from_tagged_values requires a union dtype."

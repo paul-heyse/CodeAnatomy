@@ -80,14 +80,14 @@ def register_table(
     """Register a table using the unified registry and return a DataFrame.
 
     Args:
-        ctx: Description.
-            request: Description.
+        ctx: DataFusion session context.
+        request: Table registration request payload.
 
     Returns:
         DataFrame: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If runtime profile is missing from the request.
     """
     if request.runtime_profile is None:
         msg = "Runtime profile is required for table registration."

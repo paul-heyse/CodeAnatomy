@@ -251,14 +251,14 @@ def normalize_dataset_source(
     """Normalize dataset sources into a pyarrow Dataset.
 
     Args:
-        source: Description.
-            options: Description.
+        source: Dataset source object or path.
+        options: Optional dataset source options.
 
     Returns:
         DatasetLike: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If source type is unsupported for requested format.
     """
     resolved = options or DatasetSourceOptions()
     if resolved.dataset_format == "delta" and _requires_datafusion_provider(source):

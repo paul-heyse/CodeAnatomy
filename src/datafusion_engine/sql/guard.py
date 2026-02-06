@@ -143,14 +143,14 @@ def _resolve_named_params(
     """Resolve named parameters and any table bindings.
 
     Args:
-        values: Description.
-            existing_param_values: Description.
+        values: Named parameter mapping.
+        existing_param_values: Existing scalar parameter mapping.
 
     Returns:
         tuple[dict[str, object], DataFusionParamBindings | None]: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If duplicate scalar bindings are detected.
     """
     if not values:
         return {}, None
@@ -176,16 +176,16 @@ def _execute_sql(
     """Execute SQL with resolved bindings and guardrails.
 
     Args:
-        ctx: Description.
-            sql: Description.
-            options: Description.
-            bindings: Description.
+        ctx: DataFusion session context.
+        sql: SQL text to execute.
+        options: SQL execution options.
+        bindings: Resolved scalar and table bindings.
 
     Returns:
         DataFrame | None: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If SQL execution fails due to invalid parameters.
     """
     from datafusion_engine.tables.param import register_table_params
 

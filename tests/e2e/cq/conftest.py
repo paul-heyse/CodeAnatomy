@@ -261,18 +261,18 @@ def assert_finding_exists() -> Callable[..., Finding]:
         """Assert a finding matching criteria exists in result.
 
         Args:
-            result: Description.
-                    category: Description.
-                    message_contains: Description.
-                    file: Description.
-                    severity: Description.
-                    **detail_checks: Description.
+            result: CQ result payload.
+            category: Optional finding category filter.
+            message_contains: Optional substring expected in finding message.
+            file: Optional expected file path.
+            severity: Optional expected severity.
+            **detail_checks: Additional detail key/value checks.
 
         Returns:
             Finding: Result.
 
         Raises:
-            AssertionError: If the operation cannot be completed.
+            AssertionError: If no matching finding exists.
         """
         criteria = FindingCriteria(
             category=category,

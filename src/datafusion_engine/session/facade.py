@@ -239,14 +239,14 @@ class DataFusionExecutionFacade:
         """Compile a DataFrame builder to a DataFusionPlanBundle.
 
         Args:
-            builder: Description.
-                    compute_execution_plan: Description.
+            builder: DataFrame builder callable.
+            compute_execution_plan: Whether to include execution plan capture.
 
         Returns:
             DataFusionPlanBundle: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If session runtime is unavailable.
         """
         session_runtime = self._session_runtime()
         if session_runtime is None:
@@ -313,18 +313,18 @@ class DataFusionExecutionFacade:
         """Execute a plan bundle with Substrait-first replay.
 
         Args:
-            bundle: Description.
-                    view_name: Description.
-                    scan_units: Description.
-                    scan_keys: Description.
+            bundle: Plan bundle to execute.
+            view_name: Optional view name for telemetry context.
+            scan_units: Scan units associated with the execution.
+            scan_keys: Scan keys associated with the execution.
 
         Returns:
             ExecutionResult: Result.
 
         Raises:
-            RuntimeError: If the operation cannot be completed.
-                    TypeError: If the operation cannot be completed.
-                    ValueError: If the operation cannot be completed.
+            RuntimeError: If bundle execution fails.
+            TypeError: If substrait replay APIs are unavailable.
+            ValueError: If substrait payload is invalid.
         """
         tracer = get_tracer(SCOPE_DATAFUSION)
         start = time.perf_counter()
@@ -752,15 +752,15 @@ class DataFusionExecutionFacade:
         """Register a dataset location via the registry bridge.
 
         Args:
-            name: Description.
-                    location: Description.
-                    cache_policy: Description.
+            name: Dataset name to register.
+            location: Dataset location descriptor.
+            cache_policy: Optional cache policy override.
 
         Returns:
             DataFrame: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If runtime profile is unavailable.
         """
         if self.runtime_profile is None:
             msg = "Runtime profile is required for dataset registration."
@@ -832,15 +832,15 @@ class DataFusionExecutionFacade:
         """Build a plan bundle from a DataFrame.
 
         Args:
-            df: Description.
-                    compute_execution_plan: Description.
-                    compute_substrait: Description.
+            df: DataFrame to bundle.
+            compute_execution_plan: Whether to include execution plan capture.
+            compute_substrait: Whether to generate substrait bytes.
 
         Returns:
             DataFusionPlanBundle: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If session runtime is unavailable.
         """
         session_runtime = self._session_runtime()
         if session_runtime is None:

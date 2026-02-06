@@ -417,11 +417,24 @@ def _rust_entity_to_ast_grep_rules(query: Query) -> tuple[AstGrepRule, ...]:
             for kind in type_kinds
         )
 
+    # Rust methods are function_item nodes scoped inside impl blocks.
+    if entity == "method":
+        base = AstGrepRule(pattern="$METHOD", kind="function_item", inside="impl $TYPE { $$$ }")
+        return (_apply_relational_constraints(base, query.relational),)
+
+    # Callsite matches both regular calls and macro invocations.
+    if entity == "callsite":
+        return tuple(
+            _apply_relational_constraints(rule, query.relational)
+            for rule in (
+                AstGrepRule(pattern="$CALL", kind="call_expression"),
+                AstGrepRule(pattern="$MAC", kind="macro_invocation"),
+            )
+        )
+
     base_rules: dict[str, AstGrepRule] = {
         "function": AstGrepRule(pattern="$FUNC", kind="function_item"),
-        # Rust methods are function_item nodes inside impl blocks.
-        "method": AstGrepRule(pattern="$METHOD", kind="function_item"),
-        "callsite": AstGrepRule(pattern="$CALL", kind="call_expression"),
+        "module": AstGrepRule(pattern="$MOD", kind="mod_item"),
         "import": AstGrepRule(pattern="$USE", kind="use_declaration"),
     }
     base_rule = base_rules.get(entity)

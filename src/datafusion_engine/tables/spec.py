@@ -136,16 +136,16 @@ def table_spec_from_location(
     """Build a TableSpec from a DatasetLocation.
 
     Args:
-        name: Description.
-            location: Description.
-            schema: Description.
-            required_udfs: Description.
+        name: Logical table name.
+        location: Dataset location descriptor.
+        schema: Optional explicit Arrow schema.
+        required_udfs: UDF names required by this table.
 
     Returns:
         TableSpec: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If schema resolution fails for the dataset location.
     """
     resolved = location.resolved
     if schema is None:

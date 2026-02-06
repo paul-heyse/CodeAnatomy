@@ -980,16 +980,16 @@ def execute_task_from_catalog(
     """Execute a single view task from a catalog.
 
     Args:
-        inputs: Description.
-            dependencies: Description.
-            plan_signature: Description.
-            spec: Description.
+        inputs: Task execution inputs bundle.
+        dependencies: Materialized dependency tables.
+        plan_signature: Plan signature for diagnostics.
+        spec: Task execution specification.
 
     Returns:
         TableLike: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If task output validation fails.
     """
     _touch_dependencies(dependencies)
     runtime = inputs.runtime

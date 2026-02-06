@@ -67,16 +67,16 @@ def plan_with_delta_pins(
     """Plan views, pin Delta inputs, and re-plan under pinned providers.
 
     Args:
-        ctx: Description.
-            view_nodes: Description.
-            runtime_profile: Description.
-            snapshot: Description.
+        ctx: DataFusion session context.
+        view_nodes: View nodes to plan.
+        runtime_profile: Runtime profile for planning and pinning.
+        snapshot: Optional semantic snapshot payload.
 
     Returns:
         PlanningPipelineResult: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If runtime profile is not provided.
     """
     if runtime_profile is None:
         msg = "Runtime profile is required for planning with Delta pins."

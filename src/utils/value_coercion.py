@@ -197,14 +197,14 @@ def raise_for_int(value: object, *, context: str = "") -> int:
     """Coerce value to int, raising CoercionError on failure.
 
     Args:
-        value: Description.
-            context: Description.
+        value: Value to coerce.
+        context: Optional coercion context label.
 
     Returns:
         int: Result.
 
     Raises:
-        CoercionError: If the operation cannot be completed.
+        CoercionError: If coercion to int fails.
     """
     result = coerce_int(value)
     if result is None:
@@ -216,14 +216,14 @@ def raise_for_float(value: object, *, context: str = "") -> float:
     """Coerce value to float, raising CoercionError on failure.
 
     Args:
-        value: Description.
-            context: Description.
+        value: Value to coerce.
+        context: Optional coercion context label.
 
     Returns:
         float: Result.
 
     Raises:
-        CoercionError: If the operation cannot be completed.
+        CoercionError: If coercion to float fails.
     """
     result = coerce_float(value)
     if result is None:
@@ -235,14 +235,14 @@ def raise_for_bool(value: object, *, context: str = "") -> bool:
     """Coerce value to bool, raising CoercionError on failure.
 
     Args:
-        value: Description.
-            context: Description.
+        value: Value to coerce.
+        context: Optional coercion context label.
 
     Returns:
         bool: Result.
 
     Raises:
-        CoercionError: If the operation cannot be completed.
+        CoercionError: If coercion to bool fails.
     """
     result = coerce_bool(value)
     if result is None:
@@ -254,14 +254,14 @@ def raise_for_str(value: object, *, context: str = "") -> str:
     """Coerce value to str, raising CoercionError when value is None.
 
     Args:
-        value: Description.
-            context: Description.
+        value: Value to coerce.
+        context: Optional coercion context label.
 
     Returns:
         str: Result.
 
     Raises:
-        CoercionError: If the operation cannot be completed.
+        CoercionError: If coercion to str fails.
     """
     if value is None:
         raise CoercionError(value, "str", context or "value is None")

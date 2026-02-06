@@ -1662,16 +1662,16 @@ class WritePipeline:
         """Write a Delta table using a deterministic write specification.
 
         Args:
-            result: Description.
-                    request: Description.
-                    spec: Description.
+            result: Streaming execution result payload.
+            request: Write request metadata.
+            spec: Resolved Delta write specification.
 
         Returns:
             DeltaWriteOutcome: Result.
 
         Raises:
-            DataFusionEngineError: If the operation cannot be completed.
-                    ValueError: If the operation cannot be completed.
+            DataFusionEngineError: If Delta write or maintenance operations fail.
+            ValueError: If deterministic write preconditions are violated.
         """
         local_path = Path(spec.table_uri)
         delta_service = delta_service_for_profile(self.runtime_profile)

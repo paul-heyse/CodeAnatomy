@@ -336,17 +336,17 @@ def apply_cdf_merge(
     """Apply a CDF merge strategy to combine existing and new data.
 
     Args:
-        existing: Description.
-            new_data: Description.
-            key_columns: Description.
-            strategy: Description.
-            partition_column: Description.
+        existing: Existing target table DataFrame.
+        new_data: Incoming CDF changes DataFrame.
+        key_columns: Key columns used for merge matching.
+        strategy: Merge strategy implementation.
+        partition_column: Optional partition column for partition-aware merges.
 
     Returns:
         DataFrame: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If merge strategy preconditions are not met.
     """
     from datafusion import col
 

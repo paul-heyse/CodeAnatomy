@@ -41,14 +41,14 @@ def require_semantic_inputs(
     """Validate semantic inputs and raise when invalid.
 
     Args:
-        ctx: Description.
-            input_mapping: Description.
+        ctx: DataFusion session context.
+        input_mapping: Mapping of semantic input names to table names.
 
     Returns:
         SemanticInputValidationResult: Result.
 
     Raises:
-        SemanticInputValidationError: If the operation cannot be completed.
+        SemanticInputValidationError: If semantic inputs are missing or invalid.
     """
     validation = validate_semantic_input_columns(ctx, input_mapping=input_mapping)
     if not validation.valid:

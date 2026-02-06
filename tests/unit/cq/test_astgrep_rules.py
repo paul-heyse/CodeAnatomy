@@ -4,6 +4,7 @@ Verifies that:
 1. ast-grep test suite passes
 2. Rules load correctly and produce expected JSON format
 3. Metadata fields are present in scan output
+4. Rust rule specs are correctly defined and registered
 """
 
 from __future__ import annotations
@@ -14,6 +15,12 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from tools.cq.astgrep.rules_rust import (
+    RS_CALL_MACRO,
+    RS_DEF_MODULE,
+    RULES_BY_RECORD_TYPE,
+    RUST_FACT_RULES,
+)
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 SGCONFIG_PATH = REPO_ROOT / "tools" / "cq" / "astgrep" / "sgconfig.yml"
@@ -211,3 +218,41 @@ def test_astgrep_metadata_in_output() -> None:
 
     finally:
         Path(temp_path).unlink()
+
+
+class TestRustRuleSpecs:
+    """Verify Rust rule specs are correctly defined and registered."""
+
+    @pytest.mark.smoke
+    def test_rs_def_module_exists(self) -> None:
+        """Verify RS_DEF_MODULE is present in RUST_FACT_RULES."""
+        assert RS_DEF_MODULE in RUST_FACT_RULES
+
+    @pytest.mark.smoke
+    def test_rs_call_macro_exists(self) -> None:
+        """Verify RS_CALL_MACRO is present in RUST_FACT_RULES."""
+        assert RS_CALL_MACRO in RUST_FACT_RULES
+
+    @pytest.mark.smoke
+    def test_rules_by_record_type_has_module(self) -> None:
+        """Verify RS_DEF_MODULE is registered in RULES_BY_RECORD_TYPE["def"]."""
+        assert RS_DEF_MODULE in RULES_BY_RECORD_TYPE["def"]
+
+    @pytest.mark.smoke
+    def test_rules_by_record_type_has_macro_call(self) -> None:
+        """Verify RS_CALL_MACRO is registered in RULES_BY_RECORD_TYPE["call"]."""
+        assert RS_CALL_MACRO in RULES_BY_RECORD_TYPE["call"]
+
+    def test_rs_def_module_structure(self) -> None:
+        """Verify RS_DEF_MODULE has correct rule_id, record_type, and kind."""
+        assert RS_DEF_MODULE.rule_id == "rs_def_module"
+        assert RS_DEF_MODULE.record_type == "def"
+        assert RS_DEF_MODULE.kind == "module"
+        assert RS_DEF_MODULE.config == {"rule": {"kind": "mod_item"}}
+
+    def test_rs_call_macro_structure(self) -> None:
+        """Verify RS_CALL_MACRO has correct rule_id, record_type, and kind."""
+        assert RS_CALL_MACRO.rule_id == "rs_call_macro"
+        assert RS_CALL_MACRO.record_type == "call"
+        assert RS_CALL_MACRO.kind == "macro_invocation"
+        assert RS_CALL_MACRO.config == {"rule": {"kind": "macro_invocation"}}

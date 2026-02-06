@@ -929,15 +929,15 @@ def output_config(
     """Bundle output configuration values.
 
     Args:
-        work_dir: Description.
-            output_dir: Description.
-            output_config_overrides: Description.
+        work_dir: Working directory path.
+        output_dir: Optional explicit output directory.
+        output_config_overrides: Output configuration overrides.
 
     Returns:
         OutputConfig: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If output storage policy format is not Delta.
     """
     storage_policy = output_config_overrides.output_storage_policy or OutputStoragePolicy()
     if storage_policy.format != "delta":
@@ -1111,15 +1111,15 @@ def incremental_config(
     """Bundle incremental configuration values.
 
     Args:
-        repo_root: Description.
-            incremental_overrides: Description.
-            incremental_git_overrides: Description.
+        repo_root: Repository root path.
+        incremental_overrides: Incremental runtime overrides.
+        incremental_git_overrides: Incremental git-specific overrides.
 
     Returns:
         SemanticIncrementalConfig: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If incremental configuration values are invalid.
     """
     enabled = bool(incremental_overrides.enabled) or _incremental_pipeline_enabled()
     state_dir = incremental_overrides.state_dir or env_value("CODEANATOMY_STATE_DIR")

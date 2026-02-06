@@ -153,15 +153,15 @@ class ParamTableRegistry:
         """Register values for a param table and return the artifact.
 
         Args:
-            logical_name: Description.
-                    values: Description.
+            logical_name: Logical parameter table name.
+            values: Values to register for the parameter table.
 
         Returns:
             ParamTableArtifact: Result.
 
         Raises:
-            KeyError: If the operation cannot be completed.
-                    ValueError: If the operation cannot be completed.
+            KeyError: If no param table spec exists for `logical_name`.
+            ValueError: If the spec is invalid for value registration.
         """
         spec = self.specs.get(logical_name)
         if spec is None:
@@ -225,15 +225,15 @@ def resolve_param_bindings(
     """Resolve scalar and table-like parameter bindings.
 
     Args:
-        values: Description.
-            allowlist: Description.
-            validate_names: Description.
+        values: Input parameter mapping.
+        allowlist: Optional allowed parameter names.
+        validate_names: Whether to validate parameter naming rules.
 
     Returns:
         DataFusionParamBindings: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If parameter names or values are invalid.
     """
     if not values:
         return DataFusionParamBindings(param_values={}, named_tables={})

@@ -168,16 +168,16 @@ class RegistryFacade:
         """Register a dataset and return the DataFrame.
 
         Args:
-            name: Description.
-                    location: Description.
-                    cache_policy: Description.
-                    overwrite: Description.
+            name: Dataset name to register.
+            location: Dataset location descriptor.
+            cache_policy: Optional cache policy override.
+            overwrite: Whether to overwrite an existing registration.
 
         Returns:
             DataFrame: Result.
 
         Raises:
-            RuntimeError: If the operation cannot be completed.
+            RuntimeError: If provider registration does not return a DataFrame.
         """
         checkpoint = self._checkpoint_optional()
         df: DataFrame | None = None

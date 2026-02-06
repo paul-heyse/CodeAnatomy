@@ -654,14 +654,14 @@ def configure_otel(
     """Configure OpenTelemetry providers for the current process.
 
     Args:
-        service_name: Description.
-            options: Description.
+        service_name: Optional OpenTelemetry service name.
+        options: Optional bootstrap configuration overrides.
 
     Returns:
         OtelProviders: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If OpenTelemetry exporters cannot be configured.
     """
     if options is not None and options.test_mode and _STATE["providers"] is not None:
         _STATE["providers"].shutdown()

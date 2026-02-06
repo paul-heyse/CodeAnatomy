@@ -466,17 +466,17 @@ def require_join_strategy(
     """Infer join strategy or raise with clear diagnostics.
 
     Args:
-        left_schema: Description.
-            right_schema: Description.
-            hint: Description.
-            left_name: Description.
-            right_name: Description.
+        left_schema: Left input schema.
+        right_schema: Right input schema.
+        hint: Optional join strategy hint.
+        left_name: Diagnostic label for left input.
+        right_name: Diagnostic label for right input.
 
     Returns:
         JoinStrategy: Result.
 
     Raises:
-        JoinInferenceError: If the operation cannot be completed.
+        JoinInferenceError: If no valid join strategy can be inferred.
     """
     strategy = infer_join_strategy(left_schema, right_schema, hint=hint)
     if strategy is not None:

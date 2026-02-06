@@ -847,14 +847,14 @@ class DeltaService:
         """Execute a Delta mutation request.
 
         Args:
-            request: Description.
-                    ctx: Description.
+            request: Mutation request payload.
+            ctx: Optional DataFusion session context.
 
         Returns:
             Mapping[str, object]: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If the request contains neither merge nor delete payload.
         """
         request.validate()
         if request.merge is not None:

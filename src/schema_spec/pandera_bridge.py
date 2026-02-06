@@ -178,15 +178,15 @@ def to_pandera_schema(
     """Build a pandera DataFrameSchema from a table schema spec.
 
     Args:
-        spec: Description.
-            policy: Description.
-            constraints: Description.
+        spec: Table schema spec to convert.
+        policy: Optional validation policy override.
+        constraints: Optional constraint expressions.
 
     Returns:
         Any: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If field types cannot be mapped to pandera dtypes.
     """
     import pandera.polars as pa_schema
 

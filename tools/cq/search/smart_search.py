@@ -1391,6 +1391,18 @@ def _build_cross_language_diagnostics_for_search(
     )
 
 
+def _build_capability_diagnostics_for_search(
+    *,
+    lang_scope: QueryLanguageScope,
+) -> list[Finding]:
+    from tools.cq.search.multilang_diagnostics import build_capability_diagnostics
+
+    return build_capability_diagnostics(
+        features=["pattern_query"],
+        lang_scope=lang_scope,
+    )
+
+
 def _assemble_smart_search_result(
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
@@ -1434,7 +1446,11 @@ def _assemble_smart_search_result(
         python_matches=python_matches,
         rust_matches=rust_matches,
     )
-    summary["cross_language_diagnostics"] = [finding.message for finding in diagnostics]
+    capability_diagnostics = _build_capability_diagnostics_for_search(
+        lang_scope=ctx.lang_scope,
+    )
+    all_diagnostics = diagnostics + capability_diagnostics
+    summary["cross_language_diagnostics"] = [finding.message for finding in all_diagnostics]
     assert_multilang_summary(summary)
     sections = build_sections(
         enriched_matches,
@@ -1443,8 +1459,8 @@ def _assemble_smart_search_result(
         ctx.mode,
         include_strings=ctx.include_strings,
     )
-    if diagnostics:
-        sections.append(Section(title="Cross-Language Diagnostics", findings=diagnostics))
+    if all_diagnostics:
+        sections.append(Section(title="Cross-Language Diagnostics", findings=all_diagnostics))
 
     run_ctx = RunContext.from_parts(
         root=ctx.root,
@@ -1458,7 +1474,7 @@ def _assemble_smart_search_result(
         run=run,
         summary=summary,
         sections=sections,
-        key_findings=(sections[0].findings[:5] if sections else []) + diagnostics,
+        key_findings=(sections[0].findings[:5] if sections else []) + all_diagnostics,
         evidence=[build_finding(m, ctx.root) for m in enriched_matches[:MAX_EVIDENCE]],
     )
 

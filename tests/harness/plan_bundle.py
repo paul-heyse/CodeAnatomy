@@ -25,15 +25,15 @@ def build_plan_manifest_for_sql(
     """Build a plan bundle and return ``plan_manifest`` plus full plan details.
 
     Args:
-        ctx: Description.
-            session_runtime: Description.
-            sql: Description.
+        ctx: DataFusion session context.
+        session_runtime: Session runtime for bundle options.
+        sql: SQL query to compile.
 
     Returns:
         tuple[dict[str, object], dict[str, object]]: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If manifest payload conversion is invalid.
     """
     bundle = build_plan_bundle(
         ctx,

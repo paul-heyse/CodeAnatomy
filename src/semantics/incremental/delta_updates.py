@@ -66,18 +66,18 @@ def upsert_partitioned_dataset(
     """Upsert a partitioned dataset using the incremental delete set.
 
     Args:
-        table: Description.
-            spec: Description.
-            base_dir: Description.
-            changes: Description.
-            context: Description.
+        table: Input table data.
+        spec: Partitioned dataset spec.
+        base_dir: Base output directory.
+        changes: Incremental file changes.
+        context: Delta access context.
 
     Returns:
         str | None: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
-            ValueError: If the operation cannot be completed.
+        RuntimeError: If write result metadata is incomplete.
+        ValueError: If partition spec or schema preconditions are violated.
     """
     if spec.partition_column not in table.column_names:
         msg = f"Partition column {spec.partition_column!r} is required for dataset {spec.name!r}."
@@ -139,16 +139,16 @@ def write_overwrite_dataset(
     """Overwrite a dataset with schema enforcement.
 
     Args:
-        table: Description.
-            spec: Description.
-            state_store: Description.
-            context: Description.
+        table: Input table data.
+        spec: Overwrite dataset spec.
+        state_store: Incremental state store.
+        context: Delta access context.
 
     Returns:
         dict[str, str]: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If overwrite write result metadata is incomplete.
     """
     metadata = spec.commit_metadata
     data = coerce_delta_input(

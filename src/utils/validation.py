@@ -49,15 +49,15 @@ def ensure_sequence(
     """Validate that value is a Sequence.
 
     Args:
-        value: Description.
-            label: Description.
-            item_type: Description.
+        value: Value to validate.
+        label: Label used in validation errors.
+        item_type: Optional required item type(s).
 
     Returns:
         Sequence[object]: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If value is not a sequence or items have invalid type.
     """
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         msg = f"{label} must be a Sequence, got {type(value).__name__}"
@@ -83,14 +83,14 @@ def ensure_callable(
     """Validate that value is callable.
 
     Args:
-        value: Description.
-            label: Description.
+        value: Value to validate.
+        label: Label used in validation errors.
 
     Returns:
         Callable[..., object]: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If value is not callable.
     """
     if not callable(value):
         msg = f"{label} must be callable, got {type(value).__name__}"
@@ -102,14 +102,14 @@ def ensure_table(value: object, *, label: str = "input") -> pa.Table:
     """Convert table-like input into a PyArrow Table.
 
     Args:
-        value: Description.
-            label: Description.
+        value: Value to coerce into a table.
+        label: Label used in validation errors.
 
     Returns:
         pa.Table: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If value cannot be coerced to a table.
     """
     from datafusion_engine.arrow.coercion import to_arrow_table
 
@@ -128,14 +128,14 @@ def ensure_not_empty[T](
     """Ensure sequence is not empty.
 
     Args:
-        value: Description.
-            label: Description.
+        value: Sequence to validate.
+        label: Label used in validation errors.
 
     Returns:
         Sequence[T]: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If sequence is empty.
     """
     if not value:
         msg = f"{label} must not be empty"
@@ -173,14 +173,14 @@ def ensure_unique[T](
     """Ensure all items are unique.
 
     Args:
-        items: Description.
-            label: Description.
+        items: Items to validate.
+        label: Label used in validation errors.
 
     Returns:
         list[T]: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If duplicate items are present.
     """
     seen: set[T] = set()
     duplicates: list[T] = []

@@ -3225,14 +3225,14 @@ def refresh_session_runtime(
     """Rebuild and cache a SessionRuntime for the current SessionContext.
 
     Args:
-        profile: Description.
-            ctx: Description.
+        profile: Runtime profile to refresh.
+        ctx: Optional context to rebuild for.
 
     Returns:
         SessionRuntime: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If the profile does not expose a session runtime builder.
     """
     resolved_ctx = ctx or profile.session_context()
     runtime_builder = cast(

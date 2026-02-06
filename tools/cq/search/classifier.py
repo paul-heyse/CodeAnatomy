@@ -209,6 +209,7 @@ NODE_KIND_MAP: dict[str, tuple[MatchCategory, float]] = {
     "enum_item": ("definition", 0.95),
     "trait_item": ("definition", 0.95),
     "impl_item": ("definition", 0.85),
+    "mod_item": ("definition", 0.95),
 }
 
 
@@ -269,7 +270,7 @@ def _extract_def_name_from_record(record: SgRecord) -> str | None:
     patterns = (
         r"(?:async\s+)?(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)",
         r"fn\s+([A-Za-z_][A-Za-z0-9_]*)",
-        r"(?:struct|enum|trait)\s+([A-Za-z_][A-Za-z0-9_]*)",
+        r"(?:struct|enum|trait|mod)\s+([A-Za-z_][A-Za-z0-9_]*)",
     )
     for pattern in patterns:
         match = re.search(pattern, record.text)
@@ -578,6 +579,7 @@ def _find_containing_scope(node: SgNode) -> str | None:
             "enum_item",
             "trait_item",
             "impl_item",
+            "mod_item",
         }:
             # Extract name from the definition
             name_node = current.field("name")
@@ -895,7 +897,7 @@ def get_def_lines_cached(
     for i, line in enumerate(source.splitlines(), 1):
         stripped = line.lstrip()
         if lang == "rust":
-            prefixes = ("fn ", "pub fn ", "struct ", "enum ", "trait ", "impl ")
+            prefixes = ("fn ", "pub fn ", "struct ", "enum ", "trait ", "impl ", "mod ", "pub mod ")
         else:
             prefixes = ("def ", "async def ", "class ")
         if stripped.startswith(prefixes):

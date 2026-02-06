@@ -269,15 +269,15 @@ class DatasetInputSource:
         """Build a DataFusion DataFrame for a dataset registry handle.
 
         Args:
-            input_item: Description.
-                    table_name: Description.
-                    **kwargs: Description.
+            input_item: Input source handle.
+            table_name: Target table name to register.
+            **kwargs: Additional plugin arguments (unused).
 
         Returns:
             DataFrame: Result.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If the input handle cannot be resolved.
         """
         _ = kwargs
         name = _dataset_name_from_input(input_item)

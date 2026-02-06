@@ -75,14 +75,14 @@ def resolve_repo_scope(path: PathLike, options: RepoScopeOptions) -> RepoScope:
     """Resolve a RepoScope for the given path.
 
     Args:
-        path: Description.
-            options: Description.
+        path: Path inside the target repository.
+        options: Repo scope resolution options.
 
     Returns:
         RepoScope: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If the path is not inside a git workdir.
     """
     git_ctx = open_git_context(ensure_path(path))
     if git_ctx is None or git_ctx.repo.workdir is None:

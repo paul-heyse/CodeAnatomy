@@ -124,16 +124,16 @@ def resolve_storage_profile(
     """Resolve the canonical storage profile for Delta table access.
 
     Args:
-        table_uri: Description.
-            policy: Description.
-            storage_options: Description.
-            log_storage_options: Description.
+        table_uri: Delta table URI.
+        policy: Optional store policy defaults.
+        storage_options: Optional table storage option overrides.
+        log_storage_options: Optional log-store option overrides.
 
     Returns:
         StorageProfile: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If the URI uses unsupported S3 scheme aliases.
     """
     canonical_uri = _canonical_table_uri(table_uri)
     parsed = urlparse(canonical_uri) if "://" in canonical_uri else None

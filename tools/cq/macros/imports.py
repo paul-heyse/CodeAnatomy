@@ -596,6 +596,47 @@ def _build_imports_result(
     return result
 
 
+def _apply_rust_fallback(
+    result: CqResult,
+    root: Path,
+    module: str | None,
+) -> CqResult:
+    """Append Rust fallback findings and multilang summary to an imports result.
+
+    Args:
+        result: Existing Python-only CqResult.
+        root: Repository root path.
+        module: Optional module filter used for Rust search pattern.
+
+    Returns:
+        The mutated result with Rust fallback data merged in.
+    """
+    from tools.cq.core.multilang_summary import (
+        build_multilang_summary,
+        partition_stats_from_result_summary,
+    )
+    from tools.cq.macros._rust_fallback import rust_fallback_search
+
+    pattern = module if module else "use "
+    rust_findings, capability_diags, rust_stats = rust_fallback_search(
+        root,
+        pattern,
+        macro_name="imports",
+    )
+    result.evidence.extend(rust_findings)
+    result.key_findings.extend(capability_diags)
+
+    existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
+    py_stats = partition_stats_from_result_summary(existing_summary)
+    result.summary = build_multilang_summary(
+        common=existing_summary,
+        lang_scope="auto",
+        language_order=None,
+        languages={"python": py_stats, "rust": rust_stats},
+    )
+    return result
+
+
 def cmd_imports(request: ImportRequest) -> CqResult:
     """Analyze import structure and optionally detect cycles.
 
@@ -611,4 +652,5 @@ def cmd_imports(request: ImportRequest) -> CqResult:
     """
     started = ms()
     ctx = _prepare_import_context(request)
-    return _build_imports_result(ctx, started_ms=started)
+    result = _build_imports_result(ctx, started_ms=started)
+    return _apply_rust_fallback(result, request.root, request.module)

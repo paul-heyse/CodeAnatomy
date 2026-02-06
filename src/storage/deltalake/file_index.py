@@ -70,15 +70,15 @@ def _parse_int_field(value: object, *, field: str) -> int:
     """Coerce optional numeric payloads into integer values.
 
     Args:
-        value: Description.
-            field: Description.
+        value: Raw field value.
+        field: Field name used for diagnostics.
 
     Returns:
         int: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
-            ValueError: If the operation cannot be completed.
+        TypeError: If the value type cannot be coerced to int.
+        ValueError: If string parsing fails.
     """
     if value is None:
         return 0

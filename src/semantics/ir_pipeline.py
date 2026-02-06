@@ -780,14 +780,14 @@ def optimize_semantics(
     """Optimize the semantic IR with join fusion grouping and deduplication.
 
     Args:
-        ir: Description.
-            outputs: Description.
+        ir: Semantic IR to optimize.
+        outputs: Optional output node allowlist.
 
     Returns:
         SemanticIR: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If requested outputs are not present in the IR.
     """
     seen: dict[str, SemanticIRView] = {}
     for view in ir.views:

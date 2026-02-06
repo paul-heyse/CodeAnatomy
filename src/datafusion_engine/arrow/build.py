@@ -696,14 +696,14 @@ def concatenate_tables(
     """Concatenate multiple tables with schema unification.
 
     Args:
-        tables: Description.
-            promote: Description.
+        tables: Input tables to concatenate.
+        promote: Whether to promote types during concatenation.
 
     Returns:
         TableLike: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If no tables are provided.
     """
     tables_list = list(tables)
     if not tables_list:

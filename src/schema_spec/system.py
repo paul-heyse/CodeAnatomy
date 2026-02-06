@@ -75,16 +75,16 @@ def validate_arrow_table(
     """Validate an Arrow table with Arrow-native validation.
 
     Args:
-        table: Description.
-            spec: Description.
-            options: Description.
-            runtime_profile: Description.
+        table: Arrow table-like object to validate.
+        spec: Table schema spec.
+        options: Optional Arrow validation options.
+        runtime_profile: Optional runtime profile for diagnostics.
 
     Returns:
         TableLike: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If schema or policy validation fails.
     """
     options = options or ArrowValidationOptions()
     report = validate_table(
@@ -1427,16 +1427,16 @@ def dataset_spec_from_path(
     """Create a DatasetSpec from a dataset path.
 
     Args:
-        name: Description.
-            path: Description.
-            options: Description.
-            version: Description.
+        name: Dataset name.
+        path: Dataset path or URI.
+        options: Optional dataset-open options.
+        version: Optional schema version override.
 
     Returns:
         DatasetSpec: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If dataset schema cannot be resolved.
     """
     options = options or DatasetOpenSpec()
     if options.dataset_format == "delta":

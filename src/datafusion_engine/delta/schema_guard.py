@@ -80,15 +80,15 @@ def enforce_schema_policy(
     """Enforce schema evolution policy against existing Delta table.
 
     Args:
-        expected_schema: Description.
-            dataset_location: Description.
-            policy: Description.
+        expected_schema: Expected Arrow schema.
+        dataset_location: Dataset location to validate.
+        policy: Schema evolution policy.
 
     Returns:
         str: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If schema evolution violates policy.
     """
     request = DeltaSchemaRequest(
         path=str(dataset_location.path),

@@ -88,8 +88,8 @@ def _load_extension() -> object:
         object: Result.
 
     Raises:
-        ImportError: If the operation cannot be completed.
-            ModuleNotFoundError: If the operation cannot be completed.
+        ImportError: If no compatible extension module can be loaded.
+        ModuleNotFoundError: If a nested import is missing within a candidate module.
     """
     for module_name in ("datafusion._internal", "datafusion_ext"):
         try:

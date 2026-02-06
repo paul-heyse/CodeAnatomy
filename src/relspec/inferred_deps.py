@@ -211,15 +211,15 @@ def infer_deps_from_view_nodes(
     """Infer dependencies for view nodes using DataFusion plan bundles.
 
     Args:
-        nodes: Description.
-            ctx: Description.
-            snapshot: Description.
+        nodes: View nodes to analyze.
+        ctx: Optional DataFusion session context.
+        snapshot: Optional UDF snapshot for lineage extraction.
 
     Returns:
         tuple[InferredDeps, ...]: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If both `ctx` and node plan bundles are unavailable.
     """
     inferred: list[InferredDeps] = []
     for node in nodes:

@@ -36,14 +36,14 @@ def load_scip_pb2_from_build(build_dir: Path) -> ModuleType:
     """Load the scip_pb2 module from the build/scip directory.
 
     Args:
-        build_dir: Description.
+        build_dir: Build directory expected to contain `scip_pb2.py`.
 
     Returns:
         ModuleType: Result.
 
     Raises:
-        FileNotFoundError: If the operation cannot be completed.
-            ScipProtoLoadError: If the operation cannot be completed.
+        FileNotFoundError: If `scip_pb2.py` is not present in `build_dir`.
+        ScipProtoLoadError: If module spec or loader cannot be created.
     """
     module_path = build_dir / "scip_pb2.py"
     if not module_path.exists():
@@ -62,14 +62,14 @@ def ensure_scip_pb2(repo_root: Path, build_dir: Path) -> Path:
     """Ensure scip_pb2.py exists under build/scip, generating it if missing.
 
     Args:
-        repo_root: Description.
-            build_dir: Description.
+        repo_root: Repository root for codegen scripts.
+        build_dir: Build directory where `scip_pb2.py` should exist.
 
     Returns:
         Path: Result.
 
     Raises:
-        FileNotFoundError: If the operation cannot be completed.
+        FileNotFoundError: If generated `scip_pb2.py` cannot be found.
     """
     module_path = build_dir / "scip_pb2.py"
     if module_path.exists():

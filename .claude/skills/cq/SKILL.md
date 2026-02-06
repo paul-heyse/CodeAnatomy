@@ -103,6 +103,27 @@ Language scope defaults to `auto` (search both Python and Rust); use `--lang rus
 /cq run --steps '[{"type":"q","query":"entity=function lang=rust"},{"type":"q","query":"entity=import lang=rust in=rust"}]'
 ```
 
+### Language Parity Matrix
+
+| Feature | Python | Rust | Notes |
+|---------|--------|------|-------|
+| entity=function | Full | Full | |
+| entity=class | Full | Full | struct/enum/trait in Rust |
+| entity=import | Full | Full | use declarations |
+| entity=callsite | Full | Full | incl. macro invocations |
+| entity=method | Full | Full | impl-scoped in Rust |
+| entity=module | None | Partial | Rust mod_item only |
+| entity=decorator | Full | None | Rust has no decorators |
+| Pattern queries | Full | Full | |
+| Relational constraints | Full | Full | |
+| Scope filtering | Full | None | Python symtable only |
+| Bytecode queries | Full | None | Python dis only |
+| calls macro | Full | Partial | Rust: location only |
+| impact/sig-impact | Full | None | Python AST only |
+| imports/exceptions | Full | None | Python only |
+| side-effects/scopes | Full | None | Python only |
+| bytecode-surface | Full | None | Python only |
+
 ## Smart Search (Default for Code Discovery)
 
 Smart Search (`/cq search`) is the **primary tool for finding code**. It provides semantically-enriched results that are superior to grep for code work.

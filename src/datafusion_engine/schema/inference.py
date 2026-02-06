@@ -542,14 +542,14 @@ def infer_schema_from_plan_bundle(
     """Extract schema inference from a DataFusionPlanBundle.
 
     Args:
-        bundle: Description.
-            udf_snapshot: Description.
+        bundle: DataFusion plan bundle object.
+        udf_snapshot: Optional UDF snapshot used for lineage extraction.
 
     Returns:
         SchemaInferenceResult: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If the bundle does not expose a `df` attribute.
     """
     df = getattr(bundle, "df", None)
     if df is None:

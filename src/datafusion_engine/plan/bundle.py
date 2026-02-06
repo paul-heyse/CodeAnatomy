@@ -298,15 +298,15 @@ def build_plan_bundle(
     """Build a canonical plan bundle from a DataFusion DataFrame.
 
     Args:
-        ctx: Description.
-            df: Description.
-            options: Description.
+        ctx: DataFusion session context.
+        df: DataFrame to plan.
+        options: Optional plan-bundle options.
 
     Returns:
         DataFusionPlanBundle: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If required bundle options are missing.
     """
     with stage_span(
         "planning.plan_bundle",
@@ -517,15 +517,15 @@ def _plan_core_components(
     """Collect core logical/physical plan objects.
 
     Args:
-        ctx: Description.
-            df: Description.
-            options: Description.
+        ctx: DataFusion session context.
+        df: DataFrame to plan.
+        options: Bundle planning options.
 
     Returns:
         _PlanCoreComponents: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If substrait generation is disabled.
     """
     t0 = time.perf_counter()
     logical = cast("DataFusionLogicalPlan", _safe_logical_plan(df))
@@ -1565,14 +1565,14 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
     """Convert an optimized plan to Substrait bytes.
 
     Args:
-        ctx: Description.
-            optimized: Description.
+        ctx: DataFusion session context.
+        optimized: Optimized logical plan object.
 
     Returns:
         bytes: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If substrait generation prerequisites are not met.
     """
     if SubstraitProducer is None:
         msg = "Substrait producer is unavailable."
@@ -1622,15 +1622,15 @@ def _substrait_validation_payload(
     """Validate Substrait bytes and return the validation payload.
 
     Args:
-        substrait_bytes: Description.
-            df: Description.
-            ctx: Description.
+        substrait_bytes: Encoded substrait bytes.
+        df: Source DataFrame used to compare replay output.
+        ctx: DataFusion session context.
 
     Returns:
         Mapping[str, object] | None: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If substrait validation reports mismatch.
     """
     from datafusion_engine.plan.execution import validate_substrait_plan
 

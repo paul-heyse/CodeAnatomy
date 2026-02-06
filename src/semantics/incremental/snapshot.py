@@ -95,15 +95,15 @@ def write_repo_snapshot(
     """Persist the repo snapshot to the state store as Delta.
 
     Args:
-        store: Description.
-            snapshot: Description.
-            context: Description.
+        store: Incremental state store.
+        snapshot: Repo snapshot table.
+        context: Delta access context.
 
     Returns:
         DeltaWriteResult: Result.
 
     Raises:
-        RuntimeError: If the operation cannot be completed.
+        RuntimeError: If snapshot write metadata is incomplete.
     """
     store.ensure_dirs()
     target = store.repo_snapshot_path()

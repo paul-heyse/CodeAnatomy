@@ -185,15 +185,15 @@ def validate_edge_requirements_detailed(
     """Validate predecessor edges with detailed results.
 
     Args:
-        graph: Description.
-            task_idx: Description.
-            catalog: Description.
+        graph: Task graph to validate.
+        task_idx: Task node index in the graph.
+        catalog: Evidence catalog used for requirement checks.
 
     Returns:
         TaskValidationResult: Result.
 
     Raises:
-        TypeError: If the operation cannot be completed.
+        TypeError: If `task_idx` does not reference a `TaskNode`.
     """
     node = graph.graph[task_idx]
     if not isinstance(node, GraphNode) or not isinstance(node.payload, TaskNode):

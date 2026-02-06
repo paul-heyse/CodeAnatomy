@@ -375,6 +375,46 @@ def _append_evidence(
         )
 
 
+def _apply_rust_fallback(
+    result: CqResult,
+    root: Path,
+    target: str,
+) -> CqResult:
+    """Append Rust fallback findings and multilang summary to a bytecode-surface result.
+
+    Args:
+        result: Existing Python-only CqResult.
+        root: Repository root path.
+        target: Target symbol/file for Rust search.
+
+    Returns:
+        The mutated result with Rust fallback data merged in.
+    """
+    from tools.cq.core.multilang_summary import (
+        build_multilang_summary,
+        partition_stats_from_result_summary,
+    )
+    from tools.cq.macros._rust_fallback import rust_fallback_search
+
+    rust_findings, capability_diags, rust_stats = rust_fallback_search(
+        root,
+        target,
+        macro_name="bytecode-surface",
+    )
+    result.evidence.extend(rust_findings)
+    result.key_findings.extend(capability_diags)
+
+    existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
+    py_stats = partition_stats_from_result_summary(existing_summary)
+    result.summary = build_multilang_summary(
+        common=existing_summary,
+        lang_scope="auto",
+        language_order=None,
+        languages={"python": py_stats, "rust": rust_stats},
+    )
+    return result
+
+
 def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
     """Analyze bytecode to find hidden dependencies.
 
@@ -464,4 +504,4 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
     _append_opcode_summary(result, total_opcodes, show_set, scoring_details)
     _append_evidence(result, all_surfaces, scoring_details)
 
-    return result
+    return _apply_rust_fallback(result, request.root, request.target)

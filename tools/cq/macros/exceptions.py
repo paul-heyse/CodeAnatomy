@@ -473,6 +473,47 @@ def _append_exception_evidence(
         )
 
 
+def _apply_rust_fallback(
+    result: CqResult,
+    root: Path,
+    function: str | None,
+) -> CqResult:
+    """Append Rust fallback findings and multilang summary to an exceptions result.
+
+    Args:
+        result: Existing Python-only CqResult.
+        root: Repository root path.
+        function: Optional function focus for Rust search pattern.
+
+    Returns:
+        The mutated result with Rust fallback data merged in.
+    """
+    from tools.cq.core.multilang_summary import (
+        build_multilang_summary,
+        partition_stats_from_result_summary,
+    )
+    from tools.cq.macros._rust_fallback import rust_fallback_search
+
+    pattern = function if function else "panic!\\|unwrap\\|expect\\|Result<\\|Err("
+    rust_findings, capability_diags, rust_stats = rust_fallback_search(
+        root,
+        pattern,
+        macro_name="exceptions",
+    )
+    result.evidence.extend(rust_findings)
+    result.key_findings.extend(capability_diags)
+
+    existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
+    py_stats = partition_stats_from_result_summary(existing_summary)
+    result.summary = build_multilang_summary(
+        common=existing_summary,
+        lang_scope="auto",
+        language_order=None,
+        languages={"python": py_stats, "rust": rust_stats},
+    )
+    return result
+
+
 def cmd_exceptions(
     tc: Toolchain,
     root: Path,
@@ -587,4 +628,4 @@ def cmd_exceptions(
         scoring_details=scoring_details,
     )
 
-    return result
+    return _apply_rust_fallback(result, root, function)

@@ -36,6 +36,13 @@ RS_DEF_TRAIT = RuleSpec(
     config={"rule": {"kind": "trait_item"}},
 )
 
+RS_DEF_MODULE = RuleSpec(
+    rule_id="rs_def_module",
+    record_type="def",
+    kind="module",
+    config={"rule": {"kind": "mod_item"}},
+)
+
 # =============================================================================
 # Calls
 # =============================================================================
@@ -45,6 +52,13 @@ RS_CALL_EXPRESSION = RuleSpec(
     record_type="call",
     kind="call_expression",
     config={"rule": {"kind": "call_expression"}},
+)
+
+RS_CALL_MACRO = RuleSpec(
+    rule_id="rs_call_macro",
+    record_type="call",
+    kind="macro_invocation",
+    config={"rule": {"kind": "macro_invocation"}},
 )
 
 # =============================================================================
@@ -67,7 +81,9 @@ RUST_FACT_RULES: tuple[RuleSpec, ...] = (
     RS_DEF_STRUCT,
     RS_DEF_ENUM,
     RS_DEF_TRAIT,
+    RS_DEF_MODULE,
     RS_CALL_EXPRESSION,
+    RS_CALL_MACRO,
     RS_USE_DECLARATION,
 )
 
@@ -77,8 +93,9 @@ RULES_BY_RECORD_TYPE: dict[RecordType, tuple[RuleSpec, ...]] = {
         RS_DEF_STRUCT,
         RS_DEF_ENUM,
         RS_DEF_TRAIT,
+        RS_DEF_MODULE,
     ),
-    "call": (RS_CALL_EXPRESSION,),
+    "call": (RS_CALL_EXPRESSION, RS_CALL_MACRO),
     "import": (RS_USE_DECLARATION,),
     "raise": (),
     "except": (),
@@ -116,8 +133,10 @@ def get_all_rule_ids() -> frozenset[str]:
 
 __all__ = [
     "RS_CALL_EXPRESSION",
+    "RS_CALL_MACRO",
     "RS_DEF_ENUM",
     "RS_DEF_FUNCTION",
+    "RS_DEF_MODULE",
     "RS_DEF_STRUCT",
     "RS_DEF_TRAIT",
     "RS_USE_DECLARATION",

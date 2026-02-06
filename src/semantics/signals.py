@@ -278,15 +278,15 @@ def build_file_quality_view(
     """Build aggregated file quality signals from all extraction sources.
 
     Args:
-        ctx: Description.
-            base_table: Description.
-            weights: Description.
+        ctx: DataFusion session context.
+        base_table: Base file table name.
+        weights: Optional quality-score weight overrides.
 
     Returns:
         DataFrame: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If no compatible base table can be resolved.
     """
     if not _table_exists(ctx, base_table):
         for fallback in ("file_index", "repo_files"):

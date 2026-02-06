@@ -910,16 +910,16 @@ def register_rust_udfs(
     """Ensure Rust UDF snapshots are available for a session context.
 
     Args:
-        ctx: Description.
-            enable_async: Description.
-            async_udf_timeout_ms: Description.
-            async_udf_batch_size: Description.
+        ctx: DataFusion session context.
+        enable_async: Whether async UDF execution is enabled.
+        async_udf_timeout_ms: Optional async UDF timeout override.
+        async_udf_batch_size: Optional async UDF batch-size override.
 
     Returns:
         Mapping[str, object]: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If async UDF policy settings are invalid.
     """
     try:
         policy = _async_udf_policy(

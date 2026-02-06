@@ -857,6 +857,42 @@ def _build_impact_result(
     return result
 
 
+def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> CqResult:
+    """Append Rust fallback findings and multilang summary to an impact result.
+
+    Args:
+        result: Existing Python-only CqResult.
+        root: Repository root path.
+        function_name: Function name searched for.
+
+    Returns:
+        The mutated result with Rust fallback data merged in.
+    """
+    from tools.cq.core.multilang_summary import (
+        build_multilang_summary,
+        partition_stats_from_result_summary,
+    )
+    from tools.cq.macros._rust_fallback import rust_fallback_search
+
+    rust_findings, capability_diags, rust_stats = rust_fallback_search(
+        root,
+        function_name,
+        macro_name="impact",
+    )
+    result.evidence.extend(rust_findings)
+    result.key_findings.extend(capability_diags)
+
+    existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
+    py_stats = partition_stats_from_result_summary(existing_summary)
+    result.summary = build_multilang_summary(
+        common=existing_summary,
+        lang_scope="auto",
+        language_order=None,
+        languages={"python": py_stats, "rust": rust_stats},
+    )
+    return result
+
+
 def cmd_impact(request: ImpactRequest) -> CqResult:
     """Analyze impact/taint flow from a function parameter.
 
@@ -874,4 +910,5 @@ def cmd_impact(request: ImpactRequest) -> CqResult:
     index = DefIndex.build(request.root)
     functions = _resolve_functions(index, request.function_name)
     ctx = ImpactContext(request=request, index=index, functions=functions)
-    return _build_impact_result(ctx, started_ms=started)
+    result = _build_impact_result(ctx, started_ms=started)
+    return _apply_rust_fallback(result, request.root, request.function_name)

@@ -74,6 +74,87 @@ def test_runtime_capability_summary_includes_execution_metrics() -> None:
     assert report.runtime_capabilities["execution_statistics_cache_entries"] == 9
 
 
+def test_runtime_capability_summary_includes_runtime_policy_bridge_fields() -> None:
+    """Include runtime-policy bridge details from session defaults artifacts."""
+    spans: list[dict[str, object]] = []
+    snapshot = {
+        "spans": spans,
+        "logs": [
+            {
+                "attributes": {
+                    "event.name": "datafusion_runtime_capabilities_v1",
+                    "event_time_unix_ms": 51,
+                    "strict_native_provider_enabled": True,
+                    "delta_available": True,
+                    "delta_compatible": True,
+                }
+            },
+            {
+                "attributes": {
+                    "event.name": "datafusion_delta_session_defaults_v1",
+                    "event_time_unix_ms": 52,
+                    "enabled": True,
+                    "available": True,
+                    "installed": True,
+                    "runtime_policy_bridge": {
+                        "enabled": True,
+                        "consumed_runtime_settings": {
+                            "datafusion.runtime.memory_limit": 1024,
+                            "datafusion.runtime.metadata_cache_limit": 2048,
+                        },
+                        "unsupported_runtime_settings": {
+                            "datafusion.runtime.list_files_cache_ttl": "60s"
+                        },
+                    },
+                }
+            },
+        ],
+    }
+    report = build_diagnostics_report(snapshot)
+    assert report.runtime_capabilities["delta_session_defaults_enabled"] is True
+    assert report.runtime_capabilities["delta_session_defaults_available"] is True
+    assert report.runtime_capabilities["delta_session_defaults_installed"] is True
+    assert report.runtime_capabilities["runtime_policy_bridge_enabled"] is True
+    assert report.runtime_capabilities["runtime_policy_bridge_consumed_settings"] == 2
+    assert report.runtime_capabilities["runtime_policy_bridge_unsupported_settings"] == 1
+    assert report.runtime_capabilities["runtime_policy_bridge_reason"] is None
+
+
+def test_runtime_capability_summary_reports_runtime_policy_bridge_reason() -> None:
+    """Expose explicit runtime-policy bridge disable reason when provided."""
+    spans: list[dict[str, object]] = []
+    snapshot = {
+        "spans": spans,
+        "logs": [
+            {
+                "attributes": {
+                    "event.name": "datafusion_runtime_capabilities_v1",
+                    "event_time_unix_ms": 51,
+                    "strict_native_provider_enabled": True,
+                    "delta_available": True,
+                    "delta_compatible": True,
+                }
+            },
+            {
+                "attributes": {
+                    "event.name": "datafusion_delta_session_defaults_v1",
+                    "event_time_unix_ms": 52,
+                    "enabled": True,
+                    "available": True,
+                    "installed": True,
+                    "runtime_policy_bridge": {
+                        "enabled": False,
+                        "reason": "legacy_builder_signature",
+                    },
+                }
+            },
+        ],
+    }
+    report = build_diagnostics_report(snapshot)
+    assert report.runtime_capabilities["runtime_policy_bridge_enabled"] is False
+    assert report.runtime_capabilities["runtime_policy_bridge_reason"] == "legacy_builder_signature"
+
+
 def test_runtime_capability_summary_prefers_runtime_events_over_fallbacks() -> None:
     """Prefer primary runtime capability artifacts when fallback events also exist."""
     spans: list[dict[str, object]] = []

@@ -32,6 +32,7 @@ _REQUIRED_KEYS: tuple[str, ...] = (
     "language_order",
     "languages",
     "cross_language_diagnostics",
+    "language_capabilities",
 )
 
 
@@ -82,7 +83,8 @@ def build_multilang_summary(
     lang_scope: QueryLanguageScope,
     language_order: Sequence[QueryLanguage] | None,
     languages: Mapping[QueryLanguage, Mapping[str, object]],
-    cross_language_diagnostics: Sequence[str] | None = None,
+    cross_language_diagnostics: Sequence[Mapping[str, object]] | None = None,
+    language_capabilities: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build canonical multilang summary payload.
 
@@ -102,7 +104,12 @@ def build_multilang_summary(
         language_order=ordered_languages,
         languages=languages,
     )
-    summary["cross_language_diagnostics"] = list(cross_language_diagnostics or [])
+    summary["cross_language_diagnostics"] = [
+        dict(item) for item in (cross_language_diagnostics or ())
+    ]
+    summary["language_capabilities"] = (
+        dict(language_capabilities) if language_capabilities is not None else {}
+    )
     assert_multilang_summary(summary)
     return summary
 
@@ -186,9 +193,14 @@ def assert_multilang_summary(summary: Mapping[str, object]) -> None:
             raise TypeError(msg)
 
     diagnostics = summary.get("cross_language_diagnostics")
-    if not isinstance(diagnostics, list) or not all(isinstance(item, str) for item in diagnostics):
-        msg = "summary.cross_language_diagnostics must be a list[str]"
-        raise ValueError(msg)
+    if not isinstance(diagnostics, list) or not all(isinstance(item, dict) for item in diagnostics):
+        msg = "summary.cross_language_diagnostics must be a list[dict[str, object]]"
+        raise TypeError(msg)
+
+    language_capabilities = summary.get("language_capabilities")
+    if not isinstance(language_capabilities, dict):
+        msg = "summary.language_capabilities must be a dict[str, object]"
+        raise TypeError(msg)
 
 
 __all__ = [

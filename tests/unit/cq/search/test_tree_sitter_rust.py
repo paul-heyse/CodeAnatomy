@@ -415,8 +415,8 @@ def test_struct_shape() -> None:
     """Struct shape should report field count and field list."""
     # pub struct GraphBuilder { name, nodes, edges } (line 5 targets inside struct)
     payload = _enrich(_RICH_RUST_SAMPLE, line=5, col=4, cache_key="struct-shape")
-    field_count = payload.get("field_count")
-    fields = payload.get("fields")
+    field_count = payload.get("struct_field_count")
+    fields = payload.get("struct_fields")
     if field_count is not None:
         assert isinstance(field_count, int)
         assert field_count == 3
@@ -429,8 +429,8 @@ def test_enum_shape() -> None:
     """Enum shape should report variant count and variant list."""
     # pub(crate) enum GraphError { NotFound, InvalidEdge, Overflow } (line 11)
     payload = _enrich(_RICH_RUST_SAMPLE, line=11, col=4, cache_key="enum-shape")
-    variant_count = payload.get("variant_count")
-    variants = payload.get("variants")
+    variant_count = payload.get("enum_variant_count")
+    variants = payload.get("enum_variants")
     if variant_count is not None:
         assert isinstance(variant_count, int)
         assert variant_count == 3
@@ -488,7 +488,7 @@ def test_payload_truncation() -> None:
     fields = "\n".join(f"    field_{i}: u32," for i in range(20))
     big_struct = f"pub struct Big {{\n{fields}\n}}\n"
     payload = _enrich(big_struct, line=2, col=4, cache_key="truncate")
-    field_list = payload.get("fields")
+    field_list = payload.get("struct_fields")
     if isinstance(field_list, list) and len(field_list) > 0:
         max_shown = tree_sitter_rust._MAX_FIELDS_SHOWN  # noqa: SLF001
         # The list should be capped (max_shown fields + "... and N more")

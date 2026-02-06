@@ -262,6 +262,13 @@ def _write_runtime_capabilities(
         "delta_compatible",
         "delta_probe_result",
         "delta_ctx_kind",
+        "delta_session_defaults_enabled",
+        "delta_session_defaults_available",
+        "delta_session_defaults_installed",
+        "runtime_policy_bridge_enabled",
+        "runtime_policy_bridge_reason",
+        "runtime_policy_bridge_consumed_settings",
+        "runtime_policy_bridge_unsupported_settings",
         "execution_metrics_rows",
         "execution_memory_reserved_bytes",
         "execution_metadata_cache_entries",
@@ -555,7 +562,47 @@ def _provider_mode_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, ob
 
 def _runtime_capability_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
     events = collect_runtime_capability_events(logs)
-    return runtime_capability_summary_payload(events)
+    payload = runtime_capability_summary_payload(events)
+    payload.update(_delta_session_defaults_summary(logs))
+    return payload
+
+
+def _delta_session_defaults_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    rows = _event_rows(logs, "datafusion_delta_session_defaults_v1")
+    if not rows:
+        return {}
+    latest = rows[-1]
+    bridge = latest.get("runtime_policy_bridge")
+    bridge_mapping = bridge if isinstance(bridge, Mapping) else None
+
+    bridge_enabled: bool | None = None
+    bridge_reason: str | None = None
+    bridge_consumed_settings: int | None = None
+    bridge_unsupported_settings: int | None = None
+
+    if bridge_mapping is not None:
+        enabled_value = bridge_mapping.get("enabled")
+        if isinstance(enabled_value, bool):
+            bridge_enabled = enabled_value
+        reason_value = bridge_mapping.get("reason")
+        if isinstance(reason_value, str):
+            bridge_reason = reason_value
+        consumed = bridge_mapping.get("consumed_runtime_settings")
+        if isinstance(consumed, Mapping):
+            bridge_consumed_settings = len(consumed)
+        unsupported = bridge_mapping.get("unsupported_runtime_settings")
+        if isinstance(unsupported, Mapping):
+            bridge_unsupported_settings = len(unsupported)
+
+    return {
+        "delta_session_defaults_enabled": latest.get("enabled"),
+        "delta_session_defaults_available": latest.get("available"),
+        "delta_session_defaults_installed": latest.get("installed"),
+        "runtime_policy_bridge_enabled": bridge_enabled,
+        "runtime_policy_bridge_reason": bridge_reason,
+        "runtime_policy_bridge_consumed_settings": bridge_consumed_settings,
+        "runtime_policy_bridge_unsupported_settings": bridge_unsupported_settings,
+    }
 
 
 def _delta_log_health_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:

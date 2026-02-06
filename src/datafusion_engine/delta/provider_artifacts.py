@@ -166,9 +166,7 @@ def provider_build_request_from_registration_context(
         delta_scan_options=cast("DeltaScanOptions | None", delta_scan),
         delta_scan_effective=_as_mapping(_read_attr(context, "delta_scan_effective")),
         delta_scan_snapshot=_read_attr(context, "delta_scan_snapshot"),
-        delta_scan_identity_hash=_as_optional_str(
-            _read_attr(context, "delta_scan_identity_hash")
-        ),
+        delta_scan_identity_hash=_as_optional_str(_read_attr(context, "delta_scan_identity_hash")),
         delta_snapshot=_as_mapping(_read_attr(context, "snapshot")),
         delta_scan_ignored=delta_scan_ignored,
         delta_pruning_predicate=_as_optional_str(_read_attr(context, "predicate")),
@@ -213,17 +211,23 @@ def provider_build_request_from_service_context(
         delta_version=coerce_int(_read_attr(location, "delta_version")),
         delta_timestamp=_as_optional_str(_read_attr(location, "delta_timestamp")),
         delta_log_storage_options=(
-            dict(log_options) if isinstance(log_options := _read_attr(location, "delta_log_storage_options"), Mapping) else None
+            dict(log_options)
+            if isinstance(log_options := _read_attr(location, "delta_log_storage_options"), Mapping)
+            else None
         ),
         delta_storage_options=(
             dict(storage_options)
             if isinstance(storage_options := _read_attr(location, "storage_options"), Mapping)
             else None
         ),
-        delta_scan_options=cast("DeltaScanOptions | None", _read_attr(resolution, "delta_scan_options")),
+        delta_scan_options=cast(
+            "DeltaScanOptions | None", _read_attr(resolution, "delta_scan_options")
+        ),
         delta_scan_effective=_as_mapping(_read_attr(resolution, "delta_scan_effective")),
         delta_scan_snapshot=_read_attr(resolution, "delta_scan_snapshot"),
-        delta_scan_identity_hash=_as_optional_str(_read_attr(resolution, "delta_scan_identity_hash")),
+        delta_scan_identity_hash=_as_optional_str(
+            _read_attr(resolution, "delta_scan_identity_hash")
+        ),
         delta_snapshot=_as_mapping(_read_attr(resolution, "delta_snapshot")),
         delta_pruning_predicate=_as_optional_str(_read_attr(request, "predicate")),
         delta_pruning_error=_as_optional_str(_read_attr(resolution, "predicate_error")),

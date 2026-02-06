@@ -34,6 +34,8 @@ def test_rgcollector_collects_matches_and_summary() -> None:
     match = collector.matches[0]
     assert match.span.file == "src/foo.py"
     assert match.span.start_line == 5
+    assert match.match_byte_start == 0
+    assert match.match_byte_end == 3
     assert collector.summary_stats is not None
     assert collector.summary_stats.get("matches") == 1
 
@@ -57,3 +59,27 @@ def test_rgcollector_finalize_when_missing_summary() -> None:
 
     assert collector.summary_stats is not None
     assert collector.summary_stats.get("matches") == 1
+
+
+def test_rgcollector_converts_submatch_byte_offsets_to_char_columns() -> None:
+    limits = SearchLimits(max_files=10, max_total_matches=10, max_matches_per_file=5)
+    collector = RgCollector(limits=limits, match_factory=RawMatch)
+    collector.handle_event(
+        RgEvent(
+            type="match",
+            data={
+                "path": {"text": "src/unicode.py"},
+                "lines": {"text": 'x = "héllo"\n'},
+                "line_number": 1,
+                # "héllo" starts at byte 5; "é" is multibyte in UTF-8.
+                "submatches": [{"start": 5, "end": 11, "match": {"text": "héllo"}}],
+            },
+        )
+    )
+    collector.finalize()
+    assert len(collector.matches) == 1
+    match = collector.matches[0]
+    assert match.match_byte_start == 5
+    assert match.match_byte_end == 11
+    assert match.match_start == 5
+    assert match.match_end == 10

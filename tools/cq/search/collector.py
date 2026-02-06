@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from tools.cq.core.locations import SourceSpan, span_from_rg_match
+from tools.cq.core.locations import SourceSpan, byte_col_to_char_col, span_from_rg_match
 from tools.cq.search.profiles import SearchLimits
 from tools.cq.search.rg_events import RgEvent
 
@@ -23,6 +23,8 @@ class MatchPayload:
     match_text: str
     match_start: int
     match_end: int
+    match_byte_start: int
+    match_byte_end: int
     submatch_index: int
 
 
@@ -93,6 +95,8 @@ class RgCollector:
                 match_text=line_text,
                 match_start=0,
                 match_end=len(line_text),
+                match_byte_start=0,
+                match_byte_end=len(line_text.encode("utf-8", errors="replace")),
                 submatch_index=0,
             )
         )
@@ -148,6 +152,8 @@ class RgCollector:
         end = submatch.get("end")
         if not isinstance(start, int) or not isinstance(end, int):
             return
+        char_start = byte_col_to_char_col(line_text, start)
+        char_end = byte_col_to_char_col(line_text, end)
         match_text = ""
         match_data = submatch.get("match", {})
         if isinstance(match_data, dict):
@@ -155,19 +161,21 @@ class RgCollector:
             if isinstance(text_value, str):
                 match_text = text_value
         if not match_text and line_text:
-            match_text = line_text[start:end]
+            match_text = line_text[char_start:char_end]
         self._append_match(
             MatchPayload(
                 span=span_from_rg_match(
                     file=file_path,
                     line=line_number,
-                    start_col=start,
-                    end_col=end,
+                    start_col=char_start,
+                    end_col=char_end,
                 ),
                 text=line_text,
                 match_text=match_text,
-                match_start=start,
-                match_end=end,
+                match_start=char_start,
+                match_end=char_end,
+                match_byte_start=start,
+                match_byte_end=end,
                 submatch_index=index,
             )
         )
@@ -180,6 +188,8 @@ class RgCollector:
                 match_text=payload.match_text,
                 match_start=payload.match_start,
                 match_end=payload.match_end,
+                match_byte_start=payload.match_byte_start,
+                match_byte_end=payload.match_byte_end,
                 submatch_index=payload.submatch_index,
             )
         )

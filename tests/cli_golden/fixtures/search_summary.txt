@@ -7,6 +7,7 @@
 - **language_order**: ["python","rust"]
 - **languages**: {"python":{"caps_hit":"none","matched_files":2,"scanned_files":3,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":4,"truncated":false},"rust":{"caps_hit":"none","matched_files":1,"scanned_files":1,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":1,"truncated":false}}
 - **cross_language_diagnostics**: []
+- **language_capabilities**: {"python":{},"rust":{},"shared":{}}
 - **include**: ["src/**"]
 - **exclude**: ["tests/**"]
 - **pattern**: \bbuild_graph\b
@@ -14,4 +15,4 @@
 - **scanned_files_is_estimate**: False
 
 ---
-_Completed in 12ms | Schema: cq.v1_
+_Completed in 12ms | Schema: cq.v2_

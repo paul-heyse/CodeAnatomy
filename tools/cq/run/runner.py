@@ -57,6 +57,8 @@ from tools.cq.run.spec import (
 from tools.cq.search.multilang_diagnostics import (
     build_capability_diagnostics,
     build_cross_language_diagnostics,
+    build_language_capabilities,
+    diagnostics_to_summary_payload,
     is_python_oriented_query_text,
 )
 from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
@@ -498,6 +500,10 @@ def _collapse_parent_q_results(
             results=lang_results,
             run=run,
             diagnostics=diagnostics,
+            diagnostic_payloads=diagnostics_to_summary_payload(diagnostics),
+            language_capabilities=build_language_capabilities(
+                lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE
+            ),
         )
         collapsed.append((step_id, merged))
     return collapsed

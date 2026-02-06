@@ -4,6 +4,51 @@
 **Revision**: Updated incorporating review feedback from
 `docs/plans/cq_python_enrichment_proposal_review_2026-02-06.md`.
 
+## Implementation Status Audit (2026-02-06, post-v2 codebase)
+
+This section reflects the current implementation state in `tools/cq` and CQ tests.
+
+### Snapshot
+
+| Area | Status | Evidence |
+|------|--------|----------|
+| Core Python enrichment module and integration | Complete | `tools/cq/search/python_enrichment.py` + integration in `tools/cq/search/smart_search.py` (`_maybe_python_enrichment`) |
+| Recommendation set (Recs 1-9) | Mostly complete | Most extractors and tests exist; specific field/contract gaps remain (see matrix) |
+| Prerequisites P3-P4 (bounds + fail-open) | Complete | `_truncate`, constants, `_try_extract`, `enrichment_status/degrade_reason` paths are implemented |
+| Prerequisites P1-P2 (byte-range correctness, node passthrough) | Partial/Pending | Byte-range entrypoint exists but is a stub; classifier does not pass resolved node through |
+| Output trimming and rendering updates (Rec 10) | Mostly complete | `line_text` suppression and language-aware code fences are implemented; strict byte-range correctness still pending |
+
+Focused verification: `uv run pytest -q tests/unit/cq/search/test_python_enrichment.py tests/unit/cq/search/test_tree_sitter_rust.py tests/unit/cq/search/test_smart_search.py` passed (`113 passed`).
+
+### Detailed Status Matrix
+
+| Scope Item | Status | Notes |
+|------------|--------|-------|
+| P1: Byte-range coordinate correctness | Partial | `enrich_python_context_by_byte_range()` is present but currently returns `None`; `smart_search` still uses line/col lookup and does not consume byte-range enrichment. |
+| P2: Classifier node passthrough (A4) | Pending | `classify_from_node()` still returns only `NodeClassification`; enrichment does a second lookup via `get_node_index(...).find_containing(...)`. |
+| P3: Payload bounds framework | Complete | Bounds constants and `_truncate()` framework are implemented in `tools/cq/search/python_enrichment.py`. |
+| P4: Graceful degradation | Complete | Per-extractor `_try_extract` and degraded-status metadata are implemented. |
+| Recommendation 1: Function signature extraction | Complete | `params`, `return_type`, `signature`, `is_async`, and generator signal support are implemented (ast-grep + Python `ast` tiers). |
+| Recommendation 2: Decorators + item role | Complete | Decorator extraction and semantic `item_role` mapping are implemented and tested. |
+| Recommendation 3: Class context extraction | Partial | `class_name`, `base_classes`, and `class_kind` are implemented; explicit `is_dataclass` boolean is not emitted as a dedicated field. |
+| Recommendation 4: Call target enrichment | Complete | `call_target`, `call_receiver`, `call_method`, `call_args_count` are implemented. |
+| Recommendation 5: Containing structure context | Complete | `scope_chain` and `structural_context` extraction are implemented. |
+| Recommendation 6: Import detail extraction | Complete | Python `ast`-normalized import extraction is implemented, including `import_level` and `is_type_import`. |
+| Recommendation 7: Function behavior summary | Complete | `returns_value`, `raises_exception`, `yields`, `awaits`, `has_context_manager` are implemented using scope-safe AST walking. |
+| Recommendation 8: Expanded binding signals | Complete | `referenced`, `local`, and `nonlocal` flags are now surfaced in `_symtable_flags()`. |
+| Recommendation 9: Class API shape summary | Complete | `method_count`, `property_names`, `abstract_member_count`, `class_markers` are implemented. |
+| Recommendation 10: Output trimming (staged) | Mostly complete | `line_text` is suppressed when `context_snippet` exists, `node_kind` is retained, numeric confidence/evidence are retained, and `report.py` uses language-aware code fences. |
+| O6: Payload budget metadata | Partial | `truncated_fields` is implemented; `payload_size_hint` and `dropped_fields` are not implemented. |
+| Future tree-sitter Python augmentation | Deferred/Pending | `tools/cq/search/tree_sitter_python.py` is not present (consistent with deferred phase). |
+
+### Remaining Work (Priority Order)
+
+1. Implement `enrich_python_context_by_byte_range()` and route smart-search enrichment through byte offsets from ripgrep submatches.
+2. Collapse duplicate node resolution by passing classifier-resolved `SgNode` directly into enrichment.
+3. Finish payload budget metadata (`payload_size_hint`, `dropped_fields`) if output budget controls remain a target.
+4. Decide whether to emit explicit `is_dataclass` (in addition to `class_kind`) to match contract wording.
+5. Add Unicode-focused end-to-end tests proving byte-offset correctness from collector -> classifier -> enrichment.
+
 ## Problem Statement
 
 The current Python query output from `/cq search` provides classification (definition, callsite, import, etc.), containing scope, and symtable binding flags. While this is more than many tools offer, an LLM agent reviewing Python code must still issue 2-5 follow-up queries for routine questions that a richer single-pass enrichment could answer immediately:

@@ -245,6 +245,10 @@ def to_pandera_schema(
 
 
 def _maybe_to_polars[TDF](df: TDF) -> tuple[TDF, pl.DataFrame]:
+    def _reader_to_table(reader: pa.RecordBatchReader) -> pa.Table:
+        batches = list(reader)
+        return pa.Table.from_batches(batches, schema=reader.schema)
+
     if isinstance(df, pl.DataFrame):
         return df, df
     if isinstance(df, pa.Table):
@@ -252,10 +256,13 @@ def _maybe_to_polars[TDF](df: TDF) -> tuple[TDF, pl.DataFrame]:
         return df, cast("pl.DataFrame", pl.from_arrow(table, rechunk=False))
     if isinstance(df, pa.RecordBatchReader):
         reader = cast("pa.RecordBatchReader", df)
-        return df, cast("pl.DataFrame", pl.from_arrow(reader, rechunk=False))
+        table = _reader_to_table(reader)
+        replay_reader = pa.RecordBatchReader.from_batches(reader.schema, table.to_batches())
+        return cast("TDF", replay_reader), cast("pl.DataFrame", pl.from_arrow(table, rechunk=False))
     if hasattr(df, "__arrow_c_stream__"):
         reader = pa.RecordBatchReader.from_stream(df)
-        return df, cast("pl.DataFrame", pl.from_arrow(reader, rechunk=False))
+        table = _reader_to_table(reader)
+        return df, cast("pl.DataFrame", pl.from_arrow(table, rechunk=False))
     to_arrow = getattr(df, "to_arrow_table", None)
     if callable(to_arrow):
         resolved = to_arrow()
@@ -264,9 +271,32 @@ def _maybe_to_polars[TDF](df: TDF) -> tuple[TDF, pl.DataFrame]:
             return df, cast("pl.DataFrame", pl.from_arrow(table, rechunk=False))
         if isinstance(resolved, pa.RecordBatchReader):
             reader = cast("pa.RecordBatchReader", resolved)
-            return df, cast("pl.DataFrame", pl.from_arrow(reader, rechunk=False))
+            table = _reader_to_table(reader)
+            return df, cast("pl.DataFrame", pl.from_arrow(table, rechunk=False))
     msg = f"Unsupported dataframe type for pandera validation: {type(df).__name__}"
     raise TypeError(msg)
+
+
+def _bounded_validation_rows(
+    requested: int | None,
+    *,
+    row_count: int,
+) -> int | None:
+    """Clamp validation row-window inputs to available rows.
+
+    Pandera forwards these values into Polars sampling/head/tail calls, which
+    raise when asked for more rows than present.
+
+    Returns:
+    -------
+    int | None
+        Clamped row count when applicable, otherwise ``None``.
+    """
+    if requested is None:
+        return None
+    if requested <= 0 or row_count <= 0:
+        return None
+    return min(requested, row_count)
 
 
 def validate_dataframe[TDF](
@@ -297,13 +327,17 @@ def validate_dataframe[TDF](
     if policy is None or not policy.enabled:
         return df
     original, polars_df = _maybe_to_polars(df)
+    row_count = polars_df.height
+    sample = _bounded_validation_rows(policy.sample, row_count=row_count)
+    head = _bounded_validation_rows(policy.head, row_count=row_count)
+    tail = _bounded_validation_rows(policy.tail, row_count=row_count)
     validate_kwargs: dict[str, object] = {"lazy": policy.lazy}
-    if policy.sample is not None:
-        validate_kwargs["sample"] = policy.sample
-    if policy.head is not None:
-        validate_kwargs["head"] = policy.head
-    if policy.tail is not None:
-        validate_kwargs["tail"] = policy.tail
+    if sample is not None:
+        validate_kwargs["sample"] = sample
+    if head is not None:
+        validate_kwargs["head"] = head
+    if tail is not None:
+        validate_kwargs["tail"] = tail
     strict = True
     coerce = False
     if policy is not None:
@@ -321,9 +355,9 @@ def validate_dataframe[TDF](
         model.validate(
             polars_df,
             lazy=policy.lazy,
-            sample=policy.sample,
-            head=policy.head,
-            tail=policy.tail,
+            sample=sample,
+            head=head,
+            tail=tail,
         )
     schema = to_pandera_schema(schema_spec, policy=policy, constraints=constraints)
     schema.validate(polars_df, **validate_kwargs)

@@ -9,7 +9,12 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pyarrow as pa
 import pytest
+
+from extract.extractors.ast_extract import AstExtractOptions, extract_ast_tables
+from extract.extractors.cst_extract import CstExtractOptions, extract_cst_tables
+from extract.extractors.symtable_extract import SymtableExtractOptions, extract_symtables_table
 
 
 @pytest.fixture
@@ -65,12 +70,6 @@ class ClassThree:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="Requires full extraction pipeline with CST, AST, and symtable extractors. "
-    "Implementation needs coordination between extract.extractors.cst_extract, "
-    "extract.extractors.ast_extract, and extract.extractors.symtable_extract "
-    "to verify consistent file_id across all outputs."
-)
 def test_file_id_consistency_across_extractors(
     multi_file_repo: dict[str, tuple[Path, str]],
 ) -> None:
@@ -84,13 +83,31 @@ def test_file_id_consistency_across_extractors(
     multi_file_repo
         Dictionary of test files with paths and contents.
     """
-    # Would require:
-    # 1. Build repo_files_v1 table from multi_file_repo
-    # 2. Run extract_cst_tables(repo_files) -> cst_refs
-    # 3. Run extract_ast_tables(repo_files) -> ast_files
-    # 4. Run extract_symtable_tables(repo_files) -> symtable_files
-    # 5. Verify all tables have the same file_id values for each file
-    # 6. Verify file_id is deterministic (same across multiple runs)
+    repo_files = _repo_files_table(multi_file_repo)
+    expected_file_ids = set(repo_files["file_id"].to_pylist())
+
+    cst_table = _as_table(
+        extract_cst_tables(
+            repo_files=repo_files,
+            options=CstExtractOptions(max_workers=1),
+        )["libcst_files"]
+    )
+    ast_table = _as_table(
+        extract_ast_tables(
+            repo_files=repo_files,
+            options=AstExtractOptions(max_workers=1),
+        )["ast_files"]
+    )
+    sym_table = _as_table(
+        extract_symtables_table(
+            repo_files=repo_files,
+            options=SymtableExtractOptions(max_workers=1),
+        )
+    )
+
+    assert set(cst_table["file_id"].to_pylist()) == expected_file_ids
+    assert set(ast_table["file_id"].to_pylist()) == expected_file_ids
+    assert set(sym_table["file_id"].to_pylist()) == expected_file_ids
 
 
 @pytest.mark.integration
@@ -120,11 +137,6 @@ def test_file_sha256_consistency(multi_file_repo: dict[str, tuple[Path, str]]) -
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="Requires parallel extraction infrastructure setup. "
-    "Implementation needs extract.infrastructure.parallel module understanding "
-    "and diagnostics capture for partial failures across multiple extractors."
-)
 def test_parallel_extraction_partial_failure_resilience(
     multi_file_repo: dict[str, tuple[Path, str]],
     tmp_path: Path,
@@ -141,20 +153,47 @@ def test_parallel_extraction_partial_failure_resilience(
     tmp_path
         Pytest temporary directory fixture.
     """
-    # Would require:
-    # 1. Add a malformed Python file to trigger parser failure
-    # 2. Run parallel extraction across all files
-    # 3. Verify successful extractors still produce output
-    # 4. Verify failed extractor's error captured in diagnostics
-    # 5. Verify partial results are valid (correct schema, non-zero rows)
+    broken_path = tmp_path / "broken.py"
+    broken_content = "def broken(\n"
+    broken_path.write_text(broken_content, encoding="utf-8")
+
+    repo_map = dict(multi_file_repo)
+    repo_map["broken"] = (broken_path, broken_content)
+    repo_files = _repo_files_table(repo_map)
+
+    ast_table = _as_table(
+        extract_ast_tables(
+            repo_files=repo_files,
+            options=AstExtractOptions(max_workers=2),
+        )["ast_files"]
+    )
+    cst_table = _as_table(
+        extract_cst_tables(
+            repo_files=repo_files,
+            options=CstExtractOptions(max_workers=2),
+        )["libcst_files"]
+    )
+
+    assert ast_table.num_rows == len(repo_map)
+    assert cst_table.num_rows == len(repo_map)
+
+    ast_rows = {row["file_id"]: row for row in ast_table.to_pylist()}
+    cst_rows = {row["file_id"]: row for row in cst_table.to_pylist()}
+    broken_id = broken_path.name
+
+    ast_errors = ast_rows[broken_id].get("errors")
+    assert isinstance(ast_errors, list)
+    assert ast_errors, "Broken file should have AST parse errors"
+
+    cst_errors = cst_rows[broken_id].get("parse_errors")
+    assert isinstance(cst_errors, list)
+    assert cst_errors, "Broken file should have CST parse errors"
+
+    valid_ids = [file_path.name for file_path, _ in multi_file_repo.values()]
+    assert any(not ast_rows[file_id].get("errors") for file_id in valid_ids)
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="Requires parallel extraction infrastructure setup. "
-    "Implementation needs extract.infrastructure.parallel understanding "
-    "to verify deterministic output schemas and row counts across parallel runs."
-)
 def test_parallel_extraction_result_order_independence(
     multi_file_repo: dict[str, tuple[Path, str]],
 ) -> None:
@@ -168,13 +207,34 @@ def test_parallel_extraction_result_order_independence(
     multi_file_repo
         Dictionary of test files with paths and contents.
     """
-    # Would require:
-    # 1. Run parallel extraction on multi_file_repo (run 1)
-    # 2. Capture output schemas and row counts
-    # 3. Run parallel extraction again (run 2)
-    # 4. Verify schemas match exactly
-    # 5. Verify row counts match exactly
-    # 6. Verify sorted file_id lists match
+    repo_files = _repo_files_table(multi_file_repo)
+
+    run1 = _as_table(
+        extract_ast_tables(
+            repo_files=repo_files,
+            options=AstExtractOptions(max_workers=2),
+        )["ast_files"]
+    )
+    run2 = _as_table(
+        extract_ast_tables(
+            repo_files=repo_files,
+            options=AstExtractOptions(max_workers=2),
+        )["ast_files"]
+    )
+
+    assert run1.schema.names == run2.schema.names
+    assert run1.num_rows == run2.num_rows
+    assert sorted(run1["file_id"].to_pylist()) == sorted(run2["file_id"].to_pylist())
+
+    run1_summary = {
+        row["file_id"]: (len(row.get("defs", [])), len(row.get("errors", [])))
+        for row in run1.to_pylist()
+    }
+    run2_summary = {
+        row["file_id"]: (len(row.get("defs", [])), len(row.get("errors", [])))
+        for row in run2.to_pylist()
+    }
+    assert run1_summary == run2_summary
 
 
 @pytest.mark.integration
@@ -259,3 +319,26 @@ def test_file_context_with_unicode_content() -> None:
     expected_hash = hashlib.sha256(unicode_bytes).hexdigest()
     computed_hash = hashlib.sha256(extracted_bytes).hexdigest()
     assert computed_hash == expected_hash
+
+
+def _repo_files_table(files: dict[str, tuple[Path, str]]) -> pa.Table:
+    rows: list[dict[str, str]] = []
+    for file_path, content in files.values():
+        rows.append(
+            {
+                "file_id": file_path.name,
+                "path": str(file_path),
+                "text": content,
+                "file_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            }
+        )
+    return pa.Table.from_pylist(rows)
+
+
+def _as_table(value: object) -> pa.Table:
+    if isinstance(value, pa.RecordBatchReader):
+        return value.read_all()
+    if isinstance(value, pa.Table):
+        return value
+    msg = f"Unsupported table type: {type(value)}"
+    raise TypeError(msg)

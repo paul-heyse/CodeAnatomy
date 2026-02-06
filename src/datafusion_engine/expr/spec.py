@@ -417,7 +417,7 @@ def _expr_stable_hash128(args: Sequence[Expr], _ir_args: Sequence[ExprIR]) -> Ex
 
 def _expr_prefixed_hash64(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
     prefix = _literal_prefix(ir_args, name="prefixed_hash64")
-    return udf_expr("prefixed_hash_parts64", prefix, args[1])
+    return udf_expr("prefixed_hash64", prefix, args[1])
 
 
 def _expr_stable_id_parts(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
@@ -430,12 +430,15 @@ def _expr_stable_id_parts(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Ex
 
 
 def _expr_prefixed_hash_parts64(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:
+    from datafusion import functions as f
+
     prefix = _literal_prefix(ir_args, name="prefixed_hash_parts64")
     if len(args) > _MAX_STABLE_ID_PART_ARGS:
         max_parts = _MAX_STABLE_ID_PART_ARGS - 1
         msg = f"prefixed_hash_parts64 supports up to {max_parts} parts."
         raise ValueError(msg)
-    return udf_expr("prefixed_hash_parts64", prefix, args[1], *args[2:])
+    joined = args[1] if len(args) == _EXACT_TWO else f.concat_ws("\x1f", *args[1:])
+    return udf_expr("prefixed_hash64", prefix, joined)
 
 
 def _expr_stable_hash_any(args: Sequence[Expr], ir_args: Sequence[ExprIR]) -> Expr:

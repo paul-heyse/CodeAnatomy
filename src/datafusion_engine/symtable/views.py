@@ -15,7 +15,7 @@ MAX_SCOPE_PARENT_DEPTH = 16
 
 def _prefixed_hash_expr(_ctx: SessionContext, prefix: str, *parts: Expr) -> Expr:
     combined = f.concat_ws(":", *parts)
-    return udf_expr("prefixed_hash_parts64", prefix, combined)
+    return udf_expr("prefixed_hash64", prefix, combined)
 
 
 def _scope_type_filter(scope_type: Expr) -> Expr:

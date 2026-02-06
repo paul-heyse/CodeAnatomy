@@ -89,7 +89,7 @@ def _build_exported_defs_base(
         col("def_id").alias("def_id"),
         f.coalesce(col("def_kind_norm"), col("kind")).alias("def_kind_norm"),
         col("name").alias("name"),
-        udf_expr("prefixed_hash_parts64", "qname", qname_name).alias("qname_id"),
+        udf_expr("stable_id_parts", "qname", qname_name).alias("qname_id"),
         qname_name.alias("qname"),
         qname_source.alias("qname_source"),
         symbol_expr.alias("symbol"),

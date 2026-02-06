@@ -116,6 +116,8 @@ def validate_edge_requirements(
     task_idx: int,
     *,
     catalog: EvidenceCatalog,
+    include_internal_evidence: bool = False,
+    require_declared_columns: bool = False,
 ) -> bool:
     """Validate predecessor edges using column/type/metadata requirements.
 
@@ -130,6 +132,10 @@ def validate_edge_requirements(
         Node index of the task to validate.
     catalog : EvidenceCatalog
         Evidence catalog with available datasets and columns.
+    include_internal_evidence : bool
+        Whether to enforce requirements on internally-produced evidence edges.
+    require_declared_columns : bool
+        Whether required columns should fail when no available-column set exists.
 
     Returns:
     -------
@@ -140,10 +146,14 @@ def validate_edge_requirements(
         edge_data = graph.graph.get_edge_data(pred_idx, task_idx)
         if not isinstance(edge_data, GraphEdge):
             continue
-        if _is_internal_evidence(graph, edge_data.name):
+        if not include_internal_evidence and _is_internal_evidence(graph, edge_data.name):
             continue
         available_cols = catalog.columns_by_dataset.get(edge_data.name)
-        if _missing_required_columns(edge_data.required_columns, available_cols):
+        if _missing_required_columns(
+            edge_data.required_columns,
+            available_cols,
+            require_when_unknown=require_declared_columns,
+        ):
             return False
         available_types = catalog.types_by_dataset.get(edge_data.name)
         if (
@@ -325,8 +335,12 @@ def _produced_edge_validation_result(
 def _missing_required_columns(
     required_columns: tuple[str, ...],
     available_columns: set[str] | None,
+    *,
+    require_when_unknown: bool = False,
 ) -> tuple[str, ...]:
     if available_columns is None:
+        if require_when_unknown and required_columns:
+            return tuple(required_columns)
         return ()
     return tuple(find_missing(required_columns, available_columns))
 

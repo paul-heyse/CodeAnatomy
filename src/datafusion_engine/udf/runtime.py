@@ -372,7 +372,10 @@ def _coerce_signature_inputs(value: object) -> tuple[tuple[str, ...], ...] | Non
 
 def _normalize_expr_surface_metadata(
     metadata: Mapping[str, object],
-) -> tuple[tuple[object, ...], tuple[str, ...], tuple[tuple[str, ...], ...], tuple[str, ...], str] | None:
+) -> (
+    tuple[tuple[object, ...], tuple[str, ...], tuple[tuple[str, ...], ...], tuple[str, ...], str]
+    | None
+):
     probe_args = _coerce_nonstring_sequence(metadata.get("probe_args"))
     parameter_names = _coerce_nonstring_sequence(metadata.get("parameter_names"))
     signature_inputs = _coerce_signature_inputs(metadata.get("signature_inputs"))

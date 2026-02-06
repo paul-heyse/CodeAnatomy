@@ -57,12 +57,6 @@ def empty_file_repo(tmp_path: Path) -> Path:
 
 
 @pytest.mark.e2e
-@pytest.mark.skip(
-    reason=(
-        "Requires full pipeline infrastructure including SCIP indexer, "
-        "registered UDFs, and complete extractor chain"
-    )
-)
 def test_single_file_repo_produces_cpg_nodes(minimal_python_repo: Path) -> None:
     """Full pipeline on 1-file repo produces valid CPG nodes.
 
@@ -106,12 +100,6 @@ def test_single_file_repo_produces_cpg_nodes(minimal_python_repo: Path) -> None:
 
 
 @pytest.mark.e2e
-@pytest.mark.skip(
-    reason=(
-        "Requires full pipeline infrastructure including SCIP indexer, "
-        "registered UDFs, and complete extractor chain"
-    )
-)
 def test_entity_ids_are_deterministic(minimal_python_repo: Path) -> None:
     """Build twice; verify identical entity_id values.
 
@@ -145,12 +133,6 @@ def test_entity_ids_are_deterministic(minimal_python_repo: Path) -> None:
 
 
 @pytest.mark.e2e
-@pytest.mark.skip(
-    reason=(
-        "Requires full pipeline infrastructure including SCIP indexer, "
-        "registered UDFs, and complete extractor chain"
-    )
-)
 def test_byte_spans_within_file_bounds(minimal_python_repo: Path) -> None:
     """All byte spans are within file bounds.
 
@@ -197,12 +179,6 @@ def test_byte_spans_within_file_bounds(minimal_python_repo: Path) -> None:
 
 
 @pytest.mark.e2e
-@pytest.mark.skip(
-    reason=(
-        "Requires full pipeline infrastructure including SCIP indexer, "
-        "registered UDFs, and complete extractor chain"
-    )
-)
 def test_graceful_degradation_empty_file(empty_file_repo: Path) -> None:
     """Empty Python file included; pipeline completes with correct schema.
 

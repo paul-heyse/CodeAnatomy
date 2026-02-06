@@ -86,10 +86,6 @@ def _sample_repo_files_rows() -> list[Mapping[str, Any]]:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="Requires full pipeline wiring with UDFs and normalization context. "
-    "Plan construction succeeds but execution produces empty results without proper setup."
-)
 def test_materialize_basic_roundtrip(extract_session: ExtractSession) -> None:
     """Test basic roundtrip materialization of an extract plan.
 

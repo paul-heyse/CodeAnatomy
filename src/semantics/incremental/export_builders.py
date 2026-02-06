@@ -46,11 +46,23 @@ def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
     symbol_expr = safe_cast(lit(None), "Utf8")
     symbol_roles_expr = safe_cast(lit(None), "Int32")
     if ctx.table_exist("rel_def_symbol"):
-        rel_df = ctx.table("rel_def_symbol").select(
+        rel_source_df = ctx.table("rel_def_symbol")
+        rel_schema_names = set(rel_source_df.schema().names)
+        rel_symbol_expr = (
+            col("symbol").alias("rel_symbol")
+            if "symbol" in rel_schema_names
+            else safe_cast(lit(None), "Utf8").alias("rel_symbol")
+        )
+        rel_symbol_roles_expr = (
+            col("symbol_roles").alias("rel_symbol_roles")
+            if "symbol_roles" in rel_schema_names
+            else safe_cast(lit(None), "Int32").alias("rel_symbol_roles")
+        )
+        rel_df = rel_source_df.select(
             col("entity_id").alias("rel_def_id"),
             col("path").alias("rel_path"),
-            col("symbol").alias("rel_symbol"),
-            col("symbol_roles").alias("rel_symbol_roles"),
+            rel_symbol_expr,
+            rel_symbol_roles_expr,
         )
         base_df = base_df.join(
             rel_df,
@@ -73,7 +85,7 @@ def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
         col("def_id").alias("def_id"),
         def_kind_expr.alias("def_kind_norm"),
         col("name").alias("name"),
-        udf_expr("prefixed_hash_parts64", "qname", qname_name).alias("qname_id"),
+        udf_expr("stable_id_parts", "qname", qname_name).alias("qname_id"),
         qname_name.alias("qname"),
         qname_source.alias("qname_source"),
         symbol_expr.alias("symbol"),

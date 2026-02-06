@@ -28,22 +28,52 @@ from relspec.rustworkx_schedule import ScheduleOptions, schedule_tasks
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="schedule_tasks automatically registers output evidence nodes "
-    "during scheduling loop, making column-level blocking hard to test. "
-    "The validation_summary contract tested in test_validation_summary_reflects_blocked_edges."
-)
 def test_schedule_with_selective_column_requirements() -> None:
     """Task with available columns schedules; task missing columns does not.
 
-    SKIPPED: schedule_tasks() automatically registers output evidence nodes
-    (ev_a, ev_b, ev_c) as tasks complete during the scheduling loop, which
-    means all reachable tasks end up scheduled. The validation_summary field
-    provides the contract for reporting validation failures post-schedule.
-
-    See test_validation_summary_reflects_blocked_edges() for the actual
-    validation contract testing.
+    With automatic output-evidence registration disabled, internal dependency
+    requirements must already be satisfied by the evidence catalog. This test
+    verifies that behavior is deterministic and that enabling auto-registration
+    restores the legacy scheduling behavior.
     """
+    deps = (
+        InferredDeps(
+            task_name="task_a",
+            output="ev_a",
+            inputs=(),
+            plan_fingerprint="fp-a",
+        ),
+        InferredDeps(
+            task_name="task_b",
+            output="ev_b",
+            inputs=("ev_a",),
+            required_columns={"ev_a": ("required_col",)},
+            plan_fingerprint="fp-b",
+        ),
+    )
+    graph = build_task_graph_from_inferred_deps(deps)
+
+    baseline = schedule_tasks(
+        graph,
+        evidence=EvidenceCatalog(),
+        options=ScheduleOptions(
+            allow_partial=True,
+            auto_register_output_evidence=True,
+        ),
+    )
+    assert "task_b" in baseline.ordered_tasks
+
+    strict = schedule_tasks(
+        graph,
+        evidence=EvidenceCatalog(),
+        options=ScheduleOptions(
+            allow_partial=True,
+            auto_register_output_evidence=False,
+        ),
+    )
+    assert "task_a" in strict.ordered_tasks
+    assert "task_b" not in strict.ordered_tasks
+    assert "task_b" in strict.missing_tasks
 
 
 @pytest.mark.integration

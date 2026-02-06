@@ -222,7 +222,6 @@ def test_signal_handlers_installed_and_restored(
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Requires production changes to expose signal_state dict for testing")
 def test_signal_handler_captures_correct_state(
     minimal_python_repo: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -232,6 +231,34 @@ def test_signal_handler_captures_correct_state(
     The handler's signal_state dict, run_bundle_dir, and run_id should match
     the build request values.
     """
+    from graph.product_build import _signal_handler_for_build
+
+    run_id = "test_run_signal_state"
+    run_bundle_dir = minimal_python_repo / "build" / "run_bundle" / run_id
+    signal_state = {"value": False}
+    writes: list[tuple[Path, str]] = []
+
+    def mock_write_diagnostics_outputs(path: Path, *, run_id: str | None) -> None:
+        writes.append((path, run_id or ""))
+
+    monkeypatch.setattr(
+        "graph.product_build._write_diagnostics_outputs",
+        mock_write_diagnostics_outputs,
+    )
+
+    handler = _signal_handler_for_build(run_id, run_bundle_dir, signal_state)
+
+    with pytest.raises(SystemExit):
+        handler(signal.SIGTERM, None)
+
+    assert signal_state["value"] is True
+    assert writes == [(run_bundle_dir, run_id)]
+
+    with pytest.raises(SystemExit):
+        handler(signal.SIGINT, None)
+
+    # Second signal should short-circuit via signal_state without rewriting diagnostics.
+    assert writes == [(run_bundle_dir, run_id)]
 
 
 @pytest.mark.integration

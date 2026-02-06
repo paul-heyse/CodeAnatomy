@@ -682,7 +682,7 @@ def span_start_expr(span_column: str) -> ExprSpec:
     """
 
     def _build(ctx: ExprContext) -> Expr:
-        return udf_expr("span_start", ctx.col(span_column))
+        return ctx.col(span_column)["bstart"]
 
     return _build
 
@@ -702,7 +702,7 @@ def span_end_expr(span_column: str) -> ExprSpec:
     """
 
     def _build(ctx: ExprContext) -> Expr:
-        return udf_expr("span_end", ctx.col(span_column))
+        return ctx.col(span_column)["bend"]
 
     return _build
 

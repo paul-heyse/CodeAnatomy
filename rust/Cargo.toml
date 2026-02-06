@@ -9,6 +9,13 @@ members = [
     "df_plugin_codeanatomy",
 ]
 
+[workspace.package]
+description = "CodeAnatomy Rust crates for DataFusion and DeltaLake integration"
+documentation = "https://github.com/paul-heyse/CodeAnatomy/tree/main/docs"
+homepage = "https://github.com/paul-heyse/CodeAnatomy"
+license = "UNLICENSED"
+repository = "https://github.com/paul-heyse/CodeAnatomy"
+
 [workspace.dependencies]
 arrow = "57.1.0"
 arrow-ipc = "57.1.0"

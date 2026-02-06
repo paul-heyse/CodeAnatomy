@@ -23,6 +23,7 @@ from datafusion_engine.arrow.interop import (
     SchemaLike,
     TableLike,
     as_reader,
+    coerce_arrow_schema,
     coerce_table_like,
 )
 from datafusion_engine.encoding import apply_encoding
@@ -324,40 +325,34 @@ def _should_fallback_delta_merge(exc: Exception) -> bool:
 
 
 def _execute_delta_merge_fallback(
-    *,
-    source: TableLike | RecordBatchReaderLike,
-    request: DeltaMergeArrowRequest,
-    storage_options: StorageOptions | None,
-    source_alias: str,
-    target_alias: str,
-    matched_updates: Mapping[str, str],
-    not_matched_inserts: Mapping[str, str],
+    fallback: _DeltaMergeFallbackInput,
 ) -> Mapping[str, object]:
+    request = fallback.request
     commit_properties = request.commit_properties
     if commit_properties is None and request.commit_metadata is not None:
         commit_properties = build_commit_properties(commit_metadata=request.commit_metadata)
-    storage = dict(storage_options) if storage_options is not None else None
+    storage = dict(fallback.storage_options) if fallback.storage_options is not None else None
     table = DeltaTable(request.path, storage_options=storage)
-    source_reader = as_reader(source)
+    source_reader = as_reader(fallback.source)
     merger = table.merge(
         source_reader,
         request.predicate,
-        source_alias=source_alias,
-        target_alias=target_alias,
+        source_alias=fallback.source_alias,
+        target_alias=fallback.target_alias,
         commit_properties=commit_properties,
     )
     if request.update_all:
         merger = merger.when_matched_update_all(predicate=request.matched_predicate)
-    elif matched_updates:
+    elif fallback.matched_updates:
         merger = merger.when_matched_update(
-            updates=dict(matched_updates),
+            updates=dict(fallback.matched_updates),
             predicate=request.matched_predicate,
         )
     if request.insert_all:
         merger = merger.when_not_matched_insert_all(predicate=request.not_matched_predicate)
-    elif not_matched_inserts:
+    elif fallback.not_matched_inserts:
         merger = merger.when_not_matched_insert(
-            updates=dict(not_matched_inserts),
+            updates=dict(fallback.not_matched_inserts),
             predicate=request.not_matched_predicate,
         )
     if request.delete_not_matched_by_source:
@@ -714,6 +709,38 @@ class DeltaMergeArrowRequest:
     dataset_name: str | None = None
 
 
+@dataclass(frozen=True)
+class _DeltaMergeFallbackInput:
+    source: TableLike | RecordBatchReaderLike
+    request: DeltaMergeArrowRequest
+    storage_options: StorageOptions | None
+    source_alias: str
+    target_alias: str
+    matched_updates: Mapping[str, str]
+    not_matched_inserts: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class _DeltaMergeExecutionState:
+    ctx: SessionContext
+    request: DeltaMergeArrowRequest
+    delta_input: DeltaInput
+    mutation_policy: DeltaMutationPolicy
+    storage: StorageOptions | None
+    source_alias: str
+    target_alias: str
+    matched_updates: dict[str, str]
+    not_matched_inserts: dict[str, str]
+    source_table: str
+    merge_request: DeltaMergeRequest
+
+
+@dataclass(frozen=True)
+class _DeltaMergeExecutionResult:
+    report: Mapping[str, object]
+    attempts: int
+
+
 def _open_delta_table(
     *,
     path: str,
@@ -848,30 +875,7 @@ def delta_table_schema(request: DeltaSchemaRequest) -> pa.Schema | None:
         )
         if table is None:
             return None
-        schema = table.schema()
-        resolved_schema: pa.Schema | None = None
-        if isinstance(schema, pa.Schema):
-            resolved_schema = schema
-        else:
-            try:
-                candidate = pa.schema(schema)
-            except (TypeError, ValueError):
-                candidate = None
-            if isinstance(candidate, pa.Schema):
-                resolved_schema = candidate
-            to_arrow = getattr(schema, "to_arrow", None)
-            if resolved_schema is None and callable(to_arrow):
-                try:
-                    candidate = pa.schema(to_arrow())
-                except (TypeError, ValueError):
-                    candidate = None
-                if isinstance(candidate, pa.Schema):
-                    resolved_schema = candidate
-            to_pyarrow = getattr(schema, "to_pyarrow", None)
-            if resolved_schema is None and callable(to_pyarrow):
-                candidate = to_pyarrow()
-                if isinstance(candidate, pa.Schema):
-                    resolved_schema = candidate
+        resolved_schema = coerce_arrow_schema(table.schema())
         if resolved_schema is not None:
             span.set_attribute("codeanatomy.schema_columns", len(resolved_schema))
         return resolved_schema
@@ -2933,104 +2937,150 @@ def delta_merge_arrow(
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ) as span:
-        mutation_policy = _resolve_delta_mutation_policy(request.runtime_profile)
-        storage = merged_storage_options(request.storage_options, request.log_storage_options)
-        _enforce_locking_provider(
-            request.path,
-            storage,
-            policy=mutation_policy,
+        state = _prepare_delta_merge_execution_state(
+            ctx,
+            request=request,
+            delta_input=delta_input,
         )
-        (
-            resolved_source_alias,
-            resolved_target_alias,
-            resolved_updates,
-            resolved_inserts,
-            updates_present,
-        ) = _resolve_merge_actions(request)
-        _enforce_append_only_policy(
-            policy=mutation_policy,
-            operation="merge",
-            updates_present=updates_present,
-        )
-        source_table = register_temp_table(ctx, delta_input.data)
+        try:
+            result = _run_delta_merge_control_plane(state, span=span)
+            _record_delta_merge_artifacts(request=request, result=result, span=span)
+            return result.report
+        finally:
+            deregister_table(ctx, state.source_table)
+
+
+def _prepare_delta_merge_execution_state(
+    ctx: SessionContext,
+    *,
+    request: DeltaMergeArrowRequest,
+    delta_input: DeltaInput,
+) -> _DeltaMergeExecutionState:
+    mutation_policy = _resolve_delta_mutation_policy(request.runtime_profile)
+    storage = merged_storage_options(request.storage_options, request.log_storage_options)
+    _enforce_locking_provider(request.path, storage, policy=mutation_policy)
+    (
+        source_alias,
+        target_alias,
+        matched_updates,
+        not_matched_inserts,
+        updates_present,
+    ) = _resolve_merge_actions(request)
+    _enforce_append_only_policy(
+        policy=mutation_policy,
+        operation="merge",
+        updates_present=updates_present,
+    )
+    source_table = register_temp_table(ctx, delta_input.data)
+    from datafusion_engine.delta.control_plane import DeltaMergeRequest
+
+    try:
         commit_options = _delta_commit_options(
             commit_properties=request.commit_properties,
             commit_metadata=request.commit_metadata,
             app_id=None,
             app_version=None,
         )
-        from datafusion_engine.delta.control_plane import DeltaMergeRequest
+        merge_request = DeltaMergeRequest(
+            table_uri=request.path,
+            storage_options=storage or None,
+            version=None,
+            timestamp=None,
+            source_table=source_table,
+            predicate=request.predicate,
+            source_alias=source_alias,
+            target_alias=target_alias,
+            matched_predicate=request.matched_predicate,
+            matched_updates=dict(matched_updates),
+            not_matched_predicate=request.not_matched_predicate,
+            not_matched_inserts=dict(not_matched_inserts),
+            not_matched_by_source_predicate=request.not_matched_by_source_predicate,
+            delete_not_matched_by_source=request.delete_not_matched_by_source,
+            extra_constraints=request.extra_constraints,
+            commit_options=commit_options,
+        )
+    except (RuntimeError, TypeError, ValueError):
+        deregister_table(ctx, source_table)
+        raise
+    return _DeltaMergeExecutionState(
+        ctx=ctx,
+        request=request,
+        delta_input=delta_input,
+        mutation_policy=mutation_policy,
+        storage=storage,
+        source_alias=source_alias,
+        target_alias=target_alias,
+        matched_updates=matched_updates,
+        not_matched_inserts=not_matched_inserts,
+        source_table=source_table,
+        merge_request=merge_request,
+    )
 
-        try:
-            retry_policy = mutation_policy.retry_policy
-            merge_request = DeltaMergeRequest(
-                table_uri=request.path,
-                storage_options=storage or None,
-                version=None,
-                timestamp=None,
-                source_table=source_table,
-                predicate=request.predicate,
-                source_alias=resolved_source_alias,
-                target_alias=resolved_target_alias,
-                matched_predicate=request.matched_predicate,
-                matched_updates=resolved_updates,
-                not_matched_predicate=request.not_matched_predicate,
-                not_matched_inserts=resolved_inserts,
-                not_matched_by_source_predicate=request.not_matched_by_source_predicate,
-                delete_not_matched_by_source=request.delete_not_matched_by_source,
-                extra_constraints=request.extra_constraints,
-                commit_options=commit_options,
+
+def _run_delta_merge_control_plane(
+    state: _DeltaMergeExecutionState,
+    *,
+    span: Span,
+) -> _DeltaMergeExecutionResult:
+    retry_policy = state.mutation_policy.retry_policy
+    try:
+        report, attempts = _execute_delta_merge(
+            ctx=state.ctx,
+            request=state.merge_request,
+            retry_policy=retry_policy,
+            span=span,
+        )
+    except Exception as exc:
+        if not _should_fallback_delta_merge(exc):
+            raise
+        merge_fallback = True
+        span.set_attribute("codeanatomy.merge_fallback", merge_fallback)
+        span.set_attribute("codeanatomy.merge_fallback_error", str(exc))
+        report = _execute_delta_merge_fallback(
+            _DeltaMergeFallbackInput(
+                source=state.delta_input.data,
+                request=state.request,
+                storage_options=state.storage,
+                source_alias=state.source_alias,
+                target_alias=state.target_alias,
+                matched_updates=state.matched_updates,
+                not_matched_inserts=state.not_matched_inserts,
             )
-            try:
-                report, attempts = _execute_delta_merge(
-                    ctx,
-                    request=merge_request,
-                    retry_policy=retry_policy,
-                    span=span,
-                )
-            except Exception as exc:
-                if not _should_fallback_delta_merge(exc):
-                    raise
-                merge_fallback = True
-                span.set_attribute("codeanatomy.merge_fallback", merge_fallback)
-                span.set_attribute("codeanatomy.merge_fallback_error", str(exc))
-                report = _execute_delta_merge_fallback(
-                    source=delta_input.data,
-                    request=request,
-                    storage_options=storage,
-                    source_alias=resolved_source_alias,
-                    target_alias=resolved_target_alias,
-                    matched_updates=resolved_updates,
-                    not_matched_inserts=resolved_inserts,
-                )
-                attempts = 0
-            metrics: Mapping[str, object] | None = None
-            if isinstance(report, Mapping):
-                candidate = report.get("metrics")
-                if isinstance(candidate, Mapping):
-                    metrics = candidate
-            rows = _merge_rows_affected(metrics)
-            if rows is not None:
-                span.set_attribute("codeanatomy.rows_affected", rows)
-            if attempts:
-                span.set_attribute("codeanatomy.retry_attempts", attempts)
-            _record_mutation_artifact(
-                _MutationArtifactRequest(
-                    profile=request.runtime_profile,
-                    report=report,
-                    table_uri=request.path,
-                    operation="merge",
-                    mode="merge",
-                    commit_metadata=request.commit_metadata,
-                    commit_properties=request.commit_properties,
-                    constraint_status=_constraint_status(request.extra_constraints, checked=True),
-                    constraint_violations=(),
-                    dataset_name=request.dataset_name,
-                )
-            )
-            return report
-        finally:
-            deregister_table(ctx, source_table)
+        )
+        attempts = 0
+    return _DeltaMergeExecutionResult(report=report, attempts=attempts)
+
+
+def _record_delta_merge_artifacts(
+    *,
+    request: DeltaMergeArrowRequest,
+    result: _DeltaMergeExecutionResult,
+    span: Span,
+) -> None:
+    metrics: Mapping[str, object] | None = None
+    if isinstance(result.report, Mapping):
+        candidate = result.report.get("metrics")
+        if isinstance(candidate, Mapping):
+            metrics = candidate
+    rows = _merge_rows_affected(metrics)
+    if rows is not None:
+        span.set_attribute("codeanatomy.rows_affected", rows)
+    if result.attempts:
+        span.set_attribute("codeanatomy.retry_attempts", result.attempts)
+    _record_mutation_artifact(
+        _MutationArtifactRequest(
+            profile=request.runtime_profile,
+            report=result.report,
+            table_uri=request.path,
+            operation="merge",
+            mode="merge",
+            commit_metadata=request.commit_metadata,
+            commit_properties=request.commit_properties,
+            constraint_status=_constraint_status(request.extra_constraints, checked=True),
+            constraint_violations=(),
+            dataset_name=request.dataset_name,
+        )
+    )
 
 
 def delta_data_checker(request: DeltaDataCheckRequest) -> list[str]:

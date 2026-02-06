@@ -80,8 +80,8 @@ codeanatomy = "cli:main"
 package = true
 
 [tool.uv.sources]
-datafusion = { path = "dist/wheels/datafusion-51.0.0-cp310-abi3-manylinux_2_39_x86_64.whl" }
-datafusion_ext = { path = "dist/wheels/datafusion_ext-0.1.0-cp310-abi3-manylinux_2_39_x86_64.whl" }
+datafusion = { path = "dist/wheels/datafusion-51.0.0-cp310-abi3-linux_x86_64.whl" }
+datafusion_ext = { path = "dist/wheels/datafusion_ext-0.1.0-cp310-abi3-linux_x86_64.whl" }
 
 [tool.ruff]
 line-length = 100

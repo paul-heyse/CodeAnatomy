@@ -28,6 +28,11 @@ fi
 
 wheel_dir="${CODEANATOMY_WHEEL_DIR:-dist/wheels}"
 mkdir -p "${wheel_dir}"
+run_wheel_dir="$(mktemp -d "${wheel_dir%/}/.build_datafusion_wheels.XXXXXX")"
+cleanup_run_wheel_dir() {
+  rm -rf "${run_wheel_dir}"
+}
+trap cleanup_run_wheel_dir EXIT
 
 if [ "${CODEANATOMY_SKIP_UV_SYNC:-}" != "1" ]; then
   if ls -1 "${wheel_dir}"/datafusion-*.whl >/dev/null 2>&1; then
@@ -97,18 +102,57 @@ if [ "${profile}" = "release" ] && [ "${CODEANATOMY_WHEEL_BUILD_SDIST:-1}" = "1"
   maturin_common_flags+=(--sdist)
 fi
 
-uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 uv lock --refresh-package datafusion
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 uv lock --refresh-package datafusion-ext
 
-datafusion_wheel="$(ls -1 "${wheel_dir}"/datafusion-*.whl | sort | tail -n 1)"
-datafusion_ext_wheel="$(ls -1 "${wheel_dir}"/datafusion_ext-*.whl | sort | tail -n 1)"
+shopt -s nullglob
+datafusion_wheels=("${run_wheel_dir}"/datafusion-*.whl)
+datafusion_ext_wheels=("${run_wheel_dir}"/datafusion_ext-*.whl)
+shopt -u nullglob
 
-if [ -z "${datafusion_wheel}" ] || [ -z "${datafusion_ext_wheel}" ]; then
-  echo "Wheel build did not produce expected artifacts in ${wheel_dir}." >&2
+if [ "${#datafusion_wheels[@]}" -ne 1 ] || [ "${#datafusion_ext_wheels[@]}" -ne 1 ]; then
+  echo "Wheel build did not produce exactly one datafusion and one datafusion_ext wheel in ${run_wheel_dir}." >&2
+  echo "Found datafusion wheels: ${#datafusion_wheels[@]}, datafusion_ext wheels: ${#datafusion_ext_wheels[@]}." >&2
   exit 1
 fi
+
+datafusion_wheel="${datafusion_wheels[0]}"
+datafusion_ext_wheel="${datafusion_ext_wheels[0]}"
+
+if [ "$(uname -s)" = "Linux" ]; then
+  case "${compatibility}" in
+    linux)
+      if [[ "$(basename "${datafusion_wheel}")" == *manylinux* || "$(basename "${datafusion_wheel}")" == *musllinux* ]]; then
+        echo "Expected a linux-tagged datafusion wheel for compatibility=linux, got: ${datafusion_wheel}" >&2
+        exit 1
+      fi
+      if [[ "$(basename "${datafusion_ext_wheel}")" == *manylinux* || "$(basename "${datafusion_ext_wheel}")" == *musllinux* ]]; then
+        echo "Expected a linux-tagged datafusion_ext wheel for compatibility=linux, got: ${datafusion_ext_wheel}" >&2
+        exit 1
+      fi
+      ;;
+    pypi)
+      if [[ "$(basename "${datafusion_wheel}")" != *manylinux* && "$(basename "${datafusion_wheel}")" != *musllinux* ]]; then
+        echo "Expected a manylinux/musllinux-tagged datafusion wheel for compatibility=pypi, got: ${datafusion_wheel}" >&2
+        exit 1
+      fi
+      if [[ "$(basename "${datafusion_ext_wheel}")" != *manylinux* && "$(basename "${datafusion_ext_wheel}")" != *musllinux* ]]; then
+        echo "Expected a manylinux/musllinux-tagged datafusion_ext wheel for compatibility=pypi, got: ${datafusion_ext_wheel}" >&2
+        exit 1
+      fi
+      ;;
+  esac
+fi
+
+echo "Selected wheel artifacts:"
+echo "  datafusion    : ${datafusion_wheel}"
+echo "  datafusion_ext: ${datafusion_ext_wheel}"
+
+cp -f "${run_wheel_dir}"/* "${wheel_dir}/"
+datafusion_wheel="${wheel_dir}/$(basename "${datafusion_wheel}")"
+datafusion_ext_wheel="${wheel_dir}/$(basename "${datafusion_ext_wheel}")"
 
 uv run python - <<PY
 from __future__ import annotations

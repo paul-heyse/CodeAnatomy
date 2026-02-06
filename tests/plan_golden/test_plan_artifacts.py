@@ -282,3 +282,43 @@ def test_plan_artifact_golden_fixture() -> None:
         pytest.skip("Golden fixture updated.")
     expected = _load_golden(_GOLDEN_PATH)
     assert payload == expected
+
+
+def test_plan_manifest_payload_contract() -> None:
+    """Ensure plan manifest payload remains deterministic across builds."""
+    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
+
+    profile = DataFusionRuntimeProfile(
+        features=FeatureGatesConfig(
+            enable_schema_registry=False,
+            enable_schema_evolution_adapter=False,
+            enable_function_factory=False,
+            enable_udfs=False,
+        ),
+    )
+    ctx = profile.session_context()
+    session_runtime = profile.session_runtime()
+    register_arrow_table(
+        ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
+    )
+    first = build_plan_bundle(
+        ctx,
+        ctx.sql(_SQL),
+        options=PlanBundleOptions(session_runtime=session_runtime),
+    )
+    second = build_plan_bundle(
+        ctx,
+        ctx.sql(_SQL),
+        options=PlanBundleOptions(session_runtime=session_runtime),
+    )
+    first_manifest = first.plan_details.get("plan_manifest")
+    second_manifest = second.plan_details.get("plan_manifest")
+    assert isinstance(first_manifest, dict)
+    assert isinstance(second_manifest, dict)
+    assert first_manifest == second_manifest
+    assert first_manifest.get("plan_fingerprint") == first.plan_fingerprint
+    assert isinstance(first_manifest.get("df_settings"), dict)
+    assert isinstance(first_manifest.get("snapshot_keys"), list)

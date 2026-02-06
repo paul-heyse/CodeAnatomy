@@ -24,11 +24,12 @@ import re
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
 
+from datafusion_engine.arrow.interop import coerce_arrow_schema
 from datafusion_engine.sql.options import (
     sql_options_for_profile,
     statement_sql_options_for_profile,
@@ -717,13 +718,8 @@ def schema_from_table(ctx: SessionContext, name: str) -> pa.Schema:
         Raised when the schema cannot be resolved to an Arrow schema.
     """
     df = ctx.table(name)
-    schema = df.schema()
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    if isinstance(schema, pa.Schema):
+    schema = coerce_arrow_schema(df.schema())
+    if schema is not None:
         return schema
     msg = "Unable to resolve DataFusion schema to Arrow schema."
     raise TypeError(msg)
@@ -835,24 +831,17 @@ class SchemaIntrospector:
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = "Schema introspection SQL parse failed."
             raise ValueError(msg) from exc
-        schema = df.schema()
-        if not isinstance(schema, pa.Schema):
-            to_arrow = getattr(schema, "to_arrow", None)
-            if callable(to_arrow):
-                resolved = to_arrow()
-                if isinstance(resolved, pa.Schema):
-                    schema = resolved
-        if not isinstance(schema, pa.Schema):
+        schema = coerce_arrow_schema(df.schema())
+        if schema is None:
             msg = "Schema introspection failed to resolve a PyArrow schema."
             raise TypeError(msg)
-        resolved_schema = cast("pa.Schema", schema)
         rows = [
             {
                 "column_name": field.name,
                 "data_type": str(field.type),
                 "nullable": field.nullable,
             }
-            for field in resolved_schema
+            for field in schema
         ]
         if cache is not None:
             cache.set(key, rows, expire=self.cache_ttl, tag=self.cache_prefix, retry=True)

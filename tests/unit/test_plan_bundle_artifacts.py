@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
@@ -16,9 +17,11 @@ from hamilton_pipeline.plan_artifacts import build_plan_artifact_bundle
 from relspec.execution_plan import ExecutionPlan
 from relspec.rustworkx_graph import GraphDiagnostics, TaskGraph
 from relspec.rustworkx_schedule import TaskSchedule, task_schedule_metadata
+from serde_artifacts import DeltaInputPin
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_datafusion
 from tests.test_helpers.semantic_registry_runtime import semantic_registry_runtime
+from utils.hashing import hash_settings
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -140,6 +143,89 @@ def test_plan_bundle_determinism_audit_bundle() -> None:
     df_settings_hash = audit.get("df_settings_hash")
     assert isinstance(df_settings_hash, str)
     assert len(df_settings_hash) == _SHA256_HEX_LENGTH
+
+
+def test_plan_bundle_includes_plan_manifest_payload() -> None:
+    """Ensure plan details include deterministic manifest payload fields."""
+    ctx, session_runtime = _session_context()
+    register_arrow_table(
+        ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
+    )
+    df = ctx.sql("SELECT id FROM events")
+    bundle = build_plan_bundle(
+        ctx,
+        df,
+        options=PlanBundleOptions(session_runtime=session_runtime),
+    )
+    manifest = bundle.plan_details.get("plan_manifest")
+    assert isinstance(manifest, dict)
+    assert manifest.get("plan_fingerprint") == bundle.plan_fingerprint
+    assert manifest.get("planning_env_hash") == bundle.artifacts.planning_env_hash
+    assert manifest.get("information_schema_hash") == bundle.artifacts.information_schema_hash
+    assert manifest.get("df_settings_hash") == hash_settings(bundle.artifacts.df_settings)
+    assert isinstance(manifest.get("df_settings"), dict)
+    assert isinstance(manifest.get("snapshot_keys"), list)
+    assert isinstance(manifest.get("write_outcomes"), list)
+
+
+def test_plan_manifest_snapshot_keys_are_canonical(tmp_path: Path) -> None:
+    """Ensure snapshot key manifest rows use canonical URI + resolved version."""
+    from datafusion_engine.dataset.registry import DatasetLocation
+    from datafusion_engine.session.runtime import (
+        DataFusionRuntimeProfile,
+        DataSourceConfig,
+        ExtractOutputConfig,
+        FeatureGatesConfig,
+    )
+
+    dataset_name = "delta_events"
+    delta_path = tmp_path / "delta_events"
+    profile = DataFusionRuntimeProfile(
+        data_sources=DataSourceConfig(
+            extract_output=ExtractOutputConfig(
+                dataset_locations={
+                    dataset_name: DatasetLocation(
+                        path=str(delta_path),
+                        format="delta",
+                    )
+                }
+            )
+        ),
+        features=FeatureGatesConfig(
+            enable_schema_registry=False,
+            enable_schema_evolution_adapter=False,
+            enable_udfs=False,
+        ),
+    )
+    session_runtime = profile.session_runtime()
+    ctx = session_runtime.ctx
+    register_arrow_table(
+        ctx,
+        name="events",
+        value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
+    )
+    df = ctx.sql("SELECT id FROM events")
+    bundle = build_plan_bundle(
+        ctx,
+        df,
+        options=PlanBundleOptions(
+            session_runtime=session_runtime,
+            delta_inputs=(DeltaInputPin(dataset_name=dataset_name, version=7, timestamp=None),),
+        ),
+    )
+    manifest = bundle.plan_details.get("plan_manifest")
+    assert isinstance(manifest, dict)
+    snapshot_keys = manifest.get("snapshot_keys")
+    assert isinstance(snapshot_keys, list)
+    assert snapshot_keys == [
+        {
+            "dataset_name": dataset_name,
+            "canonical_uri": str(delta_path.resolve()),
+            "resolved_version": 7,
+        }
+    ]
 
 
 def _stub_execution_plan() -> ExecutionPlan:

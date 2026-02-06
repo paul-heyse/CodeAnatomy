@@ -41,6 +41,7 @@ from datafusion_engine.delta.specs import (
 )
 from datafusion_engine.delta.store_policy import resolve_storage_profile
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
+from datafusion_engine.extensions.context_adaptation import select_context_candidate
 from datafusion_engine.generated.delta_types import (
     DeltaFeatureGate,
 )
@@ -516,7 +517,6 @@ def _internal_ctx(
     InternalSessionContext
         Internal DataFusion session context used by Rust entrypoints.
     """
-    internal_ctx = getattr(ctx, "ctx", None)
     probe_entrypoint = entrypoint or "delta_scan_config_from_session"
     compatibility = is_delta_extension_compatible(
         ctx,
@@ -524,48 +524,76 @@ def _internal_ctx(
         require_non_fallback=not allow_fallback,
     )
     if not compatibility.available:
-        details: list[str] = [
+        msg = _compatibility_message(
             "Delta control-plane extension module is unavailable.",
-            f"entrypoint={probe_entrypoint}",
-            f"probe_result={compatibility.probe_result}",
-        ]
-        if compatibility.error:
-            details.append(f"error={compatibility.error}")
-        if compatibility.module is not None:
-            details.append(f"module={compatibility.module}")
-        if compatibility.ctx_kind is not None:
-            details.append(f"ctx_kind={compatibility.ctx_kind}")
-        msg = " ".join(details)
+            compatibility=compatibility,
+            entrypoint=probe_entrypoint,
+        )
         _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
-    if compatibility.compatible:
-        if compatibility.ctx_kind == "outer":
-            return cast("InternalSessionContext", ctx)
-        if compatibility.ctx_kind == "internal":
-            if internal_ctx is None:
-                msg = (
-                    "Delta extension selected internal SessionContext, but ctx.ctx is unavailable."
-                )
-                _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
-            return cast("InternalSessionContext", internal_ctx)
-        if allow_fallback and compatibility.ctx_kind == "fallback":
-            alt_ctx = _fallback_delta_internal_ctx()
-            if alt_ctx is not None:
-                return alt_ctx
-    if allow_fallback:
-        alt_ctx = _fallback_delta_internal_ctx()
-        if alt_ctx is not None:
-            return alt_ctx
-    details = [
-        "Delta control-plane extension is incompatible for this SessionContext.",
-        f"entrypoint={probe_entrypoint}",
-        f"probe_result={compatibility.probe_result}",
-        f"ctx_kind={compatibility.ctx_kind}",
-        f"module={compatibility.module}",
-    ]
-    if compatibility.error:
-        details.append(f"error={compatibility.error}")
-    msg = " ".join(details)
+    if not compatibility.compatible:
+        msg = _compatibility_message(
+            "Delta control-plane extension is incompatible for this SessionContext.",
+            compatibility=compatibility,
+            entrypoint=probe_entrypoint,
+        )
+        _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+    resolved = _context_from_compatibility(
+        ctx,
+        ctx_kind=compatibility.ctx_kind,
+        allow_fallback=allow_fallback,
+    )
+    if resolved is not None:
+        return resolved
+    msg = _compatibility_message(
+        "Delta control-plane extension selected an unavailable context kind.",
+        compatibility=compatibility,
+        entrypoint=probe_entrypoint,
+    )
     _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+
+
+def _context_from_compatibility(
+    ctx: SessionContext,
+    *,
+    ctx_kind: str | None,
+    allow_fallback: bool,
+) -> InternalSessionContext | None:
+    fallback_ctx = _fallback_delta_internal_ctx() if allow_fallback else None
+    internal_ctx = getattr(ctx, "ctx", None)
+    candidates = dict(
+        select_context_candidate(
+            ctx,
+            internal_ctx=internal_ctx,
+            allow_fallback=allow_fallback,
+            fallback_ctx=fallback_ctx,
+        )
+    )
+    selected = candidates.get(ctx_kind or "")
+    if selected is None:
+        return None
+    return cast("InternalSessionContext", selected)
+
+
+def _compatibility_message(
+    prefix: str,
+    *,
+    compatibility: object,
+    entrypoint: str,
+) -> str:
+    details: list[str] = [prefix, f"entrypoint={entrypoint}"]
+    probe_result = getattr(compatibility, "probe_result", None)
+    if probe_result:
+        details.append(f"probe_result={probe_result}")
+    module = getattr(compatibility, "module", None)
+    if module is not None:
+        details.append(f"module={module}")
+    ctx_kind = getattr(compatibility, "ctx_kind", None)
+    if ctx_kind is not None:
+        details.append(f"ctx_kind={ctx_kind}")
+    error = getattr(compatibility, "error", None)
+    if error:
+        details.append(f"error={error}")
+    return " ".join(details)
 
 
 def _fallback_delta_internal_ctx() -> InternalSessionContext | None:

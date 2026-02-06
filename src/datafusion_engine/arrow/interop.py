@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import suppress
 from types import TracebackType
 from typing import Protocol, Self, cast, runtime_checkable
 
@@ -41,6 +42,47 @@ def ensure_arrow_dtype(dtype: DataTypeLike | object) -> pa.DataType:
         return arrow_type_to_pyarrow(dtype)
     msg = f"Expected pyarrow.DataType, got {type(dtype)!r}."
     raise TypeError(msg)
+
+
+def coerce_arrow_schema(value: object) -> pa.Schema | None:
+    """Return a ``pyarrow.Schema`` when the input can be coerced.
+
+    Parameters
+    ----------
+    value
+        Schema-like value to coerce.
+
+    Returns
+    -------
+    pa.Schema | None
+        Coerced schema, or ``None`` when conversion is not possible.
+    """
+    for candidate in _schema_coercion_candidates(value):
+        resolved = _coerce_schema_candidate(candidate)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _schema_coercion_candidates(value: object) -> tuple[object, ...]:
+    candidates: list[object] = [value]
+    for method_name in ("to_arrow", "to_pyarrow"):
+        method = getattr(value, method_name, None)
+        if not callable(method):
+            continue
+        with suppress(TypeError, ValueError):
+            candidates.append(method())
+    return tuple(candidates)
+
+
+def _coerce_schema_candidate(value: object) -> pa.Schema | None:
+    if isinstance(value, pa.Schema):
+        return value
+    with suppress(TypeError, ValueError):
+        candidate = pa.schema(value)
+        if isinstance(candidate, pa.Schema):
+            return candidate
+    return None
 
 
 @runtime_checkable
@@ -870,6 +912,7 @@ __all__ = [
     "binary",
     "bool_",
     "call_expression_function",
+    "coerce_arrow_schema",
     "coerce_table_like",
     "concat_readers",
     "concat_tables",

@@ -55,7 +55,10 @@ def test_table_provider_registry_records_delta_capsule(tmp_path: Path) -> None:
     assert result.column("row_count")[0].as_py() == EXPECTED_ROW_COUNT
     artifacts = sink.artifacts_snapshot().get("datafusion_table_providers_v1", [])
     assert artifacts
-    assert any(entry.get("name") == "delta_tbl" for entry in artifacts)
+    entry = next((item for item in artifacts if item.get("name") == "delta_tbl"), None)
+    assert entry is not None
+    assert entry.get("ffi_table_provider") is True
+    assert entry.get("provider_mode") != "dataset_fallback"
 
 
 @pytest.mark.integration
@@ -91,6 +94,8 @@ def test_delta_pruning_predicate_from_dataset_spec(tmp_path: Path) -> None:
     artifacts = sink.artifacts_snapshot().get("datafusion_table_providers_v1", [])
     entry = next((item for item in artifacts if item.get("name") == "delta_tbl"), None)
     assert entry is not None
+    assert entry.get("ffi_table_provider") is True
+    assert entry.get("provider_mode") != "dataset_fallback"
     assert entry.get("delta_pruning_predicate") == "part = 'a'"
     assert entry.get("delta_pruning_applied") is True
     assert entry.get("delta_pruned_files") is not None

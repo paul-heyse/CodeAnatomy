@@ -160,10 +160,11 @@ def _delta_provider_bundle(
             )
             raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
         _LOGGER.warning(
-            "Delta provider control-plane failed; falling back to Python dataset provider: %s",
+            "Delta provider control-plane failed with strict provider enforcement disabled; "
+            "using degraded Python dataset provider: %s",
             exc,
         )
-        return _fallback_delta_provider_bundle(
+        return _degraded_delta_provider_bundle(
             request=request,
             scan_files=scan_files,
             error=exc,
@@ -178,7 +179,7 @@ def _strict_native_provider_enabled(
     return runtime_profile.features.enforce_delta_ffi_provider
 
 
-def _fallback_delta_provider_bundle(
+def _degraded_delta_provider_bundle(
     *,
     request: DeltaProviderRequest,
     scan_files: Sequence[str] | None,
@@ -199,12 +200,12 @@ def _fallback_delta_provider_bundle(
             table.load_as_version(request.timestamp)
         provider = table.to_pyarrow_dataset()
     except Exception as exc:
-        msg = "Delta provider fallback failed after control-plane failure."
+        msg = "Delta provider degraded mode failed after control-plane failure."
         raise DataFusionEngineError(msg, kind=ErrorKind.DELTA) from exc
     snapshot: dict[str, object] = {
         "table_uri": request.table_uri,
         "version": table.version(),
-        "provider_mode": "pyarrow_dataset_fallback",
+        "provider_mode": "pyarrow_dataset_degraded",
         "fallback_error": str(error),
     }
     if scan_files:
@@ -240,10 +241,11 @@ def _resolve_delta_cdf(
             )
             raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
         _LOGGER.warning(
-            "Delta CDF control-plane failed; falling back to Python CDF reader: %s",
+            "Delta CDF control-plane failed with strict provider enforcement disabled; "
+            "using degraded Python CDF reader: %s",
             exc,
         )
-        bundle = _fallback_delta_cdf_bundle(contract=contract, error=exc)
+        bundle = _degraded_delta_cdf_bundle(contract=contract, error=exc)
     return DatasetResolution(
         name=name,
         location=location,
@@ -259,7 +261,7 @@ def _resolve_delta_cdf(
     )
 
 
-def _fallback_delta_cdf_bundle(
+def _degraded_delta_cdf_bundle(
     *,
     contract: DeltaCdfContract,
     error: Exception,
@@ -300,12 +302,12 @@ def _fallback_delta_cdf_bundle(
         )
         provider = reader.read_all()
     except Exception as exc:
-        msg = "Delta CDF fallback failed after control-plane failure."
+        msg = "Delta CDF degraded mode failed after control-plane failure."
         raise DataFusionEngineError(msg, kind=ErrorKind.DELTA) from exc
     snapshot: dict[str, object] = {
         "table_uri": contract.table_uri,
         "version": table.version(),
-        "provider_mode": "pyarrow_cdf_fallback",
+        "provider_mode": "pyarrow_cdf_degraded",
         "fallback_error": str(error),
     }
     return DeltaCdfProviderBundle(

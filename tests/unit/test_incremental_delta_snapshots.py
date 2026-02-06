@@ -48,7 +48,9 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     assert result_one.version is not None
     assert result_one.snapshot_key is not None
     assert result_one.snapshot_key.version == result_one.version
-    assert result_one.snapshot_key.canonical_uri == canonical_table_uri(str(store.repo_snapshot_path()))
+    assert result_one.snapshot_key.canonical_uri == canonical_table_uri(
+        str(store.repo_snapshot_path())
+    )
 
     snapshot_two = _snapshot_table(
         [
@@ -64,7 +66,9 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     assert result_two.version is not None
     assert result_two.snapshot_key is not None
     assert result_two.snapshot_key.version == result_two.version
-    assert result_two.snapshot_key.canonical_uri == canonical_table_uri(str(store.repo_snapshot_path()))
+    assert result_two.snapshot_key.canonical_uri == canonical_table_uri(
+        str(store.repo_snapshot_path())
+    )
 
     cdf_result = read_cdf_changes(
         context,

@@ -26,6 +26,7 @@ class DiagnosticsReport:
     plan_phase_summary: Mapping[str, object]
     datafusion_execution: Mapping[str, object]
     scan_pruning: Mapping[str, object]
+    runtime_capabilities: Mapping[str, object]
     diagnostic_categories: Mapping[str, object]
 
     def to_dict(self) -> dict[str, object]:
@@ -42,6 +43,7 @@ class DiagnosticsReport:
             "plan_phase_summary": dict(self.plan_phase_summary),
             "datafusion_execution": dict(self.datafusion_execution),
             "scan_pruning": dict(self.scan_pruning),
+            "runtime_capabilities": dict(self.runtime_capabilities),
             "diagnostic_categories": dict(self.diagnostic_categories),
         }
 
@@ -56,6 +58,7 @@ class _LogSections:
     plan_phase_summary: Mapping[str, object]
     datafusion_execution: Mapping[str, object]
     scan_pruning: Mapping[str, object]
+    runtime_capabilities: Mapping[str, object]
     diagnostic_categories: Mapping[str, object]
 
 
@@ -118,6 +121,7 @@ def build_diagnostics_report(snapshot: Mapping[str, object]) -> DiagnosticsRepor
         plan_phase_summary=log_sections.plan_phase_summary,
         datafusion_execution=log_sections.datafusion_execution,
         scan_pruning=log_sections.scan_pruning,
+        runtime_capabilities=log_sections.runtime_capabilities,
         diagnostic_categories=log_sections.diagnostic_categories,
     )
 
@@ -155,6 +159,7 @@ def write_run_diagnostics_report(
         _write_plan_phase_summary(handle, report.plan_phase_summary)
         _write_datafusion_execution(handle, report.datafusion_execution)
         _write_scan_pruning(handle, report.scan_pruning)
+        _write_runtime_capabilities(handle, report.runtime_capabilities)
         _write_diagnostic_categories(handle, report.diagnostic_categories)
     return md_path
 
@@ -226,12 +231,40 @@ def _write_provider_modes(handle: TextIO, provider_modes: Mapping[str, object]) 
     handle.write("\n## Provider Modes\n")
     handle.write(f"- total: {provider_modes.get('total', 0)}\n")
     handle.write(f"- warnings: {provider_modes.get('warnings', 0)}\n")
+    strict_enabled = provider_modes.get("strict_native_provider_enabled")
+    if isinstance(strict_enabled, bool):
+        handle.write(f"- strict_native_provider_enabled: {strict_enabled}\n")
+    strict_violations = provider_modes.get("strict_native_provider_violations")
+    if isinstance(strict_violations, int):
+        handle.write(f"- strict_native_provider_violations: {strict_violations}\n")
     modes = provider_modes.get("modes")
     if isinstance(modes, Mapping) and modes:
         for name, count in sorted(modes.items()):
             handle.write(f"- {name}: {count}\n")
         return
     handle.write("- None detected\n")
+
+
+def _write_runtime_capabilities(
+    handle: TextIO,
+    runtime_capabilities: Mapping[str, object],
+) -> None:
+    handle.write("\n## Runtime Capabilities\n")
+    handle.write(f"- total: {runtime_capabilities.get('total', 0)}\n")
+    for key in (
+        "strict_native_provider_enabled",
+        "delta_available",
+        "delta_compatible",
+        "delta_probe_result",
+        "delta_ctx_kind",
+    ):
+        value = runtime_capabilities.get(key)
+        if value is None:
+            continue
+        handle.write(f"- {key}: {value}\n")
+    plugin_path = runtime_capabilities.get("plugin_path")
+    if isinstance(plugin_path, str) and plugin_path:
+        handle.write(f"- plugin_path: {plugin_path}\n")
 
 
 def _write_delta_log_health(handle: TextIO, delta_log_health: Mapping[str, object]) -> None:
@@ -394,6 +427,7 @@ def _build_log_sections(logs: Sequence[Mapping[str, object]]) -> _LogSections:
         plan_phase_summary,
         datafusion_execution,
         scan_pruning,
+        runtime_capabilities,
         diagnostic_categories,
     ) = _log_sections(logs)
     return _LogSections(
@@ -405,6 +439,7 @@ def _build_log_sections(logs: Sequence[Mapping[str, object]]) -> _LogSections:
         plan_phase_summary=plan_phase_summary,
         datafusion_execution=datafusion_execution,
         scan_pruning=scan_pruning,
+        runtime_capabilities=runtime_capabilities,
         diagnostic_categories=diagnostic_categories,
     )
 
@@ -412,6 +447,7 @@ def _build_log_sections(logs: Sequence[Mapping[str, object]]) -> _LogSections:
 def _log_sections(
     logs: Sequence[Mapping[str, object]],
 ) -> tuple[
+    dict[str, object],
     dict[str, object],
     dict[str, object],
     dict[str, object],
@@ -430,6 +466,7 @@ def _log_sections(
     plan_phase_summary = _plan_phase_summary(logs)
     datafusion_execution = _datafusion_execution_summary(logs)
     scan_pruning = _scan_pruning_summary(logs)
+    runtime_capabilities = _runtime_capability_summary(logs)
     diagnostic_categories = _diagnostic_category_summary(logs)
     return (
         log_summary,
@@ -440,6 +477,7 @@ def _log_sections(
         plan_phase_summary,
         datafusion_execution,
         scan_pruning,
+        runtime_capabilities,
         diagnostic_categories,
     )
 
@@ -481,6 +519,8 @@ def _provider_mode_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, ob
     rows = _event_rows(logs, "dataset_provider_mode_v1")
     modes: dict[str, int] = {}
     warnings = 0
+    strict_native_provider_enabled: bool | None = None
+    strict_native_provider_violations = 0
     for row in rows:
         mode = row.get("provider_mode")
         if isinstance(mode, str):
@@ -488,7 +528,54 @@ def _provider_mode_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, ob
         severity = row.get("diagnostic.severity")
         if severity == "warn":
             warnings += 1
-    return {"total": len(rows), "warnings": warnings, "modes": modes}
+        strict_value = row.get("strict_native_provider_enabled")
+        if isinstance(strict_value, bool):
+            strict_native_provider_enabled = strict_value
+        if row.get("strict_native_provider_violation") is True:
+            strict_native_provider_violations += 1
+    return {
+        "total": len(rows),
+        "warnings": warnings,
+        "modes": modes,
+        "strict_native_provider_enabled": strict_native_provider_enabled,
+        "strict_native_provider_violations": strict_native_provider_violations,
+    }
+
+
+def _runtime_capability_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    rows = _event_rows(logs, "datafusion_runtime_capabilities_v1")
+    if not rows:
+        extension_rows = _event_rows(logs, "datafusion_extension_parity_v1")
+        for row in extension_rows:
+            payload = row.get("runtime_capabilities")
+            if isinstance(payload, Mapping):
+                rows.append(payload)
+    if not rows:
+        return {"total": 0}
+    latest = max(
+        rows,
+        key=lambda row: (
+            int(row.get("event_time_unix_ms", 0))
+            if isinstance(row.get("event_time_unix_ms"), int)
+            else 0
+        ),
+    )
+    plugin_path = None
+    plugin_manifest = latest.get("plugin_manifest")
+    if isinstance(plugin_manifest, Mapping):
+        path_value = plugin_manifest.get("plugin_path")
+        if isinstance(path_value, str):
+            plugin_path = path_value
+    return {
+        "total": len(rows),
+        "strict_native_provider_enabled": latest.get("strict_native_provider_enabled"),
+        "delta_available": latest.get("delta_available"),
+        "delta_compatible": latest.get("delta_compatible"),
+        "delta_probe_result": latest.get("delta_probe_result"),
+        "delta_ctx_kind": latest.get("delta_ctx_kind"),
+        "delta_module": latest.get("delta_module"),
+        "plugin_path": plugin_path,
+    }
 
 
 def _delta_log_health_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:

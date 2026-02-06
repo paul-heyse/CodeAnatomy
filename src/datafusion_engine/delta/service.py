@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -14,10 +15,13 @@ from datafusion_engine.dataset.resolution import (
     DatasetResolutionRequest,
     resolve_dataset_provider,
 )
+from datafusion_engine.delta.capabilities import is_delta_extension_compatible
 from datafusion_engine.delta.store_policy import (
     apply_delta_store_policy,
     resolve_delta_store_policy,
 )
+from datafusion_engine.lineage.diagnostics import record_artifact
+from obs.otel.run_context import get_run_id
 from serde_msgspec import StructBaseStrict
 from storage.deltalake.delta import (
     DeltaCdfOptions,
@@ -368,7 +372,7 @@ class DeltaService:
         """
         ctx = self.profile.session_context()
         resolved_location = self._apply_store_policy(location)
-        return resolve_dataset_provider(
+        resolution = resolve_dataset_provider(
             DatasetResolutionRequest(
                 ctx=ctx,
                 location=resolved_location,
@@ -378,6 +382,53 @@ class DeltaService:
                 scan_files=scan_files,
             )
         )
+        self._record_provider_artifact(
+            ctx=ctx,
+            resolution=resolution,
+            location=resolved_location,
+            name=name,
+            predicate=predicate,
+            scan_files=scan_files,
+        )
+        return resolution
+
+    def _record_provider_artifact(
+        self,
+        *,
+        ctx: SessionContext,
+        resolution: DatasetResolution,
+        location: DatasetLocation,
+        name: str | None,
+        predicate: str | None,
+        scan_files: Sequence[str] | None,
+    ) -> None:
+        if self.profile.diagnostics.diagnostics_sink is None:
+            return
+        compatibility = is_delta_extension_compatible(
+            ctx,
+            entrypoint="delta_provider_from_session",
+            require_non_fallback=self.profile.features.enforce_delta_ffi_provider,
+        )
+        payload: dict[str, object] = {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "run_id": get_run_id(),
+            "dataset_name": name,
+            "table_uri": str(location.path),
+            "format": location.format,
+            "provider_kind": resolution.provider_kind,
+            "strict_native_provider_enabled": self.profile.features.enforce_delta_ffi_provider,
+            "scan_files_requested": bool(scan_files),
+            "scan_files_count": len(scan_files) if scan_files is not None else 0,
+            "predicate": predicate,
+            "module": compatibility.module,
+            "entrypoint": compatibility.entrypoint,
+            "ctx_kind": compatibility.ctx_kind,
+            "probe_result": compatibility.probe_result,
+            "compatible": compatibility.compatible,
+            "available": compatibility.available,
+            "error": compatibility.error,
+        }
+        record_artifact(self.profile, "delta_service_provider_v1", payload)
 
     def table_version(
         self,

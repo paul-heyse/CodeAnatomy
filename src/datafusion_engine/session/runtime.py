@@ -4072,7 +4072,56 @@ class RuntimeProfileCatalog:
         return location
 
 
+class _RuntimeProfileIOFacadeMixin:
+    """Facade methods for runtime-profile I/O operations."""
+
+    def cache_root(self) -> str:
+        """Return the configured cache root directory.
+
+        Returns
+        -------
+        str
+            Cache root directory.
+        """
+        profile = cast("DataFusionRuntimeProfile", self)
+        return profile.io_ops.cache_root()
+
+
+class _RuntimeProfileCatalogFacadeMixin:
+    """Facade methods for runtime-profile catalog operations."""
+
+    def dataset_location(self, name: str) -> DatasetLocation | None:
+        """Return a configured dataset location for the dataset name.
+
+        Returns
+        -------
+        DatasetLocation | None
+            Dataset location when configured.
+        """
+        profile = cast("DataFusionRuntimeProfile", self)
+        return profile.catalog_ops.dataset_location(name)
+
+
+class _RuntimeProfileDeltaFacadeMixin:
+    """Facade methods for runtime-profile Delta operations."""
+
+    def delta_service(self) -> DeltaService:
+        """Return a DeltaService bound to this runtime profile.
+
+        Returns
+        -------
+        DeltaService
+            DeltaService instance bound to this profile.
+        """
+        from datafusion_engine.delta.service import delta_service_for_profile
+
+        return delta_service_for_profile(cast("DataFusionRuntimeProfile", self))
+
+
 class DataFusionRuntimeProfile(
+    _RuntimeProfileIOFacadeMixin,
+    _RuntimeProfileCatalogFacadeMixin,
+    _RuntimeProfileDeltaFacadeMixin,
     _RuntimeDiagnosticsMixin,
     StructBaseStrict,
     frozen=True,
@@ -4131,38 +4180,6 @@ class DataFusionRuntimeProfile(
             Catalog operations helper.
         """
         return RuntimeProfileCatalog(self)
-
-    def cache_root(self) -> str:
-        """Return the configured cache root directory.
-
-        Returns
-        -------
-        str
-            Cache root directory.
-        """
-        return self.io_ops.cache_root()
-
-    def dataset_location(self, name: str) -> DatasetLocation | None:
-        """Return a configured dataset location for the dataset name.
-
-        Returns
-        -------
-        DatasetLocation | None
-            Dataset location when configured.
-        """
-        return self.catalog_ops.dataset_location(name)
-
-    def delta_service(self) -> DeltaService:
-        """Return a DeltaService bound to this runtime profile.
-
-        Returns
-        -------
-        DeltaService
-            DeltaService instance bound to this profile.
-        """
-        from datafusion_engine.delta.service import delta_service_for_profile
-
-        return delta_service_for_profile(self)
 
     def _validate_information_schema(self) -> None:
         if not self.catalog.enable_information_schema:
@@ -5955,6 +5972,8 @@ class DataFusionRuntimeProfile(
         from datafusion_engine.udf.runtime import extension_capabilities_report
 
         payload["extension_capabilities"] = extension_capabilities_report()
+        runtime_capabilities = self._runtime_capabilities_payload(ctx)
+        payload["runtime_capabilities"] = runtime_capabilities
         payload["event_time_unix_ms"] = int(time.time() * 1000)
         payload["profile_name"] = self.policies.config_policy_name
         payload["settings_hash"] = self.settings_hash()
@@ -5962,6 +5981,67 @@ class DataFusionRuntimeProfile(
             "datafusion_extension_parity_v1",
             payload,
         )
+        self.record_artifact(
+            "datafusion_runtime_capabilities_v1",
+            runtime_capabilities,
+        )
+
+    def _runtime_capabilities_payload(self, ctx: SessionContext) -> dict[str, object]:
+        from datafusion_engine.delta.capabilities import is_delta_extension_compatible
+
+        try:
+            from datafusion_engine.udf.runtime import extension_capabilities_report
+
+            extension_capabilities = extension_capabilities_report()
+        except (ImportError, RuntimeError, TypeError, ValueError):
+            extension_capabilities = {}
+        compatibility = is_delta_extension_compatible(
+            ctx,
+            entrypoint="delta_provider_from_session",
+            require_non_fallback=self.features.enforce_delta_ffi_provider,
+        )
+        plugin_manifest: Mapping[str, object] | None = None
+        capabilities_snapshot: Mapping[str, object] | None = None
+        plugin_error: str | None = None
+        try:
+            datafusion_ext = importlib.import_module("datafusion_ext")
+        except ImportError as exc:
+            plugin_error = str(exc)
+        else:
+            plugin_manifest_fn = getattr(datafusion_ext, "plugin_manifest", None)
+            if callable(plugin_manifest_fn):
+                try:
+                    payload = plugin_manifest_fn()
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    plugin_error = str(exc)
+                else:
+                    if isinstance(payload, Mapping):
+                        plugin_manifest = dict(payload)
+            capabilities_snapshot_fn = getattr(datafusion_ext, "capabilities_snapshot", None)
+            if callable(capabilities_snapshot_fn):
+                try:
+                    payload = capabilities_snapshot_fn()
+                except (RuntimeError, TypeError, ValueError):
+                    payload = None
+                if isinstance(payload, Mapping):
+                    capabilities_snapshot = dict(payload)
+        return {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "profile_name": self.policies.config_policy_name,
+            "settings_hash": self.settings_hash(),
+            "strict_native_provider_enabled": self.features.enforce_delta_ffi_provider,
+            "delta_entrypoint": compatibility.entrypoint,
+            "delta_module": compatibility.module,
+            "delta_ctx_kind": compatibility.ctx_kind,
+            "delta_probe_result": compatibility.probe_result,
+            "delta_compatible": compatibility.compatible,
+            "delta_available": compatibility.available,
+            "delta_error": compatibility.error,
+            "extension_capabilities": extension_capabilities,
+            "plugin_manifest": plugin_manifest,
+            "capabilities_snapshot": capabilities_snapshot,
+            "plugin_error": plugin_error,
+        }
 
     def _record_cache_diagnostics(self, ctx: SessionContext) -> None:
         """Record cache configuration and state diagnostics.

@@ -57,6 +57,20 @@ def test_storage_type_unwraps_struct() -> None:
     assert resolved[0].type == pa.string()
 
 
+def test_storage_type_normalizes_view_types() -> None:
+    """Ensure storage_type normalizes Arrow view dtypes to storage dtypes."""
+    assert storage_type(pa.string_view()) == pa.string()
+    assert storage_type(pa.binary_view()) == pa.binary()
+    list_view = pa.list_view(pa.string_view())
+    resolved_list_view = storage_type(list_view)
+    assert pa.types.is_list(resolved_list_view)
+    assert resolved_list_view.value_field.type == pa.string()
+    large_list_view = pa.large_list_view(pa.string_view())
+    resolved_large_list_view = storage_type(large_list_view)
+    assert pa.types.is_large_list(resolved_large_list_view)
+    assert resolved_large_list_view.value_field.type == pa.string()
+
+
 def test_storage_schema_unwraps_extension() -> None:
     """Ensure storage_schema unwraps extension fields."""
     ext_type = _ExampleExtension()
@@ -69,6 +83,15 @@ def test_coerce_table_to_storage() -> None:
     """Ensure tables are coerced to storage types."""
     ext_array = _extension_array(["a", "b"])
     table = pa.Table.from_arrays([ext_array], names=["value"])
+    coerced = coerce_table_to_storage(table)
+    assert coerced.schema.field("value").type == pa.string()
+    assert coerced.column("value").to_pylist() == ["a", "b"]
+
+
+def test_coerce_table_to_storage_normalizes_view_columns() -> None:
+    """Ensure view-typed columns are cast to storage types."""
+    value = pa.array(["a", "b"], type=pa.string()).cast(pa.string_view())
+    table = pa.Table.from_arrays([value], names=["value"])
     coerced = coerce_table_to_storage(table)
     assert coerced.schema.field("value").type == pa.string()
     assert coerced.column("value").to_pylist() == ["a", "b"]

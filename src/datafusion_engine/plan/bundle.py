@@ -10,7 +10,9 @@ import contextlib
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
+from urllib.parse import urlparse
 
 import datafusion as _datafusion
 import msgspec
@@ -97,6 +99,8 @@ class PlanDetailContext:
     cdf_windows: Sequence[Mapping[str, object]] = ()
     delta_store_policy_hash: str | None = None
     information_schema_hash: str | None = None
+    snapshot_keys: Sequence[Mapping[str, object]] = ()
+    write_outcomes: Sequence[Mapping[str, object]] = ()
 
 
 @dataclass(frozen=True)
@@ -1107,6 +1111,10 @@ def _bundle_components(
         plan=plan_core.optimized or plan_core.logical,
         options=options,
     )
+    snapshot_keys = _snapshot_keys_for_manifest(
+        delta_inputs=merged_delta_inputs,
+        session_runtime=options.session_runtime,
+    )
     fingerprint = _hash_plan(
         PlanFingerprintInputs(
             substrait_bytes=plan_core.substrait_bytes,
@@ -1168,6 +1176,7 @@ def _bundle_components(
             cdf_windows=environment.cdf_windows,
             delta_store_policy_hash=environment.delta_store_policy_hash,
             information_schema_hash=environment.information_schema_hash,
+            snapshot_keys=snapshot_keys,
         ),
     )
 
@@ -1874,6 +1883,62 @@ def _cdf_window_snapshot(
     return tuple(payloads)
 
 
+def _canonical_table_uri_for_manifest(table_uri: str) -> str:
+    raw = str(table_uri).strip()
+    parsed = urlparse(raw)
+    if not parsed.scheme:
+        return str(Path(raw).expanduser().resolve())
+    scheme = parsed.scheme.lower()
+    if scheme in {"s3a", "s3n"}:
+        scheme = "s3"
+    netloc = parsed.netloc
+    if scheme in {"s3", "gs", "az", "abfs", "abfss", "http", "https"}:
+        netloc = netloc.lower()
+    path = parsed.path or ""
+    if netloc and path and not path.startswith("/"):
+        path = f"/{path}"
+    return parsed._replace(scheme=scheme, netloc=netloc, path=path).geturl()
+
+
+def _snapshot_keys_for_manifest(
+    *,
+    delta_inputs: Sequence[DeltaInputPin],
+    session_runtime: SessionRuntime | None,
+) -> tuple[dict[str, object], ...]:
+    if session_runtime is None:
+        return ()
+    locations = _dataset_location_map(session_runtime)
+    payloads: list[dict[str, object]] = []
+    seen: set[tuple[str, str, int]] = set()
+    for pin in delta_inputs:
+        if pin.version is None:
+            continue
+        location = locations.get(pin.dataset_name)
+        if location is None:
+            continue
+        canonical_uri = _canonical_table_uri_for_manifest(str(location.path))
+        resolved_version = int(pin.version)
+        key = (pin.dataset_name, canonical_uri, resolved_version)
+        if key in seen:
+            continue
+        seen.add(key)
+        payloads.append(
+            {
+                "dataset_name": pin.dataset_name,
+                "canonical_uri": canonical_uri,
+                "resolved_version": resolved_version,
+            }
+        )
+    payloads.sort(
+        key=lambda row: (
+            str(row["dataset_name"]),
+            str(row["canonical_uri"]),
+            int(row["resolved_version"]),
+        )
+    )
+    return tuple(payloads)
+
+
 def _plan_display(plan: object | None, *, method: str) -> str | None:
     """Extract a display string from a plan object.
 
@@ -1976,11 +2041,48 @@ def _plan_details(
         details["delta_store_policy_hash"] = context.delta_store_policy_hash
     if context.information_schema_hash is not None:
         details["information_schema_hash"] = context.information_schema_hash
+    if context.snapshot_keys:
+        details["snapshot_keys"] = [dict(key) for key in context.snapshot_keys]
+    if context.write_outcomes:
+        details["write_outcomes"] = [dict(outcome) for outcome in context.write_outcomes]
+    details["plan_manifest"] = _plan_manifest_payload(
+        detail_inputs=detail_inputs,
+        details=details,
+        context=context,
+    )
     details["determinism_audit"] = _determinism_audit_bundle(
         detail_inputs,
         context=context,
     )
     return details
+
+
+def _plan_manifest_payload(
+    *,
+    detail_inputs: PlanDetailInputs,
+    details: Mapping[str, object],
+    context: PlanDetailContext,
+) -> dict[str, object]:
+    settings = {
+        str(key): str(value) for key, value in sorted(detail_inputs.artifacts.df_settings.items())
+    }
+    return {
+        "version": 1,
+        "plan_fingerprint": detail_inputs.plan_fingerprint,
+        "logical_plan_text": details.get("logical_plan"),
+        "optimized_plan_text": details.get("optimized_plan"),
+        "physical_plan_text": details.get("physical_plan"),
+        "optimized_plan_pgjson": details.get("optimized_plan_pgjson"),
+        "logical_plan_proto_present": detail_inputs.artifacts.logical_plan_proto is not None,
+        "optimized_plan_proto_present": detail_inputs.artifacts.optimized_plan_proto is not None,
+        "execution_plan_proto_present": detail_inputs.artifacts.execution_plan_proto is not None,
+        "planning_env_hash": detail_inputs.artifacts.planning_env_hash,
+        "information_schema_hash": detail_inputs.artifacts.information_schema_hash,
+        "df_settings": settings,
+        "df_settings_hash": hash_settings(detail_inputs.artifacts.df_settings),
+        "snapshot_keys": [dict(key) for key in context.snapshot_keys],
+        "write_outcomes": [dict(outcome) for outcome in context.write_outcomes],
+    }
 
 
 def _plan_graphviz(plan: object | None) -> str | None:

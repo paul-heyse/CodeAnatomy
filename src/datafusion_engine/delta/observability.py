@@ -563,7 +563,13 @@ def _append_observability_row(request: _AppendObservabilityRequest) -> int | Non
                 },
             )
         )
-    except Exception as exc:  # pragma: no cover - defensive fail-open path
+    except (
+        RuntimeError,
+        TypeError,
+        ValueError,
+        OSError,
+        ImportError,
+    ) as exc:  # pragma: no cover - defensive fail-open path
         if request.runtime_profile is not None:
             request.runtime_profile.record_artifact(
                 "delta_observability_append_failed_v1",

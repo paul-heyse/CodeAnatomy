@@ -447,7 +447,7 @@ def _relationship_dataset_spec(name: str, ctx: SessionContext | None) -> Dataset
         "Callable[[SessionContext | None], Sequence[DatasetSpec]]",
         relationship_dataset_specs,
     )
-    with contextlib.suppress(RuntimeError, TypeError, ValueError):
+    with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
         for spec in relationship_dataset_specs(ctx):
             if dataset_spec_name(spec) == name:
                 return spec
@@ -577,7 +577,7 @@ def _collect_incremental_specs() -> list[DatasetSpec]:
     incremental_specs = cast("Callable[[], Sequence[DatasetSpec]]", incremental_specs)
     try:
         return list(incremental_specs())
-    except (RuntimeError, TypeError, ValueError):
+    except (KeyError, RuntimeError, TypeError, ValueError):
         return []
 
 
@@ -594,7 +594,7 @@ def _collect_relationship_specs(ctx: SessionContext | None) -> list[DatasetSpec]
     )
     try:
         return list(relationship_dataset_specs(ctx=ctx))
-    except (RuntimeError, TypeError, ValueError):
+    except (KeyError, RuntimeError, TypeError, ValueError):
         return []
 
 

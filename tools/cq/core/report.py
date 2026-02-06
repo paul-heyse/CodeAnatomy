@@ -309,7 +309,7 @@ def _summary_string(
     return _na(missing_reason)
 
 
-def _format_language_scope(summary: dict[str, object]) -> str:
+def _format_language_scope(summary: dict[str, object]) -> str:  # noqa: C901
     lang_scope = summary.get("lang_scope")
     if isinstance(lang_scope, str) and lang_scope:
         return f"`{lang_scope}`"

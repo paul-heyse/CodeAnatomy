@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 def _empty_exported_defs(ctx: SessionContext) -> DataFrame:
     from schema_spec.dataset_spec_ops import dataset_spec_schema
 
-    schema_like = dataset_spec_schema(dataset_spec("dim_exported_defs_v1"))
+    schema_like = dataset_spec_schema(dataset_spec("dim_exported_defs"))
     schema = cast("pa.Schema", schema_like)
     table = cast("pa.Table", empty_table(schema))
     return ctx.from_arrow(table)
@@ -33,9 +33,9 @@ def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
     Returns:
     -------
     DataFrame
-        Exported definitions DataFrame aligned to dim_exported_defs_v1.
+        Exported definitions DataFrame aligned to dim_exported_defs.
     """
-    base_df = ctx.table("cst_defs_norm_v1")
+    base_df = ctx.table("cst_defs_norm")
     schema_names = cast("tuple[str, ...]", base_df.schema().names)
     if "qnames" not in schema_names:
         return _empty_exported_defs(ctx)
@@ -45,9 +45,9 @@ def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
 
     symbol_expr = safe_cast(lit(None), "Utf8")
     symbol_roles_expr = safe_cast(lit(None), "Int32")
-    if ctx.table_exist("rel_def_symbol_v1"):
-        rel_df = ctx.table("rel_def_symbol_v1").select(
-            col("def_id").alias("rel_def_id"),
+    if ctx.table_exist("rel_def_symbol"):
+        rel_df = ctx.table("rel_def_symbol").select(
+            col("entity_id").alias("rel_def_id"),
             col("path").alias("rel_path"),
             col("symbol").alias("rel_symbol"),
             col("symbol_roles").alias("rel_symbol_roles"),

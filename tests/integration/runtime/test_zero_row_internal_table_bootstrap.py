@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from datafusion_engine.cache.inventory import (
-    CacheInventoryEntry,
     CACHE_INVENTORY_TABLE_NAME,
+    CacheInventoryEntry,
     ensure_cache_inventory_table,
     record_cache_inventory_entry,
 )

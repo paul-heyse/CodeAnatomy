@@ -50,7 +50,7 @@ def _register_prev_exports(
     prev_exports: str | None,
 ) -> str:
     if prev_exports is None:
-        empty = empty_table(dataset_schema("dim_exported_defs_v1"))
+        empty = empty_table(dataset_schema("dim_exported_defs"))
         return registry.register_table(empty, prefix="prev_exports")
     name = f"__incremental_prev_exports_{uuid7_hex()}"
     register_delta_df(

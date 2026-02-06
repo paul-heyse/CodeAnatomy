@@ -1712,17 +1712,17 @@ def _relationship_schema(name: str, entity_id_col: str) -> pa.Schema:
     )
 
 
-REL_NAME_SYMBOL_SCHEMA = _relationship_schema("rel_name_symbol_v1", "ref_id")
-REL_IMPORT_SYMBOL_SCHEMA = _relationship_schema("rel_import_symbol_v1", "import_alias_id")
-REL_DEF_SYMBOL_SCHEMA = _relationship_schema("rel_def_symbol_v1", "def_id")
-REL_CALLSITE_SYMBOL_SCHEMA = _relationship_schema("rel_callsite_symbol_v1", "call_id")
+REL_NAME_SYMBOL_SCHEMA = _relationship_schema("rel_name_symbol", "entity_id")
+REL_IMPORT_SYMBOL_SCHEMA = _relationship_schema("rel_import_symbol", "entity_id")
+REL_DEF_SYMBOL_SCHEMA = _relationship_schema("rel_def_symbol", "entity_id")
+REL_CALLSITE_SYMBOL_SCHEMA = _relationship_schema("rel_callsite_symbol", "entity_id")
 
 RELATIONSHIP_SCHEMA_BY_NAME: ImmutableRegistry[str, pa.Schema] = ImmutableRegistry.from_dict(
     {
-        "rel_name_symbol_v1": REL_NAME_SYMBOL_SCHEMA,
-        "rel_import_symbol_v1": REL_IMPORT_SYMBOL_SCHEMA,
-        "rel_def_symbol_v1": REL_DEF_SYMBOL_SCHEMA,
-        "rel_callsite_symbol_v1": REL_CALLSITE_SYMBOL_SCHEMA,
+        "rel_name_symbol": REL_NAME_SYMBOL_SCHEMA,
+        "rel_import_symbol": REL_IMPORT_SYMBOL_SCHEMA,
+        "rel_def_symbol": REL_DEF_SYMBOL_SCHEMA,
+        "rel_callsite_symbol": REL_CALLSITE_SYMBOL_SCHEMA,
     }
 )
 

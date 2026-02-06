@@ -554,15 +554,17 @@ class SemanticSchema:
         Expr
             stable_id(prefix, path, bstart, bend) expression.
         """
+        from datafusion import functions as f
+
         from datafusion_engine.udf.expr import udf_expr
 
-        return udf_expr(
-            "stable_id_parts",
-            prefix,
-            self.path_col(),
-            self.span_start_col(),
-            self.span_end_col(),
+        joined = f.concat_ws(
+            "\x1f",
+            self.path_col().cast(pa.string()),
+            self.span_start_col().cast(pa.string()),
+            self.span_end_col().cast(pa.string()),
         )
+        return udf_expr("stable_id", prefix, joined)
 
 
 def _matches_any(name: str, patterns: tuple[re.Pattern[str], ...]) -> bool:

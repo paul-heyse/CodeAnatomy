@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import contextlib
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
+import msgspec
 import pyarrow as pa
 from deltalake.writer import write_deltalake
 
+from datafusion_engine.arrow.semantic import apply_semantic_types
 from datafusion_engine.cache.inventory import (
     CACHE_INVENTORY_TABLE_NAME,
     ensure_cache_inventory_table,
@@ -36,9 +39,10 @@ from datafusion_engine.schema.registry import (
     relationship_schema_names,
     validate_semantic_types,
 )
-from datafusion_engine.session.facade import DataFusionExecutionFacade
 from semantics.catalog.dataset_specs import (
     dataset_schema as semantic_dataset_schema,
+)
+from semantics.catalog.dataset_specs import (
     maybe_dataset_spec as maybe_semantic_dataset_spec,
 )
 from semantics.input_registry import SEMANTIC_INPUT_SPECS, require_semantic_inputs
@@ -59,6 +63,7 @@ ZeroRowRole = Literal[
     "internal",
 ]
 _INTERNAL_TABLE_ROLE: Literal["internal"] = "internal"
+ZeroRowBootstrapMode = Literal["strict_zero_rows", "seeded_minimal_rows"]
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,8 @@ class ZeroRowBootstrapRequest(StructBaseStrict, frozen=True):
     include_internal_tables: bool = True
     strict: bool = True
     allow_semantic_row_probe_fallback: bool = False
+    bootstrap_mode: ZeroRowBootstrapMode = "strict_zero_rows"
+    seeded_datasets: tuple[str, ...] = ()
 
 
 class ZeroRowBootstrapEvent(StructBaseStrict, frozen=True):
@@ -129,6 +136,8 @@ class ZeroRowBootstrapReport(StructBaseStrict, frozen=True):
     registered_count: int
     skipped_count: int
     failed_count: int
+    seeded_count: int
+    seeded_datasets: tuple[str, ...]
     plans: tuple[dict[str, object], ...]
     events: tuple[ZeroRowBootstrapEvent, ...]
     validation_errors: tuple[str, ...] = ()
@@ -143,6 +152,8 @@ class ZeroRowBootstrapReport(StructBaseStrict, frozen=True):
             "registered_count": self.registered_count,
             "skipped_count": self.skipped_count,
             "failed_count": self.failed_count,
+            "seeded_count": self.seeded_count,
+            "seeded_datasets": list(self.seeded_datasets),
             "plans": list(self.plans),
             "events": [event.payload() for event in self.events],
             "validation_errors": list(self.validation_errors),
@@ -154,7 +165,13 @@ def build_zero_row_plan(
     *,
     request: ZeroRowBootstrapRequest,
 ) -> tuple[ZeroRowDatasetPlan, ...]:
-    """Build a deterministic zero-row bootstrap plan for runtime datasets."""
+    """Build a deterministic zero-row bootstrap plan for runtime datasets.
+
+    Returns:
+    -------
+    tuple[ZeroRowDatasetPlan, ...]
+        Ordered bootstrap plan entries.
+    """
     semantic_output_locations = _semantic_output_locations(profile)
     plans: dict[str, ZeroRowDatasetPlan] = {}
 
@@ -218,7 +235,7 @@ def build_zero_row_plan(
                 ZeroRowDatasetPlan(
                     name=name,
                     role="semantic_output",
-                    schema=pa.schema(semantic_dataset_schema(name)),
+                    schema=apply_semantic_types(pa.schema(semantic_dataset_schema(name))),
                     location=semantic_output_locations.get(name),
                     required=False,
                 ),
@@ -227,19 +244,30 @@ def build_zero_row_plan(
     return tuple(sorted(plans.values(), key=lambda item: (item.role, item.name)))
 
 
-def run_zero_row_bootstrap_validation(
+def run_zero_row_bootstrap_validation(  # noqa: C901, PLR0912, PLR0914, PLR0915
     profile: DataFusionRuntimeProfile,
     *,
     request: ZeroRowBootstrapRequest,
     ctx: SessionContext,
 ) -> ZeroRowBootstrapReport:
-    """Execute zero-row bootstrap materialization and post-bootstrap validation."""
+    """Execute zero-row bootstrap materialization and post-bootstrap validation.
+
+    Returns:
+    -------
+    ZeroRowBootstrapReport
+        Deterministic bootstrap execution report.
+    """
     plan = build_zero_row_plan(profile, request=request)
     events: list[ZeroRowBootstrapEvent] = []
     bootstrapped_count = 0
     registered_count = 0
     skipped_count = 0
     failed_count = 0
+    seeded_count = 0
+    seeded_dataset_names: set[str] = set()
+    seeded_targets = (
+        set(request.seeded_datasets) if request.bootstrap_mode == "seeded_minimal_rows" else set()
+    )
 
     for item in plan:
         event_time = int(time.time() * 1000)
@@ -289,11 +317,20 @@ def run_zero_row_bootstrap_validation(
             )
             continue
         path = Path(str(location.path))
+        should_seed = item.name in seeded_targets
         try:
-            _materialize_empty_delta(path=path, schema=item.schema)
+            _materialize_delta_table(
+                path=path,
+                schema=item.schema,
+                seed_row=_seed_row_for_schema(item.schema) if should_seed else None,
+            )
             bootstrapped_count += 1
+            if should_seed:
+                seeded_count += 1
+                seeded_dataset_names.add(item.name)
         except (RuntimeError, TypeError, ValueError, OSError, ImportError) as exc:
-            failed_count += 1
+            if item.required:
+                failed_count += 1
             events.append(
                 ZeroRowBootstrapEvent(
                     event_time_unix_ms=event_time,
@@ -309,7 +346,8 @@ def run_zero_row_bootstrap_validation(
         try:
             _register_dataset(ctx=ctx, profile=profile, name=item.name, location=location)
         except (RuntimeError, TypeError, ValueError, OSError, KeyError) as exc:
-            failed_count += 1
+            if item.required:
+                failed_count += 1
             events.append(
                 ZeroRowBootstrapEvent(
                     event_time_unix_ms=event_time,
@@ -328,7 +366,7 @@ def run_zero_row_bootstrap_validation(
                 event_time_unix_ms=event_time,
                 dataset=item.name,
                 role=item.role,
-                status="registered",
+                status="seeded_registered" if should_seed else "registered",
                 required=item.required,
                 path=str(path),
             )
@@ -341,7 +379,7 @@ def run_zero_row_bootstrap_validation(
             if event.status == "registered":
                 registered_count += 1
                 bootstrapped_count += 1
-            elif event.status.startswith("bootstrap_failed"):
+            elif event.status.startswith("bootstrap_failed") and event.required:
                 failed_count += 1
 
     validation_errors = _validation_errors(
@@ -360,6 +398,8 @@ def run_zero_row_bootstrap_validation(
         registered_count=registered_count,
         skipped_count=skipped_count,
         failed_count=failed_count,
+        seeded_count=seeded_count,
+        seeded_datasets=tuple(sorted(seeded_dataset_names)),
         plans=tuple(item.payload() for item in plan),
         events=tuple(events),
         validation_errors=tuple(validation_errors),
@@ -413,7 +453,7 @@ def _semantic_input_location(
 ) -> DatasetLocation | None:
     location = profile.catalog_ops.dataset_location(name)
     if location is not None:
-        return location
+        return _bootstrap_safe_location(location)
     extract_root = profile.data_sources.extract_output.output_root
     if extract_root is None:
         return None
@@ -423,15 +463,90 @@ def _semantic_input_location(
     )
 
 
-def _materialize_empty_delta(*, path: Path, schema: pa.Schema) -> None:
+def _bootstrap_safe_location(location: DatasetLocation) -> DatasetLocation:
+    return msgspec.structs.replace(
+        location,
+        dataset_spec=None,
+        delta_cdf_options=None,
+        datafusion_provider=None,
+        overrides=None,
+    )
+
+
+def _materialize_delta_table(
+    *,
+    path: Path,
+    schema: pa.Schema,
+    seed_row: Mapping[str, object] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    table = pa.Table.from_pylist([], schema=_delta_compatible_schema(schema))
+    compatible = _delta_compatible_schema(schema)
+    rows: list[dict[str, object]] = [] if seed_row is None else [dict(seed_row)]
+    table = pa.Table.from_pylist(rows, schema=compatible)
     write_deltalake(
         str(path),
         table,
         mode="overwrite",
         schema_mode="overwrite",
     )
+
+
+def _seed_row_for_schema(schema: pa.Schema) -> dict[str, object]:
+    compatible = _delta_compatible_schema(schema)
+    return {field.name: _seed_value_for_field(field) for field in compatible}
+
+
+def _seed_value_for_field(field: pa.Field) -> object:
+    if field.nullable:
+        return None
+    return _seed_value_for_type(field.type)
+
+
+def _seed_value_for_type(  # noqa: C901, PLR0911, PLR0912
+    data_type: pa.DataType,
+) -> object:
+    if isinstance(data_type, pa.ExtensionType):
+        return _seed_value_for_type(data_type.storage_type)
+    if pa.types.is_boolean(data_type):
+        return False
+    if pa.types.is_integer(data_type) or pa.types.is_unsigned_integer(data_type):
+        return 0
+    if pa.types.is_floating(data_type):
+        return 0.0
+    if pa.types.is_decimal(data_type):
+        return Decimal(0)
+    if pa.types.is_string(data_type) or pa.types.is_large_string(data_type):
+        return ""
+    if pa.types.is_binary(data_type) or pa.types.is_large_binary(data_type):
+        return b""
+    if pa.types.is_fixed_size_binary(data_type):
+        return b"\x00" * data_type.byte_width
+    if pa.types.is_date32(data_type):
+        return pa.scalar(0, type=data_type).as_py()
+    if pa.types.is_date64(data_type):
+        return pa.scalar(0, type=data_type).as_py()
+    if pa.types.is_time32(data_type):
+        return pa.scalar(0, type=data_type).as_py()
+    if pa.types.is_time64(data_type):
+        return pa.scalar(0, type=data_type).as_py()
+    if pa.types.is_timestamp(data_type):
+        return pa.scalar(0, type=data_type).as_py()
+    if pa.types.is_duration(data_type):
+        return pa.scalar(0, type=data_type).as_py()
+    if pa.types.is_dictionary(data_type):
+        return _seed_value_for_type(data_type.value_type)
+    if pa.types.is_struct(data_type):
+        return {field.name: _seed_value_for_field(field) for field in data_type}
+    if pa.types.is_list(data_type) or pa.types.is_large_list(data_type):
+        return cast("list[object]", [])
+    if pa.types.is_fixed_size_list(data_type):
+        value = _seed_value_for_field(data_type.value_field)
+        return [value for _ in range(data_type.list_size)]
+    if pa.types.is_map(data_type):
+        return cast("dict[str, object]", {})
+    if pa.types.is_null(data_type):
+        return None
+    return pa.scalar(0, type=data_type).as_py()
 
 
 def _delta_compatible_schema(schema: pa.Schema) -> pa.Schema:
@@ -477,8 +592,14 @@ def _register_dataset(
     if ctx.table_exist(name):
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table(name)
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
-    _ = facade.register_dataset(name=name, location=location)
+    from datafusion_engine.registry_facade import registry_facade_for_context
+
+    registry_facade = registry_facade_for_context(ctx, runtime_profile=profile)
+    _ = registry_facade.register_dataset_df(
+        name=name,
+        location=location,
+        overwrite=True,
+    )
 
 
 def _bootstrap_internal_tables(

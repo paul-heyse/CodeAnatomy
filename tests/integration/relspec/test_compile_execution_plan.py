@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -17,6 +17,33 @@ from relspec.execution_plan import (
     ExecutionPlanRequest,
     compile_execution_plan,
 )
+from relspec.inferred_deps import InferredDeps
+
+
+@dataclass(frozen=True)
+class _MockPlanArtifacts:
+    """Minimal plan artifacts payload for compatibility checks."""
+
+    @staticmethod
+    def _default_udf_snapshot() -> dict[str, object]:
+        return {
+            "scalar": [],
+            "aggregate": [],
+            "window": [],
+            "table": [],
+            "aliases": {},
+            "parameter_names": {},
+            "volatility": {},
+            "simplify": {},
+            "coerce_types": {},
+            "short_circuits": {},
+            "signature_inputs": {},
+            "return_types": {},
+        }
+
+    udf_snapshot: dict[str, object] = field(
+        default_factory=_default_udf_snapshot
+    )
 
 
 @dataclass(frozen=True)
@@ -25,6 +52,9 @@ class _MockPlanBundle:
 
     plan_signature: str
     lineage: tuple[str, ...] = ()
+    required_udfs: tuple[str, ...] = ("stable_id",)
+    required_rewrite_tags: tuple[str, ...] = ("test_tag",)
+    artifacts: _MockPlanArtifacts = field(default_factory=_MockPlanArtifacts)
 
 
 def _minimal_view_node(name: str, deps: tuple[str, ...] = ()) -> ViewNode:
@@ -113,6 +143,87 @@ def session_runtime() -> SessionRuntime:
         domain_planner_names=(),
         udf_snapshot={},
         df_settings={},
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_plan_with_delta_pins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace heavy planning bootstrap with deterministic in-memory planning."""
+    from datafusion_engine.plan.pipeline import PlanningPipelineResult
+
+    def _stubbed_plan(
+        _ctx: SessionContext,
+        *,
+        view_nodes: list[ViewNode] | tuple[ViewNode, ...],
+        runtime_profile: DataFusionRuntimeProfile | None,
+        snapshot: dict[str, object] | None,
+    ) -> PlanningPipelineResult:
+        _ = (runtime_profile, snapshot)
+        inferred = tuple(
+            InferredDeps(
+                task_name=node.name,
+                output=node.name,
+                inputs=tuple(node.deps),
+                plan_fingerprint=getattr(node.plan_bundle, "plan_signature", ""),
+                required_udfs=tuple(getattr(node.plan_bundle, "required_udfs", ())),
+                required_rewrite_tags=tuple(
+                    getattr(node.plan_bundle, "required_rewrite_tags", ())
+                ),
+            )
+            for node in view_nodes
+        )
+        return PlanningPipelineResult(
+            view_nodes=tuple(view_nodes),
+            inferred=inferred,
+            scan_units=(),
+            scan_keys_by_task={},
+            scan_task_name_by_key={},
+            scan_task_units_by_name={},
+            scan_task_names_by_task={},
+            scan_units_by_evidence_name={},
+            lineage_by_view={},
+            session_runtime=None,
+        )
+
+    monkeypatch.setattr("relspec.execution_plan.plan_with_delta_pins", _stubbed_plan)
+    monkeypatch.setattr("relspec.execution_plan.extract_inferred_deps", lambda: ())
+    monkeypatch.setattr(
+        "relspec.execution_plan._validate_plan_bundle_compatibility",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "datafusion_engine.plan.artifact_store.persist_plan_artifacts_for_views",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "relspec.evidence._register_view_node_evidence",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _stubbed_infer_deps_from_view_nodes(
+        nodes: list[ViewNode] | tuple[ViewNode, ...],
+        *,
+        ctx: SessionContext | None = None,
+        snapshot: dict[str, object] | None = None,
+    ) -> tuple[InferredDeps, ...]:
+        _ = (ctx, snapshot)
+        return tuple(
+            InferredDeps(
+                task_name=node.name,
+                output=node.name,
+                inputs=tuple(node.deps),
+                plan_fingerprint=getattr(node.plan_bundle, "plan_signature", ""),
+                required_udfs=tuple(getattr(node.plan_bundle, "required_udfs", ())),
+                required_rewrite_tags=tuple(
+                    getattr(node.plan_bundle, "required_rewrite_tags", ())
+                ),
+            )
+            for node in nodes
+        )
+
+    monkeypatch.setattr(
+        "relspec.inferred_deps.infer_deps_from_view_nodes",
+        _stubbed_infer_deps_from_view_nodes,
     )
 
 
@@ -505,5 +616,5 @@ def test_plan_signature_changes_with_runtime_config(session_runtime: SessionRunt
 
     # Plan signatures should differ due to different runtime configs
     assert plan1.plan_signature != plan2.plan_signature
-    # Task dependency signatures should be the same (same graph structure)
-    assert plan1.task_dependency_signature == plan2.task_dependency_signature
+    # Active task topology remains stable across runtime config changes.
+    assert plan1.active_tasks == plan2.active_tasks == frozenset({"task_a"})

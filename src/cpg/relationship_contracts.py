@@ -71,10 +71,10 @@ class RelationshipContractData:
     Attributes:
     ----------
     table_name : str
-        The table/contract name (e.g., "rel_name_symbol_v1").
+        The table/contract name (e.g., "rel_name_symbol").
     entity_id_cols : tuple[str, ...]
         Entity-specific ID columns that form the primary key prefix
-        (e.g., ("ref_id",) or ("call_id",)).
+        (e.g., ("entity_id",)).
     dedupe_columns : tuple[str, ...]
         Standard dedupe columns following entity ID cols
         (e.g., symbol+path+bstart+bend).
@@ -187,23 +187,23 @@ def generate_relationship_contract(
 # The 5 relationship types map entity nodes to SCIP symbols.
 RELATIONSHIP_CONTRACT_DATA: tuple[RelationshipContractData, ...] = (
     RelationshipContractData(
-        table_name="rel_name_symbol_v1",
-        entity_id_cols=("ref_id",),
+        table_name="rel_name_symbol",
+        entity_id_cols=("entity_id",),
         dedupe_columns=STANDARD_SYMBOL_DEDUPE_COLUMNS,
     ),
     RelationshipContractData(
-        table_name="rel_import_symbol_v1",
-        entity_id_cols=("import_alias_id",),
+        table_name="rel_import_symbol",
+        entity_id_cols=("entity_id",),
         dedupe_columns=STANDARD_SYMBOL_DEDUPE_COLUMNS,
     ),
     RelationshipContractData(
-        table_name="rel_def_symbol_v1",
-        entity_id_cols=("def_id",),
+        table_name="rel_def_symbol",
+        entity_id_cols=("entity_id",),
         dedupe_columns=STANDARD_SYMBOL_DEDUPE_COLUMNS,
     ),
     RelationshipContractData(
-        table_name="rel_callsite_symbol_v1",
-        entity_id_cols=("call_id",),
+        table_name="rel_callsite_symbol",
+        entity_id_cols=("entity_id",),
         dedupe_columns=STANDARD_SYMBOL_DEDUPE_COLUMNS,
     ),
 )

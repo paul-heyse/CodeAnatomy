@@ -37,6 +37,10 @@ from obs.otel.tracing import get_tracer, record_exception, set_span_attributes, 
 from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
+    from datafusion_engine.bootstrap.zero_row import (
+        ZeroRowBootstrapReport,
+        ZeroRowBootstrapRequest,
+    )
     from datafusion_engine.dataset.registration import DataFusionCachePolicy
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scan import ScanUnit
@@ -805,6 +809,34 @@ class DataFusionExecutionFacade:
             self.ctx,
             self.runtime_profile,
             table_names=table_names,
+        )
+
+    def run_zero_row_bootstrap_validation(
+        self,
+        request: ZeroRowBootstrapRequest | None = None,
+    ) -> ZeroRowBootstrapReport:
+        """Run zero-row bootstrap validation using the facade context.
+
+        Parameters
+        ----------
+        request
+            Optional zero-row bootstrap request. When omitted, runtime defaults
+            configured on the profile are used.
+
+        Returns:
+        -------
+        ZeroRowBootstrapReport
+            Bootstrap validation and materialization report.
+
+        Raises:
+            ValueError: If runtime profile is unavailable.
+        """
+        if self.runtime_profile is None:
+            msg = "Runtime profile is required for zero-row bootstrap validation."
+            raise ValueError(msg)
+        return self.runtime_profile.run_zero_row_bootstrap_validation(
+            request=request,
+            ctx=self.ctx,
         )
 
     def schema_introspector(self) -> SchemaIntrospector:

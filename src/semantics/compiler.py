@@ -221,6 +221,35 @@ class SemanticCompiler:
             self._udf_snapshot = dict(rust_udf_snapshot(self.ctx))
         validate_required_udfs(self._udf_snapshot, required=required)
 
+    @staticmethod
+    def _stable_id_expr(prefix: str, *parts: Expr) -> Expr:
+        """Build a stable ID from one or more expression parts.
+
+        The current Rust bridge reliably exposes ``stable_id(prefix, value)`` while
+        ``stable_id_parts`` support can vary by backend build. Normalize through the
+        two-argument UDF for deterministic behavior across runtimes.
+
+        Returns:
+        -------
+        Expr
+            DataFusion expression that yields a deterministic stable identifier.
+
+        Raises:
+        ------
+        ValueError:
+            If no expression parts are provided.
+        """
+        from datafusion import functions as f
+
+        from datafusion_engine.udf.expr import udf_expr
+
+        if not parts:
+            msg = "stable_id requires at least one part."
+            raise ValueError(msg)
+        string_parts = [part.cast(pa.string()) for part in parts]
+        joined = string_parts[0] if len(string_parts) == 1 else f.concat_ws("\x1f", *string_parts)
+        return udf_expr("stable_id", prefix, joined)
+
     def _spec_for_table(self, table_name: str) -> SemanticTableSpec | None:
         config_spec = self._config.spec_for(table_name)
         if config_spec is not None:
@@ -483,7 +512,7 @@ class SemanticCompiler:
 
             from datafusion_engine.udf.expr import udf_expr
 
-            self._require_udfs(("stable_id_parts", "span_make"))
+            self._require_udfs(("stable_id", "span_make"))
             info = self.get(spec.table)
             df = info.df
             names = set(self._schema_names(df))
@@ -525,8 +554,7 @@ class SemanticCompiler:
             if spec.primary_span.canonical_end != "bend":
                 df = df.with_column("bend", col(spec.primary_span.canonical_end))
 
-            id_expr = udf_expr(
-                "stable_id_parts",
+            id_expr = self._stable_id_expr(
                 spec.entity_id.namespace,
                 col(spec.entity_id.path_col),
                 col(spec.entity_id.start_col),
@@ -546,8 +574,7 @@ class SemanticCompiler:
                 df = df.with_column(spec.entity_id.canonical_entity_id, col(spec.entity_id.out_col))
 
             for foreign_key in spec.foreign_keys:
-                fk_expr = udf_expr(
-                    "stable_id_parts",
+                fk_expr = self._stable_id_expr(
                     foreign_key.target_namespace,
                     col(foreign_key.path_col),
                     col(foreign_key.start_col),
@@ -620,7 +647,7 @@ class SemanticCompiler:
                 )
                 raise SemanticSchemaError(msg)
             sem.require_evidence(table=table_name)
-            self._require_udfs(("stable_id_parts", "span_make"))
+            self._require_udfs(("stable_id", "span_make"))
 
             df = info.df.with_column(f"{prefix}_id", sem.entity_id_expr(prefix))
             df = df.with_column("entity_id", col(f"{prefix}_id"))

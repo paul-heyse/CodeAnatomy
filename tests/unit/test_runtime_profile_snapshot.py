@@ -90,6 +90,8 @@ def test_zero_row_bootstrap_config_is_in_telemetry_and_fingerprint() -> None:
             include_internal_tables=False,
             strict=False,
             allow_semantic_row_probe_fallback=True,
+            bootstrap_mode="seeded_minimal_rows",
+            seeded_datasets=("cst_refs",),
         )
     )
     assert baseline.fingerprint() != configured.fingerprint()
@@ -101,4 +103,6 @@ def test_zero_row_bootstrap_config_is_in_telemetry_and_fingerprint() -> None:
         "include_internal_tables": False,
         "strict": False,
         "allow_semantic_row_probe_fallback": True,
+        "bootstrap_mode": "seeded_minimal_rows",
+        "seeded_datasets": ["cst_refs"],
     }

@@ -39,6 +39,7 @@ use datafusion_ext::delta_protocol::{gate_from_parts, protocol_gate};
 use datafusion_ext::udf_async;
 use datafusion_ext::udf_config::CodeAnatomyUdfConfig;
 use datafusion_ext::udf_registry;
+use datafusion_ext::udtf_sources;
 
 const DELTA_SCAN_CONFIG_VERSION: u32 = 1;
 
@@ -312,7 +313,10 @@ fn build_udf_bundle() -> DfUdfBundleV1 {
 fn build_table_functions() -> Vec<DfTableFunctionV1> {
     let mut functions = Vec::new();
     let ctx = SessionContext::new();
-    for spec in udf_registry::table_udf_specs() {
+    let specs = udf_registry::table_udf_specs()
+        .into_iter()
+        .chain(udtf_sources::external_udtf_specs());
+    for spec in specs {
         let table_fn = match (spec.builder)(&ctx) {
             Ok(table_fn) => table_fn,
             Err(err) => {

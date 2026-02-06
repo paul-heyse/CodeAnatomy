@@ -551,6 +551,20 @@ def _runtime_capability_summary(logs: Sequence[Mapping[str, object]]) -> dict[st
             if isinstance(payload, Mapping):
                 rows.append(payload)
     if not rows:
+        service_rows = _event_rows(logs, "delta_service_provider_v1")
+        for row in service_rows:
+            rows.append(
+                {
+                    "event_time_unix_ms": row.get("event_time_unix_ms"),
+                    "strict_native_provider_enabled": row.get("strict_native_provider_enabled"),
+                    "delta_available": row.get("available"),
+                    "delta_compatible": row.get("compatible"),
+                    "delta_probe_result": row.get("probe_result"),
+                    "delta_ctx_kind": row.get("ctx_kind"),
+                    "delta_module": row.get("module"),
+                }
+            )
+    if not rows:
         return {"total": 0}
     latest = max(
         rows,

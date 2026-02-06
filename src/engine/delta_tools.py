@@ -214,6 +214,11 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
         storage_options=storage,
         delta_log_storage_options=request.log_storage_options or {},
     )
+    if profile.diagnostics.diagnostics_sink is not None:
+        delta_service_for_profile(profile).provider(
+            location=location,
+            name=request.table_name,
+        )
     register_dataset_df(
         ctx,
         name=request.table_name,

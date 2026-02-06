@@ -9,7 +9,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
-from storage.deltalake.delta import query_delta_sql
+from engine.delta_tools import DeltaQueryRequest, delta_query
 from tests.harness.plan_bundle import build_plan_manifest_for_sql, persist_plan_artifacts
 from tests.harness.profiles import conformance_profile_with_sink
 from tests.test_helpers.arrow_seed import register_arrow_table
@@ -87,11 +87,18 @@ def run_delta_smoke_round_trip(scenario: DeltaSmokeScenario) -> DeltaSmokeResult
         plan_manifest=plan_manifest,
         plan_details=plan_details,
     )
+    sql = f"SELECT id, label FROM {scenario.query_table_name} ORDER BY id"
     rows = _rows_from_reader(
-        query_delta_sql(
-            f"SELECT id, label FROM {scenario.query_table_name} ORDER BY id",
-            {scenario.query_table_name: str(delta_path)},
-            runtime_profile=profile,
+        delta_query(
+            DeltaQueryRequest(
+                path=str(delta_path),
+                table_name=scenario.query_table_name,
+                runtime_profile=profile,
+                builder=lambda ctx, table_name: ctx.sql(
+                    f"SELECT id, label FROM {table_name} ORDER BY id"
+                ),
+                query_label=sql,
+            )
         )
     )
     artifacts = sink.artifacts_snapshot()

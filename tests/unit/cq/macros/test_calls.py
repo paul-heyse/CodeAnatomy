@@ -144,6 +144,29 @@ def test_cmd_calls_signature_in_summary(tmp_path: Path) -> None:
     assert result.summary["signature"] == "(x, y)"
 
 
+def test_cmd_calls_sets_summary_query_and_mode(tmp_path: Path) -> None:
+    """Calls macro should expose top-level summary query/mode metadata."""
+    tc = Toolchain.detect()
+    if not tc.has_sgpy:
+        pytest.skip("ast-grep-py not available")
+
+    repo = tmp_path / "repo"
+    _write_file(
+        repo / "mod.py",
+        textwrap.dedent("""\
+            def foo():
+                return 1
+
+            def bar():
+                return foo()
+            """),
+    )
+
+    result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
+    assert result.summary["mode"] == "macro:calls"
+    assert result.summary["query"] == "foo"
+
+
 def test_extract_context_snippet_prioritizes_anchor_block() -> None:
     """Context snippet should include function top and matched anchor block."""
     source = textwrap.dedent(

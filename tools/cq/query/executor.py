@@ -207,8 +207,38 @@ def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
     return run_ctx.to_runmeta("q")
 
 
+def _query_mode(query: Query) -> str:
+    return "pattern" if query.is_pattern_query else "entity"
+
+
+def _query_text(query: Query) -> str:
+    if query.pattern_spec is not None:
+        return query.pattern_spec.pattern
+    parts: list[str] = []
+    if query.entity is not None:
+        parts.append(f"entity={query.entity}")
+    if query.name:
+        parts.append(f"name={query.name}")
+    return " ".join(parts) if parts else "q"
+
+
+def _summary_common_for_query(query: Query) -> dict[str, object]:
+    common: dict[str, object] = {
+        "query": _query_text(query),
+        "mode": _query_mode(query),
+    }
+    if query.pattern_spec is not None:
+        common["pattern"] = query.pattern_spec.pattern
+        if query.pattern_spec.context is not None:
+            common["pattern_context"] = query.pattern_spec.context
+        if query.pattern_spec.selector is not None:
+            common["pattern_selector"] = query.pattern_spec.selector
+    return common
+
+
 def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
     result = mk_result(_build_runmeta(ctx))
+    result.summary.update(_summary_common_for_query(ctx.query))
     result.summary["error"] = message
     return result
 
@@ -576,6 +606,7 @@ def _merge_auto_scope_results(
             diagnostics=diagnostics,
             diagnostic_payloads=diagnostic_payloads,
             language_capabilities=language_capabilities,
+            summary_common=_summary_common_for_query(query),
         )
     )
 
@@ -593,6 +624,7 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
         return state
 
     result = mk_result(_build_runmeta(ctx))
+    result.summary.update(_summary_common_for_query(ctx.query))
     _apply_entity_handlers(state, result)
     result.summary["files_scanned"] = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
@@ -633,6 +665,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         candidates=candidates,
     )
     result = mk_result(_build_runmeta(ctx))
+    result.summary.update(_summary_common_for_query(ctx.query))
     _apply_entity_handlers(state, result, symtable=request.symtable)
     result.summary["files_scanned"] = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
@@ -660,6 +693,7 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     )
 
     result = mk_result(_build_runmeta(ctx))
+    result.summary.update(_summary_common_for_query(ctx.query))
     result.key_findings.extend(findings)
 
     if state.ctx.query.scope_filter and findings:
@@ -717,6 +751,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     )
 
     result = mk_result(_build_runmeta(ctx))
+    result.summary.update(_summary_common_for_query(ctx.query))
     result.key_findings.extend(findings)
 
     if state.ctx.query.scope_filter and findings:

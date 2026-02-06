@@ -155,6 +155,8 @@
         "total_matches": 0,
         "truncated": false
       }
-    }
+    },
+    "mode": "entity",
+    "query": "entity=import name=Path"
   }
 }

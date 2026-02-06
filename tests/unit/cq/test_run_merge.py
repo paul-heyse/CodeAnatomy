@@ -70,6 +70,38 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
     assert isinstance(merged.summary["language_capabilities"], dict)
 
 
+def test_merge_language_cq_results_preserves_summary_common() -> None:
+    """Language merge should preserve supplied query/mode metadata."""
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=1.0,
+        toolchain={},
+    )
+    py_result = CqResult(
+        run=run,
+        summary={"matches": 1},
+        key_findings=[Finding(category="d", message="py")],
+    )
+    rs_result = CqResult(
+        run=run,
+        summary={"matches": 2},
+        key_findings=[Finding(category="d", message="rs")],
+    )
+    merged = merge_language_cq_results(
+        MergeResultsRequest(
+            scope="auto",
+            results={"python": py_result, "rust": rs_result},
+            run=run,
+            summary_common={"query": "entity=function name=target", "mode": "entity"},
+        )
+    )
+    assert merged.summary["query"] == "entity=function name=target"
+    assert merged.summary["mode"] == "entity"
+
+
 def test_runmeta_for_scope_merge_builds_runmeta() -> None:
     """Runmeta helper should preserve macro and root context."""
     run = runmeta_for_scope_merge(

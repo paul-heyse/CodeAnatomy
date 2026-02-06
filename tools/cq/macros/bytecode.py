@@ -397,6 +397,7 @@ def _apply_rust_fallback(
         root=root,
         pattern=target,
         macro_name="bytecode-surface",
+        query=target,
     )
 
 

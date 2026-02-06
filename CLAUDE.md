@@ -11,6 +11,8 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 ## Skills (Use Before Guessing)
 
 **IMPORTANT:** Always use these skills to understand code before proposing changes. They provide high-signal analysis that prevents incorrect assumptions.
+Canonical CQ behavior/output semantics are documented in
+`.claude/skills/cq/reference/cq_reference.md`.
 
 | Skill | When to Use | Why |
 |-------|-------------|-----|
@@ -30,9 +32,11 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 
 ### Mandatory cq Usage
 
-**Before searching for code:** Use `/cq search <query>` for semantic code discovery. It classifies matches and groups by containing function, enriches with a 5-stage pipeline (ast_grep, python_ast, import_detail, libcst, tree_sitter), and tracks cross-source agreement for confidence. Output includes enrichment tables (resolution, behavior, structural, parse_quality, agreement) per finding.
+**Before searching for code:** Use `/cq search <query>` for semantic code discovery. It classifies matches and groups by containing function, enriches with a 5-stage pipeline (ast_grep, python_ast, import_detail, libcst, tree_sitter), and tracks cross-source agreement for confidence. Output includes per-finding Code Facts clusters (Identity, Scope, Interface, Behavior, Structure) plus a top Code Overview block; summary/footer includes diagnostics such as `dropped_by_scope`.
 
-**Before searching Rust code:** Use `/cq search <query> --lang rust` to narrow scope to Rust files. Use `/cq q "entity=... lang=rust"` for Rust entity queries.
+**Before searching Rust code:** Use `/cq search <query> --lang rust` to narrow scope to Rust files. Use `/cq q "entity=... lang=rust"` for Rust entity queries. Scope is extension-authoritative (`python` => `.py/.pyi`, `rust` => `.rs`).
+
+CQ parallel worker pools use multiprocessing `spawn` context (not `fork`) and fail open to sequential execution on worker errors.
 
 **Before modifying a function:** Run `/cq calls <function>` to find all call sites.
 

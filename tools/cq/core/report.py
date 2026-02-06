@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import cast
 
 from tools.cq.core.codec import dumps_json_value
+from tools.cq.core.enrichment_facts import (
+    additional_language_payload,
+    resolve_fact_clusters,
+    resolve_fact_context,
+    resolve_primary_language_payload,
+)
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 from tools.cq.core.serialization import to_builtins
 from tools.cq.query.language import QueryLanguage
@@ -17,6 +24,7 @@ MAX_SECTION_FINDINGS = 50
 MAX_RENDER_ENRICH_FILES = 9  # original anchor file + next 8 files
 MAX_RENDER_ENRICH_WORKERS = 4
 MAX_CODE_OVERVIEW_ITEMS = 5
+RUN_QUERY_ARG_START_INDEX = 2
 SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
     "query",
     "mode",
@@ -171,279 +179,30 @@ def _na(reason: str) -> str:
     return f"N/A — {reason.replace('_', ' ')}"
 
 
-def _has_fact_value(value: object) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, (list, tuple, dict, set)):
-        return bool(value)
-    return True
-
-
 def _format_fact_value(value: object) -> str:
-    rendered = value if isinstance(value, str) else dumps_json_value(to_builtins(value), indent=None)
+    rendered = (
+        value if isinstance(value, str) else dumps_json_value(to_builtins(value), indent=None)
+    )
     if not isinstance(rendered, str):
         rendered = str(rendered)
     return rendered.strip() or _na("not_resolved")
 
 
-def _resolve_primary_language_payload(
-    *,
-    payload: dict[str, object],
-) -> tuple[str | None, dict[str, object] | None]:
-    language = payload.get("language")
-    if isinstance(language, str):
-        candidate = payload.get(language)
-        if isinstance(candidate, dict):
-            return language, candidate
-    for language_key in ("python", "rust"):
-        candidate = payload.get(language_key)
-        if isinstance(candidate, dict):
-            return language_key, candidate
-    return (
-        cast("str | None", language if isinstance(language, str) else None),
-        payload if isinstance(payload, dict) else None,
-    )
-
-
-def _lookup_fact_value(
-    language_payload: dict[str, object],
-    *,
-    paths: tuple[tuple[str, str], ...],
-) -> str:
-    section_seen = False
-    for section, key in paths:
-        if section == "__root__":
-            if key in language_payload:
-                value = language_payload[key]
-                if _has_fact_value(value):
-                    return _format_fact_value(value)
-                section_seen = True
-            continue
-        section_payload = language_payload.get(section)
-        if not isinstance(section_payload, dict):
-            continue
-        section_seen = True
-        if key not in section_payload:
-            continue
-        value = section_payload[key]
-        if _has_fact_value(value):
-            return _format_fact_value(value)
-    if section_seen:
-        return _na("not_resolved")
-    return _na("not_available")
-
-
-def _render_fact_cluster(
-    *,
-    title: str,
-    language_payload: dict[str, object] | None,
-    fields: tuple[tuple[str, tuple[tuple[str, str], ...]], ...],
-) -> list[str]:
-    lines = [f"  - {title}"]
-    if language_payload is None:
-        lines.extend([f"    - {label}: {_na('enrichment_unavailable')}" for label, _ in fields])
-        return lines
-    for label, paths in fields:
-        lines.append(f"    - {label}: {_lookup_fact_value(language_payload, paths=paths)}")
-    return lines
-
-
 def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
-    language, language_payload = _resolve_primary_language_payload(payload=payload)
+    language, language_payload = resolve_primary_language_payload(payload)
+    context = resolve_fact_context(language=language, language_payload=language_payload)
+    clusters = resolve_fact_clusters(
+        context=context,
+        language_payload=language_payload,
+    )
     lines = ["  Code Facts:"]
-    lines.extend(
-        _render_fact_cluster(
-            title="Identity",
-            language_payload=language_payload,
-            fields=(
-                ("Language", (("__root__", "language"),)),
-                (
-                    "Symbol Role",
-                    (
-                        ("resolution", "symbol_role"),
-                        ("structural", "item_role"),
-                        ("__root__", "item_role"),
-                    ),
-                ),
-                (
-                    "Qualified Name",
-                    (
-                        ("resolution", "qualified_name_candidates"),
-                        ("__root__", "qualified_name_candidates"),
-                    ),
-                ),
-                (
-                    "Binding Candidates",
-                    (
-                        ("resolution", "binding_candidates"),
-                        ("__root__", "binding_candidates"),
-                    ),
-                ),
-            ),
-        )
-    )
-    lines.extend(
-        _render_fact_cluster(
-            title="Scope",
-            language_payload=language_payload,
-            fields=(
-                (
-                    "Enclosing Callable",
-                    (
-                        ("resolution", "enclosing_callable"),
-                        ("__root__", "containing_scope"),
-                    ),
-                ),
-                (
-                    "Enclosing Class",
-                    (
-                        ("resolution", "enclosing_class"),
-                        ("__root__", "enclosing_class"),
-                    ),
-                ),
-                (
-                    "Import Alias Chain",
-                    (
-                        ("resolution", "import_alias_chain"),
-                        ("__root__", "import_alias_chain"),
-                    ),
-                ),
-                (
-                    "Visibility",
-                    (
-                        ("structural", "visibility"),
-                        ("__root__", "visibility"),
-                    ),
-                ),
-            ),
-        )
-    )
-    lines.extend(
-        _render_fact_cluster(
-            title="Interface",
-            language_payload=language_payload,
-            fields=(
-                ("Signature", (("structural", "signature"), ("__root__", "signature"))),
-                (
-                    "Parameters",
-                    (
-                        ("structural", "parameters"),
-                        ("__root__", "parameters"),
-                    ),
-                ),
-                (
-                    "Return Type",
-                    (
-                        ("structural", "return_type"),
-                        ("__root__", "return_type"),
-                    ),
-                ),
-                (
-                    "Attributes or Decorators",
-                    (
-                        ("structural", "attributes"),
-                        ("structural", "decorators"),
-                        ("__root__", "attributes"),
-                        ("__root__", "decorators"),
-                    ),
-                ),
-            ),
-        )
-    )
-    lines.extend(
-        _render_fact_cluster(
-            title="Behavior",
-            language_payload=language_payload,
-            fields=(
-                (
-                    "Async or Generator",
-                    (
-                        ("behavior", "is_async"),
-                        ("behavior", "is_generator"),
-                        ("__root__", "is_async"),
-                        ("__root__", "is_generator"),
-                    ),
-                ),
-                (
-                    "Await or Yield",
-                    (
-                        ("behavior", "has_await"),
-                        ("behavior", "has_yield"),
-                        ("__root__", "has_await"),
-                        ("__root__", "has_yield"),
-                    ),
-                ),
-                (
-                    "Raises",
-                    (
-                        ("behavior", "has_raise"),
-                        ("__root__", "has_raise"),
-                    ),
-                ),
-                (
-                    "Control Flow Context",
-                    (
-                        ("behavior", "in_try"),
-                        ("behavior", "in_except"),
-                        ("behavior", "in_with"),
-                        ("behavior", "in_loop"),
-                        ("__root__", "in_try"),
-                        ("__root__", "in_except"),
-                        ("__root__", "in_with"),
-                        ("__root__", "in_loop"),
-                    ),
-                ),
-            ),
-        )
-    )
-    lines.extend(
-        _render_fact_cluster(
-            title="Structure",
-            language_payload=language_payload,
-            fields=(
-                (
-                    "Struct Fields",
-                    (
-                        ("structural", "struct_fields"),
-                        ("__root__", "struct_fields"),
-                    ),
-                ),
-                (
-                    "Struct Field Count",
-                    (
-                        ("structural", "struct_field_count"),
-                        ("__root__", "struct_field_count"),
-                    ),
-                ),
-                (
-                    "Enum Variants",
-                    (
-                        ("structural", "enum_variants"),
-                        ("__root__", "enum_variants"),
-                    ),
-                ),
-                (
-                    "Enum Variant Count",
-                    (
-                        ("structural", "enum_variant_count"),
-                        ("__root__", "enum_variant_count"),
-                    ),
-                ),
-            ),
-        )
-    )
+    for cluster in clusters:
+        lines.append(f"  - {cluster.title}")
+        for row in cluster.rows:
+            rendered = _format_fact_value(row.value) if row.reason is None else _na(row.reason)
+            lines.append(f"    - {row.label}: {rendered}")
 
-    additional_payload = (
-        {
-            key: value
-            for key, value in language_payload.items()
-            if key not in {"meta", "resolution", "behavior", "structural", "parse_quality", "agreement"}
-        }
-        if isinstance(language_payload, dict)
-        else {}
-    )
+    additional_payload = additional_language_payload(language_payload)
     if additional_payload:
         rendered = dumps_json_value(to_builtins(additional_payload), indent=None)
         lines.append(f"  - Additional Facts: `{rendered}`")
@@ -469,15 +228,62 @@ def _extract_symbol_hint(finding: Finding) -> str | None:
     return message
 
 
+def _derive_query_fallback(result: CqResult) -> str | None:
+    run = result.run
+    if run.macro == "run":
+        steps = result.summary.get("steps")
+        if isinstance(steps, list):
+            return f"multi-step plan ({len(steps)} steps)"
+        step_summaries = result.summary.get("step_summaries")
+        if isinstance(step_summaries, dict):
+            return f"multi-step plan ({len(step_summaries)} steps)"
+        return "multi-step plan"
+    if len(run.argv) > RUN_QUERY_ARG_START_INDEX:
+        tail = " ".join(
+            str(arg) for arg in run.argv[RUN_QUERY_ARG_START_INDEX:] if str(arg).strip()
+        )
+        if tail:
+            return tail
+    return None
+
+
+def _derive_mode_fallback(result: CqResult) -> str | None:
+    run_macro = result.run.macro
+    if run_macro == "run":
+        return "run"
+    if run_macro in {
+        "calls",
+        "impact",
+        "sig-impact",
+        "imports",
+        "exceptions",
+        "side-effects",
+        "scopes",
+        "bytecode-surface",
+    }:
+        return f"macro:{run_macro}"
+    if run_macro in {"search", "q"}:
+        return run_macro
+    return None
+
+
 def _summary_string(
-    summary: dict[str, object],
+    result: CqResult,
     *,
     key: str,
     missing_reason: str,
 ) -> str:
+    summary: dict[str, object] = result.summary if isinstance(result.summary, dict) else {}
     value = summary.get(key)
     if isinstance(value, str) and value:
         return f"`{value}`"
+    fallback: str | None = None
+    if key == "query":
+        fallback = _derive_query_fallback(result)
+    elif key == "mode":
+        fallback = _derive_mode_fallback(result)
+    if isinstance(fallback, str) and fallback:
+        return f"`{fallback}`"
     return _na(missing_reason)
 
 
@@ -538,10 +344,10 @@ def _summarize_categories(findings: list[Finding]) -> str:
 
 def _render_code_overview(result: CqResult) -> list[str]:
     lines = ["## Code Overview"]
-    summary = result.summary if isinstance(result.summary, dict) else {}
     all_findings = _iter_result_findings(result)
-    lines.append(f"- Query: {_summary_string(summary, key='query', missing_reason='query_missing')}")
-    lines.append(f"- Mode: {_summary_string(summary, key='mode', missing_reason='mode_missing')}")
+    lines.append(f"- Query: {_summary_string(result, key='query', missing_reason='query_missing')}")
+    lines.append(f"- Mode: {_summary_string(result, key='mode', missing_reason='mode_missing')}")
+    summary = result.summary if isinstance(result.summary, dict) else {}
     lines.append(f"- Language Scope: {_format_language_scope(summary)}")
     lines.append(f"- Top Symbols: {_collect_top_symbols(all_findings)}")
     lines.append(f"- Top Files: {_collect_top_files(all_findings)}")
@@ -672,7 +478,12 @@ def _compute_render_enrichment_payload_from_anchor(
         match_byte_end=byte_end,
     )
     try:
-        enriched = classify_match(raw, root, lang=language)
+        enriched = classify_match(
+            raw,
+            root,
+            lang=language,
+            force_semantic_enrichment=True,
+        )
         enriched_finding = build_finding(enriched, root)
         payload = to_builtins(enriched_finding.details.data)
     except Exception:  # noqa: BLE001 - fail-open render enrichment
@@ -790,7 +601,10 @@ def _populate_render_enrichment_cache(
         _populate_render_enrichment_cache_sequential(cache, tasks)
         return
     try:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        ) as pool:
             cache.update(pool.map(_compute_render_enrichment_worker, tasks))
     except Exception:  # noqa: BLE001 - fail-open to sequential mode
         _populate_render_enrichment_cache_sequential(cache, tasks)

@@ -7,6 +7,7 @@ from pathlib import Path
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguageScope,
+    is_path_in_lang_scope,
     ripgrep_types_for_scope,
 )
 from tools.cq.search.classifier import QueryMode
@@ -101,6 +102,8 @@ def find_files_with_pattern(
         rel_path = match_path(data)
         if rel_path is None:
             continue
+        if not is_path_in_lang_scope(rel_path, lang_scope):
+            continue
         seen.add((root / rel_path).resolve())
         if len(seen) >= limits.max_files:
             break
@@ -153,6 +156,8 @@ def find_call_candidates(
         rel_path = match_path(data)
         line = match_line_number(data)
         if rel_path is None or line is None:
+            continue
+        if not is_path_in_lang_scope(rel_path, lang_scope):
             continue
         results.append(((root / rel_path).resolve(), line))
         if len(results) >= limits.max_total_matches:
@@ -221,6 +226,8 @@ def search_content(
         rel_path = match_path(data)
         line = match_line_number(data)
         if rel_path is None or line is None:
+            continue
+        if not is_path_in_lang_scope(rel_path, lang_scope):
             continue
         results.append(((root / rel_path).resolve(), line, match_line_text(data)))
         if len(results) >= limits.max_total_matches:

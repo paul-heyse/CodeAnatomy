@@ -336,6 +336,7 @@ def _apply_rust_fallback(
         root=root,
         pattern=symbol,
         macro_name="sig-impact",
+        query=symbol,
     )
 
 

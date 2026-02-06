@@ -27,7 +27,7 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 | `/cq run` | Multi-step execution with shared scan | Batch analysis workflows |
 | `/cq chain` | Command chaining frontend | Quick multi-command analysis |
 | `/ast-grep` | Structural search/rewrites (not regex) | Pattern-based code transformation |
-| `/datafusion-stack` | DataFusion/Delta/UDF operations | Don't guess APIs - probe versions |
+| `/datafusion-and-deltalake-stack` | DataFusion + DeltaLake operations (query engine, storage, UDFs) | Don't guess APIs - probe versions |
 
 ### Mandatory cq Usage
 

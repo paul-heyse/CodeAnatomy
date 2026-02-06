@@ -49,7 +49,7 @@ to a queryable graph using Hamilton DAG + DataFusion.
 | `/cq run` | Plan file execution | `/cq run --plan analysis.toml` |
 | `/cq chain` | Command chaining | `/cq chain q "..." AND calls foo AND search foo` |
 | `/ast-grep` | Structural search/rewrite | `/ast-grep pattern 'def $F($_): ...'` |
-| `/datafusion-stack` | DataFusion/Delta/UDF work | `/datafusion-stack` |
+| `/datafusion-and-deltalake-stack` | DataFusion + DeltaLake operations (query engine, storage, UDFs) | `/datafusion-and-deltalake-stack` |
 
 ### Default: Start with Smart Search
 

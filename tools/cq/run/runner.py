@@ -206,7 +206,7 @@ def _derive_run_scope_metadata(
             scopes.append(cast("QueryLanguageScope", raw_scope))
         raw_order = summary.get("language_order")
         if isinstance(raw_order, list):
-            normalized = tuple(
+            normalized: tuple[QueryLanguage, ...] = tuple(
                 cast("QueryLanguage", item) for item in raw_order if item in {"python", "rust"}
             )
             if normalized:

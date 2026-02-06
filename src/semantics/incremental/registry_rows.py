@@ -67,7 +67,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
     ),
     DatasetRow(
-        name="dim_exported_defs_v1",
+        name="dim_exported_defs",
         version=SCHEMA_VERSION,
         fields=(
             FieldSpec(name="file_id", dtype=arrow_type_from_pyarrow(interop.string())),

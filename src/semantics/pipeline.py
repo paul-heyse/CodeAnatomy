@@ -259,12 +259,12 @@ def _normalize_spec_builder(
     config: SemanticConfig | None,
 ) -> DataFrameBuilder:
     def _builder(inner_ctx: SessionContext) -> DataFrame:
-        from dataclasses import replace
+        import msgspec
 
         from semantics.compiler import SemanticCompiler
 
         resolved_table = input_mapping.get(spec.source_table, spec.source_table)
-        resolved_spec = replace(spec.spec, table=resolved_table)
+        resolved_spec = msgspec.structs.replace(spec.spec, table=resolved_table)
         return SemanticCompiler(inner_ctx, config=config).normalize_from_spec(resolved_spec)
 
     return _builder

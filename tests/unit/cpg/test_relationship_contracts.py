@@ -25,11 +25,11 @@ class TestRelationshipContractData:
     def test_dedupe_keys_symbol_relationship(self) -> None:
         """Test dedupe keys for symbol relationships."""
         data = RelationshipContractData(
-            table_name="rel_name_symbol_v1",
-            entity_id_cols=("ref_id",),
+            table_name="rel_name_symbol",
+            entity_id_cols=("entity_id",),
             dedupe_columns=STANDARD_SYMBOL_DEDUPE_COLUMNS,
         )
-        expected = ("ref_id", "symbol", "path", "bstart", "bend")
+        expected = ("entity_id", "symbol", "path", "bstart", "bend")
         assert data.dedupe_keys == expected
 
     def test_dedupe_keys_with_extra(self) -> None:
@@ -135,8 +135,8 @@ class TestRelationshipContractDataByName:
     def test_lookup_by_name(self) -> None:
         """Test that contracts can be looked up by name."""
         mapping = relationship_contract_data_by_name()
-        data = mapping["rel_name_symbol_v1"]
-        assert data.entity_id_cols == ("ref_id",)
+        data = mapping["rel_name_symbol"]
+        assert data.entity_id_cols == ("entity_id",)
 
 
 class TestStaticContractDataMatches:
@@ -145,10 +145,10 @@ class TestStaticContractDataMatches:
     @pytest.mark.parametrize(
         ("table_name", "entity_id_cols"),
         [
-            ("rel_name_symbol_v1", ("ref_id",)),
-            ("rel_import_symbol_v1", ("import_alias_id",)),
-            ("rel_def_symbol_v1", ("def_id",)),
-            ("rel_callsite_symbol_v1", ("call_id",)),
+            ("rel_name_symbol", ("entity_id",)),
+            ("rel_import_symbol", ("entity_id",)),
+            ("rel_def_symbol", ("entity_id",)),
+            ("rel_callsite_symbol", ("entity_id",)),
         ],
     )
     def test_contract_data_entity_cols(
@@ -164,10 +164,10 @@ class TestStaticContractDataMatches:
     def test_all_symbol_relationships_use_symbol_dedupe(self) -> None:
         """Test that symbol relationships use STANDARD_SYMBOL_DEDUPE_COLUMNS."""
         symbol_names = {
-            "rel_name_symbol_v1",
-            "rel_import_symbol_v1",
-            "rel_def_symbol_v1",
-            "rel_callsite_symbol_v1",
+            "rel_name_symbol",
+            "rel_import_symbol",
+            "rel_def_symbol",
+            "rel_callsite_symbol",
         }
         mapping = relationship_contract_data_by_name()
         for name in symbol_names:

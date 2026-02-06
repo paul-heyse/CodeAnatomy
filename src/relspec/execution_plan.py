@@ -628,14 +628,14 @@ def _prepare_plan_context(
     session = session_runtime.ctx
     requested = set(request.requested_task_names or ())
     nodes_with_ast = _validated_view_nodes(request.view_nodes, requested=requested)
-    dataset_spec_map = _dataset_spec_map(session)
-    runtime_profile = request.runtime_profile or session_runtime.profile
     if (
         request.runtime_profile is not None
         and request.runtime_profile is not session_runtime.profile
     ):
         msg = "ExecutionPlanRequest runtime_profile must match the SessionRuntime profile."
         raise ValueError(msg)
+    runtime_profile = request.runtime_profile or session_runtime.profile
+    dataset_spec_map = _dataset_spec_map(session)
     planned = plan_with_delta_pins(
         session,
         view_nodes=nodes_with_ast,

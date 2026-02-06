@@ -32,7 +32,7 @@ def build_exported_defs_index(
     pa.Table
         Exported definitions table with qname and optional symbol bindings.
     """
-    schema = dataset_schema("dim_exported_defs_v1")
+    schema = dataset_schema("dim_exported_defs")
     cst_table = coerce_table_like(cst_defs_norm, requested_schema=None)
     schema_names = cast("Sequence[str]", cst_table.schema.names)
     if "qnames" not in schema_names:
@@ -97,7 +97,7 @@ def _build_exported_defs_base(
     )
     table = execute_df_to_table(runtime, df, view_name="incremental_exported_defs")
     if table.num_rows == 0:
-        return _empty_exported_defs(dataset_schema("dim_exported_defs_v1"))
+        return _empty_exported_defs(dataset_schema("dim_exported_defs"))
     return table
 
 

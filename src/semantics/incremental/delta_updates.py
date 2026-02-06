@@ -263,9 +263,9 @@ def upsert_exported_defs(
         Mapping of dataset name to dataset path.
     """
     spec = PartitionedDatasetSpec(
-        name="dim_exported_defs_v1",
+        name="dim_exported_defs",
         partition_column="file_id",
-        schema=dataset_schema("dim_exported_defs_v1"),
+        schema=dataset_schema("dim_exported_defs"),
     )
     path = upsert_partitioned_dataset(
         exported_defs,

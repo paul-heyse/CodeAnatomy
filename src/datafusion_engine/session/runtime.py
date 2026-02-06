@@ -285,6 +285,8 @@ _ZERO_ROW_BOOTSTRAP_SCHEMA = pa.struct(
         pa.field("include_internal_tables", pa.bool_()),
         pa.field("strict", pa.bool_()),
         pa.field("allow_semantic_row_probe_fallback", pa.bool_()),
+        pa.field("bootstrap_mode", pa.string()),
+        pa.field("seeded_datasets", pa.list_(pa.string())),
     ]
 )
 _DELTA_STORE_POLICY_SCHEMA = pa.struct(
@@ -3203,10 +3205,10 @@ def build_session_runtime(
     """
     cache_key = profile.context_cache_key()
     cached = _SESSION_RUNTIME_CACHE.get(cache_key)
-    # Guard against cache-key collisions across profile variants.
-    if cached is not None and use_cache and cached.profile == profile:
-        return cached
     ctx = profile.session_context()
+    # Guard against cache-key collisions across profile variants.
+    if cached is not None and use_cache and cached.profile == profile and cached.ctx is ctx:
+        return cached
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
     from datafusion_engine.udf.catalog import rewrite_tag_index
     from datafusion_engine.udf.runtime import rust_udf_snapshot, rust_udf_snapshot_hash
@@ -3477,6 +3479,8 @@ class ZeroRowBootstrapConfig(StructBaseStrict, frozen=True):
     include_internal_tables: bool = True
     strict: bool = True
     allow_semantic_row_probe_fallback: bool = False
+    bootstrap_mode: Literal["strict_zero_rows", "seeded_minimal_rows"] = "strict_zero_rows"
+    seeded_datasets: tuple[str, ...] = ()
 
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for zero-row bootstrap settings.
@@ -3492,6 +3496,8 @@ class ZeroRowBootstrapConfig(StructBaseStrict, frozen=True):
             "include_internal_tables": self.include_internal_tables,
             "strict": self.strict,
             "allow_semantic_row_probe_fallback": self.allow_semantic_row_probe_fallback,
+            "bootstrap_mode": self.bootstrap_mode,
+            "seeded_datasets": list(self.seeded_datasets),
         }
 
 
@@ -4542,6 +4548,8 @@ class DataFusionRuntimeProfile(
         """
         from datafusion_engine.bootstrap.zero_row import (
             ZeroRowBootstrapRequest as BootstrapRequest,
+        )
+        from datafusion_engine.bootstrap.zero_row import (
             run_zero_row_bootstrap_validation as run_bootstrap_validation,
         )
 
@@ -4552,6 +4560,8 @@ class DataFusionRuntimeProfile(
             allow_semantic_row_probe_fallback=(
                 self.zero_row_bootstrap.allow_semantic_row_probe_fallback
             ),
+            bootstrap_mode=self.zero_row_bootstrap.bootstrap_mode,
+            seeded_datasets=self.zero_row_bootstrap.seeded_datasets,
         )
         active_ctx = ctx or self.session_context()
         report = run_bootstrap_validation(
@@ -5842,10 +5852,7 @@ class DataFusionRuntimeProfile(
         if validation.type_errors:
             issues["type_errors"] = dict(validation.type_errors)
         if validation.view_errors:
-            if (
-                zero_row_bootstrap.validation_mode == "bootstrap"
-                and not zero_row_bootstrap.strict
-            ):
+            if zero_row_bootstrap.validation_mode == "bootstrap" and not zero_row_bootstrap.strict:
                 advisory["view_errors"] = dict(validation.view_errors)
             else:
                 issues["view_errors"] = dict(validation.view_errors)

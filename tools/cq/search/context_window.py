@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+_TOP_LEVEL_PROLOGUE_LINE_COUNT = 3
+
 
 def _line_indent(line: str) -> int:
     expanded = line.expandtabs(4)
@@ -43,7 +45,7 @@ def _compact_top_level_window(
     block_start = _find_nonblank_start(source_lines, anchor_idx, lower_idx)
     block_end = _find_nonblank_end(source_lines, anchor_idx, upper_idx)
 
-    start_idx = 0 if block_start <= 3 else block_start
+    start_idx = 0 if block_start <= _TOP_LEVEL_PROLOGUE_LINE_COUNT else block_start
     end_idx = max(block_end, min(upper_idx, anchor_idx + 4))
     if end_idx - start_idx + 1 > max_lines:
         if anchor_idx - start_idx >= max_lines:
@@ -64,6 +66,11 @@ def compute_search_context_window(
     For matches inside definitions, this reuses macro callsite context behavior.
     For top-level/import matches, it emits a compact prologue block instead of
     spanning to EOF.
+
+    Returns:
+    -------
+    dict[str, int]
+        Inclusive one-based context window with ``start_line`` and ``end_line``.
     """
     total_lines = len(source_lines)
     if total_lines == 0:
@@ -88,7 +95,13 @@ def extract_search_context_snippet(
     context_window: dict[str, int],
     match_line: int,
 ) -> str | None:
-    """Render context snippet for smart-search findings."""
+    """Render context snippet for smart-search findings.
+
+    Returns:
+    -------
+    str | None
+        Extracted snippet text or ``None`` when rendering is unavailable.
+    """
     from tools.cq.macros.calls import _extract_context_snippet
 
     return _extract_context_snippet(

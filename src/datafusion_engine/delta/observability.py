@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import shutil
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -11,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 from opentelemetry import trace
 
 from datafusion_engine.arrow.field_builders import (
@@ -33,6 +36,7 @@ from datafusion_engine.delta.payload import (
     string_map,
 )
 from datafusion_engine.errors import DataFusionEngineError
+from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import (
     WriteFormat,
@@ -263,6 +267,11 @@ def record_delta_mutation(
         Delta table version for the write, or ``None`` when disabled.
     """
     if profile is None:
+        return None
+    if _is_observability_target(
+        dataset_name=artifact.dataset_name,
+        table_uri=artifact.table_uri,
+    ):
         return None
     active_ctx = ctx or profile.session_context()
     location = _ensure_observability_table(
@@ -542,6 +551,14 @@ def _ensure_observability_table(
         OSError,
         KeyError,
     ) as exc:
+        if _register_observability_fallback(
+            ctx,
+            profile,
+            name=name,
+            table_path=table_path,
+            exc=exc,
+        ):
+            return location
         profile.record_artifact(
             "delta_observability_register_failed_v1",
             {
@@ -581,6 +598,69 @@ def ensure_delta_observability_tables(
         )
         for name, schema in specs
     }
+
+
+def _register_observability_fallback(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+    *,
+    name: str,
+    table_path: Path,
+    exc: Exception,
+) -> bool:
+    if not _is_control_plane_registration_error(exc):
+        return False
+    try:
+        dataset = ds.dataset(str(table_path), format="parquet")
+    except (RuntimeError, TypeError, ValueError, OSError) as dataset_exc:
+        profile.record_artifact(
+            "delta_observability_register_fallback_failed_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": name,
+                "path": str(table_path),
+                "error": str(dataset_exc),
+                "cause": str(exc),
+                "stage": "dataset",
+            },
+        )
+        return False
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
+    if ctx.table_exist(name):
+        with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
+            adapter.deregister_table(name)
+    try:
+        adapter.register_dataset(name, dataset)
+    except (RuntimeError, TypeError, ValueError, OSError, KeyError) as register_exc:
+        profile.record_artifact(
+            "delta_observability_register_fallback_failed_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": name,
+                "path": str(table_path),
+                "error": str(register_exc),
+                "cause": str(exc),
+                "stage": "register",
+            },
+        )
+        return False
+    profile.record_artifact(
+        "delta_observability_register_fallback_used_v1",
+        {
+            "event_time_unix_ms": int(time.time() * 1000),
+            "table": name,
+            "path": str(table_path),
+            "cause": str(exc),
+        },
+    )
+    return True
+
+
+def _is_control_plane_registration_error(exc: Exception) -> bool:
+    if not isinstance(exc, DataFusionEngineError):
+        return False
+    message = str(exc).lower()
+    return "control-plane failed" in message or "degraded python fallback paths" in message
 
 
 def _ensure_observability_schema(
@@ -675,15 +755,32 @@ def _bootstrap_observability_table(
     from deltalake.writer import write_deltalake
 
     commit_properties = CommitProperties(
-        custom_metadata={"operation": operation, "table": table_path.name},
+        custom_metadata=_observability_commit_metadata(
+            operation,
+            {"table": table_path.name},
+        ),
     )
-    write_deltalake(
-        str(table_path),
-        empty,
-        mode="overwrite",
-        schema_mode="overwrite",
-        commit_properties=commit_properties,
-    )
+    try:
+        write_deltalake(
+            str(table_path),
+            empty,
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_properties=commit_properties,
+        )
+    except Exception as exc:
+        if not _is_corrupt_delta_log_error(exc):
+            raise
+        with contextlib.suppress(OSError):
+            shutil.rmtree(table_path)
+        table_path.parent.mkdir(parents=True, exist_ok=True)
+        write_deltalake(
+            str(table_path),
+            empty,
+            mode="overwrite",
+            schema_mode="overwrite",
+            commit_properties=commit_properties,
+        )
 
 
 def _bootstrap_observability_row(schema: pa.Schema) -> dict[str, object]:
@@ -711,6 +808,10 @@ def _bootstrap_observability_row(schema: pa.Schema) -> dict[str, object]:
 def _append_observability_row(request: _AppendObservabilityRequest) -> int | None:
     table = pa.Table.from_pylist([dict(request.payload)], schema=request.schema)
     pipeline = WritePipeline(ctx=request.ctx, runtime_profile=request.runtime_profile)
+    commit_metadata = _observability_commit_metadata(
+        request.operation,
+        request.commit_metadata,
+    )
     try:
         append_name = f"{request.location.path}_append_{time.time_ns()}"
         df = datafusion_from_arrow(request.ctx, name=append_name, value=table)
@@ -720,12 +821,7 @@ def _append_observability_row(request: _AppendObservabilityRequest) -> int | Non
                 destination=str(request.location.path),
                 format=WriteFormat.DELTA,
                 mode=WriteMode.APPEND,
-                format_options={
-                    "commit_metadata": {
-                        "operation": request.operation,
-                        **(request.commit_metadata or {}),
-                    }
-                },
+                format_options={"commit_metadata": commit_metadata},
             )
         )
     except _OBSERVABILITY_APPEND_ERRORS as exc:  # pragma: no cover - defensive fail-open path
@@ -749,12 +845,7 @@ def _append_observability_row(request: _AppendObservabilityRequest) -> int | Non
                         destination=str(request.location.path),
                         format=WriteFormat.DELTA,
                         mode=WriteMode.APPEND,
-                        format_options={
-                            "commit_metadata": {
-                                "operation": request.operation,
-                                **(request.commit_metadata or {}),
-                            }
-                        },
+                        format_options={"commit_metadata": commit_metadata},
                     )
                 )
             except (
@@ -781,6 +872,42 @@ def _is_schema_mismatch_error(exc: Exception) -> bool:
             "number of fields does not match",
         )
     )
+
+
+def _is_corrupt_delta_log_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "invalid json in log record" in message or "duplicate field `operation`" in message
+
+
+def _observability_commit_metadata(
+    operation: str,
+    metadata: Mapping[str, str] | None,
+) -> dict[str, str]:
+    sanitized: dict[str, str] = {
+        str(key): str(value)
+        for key, value in (metadata or {}).items()
+        if str(key).lower() != "operation"
+    }
+    sanitized["observability_operation"] = operation
+    return sanitized
+
+
+def _is_observability_target(
+    *,
+    dataset_name: str | None,
+    table_uri: str | None,
+) -> bool:
+    names = {
+        DELTA_SNAPSHOT_TABLE_NAME,
+        DELTA_MUTATION_TABLE_NAME,
+        DELTA_SCAN_PLAN_TABLE_NAME,
+        DELTA_MAINTENANCE_TABLE_NAME,
+    }
+    if dataset_name in names:
+        return True
+    if table_uri is None:
+        return False
+    return Path(table_uri).name in names
 
 
 def _record_append_failure(request: _AppendObservabilityRequest, exc: Exception) -> None:

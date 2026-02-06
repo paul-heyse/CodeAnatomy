@@ -102,5 +102,11 @@ def run_zero_row_bootstrap(
     *,
     request: ZeroRowBootstrapRequest | None = None,
 ) -> ZeroRowBootstrapReport:
-    """Execute zero-row bootstrap for a runtime profile."""
+    """Execute zero-row bootstrap for a runtime profile.
+
+    Returns:
+    -------
+    ZeroRowBootstrapReport
+        Report emitted by runtime zero-row bootstrap validation.
+    """
     return profile.run_zero_row_bootstrap_validation(request=request)

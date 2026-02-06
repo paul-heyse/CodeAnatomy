@@ -32,6 +32,8 @@ def _conflict_family(exc: BaseException) -> str:
             "version already exists",
             "transaction conflict",
             "commit failed",
+            "invalid json in log record",
+            "duplicate field `operation`",
         )
     ):
         return "conflict"

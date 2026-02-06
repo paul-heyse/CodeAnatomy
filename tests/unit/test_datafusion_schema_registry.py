@@ -6,9 +6,9 @@ import pyarrow as pa
 import pytest
 
 from arrow_utils.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
-from datafusion_engine.arrow.semantic import SEMANTIC_TYPE_META
 from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.arrow.metadata_codec import encode_metadata_list
+from datafusion_engine.arrow.semantic import SEMANTIC_TYPE_META
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema import registry as schema_registry
 from datafusion_engine.schema.registry import (
@@ -21,12 +21,12 @@ from datafusion_engine.schema.registry import (
     LIBCST_FILES_SCHEMA,
     SYMTABLE_FILES_SCHEMA,
     nested_view_spec,
-    validate_semantic_types,
     validate_ast_views,
     validate_required_bytecode_functions,
     validate_required_cst_functions,
     validate_required_engine_functions,
     validate_required_symtable_functions,
+    validate_semantic_types,
 )
 from datafusion_engine.udf.platform import ensure_rust_udfs
 from tests.test_helpers.datafusion_runtime import df_profile

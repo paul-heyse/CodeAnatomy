@@ -177,3 +177,64 @@ def test_provider_build_request_adapter_from_service_context() -> None:
     assert build_request.delta_pruned_files == 1
     assert build_request.strict_native_provider_enabled is True
     assert build_request.run_id == "run-123"
+
+
+def test_provider_build_request_adapter_preserves_internal_bootstrap_context() -> None:
+    """Registration adapter should preserve bootstrap metadata for internal tables."""
+    context = _RegistrationContextStub(
+        dataset_name="datafusion_view_cache_inventory_v1",
+        strict_native_provider_enabled=False,
+        strict_native_provider_violation=False,
+        registration_path="bootstrap",
+        predicate=None,
+        predicate_error=None,
+        add_actions=None,
+        snapshot={"version": 0},
+    )
+    request = provider_build_request_from_registration_context(
+        RegistrationProviderArtifactInput(
+            table_uri="file:///tmp/artifacts/datafusion_view_cache_inventory_v1",
+            dataset_format="delta",
+            provider_kind="delta",
+            compatibility=_CompatibilityStub(),
+            context=context,
+        )
+    )
+    assert request.dataset_name == "datafusion_view_cache_inventory_v1"
+    assert request.registration_path == "bootstrap"
+    assert request.strict_native_provider_enabled is False
+    assert request.delta_pruning_applied is False
+    assert request.delta_pruned_files is None
+    assert request.delta_scan_ignored is False
+    assert request.delta_snapshot == {"version": 0}
+
+
+def test_provider_build_result_includes_internal_bootstrap_snapshot_identity() -> None:
+    """Bootstrap registrations should emit stable snapshot identity for internal tables."""
+    request = DeltaProviderBuildRequest(
+        table_uri="file:///tmp/artifacts/delta_observability/semantic_delta_snapshot_artifacts_v1",
+        dataset_format="delta",
+        provider_kind="delta",
+        dataset_name="semantic_delta_snapshot_artifacts_v1",
+        provider_mode="delta_table_provider",
+        strict_native_provider_enabled=False,
+        strict_native_provider_violation=False,
+        ffi_table_provider=True,
+        compatibility=_CompatibilityStub(),
+        registration_path="bootstrap",
+        delta_snapshot={"version": 0},
+        include_event_metadata=False,
+    )
+    payload = build_delta_provider_build_result(request).as_payload()
+    assert payload["dataset_name"] == "semantic_delta_snapshot_artifacts_v1"
+    assert payload["registration_path"] == "bootstrap"
+    snapshot_key = payload.get("snapshot_key")
+    assert isinstance(snapshot_key, dict)
+    assert snapshot_key["resolved_version"] == 0
+    canonical_uri = snapshot_key["canonical_uri"]
+    assert isinstance(canonical_uri, str)
+    assert canonical_uri.startswith("file://")
+    storage_fingerprint = payload.get("storage_profile_fingerprint")
+    assert isinstance(storage_fingerprint, str)
+    assert len(storage_fingerprint) == 16
+    assert "event_time_unix_ms" not in payload

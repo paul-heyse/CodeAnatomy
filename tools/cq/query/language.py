@@ -192,7 +192,13 @@ def constrain_include_globs_for_language(
     include_globs: list[str] | None,
     lang: QueryLanguage,
 ) -> list[str] | None:
-    """Constrain include globs to language-compatible file patterns."""
+    """Constrain include globs to language-compatible file patterns.
+
+    Returns:
+    -------
+    list[str] | None
+        Language-constrained include globs, or ``None`` when no patterns remain.
+    """
     if not include_globs:
         return include_globs
     suffixes = LANGUAGE_FILE_EXTENSIONS[lang]

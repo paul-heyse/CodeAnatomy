@@ -552,9 +552,9 @@
     {
       "inputs": [],
       "kind": "export",
-      "name": "dim_exported_defs_v1",
+      "name": "dim_exported_defs",
       "outputs": [
-        "dim_exported_defs_v1"
+        "dim_exported_defs"
       ]
     },
     {

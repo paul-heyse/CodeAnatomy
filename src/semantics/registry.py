@@ -497,7 +497,7 @@ def _build_output_specs() -> tuple[SemanticOutputSpec, ...]:
     for name in SEMANTIC_DIAGNOSTIC_VIEW_NAMES:
         _append(SemanticOutputSpec(name=name, kind="diagnostic", contract_ref=name))
 
-    for name in ("dim_exported_defs_v1",):
+    for name in ("dim_exported_defs",):
         _append(SemanticOutputSpec(name=name, kind="export", contract_ref=name))
 
     return tuple(ordered)

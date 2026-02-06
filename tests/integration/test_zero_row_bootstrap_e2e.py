@@ -57,6 +57,37 @@ def test_zero_row_bootstrap_validation_e2e(tmp_path: Path) -> None:
     assert ctx.table_exist("cpg_nodes")
     assert (extract_root / "cst_refs" / "_delta_log").exists()
     assert (semantic_root / "cpg_nodes" / "_delta_log").exists()
-    assert (
-        artifacts_root / "datafusion_view_cache_inventory_v1" / "_delta_log"
-    ).exists()
+    assert (artifacts_root / "datafusion_view_cache_inventory_v1" / "_delta_log").exists()
+
+
+@pytest.mark.integration
+def test_zero_row_bootstrap_seeded_mode_only_seeds_selected_datasets(tmp_path: Path) -> None:
+    """Seeded mode should only materialize seed rows for selected datasets."""
+    extract_root = tmp_path / "extract"
+    semantic_root = tmp_path / "semantic"
+    profile = DataFusionRuntimeProfile(
+        data_sources=DataSourceConfig(
+            extract_output=ExtractOutputConfig(output_root=str(extract_root)),
+            semantic_output=SemanticOutputConfig(output_root=str(semantic_root)),
+        ),
+    )
+
+    report = profile.run_zero_row_bootstrap_validation(
+        request=ZeroRowBootstrapRequest(
+            include_semantic_outputs=False,
+            include_internal_tables=False,
+            strict=True,
+            bootstrap_mode="seeded_minimal_rows",
+            seeded_datasets=("cst_refs",),
+        )
+    )
+
+    assert report.success
+    assert report.seeded_count == 1
+    assert report.seeded_datasets == ("cst_refs",)
+
+    ctx = profile.session_context()
+    seeded_count = ctx.sql("SELECT COUNT(*) AS n FROM cst_refs").to_arrow_table().to_pylist()
+    plain_count = ctx.sql("SELECT COUNT(*) AS n FROM cst_defs").to_arrow_table().to_pylist()
+    assert seeded_count[0]["n"] == 1
+    assert plain_count[0]["n"] == 0

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tools.cq.core.multilang_summary import build_multilang_summary
+from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.search.contracts import (
     CrossLanguageDiagnostic,
     EnrichmentTelemetry,
@@ -15,15 +16,17 @@ from tools.cq.search.contracts import (
 
 def test_search_summary_contract_preserves_required_keys() -> None:
     summary = build_multilang_summary(
-        common={"query": "build_graph"},
-        lang_scope="auto",
-        language_order=["python", "rust"],
-        languages={
-            "python": {"matches": 2, "files_scanned": 1},
-            "rust": {"matches": 1, "files_scanned": 1},
-        },
-        cross_language_diagnostics=(),
-        language_capabilities={},
+        SummaryBuildRequest(
+            common={"query": "build_graph"},
+            lang_scope="auto",
+            language_order=("python", "rust"),
+            languages={
+                "python": {"matches": 2, "files_scanned": 1},
+                "rust": {"matches": 1, "files_scanned": 1},
+            },
+            cross_language_diagnostics=[],
+            language_capabilities={},
+        )
     )
     assert "lang_scope" in summary
     assert "language_order" in summary

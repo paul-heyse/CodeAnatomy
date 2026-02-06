@@ -150,23 +150,35 @@ def _extract_visibility(item: SgNode) -> str:
     return "private"
 
 
-def _extract_function_signature(node: SgNode) -> dict[str, object]:  # noqa: C901
-    result: dict[str, object] = {}
+def _extract_function_signature(node: SgNode) -> dict[str, object]:
     if node.kind() != "function_item":
-        return result
+        return {}
 
+    result = _extract_function_params(node)
+    result.update(_extract_function_type_details(node))
+    signature_fields = _extract_signature_flags(node)
+    result.update(signature_fields)
+    return result
+
+
+def _extract_function_params(node: SgNode) -> dict[str, object]:
     params_node = node.field("parameters")
+    if params_node is None:
+        return {"params": []}
     params: list[str] = []
-    if params_node is not None:
-        for child in params_node.children():
-            if not child.is_named():
-                continue
-            text = child.text().strip()
-            if text:
-                params.append(text)
-            if len(params) >= _MAX_FUNCTION_PARAMS:
-                break
-    result["params"] = params
+    for child in params_node.children():
+        if not child.is_named():
+            continue
+        text = child.text().strip()
+        if text:
+            params.append(text)
+        if len(params) >= _MAX_FUNCTION_PARAMS:
+            break
+    return {"params": params}
+
+
+def _extract_function_type_details(node: SgNode) -> dict[str, object]:
+    result: dict[str, object] = {}
 
     return_type = _node_text(node.field("return_type"))
     if return_type is not None:
@@ -175,19 +187,22 @@ def _extract_function_signature(node: SgNode) -> dict[str, object]:  # noqa: C90
     type_params = _node_text(node.field("type_parameters"))
     if type_params is not None:
         result["generics"] = type_params
+    return result
 
+
+def _extract_signature_flags(node: SgNode) -> dict[str, object]:
     sig_text = node.text()
     body_idx = sig_text.find("{")
     if body_idx > 0:
         sig_text = sig_text[:body_idx].strip()
+
     if sig_text:
-        result["signature"] = sig_text[:200]
-        result["is_async"] = " async " in f" {sig_text} " or sig_text.startswith("async ")
-        result["is_unsafe"] = " unsafe " in f" {sig_text} " or sig_text.startswith("unsafe ")
-    else:
-        result["is_async"] = False
-        result["is_unsafe"] = False
-    return result
+        return {
+            "signature": sig_text[:200],
+            "is_async": " async " in f" {sig_text} " or sig_text.startswith("async "),
+            "is_unsafe": " unsafe " in f" {sig_text} " or sig_text.startswith("unsafe "),
+        }
+    return {"is_async": False, "is_unsafe": False}
 
 
 def _extract_struct_shape(node: SgNode) -> dict[str, object]:
@@ -277,7 +292,7 @@ def _extract_attributes(node: SgNode) -> list[str]:
     return attrs
 
 
-def _classify_item_role(  # noqa: C901, PLR0911
+def _classify_item_role(
     node: SgNode,
     scope: SgNode | None,
     *,
@@ -285,36 +300,55 @@ def _classify_item_role(  # noqa: C901, PLR0911
     attrs: list[str],
 ) -> str:
     kind = node.kind()
+    role = _classify_call_like_role(node, kind)
+    if role is not None:
+        return role
+
+    fn_target = _resolve_function_target(node, scope)
+    if fn_target is not None:
+        return _classify_function_role(fn_target, attrs=attrs, max_scope_depth=max_scope_depth)
+
+    return _NON_FUNCTION_ROLE_BY_KIND.get(kind, kind)
+
+
+_NON_FUNCTION_ROLE_BY_KIND: dict[str, str] = {
+    "use_declaration": "use_import",
+    "field_declaration": "struct_field",
+    "enum_variant": "enum_variant",
+}
+
+
+def _classify_call_like_role(node: SgNode, kind: str) -> str | None:
     if kind == "macro_invocation":
         return "macro_call"
-    if kind == "call_expression":
-        function = node.field("function")
-        if function is not None and function.kind() == "field_expression":
-            return "method_call"
-        return "function_call"
-    fn_target = (
-        node
-        if kind == "function_item"
-        else scope
-        if scope and scope.kind() == "function_item"
-        else None
-    )
-    if fn_target is not None:
-        if any(attr in _RUST_TEST_ATTRS for attr in attrs):
-            return "test_function"
-        impl_node = _find_ancestor(fn_target, "impl_item", max_depth=max_scope_depth)
-        if impl_node is not None:
-            if impl_node.field("trait") is not None:
-                return "trait_method"
-            return "method"
+    if kind != "call_expression":
+        return None
+    function = node.field("function")
+    if function is not None and function.kind() == "field_expression":
+        return "method_call"
+    return "function_call"
+
+
+def _resolve_function_target(node: SgNode, scope: SgNode | None) -> SgNode | None:
+    if node.kind() == "function_item":
+        return node
+    if scope is not None and scope.kind() == "function_item":
+        return scope
+    return None
+
+
+def _classify_function_role(
+    fn_target: SgNode,
+    *,
+    attrs: list[str],
+    max_scope_depth: int,
+) -> str:
+    if any(attr in _RUST_TEST_ATTRS for attr in attrs):
+        return "test_function"
+    impl_node = _find_ancestor(fn_target, "impl_item", max_depth=max_scope_depth)
+    if impl_node is None:
         return "free_function"
-    if kind == "use_declaration":
-        return "use_import"
-    if kind == "field_declaration":
-        return "struct_field"
-    if kind == "enum_variant":
-        return "enum_variant"
-    return kind
+    return "trait_method" if impl_node.field("trait") is not None else "method"
 
 
 def _canonicalize_tree_sitter_payload(payload: dict[str, object] | None) -> dict[str, object]:
@@ -336,7 +370,7 @@ def _merge_gap_fill(primary: dict[str, object], secondary: dict[str, object]) ->
     return merge_gap_fill_payload(primary, secondary)
 
 
-def _build_ast_grep_payload(  # noqa: C901, PLR0914
+def _build_ast_grep_payload(
     source: str,
     *,
     byte_start: int,
@@ -347,16 +381,49 @@ def _build_ast_grep_payload(  # noqa: C901, PLR0914
     source_bytes = source.encode("utf-8", errors="replace")
     sg_root = _get_sg_root(source, cache_key=cache_key)
 
-    line, col = byte_offset_to_line_col(source_bytes, byte_start)
-    index = get_node_index(Path(cache_key or "<memory>.rs"), sg_root, lang="rust")
-    node = index.find_containing(line, col)
-    if node is None:
-        end_line, end_col = byte_offset_to_line_col(source_bytes, max(byte_start, byte_end - 1))
-        node = index.find_containing(end_line, end_col)
+    node = _resolve_rust_node(
+        sg_root=sg_root,
+        source_bytes=source_bytes,
+        byte_start=byte_start,
+        byte_end=byte_end,
+        cache_key=cache_key,
+    )
     if node is None:
         return None
 
     scope = _find_scope(node, max_depth=max_scope_depth)
+    payload = _base_rust_payload(node=node, scope=scope, max_scope_depth=max_scope_depth)
+    attrs = _apply_definition_metadata(payload=payload, node=node, scope=scope)
+    _apply_kind_extractors(payload=payload, node=node, scope=scope)
+    payload["item_role"] = _classify_item_role(
+        node, scope, max_scope_depth=max_scope_depth, attrs=attrs
+    )
+    return payload
+
+
+def _resolve_rust_node(
+    *,
+    sg_root: SgRoot,
+    source_bytes: bytes,
+    byte_start: int,
+    byte_end: int,
+    cache_key: str | None,
+) -> SgNode | None:
+    line, col = byte_offset_to_line_col(source_bytes, byte_start)
+    index = get_node_index(Path(cache_key or "<memory>.rs"), sg_root, lang="rust")
+    node = index.find_containing(line, col)
+    if node is not None:
+        return node
+    end_line, end_col = byte_offset_to_line_col(source_bytes, max(byte_start, byte_end - 1))
+    return index.find_containing(end_line, end_col)
+
+
+def _base_rust_payload(
+    *,
+    node: SgNode,
+    scope: SgNode | None,
+    max_scope_depth: int,
+) -> dict[str, object]:
     payload: dict[str, object] = {
         "language": "rust",
         "node_kind": node.kind(),
@@ -369,9 +436,11 @@ def _build_ast_grep_payload(  # noqa: C901, PLR0914
         scope_name = _scope_name(scope)
         if scope_name:
             payload["scope_name"] = scope_name
+    return payload
 
-    def_target: SgNode | None = node
-    if node.kind() not in {
+
+def _resolve_definition_target(node: SgNode, scope: SgNode | None) -> SgNode | None:
+    if node.kind() in {
         "function_item",
         "struct_item",
         "enum_item",
@@ -379,54 +448,54 @@ def _build_ast_grep_payload(  # noqa: C901, PLR0914
         "impl_item",
         "mod_item",
     }:
-        def_target = scope
-    attrs: list[str] = []
-    if def_target is not None:
-        payload["visibility"] = _extract_visibility(def_target)
-        attrs = _extract_attributes(def_target)
-        if attrs:
-            payload["attributes"] = attrs
+        return node
+    return scope
 
-    fn_target = (
-        node
-        if node.kind() == "function_item"
-        else scope
-        if scope and scope.kind() == "function_item"
-        else None
-    )
+
+def _apply_definition_metadata(
+    *,
+    payload: dict[str, object],
+    node: SgNode,
+    scope: SgNode | None,
+) -> list[str]:
+    def_target = _resolve_definition_target(node, scope)
+    if def_target is None:
+        return []
+    payload["visibility"] = _extract_visibility(def_target)
+    attrs = _extract_attributes(def_target)
+    if attrs:
+        payload["attributes"] = attrs
+    return attrs
+
+
+def _resolve_shape_target(node: SgNode, scope: SgNode | None, kind: str) -> SgNode | None:
+    if scope is not None and scope.kind() == kind:
+        return scope
+    if node.kind() == kind:
+        return node
+    return None
+
+
+def _apply_kind_extractors(
+    *,
+    payload: dict[str, object],
+    node: SgNode,
+    scope: SgNode | None,
+) -> None:
+    fn_target = _resolve_function_target(node, scope)
     if fn_target is not None:
         payload.update(_extract_function_signature(fn_target))
 
-    struct_target = (
-        scope
-        if scope and scope.kind() == "struct_item"
-        else node
-        if node.kind() == "struct_item"
-        else None
-    )
+    struct_target = _resolve_shape_target(node, scope, "struct_item")
     if struct_target is not None:
         payload.update(_extract_struct_shape(struct_target))
 
-    enum_target = (
-        scope
-        if scope and scope.kind() == "enum_item"
-        else node
-        if node.kind() == "enum_item"
-        else None
-    )
+    enum_target = _resolve_shape_target(node, scope, "enum_item")
     if enum_target is not None:
         payload.update(_extract_enum_shape(enum_target))
 
     if node.kind() in {"call_expression", "macro_invocation"}:
         payload.update(_extract_call_target(node))
-
-    payload["item_role"] = _classify_item_role(
-        node,
-        scope,
-        max_scope_depth=max_scope_depth,
-        attrs=attrs,
-    )
-    return payload
 
 
 def _crosscheck_mismatches(
@@ -444,7 +513,7 @@ def _crosscheck_mismatches(
     return mismatches
 
 
-def enrich_rust_context_by_byte_range(  # noqa: C901, PLR0912
+def enrich_rust_context_by_byte_range(
     source: str,
     *,
     byte_start: int,
@@ -465,8 +534,45 @@ def enrich_rust_context_by_byte_range(  # noqa: C901, PLR0912
     if byte_end > len(source_bytes):
         return None
 
+    ast_payload = _safe_ast_grep_payload(
+        source=source,
+        byte_start=byte_start,
+        byte_end=byte_end,
+        cache_key=cache_key,
+        max_scope_depth=max_scope_depth,
+    )
+    ts_payload = _safe_tree_sitter_payload(
+        source=source,
+        byte_start=byte_start,
+        byte_end=byte_end,
+        cache_key=cache_key,
+        max_scope_depth=max_scope_depth,
+    )
+
+    if ast_payload is None and not ts_payload:
+        return None
+
+    merged = _merge_enrichment_payloads(ast_payload=ast_payload, ts_payload=ts_payload)
+
+    if os.getenv(_CROSSCHECK_ENV) == "1" and ts_payload and ast_payload is not None:
+        mismatches = _crosscheck_mismatches(ast_payload, ts_payload)
+        if mismatches:
+            merged["crosscheck_mismatches"] = mismatches
+            set_degraded(merged, "crosscheck mismatch")
+
+    return normalize_rust_payload(merged)
+
+
+def _safe_ast_grep_payload(
+    *,
+    source: str,
+    byte_start: int,
+    byte_end: int,
+    cache_key: str | None,
+    max_scope_depth: int,
+) -> dict[str, object] | None:
     try:
-        ast_payload = _build_ast_grep_payload(
+        return _build_ast_grep_payload(
             source,
             byte_start=byte_start,
             byte_end=byte_end,
@@ -474,10 +580,19 @@ def enrich_rust_context_by_byte_range(  # noqa: C901, PLR0912
             max_scope_depth=max_scope_depth,
         )
     except _ENRICHMENT_ERRORS:
-        ast_payload = None
+        return None
 
+
+def _safe_tree_sitter_payload(
+    *,
+    source: str,
+    byte_start: int,
+    byte_end: int,
+    cache_key: str | None,
+    max_scope_depth: int,
+) -> dict[str, object]:
     try:
-        ts_payload = _canonicalize_tree_sitter_payload(
+        return _canonicalize_tree_sitter_payload(
             _ts_enrich(
                 source,
                 byte_start=byte_start,
@@ -487,43 +602,49 @@ def enrich_rust_context_by_byte_range(  # noqa: C901, PLR0912
             )
         )
     except _ENRICHMENT_ERRORS:
-        ts_payload: dict[str, object] = {}
+        return {}
 
-    if ast_payload is None and not ts_payload:
-        return None
 
+def _merge_enrichment_payloads(
+    *,
+    ast_payload: dict[str, object] | None,
+    ts_payload: dict[str, object],
+) -> dict[str, object]:
     if ast_payload is None:
         merged = dict(ts_payload)
         append_source(merged, "tree_sitter")
         merged.setdefault("enrichment_status", "applied")
         merged.setdefault("language", "rust")
-        return normalize_rust_payload(merged)
+        return merged
 
     merged = _merge_gap_fill(ast_payload, ts_payload)
     if ts_payload:
         append_source(merged, "tree_sitter")
+    _apply_upstream_degradation(merged, ast_payload=ast_payload, ts_payload=ts_payload)
+    return merged
 
+
+def _apply_upstream_degradation(
+    merged: dict[str, object],
+    *,
+    ast_payload: dict[str, object],
+    ts_payload: dict[str, object],
+) -> None:
     ast_status = str(ast_payload.get("enrichment_status", "applied"))
     ts_status = str(ts_payload.get("enrichment_status", "applied"))
-    if ast_status == "degraded" or ts_status == "degraded":
-        set_degraded(merged, "upstream degraded")
-        reasons: list[str] = []
-        ast_reason = ast_payload.get("degrade_reason")
-        ts_reason = ts_payload.get("degrade_reason")
-        if isinstance(ast_reason, str) and ast_reason:
-            reasons.append(f"ast_grep:{ast_reason}")
-        if isinstance(ts_reason, str) and ts_reason:
-            reasons.append(f"tree_sitter:{ts_reason}")
-        if reasons:
-            merged["degrade_reason"] = "; ".join(reasons)
+    if ast_status != "degraded" and ts_status != "degraded":
+        return
 
-    if os.getenv(_CROSSCHECK_ENV) == "1" and ts_payload:
-        mismatches = _crosscheck_mismatches(ast_payload, ts_payload)
-        if mismatches:
-            merged["crosscheck_mismatches"] = mismatches
-            set_degraded(merged, "crosscheck mismatch")
-
-    return normalize_rust_payload(merged)
+    set_degraded(merged, "upstream degraded")
+    reasons: list[str] = []
+    ast_reason = ast_payload.get("degrade_reason")
+    ts_reason = ts_payload.get("degrade_reason")
+    if isinstance(ast_reason, str) and ast_reason:
+        reasons.append(f"ast_grep:{ast_reason}")
+    if isinstance(ts_reason, str) and ts_reason:
+        reasons.append(f"tree_sitter:{ts_reason}")
+    if reasons:
+        merged["degrade_reason"] = "; ".join(reasons)
 
 
 def lint_rust_enrichment_schema() -> list[str]:

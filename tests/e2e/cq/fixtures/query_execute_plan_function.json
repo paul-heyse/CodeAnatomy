@@ -6,9 +6,9 @@
       "anchor": {
         "col": 0,
         "end_col": 39,
-        "end_line": 478,
+        "end_line": 479,
         "file": "tools/cq/query/executor.py",
-        "line": 440
+        "line": 441
       },
       "category": "definition",
       "details": {

@@ -230,7 +230,7 @@ def test_provider_mode_summary_includes_strict_violation_counts() -> None:
             {
                 "attributes": {
                     "event.name": "dataset_provider_mode_v1",
-                    "provider_mode": "delta_dataset_fallback",
+                    "provider_mode": "delta_table_provider",
                     "strict_native_provider_enabled": True,
                     "strict_native_provider_violation": True,
                     "diagnostic.severity": "warn",

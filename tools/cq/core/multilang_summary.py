@@ -5,10 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
+from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope, expand_language_scope
 from tools.cq.search.contracts import (
-    CrossLanguageDiagnostic,
-    LanguageCapabilities,
     LanguagePartitionStats,
     SearchSummaryContract,
     coerce_diagnostics,
@@ -68,17 +67,7 @@ def normalize_language_partitions(
     return {lang: dict(to_builtins(partition)) for lang, partition in normalized.items()}
 
 
-def build_multilang_summary(  # noqa: PLR0913
-    *,
-    common: Mapping[str, object] | None,
-    lang_scope: QueryLanguageScope,
-    language_order: Sequence[QueryLanguage] | None,
-    languages: Mapping[QueryLanguage, Mapping[str, object]],
-    cross_language_diagnostics: Sequence[CrossLanguageDiagnostic | Mapping[str, object]]
-    | None = None,
-    language_capabilities: LanguageCapabilities | Mapping[str, object] | None = None,
-    enrichment_telemetry: Mapping[str, object] | None = None,
-) -> dict[str, object]:
+def build_multilang_summary(request: SummaryBuildRequest) -> dict[str, object]:
     """Build canonical multilang summary payload.
 
     Returns:
@@ -87,24 +76,26 @@ def build_multilang_summary(  # noqa: PLR0913
         Summary dictionary with required multilang keys.
     """
     ordered_languages = (
-        tuple(language_order) if language_order is not None else expand_language_scope(lang_scope)
+        request.language_order
+        if request.language_order is not None
+        else expand_language_scope(request.lang_scope)
     )
     contract = SearchSummaryContract(
-        lang_scope=lang_scope,
+        lang_scope=request.lang_scope,
         language_order=list(ordered_languages),
         languages=coerce_language_partitions(
             language_order=ordered_languages,
-            partitions=languages,
+            partitions=request.languages,
         ),
-        cross_language_diagnostics=coerce_diagnostics(cross_language_diagnostics),
-        language_capabilities=coerce_language_capabilities(language_capabilities),
+        cross_language_diagnostics=coerce_diagnostics(request.cross_language_diagnostics),
+        language_capabilities=coerce_language_capabilities(request.language_capabilities),
         enrichment_telemetry=(
             None
-            if enrichment_telemetry is None
-            else _coerce_enrichment_telemetry(enrichment_telemetry)
+            if request.enrichment_telemetry is None
+            else _coerce_enrichment_telemetry(request.enrichment_telemetry)
         ),
     )
-    summary = summary_contract_to_dict(contract, common=common)
+    summary = summary_contract_to_dict(contract, common=request.common)
     assert_multilang_summary(summary)
     return summary
 

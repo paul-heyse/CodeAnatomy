@@ -187,7 +187,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
         "storage.deltalake.delta",
         "enable_delta_vacuum_protocol_check",
     ),
-    "query_delta_sql": ("storage.deltalake.delta", "query_delta_sql"),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
     "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
     "build_delta_file_index_from_add_actions": (
@@ -250,10 +249,6 @@ _DEPRECATED_EXPORTS: dict[str, str] = {
     "disable_delta_vacuum_protocol_check": (
         "storage.deltalake.disable_delta_vacuum_protocol_check is deprecated and will be removed; "
         "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "query_delta_sql": (
-        "storage.deltalake.query_delta_sql is deprecated and will be removed; "
-        "use engine.delta_tools.delta_query with a runtime profile."
     ),
 }
 
@@ -324,7 +319,6 @@ if TYPE_CHECKING:
     enable_delta_row_tracking = _delta_io.enable_delta_row_tracking
     enable_delta_v2_checkpoints = _delta_io.enable_delta_v2_checkpoints
     enable_delta_vacuum_protocol_check = _delta_io.enable_delta_vacuum_protocol_check
-    query_delta_sql = _delta_io.query_delta_sql
     read_delta_cdf = _delta_io.read_delta_cdf
     read_delta_cdf_eager = _delta_io.read_delta_cdf_eager
     read_delta_table = _delta_io.read_delta_table

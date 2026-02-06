@@ -9,6 +9,7 @@ from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
+from tools.cq.core.requests import MergeResultsRequest
 from tools.cq.core.schema import CqResult, Finding, RunMeta, Section
 
 
@@ -54,9 +55,11 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
         run=run, summary={"matches": 2}, key_findings=[Finding(category="d", message="rs")]
     )
     merged = merge_language_cq_results(
-        scope="auto",
-        results={"python": py_result, "rust": rs_result},
-        run=run,
+        MergeResultsRequest(
+            scope="auto",
+            results={"python": py_result, "rust": rs_result},
+            run=run,
+        )
     )
     assert merged.summary["lang_scope"] == "auto"
     assert merged.summary["language_order"] == ["python", "rust"]

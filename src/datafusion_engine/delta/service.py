@@ -121,6 +121,13 @@ def _read_attr(value: object, name: str) -> object:
     return getattr(value, name, None)
 
 
+def _canonical_provider_mode(resolution: object) -> str:
+    provider_kind = _read_attr(resolution, "provider_kind")
+    if provider_kind == "delta_cdf":
+        return "cdf_table_provider"
+    return "delta_table_provider"
+
+
 @dataclass(frozen=True)
 class DeltaFeatureOps:
     """Feature mutation helpers bound to a Delta service."""
@@ -439,18 +446,13 @@ class DeltaService:
         resolution = _read_attr(request, "resolution")
         snapshot = _read_attr(resolution, "delta_snapshot")
         snapshot_mapping = snapshot if isinstance(snapshot, Mapping) else None
-        provider_mode = (
-            str(snapshot_mapping.get("provider_mode"))
-            if snapshot_mapping is not None and snapshot_mapping.get("provider_mode") is not None
-            else str(_read_attr(resolution, "provider_kind"))
-        )
+        provider_mode = _canonical_provider_mode(resolution)
         strict_enabled = self.profile.features.enforce_delta_ffi_provider
-        strict_violation = strict_enabled and provider_mode in {
-            "delta_dataset_fallback",
-            "cdf_dataset_fallback",
-            "pyarrow_dataset_degraded",
-            "pyarrow_cdf_degraded",
-        }
+        ffi_table_provider = (
+            snapshot_mapping.get("ffi_table_provider") if snapshot_mapping is not None else None
+        )
+        provider_is_native = ffi_table_provider if isinstance(ffi_table_provider, bool) else True
+        strict_violation = strict_enabled and not provider_is_native
         payload_request = provider_build_request_from_service_context(
             ServiceProviderArtifactInput(
                 request=request,

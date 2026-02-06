@@ -84,6 +84,55 @@ Ensure `rg` is installed and available on `PATH`.
 - Python-only deep analyses: `calls`, `impact`, `sig-impact`, `imports`, `scopes`,
   `bytecode-surface`, `side-effects`, `exceptions`.
 
+## Enrichment Pipeline
+
+Smart search results include multi-source enrichment from a 5-stage pipeline:
+
+| Stage | Source | Provides |
+|-------|--------|----------|
+| `ast_grep` | ast-grep-py | Node kind, symbol role, structural context |
+| `python_ast` | Python `ast` | AST node type, scope nesting |
+| `import_detail` | Import visitor | Module path, alias resolution |
+| `libcst` | LibCST metadata | Qualified names, scope analysis, binding candidates |
+| `tree_sitter` | tree-sitter queries | Parse quality, structural patterns |
+
+Enrichment payloads are structured into sections: `meta`, `resolution`, `behavior`,
+`structural`, `parse_quality`, `agreement`. Cross-source agreement tracking compares
+ast_grep, libcst, and tree_sitter results ("full"/"partial"/"conflict").
+
+### Markdown Enrichment Tables
+
+In `--format md`, findings include compact enrichment tables organized by section.
+Tables use a 3-row format (header, separator, values) with max 5 columns each.
+
+### Render-Time Enrichment
+
+Findings missing enrichment (e.g., from macro commands) receive on-demand enrichment
+at markdown render time, parallelized across up to 4 workers for up to 9 files.
+
+### Parallel Classification
+
+Smart search classification runs in parallel (up to 4 workers, partitioned by file)
+with fail-open fallback to sequential processing.
+
+## Request Objects
+
+Internal operations use frozen `CqStruct` request types for clean input contracts:
+
+- `RgRunRequest` - ripgrep execution input
+- `CandidateCollectionRequest` - candidate collection input
+- `PythonNodeEnrichmentRequest` / `PythonByteRangeEnrichmentRequest` - Python enrichment
+- `RustEnrichmentRequest` - Rust enrichment
+- `SummaryBuildRequest` / `MergeResultsRequest` - orchestration contracts
+
+Request structs live in `tools/cq/search/requests.py` and `tools/cq/core/requests.py`.
+
+## Analysis Session Caching
+
+`PythonAnalysisSession` caches per-file analysis artifacts (ast-grep root, AST tree,
+symtable, LibCST wrapper, tree-sitter tree) keyed by content hash. Maximum 64 cached
+entries. Multiple findings in the same file share a single session.
+
 ## Artifacts
 
 JSON artifacts are saved by default to `.cq/artifacts`.

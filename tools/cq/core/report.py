@@ -2,13 +2,47 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+from typing import cast
+
 from tools.cq.core.codec import dumps_json_value
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 from tools.cq.core.serialization import to_builtins
+from tools.cq.query.language import QueryLanguage
 
 # Maximum evidence items to show before truncating
 MAX_EVIDENCE_DISPLAY = 20
 MAX_SECTION_FINDINGS = 50
+MAX_RENDER_ENRICH_FILES = 9  # original anchor file + next 8 files
+MAX_RENDER_ENRICH_WORKERS = 4
+MAX_CODE_OVERVIEW_ITEMS = 5
+SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
+    "query",
+    "mode",
+    "lang_scope",
+    "language_order",
+    "returned_matches",
+    "total_matches",
+    "matched_files",
+    "scanned_files",
+    "caps_hit",
+    "truncated",
+    "timed_out",
+    "languages",
+    "cross_language_diagnostics",
+    "language_capabilities",
+    "enrichment_telemetry",
+)
+DETAILS_SUPPRESS_KEYS: frozenset[str] = frozenset(
+    {
+        "context_snippet",
+        "context_window",
+        "enrichment",
+        "python_enrichment",
+        "rust_tree_sitter",
+    }
+)
 
 
 def _severity_icon(severity: str) -> str:
@@ -26,7 +60,14 @@ def _severity_icon(severity: str) -> str:
     }.get(severity, "")
 
 
-def _format_finding(f: Finding, *, show_anchor: bool = True) -> str:
+def _format_finding(
+    f: Finding,
+    *,
+    show_anchor: bool = True,
+    root: Path | None = None,
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
+    allowed_enrichment_files: set[str] | None = None,
+) -> str:
     """Format a single finding as a markdown line.
 
     Parameters
@@ -41,46 +82,805 @@ def _format_finding(f: Finding, *, show_anchor: bool = True) -> str:
     str
         Markdown-formatted line(s), including context snippet if available.
     """
-    # Use impact/confidence tags if available, otherwise fall back to severity icon
-    if "impact_bucket" in f.details and "confidence_bucket" in f.details:
-        imp_bucket = f.details["impact_bucket"]
-        conf_bucket = f.details["confidence_bucket"]
-        prefix = f"[impact:{imp_bucket}] [conf:{conf_bucket}] "
-    else:
-        icon = _severity_icon(f.severity)
-        prefix = f"{icon} " if icon else ""
-
-    if show_anchor and f.anchor:
-        loc = f"`{f.anchor.to_ref()}`"
-        base_line = f"- {prefix}{f.message} ({loc})"
-    else:
-        base_line = f"- {prefix}{f.message}"
-
-    # Add context snippet if available
-    context_snippet = f.details.get("context_snippet")
-    context_window = f.details.get("context_window")
-    if context_snippet and isinstance(context_snippet, str):
-        # Build context header with line range
-        if context_window and isinstance(context_window, dict):
-            start = context_window.get("start_line", "?")
-            end = context_window.get("end_line", "?")
-            header = f"  Context (lines {start}-{end}):"
-        else:
-            header = "  Context:"
-        # Indent the code block with language-aware syntax highlighting
-        lang = (
-            f.details.get("language", "python")
-            if isinstance(f.details.get("language"), str)
-            else "python"
+    if root is not None:
+        _maybe_attach_render_enrichment(
+            f,
+            root=root,
+            cache=enrich_cache,
+            allowed_files=allowed_enrichment_files,
         )
-        snippet_lines = context_snippet.split("\n")
-        indented_snippet = "\n".join(f"  {line}" for line in snippet_lines)
-        return f"{base_line}\n{header}\n  ```{lang}\n{indented_snippet}\n  ```"
 
-    return base_line
+    rendered_lines = [_format_finding_base_line(f, show_anchor=show_anchor)]
+
+    enrichment_payload = _extract_enrichment_payload(f)
+    if enrichment_payload is not None:
+        rendered_lines.extend(_format_enrichment_facts(enrichment_payload))
+
+    rendered_lines.extend(_format_context_block(f))
+
+    details_payload = _extract_compact_details_payload(f)
+    if details_payload is not None:
+        rendered = dumps_json_value(details_payload, indent=None)
+        rendered_lines.append(f"  Details: `{rendered}`")
+
+    return "\n".join(rendered_lines)
 
 
-def _format_section(s: Section) -> str:
+def _format_finding_base_line(finding: Finding, *, show_anchor: bool) -> str:
+    prefix = _format_finding_prefix(finding)
+    if show_anchor and finding.anchor:
+        loc = f"`{finding.anchor.to_ref()}`"
+        return f"- {prefix}{finding.message} ({loc})"
+    return f"- {prefix}{finding.message}"
+
+
+def _format_finding_prefix(finding: Finding) -> str:
+    if "impact_bucket" in finding.details and "confidence_bucket" in finding.details:
+        return f"[impact:{finding.details['impact_bucket']}] [conf:{finding.details['confidence_bucket']}] "
+    icon = _severity_icon(finding.severity)
+    return f"{icon} " if icon else ""
+
+
+def _format_context_block(finding: Finding) -> list[str]:
+    context_snippet = finding.details.get("context_snippet")
+    if not isinstance(context_snippet, str) or not context_snippet:
+        return []
+    context_window = finding.details.get("context_window")
+    if context_window and isinstance(context_window, dict):
+        start = context_window.get("start_line", "?")
+        end = context_window.get("end_line", "?")
+        header = f"  Context (lines {start}-{end}):"
+    else:
+        header = "  Context:"
+    language = finding.details.get("language")
+    lang = language if isinstance(language, str) else "python"
+    indented_snippet = "\n".join(f"  {line}" for line in context_snippet.split("\n"))
+    return [header, f"  ```{lang}", indented_snippet, "  ```"]
+
+
+def _extract_enrichment_payload(finding: Finding) -> dict[str, object] | None:
+    payload = finding.details.get("enrichment")
+    if isinstance(payload, dict) and payload:
+        return payload
+    fallback: dict[str, object] = {}
+    python_payload = finding.details.get("python_enrichment")
+    if isinstance(python_payload, dict) and python_payload:
+        fallback["python"] = python_payload
+    rust_payload = finding.details.get("rust_tree_sitter")
+    if isinstance(rust_payload, dict) and rust_payload:
+        fallback["rust"] = rust_payload
+    language = finding.details.get("language")
+    if fallback and isinstance(language, str):
+        fallback["language"] = language
+    return fallback or None
+
+
+def _extract_compact_details_payload(finding: Finding) -> dict[str, object] | None:
+    data = to_builtins(finding.details.data)
+    if not isinstance(data, dict):
+        return None
+    compact = {
+        key: value
+        for key, value in data.items()
+        if key not in DETAILS_SUPPRESS_KEYS and value is not None
+    }
+    return compact or None
+
+
+def _na(reason: str) -> str:
+    return f"N/A — {reason.replace('_', ' ')}"
+
+
+def _has_fact_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict, set)):
+        return bool(value)
+    return True
+
+
+def _format_fact_value(value: object) -> str:
+    rendered = value if isinstance(value, str) else dumps_json_value(to_builtins(value), indent=None)
+    if not isinstance(rendered, str):
+        rendered = str(rendered)
+    return rendered.strip() or _na("not_resolved")
+
+
+def _resolve_primary_language_payload(
+    *,
+    payload: dict[str, object],
+) -> tuple[str | None, dict[str, object] | None]:
+    language = payload.get("language")
+    if isinstance(language, str):
+        candidate = payload.get(language)
+        if isinstance(candidate, dict):
+            return language, candidate
+    for language_key in ("python", "rust"):
+        candidate = payload.get(language_key)
+        if isinstance(candidate, dict):
+            return language_key, candidate
+    return (
+        cast("str | None", language if isinstance(language, str) else None),
+        payload if isinstance(payload, dict) else None,
+    )
+
+
+def _lookup_fact_value(
+    language_payload: dict[str, object],
+    *,
+    paths: tuple[tuple[str, str], ...],
+) -> str:
+    section_seen = False
+    for section, key in paths:
+        if section == "__root__":
+            if key in language_payload:
+                value = language_payload[key]
+                if _has_fact_value(value):
+                    return _format_fact_value(value)
+                section_seen = True
+            continue
+        section_payload = language_payload.get(section)
+        if not isinstance(section_payload, dict):
+            continue
+        section_seen = True
+        if key not in section_payload:
+            continue
+        value = section_payload[key]
+        if _has_fact_value(value):
+            return _format_fact_value(value)
+    if section_seen:
+        return _na("not_resolved")
+    return _na("not_available")
+
+
+def _render_fact_cluster(
+    *,
+    title: str,
+    language_payload: dict[str, object] | None,
+    fields: tuple[tuple[str, tuple[tuple[str, str], ...]], ...],
+) -> list[str]:
+    lines = [f"  - {title}"]
+    if language_payload is None:
+        lines.extend([f"    - {label}: {_na('enrichment_unavailable')}" for label, _ in fields])
+        return lines
+    for label, paths in fields:
+        lines.append(f"    - {label}: {_lookup_fact_value(language_payload, paths=paths)}")
+    return lines
+
+
+def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
+    language, language_payload = _resolve_primary_language_payload(payload=payload)
+    lines = ["  Code Facts:"]
+    lines.extend(
+        _render_fact_cluster(
+            title="Identity",
+            language_payload=language_payload,
+            fields=(
+                ("Language", (("__root__", "language"),)),
+                (
+                    "Symbol Role",
+                    (
+                        ("resolution", "symbol_role"),
+                        ("structural", "item_role"),
+                        ("__root__", "item_role"),
+                    ),
+                ),
+                (
+                    "Qualified Name",
+                    (
+                        ("resolution", "qualified_name_candidates"),
+                        ("__root__", "qualified_name_candidates"),
+                    ),
+                ),
+                (
+                    "Binding Candidates",
+                    (
+                        ("resolution", "binding_candidates"),
+                        ("__root__", "binding_candidates"),
+                    ),
+                ),
+            ),
+        )
+    )
+    lines.extend(
+        _render_fact_cluster(
+            title="Scope",
+            language_payload=language_payload,
+            fields=(
+                (
+                    "Enclosing Callable",
+                    (
+                        ("resolution", "enclosing_callable"),
+                        ("__root__", "containing_scope"),
+                    ),
+                ),
+                (
+                    "Enclosing Class",
+                    (
+                        ("resolution", "enclosing_class"),
+                        ("__root__", "enclosing_class"),
+                    ),
+                ),
+                (
+                    "Import Alias Chain",
+                    (
+                        ("resolution", "import_alias_chain"),
+                        ("__root__", "import_alias_chain"),
+                    ),
+                ),
+                (
+                    "Visibility",
+                    (
+                        ("structural", "visibility"),
+                        ("__root__", "visibility"),
+                    ),
+                ),
+            ),
+        )
+    )
+    lines.extend(
+        _render_fact_cluster(
+            title="Interface",
+            language_payload=language_payload,
+            fields=(
+                ("Signature", (("structural", "signature"), ("__root__", "signature"))),
+                (
+                    "Parameters",
+                    (
+                        ("structural", "parameters"),
+                        ("__root__", "parameters"),
+                    ),
+                ),
+                (
+                    "Return Type",
+                    (
+                        ("structural", "return_type"),
+                        ("__root__", "return_type"),
+                    ),
+                ),
+                (
+                    "Attributes or Decorators",
+                    (
+                        ("structural", "attributes"),
+                        ("structural", "decorators"),
+                        ("__root__", "attributes"),
+                        ("__root__", "decorators"),
+                    ),
+                ),
+            ),
+        )
+    )
+    lines.extend(
+        _render_fact_cluster(
+            title="Behavior",
+            language_payload=language_payload,
+            fields=(
+                (
+                    "Async or Generator",
+                    (
+                        ("behavior", "is_async"),
+                        ("behavior", "is_generator"),
+                        ("__root__", "is_async"),
+                        ("__root__", "is_generator"),
+                    ),
+                ),
+                (
+                    "Await or Yield",
+                    (
+                        ("behavior", "has_await"),
+                        ("behavior", "has_yield"),
+                        ("__root__", "has_await"),
+                        ("__root__", "has_yield"),
+                    ),
+                ),
+                (
+                    "Raises",
+                    (
+                        ("behavior", "has_raise"),
+                        ("__root__", "has_raise"),
+                    ),
+                ),
+                (
+                    "Control Flow Context",
+                    (
+                        ("behavior", "in_try"),
+                        ("behavior", "in_except"),
+                        ("behavior", "in_with"),
+                        ("behavior", "in_loop"),
+                        ("__root__", "in_try"),
+                        ("__root__", "in_except"),
+                        ("__root__", "in_with"),
+                        ("__root__", "in_loop"),
+                    ),
+                ),
+            ),
+        )
+    )
+    lines.extend(
+        _render_fact_cluster(
+            title="Structure",
+            language_payload=language_payload,
+            fields=(
+                (
+                    "Struct Fields",
+                    (
+                        ("structural", "struct_fields"),
+                        ("__root__", "struct_fields"),
+                    ),
+                ),
+                (
+                    "Struct Field Count",
+                    (
+                        ("structural", "struct_field_count"),
+                        ("__root__", "struct_field_count"),
+                    ),
+                ),
+                (
+                    "Enum Variants",
+                    (
+                        ("structural", "enum_variants"),
+                        ("__root__", "enum_variants"),
+                    ),
+                ),
+                (
+                    "Enum Variant Count",
+                    (
+                        ("structural", "enum_variant_count"),
+                        ("__root__", "enum_variant_count"),
+                    ),
+                ),
+            ),
+        )
+    )
+
+    additional_payload = (
+        {
+            key: value
+            for key, value in language_payload.items()
+            if key not in {"meta", "resolution", "behavior", "structural", "parse_quality", "agreement"}
+        }
+        if isinstance(language_payload, dict)
+        else {}
+    )
+    if additional_payload:
+        rendered = dumps_json_value(to_builtins(additional_payload), indent=None)
+        lines.append(f"  - Additional Facts: `{rendered}`")
+    if isinstance(language, str):
+        lines.append(f"  - Enrichment Language: `{language}`")
+    return lines
+
+
+def _extract_symbol_hint(finding: Finding) -> str | None:
+    for key in ("name", "match_text", "callee", "text"):
+        value = finding.details.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().split("\n", maxsplit=1)[0]
+    message = finding.message.strip()
+    if not message:
+        return None
+    if ":" in message:
+        candidate = message.rsplit(":", maxsplit=1)[1].strip()
+        if candidate:
+            return candidate
+    if "(" in message:
+        return message.split("(", maxsplit=1)[0].strip() or None
+    return message
+
+
+def _summary_string(
+    summary: dict[str, object],
+    *,
+    key: str,
+    missing_reason: str,
+) -> str:
+    value = summary.get(key)
+    if isinstance(value, str) and value:
+        return f"`{value}`"
+    return _na(missing_reason)
+
+
+def _format_language_scope(summary: dict[str, object]) -> str:
+    lang_scope = summary.get("lang_scope")
+    if isinstance(lang_scope, str) and lang_scope:
+        return f"`{lang_scope}`"
+    language_order = summary.get("language_order")
+    if isinstance(language_order, list) and language_order:
+        return f"`{', '.join(str(item) for item in language_order)}`"
+    return _na("language_scope_missing")
+
+
+def _collect_top_symbols(findings: list[Finding]) -> str:
+    symbol_hints: list[str] = []
+    seen_symbols: set[str] = set()
+    for finding in findings:
+        symbol = _extract_symbol_hint(finding)
+        if symbol is None or symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        symbol_hints.append(symbol)
+        if len(symbol_hints) >= MAX_CODE_OVERVIEW_ITEMS:
+            break
+    if not symbol_hints:
+        return _na("no_symbol_like_matches")
+    return f"`{', '.join(symbol_hints)}`"
+
+
+def _collect_top_files(findings: list[Finding]) -> str:
+    files: list[str] = []
+    seen_files: set[str] = set()
+    for finding in findings:
+        anchor = finding.anchor
+        if anchor is None or anchor.file in seen_files:
+            continue
+        seen_files.add(anchor.file)
+        files.append(anchor.file)
+        if len(files) >= MAX_CODE_OVERVIEW_ITEMS:
+            break
+    if not files:
+        return _na("no_anchored_matches")
+    return f"`{', '.join(files)}`"
+
+
+def _summarize_categories(findings: list[Finding]) -> str:
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding.category] = counts.get(finding.category, 0) + 1
+    if not counts:
+        return _na("no_findings")
+    ordered_counts = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    category_summary = ", ".join(
+        f"{category}:{count}" for category, count in ordered_counts[:MAX_CODE_OVERVIEW_ITEMS]
+    )
+    return f"`{category_summary}`"
+
+
+def _render_code_overview(result: CqResult) -> list[str]:
+    lines = ["## Code Overview"]
+    summary = result.summary if isinstance(result.summary, dict) else {}
+    all_findings = _iter_result_findings(result)
+    lines.append(f"- Query: {_summary_string(summary, key='query', missing_reason='query_missing')}")
+    lines.append(f"- Mode: {_summary_string(summary, key='mode', missing_reason='mode_missing')}")
+    lines.append(f"- Language Scope: {_format_language_scope(summary)}")
+    lines.append(f"- Top Symbols: {_collect_top_symbols(all_findings)}")
+    lines.append(f"- Top Files: {_collect_top_files(all_findings)}")
+    lines.append(f"- Match Categories: {_summarize_categories(all_findings)}")
+
+    lines.append("")
+    return lines
+
+
+def _infer_language(finding: Finding) -> QueryLanguage:
+    language = finding.details.get("language")
+    if language in {"python", "rust"}:
+        return cast("QueryLanguage", language)
+    if finding.anchor and finding.anchor.file.endswith(".rs"):
+        return "rust"
+    return "python"
+
+
+def _extract_match_text_candidates(finding: Finding) -> list[str]:
+    candidates: list[str] = []
+    for key in ("match_text", "name", "callee", "text"):
+        value = finding.details.get(key)
+        if not isinstance(value, str):
+            continue
+        candidate = value.strip().split("\n", maxsplit=1)[0]
+        if candidate:
+            candidates.append(candidate)
+    message = finding.message.strip()
+    if ":" in message:
+        message_candidate = message.rsplit(":", maxsplit=1)[1].strip()
+        if message_candidate:
+            candidates.append(message_candidate)
+    else:
+        candidates.append(message)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+    return deduped
+
+
+def _compute_match_columns(
+    line_text: str,
+    anchor_col: int,
+    candidates: list[str],
+) -> tuple[int, int, str]:
+    line_len = len(line_text)
+    start = max(0, min(anchor_col, line_len))
+    for candidate in candidates:
+        candidate_start = line_text.find(candidate, start)
+        if candidate_start < 0:
+            candidate_start = line_text.find(candidate)
+        if candidate_start >= 0:
+            candidate_end = min(line_len, candidate_start + len(candidate))
+            return candidate_start, max(candidate_start + 1, candidate_end), candidate
+    if line_len == 0:
+        return 0, 1, ""
+    end = min(line_len, start + 1)
+    return start, max(start + 1, end), line_text[start:end]
+
+
+def _line_relative_byte_offset(text: str, col: int) -> int:
+    safe_col = max(0, min(col, len(text)))
+    return len(text[:safe_col].encode("utf-8", errors="replace"))
+
+
+def _read_line_text(root: Path, rel_path: str, line_number: int) -> str | None:
+    if line_number < 1:
+        return None
+    path = Path(rel_path)
+    file_path = path if path.is_absolute() else (root / path)
+    try:
+        lines = file_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    index = line_number - 1
+    if index >= len(lines):
+        return None
+    return lines[index]
+
+
+def _merge_enrichment_details(finding: Finding, payload: dict[str, object]) -> None:
+    for key, value in payload.items():
+        if key in finding.details:
+            continue
+        finding.details[key] = value
+
+
+def _compute_render_enrichment_payload_from_anchor(
+    *,
+    root: Path,
+    file: str,
+    line: int,
+    col: int,
+    language: QueryLanguage,
+    candidates: list[str],
+) -> dict[str, object]:
+    line_text = _read_line_text(root, file, line)
+    if line_text is None:
+        return {}
+
+    from tools.cq.core.locations import SourceSpan
+    from tools.cq.search.smart_search import RawMatch, build_finding, classify_match
+
+    match_start, match_end, match_text = _compute_match_columns(
+        line_text,
+        col,
+        candidates,
+    )
+    byte_start = _line_relative_byte_offset(line_text, match_start)
+    byte_end = max(byte_start + 1, _line_relative_byte_offset(line_text, match_end))
+    raw = RawMatch(
+        span=SourceSpan(
+            file=file,
+            start_line=line,
+            start_col=match_start,
+            end_line=line,
+            end_col=match_end,
+        ),
+        text=line_text,
+        match_text=match_text,
+        match_start=match_start,
+        match_end=match_end,
+        match_byte_start=byte_start,
+        match_byte_end=byte_end,
+    )
+    try:
+        enriched = classify_match(raw, root, lang=language)
+        enriched_finding = build_finding(enriched, root)
+        payload = to_builtins(enriched_finding.details.data)
+    except Exception:  # noqa: BLE001 - fail-open render enrichment
+        return {}
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def _iter_result_findings(result: CqResult) -> list[Finding]:
+    findings: list[Finding] = []
+    findings.extend(result.key_findings)
+    for section in result.sections:
+        findings.extend(section.findings)
+    findings.extend(result.evidence)
+    return findings
+
+
+def _select_enrichment_target_files(result: CqResult) -> set[str]:
+    files: list[str] = []
+    seen: set[str] = set()
+    for finding in _iter_result_findings(result):
+        anchor = finding.anchor
+        if anchor is None or anchor.file in seen:
+            continue
+        seen.add(anchor.file)
+        files.append(anchor.file)
+        if len(files) >= MAX_RENDER_ENRICH_FILES:
+            break
+    return set(files)
+
+
+def _resolve_render_worker_count(task_count: int) -> int:
+    if task_count <= 1:
+        return 1
+    return min(task_count, MAX_RENDER_ENRICH_WORKERS)
+
+
+def _compute_render_enrichment_worker(
+    task: tuple[str, str, int, int, str, tuple[str, ...]],
+) -> tuple[tuple[str, int, int, str], dict[str, object]]:
+    root_str, file, line, col, language, candidates = task
+    payload = _compute_render_enrichment_payload_from_anchor(
+        root=Path(root_str),
+        file=file,
+        line=line,
+        col=col,
+        language=cast("QueryLanguage", language),
+        candidates=list(candidates),
+    )
+    return (file, line, col, language), payload
+
+
+def _build_render_enrichment_tasks(
+    result: CqResult,
+    *,
+    root: Path,
+    cache: dict[tuple[str, int, int, str], dict[str, object]],
+    allowed_files: set[str] | None,
+) -> list[tuple[str, str, int, int, str, tuple[str, ...]]]:
+    tasks: list[tuple[str, str, int, int, str, tuple[str, ...]]] = []
+    seen: set[tuple[str, int, int, str]] = set()
+    for finding in _iter_result_findings(result):
+        task = _build_single_render_enrichment_task(
+            finding=finding,
+            root=root,
+            cache=cache,
+            seen=seen,
+            allowed_files=allowed_files,
+        )
+        if task is not None:
+            tasks.append(task)
+    return tasks
+
+
+def _build_single_render_enrichment_task(
+    *,
+    finding: Finding,
+    root: Path,
+    cache: dict[tuple[str, int, int, str], dict[str, object]],
+    seen: set[tuple[str, int, int, str]],
+    allowed_files: set[str] | None,
+) -> tuple[str, str, int, int, str, tuple[str, ...]] | None:
+    anchor = finding.anchor
+    if anchor is None:
+        return None
+    if allowed_files is not None and anchor.file not in allowed_files:
+        return None
+    col = int(anchor.col or 0)
+    language = _infer_language(finding)
+    cache_key = (anchor.file, anchor.line, col, language)
+    if cache_key in cache or cache_key in seen:
+        return None
+    needs_context = not isinstance(finding.details.get("context_snippet"), str)
+    needs_enrichment = _extract_enrichment_payload(finding) is None
+    if not (needs_context or needs_enrichment):
+        return None
+    seen.add(cache_key)
+    return (
+        str(root),
+        anchor.file,
+        anchor.line,
+        col,
+        language,
+        tuple(_extract_match_text_candidates(finding)),
+    )
+
+
+def _populate_render_enrichment_cache(
+    cache: dict[tuple[str, int, int, str], dict[str, object]],
+    tasks: list[tuple[str, str, int, int, str, tuple[str, ...]]],
+) -> None:
+    workers = _resolve_render_worker_count(len(tasks))
+    if workers <= 1:
+        _populate_render_enrichment_cache_sequential(cache, tasks)
+        return
+    try:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            cache.update(pool.map(_compute_render_enrichment_worker, tasks))
+    except Exception:  # noqa: BLE001 - fail-open to sequential mode
+        _populate_render_enrichment_cache_sequential(cache, tasks)
+
+
+def _populate_render_enrichment_cache_sequential(
+    cache: dict[tuple[str, int, int, str], dict[str, object]],
+    tasks: list[tuple[str, str, int, int, str, tuple[str, ...]]],
+) -> None:
+    for task in tasks:
+        key, payload = _compute_render_enrichment_worker(task)
+        cache[key] = payload
+
+
+def _precompute_render_enrichment_cache(
+    result: CqResult,
+    *,
+    root: Path,
+    cache: dict[tuple[str, int, int, str], dict[str, object]],
+    allowed_files: set[str] | None,
+) -> None:
+    tasks = _build_render_enrichment_tasks(
+        result,
+        root=root,
+        cache=cache,
+        allowed_files=allowed_files,
+    )
+    if not tasks:
+        return
+    _populate_render_enrichment_cache(cache, tasks)
+
+
+def _compute_render_enrichment_payload(
+    finding: Finding,
+    *,
+    root: Path,
+) -> dict[str, object]:
+    anchor = finding.anchor
+    if anchor is None:
+        return {}
+    anchor_col = anchor.col if isinstance(anchor.col, int) else 0
+    return _compute_render_enrichment_payload_from_anchor(
+        root=root,
+        file=anchor.file,
+        line=anchor.line,
+        col=anchor_col,
+        language=_infer_language(finding),
+        candidates=_extract_match_text_candidates(finding),
+    )
+
+
+def _maybe_attach_render_enrichment(
+    finding: Finding,
+    *,
+    root: Path,
+    cache: dict[tuple[str, int, int, str], dict[str, object]] | None,
+    allowed_files: set[str] | None,
+) -> None:
+    if finding.anchor is None:
+        return
+    if allowed_files is not None and finding.anchor.file not in allowed_files:
+        return
+    needs_context = not isinstance(finding.details.get("context_snippet"), str)
+    needs_enrichment = _extract_enrichment_payload(finding) is None
+    if not (needs_context or needs_enrichment):
+        return
+    anchor = finding.anchor
+    cache_key = (
+        anchor.file,
+        anchor.line,
+        int(anchor.col or 0),
+        _infer_language(finding),
+    )
+    payload: dict[str, object] | None = None
+    if cache is not None:
+        payload = cache.get(cache_key)
+    if payload is None:
+        payload = _compute_render_enrichment_payload(finding, root=root)
+        if cache is not None:
+            cache[cache_key] = payload
+    _merge_enrichment_details(finding, payload)
+
+
+def _format_section(
+    s: Section,
+    *,
+    root: Path | None = None,
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
+    allowed_enrichment_files: set[str] | None = None,
+) -> str:
     """Format a section with its findings.
 
     Parameters
@@ -100,7 +900,17 @@ def _format_section(s: Section) -> str:
         return "\n".join(lines)
 
     displayed = s.findings[:MAX_SECTION_FINDINGS]
-    lines.extend([_format_finding(finding) for finding in displayed])
+    lines.extend(
+        [
+            _format_finding(
+                finding,
+                root=root,
+                enrich_cache=enrich_cache,
+                allowed_enrichment_files=allowed_enrichment_files,
+            )
+            for finding in displayed
+        ]
+    )
 
     remaining = len(s.findings) - len(displayed)
     if remaining > 0:
@@ -120,20 +930,34 @@ def _render_summary(summary: dict[str, object]) -> list[str]:
     if not summary:
         return []
     lines = ["## Summary"]
-    formatted: list[str] = []
-    for key, value in summary.items():
-        rendered_value = to_builtins(value)
-        if isinstance(rendered_value, (dict, list)):
-            rendered = dumps_json_value(rendered_value, indent=None)
-        else:
-            rendered = str(rendered_value)
-        formatted.append(f"- **{key}**: {rendered}")
-    lines.extend(formatted)
+    summary_payload = _ordered_summary_payload(summary)
+    rendered = dumps_json_value(summary_payload, indent=None)
+    lines.append(f"- {rendered}")
     lines.append("")
     return lines
 
 
-def _render_key_findings(findings: list[Finding]) -> list[str]:
+def _ordered_summary_payload(summary: dict[str, object]) -> dict[str, object]:
+    rendered_summary = to_builtins(summary)
+    if not isinstance(rendered_summary, dict):
+        return {"summary": rendered_summary}
+    ordered: dict[str, object] = {}
+    for key in SUMMARY_PRIORITY_KEYS:
+        if key in rendered_summary:
+            ordered[key] = rendered_summary[key]
+    for key, value in rendered_summary.items():
+        if key not in ordered:
+            ordered[key] = value
+    return ordered
+
+
+def _render_key_findings(
+    findings: list[Finding],
+    *,
+    root: Path | None = None,
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
+    allowed_enrichment_files: set[str] | None = None,
+) -> list[str]:
     """Render key findings section lines.
 
     Returns:
@@ -144,12 +968,28 @@ def _render_key_findings(findings: list[Finding]) -> list[str]:
     if not findings:
         return []
     lines = ["## Key Findings"]
-    lines.extend([_format_finding(finding) for finding in findings])
+    lines.extend(
+        [
+            _format_finding(
+                finding,
+                root=root,
+                enrich_cache=enrich_cache,
+                allowed_enrichment_files=allowed_enrichment_files,
+            )
+            for finding in findings
+        ]
+    )
     lines.append("")
     return lines
 
 
-def _render_sections(sections: list[Section]) -> list[str]:
+def _render_sections(
+    sections: list[Section],
+    *,
+    root: Path | None = None,
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
+    allowed_enrichment_files: set[str] | None = None,
+) -> list[str]:
     """Render section blocks.
 
     Returns:
@@ -159,12 +999,25 @@ def _render_sections(sections: list[Section]) -> list[str]:
     """
     lines: list[str] = []
     for section in sections:
-        lines.append(_format_section(section))
+        lines.append(
+            _format_section(
+                section,
+                root=root,
+                enrich_cache=enrich_cache,
+                allowed_enrichment_files=allowed_enrichment_files,
+            )
+        )
         lines.append("")
     return lines
 
 
-def _render_evidence(findings: list[Finding]) -> list[str]:
+def _render_evidence(
+    findings: list[Finding],
+    *,
+    root: Path | None = None,
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
+    allowed_enrichment_files: set[str] | None = None,
+) -> list[str]:
     """Render evidence section lines.
 
     Returns:
@@ -176,7 +1029,17 @@ def _render_evidence(findings: list[Finding]) -> list[str]:
         return []
     lines = ["## Evidence"]
     displayed = findings[:MAX_EVIDENCE_DISPLAY]
-    lines.extend([_format_finding(finding) for finding in displayed])
+    lines.extend(
+        [
+            _format_finding(
+                finding,
+                root=root,
+                enrich_cache=enrich_cache,
+                allowed_enrichment_files=allowed_enrichment_files,
+            )
+            for finding in displayed
+        ]
+    )
     remaining = len(findings) - len(displayed)
     if remaining > 0:
         lines.append(f"\n_... and {remaining} more evidence items_")
@@ -225,12 +1088,44 @@ def render_markdown(result: CqResult) -> str:
     str
         Markdown-formatted report.
     """
+    root = Path(result.run.root)
+    enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
+    allowed_enrichment_files = _select_enrichment_target_files(result)
+    _precompute_render_enrichment_cache(
+        result,
+        root=root,
+        cache=enrich_cache,
+        allowed_files=allowed_enrichment_files,
+    )
+
     lines = [f"# cq {result.run.macro}", ""]
-    lines.extend(_render_summary(result.summary))
-    lines.extend(_render_key_findings(result.key_findings))
-    lines.extend(_render_sections(result.sections))
-    lines.extend(_render_evidence(result.evidence))
+    lines.extend(_render_code_overview(result))
+    lines.extend(
+        _render_key_findings(
+            result.key_findings,
+            root=root,
+            enrich_cache=enrich_cache,
+            allowed_enrichment_files=allowed_enrichment_files,
+        )
+    )
+    lines.extend(
+        _render_sections(
+            result.sections,
+            root=root,
+            enrich_cache=enrich_cache,
+            allowed_enrichment_files=allowed_enrichment_files,
+        )
+    )
+    lines.extend(
+        _render_evidence(
+            result.evidence,
+            root=root,
+            enrich_cache=enrich_cache,
+            allowed_enrichment_files=allowed_enrichment_files,
+        )
+    )
     lines.extend(_render_artifacts(result.artifacts))
+    lines.extend(_render_summary(result.summary))
     lines.extend(_render_footer(result))
     return "\n".join(lines)
 

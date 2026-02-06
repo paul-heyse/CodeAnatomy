@@ -55,6 +55,11 @@ Language scope defaults to `auto` (search both Python and Rust); use `--lang rus
   into serialized contract models.
 - In CQ hot paths (`tools/cq/search`, `tools/cq/query`, `tools/cq/run`), avoid
   `pydantic`; use typed runtime objects and boundary serialization instead.
+- Use frozen `CqStruct` request objects (`tools/cq/search/requests.py`,
+  `tools/cq/core/requests.py`) for internal operation input contracts.
+- `PythonAnalysisSession` (`tools/cq/search/python_analysis_session.py`) caches
+  per-file analysis artifacts (ast-grep, AST, symtable, LibCST, tree-sitter) keyed
+  by content hash. Maximum 64 cached sessions.
 
 ### Supported Commands for Rust
 
@@ -176,6 +181,60 @@ Smart Search (`/cq search`) is the **primary tool for finding code**. It provide
 - **Non-Code Matches**: Strings/comments (collapsed)
 - **Hot Files**: Files with most matches
 - **Suggested Follow-ups**: Next commands to explore
+
+### Enrichment Pipeline
+
+Each Python match undergoes a 5-stage enrichment pipeline extracting complementary semantic information:
+
+| Stage | Source | Provides |
+|-------|--------|----------|
+| `ast_grep` | ast-grep-py | Node kind, enclosing scope, symbol role |
+| `python_ast` | Python `ast` | AST node type, scope nesting, decorator context |
+| `import_detail` | Import visitor | Module path, alias resolution |
+| `libcst` | LibCST providers | Qualified names, scope analysis, binding candidates |
+| `tree_sitter` | tree-sitter queries | Parse quality metrics, structural patterns |
+
+Enrichment data is organized into structured sections in the output:
+
+| Section | What It Tells You |
+|---------|-------------------|
+| **meta** | Pipeline status and per-stage timing |
+| **resolution** | What a symbol resolves to (qualified names, bindings, call targets) |
+| **behavior** | Runtime characteristics (async, generator, exception handling) |
+| **structural** | Code structure (enclosing scope, nesting depth, decorators) |
+| **parse_quality** | Source file health (syntax validity, parse errors) |
+| **agreement** | Cross-source confidence ("full"/"partial"/"conflict") |
+
+**Cross-source agreement** compares results from ast_grep, libcst, and tree_sitter:
+- `full` = high confidence (all sources agree)
+- `partial` = reasonable confidence (some sources unavailable)
+- `conflict` = manual review recommended (sources disagree)
+
+### Enrichment Tables in Markdown
+
+When using `--format md`, findings include compact enrichment tables:
+
+```
+| qualified_name | symbol_role | enclosing_callable |
+|----------------|-------------|---------------------|
+| mod.func       | definition  | None                |
+```
+
+Tables render up to 5 columns per row. Known sections (meta, resolution, behavior, structural, parse_quality, agreement) each get their own table.
+
+### Parallel Classification
+
+Smart search classification runs in parallel for large result sets:
+- Matches partitioned by file across up to 4 worker processes
+- Fail-open: falls back to sequential on any worker error
+- Transparent to output (same results, faster execution)
+
+### Render-Time Enrichment
+
+For findings missing enrichment (e.g., from macro commands), cq performs on-demand enrichment at markdown render time:
+- Enriches up to 9 unique files in parallel (4 workers)
+- Results cached by `(file, line, col, language)` for deduplication
+- Findings beyond the file limit render without enrichment tables
 
 ### Plain Query Fallback
 
@@ -416,7 +475,13 @@ Each call site includes a context window showing the containing function:
 | `context_window` | Line range (`start_line`, `end_line`) of containing function |
 | `context_snippet` | Source code snippet of the containing function (truncated if >30 lines) |
 
-The context snippet provides immediate visibility into how each call site is used, making it easier to understand argument patterns and refactoring impact without needing to read the full file.
+The context snippet uses smart block selection to show the most relevant code:
+- **Function header**: The `def` line and signature are always included
+- **Docstring skipping**: Leading docstrings are omitted to focus on logic
+- **Anchor block**: Lines around the actual call site are prioritized
+- **Omission markers**: Gaps show `# ... omitted (N lines) ...` instead of truncating
+
+This ensures the call site is always visible in context, even in long functions, rather than being truncated away.
 
 ### sig-impact - Signature Change Analysis
 
@@ -900,6 +965,39 @@ Use pattern queries to find security-sensitive constructs without a dedicated sc
 # Shell injection risks
 /cq q "pattern='subprocess.\$M(\$$$, shell=True)'"
 ```
+
+## Enrichment Telemetry
+
+Smart search summary includes pipeline performance data:
+
+| Metric | Description |
+|--------|-------------|
+| `enrichment.applied` | Findings that received enrichment |
+| `enrichment.degraded` | Findings with partial enrichment |
+| `enrichment.skipped` | Findings where enrichment was skipped |
+| `enrichment.stages.*` | Per-stage applied/degraded/skipped counts and timing |
+
+Per-stage breakdown covers: `ast_grep`, `python_ast`, `import_detail`, `libcst`, `tree_sitter`.
+
+Use telemetry to diagnose enrichment issues: high degraded counts suggest parse errors, high skipped counts suggest missing dependencies, and stage timing identifies bottlenecks.
+
+## Markdown Output Structure
+
+The markdown output follows this ordering:
+
+1. **Title** - Command and target
+2. **Key Findings** - Top-level actionable insights
+3. **Sections** - Organized finding groups with enrichment tables
+4. **Evidence** - Supporting details
+5. **Artifacts** - Saved JSON artifact references
+6. **Summary** - Single ordered JSON line with priority-keyed metrics
+
+The summary appears at the end as a compact JSON line:
+```
+{"macro":"search","total_matches":45,"definitions":3,"callsites":12,...}
+```
+
+Summary keys are ordered by priority: core metrics first, then classification breakdown, enrichment telemetry, and timing data.
 
 ## Filtering & Output
 

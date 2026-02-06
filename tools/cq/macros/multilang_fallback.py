@@ -8,6 +8,7 @@ from tools.cq.core.multilang_summary import (
     build_multilang_summary,
     partition_stats_from_result_summary,
 )
+from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.core.schema import CqResult
 from tools.cq.macros._rust_fallback import rust_fallback_search
 
@@ -41,10 +42,12 @@ def apply_rust_macro_fallback(
         fallback_matches=fallback_matches,
     )
     result.summary = build_multilang_summary(
-        common=existing_summary,
-        lang_scope="auto",
-        language_order=None,
-        languages={"python": py_stats, "rust": rust_stats},
+        SummaryBuildRequest(
+            common=existing_summary,
+            lang_scope="auto",
+            language_order=None,
+            languages={"python": py_stats, "rust": rust_stats},
+        )
     )
     return result
 

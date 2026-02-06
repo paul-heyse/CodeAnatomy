@@ -5,14 +5,11 @@ from __future__ import annotations
 import subprocess
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING
 
+from tools.cq.search.classifier import QueryMode
+from tools.cq.search.profiles import SearchLimits
+from tools.cq.search.requests import RgRunRequest
 from tools.cq.search.rg_events import RgEvent, decode_rg_event
-
-if TYPE_CHECKING:
-    from tools.cq.search.classifier import QueryMode
-    from tools.cq.search.profiles import SearchLimits
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,16 +111,7 @@ def build_rg_command(
     return command
 
 
-def run_rg_json(  # noqa: PLR0913
-    *,
-    root: Path,
-    pattern: str,
-    mode: QueryMode,
-    lang_types: tuple[str, ...],
-    include_globs: list[str],
-    exclude_globs: list[str],
-    limits: SearchLimits,
-) -> RgProcessResult:
+def run_rg_json(request: RgRunRequest) -> RgProcessResult:
     """Run native ``rg --json`` and decode events.
 
     Returns:
@@ -132,16 +120,16 @@ def run_rg_json(  # noqa: PLR0913
         Process metadata and decoded event stream.
     """
     command = build_rg_command(
-        pattern=pattern,
-        mode=mode,
-        lang_types=lang_types,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        limits=limits,
+        pattern=request.pattern,
+        mode=request.mode,
+        lang_types=request.lang_types,
+        include_globs=request.include_globs,
+        exclude_globs=request.exclude_globs,
+        limits=request.limits,
     )
     process = subprocess.Popen(
         command,
-        cwd=root,
+        cwd=request.root,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=False,
@@ -149,7 +137,7 @@ def run_rg_json(  # noqa: PLR0913
 
     events: list[RgEvent] = []
     timed_out = False
-    deadline = time.monotonic() + limits.timeout_seconds
+    deadline = time.monotonic() + request.limits.timeout_seconds
 
     assert process.stdout is not None
     assert process.stderr is not None
@@ -158,7 +146,7 @@ def run_rg_json(  # noqa: PLR0913
             event = decode_rg_event(raw_line)
             if event is not None:
                 events.append(event)
-            if limits.timeout_seconds > 0 and time.monotonic() >= deadline:
+            if request.limits.timeout_seconds > 0 and time.monotonic() >= deadline:
                 timed_out = True
                 process.kill()
                 break

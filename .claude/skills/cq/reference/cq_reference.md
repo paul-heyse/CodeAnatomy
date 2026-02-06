@@ -72,6 +72,34 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+### Request Objects
+
+CQ uses frozen `msgspec.Struct` request objects to define clean input contracts for internal operations:
+
+| Request | Module | Purpose |
+|---------|--------|---------|
+| `RgRunRequest` | `search/requests.py` | Native ripgrep JSON execution input |
+| `CandidateCollectionRequest` | `search/requests.py` | Raw candidate collection input |
+| `PythonNodeEnrichmentRequest` | `search/requests.py` | Node-anchored Python enrichment input |
+| `PythonByteRangeEnrichmentRequest` | `search/requests.py` | Byte-range Python enrichment input |
+| `RustEnrichmentRequest` | `search/requests.py` | Rust enrichment input |
+| `SummaryBuildRequest` | `core/requests.py` | Summary construction with telemetry |
+| `MergeResultsRequest` | `core/requests.py` | Multi-language result merge input |
+
+All request objects are frozen (immutable) and use `CqStruct` as their base class for consistent serialization behavior.
+
+### Tree-Sitter Query Packs
+
+Tree-sitter enrichment uses `.scm` query files for language-specific pattern matching:
+
+| Query Pack | Location | Purpose |
+|-----------|----------|---------|
+| `enrichment_core.scm` | `search/queries/python/` | Function/class definitions, call expressions |
+| `enrichment_imports.scm` | `search/queries/python/` | Import and from-import statements |
+| `enrichment_locals.scm` | `search/queries/python/` | Identifiers and attribute expressions |
+
+Query packs enable declarative pattern specification separate from enrichment logic, making it easy to extend enrichment coverage by adding new `.scm` files.
+
 ## Global Options Reference
 
 All cq commands accept these global options, handled by the meta-app launcher.
@@ -265,6 +293,15 @@ All commands support filtering options; see **Filtering Options** for details.
 3. **AST Classification**: ast-grep-py node lookup for structural context
 4. **Symtable Enrichment**: Optional scope analysis for high-value matches
 5. **Result Assembly**: Grouped by containing function, ranked by relevance
+6. **Enrichment Pipeline**: 5-stage enrichment (ast_grep, python_ast, import_detail, libcst, tree_sitter)
+
+**Parallel Classification:**
+
+For large result sets, the classification phase runs in parallel:
+- Matches are partitioned by file
+- Up to 4 worker processes classify partitions concurrently
+- Results are merged back in original order
+- On any worker failure, classification falls back to sequential processing
 
 **Classification Categories:**
 | Category | Description |
@@ -310,6 +347,177 @@ All commands support filtering options; see **Filtering Options** for details.
 # Plain query fallback (same result)
 /cq q build_graph
 ```
+
+---
+
+## Multi-Source Python Enrichment Pipeline
+
+Smart search results include deep semantic enrichment from multiple analysis sources. Each Python match undergoes a 5-stage enrichment pipeline that extracts complementary information from different analysis tools.
+
+### Enrichment Stages
+
+| Stage | Source | What It Provides |
+|-------|--------|-----------------|
+| `ast_grep` | ast-grep-py | Node kind, enclosing scope, symbol role, structural context |
+| `python_ast` | Python `ast` module | AST node type, scope nesting, decorator context |
+| `import_detail` | Python `ast` import visitor | Module path, alias resolution, import form |
+| `libcst` | LibCST metadata providers | Qualified names, scope analysis, binding candidates, expression context |
+| `tree_sitter` | tree-sitter with query packs | Parse quality metrics, structural pattern matches, syntax validation |
+
+### Enrichment Payload Structure
+
+Each enriched finding carries a structured payload organized into semantic sections:
+
+| Section | Purpose | Key Fields |
+|---------|---------|------------|
+| `meta` | Pipeline metadata | `enrichment_status`, `stage_status`, `stage_timings_ms` |
+| `resolution` | Symbol resolution | `qualified_name_candidates`, `binding_candidates`, `import_alias_chain`, `call_target` |
+| `behavior` | Runtime behavior flags | `has_await`, `has_yield`, `has_raise`, `in_try`, `in_except`, `in_with`, `in_loop` |
+| `structural` | Code structure | `enclosing_callable`, `enclosing_class`, `nesting_depth`, `decorator_list` |
+| `parse_quality` | Source quality metrics | `syntax_valid`, `parse_error_count`, `tree_sitter_node_count` |
+| `agreement` | Cross-source validation | `status` ("full"/"partial"/"conflict"), `sources_agree`, `sources_disagree` |
+
+### Stage Status Tracking
+
+Each stage reports its outcome:
+
+| Status | Meaning |
+|--------|---------|
+| `applied` | Stage ran successfully and contributed data |
+| `degraded` | Stage ran but with partial results (e.g., parse error) |
+| `skipped` | Stage was not applicable or was disabled |
+| `error` | Stage failed (error isolated, other stages unaffected) |
+
+### Cross-Source Agreement
+
+When multiple enrichment sources analyze the same construct, their results are cross-checked:
+
+- **full**: All 3 sources (ast_grep, libcst, tree_sitter) agree on the classification
+- **partial**: Some sources agree, others differ or were unavailable
+- **conflict**: Sources produced contradictory results (investigate manually)
+
+Agreement tracking helps identify ambiguous code patterns where static analysis tools disagree, signaling areas that may need manual review.
+
+### PythonAnalysisSession
+
+To avoid redundant parsing, cq caches per-file analysis artifacts in a `PythonAnalysisSession`:
+
+- ast-grep root node and node index
+- Python AST tree and symtable
+- LibCST wrapper with metadata providers
+- tree-sitter parse tree
+
+Sessions are keyed by content hash with a maximum cache of 64 entries. When multiple findings reference the same file, they share a single session, significantly reducing parse overhead.
+
+### Environment Controls
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CQ_PY_ENRICHMENT_CROSSCHECK` | `true` | Enable/disable cross-source agreement checking |
+
+---
+
+## Enrichment Tables in Markdown Output
+
+When using markdown format (`--format md`), enriched findings include structured tables showing enrichment data organized by section.
+
+### Table Format
+
+Each enrichment section renders as a compact 3-row table (header, separator, values) with a maximum of 5 columns. If a section has more fields, multiple tables are rendered.
+
+### Rendered Sections
+
+| Section Header | Content | When Shown |
+|---------------|---------|------------|
+| **meta** | Pipeline status, stage outcomes, timing | Always (when enrichment present) |
+| **resolution** | Qualified names, bindings, call targets | When resolution data available |
+| **behavior** | Async/yield/raise/try/loop flags | When behavior flags derived |
+| **structural** | Enclosing scope, nesting, decorators | When structural context available |
+| **parse_quality** | Syntax validity, error counts, node counts | When tree-sitter ran |
+| **agreement** | Cross-source agreement status | When multiple sources contributed |
+| **python** | Python-specific enrichment data | Python findings |
+| **rust** | Rust-specific enrichment data | Rust findings |
+| **symtable** | Symbol table enrichment (closure, free vars) | When symtable ran |
+
+### Interpreting Enrichment Data
+
+**Resolution section** - Use to understand what a symbol resolves to:
+- `qualified_name_candidates`: Fully qualified names the symbol could refer to
+- `binding_candidates`: Where the symbol is defined/bound
+- `call_target` / `call_receiver` / `call_method`: For call sites, the decomposed target
+
+**Behavior section** - Use to understand runtime characteristics:
+- `has_await`: Contains await expressions (async code)
+- `has_yield`: Is a generator function
+- `in_try` / `in_except`: Inside exception handling (may affect control flow)
+
+**Agreement section** - Use to gauge confidence:
+- `full` agreement = high confidence in classification
+- `partial` = reasonable confidence, some sources unavailable
+- `conflict` = manual review recommended
+
+---
+
+## Render-Time Enrichment
+
+For findings that were not enriched during the initial search phase (e.g., from macro commands), cq performs on-demand enrichment at markdown render time.
+
+### How It Works
+
+1. During `render_markdown()`, findings without enrichment data are identified
+2. A pre-computation pass collects enrichment for up to 9 unique files (`MAX_RENDER_ENRICH_FILES`)
+3. Enrichment runs in parallel via `ProcessPoolExecutor` with up to 4 workers
+4. Results are cached by `(file, line, col, language)` tuple
+5. Each finding is then rendered with its enrichment tables
+
+### Limitations
+
+- Limited to the first 9 files encountered (to bound render time)
+- Findings in files beyond this limit render without enrichment
+- Parallel workers are capped at 4 to avoid resource contention
+
+---
+
+## Enrichment Telemetry
+
+Smart search results include telemetry data about the enrichment pipeline's performance.
+
+### Telemetry Fields
+
+| Field | Description |
+|-------|-------------|
+| `enrichment.applied` | Total findings that received enrichment |
+| `enrichment.degraded` | Findings with partial/degraded enrichment |
+| `enrichment.skipped` | Findings where enrichment was skipped |
+| `enrichment.stages` | Per-stage breakdown (ast_grep, python_ast, import_detail, libcst, tree_sitter) |
+
+### Per-Stage Metrics
+
+Each stage in `enrichment.stages` reports:
+
+| Metric | Description |
+|--------|-------------|
+| `applied` | Number of findings this stage enriched |
+| `degraded` | Number of findings with degraded results |
+| `skipped` | Number of findings this stage skipped |
+| `total_ms` | Total wall-clock time for this stage |
+
+### Cache Statistics
+
+When PythonAnalysisSession caching is active:
+
+| Metric | Description |
+|--------|-------------|
+| `cache_hits` | Sessions reused from cache |
+| `cache_misses` | New sessions created |
+
+### Using Telemetry
+
+Telemetry helps diagnose enrichment issues:
+- High `degraded` counts suggest parse errors in source files
+- High `skipped` counts for a stage may indicate missing dependencies
+- Stage timing helps identify enrichment bottlenecks
+- Cache hit rates show session reuse efficiency
 
 ---
 
@@ -414,7 +622,14 @@ Each call site includes enrichment data for deeper analysis:
 
 **context_snippet:**
 
-The context snippet provides the actual source code of the containing function, making it easy to understand how each call site is used without reading the full file. Snippets longer than 30 lines are truncated with a `# ... truncated (N more lines) ...` marker, showing the first 15 and last 5 lines.
+The context snippet provides the actual source code of the containing function, using a smart block selection algorithm:
+
+1. **Docstring skipping**: Leading docstrings are omitted to focus on logic
+2. **Function header**: The `def` line and signature are always included
+3. **Anchor block**: Lines around the actual call site (the match line) are prioritized
+4. **Omission markers**: Gaps between included blocks show `# ... omitted (N lines) ...`
+
+This approach ensures the most relevant code is visible even in long functions, with the call site itself always shown in context rather than being truncated away.
 
 **symtable_info structure:**
 
@@ -1007,9 +1222,19 @@ All commands support these filtering options:
 
 ### Summary Format
 
+Summary output appears at the end of markdown output (after artifacts) as a single ordered JSON line:
+
 ```
-calls: 45 total sites [3 error, 12 warning, 30 info] [impact:high confidence:high]
+{"macro":"search","total_matches":45,"definitions":3,"callsites":12,"imports":5,...}
 ```
+
+Summary keys are ordered by priority:
+1. Core metrics (macro, total counts)
+2. Classification breakdown
+3. Enrichment telemetry
+4. Timing data
+
+This compact format enables efficient parsing while preserving all key metrics in a deterministic order.
 
 ---
 

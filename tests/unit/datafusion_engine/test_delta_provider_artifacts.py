@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from datafusion_engine.delta.provider_artifacts import (
     DeltaProviderBuildRequest,
@@ -35,7 +35,7 @@ class _RegistrationContextStub:
     strict_native_provider_violation: bool | None = False
     delta_scan: object | None = None
     delta_scan_effective: dict[str, object] | None = None
-    delta_scan_snapshot: object | None = {"schema_hash": "abc"}
+    delta_scan_snapshot: object | None = field(default_factory=lambda: {"schema_hash": "abc"})
     delta_scan_identity_hash: str | None = "cafef00d"
     snapshot: dict[str, object] | None = None
     registration_path: str = "provider"

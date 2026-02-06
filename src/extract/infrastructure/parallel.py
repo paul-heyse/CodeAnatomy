@@ -5,7 +5,6 @@ from __future__ import annotations
 import multiprocessing
 import os
 import sys
-import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import TypeVar
@@ -15,6 +14,15 @@ from opentelemetry import propagate
 
 T = TypeVar("T")
 U = TypeVar("U")
+
+
+def _process_worker_init(carrier_payload: Mapping[str, str] | None) -> None:
+    from obs.otel import configure_otel
+
+    configure_otel(service_name="codeanatomy")
+    if carrier_payload:
+        context = propagate.extract(carrier_payload)
+        otel_context.attach(context)
 
 
 def _gil_disabled() -> bool:
@@ -49,21 +57,15 @@ def supports_fork() -> bool:
     """
     if "fork" not in multiprocessing.get_all_start_methods():
         return False
-    return threading.active_count() <= 1
+    # Python 3.13+ is our baseline and inherits 3.12 fork warnings; keep
+    # spawn-only behavior to avoid unsafe multi-threaded fork semantics.
+    return False
 
 
 def _process_executor(
     max_workers: int | None,
     carrier: Mapping[str, str] | None,
 ) -> ProcessPoolExecutor:
-    def _worker_init(carrier_payload: Mapping[str, str] | None) -> None:
-        from obs.otel import configure_otel
-
-        configure_otel(service_name="codeanatomy")
-        if carrier_payload:
-            context = propagate.extract(carrier_payload)
-            otel_context.attach(context)
-
     ctx = (
         multiprocessing.get_context("fork")
         if supports_fork()
@@ -72,7 +74,7 @@ def _process_executor(
     return ProcessPoolExecutor(
         max_workers=max_workers,
         mp_context=ctx,
-        initializer=_worker_init,
+        initializer=_process_worker_init,
         initargs=(carrier,),
     )
 

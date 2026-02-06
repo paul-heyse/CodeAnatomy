@@ -4,20 +4,16 @@ from __future__ import annotations
 
 import warnings
 
+import pytest
 
-def test_storage_deltalake_query_delta_sql_warns() -> None:
-    """Legacy query_delta_sql export should emit a deprecation warning."""
+
+def test_storage_deltalake_query_delta_sql_removed() -> None:
+    """Legacy query_delta_sql export should be fully removed."""
     import storage.deltalake as deltalake_module
 
     deltalake_module.__dict__.pop("query_delta_sql", None)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        value = deltalake_module.query_delta_sql
-    assert callable(value)
-    assert any(
-        issubclass(item.category, DeprecationWarning) and "query_delta_sql" in str(item.message)
-        for item in caught
-    )
+    with pytest.raises(AttributeError):
+        _ = deltalake_module.query_delta_sql
 
 
 def test_storage_deltalake_disable_feature_warns() -> None:

@@ -27,6 +27,7 @@ from tools.cq.search.python_enrichment import (
     enrich_python_context,
     enrich_python_context_by_byte_range,
 )
+from tools.cq.search.requests import PythonByteRangeEnrichmentRequest, PythonNodeEnrichmentRequest
 
 _PYTHON_SAMPLE = '''\
 from __future__ import annotations
@@ -657,12 +658,14 @@ class TestEnrichPythonContext:
         node = _find_node(sg, 45, 0)
         assert node is not None
         result = enrich_python_context(
-            sg,
-            node,
-            _PYTHON_SAMPLE.encode(),
-            line=45,
-            col=0,
-            cache_key="test",
+            PythonNodeEnrichmentRequest(
+                sg_root=sg,
+                node=node,
+                source_bytes=_PYTHON_SAMPLE.encode(),
+                line=45,
+                col=0,
+                cache_key="test",
+            )
         )
         assert result is not None
         assert result["enrichment_status"] in {"applied", "degraded"}
@@ -679,12 +682,14 @@ class TestEnrichPythonContext:
             node = node.parent()
         if node is not None:
             result = enrich_python_context(
-                sg,
-                node,
-                _PYTHON_SAMPLE.encode(),
-                line=71,
-                col=4,
-                cache_key="test",
+                PythonNodeEnrichmentRequest(
+                    sg_root=sg,
+                    node=node,
+                    source_bytes=_PYTHON_SAMPLE.encode(),
+                    line=71,
+                    col=4,
+                    cache_key="test",
+                )
             )
             assert result is not None
             assert result.get("item_role") == "callsite"
@@ -695,12 +700,14 @@ class TestEnrichPythonContext:
         sg = SgRoot(source, "python")
         node = sg.root()
         result = enrich_python_context(
-            sg,
-            node,
-            source.encode(),
-            line=1,
-            col=0,
-            cache_key="test_nonenr",
+            PythonNodeEnrichmentRequest(
+                sg_root=sg,
+                node=node,
+                source_bytes=source.encode(),
+                line=1,
+                col=0,
+                cache_key="test_nonenr",
+            )
         )
         assert result is None
 
@@ -710,12 +717,14 @@ class TestEnrichPythonContext:
         node = _find_node(sg, 45, 0)
         assert node is not None
         result = enrich_python_context(
-            sg,
-            node,
-            _PYTHON_SAMPLE.encode(),
-            line=45,
-            col=0,
-            cache_key="test",
+            PythonNodeEnrichmentRequest(
+                sg_root=sg,
+                node=node,
+                source_bytes=_PYTHON_SAMPLE.encode(),
+                line=45,
+                col=0,
+                cache_key="test",
+            )
         )
         assert result is not None
         sources = result.get("enrichment_sources", [])
@@ -728,12 +737,14 @@ class TestEnrichPythonContext:
         node = _find_node(sg, 45, 0)
         assert node is not None
         result = enrich_python_context(
-            sg,
-            node,
-            _PYTHON_SAMPLE.encode(),
-            line=45,
-            col=0,
-            cache_key="test",
+            PythonNodeEnrichmentRequest(
+                sg_root=sg,
+                node=node,
+                source_bytes=_PYTHON_SAMPLE.encode(),
+                line=45,
+                col=0,
+                cache_key="test",
+            )
         )
         assert result is not None
         size_hint = result.get("payload_size_hint")
@@ -750,12 +761,14 @@ class TestEnrichPythonContext:
             node = node.parent()
         assert node is not None
         result = enrich_python_context(
-            sg,
-            node,
-            _PYTHON_SAMPLE.encode(),
-            line=73,
-            col=0,
-            cache_key="test",
+            PythonNodeEnrichmentRequest(
+                sg_root=sg,
+                node=node,
+                source_bytes=_PYTHON_SAMPLE.encode(),
+                line=73,
+                col=0,
+                cache_key="test",
+            )
         )
         assert result is not None
         assert result.get("is_dataclass") is True
@@ -768,11 +781,13 @@ class TestEnrichPythonContext:
         byte_start = source.index(marker)
         byte_end = byte_start + len(marker)
         result = enrich_python_context_by_byte_range(
-            sg,
-            source,
-            byte_start,
-            byte_end,
-            cache_key="test",
+            PythonByteRangeEnrichmentRequest(
+                sg_root=sg,
+                source_bytes=source,
+                byte_start=byte_start,
+                byte_end=byte_end,
+                cache_key="test",
+            )
         )
         assert result is not None
         assert result.get("node_kind") in {"function_definition", "decorated_definition"}
@@ -784,12 +799,14 @@ class TestEnrichPythonContext:
         assert node is not None
         # Pass invalid source that causes ast.parse to fail
         result = enrich_python_context(
-            sg,
-            node,
-            b"def \xff broken(",
-            line=45,
-            col=0,
-            cache_key="test_broken",
+            PythonNodeEnrichmentRequest(
+                sg_root=sg,
+                node=node,
+                source_bytes=b"def \xff broken(",
+                line=45,
+                col=0,
+                cache_key="test_broken",
+            )
         )
         # Should still return partial results from ast-grep tier
         assert result is not None

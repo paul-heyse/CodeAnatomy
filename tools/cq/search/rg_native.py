@@ -71,7 +71,7 @@ def detect_rg_types() -> set[str]:
     return types
 
 
-def build_rg_command(  # noqa: PLR0913
+def build_rg_command(
     *,
     pattern: str,
     mode: QueryMode,
@@ -114,7 +114,7 @@ def build_rg_command(  # noqa: PLR0913
     return command
 
 
-def run_rg_json(  # noqa: PLR0913
+def run_rg_json(
     *,
     root: Path,
     pattern: str,

@@ -102,7 +102,7 @@ def collect_extension_plugin_snapshot(
 def collect_runtime_execution_metrics(
     ctx: SessionContext,
     *,
-    module_name: str = "datafusion_ext",
+    module_name: str | None = None,
 ) -> Mapping[str, object] | None:
     """Collect runtime execution metrics from the extension when available.
 
@@ -111,19 +111,31 @@ def collect_runtime_execution_metrics(
     Mapping[str, object] | None
         Structured metrics payload, or None when unavailable.
     """
-    try:
-        module = importlib.import_module(module_name)
-    except ImportError:
+    module_candidates = (
+        (module_name,)
+        if module_name is not None
+        else (
+            "datafusion._internal",
+            "datafusion_ext",
+        )
+    )
+    errors: list[str] = []
+    for candidate in module_candidates:
+        try:
+            module = importlib.import_module(candidate)
+        except ImportError:
+            continue
+        snapshot_fn = getattr(module, "runtime_execution_metrics_snapshot", None)
+        if not callable(snapshot_fn):
+            continue
+        payload, error = _invoke_extension_with_context(snapshot_fn, ctx)
+        if isinstance(payload, Mapping):
+            return dict(payload)
+        if error is not None:
+            errors.append(f"{candidate}: {error}")
+    if not errors:
         return None
-    snapshot_fn = getattr(module, "runtime_execution_metrics_snapshot", None)
-    if not callable(snapshot_fn):
-        return None
-    payload, error = _invoke_extension_with_context(snapshot_fn, ctx)
-    if isinstance(payload, Mapping):
-        return dict(payload)
-    if error is None:
-        return None
-    return {"error": error}
+    return {"error": "; ".join(errors)}
 
 
 def build_runtime_capabilities_snapshot(

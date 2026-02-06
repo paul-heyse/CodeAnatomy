@@ -116,12 +116,12 @@ _FIELD_GROUPS: dict[str, list[str]] = {
         "macro_name",
     ],
     "struct_shape": [
-        "field_count",
-        "fields",
+        "struct_field_count",
+        "struct_fields",
     ],
     "enum_shape": [
-        "variant_count",
-        "variants",
+        "enum_variant_count",
+        "enum_variants",
     ],
 }
 
@@ -306,6 +306,15 @@ def clear_tree_sitter_rust_cache() -> None:
     _cache_hits = 0
     _cache_misses = 0
     _cache_evictions = 0
+
+
+def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
+    """Return cache counters for observability/debugging."""
+    return {
+        "cache_hits": _cache_hits,
+        "cache_misses": _cache_misses,
+        "cache_evictions": _cache_evictions,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -698,7 +707,7 @@ def _extract_struct_shape(struct_node: Node, source_bytes: bytes) -> dict[str, o
     Returns:
     -------
     dict[str, object]
-        Fields: field_count, fields (list of field text, capped).
+        Fields: struct_field_count, struct_fields (list of field text, capped).
     """
     result: dict[str, object] = {}
     body = struct_node.child_by_field_name("body")
@@ -706,7 +715,7 @@ def _extract_struct_shape(struct_node: Node, source_bytes: bytes) -> dict[str, o
         return result
 
     field_nodes = [c for c in body.named_children if c.type == "field_declaration"]
-    result["field_count"] = len(field_nodes)
+    result["struct_field_count"] = len(field_nodes)
 
     fields: list[str] = []
     for field_node in field_nodes[:_MAX_FIELDS_SHOWN]:
@@ -717,7 +726,7 @@ def _extract_struct_shape(struct_node: Node, source_bytes: bytes) -> dict[str, o
     remaining = len(field_nodes) - _MAX_FIELDS_SHOWN
     if remaining > 0:
         fields.append(f"... and {remaining} more")
-    result["fields"] = fields
+    result["struct_fields"] = fields
     return result
 
 
@@ -734,7 +743,7 @@ def _extract_enum_shape(enum_node: Node, source_bytes: bytes) -> dict[str, objec
     Returns:
     -------
     dict[str, object]
-        Fields: variant_count, variants (list of variant text, capped).
+        Fields: enum_variant_count, enum_variants (list of variant text, capped).
     """
     result: dict[str, object] = {}
     body = enum_node.child_by_field_name("body")
@@ -742,7 +751,7 @@ def _extract_enum_shape(enum_node: Node, source_bytes: bytes) -> dict[str, objec
         return result
 
     variant_nodes = [c for c in body.named_children if c.type == "enum_variant"]
-    result["variant_count"] = len(variant_nodes)
+    result["enum_variant_count"] = len(variant_nodes)
 
     variants: list[str] = []
     for variant_node in variant_nodes[:_MAX_VARIANTS_SHOWN]:
@@ -753,7 +762,7 @@ def _extract_enum_shape(enum_node: Node, source_bytes: bytes) -> dict[str, objec
     remaining = len(variant_nodes) - _MAX_VARIANTS_SHOWN
     if remaining > 0:
         variants.append(f"... and {remaining} more")
-    result["variants"] = variants
+    result["enum_variants"] = variants
     return result
 
 
@@ -1336,5 +1345,6 @@ __all__ = [
     "clear_tree_sitter_rust_cache",
     "enrich_rust_context",
     "enrich_rust_context_by_byte_range",
+    "get_tree_sitter_rust_cache_stats",
     "is_tree_sitter_rust_available",
 ]

@@ -35,7 +35,7 @@
     "argv": [],
     "macro": "q",
     "root": "/home/paul/CodeAnatomy",
-    "schema_version": "cq.v1",
+    "schema_version": "cq.v2",
     "toolchain": {
       "python": "3.13.12",
       "rg": "ripgrep 14.1.0",
@@ -46,6 +46,95 @@
   "summary": {
     "cross_language_diagnostics": [],
     "lang_scope": "auto",
+    "language_capabilities": {
+      "python": {
+        "bytecode_surface_macro": {
+          "level": "full",
+          "supported": true
+        },
+        "calls_macro": {
+          "level": "full",
+          "supported": true
+        },
+        "entity_query": {
+          "level": "full",
+          "supported": true
+        },
+        "impact_macro": {
+          "level": "full",
+          "supported": true
+        },
+        "pattern_query": {
+          "level": "full",
+          "supported": true
+        },
+        "run_q_steps": {
+          "level": "full",
+          "supported": true
+        },
+        "scopes_macro": {
+          "level": "full",
+          "supported": true
+        },
+        "search": {
+          "level": "full",
+          "supported": true
+        },
+        "sig_impact_macro": {
+          "level": "full",
+          "supported": true
+        }
+      },
+      "rust": {
+        "bytecode_surface_macro": {
+          "level": "none",
+          "supported": false
+        },
+        "calls_macro": {
+          "level": "partial",
+          "supported": true
+        },
+        "entity_query": {
+          "level": "full",
+          "supported": true
+        },
+        "impact_macro": {
+          "level": "none",
+          "supported": false
+        },
+        "pattern_query": {
+          "level": "full",
+          "supported": true
+        },
+        "run_q_steps": {
+          "level": "full",
+          "supported": true
+        },
+        "scopes_macro": {
+          "level": "none",
+          "supported": false
+        },
+        "search": {
+          "level": "full",
+          "supported": true
+        },
+        "sig_impact_macro": {
+          "level": "none",
+          "supported": false
+        }
+      },
+      "shared": {
+        "bytecode_surface_macro": false,
+        "calls_macro": true,
+        "entity_query": true,
+        "impact_macro": false,
+        "pattern_query": true,
+        "run_q_steps": true,
+        "scopes_macro": false,
+        "search": true,
+        "sig_impact_macro": false
+      }
+    },
     "language_order": [
       "python",
       "rust"

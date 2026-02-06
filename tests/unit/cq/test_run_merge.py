@@ -63,6 +63,8 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
     assert isinstance(merged.summary["languages"], dict)
     assert "python" in merged.summary["languages"]
     assert "rust" in merged.summary["languages"]
+    assert isinstance(merged.summary["cross_language_diagnostics"], list)
+    assert isinstance(merged.summary["language_capabilities"], dict)
 
 
 def test_runmeta_for_scope_merge_builds_runmeta() -> None:

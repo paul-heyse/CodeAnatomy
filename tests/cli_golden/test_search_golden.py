@@ -76,6 +76,11 @@ def _render_search_summary() -> str:
                 },
             },
             "cross_language_diagnostics": [],
+            "language_capabilities": {
+                "python": {},
+                "rust": {},
+                "shared": {},
+            },
             "include": ["src/**"],
             "exclude": ["tests/**"],
             "pattern": r"\bbuild_graph\b",

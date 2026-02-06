@@ -8,11 +8,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, TypedDict, Unpack, cast
 
 import msgspec
 
-from tools.cq.core.locations import SourceSpan
+from tools.cq.core.locations import (
+    SourceSpan,
+    line_relative_byte_range_to_absolute,
+)
 from tools.cq.core.multilang_orchestrator import (
     execute_by_language_scope,
     merge_partitioned_items,
@@ -50,12 +53,14 @@ from tools.cq.search.classifier import (
     SymtableEnrichment,
     classify_from_node,
     classify_from_records,
+    classify_from_resolved_node,
     classify_heuristic,
     clear_caches,
     detect_query_mode,
     enrich_with_symtable_from_table,
     get_cached_source,
     get_def_lines_cached,
+    get_node_index,
     get_sg_root,
     get_symtable_table,
 )
@@ -64,11 +69,21 @@ from tools.cq.search.context import SmartSearchContext
 from tools.cq.search.models import SearchConfig, SearchKwargs
 from tools.cq.search.multilang_diagnostics import (
     build_cross_language_diagnostics,
+    build_language_capabilities,
+    diagnostics_to_summary_payload,
     is_python_oriented_query_text,
 )
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search.python_enrichment import (
+    _ENRICHMENT_ERRORS as _PYTHON_ENRICHMENT_ERRORS,
+)
+from tools.cq.search.python_enrichment import enrich_python_context_by_byte_range
 from tools.cq.search.rg_native import build_rg_command, run_rg_json
-from tools.cq.search.tree_sitter_rust import enrich_rust_context
+from tools.cq.search.rust_enrichment import enrich_rust_context_by_byte_range
+from tools.cq.search.tree_sitter_rust import get_tree_sitter_rust_cache_stats
+
+if TYPE_CHECKING:
+    from ast_grep_py import SgNode, SgRoot
 
 # Derive smart search limits from INTERACTIVE profile
 SMART_SEARCH_LIMITS = msgspec.structs.replace(
@@ -115,9 +130,13 @@ class RawMatch(CqStruct, frozen=True):
     match_text
         Exact matched substring.
     match_start
-        Column offset of match start.
+        Character-column offset of match start.
     match_end
-        Column offset of match end.
+        Character-column offset of match end.
+    match_byte_start
+        Line-relative UTF-8 byte offset of match start.
+    match_byte_end
+        Line-relative UTF-8 byte offset of match end.
     submatch_index
         Which submatch on this line.
     """
@@ -127,6 +146,8 @@ class RawMatch(CqStruct, frozen=True):
     match_text: str
     match_start: int
     match_end: int
+    match_byte_start: int
+    match_byte_end: int
     submatch_index: int = 0
 
     @property
@@ -173,11 +194,20 @@ class ClassificationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedNodeContext:
+    sg_root: SgRoot
+    node: SgNode
+    line: int
+    col: int
+
+
+@dataclass(frozen=True, slots=True)
 class MatchEnrichment:
     symtable: SymtableEnrichment | None
     context_window: dict[str, int] | None
     context_snippet: str | None
     rust_tree_sitter: dict[str, object] | None
+    python_enrichment: dict[str, object] | None
 
 
 class SearchStats(CqStruct, frozen=True):
@@ -238,6 +268,8 @@ class EnrichedMatch(CqStruct, frozen=True):
         Symtable enrichment data.
     rust_tree_sitter
         Optional best-effort Rust context details from tree-sitter-rust.
+    python_enrichment
+        Optional best-effort Python context details from python_enrichment.
     """
 
     span: SourceSpan
@@ -252,6 +284,7 @@ class EnrichedMatch(CqStruct, frozen=True):
     context_snippet: str | None = None
     symtable: SymtableEnrichment | None = None
     rust_tree_sitter: dict[str, object] | None = None
+    python_enrichment: dict[str, object] | None = None
     language: QueryLanguage = "python"
 
     @property
@@ -383,7 +416,7 @@ def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchSta
     )
 
 
-def collect_candidates(  # noqa: PLR0913
+def collect_candidates(
     root: Path,
     *,
     pattern: str,
@@ -468,7 +501,15 @@ def classify_match(
         return _build_heuristic_enriched(raw, heuristic, match_text, lang=lang)
 
     file_path = root / raw.file
-    classification = _resolve_match_classification(raw, file_path, heuristic, root, lang=lang)
+    resolved_python = _resolve_python_node_context(file_path, raw) if lang == "python" else None
+    classification = _resolve_match_classification(
+        raw,
+        file_path,
+        heuristic,
+        root,
+        lang=lang,
+        resolved_python=resolved_python,
+    )
     symtable_enrichment = _maybe_symtable_enrichment(
         file_path,
         raw,
@@ -481,12 +522,19 @@ def classify_match(
         raw,
         lang=lang,
     )
+    python_enrichment = _maybe_python_enrichment(
+        file_path,
+        raw,
+        lang=lang,
+        resolved_python=resolved_python,
+    )
     context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
     enrichment = MatchEnrichment(
         symtable=symtable_enrichment,
         context_window=context_window,
         context_snippet=context_snippet,
         rust_tree_sitter=rust_tree_sitter,
+        python_enrichment=python_enrichment,
     )
     return _build_enriched_match(
         raw,
@@ -523,6 +571,7 @@ def _resolve_match_classification(
     root: Path,
     *,
     lang: QueryLanguage,
+    resolved_python: ResolvedNodeContext | None = None,
 ) -> ClassificationResult:
     lang_suffixes = {".py", ".pyi"} if lang == "python" else {".rs"}
     if file_path.suffix not in lang_suffixes:
@@ -531,7 +580,12 @@ def _resolve_match_classification(
         )
 
     record_result = classify_from_records(file_path, root, raw.line, raw.col, lang=lang)
-    ast_result = record_result or _classify_from_node(file_path, raw, lang=lang)
+    ast_result = record_result or _classify_from_node(
+        file_path,
+        raw,
+        lang=lang,
+        resolved_python=resolved_python,
+    )
     if ast_result is not None:
         return _classification_from_node(ast_result)
     if heuristic.category is not None:
@@ -544,7 +598,10 @@ def _classify_from_node(
     raw: RawMatch,
     *,
     lang: QueryLanguage,
+    resolved_python: ResolvedNodeContext | None = None,
 ) -> NodeClassification | None:
+    if lang == "python" and resolved_python is not None:
+        return classify_from_resolved_node(resolved_python.node)
     sg_root = get_sg_root(file_path, lang=lang)
     if sg_root is None:
         return None
@@ -664,7 +721,57 @@ def _build_enriched_match(
         context_snippet=enrichment.context_snippet,
         symtable=enrichment.symtable,
         rust_tree_sitter=enrichment.rust_tree_sitter,
+        python_enrichment=enrichment.python_enrichment,
         language=lang,
+    )
+
+
+def _raw_match_abs_byte_range(raw: RawMatch, source_bytes: bytes) -> tuple[int, int] | None:
+    """Resolve absolute file-byte range for a raw line-relative match.
+
+    Returns:
+    -------
+    tuple[int, int] | None
+        Absolute start/end byte offsets when a range can be resolved.
+    """
+    abs_range = line_relative_byte_range_to_absolute(
+        source_bytes,
+        line=raw.line,
+        byte_start=raw.match_byte_start,
+        byte_end=raw.match_byte_end,
+    )
+    if abs_range is not None:
+        return abs_range
+    # Fallback: derive from line/column when line-relative byte data is missing.
+    line_start_byte = line_relative_byte_range_to_absolute(
+        source_bytes,
+        line=raw.line,
+        byte_start=0,
+        byte_end=1,
+    )
+    if line_start_byte is None:
+        return None
+    start = line_start_byte[0] + max(0, raw.col)
+    end = max(start + 1, start + max(1, raw.match_end - raw.match_start))
+    return start, min(end, len(source_bytes))
+
+
+def _resolve_python_node_context(
+    file_path: Path,
+    raw: RawMatch,
+) -> ResolvedNodeContext | None:
+    sg_root = get_sg_root(file_path, lang="python")
+    if sg_root is None:
+        return None
+    index = get_node_index(file_path, sg_root, lang="python")
+    node = index.find_containing(raw.line, raw.col)
+    if node is None:
+        return None
+    return ResolvedNodeContext(
+        sg_root=sg_root,
+        node=node,
+        line=raw.line,
+        col=raw.col,
     )
 
 
@@ -679,14 +786,74 @@ def _maybe_rust_tree_sitter_enrichment(
     source = get_cached_source(file_path)
     if source is None:
         return None
+    source_bytes = source.encode("utf-8", errors="replace")
+    abs_range = _raw_match_abs_byte_range(raw, source_bytes)
+    if abs_range is None:
+        return None
+    byte_start, byte_end = abs_range
     try:
-        return enrich_rust_context(
+        return enrich_rust_context_by_byte_range(
             source,
-            line=raw.line,
-            col=raw.col,
+            byte_start=byte_start,
+            byte_end=byte_end,
             cache_key=str(file_path),
         )
     except _RUST_ENRICHMENT_ERRORS:
+        return None
+
+
+def _maybe_python_enrichment(
+    file_path: Path,
+    raw: RawMatch,
+    *,
+    lang: QueryLanguage,
+    resolved_python: ResolvedNodeContext | None = None,
+) -> dict[str, object] | None:
+    """Attempt Python context enrichment for a match.
+
+    Parameters
+    ----------
+    file_path
+        Path to the source file.
+    raw
+        Raw match from ripgrep.
+    lang
+        Query language.
+
+    Returns:
+    -------
+    dict[str, object] | None
+        Enrichment payload, or None if not applicable.
+    """
+    if lang != "python":
+        return None
+    sg_root = (
+        resolved_python.sg_root
+        if resolved_python is not None
+        else get_sg_root(file_path, lang=lang)
+    )
+    if sg_root is None:
+        return None
+    source = get_cached_source(file_path)
+    if source is None:
+        return None
+    source_bytes = source.encode("utf-8", errors="replace")
+    abs_range = _raw_match_abs_byte_range(raw, source_bytes)
+    if abs_range is None:
+        return None
+    byte_start, byte_end = abs_range
+    try:
+        return enrich_python_context_by_byte_range(
+            sg_root,
+            source_bytes,
+            byte_start,
+            byte_end,
+            cache_key=str(file_path),
+            resolved_node=resolved_python.node if resolved_python is not None else None,
+            resolved_line=resolved_python.line if resolved_python is not None else None,
+            resolved_col=resolved_python.col if resolved_python is not None else None,
+        )
+    except _PYTHON_ENRICHMENT_ERRORS:
         return None
 
 
@@ -849,9 +1016,26 @@ def _build_score_details(match: EnrichedMatch) -> ScoreDetails:
 def _build_match_data(match: EnrichedMatch) -> dict[str, object]:
     data: dict[str, object] = {
         "match_text": match.match_text,
-        "line_text": match.text,
         "language": match.language,
     }
+    # Rec 10: Only include line_text when context_snippet is absent
+    if not match.context_snippet:
+        data["line_text"] = match.text
+    _populate_optional_fields(data, match)
+    _merge_enrichment_payloads(data, match)
+    return data
+
+
+def _populate_optional_fields(data: dict[str, object], match: EnrichedMatch) -> None:
+    """Add optional context fields to the match data dict.
+
+    Parameters
+    ----------
+    data
+        Target dict (mutated in place).
+    match
+        Enriched match to extract fields from.
+    """
     if match.context_window:
         data["context_window"] = match.context_window
     if match.context_snippet:
@@ -864,9 +1048,24 @@ def _build_match_data(match: EnrichedMatch) -> dict[str, object]:
         flags = _symtable_flags(match.symtable)
         if flags:
             data["binding_flags"] = flags
+
+
+def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) -> None:
+    """Merge language-specific enrichment payloads into the data dict.
+
+    Parameters
+    ----------
+    data
+        Target dict (mutated in place).
+    match
+        Enriched match with optional enrichment payloads.
+    """
     if match.rust_tree_sitter:
         data["rust_tree_sitter"] = match.rust_tree_sitter
-    return data
+    if match.python_enrichment:
+        for key, value in match.python_enrichment.items():
+            if key not in data:
+                data[key] = value
 
 
 def _symtable_flags(symtable: SymtableEnrichment) -> list[str]:
@@ -881,6 +1080,12 @@ def _symtable_flags(symtable: SymtableEnrichment) -> list[str]:
         flags.append("closure_var")
     if symtable.is_global:
         flags.append("global")
+    if symtable.is_referenced:
+        flags.append("referenced")
+    if symtable.is_local:
+        flags.append("local")
+    if symtable.is_nonlocal:
+        flags.append("nonlocal")
     return flags
 
 
@@ -1082,6 +1287,7 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         language_order=inputs.languages,
         languages=language_stats,
         cross_language_diagnostics=(),
+        language_capabilities=build_language_capabilities(lang_scope=config.lang_scope),
     )
 
 
@@ -1406,6 +1612,41 @@ def _build_capability_diagnostics_for_search(
     )
 
 
+def _status_from_enrichment(payload: dict[str, object] | None) -> str:
+    if payload is None:
+        return "skipped"
+    status = payload.get("enrichment_status")
+    if status in {"applied", "degraded", "skipped"}:
+        return cast("str", status)
+    return "applied"
+
+
+def _build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, object]:
+    """Build additive observability stats for enrichment stages.
+
+    Returns:
+    -------
+    dict[str, object]
+        Per-language enrichment status counters and Rust cache metrics.
+    """
+    telemetry: dict[str, object] = {
+        "python": {"applied": 0, "degraded": 0, "skipped": 0},
+        "rust": {"applied": 0, "degraded": 0, "skipped": 0},
+    }
+    for match in matches:
+        lang_bucket = telemetry.get(match.language)
+        if not isinstance(lang_bucket, dict):
+            continue
+        payload = match.python_enrichment if match.language == "python" else match.rust_tree_sitter
+        status = _status_from_enrichment(payload)
+        lang_bucket[status] = cast("int", lang_bucket.get(status, 0)) + 1
+
+    rust_bucket = telemetry.get("rust")
+    if isinstance(rust_bucket, dict):
+        rust_bucket.update(get_tree_sitter_rust_cache_stats())
+    return telemetry
+
+
 def _assemble_smart_search_result(
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
@@ -1453,7 +1694,9 @@ def _assemble_smart_search_result(
         lang_scope=ctx.lang_scope,
     )
     all_diagnostics = diagnostics + capability_diagnostics
-    summary["cross_language_diagnostics"] = [finding.message for finding in all_diagnostics]
+    summary["cross_language_diagnostics"] = diagnostics_to_summary_payload(all_diagnostics)
+    summary["language_capabilities"] = build_language_capabilities(lang_scope=ctx.lang_scope)
+    summary["enrichment_telemetry"] = _build_enrichment_telemetry(enriched_matches)
     assert_multilang_summary(summary)
     sections = build_sections(
         enriched_matches,

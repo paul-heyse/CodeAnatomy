@@ -31,6 +31,17 @@ def test_df_delta_smoke_round_trip(tmp_path: Path) -> None:
         result.runtime_capabilities[-1].get("strict_native_provider_enabled")
         is result.strict_native_provider_enabled
     )
+    runtime_last = result.runtime_capabilities[-1]
+    execution_metrics = runtime_last.get("execution_metrics")
+    assert isinstance(execution_metrics, dict)
+    summary = execution_metrics.get("summary")
+    assert isinstance(summary, dict)
+    for key in (
+        "memory_reserved_bytes",
+        "metadata_cache_entries",
+        "metadata_cache_hits",
+    ):
+        assert key in summary
     assert result.provider_artifacts
     last = result.provider_artifacts[-1]
     assert last.get("strict_native_provider_enabled") is result.strict_native_provider_enabled

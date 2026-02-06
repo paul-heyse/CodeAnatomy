@@ -649,42 +649,50 @@ def classify_from_node(
     NodeClassification | None
         Classification result, or None if no classifiable node found.
     """
-    result: NodeClassification | None = None
     node = _find_node_at_position(sg_root, line, col, lang=lang)
+    if node is None:
+        return None
+    return classify_from_resolved_node(node)
 
-    if node is not None:
-        kind = node.kind()
-        if kind in NODE_KIND_MAP:
-            category, confidence = NODE_KIND_MAP[kind]
-            if category == "string_match" and _is_docstring_context(node):
-                category = "docstring_match"
-                confidence = 0.95
-            result = NodeClassification(
+
+def classify_from_resolved_node(node: SgNode) -> NodeClassification | None:
+    """Classify from an already-resolved AST node.
+
+    Returns:
+    -------
+    NodeClassification | None
+        Classification result or ``None`` when no mapping applies.
+    """
+    kind = node.kind()
+    if kind in NODE_KIND_MAP:
+        category, confidence = NODE_KIND_MAP[kind]
+        if category == "string_match" and _is_docstring_context(node):
+            category = "docstring_match"
+            confidence = 0.95
+        return NodeClassification(
+            category=category,
+            confidence=confidence,
+            node_kind=kind,
+            containing_scope=_find_containing_scope(node),
+        )
+
+    max_parent_depth = 5
+    parent = node.parent()
+    depth = 0
+    while parent and depth < max_parent_depth:
+        parent_kind = parent.kind()
+        if parent_kind in NODE_KIND_MAP:
+            category, confidence = NODE_KIND_MAP[parent_kind]
+            return NodeClassification(
                 category=category,
-                confidence=confidence,
-                node_kind=kind,
-                containing_scope=_find_containing_scope(node),
+                confidence=confidence * 0.9,
+                node_kind=parent_kind,
+                containing_scope=_find_containing_scope(parent),
+                evidence_kind="resolved_ast_heuristic",
             )
-        else:
-            max_parent_depth = 5
-            parent = node.parent()
-            depth = 0
-            while parent and depth < max_parent_depth:
-                parent_kind = parent.kind()
-                if parent_kind in NODE_KIND_MAP:
-                    category, confidence = NODE_KIND_MAP[parent_kind]
-                    result = NodeClassification(
-                        category=category,
-                        confidence=confidence * 0.9,
-                        node_kind=parent_kind,
-                        containing_scope=_find_containing_scope(parent),
-                        evidence_kind="resolved_ast_heuristic",
-                    )
-                    break
-                parent = parent.parent()
-                depth += 1
-
-    return result
+        parent = parent.parent()
+        depth += 1
+    return None
 
 
 def classify_from_records(
@@ -973,8 +981,10 @@ def clear_caches() -> None:
     _symtable_cache.clear()
     _record_context_cache.clear()
     _node_index_cache.clear()
+    from tools.cq.search.python_enrichment import clear_python_enrichment_cache
     from tools.cq.search.tree_sitter_rust import clear_tree_sitter_rust_cache
 
+    clear_python_enrichment_cache()
     clear_tree_sitter_rust_cache()
 
 
@@ -987,6 +997,7 @@ __all__ = [
     "SymtableEnrichment",
     "classify_from_node",
     "classify_from_records",
+    "classify_from_resolved_node",
     "classify_heuristic",
     "clear_caches",
     "detect_query_mode",
@@ -994,6 +1005,7 @@ __all__ = [
     "enrich_with_symtable_from_table",
     "get_cached_source",
     "get_def_lines_cached",
+    "get_node_index",
     "get_sg_root",
     "get_symtable_table",
 ]

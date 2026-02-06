@@ -6,6 +6,8 @@ from tools.cq.search.multilang_diagnostics import (
     CAPABILITY_MATRIX,
     build_capability_diagnostics,
     build_cross_language_diagnostics,
+    build_language_capabilities,
+    diagnostics_to_summary_payload,
     features_from_macro,
 )
 
@@ -54,6 +56,7 @@ class TestBuildCapabilityDiagnostics:
         assert diags[0].category == "capability_limitation"
         assert "rust" in diags[0].message
         assert "not supported" in diags[0].message
+        assert diags[0].details.data["code"].startswith("ML_CAP_")
 
     def test_diagnostics_for_partial_support(self) -> None:
         """Test diagnostic generation for partially supported features."""
@@ -123,6 +126,7 @@ class TestExistingCrossLanguageDiagnostics:
         )
         assert len(diags) == 1
         assert diags[0].category == "cross_language_hint"
+        assert diags[0].details.data["code"] == "ML001"
 
     def test_cross_lang_hint_no_fire_with_python_matches(self) -> None:
         """Test that hint doesn't fire when python matches exist."""
@@ -143,3 +147,29 @@ class TestExistingCrossLanguageDiagnostics:
             python_oriented=True,
         )
         assert diags == []
+
+
+class TestSummaryPayloadHelpers:
+    """Tests for summary payload serialization helpers."""
+
+    def test_diagnostics_to_summary_payload(self) -> None:
+        """Test diagnostic list conversion into summary payload rows."""
+        diags = build_cross_language_diagnostics(
+            lang_scope="auto",
+            python_matches=0,
+            rust_matches=2,
+            python_oriented=True,
+        )
+        payload = diagnostics_to_summary_payload(diags)
+        assert payload
+        first = payload[0]
+        assert first["code"] == "ML001"
+        assert first["severity"] == "warning"
+        assert "languages" in first
+
+    def test_language_capabilities_shape(self) -> None:
+        """Test language-capabilities payload top-level shape."""
+        caps = build_language_capabilities(lang_scope="auto")
+        assert "python" in caps
+        assert "rust" in caps
+        assert "shared" in caps

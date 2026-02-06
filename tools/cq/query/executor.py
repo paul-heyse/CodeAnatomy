@@ -57,6 +57,8 @@ from tools.cq.search import SearchLimits, find_files_with_pattern
 from tools.cq.search.multilang_diagnostics import (
     build_capability_diagnostics,
     build_cross_language_diagnostics,
+    build_language_capabilities,
+    diagnostics_to_summary_payload,
     features_from_query,
     is_python_oriented_query_ir,
 )
@@ -557,6 +559,8 @@ def _merge_auto_scope_results(
         lang_scope=query.lang_scope,
     )
     diagnostics = list(diagnostics) + capability_diagnostics
+    diagnostic_payloads = diagnostics_to_summary_payload(diagnostics)
+    language_capabilities = build_language_capabilities(lang_scope=query.lang_scope)
     run = runmeta_for_scope_merge(
         macro="q",
         root=root,
@@ -568,6 +572,8 @@ def _merge_auto_scope_results(
         results=results,
         run=run,
         diagnostics=diagnostics,
+        diagnostic_payloads=diagnostic_payloads,
+        language_capabilities=language_capabilities,
     )
 
 

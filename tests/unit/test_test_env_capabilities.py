@@ -35,6 +35,8 @@ def test_required_runtime_capabilities_available() -> None:
     assert callable(getattr(extension, "register_codeanatomy_udfs", None))
     assert callable(getattr(extension, "delta_write_ipc", None))
     assert callable(getattr(extension, "capabilities_snapshot", None))
+    assert callable(getattr(extension, "runtime_execution_metrics_snapshot", None))
+    assert hasattr(extension, "DeltaSessionRuntimePolicyOptions")
     for entrypoint in (
         "delta_scan_config_from_session",
         "delta_table_provider_from_session",
@@ -49,6 +51,11 @@ def test_required_runtime_capabilities_available() -> None:
         payload = capabilities.get(name)
         assert isinstance(payload, dict)
         assert isinstance(payload.get("available"), bool)
+    udf_registry_payload = capabilities.get("udf_registry")
+    assert isinstance(udf_registry_payload, dict)
+    table_count = udf_registry_payload.get("table")
+    assert isinstance(table_count, int)
+    assert table_count >= 2
     assert callable(getattr(extension, "plugin_manifest", None))
     manifest_resolution = resolve_plugin_manifest("datafusion_ext")
     manifest = manifest_resolution.manifest

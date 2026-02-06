@@ -139,6 +139,8 @@ def merge_language_cq_results(
     results: Mapping[QueryLanguage, CqResult],
     run: RunMeta,
     diagnostics: list[Finding] | None = None,
+    diagnostic_payloads: list[dict[str, object]] | None = None,
+    language_capabilities: dict[str, object] | None = None,
     include_section_language_prefix: bool = True,
 ) -> CqResult:
     """Merge per-language CQ results into a canonical multi-language result.
@@ -210,12 +212,27 @@ def merge_language_cq_results(
     diag_findings = diagnostics or []
     if diag_findings:
         merged.sections.append(Section(title="Cross-Language Diagnostics", findings=diag_findings))
+    summary_diagnostics = diagnostic_payloads
+    if summary_diagnostics is None:
+        summary_diagnostics = [
+            {
+                "code": "ML000",
+                "severity": finding.severity,
+                "message": finding.message,
+                "intent": "unspecified",
+                "languages": [],
+                "counts": {},
+                "remediation": "",
+            }
+            for finding in diag_findings
+        ]
     merged.summary = build_multilang_summary(
         common={},
         lang_scope=scope,
         language_order=order,
         languages=partitions,
-        cross_language_diagnostics=[finding.message for finding in diag_findings],
+        cross_language_diagnostics=summary_diagnostics,
+        language_capabilities=language_capabilities,
     )
     if diag_findings:
         merged.key_findings.extend(diag_findings)

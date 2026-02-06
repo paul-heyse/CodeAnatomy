@@ -29,6 +29,7 @@ fi
 wheel_dir="${CODEANATOMY_WHEEL_DIR:-dist/wheels}"
 mkdir -p "${wheel_dir}"
 run_wheel_dir="$(mktemp -d "${wheel_dir%/}/.build_datafusion_wheels.XXXXXX")"
+run_wheel_dir="$(cd "${run_wheel_dir}" && pwd)"
 cleanup_run_wheel_dir() {
   rm -rf "${run_wheel_dir}"
 }
@@ -104,7 +105,10 @@ fi
 
 uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 uv lock --refresh-package datafusion
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
+(
+  cd rust/datafusion_ext_py
+  uv run maturin build --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
+)
 uv lock --refresh-package datafusion-ext
 
 shopt -s nullglob

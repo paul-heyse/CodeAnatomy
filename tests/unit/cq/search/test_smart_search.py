@@ -134,6 +134,8 @@ class TestRawMatch:
             match_text="build_graph",
             match_start=9,
             match_end=20,
+            match_byte_start=9,
+            match_byte_end=20,
         )
         assert raw.file == "src/module.py"
         assert raw.line == 10
@@ -148,6 +150,8 @@ class TestRawMatch:
             match_text="build_graph",
             match_start=9,
             match_end=20,
+            match_byte_start=9,
+            match_byte_end=20,
         )
         assert not hasattr(raw, "context_before")
         assert not hasattr(raw, "context_after")
@@ -277,6 +281,8 @@ class TestClassifyMatch:
             match_text="build_graph",
             match_start=2,
             match_end=13,
+            match_byte_start=2,
+            match_byte_end=13,
         )
         # Create file with comment
         (sample_repo / "src" / "module_a.py").write_text("# build_graph is here\n")
@@ -293,6 +299,8 @@ class TestClassifyMatch:
             match_text="build_graph",
             match_start=7,
             match_end=18,
+            match_byte_start=7,
+            match_byte_end=18,
         )
         # Create file with import
         (sample_repo / "src" / "module_a.py").write_text("import build_graph\n")
@@ -460,6 +468,7 @@ class TestBuildSummary:
         assert summary["language_order"] == ["python", "rust"]
         assert isinstance(summary["languages"], dict)
         assert isinstance(summary["cross_language_diagnostics"], list)
+        assert isinstance(summary["language_capabilities"], dict)
 
 
 class TestBuildSections:
@@ -586,6 +595,7 @@ class TestSmartSearch:
         assert result.run.macro == "search"
         assert "query" in result.summary
         assert result.summary["mode"] == "identifier"
+        assert isinstance(result.summary.get("enrichment_telemetry"), dict)
         # Should find matches
         assert len(result.evidence) > 0
 
@@ -656,9 +666,10 @@ class TestSmartSearch:
         result = smart_search(tmp_path, "decorator")
         diagnostics = cast("list[object]", result.summary["cross_language_diagnostics"])
         assert diagnostics
-        assert any(
-            "Python-oriented query produced no Python matches" in str(item) for item in diagnostics
-        )
+        assert isinstance(diagnostics[0], dict)
+        first = cast("dict[str, object]", diagnostics[0])
+        assert first.get("code") == "ML001"
+        assert "Python-oriented query produced no Python matches" in str(first.get("message"))
 
     @pytest.mark.skipif(
         not is_tree_sitter_rust_available(),
@@ -694,7 +705,7 @@ class TestSmartSearch:
             msg = "forced enrichment failure"
             raise RuntimeError(msg)
 
-        monkeypatch.setattr(smart_search_module, "enrich_rust_context", _boom)
+        monkeypatch.setattr(smart_search_module, "enrich_rust_context_by_byte_range", _boom)
         result = smart_search_module.smart_search(tmp_path, "build_graph", lang_scope="rust")
         assert result.summary["query"] == "build_graph"
         assert result.evidence

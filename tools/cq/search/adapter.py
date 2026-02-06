@@ -76,7 +76,7 @@ def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
     return results
 
 
-def find_files_with_pattern(  # noqa: PLR0913
+def find_files_with_pattern(
     root: Path,
     pattern: str,
     *,

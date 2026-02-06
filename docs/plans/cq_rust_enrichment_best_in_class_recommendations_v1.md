@@ -3,6 +3,50 @@
 **Revision**: Updated 2026-02-06 incorporating review feedback from
 `docs/plans/cq_rust_enrichment_proposal_review_2026-02-06.md`.
 
+## Implementation Status Audit (2026-02-06, post-v2 codebase)
+
+This section reflects the current implementation state in `tools/cq` and CQ tests.
+
+### Snapshot
+
+| Area | Status | Evidence |
+|------|--------|----------|
+| Two-tier extraction architecture (ast-grep primary, tree-sitter fallback) | Partial | `tools/cq/search/tree_sitter_rust.py` currently emits `enrichment_sources=["tree_sitter"]`; no ast-grep field merge path in enrichment runtime |
+| Recommendations 1-6 (core enrichment fields) | Complete | `tools/cq/search/tree_sitter_rust.py` extractor set and `tests/unit/cq/search/test_tree_sitter_rust.py` coverage |
+| Prerequisites P2-P3 (cache correctness, byte-safe signature slicing) | Complete | `_get_tree()` hash-aware bounded cache; `_extract_function_signature()` slices bytes before decode |
+| Prerequisite P1 (end-to-end byte-safe anchoring) | Partial | `enrich_rust_context_by_byte_range()` exists and is tested, but `smart_search` still calls line/col entrypoint |
+| Additional opportunities O1-O6 | Partial/Pending | O6 partially present (cache counters), O1/O2/O3/O5 pending, O4 partially present |
+
+Focused verification: `uv run pytest -q tests/unit/cq/search/test_python_enrichment.py tests/unit/cq/search/test_tree_sitter_rust.py tests/unit/cq/search/test_smart_search.py` passed (`113 passed`).
+
+### Detailed Status Matrix
+
+| Scope Item | Status | Notes |
+|------------|--------|-------|
+| Recommendation 1: Function signature extraction | Complete | Implemented via `_extract_function_signature`, `_extract_fn_params`, `_extract_fn_modifiers` in `tools/cq/search/tree_sitter_rust.py`. |
+| Recommendation 2: Visibility and attributes | Complete | Implemented via `_extract_visibility` and `_extract_attributes`; sibling comment skipping and inner-attribute exclusion are in place. |
+| Recommendation 3: Impl context resolution | Complete | Implemented via `_extract_impl_context` with `impl_type`, `impl_trait`, `impl_kind`, `impl_generics`. |
+| Recommendation 4: Item kind discrimination | Complete | Implemented via `_classify_item_role` and role helpers (`method`, `trait_method`, `test_function`, call roles). |
+| Recommendation 5: Call target extraction | Complete | Implemented via `_extract_call_target` and `_extract_field_expression`, including `macro_name`. |
+| Recommendation 6: Struct/enum shape summary | Complete (with field-name drift) | Implemented as `field_count`/`fields` and `variant_count`/`variants` (not `struct_field_count`/`struct_fields` and `enum_variant_count`/`enum_variants`). |
+| P1: Byte-safe coordinate handling | Partial | Byte-range API is implemented (`enrich_rust_context_by_byte_range`), but `tools/cq/search/smart_search.py` still calls `enrich_rust_context(..., line, col)` and does not pass ripgrep byte offsets through. |
+| P2: Cache staleness + bounded size | Complete | `_source_hash` + content-hash verification + bounded cache eviction + counters are implemented. |
+| P3: Signature byte-safety | Complete | Signature reconstruction slices bytes then decodes. |
+| O1: Node-types schema lint | Pending | No grammar-schema lint utility/tests found for Rust enrichment fields/kinds. |
+| O2: Query-pack driven enrichment micro-rules | Pending | No CQ-owned Rust enrichment `.scm` query packs are present under `tools/cq/search/queries/rust/`. |
+| O3: Injection-aware macro token-tree analysis | Pending | No injection/token-tree enrichment tags are emitted. |
+| O4: ast-grep context/selector templates | Partial | `tools/cq/astgrep/rules_rust.py` has baseline Rust rules, but not the recommended selector/context-driven enrichment-oriented rule set. |
+| O5: Cross-check mode (ast-grep vs tree-sitter) | Pending | No debug mismatch comparison mode is implemented. |
+| O6: Telemetry for quality/cost | Partial | Internal cache counters exist (`_cache_hits`, `_cache_misses`, `_cache_evictions`), but no surfaced enrichment latency/applied/degraded metrics in CQ outputs. |
+
+### Remaining Work (Priority Order)
+
+1. Wire byte-range anchoring end-to-end from ripgrep submatches into Rust enrichment in `smart_search` (close P1).
+2. Implement ast-grep-first field sourcing and deterministic precedence merge (`ast_grep` -> `tree_sitter` gap fill).
+3. Resolve enrichment field contract drift (`field_count`/`variant_count` naming vs documented keys) and runtime status semantics (`skipped` support if kept in contract).
+4. Add schema lint guards (O1) and optional cross-check hardening mode (O5).
+5. Add query-pack/injection enhancements only after core precedence path is complete (O2/O3/O4).
+
 ## Problem Statement
 
 The current Rust enrichment in `tools/cq/search/tree_sitter_rust.py` produces four fields per match:

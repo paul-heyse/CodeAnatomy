@@ -10,6 +10,7 @@ from datafusion_engine.session.runtime import (
     ExecutionConfig,
     FeatureGatesConfig,
     PolicyBundleConfig,
+    ZeroRowBootstrapConfig,
 )
 from engine.runtime_profile import PROFILE_HASH_VERSION, runtime_profile_snapshot
 from tests.test_helpers.datafusion_runtime import df_profile
@@ -77,3 +78,27 @@ def test_delta_runtime_env_telemetry_payload() -> None:
     delta_runtime = cast("dict[str, object]", extensions["delta_runtime_env"])
     assert delta_runtime["max_spill_size"] == DELTA_MAX_SPILL_SIZE
     assert delta_runtime["max_temp_directory_size"] == DELTA_MAX_TEMP_DIRECTORY_SIZE
+
+
+def test_zero_row_bootstrap_config_is_in_telemetry_and_fingerprint() -> None:
+    """Zero-row bootstrap settings should affect telemetry payload and profile hash."""
+    baseline = DataFusionRuntimeProfile()
+    configured = DataFusionRuntimeProfile(
+        zero_row_bootstrap=ZeroRowBootstrapConfig(
+            validation_mode="bootstrap",
+            include_semantic_outputs=False,
+            include_internal_tables=False,
+            strict=False,
+            allow_semantic_row_probe_fallback=True,
+        )
+    )
+    assert baseline.fingerprint() != configured.fingerprint()
+    payload = configured.telemetry_payload_v1()
+    zero_row = cast("dict[str, object]", payload["zero_row_bootstrap"])
+    assert zero_row == {
+        "validation_mode": "bootstrap",
+        "include_semantic_outputs": False,
+        "include_internal_tables": False,
+        "strict": False,
+        "allow_semantic_row_probe_fallback": True,
+    }

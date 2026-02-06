@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    SchemaRegistryValidationResult,
+    ZeroRowBootstrapConfig,
+)
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_datafusion_udfs
 
@@ -41,3 +45,17 @@ def test_runtime_context_pool_cleans_run_scoped_tables() -> None:
 
     with pool.checkout(run_prefix=run_prefix) as ctx:
         assert table_name not in _table_names(ctx)
+
+
+@pytest.mark.integration
+def test_schema_registry_view_errors_are_advisory_in_non_strict_bootstrap_mode() -> None:
+    """Bootstrap mode should downgrade schema view errors when strict mode is disabled."""
+    issues, advisory = DataFusionRuntimeProfile._schema_registry_issues(  # noqa: SLF001
+        SchemaRegistryValidationResult(view_errors={"semantic_types": "missing metadata"}),
+        zero_row_bootstrap=ZeroRowBootstrapConfig(
+            validation_mode="bootstrap",
+            strict=False,
+        ),
+    )
+    assert "view_errors" not in issues
+    assert advisory == {"view_errors": {"semantic_types": "missing metadata"}}

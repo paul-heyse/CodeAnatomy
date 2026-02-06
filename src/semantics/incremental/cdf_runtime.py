@@ -361,6 +361,13 @@ def read_cdf_changes(
                 table_name=cdf_name,
                 filter_policy=filter_policy,
             )
+            if "_change_type" not in table.column_names:
+                # Degraded provider registration can return a base Delta dataset
+                # without CDF virtual columns. Fall back to direct load_cdf().
+                table = _read_cdf_table_fallback(
+                    state,
+                    filter_policy=filter_policy,
+                )
         except Exception as exc:
             if not _is_cdf_start_version_error(exc):
                 raise

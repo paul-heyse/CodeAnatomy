@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -77,15 +78,6 @@ def snapshot_datafusion_caches(
     -------
     list[dict[str, object]]
         Diagnostics payloads for each snapshot attempt.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when SQL execution or snapshot writes fail unexpectedly.
-    TypeError
-        Raised when a cache source or write payload has incompatible types.
-    ValueError
-        Raised when cache SQL, write options, or metadata values are invalid.
     """
     cache_root = Path(runtime_profile.io_ops.metadata_cache_snapshot_root())
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -114,11 +106,10 @@ def snapshot_datafusion_caches(
                     "cache_table": table_name,
                 },
             ) as (_span, set_result):
-                try:
-                    source: DataFrame = ctx.sql(sql)
-                except (RuntimeError, TypeError, ValueError) as exc:
-                    if "not found" not in str(exc).lower():
-                        raise
+                source: DataFrame | None = None
+                with suppress(Exception):
+                    source = ctx.sql(sql)
+                if source is None:
                     source = ctx.from_arrow(
                         _fallback_cache_snapshot_source(ctx, table_name=table_name)
                     )
@@ -205,18 +196,55 @@ def _fallback_cache_snapshot_source(ctx: SessionContext, *, table_name: str) -> 
     if isinstance(snapshots, list):
         for row in snapshots:
             if isinstance(row, Mapping) and str(row.get("cache_name")) == cache_name:
-                return pa.table({key: [value] for key, value in row.items()})
-    return pa.table(
-        {
-            "cache_name": [cache_name],
-            "event_time_unix_ms": [int(time.time() * 1000)],
-            "entry_count": [None],
-            "hit_count": [None],
-            "miss_count": [None],
-            "eviction_count": [None],
-            "config_ttl": [None],
-            "config_limit": [None],
-        }
+                return _cache_snapshot_source_table(cache_name, row=row)
+    return _cache_snapshot_source_table(cache_name, row={})
+
+
+def _coerce_optional_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        with suppress(ValueError):
+            return int(value.strip())
+    return None
+
+
+def _coerce_optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _cache_snapshot_source_table(cache_name: str, *, row: Mapping[str, object]) -> pa.Table:
+    event_time = _coerce_optional_int(row.get("event_time_unix_ms"))
+    if event_time is None:
+        event_time = int(time.time() * 1000)
+
+    return pa.Table.from_arrays(
+        [
+            pa.array([str(row.get("cache_name") or cache_name)], type=pa.string()),
+            pa.array([event_time], type=pa.int64()),
+            pa.array([_coerce_optional_int(row.get("entry_count"))], type=pa.int64()),
+            pa.array([_coerce_optional_int(row.get("hit_count"))], type=pa.int64()),
+            pa.array([_coerce_optional_int(row.get("miss_count"))], type=pa.int64()),
+            pa.array([_coerce_optional_int(row.get("eviction_count"))], type=pa.int64()),
+            pa.array([_coerce_optional_str(row.get("config_ttl"))], type=pa.string()),
+            pa.array([_coerce_optional_str(row.get("config_limit"))], type=pa.string()),
+        ],
+        names=[
+            "cache_name",
+            "event_time_unix_ms",
+            "entry_count",
+            "hit_count",
+            "miss_count",
+            "eviction_count",
+            "config_ttl",
+            "config_limit",
+        ],
     )
 
 

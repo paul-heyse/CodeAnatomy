@@ -1,4 +1,4 @@
-"""Tests for rpygrep adapter integration."""
+"""Tests for native ripgrep adapter integration."""
 
 from __future__ import annotations
 

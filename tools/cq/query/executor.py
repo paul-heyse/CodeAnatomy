@@ -16,6 +16,11 @@ from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
 from tools.cq.core.locations import SourceSpan
+from tools.cq.core.multilang_orchestrator import (
+    execute_by_language_scope,
+    merge_language_cq_results,
+    runmeta_for_scope_merge,
+)
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -43,13 +48,16 @@ from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE,
     QueryLanguage,
     QueryLanguageScope,
-    expand_language_scope,
     file_extensions_for_language,
     file_extensions_for_scope,
 )
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
 from tools.cq.search import SearchLimits, find_files_with_pattern
+from tools.cq.search.multilang_diagnostics import (
+    build_cross_language_diagnostics,
+    is_python_oriented_query_ir,
+)
 from tools.cq.utils.interval_index import FileIntervalIndex, IntervalIndex
 
 if TYPE_CHECKING:
@@ -479,22 +487,53 @@ def _execute_auto_scope_plan(
     root: Path,
     argv: list[str],
 ) -> CqResult:
-    from tools.cq.query.planner import compile_query
 
-    results: dict[QueryLanguage, CqResult] = {}
-    for lang in expand_language_scope(query.lang_scope):
-        scoped_query = msgspec.structs.replace(query, lang_scope=cast("QueryLanguageScope", lang))
-        scoped_plan = compile_query(scoped_query)
-        scoped_ctx = QueryExecutionContext(
-            plan=scoped_plan,
-            query=scoped_query,
+    results = execute_by_language_scope(
+        query.lang_scope,
+        lambda lang: _run_scoped_auto_query(
+            query=query,
+            lang=lang,
             tc=tc,
             root=root,
             argv=argv,
-            started_ms=ms(),
-        )
-        results[lang] = _execute_single_context(scoped_ctx)
+        ),
+    )
     return _merge_auto_scope_results(query, results, root=root, argv=argv, tc=tc)
+
+
+def _run_scoped_auto_query(
+    *,
+    query: Query,
+    lang: QueryLanguage,
+    tc: Toolchain,
+    root: Path,
+    argv: list[str],
+) -> CqResult:
+    from tools.cq.query.planner import compile_query
+
+    scoped_query = msgspec.structs.replace(query, lang_scope=cast("QueryLanguageScope", lang))
+    scoped_plan = compile_query(scoped_query)
+    scoped_ctx = QueryExecutionContext(
+        plan=scoped_plan,
+        query=scoped_query,
+        tc=tc,
+        root=root,
+        argv=argv,
+        started_ms=ms(),
+    )
+    return _execute_single_context(scoped_ctx)
+
+
+def _count_result_matches(result: CqResult | None) -> int:
+    if result is None:
+        return 0
+    summary_matches = result.summary.get("matches")
+    if isinstance(summary_matches, int):
+        return summary_matches
+    summary_total = result.summary.get("total_matches")
+    if isinstance(summary_total, int):
+        return summary_total
+    return len(result.key_findings)
 
 
 def _merge_auto_scope_results(
@@ -505,45 +544,24 @@ def _merge_auto_scope_results(
     argv: list[str],
     tc: Toolchain,
 ) -> CqResult:
-    run_ctx = RunContext.from_parts(root=root, argv=argv, tc=tc, started_ms=ms())
-    merged = mk_result(run_ctx.to_runmeta("q"))
-    language_order = list(expand_language_scope(query.lang_scope))
-    merged.summary["lang_scope"] = query.lang_scope
-    merged.summary["language_order"] = language_order
-    merged.summary["languages"] = {
-        lang: result.summary for lang, result in results.items()
-    }
-    merged.summary["cross_language_diagnostics"] = []
-
-    for lang in language_order:
-        result = results.get(lang)
-        if result is None:
-            continue
-        for finding in result.key_findings:
-            if finding.details.kind is None:
-                finding.details.kind = finding.category
-            finding.details.data.setdefault("language", lang)
-            merged.key_findings.append(finding)
-        for finding in result.evidence:
-            if finding.details.kind is None:
-                finding.details.kind = finding.category
-            finding.details.data.setdefault("language", lang)
-            merged.evidence.append(finding)
-        for section in result.sections:
-            section_findings: list[Finding] = []
-            for finding in section.findings:
-                if finding.details.kind is None:
-                    finding.details.kind = finding.category
-                finding.details.data.setdefault("language", lang)
-                section_findings.append(finding)
-            merged.sections.append(
-                Section(
-                    title=f"{lang}: {section.title}",
-                    findings=section_findings,
-                    collapsed=section.collapsed,
-                )
-            )
-    return merged
+    diagnostics = build_cross_language_diagnostics(
+        lang_scope=query.lang_scope,
+        python_matches=_count_result_matches(results.get("python")),
+        rust_matches=_count_result_matches(results.get("rust")),
+        python_oriented=is_python_oriented_query_ir(query),
+    )
+    run = runmeta_for_scope_merge(
+        macro="q",
+        root=root,
+        argv=argv,
+        tc=tc,
+    )
+    return merge_language_cq_results(
+        scope=query.lang_scope,
+        results=results,
+        run=run,
+        diagnostics=diagnostics,
+    )
 
 
 def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:

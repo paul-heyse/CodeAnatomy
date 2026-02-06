@@ -13,6 +13,14 @@ from typing import TypedDict, Unpack, cast
 import msgspec
 
 from tools.cq.core.locations import SourceSpan
+from tools.cq.core.multilang_orchestrator import (
+    execute_by_language_scope,
+    merge_partitioned_items,
+)
+from tools.cq.core.multilang_summary import (
+    assert_multilang_summary,
+    build_multilang_summary,
+)
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -54,8 +62,13 @@ from tools.cq.search.classifier import (
 from tools.cq.search.collector import RgCollector
 from tools.cq.search.context import SmartSearchContext
 from tools.cq.search.models import SearchConfig, SearchKwargs
+from tools.cq.search.multilang_diagnostics import (
+    build_cross_language_diagnostics,
+    is_python_oriented_query_text,
+)
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
 from tools.cq.search.rg_native import build_rg_command, run_rg_json
+from tools.cq.search.tree_sitter_rust import enrich_rust_context
 
 # Derive smart search limits from INTERACTIVE profile
 SMART_SEARCH_LIMITS = msgspec.structs.replace(
@@ -70,6 +83,7 @@ _CASE_SENSITIVE_DEFAULT = True
 
 # Evidence disclosure cap to keep output high-signal
 MAX_EVIDENCE = 100
+_RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 
 
 @lru_cache(maxsize=1)
@@ -163,6 +177,7 @@ class MatchEnrichment:
     symtable: SymtableEnrichment | None
     context_window: dict[str, int] | None
     context_snippet: str | None
+    rust_tree_sitter: dict[str, object] | None
 
 
 class SearchStats(CqStruct, frozen=True):
@@ -221,6 +236,8 @@ class EnrichedMatch(CqStruct, frozen=True):
         Source code snippet.
     symtable
         Symtable enrichment data.
+    rust_tree_sitter
+        Optional best-effort Rust context details from tree-sitter-rust.
     """
 
     span: SourceSpan
@@ -234,6 +251,7 @@ class EnrichedMatch(CqStruct, frozen=True):
     context_window: dict[str, int] | None = None
     context_snippet: str | None = None
     symtable: SymtableEnrichment | None = None
+    rust_tree_sitter: dict[str, object] | None = None
     language: QueryLanguage = "python"
 
     @property
@@ -458,11 +476,17 @@ def classify_match(
         lang=lang,
         enable_symtable=enable_symtable,
     )
+    rust_tree_sitter = _maybe_rust_tree_sitter_enrichment(
+        file_path,
+        raw,
+        lang=lang,
+    )
     context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
     enrichment = MatchEnrichment(
         symtable=symtable_enrichment,
         context_window=context_window,
         context_snippet=context_snippet,
+        rust_tree_sitter=rust_tree_sitter,
     )
     return _build_enriched_match(
         raw,
@@ -618,6 +642,12 @@ def _build_enriched_match(
     *,
     lang: QueryLanguage,
 ) -> EnrichedMatch:
+    containing_scope = classification.containing_scope
+    if containing_scope is None and enrichment.rust_tree_sitter is not None:
+        scope_name = enrichment.rust_tree_sitter.get("scope_name")
+        if isinstance(scope_name, str):
+            containing_scope = scope_name
+
     return EnrichedMatch(
         span=raw.span,
         text=raw.text,
@@ -626,12 +656,35 @@ def _build_enriched_match(
         confidence=classification.confidence,
         evidence_kind=classification.evidence_kind,
         node_kind=classification.node_kind,
-        containing_scope=classification.containing_scope,
+        containing_scope=containing_scope,
         context_window=enrichment.context_window,
         context_snippet=enrichment.context_snippet,
         symtable=enrichment.symtable,
+        rust_tree_sitter=enrichment.rust_tree_sitter,
         language=lang,
     )
+
+
+def _maybe_rust_tree_sitter_enrichment(
+    file_path: Path,
+    raw: RawMatch,
+    *,
+    lang: QueryLanguage,
+) -> dict[str, object] | None:
+    if lang != "rust":
+        return None
+    source = get_cached_source(file_path)
+    if source is None:
+        return None
+    try:
+        return enrich_rust_context(
+            source,
+            line=raw.line,
+            col=raw.col,
+            cache_key=str(file_path),
+        )
+    except _RUST_ENRICHMENT_ERRORS:
+        return None
 
 
 def _classify_file_role(file_path: str) -> str:
@@ -808,6 +861,8 @@ def _build_match_data(match: EnrichedMatch) -> dict[str, object]:
         flags = _symtable_flags(match.symtable)
         if flags:
             data["binding_flags"] = flags
+    if match.rust_tree_sitter:
+        data["rust_tree_sitter"] = match.rust_tree_sitter
     return data
 
 
@@ -970,7 +1025,7 @@ def _coerce_summary_inputs(
 
 def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
     config = inputs.config
-    language_stats = {
+    language_stats: dict[QueryLanguage, dict[str, object]] = {
         lang: {
             "scanned_files": stat.scanned_files,
             "scanned_files_is_estimate": stat.scanned_files_is_estimate,
@@ -990,13 +1045,9 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         }
         for lang, stat in inputs.language_stats.items()
     }
-    return {
+    common = {
         "query": config.query,
         "mode": config.mode.value,
-        "lang_scope": config.lang_scope,
-        "language_order": list(inputs.languages),
-        "languages": language_stats,
-        "cross_language_diagnostics": [],
         "file_globs": inputs.file_globs or file_globs_for_scope(config.lang_scope),
         "include": config.include_globs or [],
         "exclude": config.exclude_globs or [],
@@ -1022,6 +1073,13 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         "truncated": inputs.stats.truncated,
         "timed_out": inputs.stats.timed_out,
     }
+    return build_multilang_summary(
+        common=common,
+        lang_scope=config.lang_scope,
+        language_order=inputs.languages,
+        languages=language_stats,
+        cross_language_diagnostics=(),
+    )
 
 
 def build_sections(
@@ -1279,20 +1337,26 @@ class _LanguageSearchResult:
 
 
 def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchResult]:
-    results: list[_LanguageSearchResult] = []
-    for lang in expand_language_scope(ctx.lang_scope):
-        raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang)
-        enriched = _run_classification_phase(ctx, lang=lang, raw_matches=raw_matches)
-        results.append(
-            _LanguageSearchResult(
-                lang=lang,
-                raw_matches=raw_matches,
-                stats=stats,
-                pattern=pattern,
-                enriched_matches=enriched,
-            )
-        )
-    return results
+    by_lang = execute_by_language_scope(
+        ctx.lang_scope,
+        lambda lang: _run_single_partition(ctx, lang),
+    )
+    return [by_lang[lang] for lang in expand_language_scope(ctx.lang_scope)]
+
+
+def _run_single_partition(
+    ctx: SmartSearchContext,
+    lang: QueryLanguage,
+) -> _LanguageSearchResult:
+    raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang)
+    enriched = _run_classification_phase(ctx, lang=lang, raw_matches=raw_matches)
+    return _LanguageSearchResult(
+        lang=lang,
+        raw_matches=raw_matches,
+        stats=stats,
+        pattern=pattern,
+        enriched_matches=enriched,
+    )
 
 
 def _merge_language_matches(
@@ -1300,65 +1364,31 @@ def _merge_language_matches(
     partition_results: list[_LanguageSearchResult],
     lang_scope: QueryLanguageScope,
 ) -> list[EnrichedMatch]:
-    priority = {lang: idx for idx, lang in enumerate(expand_language_scope(lang_scope))}
-    merged: list[EnrichedMatch] = []
+    partitions: dict[QueryLanguage, list[EnrichedMatch]] = {}
     for partition in partition_results:
-        merged.extend(partition.enriched_matches)
-    merged.sort(
-        key=lambda match: (
-            priority.get(match.language, 99),
-            -compute_relevance_score(match),
-            match.file,
-            match.line,
-            match.col,
-        )
+        partitions.setdefault(partition.lang, []).extend(partition.enriched_matches)
+    return merge_partitioned_items(
+        partitions=partitions,
+        scope=lang_scope,
+        get_language=lambda match: match.language,
+        get_score=compute_relevance_score,
+        get_location=lambda match: (match.file, match.line, match.col),
     )
-    return merged
 
 
-def _is_python_oriented_query(query: str) -> bool:
-    lowered = query.lower()
-    hints = (
-        "def ",
-        "async def ",
-        "class ",
-        "decorator",
-        "symtable",
-        "bytecode",
-    )
-    return any(hint in lowered for hint in hints)
-
-
-def _build_cross_language_diagnostics(
+def _build_cross_language_diagnostics_for_search(
     *,
     query: str,
     lang_scope: QueryLanguageScope,
     python_matches: int,
     rust_matches: int,
 ) -> list[Finding]:
-    if lang_scope != "auto":
-        return []
-    if not _is_python_oriented_query(query):
-        return []
-    if python_matches > 0 or rust_matches == 0:
-        return []
-    return [
-        Finding(
-            category="cross_language_hint",
-            message=(
-                "Python-oriented query produced no Python matches; "
-                "Rust matches were found."
-            ),
-            severity="warning",
-            details=DetailPayload(
-                kind="cross_language_hint",
-                data={
-                    "python_matches": python_matches,
-                    "rust_matches": rust_matches,
-                },
-            ),
-        )
-    ]
+    return build_cross_language_diagnostics(
+        lang_scope=lang_scope,
+        python_matches=python_matches,
+        rust_matches=rust_matches,
+        python_oriented=is_python_oriented_query_text(query),
+    )
 
 
 def _assemble_smart_search_result(
@@ -1369,7 +1399,9 @@ def _assemble_smart_search_result(
         partition_results=partition_results,
         lang_scope=ctx.lang_scope,
     )
-    language_stats = {result.lang: result.stats for result in partition_results}
+    language_stats: dict[QueryLanguage, SearchStats] = {
+        result.lang: result.stats for result in partition_results
+    }
     patterns = {result.lang: result.pattern for result in partition_results}
     merged_stats = SearchStats(
         scanned_files=sum(stat.scanned_files for stat in language_stats.values()),
@@ -1396,13 +1428,14 @@ def _assemble_smart_search_result(
     summary = build_summary(summary_inputs)
     python_matches = sum(1 for match in enriched_matches if match.language == "python")
     rust_matches = sum(1 for match in enriched_matches if match.language == "rust")
-    diagnostics = _build_cross_language_diagnostics(
+    diagnostics = _build_cross_language_diagnostics_for_search(
         query=ctx.query,
         lang_scope=ctx.lang_scope,
         python_matches=python_matches,
         rust_matches=rust_matches,
     )
     summary["cross_language_diagnostics"] = [finding.message for finding in diagnostics]
+    assert_multilang_summary(summary)
     sections = build_sections(
         enriched_matches,
         ctx.root,
@@ -1428,6 +1461,7 @@ def _assemble_smart_search_result(
         key_findings=(sections[0].findings[:5] if sections else []) + diagnostics,
         evidence=[build_finding(m, ctx.root) for m in enriched_matches[:MAX_EVIDENCE]],
     )
+
 
 def smart_search(
     root: Path,

@@ -18,6 +18,7 @@ from utils.hashing import hash_sha256_hex
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DataFusionProvider, DatasetLocation
     from schema_spec.system import DataFusionScanOptions, DatasetSpec
+    from storage.deltalake import DeltaCdfOptions
 
 
 @dataclass(frozen=True)
@@ -64,9 +65,11 @@ class TableSpec:
     format: str = "delta"
     delta_version: int | None = None
     delta_timestamp: str | None = None
+    delta_cdf_options: DeltaCdfOptions | None = None
     required_udfs: tuple[str, ...] = ()
     partition_columns: tuple[str, ...] = ()
     storage_options: Mapping[str, str] = field(default_factory=dict)
+    delta_log_storage_options: Mapping[str, str] = field(default_factory=dict)
     table_properties: Mapping[str, str] = field(default_factory=dict)
 
     def with_delta_version(self, version: int) -> TableSpec:
@@ -92,9 +95,11 @@ class TableSpec:
             format=self.format,
             delta_version=version,
             delta_timestamp=None,
+            delta_cdf_options=self.delta_cdf_options,
             required_udfs=self.required_udfs,
             partition_columns=self.partition_columns,
             storage_options=self.storage_options,
+            delta_log_storage_options=self.delta_log_storage_options,
             table_properties=self.table_properties,
         )
 
@@ -151,11 +156,14 @@ def table_spec_from_location(
     ValueError
         When schema is required but not provided.
     """
+    resolved = location.resolved
+    if schema is None:
+        from datafusion_engine.arrow.interop import coerce_arrow_schema
+
+        schema = coerce_arrow_schema(resolved.schema)
     if schema is None:
         msg = f"Schema required for TableSpec: {name}"
         raise ValueError(msg)
-
-    resolved = location.resolved
     return TableSpec(
         name=name,
         schema=schema,
@@ -166,9 +174,11 @@ def table_spec_from_location(
         format=location.format or "delta",
         delta_version=location.delta_version,
         delta_timestamp=location.delta_timestamp,
+        delta_cdf_options=location.delta_cdf_options,
         required_udfs=tuple(required_udfs),
         partition_columns=(),
         storage_options=dict(location.storage_options),
+        delta_log_storage_options=dict(location.delta_log_storage_options),
         table_properties={},
     )
 

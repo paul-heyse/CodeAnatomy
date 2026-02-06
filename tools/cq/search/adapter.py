@@ -59,7 +59,17 @@ def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
     for i, line in enumerate(content.splitlines(), 1):
         stripped = line.lstrip()
         if stripped.startswith(
-            ("def ", "async def ", "class ", "fn ", "pub fn ", "struct ", "enum ", "trait ", "impl ")
+            (
+                "def ",
+                "async def ",
+                "class ",
+                "fn ",
+                "pub fn ",
+                "struct ",
+                "enum ",
+                "trait ",
+                "impl ",
+            )
         ):
             indent = len(line) - len(stripped)
             results.append((i, indent))

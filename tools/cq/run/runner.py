@@ -6,11 +6,16 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import msgspec
 
 from tools.cq.cli_app.context import CliContext
 from tools.cq.core.merge import merge_step_results
+from tools.cq.core.multilang_orchestrator import (
+    merge_language_cq_results,
+    runmeta_for_scope_merge,
+)
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, mk_result, ms
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
@@ -22,13 +27,13 @@ from tools.cq.query.execution_requests import (
 from tools.cq.query.executor import (
     execute_entity_query_from_records,
     execute_pattern_query_with_files,
-    execute_plan,
 )
 from tools.cq.query.ir import Query, Scope
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguage,
     QueryLanguageScope,
+    expand_language_scope,
     file_extensions_for_scope,
 )
 from tools.cq.query.parser import QueryParseError, parse_query
@@ -49,12 +54,17 @@ from tools.cq.run.spec import (
     normalize_step_ids,
     step_type,
 )
+from tools.cq.search.multilang_diagnostics import (
+    build_cross_language_diagnostics,
+    is_python_oriented_query_text,
+)
 from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
 
 
 @dataclass(frozen=True)
 class ParsedQStep:
     step_id: str
+    parent_step_id: str
     step: QStep
     query: Query
     plan: ToolPlan
@@ -146,8 +156,8 @@ def _execute_q_steps(
             results=results,
         )
         if should_stop:
-            return results
-    return results
+            return _collapse_parent_q_results(results, ctx=ctx)
+    return _collapse_parent_q_results(results, ctx=ctx)
 
 
 def _partition_q_steps(
@@ -168,8 +178,10 @@ def _partition_q_steps(
             if stop_on_error and is_error:
                 break
             continue
-        target = pattern_by_lang if outcome.plan.is_pattern_query else parsed_by_lang
-        target.setdefault(outcome.plan.lang, []).append(outcome)
+        expanded = _expand_q_step_by_scope(outcome, ctx)
+        for parsed in expanded:
+            target = pattern_by_lang if parsed.plan.is_pattern_query else parsed_by_lang
+            target.setdefault(parsed.plan.lang, []).append(parsed)
     return parsed_by_lang, pattern_by_lang
 
 
@@ -205,10 +217,6 @@ def _prepare_q_step(
         return _handle_query_parse_error(step, step_id, plan, ctx, exc)
 
     query = _apply_run_scope(query, plan)
-    if query.lang_scope == "auto":
-        auto_plan = compile_query(query)
-        auto_result = execute_plan(auto_plan, query, ctx.toolchain, ctx.root, ctx.argv)
-        return step_id, auto_result, False
     tool_plan = compile_query(query)
     scope_paths = scope_to_paths(tool_plan.scope, ctx.root)
     if not scope_paths:
@@ -217,6 +225,7 @@ def _prepare_q_step(
     scope_globs = scope_to_globs(tool_plan.scope)
     parsed_step = ParsedQStep(
         step_id=step_id,
+        parent_step_id=step_id,
         step=step,
         query=query,
         plan=tool_plan,
@@ -224,6 +233,29 @@ def _prepare_q_step(
         scope_globs=scope_globs,
     )
     return step_id, parsed_step, False
+
+
+def _expand_q_step_by_scope(step: ParsedQStep, ctx: CliContext) -> list[ParsedQStep]:
+    if step.query.lang_scope != "auto":
+        return [step]
+
+    expanded: list[ParsedQStep] = []
+    for lang in expand_language_scope(step.query.lang_scope):
+        scoped_query = msgspec.structs.replace(step.query, lang_scope=lang)
+        scoped_plan = compile_query(scoped_query)
+        scoped_paths = scope_to_paths(scoped_plan.scope, ctx.root)
+        expanded.append(
+            ParsedQStep(
+                step_id=f"{step.parent_step_id}:{lang}",
+                parent_step_id=step.parent_step_id,
+                step=step.step,
+                query=scoped_query,
+                plan=scoped_plan,
+                scope_paths=scoped_paths,
+                scope_globs=scope_to_globs(scoped_plan.scope),
+            )
+        )
+    return expanded
 
 
 def _handle_query_parse_error(
@@ -247,8 +279,13 @@ def _execute_entity_q_steps(
     if not ctx.toolchain.has_sgpy:
         return [
             (
-                step.step_id,
-                _error_result(step.step_id, "q", RuntimeError("ast-grep not available"), ctx),
+                step.parent_step_id,
+                _error_result(
+                    step.parent_step_id,
+                    "q",
+                    RuntimeError("ast-grep not available"),
+                    ctx,
+                ),
             )
             for step in steps
         ]
@@ -294,12 +331,16 @@ def _execute_entity_q_steps(
         try:
             result = execute_entity_query_from_records(request)
         except Exception as exc:  # noqa: BLE001 - defensive boundary
-            result = _error_result(step.step_id, "q", exc, ctx)
-            results.append((step.step_id, result))
+            result = _error_result(step.parent_step_id, "q", exc, ctx)
+            result.summary["lang"] = step.plan.lang
+            result.summary["query_text"] = step.step.query
+            results.append((step.parent_step_id, result))
             if stop_on_error:
                 break
             continue
-        results.append((step.step_id, result))
+        result.summary["lang"] = step.plan.lang
+        result.summary["query_text"] = step.step.query
+        results.append((step.parent_step_id, result))
     return results
 
 
@@ -312,8 +353,13 @@ def _execute_pattern_q_steps(
     if not ctx.toolchain.has_sgpy:
         return [
             (
-                step.step_id,
-                _error_result(step.step_id, "q", RuntimeError("ast-grep not available"), ctx),
+                step.parent_step_id,
+                _error_result(
+                    step.parent_step_id,
+                    "q",
+                    RuntimeError("ast-grep not available"),
+                    ctx,
+                ),
             )
             for step in steps
         ]
@@ -343,13 +389,93 @@ def _execute_pattern_q_steps(
         try:
             result = execute_pattern_query_with_files(request)
         except Exception as exc:  # noqa: BLE001 - defensive boundary
-            result = _error_result(step.step_id, "q", exc, ctx)
-            results.append((step.step_id, result))
+            result = _error_result(step.parent_step_id, "q", exc, ctx)
+            result.summary["lang"] = step.plan.lang
+            result.summary["query_text"] = step.step.query
+            results.append((step.parent_step_id, result))
             if stop_on_error:
                 break
             continue
-        results.append((step.step_id, result))
+        result.summary["lang"] = step.plan.lang
+        result.summary["query_text"] = step.step.query
+        results.append((step.parent_step_id, result))
     return results
+
+
+def _result_language(result: CqResult) -> QueryLanguage | None:
+    value = result.summary.get("lang")
+    if value in {"python", "rust"}:
+        return cast("QueryLanguage", value)
+    return None
+
+
+def _result_match_count(result: CqResult | None) -> int:
+    if result is None:
+        return 0
+    total = result.summary.get("total_matches")
+    if isinstance(total, int):
+        return total
+    matches = result.summary.get("matches")
+    if isinstance(matches, int):
+        return matches
+    return len(result.key_findings)
+
+
+def _collapse_parent_q_results(
+    step_results: list[tuple[str, CqResult]],
+    *,
+    ctx: CliContext,
+) -> list[tuple[str, CqResult]]:
+    grouped: dict[str, list[CqResult]] = {}
+    order: list[str] = []
+    for step_id, result in step_results:
+        if step_id not in grouped:
+            grouped[step_id] = []
+            order.append(step_id)
+        grouped[step_id].append(result)
+
+    collapsed: list[tuple[str, CqResult]] = []
+    for step_id in order:
+        group = grouped[step_id]
+        if len(group) == 1:
+            group[0].summary.pop("lang", None)
+            group[0].summary.pop("query_text", None)
+            collapsed.append((step_id, group[0]))
+            continue
+
+        lang_results: dict[QueryLanguage, CqResult] = {}
+        query_text = ""
+        for result in group:
+            lang = _result_language(result)
+            if lang is None:
+                continue
+            if lang not in lang_results:
+                lang_results[lang] = result
+            if not query_text:
+                candidate = result.summary.get("query_text")
+                if isinstance(candidate, str):
+                    query_text = candidate
+
+        diagnostics = build_cross_language_diagnostics(
+            lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+            python_matches=_result_match_count(lang_results.get("python")),
+            rust_matches=_result_match_count(lang_results.get("rust")),
+            python_oriented=is_python_oriented_query_text(query_text),
+        )
+        run = runmeta_for_scope_merge(
+            macro="q",
+            root=ctx.root,
+            argv=ctx.argv,
+            tc=ctx.toolchain,
+        )
+        merged = merge_language_cq_results(
+            scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+            results=lang_results,
+            run=run,
+            diagnostics=diagnostics,
+        )
+        collapsed.append((step_id, merged))
+    return collapsed
 
 
 def _execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext) -> CqResult:

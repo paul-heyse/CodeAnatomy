@@ -10,6 +10,7 @@ from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
+from tools.cq.search.smart_search import smart_search
 
 
 @pytest.fixture
@@ -261,3 +262,20 @@ def test_regression_empty_query_handling(toolchain: Toolchain, repo_root: Path) 
 
     assert len(all_findings) == 0, "Expected empty results for non-existent class"
     assert result.run is not None
+
+
+def test_q_and_search_share_multilang_summary_contract(
+    toolchain: Toolchain,
+    repo_root: Path,
+) -> None:
+    """Q and search should expose the same top-level multilang summary keys."""
+    q_result = _execute_query("entity=class name=Toolchain lang=auto", toolchain, repo_root)
+    search_result = smart_search(
+        repo_root, "Toolchain", tc=toolchain, argv=["cq", "search", "Toolchain"]
+    )
+
+    for result in (q_result, search_result):
+        assert result.summary["lang_scope"] == "auto"
+        assert result.summary["language_order"] == ["python", "rust"]
+        assert "languages" in result.summary
+        assert "cross_language_diagnostics" in result.summary

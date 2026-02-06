@@ -6,9 +6,9 @@
       "anchor": {
         "col": 0,
         "end_col": 39,
-        "end_line": 466,
+        "end_line": 474,
         "file": "tools/cq/query/executor.py",
-        "line": 428
+        "line": 436
       },
       "category": "definition",
       "details": {
@@ -38,7 +38,7 @@
     "schema_version": "cq.v1",
     "toolchain": {
       "python": "3.13.12",
-      "rg": "ripgrep 15.0.0",
+      "rg": "ripgrep 14.1.0",
       "sgpy": "0.40.5"
     }
   },
@@ -52,16 +52,26 @@
     ],
     "languages": {
       "python": {
+        "caps_hit": "none",
         "files_scanned": 1,
+        "matched_files": 0,
         "matches": 1,
-        "total_calls": 499,
-        "total_defs": 90
+        "scanned_files": 1,
+        "scanned_files_is_estimate": false,
+        "timed_out": false,
+        "total_matches": 1,
+        "truncated": false
       },
       "rust": {
+        "caps_hit": "none",
         "files_scanned": 0,
+        "matched_files": 0,
         "matches": 0,
-        "total_calls": 0,
-        "total_defs": 0
+        "scanned_files": 0,
+        "scanned_files_is_estimate": false,
+        "timed_out": false,
+        "total_matches": 0,
+        "truncated": false
       }
     }
   }

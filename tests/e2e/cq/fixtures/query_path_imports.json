@@ -31,7 +31,7 @@
     "schema_version": "cq.v1",
     "toolchain": {
       "python": "3.13.12",
-      "rg": "ripgrep 15.0.0",
+      "rg": "ripgrep 14.1.0",
       "sgpy": "0.40.5"
     }
   },
@@ -45,14 +45,26 @@
     ],
     "languages": {
       "python": {
+        "caps_hit": "none",
         "files_scanned": 1,
+        "matched_files": 0,
         "matches": 1,
-        "total_imports": 7
+        "scanned_files": 1,
+        "scanned_files_is_estimate": false,
+        "timed_out": false,
+        "total_matches": 1,
+        "truncated": false
       },
       "rust": {
+        "caps_hit": "none",
         "files_scanned": 0,
+        "matched_files": 0,
         "matches": 0,
-        "total_imports": 0
+        "scanned_files": 0,
+        "scanned_files_is_estimate": false,
+        "timed_out": false,
+        "total_matches": 0,
+        "truncated": false
       }
     }
   }

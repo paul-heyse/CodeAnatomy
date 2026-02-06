@@ -23,6 +23,7 @@ from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from obs.otel.run_context import get_run_id
+from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -32,6 +33,10 @@ if TYPE_CHECKING:
 
 CACHE_RUN_SUMMARY_TABLE_NAME = "datafusion_cache_run_summary_v1"
 CACHE_SNAPSHOT_REGISTRY_TABLE_NAME = "datafusion_cache_snapshot_registry_v1"
+
+
+def _append_source_name(table_name: str) -> str:
+    return f"{table_name}_append_{uuid7_hex()}"
 
 
 @dataclass(frozen=True)
@@ -151,7 +156,7 @@ def record_cache_run_summary(
     table = pa.Table.from_pylist([summary.to_row()], schema=_cache_run_summary_schema())
     df = datafusion_from_arrow(
         active_ctx,
-        name=f"{CACHE_RUN_SUMMARY_TABLE_NAME}_append",
+        name=_append_source_name(CACHE_RUN_SUMMARY_TABLE_NAME),
         value=table,
     )
     commit_metadata = cache_commit_metadata(
@@ -175,7 +180,18 @@ def record_cache_run_summary(
     )
     if result.delta_result is None:
         return None
-    return result.delta_result.version
+    version = result.delta_result.version
+    register_dataset_df(
+        active_ctx,
+        name=CACHE_RUN_SUMMARY_TABLE_NAME,
+        location=DatasetLocation(
+            path=str(location.path),
+            format="delta",
+            delta_version=version,
+        ),
+        options=DatasetRegistrationOptions(runtime_profile=profile),
+    )
+    return version
 
 
 def ensure_cache_snapshot_registry_table(
@@ -230,7 +246,7 @@ def record_cache_snapshot_registry(
     table = pa.Table.from_pylist([entry.to_row()], schema=_cache_snapshot_registry_schema())
     df = datafusion_from_arrow(
         active_ctx,
-        name=f"{CACHE_SNAPSHOT_REGISTRY_TABLE_NAME}_append",
+        name=_append_source_name(CACHE_SNAPSHOT_REGISTRY_TABLE_NAME),
         value=table,
     )
     commit_metadata = cache_commit_metadata(
@@ -255,7 +271,18 @@ def record_cache_snapshot_registry(
     )
     if result.delta_result is None:
         return None
-    return result.delta_result.version
+    version = result.delta_result.version
+    register_dataset_df(
+        active_ctx,
+        name=CACHE_SNAPSHOT_REGISTRY_TABLE_NAME,
+        location=DatasetLocation(
+            path=str(location.path),
+            format="delta",
+            delta_version=version,
+        ),
+        options=DatasetRegistrationOptions(runtime_profile=profile),
+    )
+    return version
 
 
 def _bootstrap_cache_ledger_table(

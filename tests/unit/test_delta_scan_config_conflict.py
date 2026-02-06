@@ -7,6 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.errors import DataFusionEngineError
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.delta_seed import DeltaSeedOptions, write_delta_table
 from tests.test_helpers.optional_deps import (
@@ -37,7 +38,11 @@ def test_delta_file_column_conflict_raises(tmp_path: Path) -> None:
             table_name="delta_table",
         ),
     )
-    with pytest.raises(RuntimeError):
+    expected_errors: tuple[type[Exception], ...] = (
+        RuntimeError,
+        DataFusionEngineError,
+    )
+    with pytest.raises(expected_errors):
         register_dataset_df(
             ctx,
             name="delta_tbl",

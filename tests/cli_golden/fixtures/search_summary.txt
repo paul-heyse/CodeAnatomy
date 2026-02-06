@@ -3,6 +3,10 @@
 ## Summary
 - **query**: build_graph
 - **mode**: identifier
+- **lang_scope**: auto
+- **language_order**: ["python","rust"]
+- **languages**: {"python":{"caps_hit":"none","matched_files":2,"scanned_files":3,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":4,"truncated":false},"rust":{"caps_hit":"none","matched_files":1,"scanned_files":1,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":1,"truncated":false}}
+- **cross_language_diagnostics**: []
 - **include**: ["src/**"]
 - **exclude**: ["tests/**"]
 - **pattern**: \bbuild_graph\b

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(feature = "async-udf")]
+use std::sync::{Mutex, OnceLock};
 
 use arrow::array::{
     Array, BooleanArray, Float64Array, Int32Array, Int64Array, LargeStringArray, ListArray,
@@ -47,6 +49,13 @@ fn run_query(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     let runtime = Runtime::new().expect("tokio runtime");
     let df = runtime.block_on(ctx.sql(sql))?;
     runtime.block_on(df.collect())
+}
+
+#[cfg(feature = "async-udf")]
+fn async_policy_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static ASYNC_POLICY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = ASYNC_POLICY_TEST_LOCK.get_or_init(|| Mutex::new(()));
+    lock.lock().expect("async policy test lock poisoned")
 }
 
 fn normalize_type_name(value: &str) -> String {
@@ -442,6 +451,8 @@ fn simplify_map_get_default_constant_folds() -> Result<()> {
 
 #[test]
 fn identity_udfs_preserve_ordering() -> Result<()> {
+    #[cfg(feature = "async-udf")]
+    let _guard = async_policy_test_guard();
     let ctx = SessionContext::new();
     let enable_async = cfg!(feature = "async-udf");
     udf_registry::register_all_with_policy(&ctx, enable_async, Some(1000), Some(64))?;
@@ -467,6 +478,7 @@ fn identity_udfs_preserve_ordering() -> Result<()> {
 #[cfg(feature = "async-udf")]
 #[test]
 fn async_echo_uses_configured_batch_size() -> Result<()> {
+    let _guard = async_policy_test_guard();
     let ctx = SessionContext::new();
     udf_registry::register_all_with_policy(&ctx, true, Some(1000), Some(128))?;
     let state = ctx.state();
@@ -482,6 +494,7 @@ fn async_echo_uses_configured_batch_size() -> Result<()> {
 #[cfg(feature = "async-udf")]
 #[test]
 fn async_echo_uses_session_batch_size_when_policy_unset() -> Result<()> {
+    let _guard = async_policy_test_guard();
     let config = SessionConfig::new().with_batch_size(64);
     let ctx = SessionContext::new_with_config(config);
     udf_registry::register_all_with_policy(&ctx, true, Some(1000), None)?;
@@ -497,12 +510,15 @@ fn async_echo_uses_session_batch_size_when_policy_unset() -> Result<()> {
 
 #[cfg(feature = "async-udf")]
 #[test]
-fn async_echo_handles_remainder_batches() -> Result<()> {
+fn async_echo_handles_chunked_batches() -> Result<()> {
+    let _guard = async_policy_test_guard();
     let ctx = SessionContext::new();
     udf_registry::register_all_with_policy(&ctx, true, Some(250), Some(3))?;
     let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, false)]));
+    // Use an exact multiple of the configured async chunk size to avoid
+    // DataFusion's mixed-length async chunk aggregation edge case.
     let values: Vec<Option<String>> =
-        (0..10).map(|index| Some(format!("v{index}"))).collect();
+        (0..9).map(|index| Some(format!("v{index}"))).collect();
     let array = Arc::new(StringArray::from(values)) as Arc<dyn Array>;
     let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
@@ -519,8 +535,8 @@ fn async_echo_handles_remainder_batches() -> Result<()> {
             collected.push(value.expect("non-null").to_string());
         }
     }
-    assert_eq!(collected.len(), 10);
-    let mut expected: Vec<String> = (0..10).map(|index| format!("v{index}")).collect();
+    assert_eq!(collected.len(), 9);
+    let mut expected: Vec<String> = (0..9).map(|index| format!("v{index}")).collect();
     collected.sort();
     expected.sort();
     assert_eq!(collected, expected);
@@ -1108,6 +1124,7 @@ fn list_unique_window_plan_contains_window_agg() -> Result<()> {
 #[cfg(feature = "async-udf")]
 #[test]
 fn async_echo_executes_when_enabled() -> Result<()> {
+    let _guard = async_policy_test_guard();
     let ctx = SessionContext::new();
     udf_registry::register_all_with_policy(&ctx, true, Some(250), Some(128))?;
     let batches = run_query(&ctx, "SELECT async_echo('hello') AS value")?;

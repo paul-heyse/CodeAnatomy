@@ -55,6 +55,39 @@ if TYPE_CHECKING:
 
 type StorageOptions = Mapping[str, str]
 
+_RESERVED_DELTA_COMMIT_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "operation",
+        "operationparameters",
+        "operationmetrics",
+        "timestamp",
+        "readversion",
+        "isolationlevel",
+        "isblindappend",
+        "engineinfo",
+        "userdata",
+        "usermetadata",
+    }
+)
+
+
+def _normalize_commit_metadata_key(key: str) -> str:
+    if key.lower() in _RESERVED_DELTA_COMMIT_METADATA_KEYS:
+        return f"codeanatomy_{key}"
+    return key
+
+
+def _normalize_commit_metadata(
+    commit_metadata: Mapping[str, str] | None,
+) -> dict[str, str] | None:
+    if commit_metadata is None:
+        return None
+    normalized = {
+        _normalize_commit_metadata_key(str(key)): str(value)
+        for key, value in commit_metadata.items()
+    }
+    return normalized or None
+
 
 def canonical_table_uri(table_uri: str) -> str:
     """Return a canonical URI form for Delta snapshot identity keys.
@@ -3318,7 +3351,7 @@ def build_commit_properties(
     CommitProperties | None
         Commit properties with app transaction and custom metadata when provided.
     """
-    custom_metadata = dict(commit_metadata) if commit_metadata is not None else None
+    custom_metadata = _normalize_commit_metadata(commit_metadata)
     app_transactions = None
     if app_id is not None and version is not None:
         app_transactions = [Transaction(app_id=app_id, version=version)]
@@ -3412,7 +3445,10 @@ def _delta_commit_options(
                         else None,
                     )
     if commit_metadata:
-        metadata.update({str(key): str(value) for key, value in commit_metadata.items()})
+        metadata.update(
+            _normalize_commit_metadata(commit_metadata)
+            or {str(key): str(value) for key, value in commit_metadata.items()}
+        )
     if app_transaction is None and app_id is not None and app_version is not None:
         from datafusion_engine.delta.control_plane import DeltaAppTransaction
 

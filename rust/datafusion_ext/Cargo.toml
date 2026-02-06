@@ -51,11 +51,12 @@ tokio = { version = "1.49.0", features = ["rt-multi-thread"] }
 unicode-normalization = "0.1"
 url = "2"
 urlencoding = "2"
+pyo3 = { workspace = true, optional = true }
 
 [features]
 default = []
 async-udf = []
-python = []
+python = ["dep:pyo3"]
 
 [dev-dependencies]
 parquet = { version = "57.1.0", features = ["arrow"] }

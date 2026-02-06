@@ -127,6 +127,10 @@ _COPY_FORMAT_TOKENS: Mapping[WriteFormat, str] = {
     WriteFormat.JSON: "JSON",
     WriteFormat.ARROW: "ARROW",
 }
+_RETRYABLE_DELTA_STREAM_ERROR_MARKERS: tuple[str, ...] = (
+    "c data interface error",
+    "expected 3 buffers for imported type string",
+)
 
 
 def _sql_identifier(name: str) -> str:
@@ -158,6 +162,25 @@ def _copy_format_token(format_: WriteFormat) -> str:
         msg = f"COPY does not support format: {format_}"
         raise ValueError(msg)
     return token
+
+
+def _is_retryable_delta_stream_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _RETRYABLE_DELTA_STREAM_ERROR_MARKERS)
+
+
+def _is_delta_observability_operation(operation: str | None) -> bool:
+    if operation is None:
+        return False
+    return operation.startswith(
+        (
+            "delta_mutation_",
+            "delta_snapshot_",
+            "delta_scan_plan",
+            "delta_maintenance_",
+            "delta_observability_",
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -1576,6 +1599,9 @@ class WritePipeline:
     ) -> None:
         if self.runtime_profile is None:
             return
+        operation_name = spec.commit_metadata.get("operation")
+        if _is_delta_observability_operation(operation_name):
+            return
         report = delta_result.report or {}
         from datafusion_engine.delta.observability import (
             DeltaMutationArtifact,
@@ -1598,6 +1624,7 @@ class WritePipeline:
                 constraint_status=constraint_status,
                 constraint_violations=(),
             ),
+            ctx=self.ctx,
         )
 
     def _run_post_write_maintenance(
@@ -1789,53 +1816,43 @@ class WritePipeline:
         storage = merged_storage_options(spec.storage_options, spec.log_storage_options)
         partition_by = list(spec.partition_by) if spec.partition_by else None
         storage_options = dict(storage) if storage else None
-        if spec.mode == "overwrite":
+
+        def _write_with_source(source: pa.RecordBatchReader) -> None:
             if spec.writer_properties is None:
                 write_deltalake(
                     spec.table_uri,
-                    stream,
+                    source,
                     partition_by=partition_by,
-                    mode="overwrite",
+                    mode=spec.mode,
                     schema_mode=spec.schema_mode,
                     storage_options=storage_options,
                     target_file_size=spec.target_file_size,
                     commit_properties=spec.commit_properties,
                 )
-            else:
-                write_deltalake(
-                    spec.table_uri,
-                    stream,
-                    partition_by=partition_by,
-                    mode="overwrite",
-                    schema_mode=spec.schema_mode,
-                    storage_options=storage_options,
-                    target_file_size=spec.target_file_size,
-                    writer_properties=spec.writer_properties,
-                    commit_properties=spec.commit_properties,
-                )
-        elif spec.writer_properties is None:
+                return
             write_deltalake(
                 spec.table_uri,
-                stream,
+                source,
                 partition_by=partition_by,
-                mode="append",
+                mode=spec.mode,
                 schema_mode=spec.schema_mode,
                 storage_options=storage_options,
                 target_file_size=spec.target_file_size,
                 commit_properties=spec.commit_properties,
-            )
-        else:
-            write_deltalake(
-                spec.table_uri,
-                stream,
-                partition_by=partition_by,
-                mode="append",
-                schema_mode=spec.schema_mode,
-                storage_options=storage_options,
-                target_file_size=spec.target_file_size,
                 writer_properties=spec.writer_properties,
-                commit_properties=spec.commit_properties,
             )
+
+        try:
+            _write_with_source(stream)
+        except Exception as exc:
+            if not _is_retryable_delta_stream_error(exc):
+                raise
+            fallback_table = result.df.to_arrow_table()
+            fallback_reader = pa.RecordBatchReader.from_batches(
+                fallback_table.schema,
+                fallback_table.to_batches(),
+            )
+            _write_with_source(fallback_reader)
         if self.runtime_profile is not None:
             row_count = None
             record_artifact(

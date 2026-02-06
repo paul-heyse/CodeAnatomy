@@ -36,7 +36,9 @@ def cache_commit_metadata(request: CacheCommitMetadataRequest) -> dict[str, str]
         Stringified commit metadata entries.
     """
     payload: dict[str, object] = {
-        "operation": request.operation,
+        # Delta commit info already writes a reserved "operation" key.
+        # Use a cache-specific key to avoid duplicate JSON fields in commit logs.
+        "cache_operation": request.operation,
         "cache_policy": request.cache_policy,
         "cache_scope": request.cache_scope,
     }

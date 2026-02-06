@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from tools.cq.core.merge import merge_step_results
+from tools.cq.core.multilang_orchestrator import (
+    merge_language_cq_results,
+    runmeta_for_scope_merge,
+)
 from tools.cq.core.schema import CqResult, Finding, RunMeta, Section
 
 
@@ -29,3 +35,42 @@ def test_merge_step_results_adds_provenance() -> None:
     assert merged.key_findings[0].details.data["source_step"] == "step_0"
     assert merged.key_findings[0].details.data["source_macro"] == "calls"
     assert merged.sections[0].title == "step_0: Section"
+
+
+def test_merge_language_cq_results_builds_multilang_contract() -> None:
+    """Language merge helper should emit canonical multilang summary keys."""
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=1.0,
+        toolchain={},
+    )
+    py_result = CqResult(
+        run=run, summary={"matches": 1}, key_findings=[Finding(category="d", message="py")]
+    )
+    rs_result = CqResult(
+        run=run, summary={"matches": 2}, key_findings=[Finding(category="d", message="rs")]
+    )
+    merged = merge_language_cq_results(
+        scope="auto",
+        results={"python": py_result, "rust": rs_result},
+        run=run,
+    )
+    assert merged.summary["lang_scope"] == "auto"
+    assert merged.summary["language_order"] == ["python", "rust"]
+    assert isinstance(merged.summary["languages"], dict)
+    assert "python" in merged.summary["languages"]
+    assert "rust" in merged.summary["languages"]
+
+
+def test_runmeta_for_scope_merge_builds_runmeta() -> None:
+    """Runmeta helper should preserve macro and root context."""
+    run = runmeta_for_scope_merge(
+        macro="q",
+        root=Path(),
+        argv=["cq", "q"],
+        tc=None,
+    )
+    assert run.macro == "q"

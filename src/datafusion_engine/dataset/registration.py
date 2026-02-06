@@ -76,11 +76,13 @@ from datafusion_engine.dataset.resolution import (
     DatasetResolutionRequest,
     resolve_dataset_provider,
 )
+from datafusion_engine.delta.capabilities import is_delta_extension_compatible
 from datafusion_engine.delta.protocol import (
     delta_protocol_compatibility,
 )
-from datafusion_engine.delta.scan_config import (
-    delta_scan_config_snapshot_from_options,
+from datafusion_engine.delta.provider_artifacts import (
+    build_delta_provider_build_result,
+    delta_scan_snapshot_payload,
 )
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.identity import schema_identity_hash
@@ -125,7 +127,6 @@ from schema_spec.system import (
     ddl_fingerprint_from_definition,
     make_dataset_spec,
 )
-from serde_msgspec import to_builtins
 from storage.deltalake import DeltaCdfOptions
 from utils.validation import find_missing, validate_required_items
 from utils.value_coercion import coerce_int
@@ -1572,6 +1573,11 @@ def _register_listing_table(context: DataFusionRegistrationContext) -> DataFrame
 
 @dataclass(frozen=True)
 class _DeltaProviderArtifactContext:
+    dataset_name: str | None
+    provider_mode: str
+    ffi_table_provider: bool
+    strict_native_provider_enabled: bool | None
+    strict_native_provider_violation: bool | None
     delta_scan: DeltaScanOptions | None
     delta_scan_effective: Mapping[str, object] | None
     delta_scan_snapshot: object | None
@@ -1836,9 +1842,22 @@ def _record_delta_table_registration_artifacts(
 ) -> None:
     location = context.location
     resolution = state.resolution
+    provider_mode = "delta_table_provider" if state.provider_is_native else "delta_dataset_fallback"
+    strict_enabled = (
+        context.runtime_profile.features.enforce_delta_ffi_provider
+        if context.runtime_profile is not None
+        else None
+    )
+    strict_violation = bool(strict_enabled) and provider_mode == "delta_dataset_fallback"
     details = _delta_provider_artifact_payload(
+        context.ctx,
         location,
         context=_DeltaProviderArtifactContext(
+            dataset_name=context.name,
+            provider_mode=provider_mode,
+            ffi_table_provider=state.provider_is_native,
+            strict_native_provider_enabled=strict_enabled,
+            strict_native_provider_violation=strict_violation,
             delta_scan=resolution.delta_scan_options,
             delta_scan_effective=resolution.delta_scan_effective,
             delta_scan_snapshot=resolution.delta_scan_snapshot,
@@ -1850,10 +1869,6 @@ def _record_delta_table_registration_artifacts(
             add_actions=resolution.add_actions,
         ),
     )
-    details["ffi_table_provider"] = state.provider_is_native
-    provider_mode = _delta_registration_mode(state)
-    if provider_mode is not None:
-        details["provider_mode"] = provider_mode
     if fingerprint_details:
         details.update(fingerprint_details)
     _record_table_provider_artifact(
@@ -1861,9 +1876,7 @@ def _record_delta_table_registration_artifacts(
         artifact=_TableProviderArtifact(
             name=context.name,
             provider=state.provider,
-            provider_kind="delta_table_provider"
-            if state.provider_is_native
-            else "delta_dataset_fallback",
+            provider_kind=provider_mode,
             source=None,
             details=details,
         ),
@@ -1929,6 +1942,7 @@ def _record_delta_snapshot_if_applicable(
 
 
 def _delta_provider_artifact_payload(
+    ctx: SessionContext,
     location: DatasetLocation,
     *,
     context: _DeltaProviderArtifactContext,
@@ -1936,29 +1950,42 @@ def _delta_provider_artifact_payload(
     pruned_files_count = len(context.add_actions) if context.add_actions is not None else None
     pruning_applied = context.add_actions is not None
     delta_scan_ignored = context.registration_path == "ddl" and context.delta_scan is not None
-    return {
-        "path": str(location.path),
-        "format": location.format,
-        "registration_path": context.registration_path,
-        "delta_version": location.delta_version,
-        "delta_timestamp": location.delta_timestamp,
-        "delta_log_storage_options": (
+    compatibility = is_delta_extension_compatible(
+        ctx,
+        entrypoint="delta_table_provider_from_session",
+        require_non_fallback=bool(context.strict_native_provider_enabled),
+    )
+    return build_delta_provider_build_result(
+        table_uri=str(location.path),
+        dataset_format=location.format,
+        provider_kind="delta",
+        dataset_name=context.dataset_name,
+        provider_mode=context.provider_mode,
+        strict_native_provider_enabled=context.strict_native_provider_enabled,
+        strict_native_provider_violation=context.strict_native_provider_violation,
+        ffi_table_provider=context.ffi_table_provider,
+        predicate=context.predicate,
+        compatibility=compatibility,
+        registration_path=context.registration_path,
+        delta_version=location.delta_version,
+        delta_timestamp=location.delta_timestamp,
+        delta_log_storage_options=(
             dict(location.delta_log_storage_options) if location.delta_log_storage_options else None
         ),
-        "delta_storage_options": (
+        delta_storage_options=(
             dict(location.storage_options) if location.storage_options else None
         ),
-        "delta_scan": _delta_scan_payload(context.delta_scan),
-        "delta_scan_effective": context.delta_scan_effective,
-        "delta_scan_snapshot": _delta_scan_snapshot_payload(context.delta_scan_snapshot),
-        "delta_scan_identity_hash": context.delta_scan_identity_hash,
-        "delta_snapshot": context.snapshot,
-        "delta_scan_ignored": delta_scan_ignored,
-        "delta_pruning_predicate": context.predicate,
-        "delta_pruning_error": context.predicate_error,
-        "delta_pruning_applied": pruning_applied,
-        "delta_pruned_files": pruned_files_count,
-    }
+        delta_scan_options=context.delta_scan,
+        delta_scan_effective=context.delta_scan_effective,
+        delta_scan_snapshot=context.delta_scan_snapshot,
+        delta_scan_identity_hash=context.delta_scan_identity_hash,
+        delta_snapshot=context.snapshot,
+        delta_scan_ignored=delta_scan_ignored,
+        delta_pruning_predicate=context.predicate,
+        delta_pruning_error=context.predicate_error,
+        delta_pruning_applied=pruning_applied,
+        delta_pruned_files=pruned_files_count,
+    ).as_payload()
 
 
 def _record_delta_log_health(
@@ -2104,26 +2131,6 @@ def _delta_cdf_artifact_payload(
         "delta_snapshot": resolution.delta_snapshot,
         "cdf_options": _cdf_options_payload(location.delta_cdf_options),
     }
-
-
-def _delta_scan_payload(options: DeltaScanOptions | None) -> dict[str, object] | None:
-    if options is None:
-        return None
-    snapshot = delta_scan_config_snapshot_from_options(options)
-    if snapshot is None:
-        return None
-    return cast("dict[str, object]", to_builtins(snapshot, str_keys=True))
-
-
-def _delta_scan_snapshot_payload(snapshot: object | None) -> dict[str, object] | None:
-    if snapshot is None:
-        return None
-    if isinstance(snapshot, Mapping):
-        return {str(key): value for key, value in snapshot.items()}
-    payload = to_builtins(snapshot, str_keys=True)
-    if isinstance(payload, Mapping):
-        return {str(key): value for key, value in payload.items()}
-    return None
 
 
 def provider_capsule_id(provider: object) -> str:
@@ -2337,7 +2344,7 @@ def _update_table_provider_scan_config(
         return
     updated = replace(
         metadata,
-        delta_scan_config=_delta_scan_snapshot_payload(delta_scan_snapshot),
+        delta_scan_config=delta_scan_snapshot_payload(delta_scan_snapshot),
         delta_scan_identity_hash=delta_scan_identity_hash,
         delta_scan_effective=dict(delta_scan_effective) if delta_scan_effective else None,
     )

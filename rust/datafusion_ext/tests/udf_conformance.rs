@@ -789,6 +789,51 @@ fn udf_docs_exposes_stable_hash64() -> Result<()> {
 }
 
 #[test]
+fn external_delta_udtfs_are_registered() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+
+    let err = run_query(&ctx, "SELECT * FROM read_delta_cdf(CAST(1 AS BIGINT))")
+        .expect_err("read_delta_cdf should be registered and validate literals");
+    assert!(
+        err.to_string()
+            .contains("read_delta_cdf expects argument 1 to be a string literal"),
+        "unexpected error: {err}"
+    );
+
+    let err = run_query(&ctx, "SELECT * FROM delta_add_actions(CAST(1 AS BIGINT))")
+        .expect_err("delta_add_actions should be registered and validate literals");
+    assert!(
+        err.to_string()
+            .contains("delta_add_actions expects argument 1 to be a string literal"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+#[test]
+fn external_delta_udtfs_require_literal_string_args() -> Result<()> {
+    let ctx = SessionContext::new();
+    udf_registry::register_all(&ctx)?;
+
+    let err = run_query(&ctx, "SELECT * FROM read_delta()").expect_err("argument count should fail");
+    assert!(
+        err.to_string()
+            .contains("read_delta expects 1 arguments"),
+        "unexpected error: {err}"
+    );
+
+    let err = run_query(&ctx, "SELECT * FROM delta_snapshot(CAST(1 AS BIGINT))")
+        .expect_err("non-string literal should fail");
+    assert!(
+        err.to_string()
+            .contains("delta_snapshot expects argument 1 to be a string literal"),
+        "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+#[test]
 fn stable_hash64_accepts_large_utf8() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;

@@ -41,6 +41,13 @@ def test_df_delta_smoke_round_trip(tmp_path: Path) -> None:
         service_last = result.service_provider_artifacts[-1]
         assert service_last.get("provider_kind") == "delta"
         assert service_last.get("strict_native_provider_enabled") is True
+        snapshot_key = service_last.get("snapshot_key")
+        assert isinstance(snapshot_key, dict)
+        assert snapshot_key.get("resolved_version") == result.delta_version
+        assert isinstance(snapshot_key.get("canonical_uri"), str)
+        fingerprint = service_last.get("storage_profile_fingerprint")
+        assert isinstance(fingerprint, str)
+        assert fingerprint
     elif result.service_provider_artifacts:
         service_last = result.service_provider_artifacts[-1]
         assert service_last.get("strict_native_provider_enabled") is False

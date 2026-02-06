@@ -94,3 +94,32 @@ def test_diagnostics_markdown_includes_runtime_capabilities_section(tmp_path: Pa
     rendered = path.read_text(encoding="utf-8")
     assert "## Runtime Capabilities" in rendered
     assert "strict_native_provider_enabled: True" in rendered
+
+
+def test_runtime_capability_summary_falls_back_to_service_provider_artifact() -> None:
+    """Use delta service provider artifacts when runtime capability artifacts are absent."""
+    spans: list[dict[str, object]] = []
+    snapshot = {
+        "spans": spans,
+        "logs": [
+            {
+                "attributes": {
+                    "event.name": "delta_service_provider_v1",
+                    "event_time_unix_ms": 11,
+                    "strict_native_provider_enabled": True,
+                    "available": True,
+                    "compatible": True,
+                    "probe_result": "ok",
+                    "ctx_kind": "outer",
+                    "module": "datafusion_ext",
+                }
+            }
+        ],
+    }
+    report = build_diagnostics_report(snapshot)
+    assert report.runtime_capabilities["total"] == 1
+    assert report.runtime_capabilities["strict_native_provider_enabled"] is True
+    assert report.runtime_capabilities["delta_available"] is True
+    assert report.runtime_capabilities["delta_compatible"] is True
+    assert report.runtime_capabilities["delta_probe_result"] == "ok"
+    assert report.runtime_capabilities["delta_ctx_kind"] == "outer"

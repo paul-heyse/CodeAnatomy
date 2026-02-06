@@ -644,8 +644,11 @@ def _build_enriched_match(
 ) -> EnrichedMatch:
     containing_scope = classification.containing_scope
     if containing_scope is None and enrichment.rust_tree_sitter is not None:
+        impl_type = enrichment.rust_tree_sitter.get("impl_type")
         scope_name = enrichment.rust_tree_sitter.get("scope_name")
-        if isinstance(scope_name, str):
+        if isinstance(impl_type, str) and isinstance(scope_name, str):
+            containing_scope = f"{impl_type}::{scope_name}"
+        elif isinstance(scope_name, str):
             containing_scope = scope_name
 
     return EnrichedMatch(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import warnings
 from typing import TYPE_CHECKING
 
 __all__ = (
@@ -48,17 +49,6 @@ __all__ = (
     "delta_table_schema",
     "delta_table_version",
     "delta_write_configuration",
-    "disable_delta_change_data_feed",
-    "disable_delta_check_constraints",
-    "disable_delta_checkpoint_protection",
-    "disable_delta_column_mapping",
-    "disable_delta_deletion_vectors",
-    "disable_delta_generated_columns",
-    "disable_delta_in_commit_timestamps",
-    "disable_delta_invariants",
-    "disable_delta_row_tracking",
-    "disable_delta_v2_checkpoints",
-    "disable_delta_vacuum_protocol_check",
     "enable_delta_change_data_feed",
     "enable_delta_check_constraints",
     "enable_delta_checkpoint_protection",
@@ -74,7 +64,6 @@ __all__ = (
     "evaluate_and_select_files",
     "evaluate_filters_against_index",
     "idempotent_commit_properties",
-    "query_delta_sql",
     "read_delta_cdf",
     "read_delta_cdf_eager",
     "read_delta_table",
@@ -217,6 +206,57 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "select_candidate_files": ("storage.deltalake.file_pruning", "select_candidate_files"),
 }
 
+_DEPRECATED_EXPORTS: dict[str, str] = {
+    "disable_delta_change_data_feed": (
+        "storage.deltalake.disable_delta_change_data_feed is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_check_constraints": (
+        "storage.deltalake.disable_delta_check_constraints is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_checkpoint_protection": (
+        "storage.deltalake.disable_delta_checkpoint_protection is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_column_mapping": (
+        "storage.deltalake.disable_delta_column_mapping is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_deletion_vectors": (
+        "storage.deltalake.disable_delta_deletion_vectors is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_generated_columns": (
+        "storage.deltalake.disable_delta_generated_columns is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_in_commit_timestamps": (
+        "storage.deltalake.disable_delta_in_commit_timestamps is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_invariants": (
+        "storage.deltalake.disable_delta_invariants is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_row_tracking": (
+        "storage.deltalake.disable_delta_row_tracking is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_v2_checkpoints": (
+        "storage.deltalake.disable_delta_v2_checkpoints is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "disable_delta_vacuum_protocol_check": (
+        "storage.deltalake.disable_delta_vacuum_protocol_check is deprecated and will be removed; "
+        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
+    ),
+    "query_delta_sql": (
+        "storage.deltalake.query_delta_sql is deprecated and will be removed; "
+        "use engine.delta_tools.delta_query with a runtime profile."
+    ),
+}
+
 if TYPE_CHECKING:
     import storage.deltalake.config as _delta_config
     import storage.deltalake.delta as _delta_io
@@ -307,6 +347,8 @@ def __getattr__(name: str) -> object:
     if export is None:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
+    if warning := _DEPRECATED_EXPORTS.get(name):
+        warnings.warn(warning, DeprecationWarning, stacklevel=2)
     module_name, attr = export
     module = importlib.import_module(module_name)
     value = getattr(module, attr)

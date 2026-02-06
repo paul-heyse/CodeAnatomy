@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import warnings
 from typing import TYPE_CHECKING
 
 __all__ = (
@@ -28,6 +29,54 @@ __all__ = (
 )
 _EXPORTS: tuple[str, ...] = __all__
 _EXPORT_MAP: dict[str, tuple[str, str]] = {name: ("storage.io", name) for name in _EXPORTS}
+_DEPRECATED_EXPORTS: dict[str, str] = {
+    "DeltaCdfOptions": (
+        "storage.DeltaCdfOptions is deprecated; import from storage.deltalake instead."
+    ),
+    "DeltaSchemaPolicy": (
+        "storage.DeltaSchemaPolicy is deprecated; import from storage.deltalake.config instead."
+    ),
+    "DeltaWritePolicy": (
+        "storage.DeltaWritePolicy is deprecated; import from storage.deltalake.config instead."
+    ),
+    "DeltaWriteResult": (
+        "storage.DeltaWriteResult is deprecated; import from storage.deltalake instead."
+    ),
+    "cleanup_delta_log": (
+        "storage.cleanup_delta_log is deprecated; import from storage.deltalake instead."
+    ),
+    "coerce_delta_input": (
+        "storage.coerce_delta_input is deprecated; import from storage.deltalake instead."
+    ),
+    "coerce_delta_table": (
+        "storage.coerce_delta_table is deprecated; import from storage.deltalake instead."
+    ),
+    "create_delta_checkpoint": (
+        "storage.create_delta_checkpoint is deprecated; import from storage.deltalake instead."
+    ),
+    "delta_commit_metadata": (
+        "storage.delta_commit_metadata is deprecated; import from storage.deltalake instead."
+    ),
+    "delta_history_snapshot": (
+        "storage.delta_history_snapshot is deprecated; import from storage.deltalake instead."
+    ),
+    "delta_protocol_snapshot": (
+        "storage.delta_protocol_snapshot is deprecated; import from storage.deltalake instead."
+    ),
+    "delta_table_features": (
+        "storage.delta_table_features is deprecated; import from storage.deltalake instead."
+    ),
+    "delta_table_version": (
+        "storage.delta_table_version is deprecated; import from storage.deltalake instead."
+    ),
+    "enable_delta_features": (
+        "storage.enable_delta_features is deprecated; import from storage.deltalake instead."
+    ),
+    "read_delta_cdf": (
+        "storage.read_delta_cdf is deprecated; import from storage.deltalake instead."
+    ),
+    "vacuum_delta": ("storage.vacuum_delta is deprecated; import from storage.deltalake instead."),
+}
 
 if TYPE_CHECKING:
     from storage import io as _storage_io
@@ -58,6 +107,8 @@ def __getattr__(name: str) -> object:
     if export is None:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
+    if warning := _DEPRECATED_EXPORTS.get(name):
+        warnings.warn(warning, DeprecationWarning, stacklevel=2)
     module_name, attr = export
     module = importlib.import_module(module_name)
     value = getattr(module, attr)

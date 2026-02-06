@@ -59,6 +59,13 @@ def test_table_provider_registry_records_delta_capsule(tmp_path: Path) -> None:
     assert entry is not None
     assert entry.get("ffi_table_provider") is True
     assert entry.get("provider_mode") != "dataset_fallback"
+    snapshot_key = entry.get("snapshot_key")
+    assert isinstance(snapshot_key, dict)
+    assert isinstance(snapshot_key.get("canonical_uri"), str)
+    assert isinstance(snapshot_key.get("resolved_version"), int)
+    fingerprint = entry.get("storage_profile_fingerprint")
+    assert isinstance(fingerprint, str)
+    assert fingerprint
 
 
 @pytest.mark.integration
@@ -99,3 +106,6 @@ def test_delta_pruning_predicate_from_dataset_spec(tmp_path: Path) -> None:
     assert entry.get("delta_pruning_predicate") == "part = 'a'"
     assert entry.get("delta_pruning_applied") is True
     assert entry.get("delta_pruned_files") is not None
+    snapshot_key = entry.get("snapshot_key")
+    assert isinstance(snapshot_key, dict)
+    assert isinstance(snapshot_key.get("resolved_version"), int)

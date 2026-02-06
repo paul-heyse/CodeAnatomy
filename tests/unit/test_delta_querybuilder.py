@@ -1,4 +1,4 @@
-"""Tests for Delta query builder path."""
+"""Tests for Delta query execution via runtime session registration."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ require_deltalake()
 require_delta_extension()
 
 
-def test_delta_querybuilder_path(tmp_path: Path) -> None:
-    """Ensure delta_query can execute via DataFusion expressions."""
+def test_delta_query_runtime_path(tmp_path: Path) -> None:
+    """Ensure delta_query executes through SessionContext table registration."""
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from engine.delta_tools import DeltaQueryRequest, delta_query
 

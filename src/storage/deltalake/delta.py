@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import time
+import warnings
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -452,7 +453,6 @@ def query_delta_sql(
     storage_options: StorageOptions | None = None,
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
-    use_querybuilder: bool = False,
 ) -> RecordBatchReaderLike:
     """Execute SQL over Delta tables using runtime sessions by default.
 
@@ -467,7 +467,7 @@ def query_delta_sql(
             "codeanatomy.sql_len": len(sql),
             "codeanatomy.table_count": len(tables),
             "codeanatomy.tables": sorted(tables),
-            "codeanatomy.query_path": "query_builder" if use_querybuilder else "runtime_session",
+            "codeanatomy.query_path": "runtime_session",
         },
     )
     with stage_span(
@@ -476,15 +476,6 @@ def query_delta_sql(
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ):
-        if use_querybuilder:
-            from storage.deltalake.query_builder import execute_query, open_delta_table
-
-            delta_tables = {
-                name: open_delta_table(path, storage_options=storage_options)
-                for name, path in tables.items()
-            }
-            return as_reader(execute_query(sql, delta_tables))
-
         from datafusion_engine.dataset.registration import (
             DatasetRegistrationOptions,
             register_dataset_df,
@@ -599,7 +590,9 @@ class DeltaCdfOptions:
     allow_out_of_range: bool = False
 
 
-def cdf_options_to_spec(options: DeltaCdfOptions | None) -> DeltaCdfOptionsSpec | None:
+def cdf_options_to_spec(
+    options: DeltaCdfOptions | DeltaCdfOptionsSpec | None,
+) -> DeltaCdfOptionsSpec | None:
     """Return a DeltaCdfOptionsSpec payload for control-plane requests.
 
     Returns:
@@ -610,6 +603,9 @@ def cdf_options_to_spec(options: DeltaCdfOptions | None) -> DeltaCdfOptionsSpec 
     if options is None:
         return None
     from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
+
+    if isinstance(options, DeltaCdfOptionsSpec):
+        return options
 
     columns = tuple(options.columns) if options.columns is not None else None
     return DeltaCdfOptionsSpec(
@@ -634,6 +630,12 @@ def cdf_options_from_spec(options: DeltaCdfOptionsSpec | None) -> DeltaCdfOption
     """
     if options is None:
         return None
+    warnings.warn(
+        "storage.deltalake.delta.cdf_options_from_spec is deprecated; "
+        "prefer DeltaCdfOptionsSpec at the control-plane boundary.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
 
     if not isinstance(options, DeltaCdfOptionsSpec):

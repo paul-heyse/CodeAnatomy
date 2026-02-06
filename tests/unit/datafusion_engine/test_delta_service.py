@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from tests.test_helpers.optional_deps import require_datafusion
 
 require_datafusion()
@@ -82,3 +84,60 @@ def test_delta_service_read_table_attaches_runtime_profile(
     assert captured["runtime_profile"] is profile
     assert captured["storage_options"] == {"policy": "1", "request": "2"}
     assert captured["log_storage_options"] == {"log": "2"}
+
+
+def test_delta_service_provider_artifact_payload_includes_canonical_fields() -> None:
+    """Provider artifact payloads should include canonical snapshot identity metadata."""
+    profile = DataFusionRuntimeProfile()
+    service = profile.delta_service()
+    request = SimpleNamespace(
+        name="events",
+        location=SimpleNamespace(
+            path="s3a://Example-Bucket/path/table",
+            format="delta",
+            delta_version=7,
+            delta_timestamp=None,
+            delta_log_storage_options={"aws_endpoint": "http://localhost:4566"},
+            storage_options={"region": "us-east-1"},
+        ),
+        resolution=SimpleNamespace(
+            provider_kind="delta",
+            delta_scan_options=None,
+            delta_scan_effective={"fallback": True},
+            delta_scan_snapshot={"scan": "v1"},
+            delta_scan_identity_hash="abc123",
+            delta_snapshot={"version": 7, "provider_mode": "pyarrow_dataset_degraded"},
+            add_actions=[{"path": "part-000.parquet"}],
+            predicate_error="predicate parse failed",
+        ),
+        predicate="id > 1",
+        scan_files=("part-000.parquet",),
+    )
+    compatibility = SimpleNamespace(
+        module="datafusion_ext",
+        entrypoint="delta_provider_from_session",
+        ctx_kind="outer",
+        probe_result="ok",
+        compatible=True,
+        available=True,
+        error=None,
+    )
+
+    payload = service._provider_artifact_payload(  # noqa: SLF001
+        request=request,
+        compatibility=compatibility,
+    )
+
+    assert payload["provider_mode"] == "pyarrow_dataset_degraded"
+    assert payload["strict_native_provider_enabled"] is True
+    assert payload["strict_native_provider_violation"] is True
+    assert payload["scan_files_count"] == 1
+    assert payload["delta_pruned_files"] == 1
+    assert payload["probe_result"] == "ok"
+    snapshot_key = payload.get("snapshot_key")
+    assert isinstance(snapshot_key, dict)
+    assert snapshot_key["resolved_version"] == 7
+    assert snapshot_key["canonical_uri"] == "s3://example-bucket/path/table"
+    fingerprint = payload.get("storage_profile_fingerprint")
+    assert isinstance(fingerprint, str)
+    assert len(fingerprint) == 16

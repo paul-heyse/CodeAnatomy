@@ -362,7 +362,9 @@ pub async fn delta_merge(
     .await?;
     ensure_no_violations(violations)?;
     let session_state: Arc<dyn Session> = Arc::new(session_ctx.state());
-    let mut builder = table.merge(source_df, predicate).with_session_state(session_state);
+    let mut builder = table
+        .merge(source_df, predicate)
+        .with_session_state(session_state);
     if let Some(alias) = source_alias {
         builder = builder.with_source_alias(alias);
     }

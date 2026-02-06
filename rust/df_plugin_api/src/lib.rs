@@ -2,10 +2,10 @@
 
 mod manifest;
 
-use abi_stable::StableAbi;
 use abi_stable::library::RootModule;
 use abi_stable::sabi_types::version::VersionStrings;
-use abi_stable::std_types::{ROption, RResult, RString, RStr, RVec};
+use abi_stable::std_types::{ROption, RResult, RStr, RString, RVec};
+use abi_stable::StableAbi;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use datafusion_ffi::udaf::FFI_AggregateUDF;
 use datafusion_ffi::udf::FFI_ScalarUDF;
@@ -47,9 +47,8 @@ pub struct DfPluginExportsV1 {
 pub struct DfPluginMod {
     pub manifest: extern "C" fn() -> DfPluginManifestV1,
     pub exports: extern "C" fn() -> DfPluginExportsV1,
-    pub udf_bundle_with_options: extern "C" fn(
-        options_json: ROption<RString>,
-    ) -> DfResult<DfUdfBundleV1>,
+    pub udf_bundle_with_options:
+        extern "C" fn(options_json: ROption<RString>) -> DfResult<DfUdfBundleV1>,
     #[sabi(last_prefix_field)]
     pub create_table_provider: extern "C" fn(
         name: RStr<'_>,

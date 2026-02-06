@@ -391,10 +391,7 @@ impl ScalarUDFImpl for SqlMacroUdf {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args
-            .arg_fields
-            .iter()
-            .any(|field| field.is_nullable());
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(Field::new(
             self.name(),
             self.return_type.clone(),

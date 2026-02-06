@@ -261,10 +261,7 @@ pub fn arrow_metadata_udf() -> ScalarUDF {
 }
 
 pub fn cpg_score_udf() -> ScalarUDF {
-    let signature = signature_with_names(
-        Signature::numeric(1, Volatility::Immutable),
-        &["value"],
-    );
+    let signature = signature_with_names(Signature::numeric(1, Volatility::Immutable), &["value"]);
     ScalarUDF::new_from_shared_impl(Arc::new(CpgScoreUdf {
         signature: SignatureEqHash::new(signature),
     }))

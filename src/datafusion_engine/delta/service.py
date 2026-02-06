@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -15,7 +16,11 @@ from datafusion_engine.dataset.resolution import (
     resolve_dataset_provider,
 )
 from datafusion_engine.delta.capabilities import is_delta_extension_compatible
-from datafusion_engine.delta.provider_artifacts import build_delta_provider_build_result
+from datafusion_engine.delta.provider_artifacts import (
+    ServiceProviderArtifactInput,
+    build_delta_provider_build_result,
+    provider_build_request_from_service_context,
+)
 from datafusion_engine.delta.store_policy import (
     apply_delta_store_policy,
     resolve_delta_store_policy,
@@ -110,6 +115,10 @@ class _ProviderArtifactRecordRequest:
     name: str | None
     predicate: str | None
     scan_files: Sequence[str] | None
+
+
+def _read_attr(value: object, name: str) -> object:
+    return getattr(value, name, None)
 
 
 @dataclass(frozen=True)
@@ -424,14 +433,16 @@ class DeltaService:
     def _provider_artifact_payload(
         self,
         *,
-        request: _ProviderArtifactRecordRequest,
+        request: object,
         compatibility: object,
     ) -> dict[str, object]:
-        snapshot = request.resolution.delta_snapshot
+        resolution = _read_attr(request, "resolution")
+        snapshot = _read_attr(resolution, "delta_snapshot")
+        snapshot_mapping = snapshot if isinstance(snapshot, Mapping) else None
         provider_mode = (
-            str(snapshot.get("provider_mode"))
-            if snapshot is not None and snapshot.get("provider_mode") is not None
-            else request.resolution.provider_kind
+            str(snapshot_mapping.get("provider_mode"))
+            if snapshot_mapping is not None and snapshot_mapping.get("provider_mode") is not None
+            else str(_read_attr(resolution, "provider_kind"))
         )
         strict_enabled = self.profile.features.enforce_delta_ffi_provider
         strict_violation = strict_enabled and provider_mode in {
@@ -440,44 +451,18 @@ class DeltaService:
             "pyarrow_dataset_degraded",
             "pyarrow_cdf_degraded",
         }
-        return build_delta_provider_build_result(
-            table_uri=str(request.location.path),
-            dataset_format=request.location.format,
-            provider_kind=request.resolution.provider_kind,
-            dataset_name=request.name,
-            provider_mode=provider_mode,
-            strict_native_provider_enabled=strict_enabled,
-            strict_native_provider_violation=strict_violation,
-            scan_files_requested=bool(request.scan_files),
-            scan_files_count=len(request.scan_files) if request.scan_files is not None else 0,
-            predicate=request.predicate,
-            compatibility=compatibility,
-            delta_version=request.location.delta_version,
-            delta_timestamp=request.location.delta_timestamp,
-            delta_log_storage_options=(
-                dict(request.location.delta_log_storage_options)
-                if request.location.delta_log_storage_options
-                else None
-            ),
-            delta_storage_options=(
-                dict(request.location.storage_options) if request.location.storage_options else None
-            ),
-            delta_scan_options=request.resolution.delta_scan_options,
-            delta_scan_effective=request.resolution.delta_scan_effective,
-            delta_scan_snapshot=request.resolution.delta_scan_snapshot,
-            delta_scan_identity_hash=request.resolution.delta_scan_identity_hash,
-            delta_snapshot=snapshot,
-            delta_pruning_predicate=request.predicate,
-            delta_pruning_error=request.resolution.predicate_error,
-            delta_pruning_applied=request.resolution.add_actions is not None,
-            delta_pruned_files=(
-                len(request.resolution.add_actions)
-                if request.resolution.add_actions is not None
-                else None
-            ),
-            include_event_metadata=True,
-            run_id=get_run_id(),
-        ).as_payload()
+        payload_request = provider_build_request_from_service_context(
+            ServiceProviderArtifactInput(
+                request=request,
+                compatibility=compatibility,
+                provider_mode=provider_mode,
+                strict_native_provider_enabled=strict_enabled,
+                strict_native_provider_violation=strict_violation,
+                include_event_metadata=True,
+                run_id=get_run_id(),
+            )
+        )
+        return build_delta_provider_build_result(payload_request).as_payload()
 
     def table_version(
         self,

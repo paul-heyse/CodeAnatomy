@@ -5,8 +5,8 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int64Builder, StringBuilder};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::lit;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_macros::user_doc;
 
 use crate::compat::{
@@ -14,13 +14,12 @@ use crate::compat::{
     ScalarUDFImpl, Signature, Volatility,
 };
 use crate::udf::common::{
-    columnar_to_optional_strings, columnar_to_strings, literal_scalar, literal_string,
-    normalize_text, prefixed_hash64_value, scalar_argument_string, scalar_columnar_value,
-    scalar_str, scalar_to_bool, scalar_to_string, scalar_to_string_with_sentinel,
-    semantic_type_from_prefix,
-    signature_with_names, stable_id_value, string_array_any, variadic_any_signature,
-    DEFAULT_NORMALIZE_FORM, NULL_SENTINEL, PART_SEPARATOR, SignatureEqHash, hash64_value,
-    hash128_value,
+    columnar_to_optional_strings, columnar_to_strings, hash128_value, hash64_value, literal_scalar,
+    literal_string, normalize_text, prefixed_hash64_value, scalar_argument_string,
+    scalar_columnar_value, scalar_str, scalar_to_bool, scalar_to_string,
+    scalar_to_string_with_sentinel, semantic_type_from_prefix, signature_with_names,
+    stable_id_value, string_array_any, variadic_any_signature, SignatureEqHash,
+    DEFAULT_NORMALIZE_FORM, NULL_SENTINEL, PART_SEPARATOR,
 };
 
 #[user_doc(
@@ -227,10 +226,7 @@ impl ScalarUDFImpl for StableHash128Udf {
         name = "prefix",
         description = "String namespace prefix to prepend to the hash."
     ),
-    argument(
-        name = "value",
-        description = "String value to hash."
-    )
+    argument(name = "value", description = "String value to hash.")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PrefixedHash64Udf {

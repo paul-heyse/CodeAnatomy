@@ -5,8 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from datafusion_engine.delta.provider_artifacts import (
+    DeltaProviderBuildRequest,
+    RegistrationProviderArtifactInput,
+    ServiceProviderArtifactInput,
     build_delta_provider_build_result,
     delta_snapshot_key_payload,
+    provider_build_request_from_registration_context,
+    provider_build_request_from_service_context,
 )
 
 
@@ -21,9 +26,58 @@ class _CompatibilityStub:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class _RegistrationContextStub:
+    dataset_name: str | None = "events"
+    provider_mode: str = "delta_table_provider"
+    ffi_table_provider: bool = True
+    strict_native_provider_enabled: bool | None = True
+    strict_native_provider_violation: bool | None = False
+    delta_scan: object | None = None
+    delta_scan_effective: dict[str, object] | None = None
+    delta_scan_snapshot: object | None = {"schema_hash": "abc"}
+    delta_scan_identity_hash: str | None = "cafef00d"
+    snapshot: dict[str, object] | None = None
+    registration_path: str = "provider"
+    predicate: str | None = "id > 1"
+    predicate_error: str | None = None
+    add_actions: tuple[dict[str, object], ...] | None = None
+
+
+@dataclass(frozen=True)
+class _ServiceLocationStub:
+    path: str = "s3://bucket/events"
+    format: str = "delta"
+    delta_version: int | None = 7
+    delta_timestamp: str | None = None
+    delta_log_storage_options: dict[str, str] | None = None
+    storage_options: dict[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class _ServiceResolutionStub:
+    provider_kind: str = "delta"
+    delta_scan_options: object | None = None
+    delta_scan_effective: dict[str, object] | None = None
+    delta_scan_snapshot: object | None = None
+    delta_scan_identity_hash: str | None = None
+    delta_snapshot: dict[str, object] | None = None
+    predicate_error: str | None = None
+    add_actions: tuple[dict[str, object], ...] | None = None
+
+
+@dataclass(frozen=True)
+class _ServiceRequestStub:
+    location: _ServiceLocationStub
+    resolution: _ServiceResolutionStub
+    name: str | None = "events"
+    predicate: str | None = "id > 1"
+    scan_files: tuple[str, ...] | None = ("part-0001.parquet",)
+
+
 def test_build_delta_provider_build_result_emits_snapshot_identity_and_fingerprint() -> None:
     """Provider artifact payload should include deterministic snapshot identity fields."""
-    result = build_delta_provider_build_result(
+    request = DeltaProviderBuildRequest(
         table_uri="s3a://Example-Bucket/path/table",
         dataset_format="delta",
         provider_kind="delta",
@@ -49,6 +103,7 @@ def test_build_delta_provider_build_result_emits_snapshot_identity_and_fingerpri
         include_event_metadata=True,
         run_id="run-123",
     )
+    result = build_delta_provider_build_result(request)
 
     payload = result.as_payload()
     snapshot_key = payload.get("snapshot_key")
@@ -61,7 +116,9 @@ def test_build_delta_provider_build_result_emits_snapshot_identity_and_fingerpri
     assert payload["probe_result"] == "ok"
     assert payload["entrypoint"] == "delta_provider_from_session"
     assert payload["strict_native_provider_enabled"] is True
-    assert payload["event_time_unix_ms"] > 0
+    event_time = payload.get("event_time_unix_ms")
+    assert isinstance(event_time, int)
+    assert event_time > 0
 
 
 def test_delta_snapshot_key_payload_normalizes_aliases() -> None:
@@ -74,3 +131,49 @@ def test_delta_snapshot_key_payload_normalizes_aliases() -> None:
         "canonical_uri": "s3://example-bucket/path/table",
         "resolved_version": 7,
     }
+
+
+def test_provider_build_request_adapter_from_registration_context() -> None:
+    """Registration adapter should derive pruning and scan metadata deterministically."""
+    context = _RegistrationContextStub(
+        add_actions=({"path": "a.parquet"}, {"path": "b.parquet"}),
+        snapshot={"version": 3},
+    )
+    request = provider_build_request_from_registration_context(
+        RegistrationProviderArtifactInput(
+            table_uri="s3://bucket/events",
+            dataset_format="delta",
+            provider_kind="delta",
+            compatibility=_CompatibilityStub(),
+            context=context,
+        )
+    )
+    assert isinstance(request, DeltaProviderBuildRequest)
+    assert request.delta_pruning_applied is True
+    assert request.delta_pruned_files == 2
+    assert request.delta_scan_ignored is False
+    assert request.provider_mode == "delta_table_provider"
+
+
+def test_provider_build_request_adapter_from_service_context() -> None:
+    """Service adapter should map request/resolution fields without payload drift."""
+    request = _ServiceRequestStub(
+        location=_ServiceLocationStub(delta_log_storage_options={"region": "us-east-1"}),
+        resolution=_ServiceResolutionStub(add_actions=({"path": "a.parquet"},)),
+    )
+    build_request = provider_build_request_from_service_context(
+        ServiceProviderArtifactInput(
+            request=request,
+            compatibility=_CompatibilityStub(),
+            provider_mode="delta_table_provider",
+            strict_native_provider_enabled=True,
+            strict_native_provider_violation=False,
+            include_event_metadata=True,
+            run_id="run-123",
+        )
+    )
+    assert build_request.scan_files_requested is True
+    assert build_request.scan_files_count == 1
+    assert build_request.delta_pruned_files == 1
+    assert build_request.strict_native_provider_enabled is True
+    assert build_request.run_id == "run-123"

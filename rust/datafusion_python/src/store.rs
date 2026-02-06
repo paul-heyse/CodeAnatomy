@@ -52,8 +52,9 @@ impl PyLocalFileSystemContext {
     #[new]
     fn new(prefix: Option<String>) -> PyResult<Self> {
         if let Some(prefix) = prefix {
-            let fs = LocalFileSystem::new_with_prefix(prefix)
-                .map_err(|err| PyValueError::new_err(format!("Failed to create LocalFileSystem: {err}")))?;
+            let fs = LocalFileSystem::new_with_prefix(prefix).map_err(|err| {
+                PyValueError::new_err(format!("Failed to create LocalFileSystem: {err}"))
+            })?;
             Ok(Self {
                 inner: Arc::new(fs),
             })
@@ -128,9 +129,9 @@ impl PyMicrosoftAzureContext {
             builder = builder.with_allow_http(allow_http);
         }
 
-        let storage = builder
-            .build()
-            .map_err(|err| PyValueError::new_err(format!("Could not create Azure Storage context: {err}")))?;
+        let storage = builder.build().map_err(|err| {
+            PyValueError::new_err(format!("Could not create Azure Storage context: {err}"))
+        })?;
         Ok(Self {
             inner: Arc::new(storage),
             container_name,
@@ -157,9 +158,9 @@ impl PyGoogleCloudContext {
             builder = builder.with_service_account_path(credential_path);
         }
 
-        let storage = builder
-            .build()
-            .map_err(|err| PyValueError::new_err(format!("Could not create Google Cloud Storage: {err}")))?;
+        let storage = builder.build().map_err(|err| {
+            PyValueError::new_err(format!("Could not create Google Cloud Storage: {err}"))
+        })?;
         Ok(Self {
             inner: Arc::new(storage),
             bucket_name,

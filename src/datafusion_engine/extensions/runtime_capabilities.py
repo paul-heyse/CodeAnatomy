@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from datafusion import SessionContext
@@ -46,6 +46,7 @@ class RuntimeCapabilitiesSnapshot:
     delta: DeltaCompatibilitySnapshot
     extension_capabilities: Mapping[str, object]
     plugin: ExtensionPluginSnapshot
+    execution_metrics: Mapping[str, object] | None
 
 
 def collect_delta_compatibility(
@@ -98,6 +99,33 @@ def collect_extension_plugin_snapshot(
     )
 
 
+def collect_runtime_execution_metrics(
+    ctx: SessionContext,
+    *,
+    module_name: str = "datafusion_ext",
+) -> Mapping[str, object] | None:
+    """Collect runtime execution metrics from the extension when available.
+
+    Returns:
+    -------
+    Mapping[str, object] | None
+        Structured metrics payload, or None when unavailable.
+    """
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError:
+        return None
+    snapshot_fn = getattr(module, "runtime_execution_metrics_snapshot", None)
+    if not callable(snapshot_fn):
+        return None
+    payload, error = _invoke_extension_with_context(snapshot_fn, ctx)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    if error is None:
+        return None
+    return {"error": error}
+
+
 def build_runtime_capabilities_snapshot(
     ctx: SessionContext,
     *,
@@ -126,6 +154,7 @@ def build_runtime_capabilities_snapshot(
         ),
         extension_capabilities=_extension_capabilities_report(),
         plugin=collect_extension_plugin_snapshot(),
+        execution_metrics=collect_runtime_execution_metrics(ctx),
     )
 
 
@@ -157,6 +186,11 @@ def runtime_capabilities_payload(snapshot: RuntimeCapabilitiesSnapshot) -> dict[
         if snapshot.plugin.capabilities_snapshot is not None
         else None,
         "plugin_error": snapshot.plugin.error,
+        "execution_metrics": (
+            dict(snapshot.execution_metrics)
+            if isinstance(snapshot.execution_metrics, Mapping)
+            else None
+        ),
     }
 
 
@@ -191,6 +225,23 @@ def _capabilities_snapshot_from_module(
     if isinstance(payload, Mapping):
         return dict(payload), None
     return None, None
+
+
+def _invoke_extension_with_context(
+    fn: Callable[[object], object],
+    ctx: SessionContext,
+) -> tuple[object | None, str | None]:
+    candidates = [ctx, getattr(ctx, "ctx", None)]
+    error: str | None = None
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            return fn(candidate), None
+        except (RuntimeError, TypeError, ValueError) as exc:
+            error = str(exc)
+            continue
+    return None, error
 
 
 __all__ = [

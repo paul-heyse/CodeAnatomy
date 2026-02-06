@@ -5,10 +5,7 @@ use abi_stable::library::RootModule;
 use datafusion::error::{DataFusionError, Result};
 
 use df_plugin_api::{
-    DfPluginManifestV1,
-    DfPluginMod_Ref,
-    DF_PLUGIN_ABI_MAJOR,
-    DF_PLUGIN_ABI_MINOR,
+    DfPluginManifestV1, DfPluginMod_Ref, DF_PLUGIN_ABI_MAJOR, DF_PLUGIN_ABI_MINOR,
 };
 
 pub struct PluginHandle {
@@ -32,9 +29,9 @@ fn parse_major(version: &str) -> Result<u16> {
             "Invalid version string {version:?}"
         )));
     };
-    major.parse::<u16>().map_err(|err| {
-        DataFusionError::Plan(format!("Invalid version string {version:?}: {err}"))
-    })
+    major
+        .parse::<u16>()
+        .map_err(|err| DataFusionError::Plan(format!("Invalid version string {version:?}: {err}")))
 }
 
 fn validate_manifest(manifest: &DfPluginManifestV1) -> Result<()> {

@@ -35,6 +35,111 @@ def test_runtime_capability_summary_from_runtime_artifact() -> None:
     assert report.runtime_capabilities["plugin_path"] == "/tmp/plugin.so"
 
 
+def test_runtime_capability_summary_includes_execution_metrics() -> None:
+    """Include structured runtime execution metrics in capability summaries."""
+    spans: list[dict[str, object]] = []
+    snapshot = {
+        "spans": spans,
+        "logs": [
+            {
+                "attributes": {
+                    "event.name": "datafusion_runtime_capabilities_v1",
+                    "event_time_unix_ms": 51,
+                    "strict_native_provider_enabled": True,
+                    "delta_available": True,
+                    "delta_compatible": True,
+                    "execution_metrics": {
+                        "summary": {
+                            "memory_reserved_bytes": 4096,
+                            "metadata_cache_entries": 12,
+                            "metadata_cache_hits": 21,
+                            "list_files_cache_entries": 5,
+                            "statistics_cache_entries": 9,
+                        },
+                        "rows": [
+                            {"metric_name": "memory_reserved_bytes", "value": 4096},
+                            {"metric_name": "metadata_cache_entries", "value": 12},
+                        ],
+                    },
+                }
+            }
+        ],
+    }
+    report = build_diagnostics_report(snapshot)
+    assert report.runtime_capabilities["execution_metrics_rows"] == 2
+    assert report.runtime_capabilities["execution_memory_reserved_bytes"] == 4096
+    assert report.runtime_capabilities["execution_metadata_cache_entries"] == 12
+    assert report.runtime_capabilities["execution_metadata_cache_hits"] == 21
+    assert report.runtime_capabilities["execution_list_files_cache_entries"] == 5
+    assert report.runtime_capabilities["execution_statistics_cache_entries"] == 9
+
+
+def test_runtime_capability_summary_prefers_runtime_events_over_fallbacks() -> None:
+    """Prefer primary runtime capability artifacts when fallback events also exist."""
+    spans: list[dict[str, object]] = []
+    snapshot = {
+        "spans": spans,
+        "logs": [
+            {
+                "attributes": {
+                    "event.name": "datafusion_extension_parity_v1",
+                    "runtime_capabilities": {
+                        "event_time_unix_ms": 5,
+                        "strict_native_provider_enabled": False,
+                        "delta_available": False,
+                        "delta_compatible": False,
+                    },
+                }
+            },
+            {
+                "attributes": {
+                    "event.name": "delta_service_provider_v1",
+                    "event_time_unix_ms": 8,
+                    "strict_native_provider_enabled": False,
+                    "available": False,
+                    "compatible": False,
+                }
+            },
+            {
+                "attributes": {
+                    "event.name": "datafusion_runtime_capabilities_v1",
+                    "event_time_unix_ms": 42,
+                    "strict_native_provider_enabled": True,
+                    "delta_available": True,
+                    "delta_compatible": True,
+                }
+            },
+        ],
+    }
+    report = build_diagnostics_report(snapshot)
+    assert report.runtime_capabilities["total"] == 1
+    assert report.runtime_capabilities["strict_native_provider_enabled"] is True
+    assert report.runtime_capabilities["delta_compatible"] is True
+
+
+def test_runtime_capability_summary_handles_malformed_execution_metrics() -> None:
+    """Treat malformed execution metrics payloads as absent summary fields."""
+    spans: list[dict[str, object]] = []
+    snapshot = {
+        "spans": spans,
+        "logs": [
+            {
+                "attributes": {
+                    "event.name": "datafusion_runtime_capabilities_v1",
+                    "event_time_unix_ms": 51,
+                    "strict_native_provider_enabled": True,
+                    "delta_available": True,
+                    "delta_compatible": True,
+                    "execution_metrics": {"rows": "not-a-sequence", "summary": "not-a-mapping"},
+                }
+            }
+        ],
+    }
+    report = build_diagnostics_report(snapshot)
+    assert report.runtime_capabilities["execution_metrics_rows"] is None
+    assert report.runtime_capabilities["execution_memory_reserved_bytes"] is None
+
+
 def test_provider_mode_summary_includes_strict_violation_counts() -> None:
     """Count strict native-provider violations from provider-mode diagnostics."""
     spans: list[dict[str, object]] = []

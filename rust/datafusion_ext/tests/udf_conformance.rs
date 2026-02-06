@@ -5,8 +5,8 @@ use std::sync::{Mutex, OnceLock};
 
 use arrow::array::{
     Array, BooleanArray, Float64Array, Int32Array, Int64Array, LargeStringArray, ListArray,
-    ListBuilder, MapBuilder, StringArray, StringBuilder, StringViewArray, StructArray,
-    UInt64Array, UInt8Array,
+    ListBuilder, MapBuilder, StringArray, StringBuilder, StringViewArray, StructArray, UInt64Array,
+    UInt8Array,
 };
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::record_batch::RecordBatch;
@@ -174,7 +174,10 @@ fn stable_hash64_coerce_types() -> Result<()> {
     let coerced = udf.inner().coerce_types(&[DataType::Utf8])?;
     assert_eq!(coerced, vec![DataType::Utf8]);
     assert!(udf.inner().coerce_types(&[]).is_err());
-    assert!(udf.inner().coerce_types(&[DataType::Utf8, DataType::Utf8]).is_err());
+    assert!(udf
+        .inner()
+        .coerce_types(&[DataType::Utf8, DataType::Utf8])
+        .is_err());
     Ok(())
 }
 
@@ -197,8 +200,8 @@ fn scalar_udfs_preserve_row_count() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
     let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
-    let array = Arc::new(StringArray::from(vec![Some("alpha"), None, Some("beta")]))
-        as Arc<dyn Array>;
+    let array =
+        Arc::new(StringArray::from(vec![Some("alpha"), None, Some("beta")])) as Arc<dyn Array>;
     let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
     ctx.register_table("t", Arc::new(table))?;
@@ -514,11 +517,14 @@ fn async_echo_handles_chunked_batches() -> Result<()> {
     let _guard = async_policy_test_guard();
     let ctx = SessionContext::new();
     udf_registry::register_all_with_policy(&ctx, true, Some(250), Some(3))?;
-    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, false)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Utf8,
+        false,
+    )]));
     // Use an exact multiple of the configured async chunk size to avoid
     // DataFusion's mixed-length async chunk aggregation edge case.
-    let values: Vec<Option<String>> =
-        (0..9).map(|index| Some(format!("v{index}"))).collect();
+    let values: Vec<Option<String>> = (0..9).map(|index| Some(format!("v{index}"))).collect();
     let array = Arc::new(StringArray::from(values)) as Arc<dyn Array>;
     let batch = RecordBatch::try_new(schema.clone(), vec![array])?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
@@ -632,8 +638,8 @@ fn information_schema_parameters_match_snapshot() -> Result<()> {
         let has_any_signature = expected_inputs
             .iter()
             .any(|row| row.iter().any(|entry| entry == "null"));
-        let has_only_nullary = !expected_inputs.is_empty()
-            && expected_inputs.iter().all(|row| row.is_empty());
+        let has_only_nullary =
+            !expected_inputs.is_empty() && expected_inputs.iter().all(|row| row.is_empty());
         if expected_inputs.is_empty() || has_any_signature {
             continue;
         }
@@ -816,10 +822,10 @@ fn external_delta_udtfs_require_literal_string_args() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
 
-    let err = run_query(&ctx, "SELECT * FROM read_delta()").expect_err("argument count should fail");
+    let err =
+        run_query(&ctx, "SELECT * FROM read_delta()").expect_err("argument count should fail");
     assert!(
-        err.to_string()
-            .contains("read_delta expects 1 arguments"),
+        err.to_string().contains("read_delta expects 1 arguments"),
         "unexpected error: {err}"
     );
 
@@ -1072,8 +1078,8 @@ fn list_unique_sliding_window_retracts() -> Result<()> {
         Field::new("value", DataType::Utf8, true),
     ]));
     let ts_values = Arc::new(Int32Array::from(vec![1, 2, 3])) as Arc<dyn Array>;
-    let values = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]))
-        as Arc<dyn Array>;
+    let values =
+        Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])) as Arc<dyn Array>;
     let batch = RecordBatch::try_new(schema.clone(), vec![ts_values, values])?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
     ctx.register_table("t", Arc::new(table))?;
@@ -1113,8 +1119,8 @@ fn count_distinct_sliding_window_retracts() -> Result<()> {
         Field::new("value", DataType::Utf8, true),
     ]));
     let ts_values = Arc::new(Int32Array::from(vec![1, 2, 3])) as Arc<dyn Array>;
-    let values = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("b")]))
-        as Arc<dyn Array>;
+    let values =
+        Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("b")])) as Arc<dyn Array>;
     let batch = RecordBatch::try_new(schema.clone(), vec![ts_values, values])?;
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
     ctx.register_table("t", Arc::new(table))?;
@@ -1275,12 +1281,7 @@ fn udf_expr_registry_first_resolves_builtin_registry() -> Result<()> {
     let registry = state
         .function_registry()
         .expect("function registry available");
-    let expr = udf_expr::expr_from_registry_or_specs(
-        registry,
-        "sqrt",
-        vec![lit(4_f64)],
-        None,
-    )?;
+    let expr = udf_expr::expr_from_registry_or_specs(registry, "sqrt", vec![lit(4_f64)], None)?;
     assert!(format!("{expr}").to_lowercase().contains("sqrt"));
     assert!(udf_expr::expr_from_name("sqrt", vec![lit(4_f64)], None).is_err());
     Ok(())
@@ -1290,10 +1291,7 @@ fn udf_expr_registry_first_resolves_builtin_registry() -> Result<()> {
 fn interval_align_score_matches_span_len() -> Result<()> {
     let ctx = SessionContext::new();
     udf_registry::register_all(&ctx)?;
-    let batches = run_query(
-        &ctx,
-        "SELECT interval_align_score(0, 5, 10, 20) AS score",
-    )?;
+    let batches = run_query(&ctx, "SELECT interval_align_score(0, 5, 10, 20) AS score")?;
     let array = batches[0]
         .column(0)
         .as_any()
@@ -1355,7 +1353,11 @@ fn dedupe_best_by_score_behaves_like_row_number() -> Result<()> {
         ));
     }
     rows.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-    let mut expected = vec![("a".to_string(), 1, 2), ("a".to_string(), 2, 1), ("b".to_string(), 3, 1)];
+    let mut expected = vec![
+        ("a".to_string(), 1, 2),
+        ("a".to_string(), 2, 1),
+        ("b".to_string(), 3, 1),
+    ];
     expected.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
     assert_eq!(rows, expected);
     Ok(())

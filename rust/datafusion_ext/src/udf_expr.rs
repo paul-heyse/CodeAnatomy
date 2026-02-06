@@ -1,7 +1,7 @@
 use datafusion::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{lit, Expr};
 use datafusion_expr::registry::FunctionRegistry;
+use datafusion_expr::{lit, Expr};
 use datafusion_functions::core::expr_fn as core_expr_fn;
 use datafusion_functions_aggregate::expr_fn as agg_expr_fn;
 use datafusion_functions_aggregate::string_agg::string_agg as string_agg_fn;
@@ -11,9 +11,9 @@ use datafusion_functions_window::expr_fn as window_expr_fn;
 use crate::udf_registry;
 
 fn require_arg(args: &[Expr], idx: usize, name: &str) -> Result<Expr> {
-    args.get(idx)
-        .cloned()
-        .ok_or_else(|| DataFusionError::Plan(format!("{name} expects at least {} arguments", idx + 1)))
+    args.get(idx).cloned().ok_or_else(|| {
+        DataFusionError::Plan(format!("{name} expects at least {} arguments", idx + 1))
+    })
 }
 
 fn ensure_exact_args(args: &[Expr], expected: usize, name: &str) -> Result<()> {
@@ -77,11 +77,7 @@ fn resolve_scalar_udf(name: &str) -> Option<udf_registry::ScalarUdfSpec> {
     None
 }
 
-pub fn expr_from_name(
-    name: &str,
-    args: Vec<Expr>,
-    config: Option<&ConfigOptions>,
-) -> Result<Expr> {
+pub fn expr_from_name(name: &str, args: Vec<Expr>, config: Option<&ConfigOptions>) -> Result<Expr> {
     match name {
         "map_entries" => {
             ensure_exact_args(&args, 1, name)?;
@@ -153,9 +149,7 @@ pub fn expr_from_name(
         }
         _ => {
             let Some(spec) = resolve_scalar_udf(name) else {
-                return Err(DataFusionError::Plan(format!(
-                    "Unknown scalar UDF: {name}"
-                )));
+                return Err(DataFusionError::Plan(format!("Unknown scalar UDF: {name}")));
             };
             let mut udf = (spec.builder)();
             if let Some(config) = config {

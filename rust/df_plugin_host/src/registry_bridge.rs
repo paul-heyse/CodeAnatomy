@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use abi_stable::std_types::{ROption, RResult, RString, RStr};
+use abi_stable::std_types::{ROption, RResult, RStr, RString};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
@@ -91,12 +91,7 @@ impl PluginHandle {
         if !exports.table_provider_names.is_empty() {
             self.require_capability(caps::TABLE_PROVIDER, "table_provider")?;
         }
-        let requested = table_names.map(|names| {
-            names
-                .iter()
-                .cloned()
-                .collect::<HashSet<_>>()
-        });
+        let requested = table_names.map(|names| names.iter().cloned().collect::<HashSet<_>>());
         let mut found = HashSet::new();
         for name in exports.table_provider_names.iter() {
             let name_str = name.to_string();

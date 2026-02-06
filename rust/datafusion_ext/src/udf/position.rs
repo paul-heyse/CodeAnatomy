@@ -11,8 +11,8 @@ use crate::compat::{
     Signature, TypeSignature, Volatility,
 };
 use crate::udf::common::{
-    scalar_str, signature_with_names, string_array_any, string_int_string_signature, ENC_UTF16,
-    ENC_UTF32, ENC_UTF8, SignatureEqHash,
+    scalar_str, signature_with_names, string_array_any, string_int_string_signature,
+    SignatureEqHash, ENC_UTF16, ENC_UTF32, ENC_UTF8,
 };
 
 #[derive(Clone, Copy)]

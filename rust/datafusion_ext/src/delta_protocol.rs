@@ -85,16 +85,14 @@ pub fn protocol_gate(
         }
     }
     let reader_features: HashSet<String> = snapshot.reader_features.iter().cloned().collect();
-    let required_reader: HashSet<String> =
-        gate.required_reader_features.iter().cloned().collect();
+    let required_reader: HashSet<String> = gate.required_reader_features.iter().cloned().collect();
     if !required_reader.is_subset(&reader_features) {
         return Err(DeltaTableError::Generic(
             "Delta reader feature gate failed.".to_owned(),
         ));
     }
     let writer_features: HashSet<String> = snapshot.writer_features.iter().cloned().collect();
-    let required_writer: HashSet<String> =
-        gate.required_writer_features.iter().cloned().collect();
+    let required_writer: HashSet<String> = gate.required_writer_features.iter().cloned().collect();
     if !required_writer.is_subset(&writer_features) {
         return Err(DeltaTableError::Generic(
             "Delta writer feature gate failed.".to_owned(),
@@ -136,16 +134,14 @@ pub fn protocol_gate_snapshot(
         }
     }
     let reader_features: HashSet<String> = snapshot.reader_features.iter().cloned().collect();
-    let required_reader: HashSet<String> =
-        gate.required_reader_features.iter().cloned().collect();
+    let required_reader: HashSet<String> = gate.required_reader_features.iter().cloned().collect();
     if !required_reader.is_subset(&reader_features) {
         return Err(DeltaTableError::Generic(
             "Delta reader feature gate failed.".to_owned(),
         ));
     }
     let writer_features: HashSet<String> = snapshot.writer_features.iter().cloned().collect();
-    let required_writer: HashSet<String> =
-        gate.required_writer_features.iter().cloned().collect();
+    let required_writer: HashSet<String> = gate.required_writer_features.iter().cloned().collect();
     if !required_writer.is_subset(&writer_features) {
         return Err(DeltaTableError::Generic(
             "Delta writer feature gate failed.".to_owned(),
@@ -158,10 +154,9 @@ pub fn validate_protocol_gate_payload(
     snapshot_msgpack: &[u8],
     gate_msgpack: &[u8],
 ) -> Result<(), DeltaTableError> {
-    let snapshot: DeltaProtocolSnapshotPayload =
-        from_slice(snapshot_msgpack).map_err(|err| {
-            DeltaTableError::Generic(format!("Failed to decode Delta snapshot: {err}"))
-        })?;
+    let snapshot: DeltaProtocolSnapshotPayload = from_slice(snapshot_msgpack).map_err(|err| {
+        DeltaTableError::Generic(format!("Failed to decode Delta snapshot: {err}"))
+    })?;
     let gate: DeltaFeatureGate = from_slice(gate_msgpack).map_err(|err| {
         DeltaTableError::Generic(format!("Failed to decode Delta feature gate: {err}"))
     })?;

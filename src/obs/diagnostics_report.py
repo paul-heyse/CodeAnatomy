@@ -9,6 +9,11 @@ from pathlib import Path
 from statistics import mean
 from typing import TextIO
 
+from obs.runtime_capabilities_summary import (
+    collect_runtime_capability_events,
+    runtime_capability_summary_payload,
+)
+
 
 @dataclass(frozen=True)
 class DiagnosticsReport:
@@ -257,6 +262,12 @@ def _write_runtime_capabilities(
         "delta_compatible",
         "delta_probe_result",
         "delta_ctx_kind",
+        "execution_metrics_rows",
+        "execution_memory_reserved_bytes",
+        "execution_metadata_cache_entries",
+        "execution_metadata_cache_hits",
+        "execution_list_files_cache_entries",
+        "execution_statistics_cache_entries",
     ):
         value = runtime_capabilities.get(key)
         if value is None:
@@ -543,56 +554,8 @@ def _provider_mode_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, ob
 
 
 def _runtime_capability_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:
-    rows = _event_rows(logs, "datafusion_runtime_capabilities_v1")
-    if not rows:
-        extension_rows = _event_rows(logs, "datafusion_extension_parity_v1")
-        for row in extension_rows:
-            payload = row.get("runtime_capabilities")
-            if isinstance(payload, Mapping):
-                rows.append(payload)
-    if not rows:
-        service_rows = _event_rows(logs, "delta_service_provider_v1")
-        for row in service_rows:
-            rows.append(
-                {
-                    "event_time_unix_ms": row.get("event_time_unix_ms"),
-                    "strict_native_provider_enabled": row.get("strict_native_provider_enabled"),
-                    "delta_available": row.get("available"),
-                    "delta_compatible": row.get("compatible"),
-                    "delta_probe_result": row.get("probe_result"),
-                    "delta_ctx_kind": row.get("ctx_kind"),
-                    "delta_module": row.get("module"),
-                }
-            )
-    if not rows:
-        return {"total": 0}
-    latest = max(
-        rows,
-        key=_event_time_unix_ms,
-    )
-    plugin_path = None
-    plugin_manifest = latest.get("plugin_manifest")
-    if isinstance(plugin_manifest, Mapping):
-        path_value = plugin_manifest.get("plugin_path")
-        if isinstance(path_value, str):
-            plugin_path = path_value
-    return {
-        "total": len(rows),
-        "strict_native_provider_enabled": latest.get("strict_native_provider_enabled"),
-        "delta_available": latest.get("delta_available"),
-        "delta_compatible": latest.get("delta_compatible"),
-        "delta_probe_result": latest.get("delta_probe_result"),
-        "delta_ctx_kind": latest.get("delta_ctx_kind"),
-        "delta_module": latest.get("delta_module"),
-        "plugin_path": plugin_path,
-    }
-
-
-def _event_time_unix_ms(row: Mapping[str, object]) -> int:
-    value = row.get("event_time_unix_ms")
-    if isinstance(value, int):
-        return value
-    return 0
+    events = collect_runtime_capability_events(logs)
+    return runtime_capability_summary_payload(events)
 
 
 def _delta_log_health_summary(logs: Sequence[Mapping[str, object]]) -> dict[str, object]:

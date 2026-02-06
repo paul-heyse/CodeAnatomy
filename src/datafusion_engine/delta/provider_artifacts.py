@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from datafusion_engine.delta.scan_config import delta_scan_config_snapshot_from_options
@@ -13,7 +14,6 @@ from utils.hashing import hash_msgpack_canonical
 from utils.value_coercion import coerce_int
 
 if TYPE_CHECKING:
-    from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
     from schema_spec.system import DeltaScanOptions
 
 
@@ -70,37 +70,194 @@ class DeltaProviderBuildResult(StructBaseStrict, frozen=True):
         return {key: value for key, value in normalized.items() if value is not None}
 
 
-def build_delta_provider_build_result(  # noqa: PLR0913
-    *,
-    table_uri: str | None,
-    dataset_format: str | None,
-    provider_kind: str | None,
-    dataset_name: str | None = None,
-    provider_mode: str | None = None,
-    strict_native_provider_enabled: bool | None = None,
-    strict_native_provider_violation: bool | None = None,
-    ffi_table_provider: bool | None = None,
-    scan_files_requested: bool | None = None,
-    scan_files_count: int | None = None,
-    predicate: str | None = None,
-    compatibility: DeltaExtensionCompatibility | None = None,
-    registration_path: str | None = None,
-    delta_version: int | None = None,
-    delta_timestamp: str | None = None,
-    delta_log_storage_options: Mapping[str, str] | None = None,
-    delta_storage_options: Mapping[str, str] | None = None,
-    delta_scan_options: DeltaScanOptions | None = None,
-    delta_scan_effective: Mapping[str, object] | None = None,
-    delta_scan_snapshot: object | None = None,
-    delta_scan_identity_hash: str | None = None,
-    delta_snapshot: Mapping[str, object] | None = None,
-    delta_scan_ignored: bool | None = None,
-    delta_pruning_predicate: str | None = None,
-    delta_pruning_error: str | None = None,
-    delta_pruning_applied: bool | None = None,
-    delta_pruned_files: int | None = None,
-    include_event_metadata: bool = False,
-    run_id: str | None = None,
+@dataclass(frozen=True)
+class DeltaProviderBuildRequest:
+    """Input request for canonical Delta provider artifact construction."""
+
+    table_uri: str | None
+    dataset_format: str | None
+    provider_kind: str | None
+    dataset_name: str | None = None
+    provider_mode: str | None = None
+    strict_native_provider_enabled: bool | None = None
+    strict_native_provider_violation: bool | None = None
+    ffi_table_provider: bool | None = None
+    scan_files_requested: bool | None = None
+    scan_files_count: int | None = None
+    predicate: str | None = None
+    compatibility: object | None = None
+    registration_path: str | None = None
+    delta_version: int | None = None
+    delta_timestamp: str | None = None
+    delta_log_storage_options: Mapping[str, str] | None = None
+    delta_storage_options: Mapping[str, str] | None = None
+    delta_scan_options: DeltaScanOptions | None = None
+    delta_scan_effective: Mapping[str, object] | None = None
+    delta_scan_snapshot: object | None = None
+    delta_scan_identity_hash: str | None = None
+    delta_snapshot: Mapping[str, object] | None = None
+    delta_scan_ignored: bool | None = None
+    delta_pruning_predicate: str | None = None
+    delta_pruning_error: str | None = None
+    delta_pruning_applied: bool | None = None
+    delta_pruned_files: int | None = None
+    include_event_metadata: bool = False
+    run_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RegistrationProviderArtifactInput:
+    """Input adapter for dataset-registration provider artifact derivation."""
+
+    table_uri: str
+    dataset_format: str
+    provider_kind: str
+    compatibility: object | None
+    context: object
+
+
+@dataclass(frozen=True)
+class ServiceProviderArtifactInput:
+    """Input adapter for Delta-service provider artifact derivation."""
+
+    request: object
+    compatibility: object | None
+    provider_mode: str
+    strict_native_provider_enabled: bool
+    strict_native_provider_violation: bool
+    include_event_metadata: bool
+    run_id: str | None
+
+
+def provider_build_request_from_registration_context(
+    source: RegistrationProviderArtifactInput,
+) -> DeltaProviderBuildRequest:
+    """Build a provider artifact request from dataset-registration context.
+
+    Returns:
+    -------
+    DeltaProviderBuildRequest
+        Normalized provider-build request.
+    """
+    context = source.context
+    add_actions = getattr(context, "add_actions", None)
+    delta_scan = getattr(context, "delta_scan", None)
+    registration_path = _read_attr(context, "registration_path")
+    registration_is_ddl = registration_path == "ddl"
+    pruned_files_count = len(add_actions) if isinstance(add_actions, Sequence) else None
+    pruning_applied = add_actions is not None
+    delta_scan_ignored = registration_is_ddl and delta_scan is not None
+    return DeltaProviderBuildRequest(
+        table_uri=source.table_uri,
+        dataset_format=source.dataset_format,
+        provider_kind=source.provider_kind,
+        dataset_name=_as_optional_str(_read_attr(context, "dataset_name")),
+        provider_mode=_as_optional_str(_read_attr(context, "provider_mode")),
+        strict_native_provider_enabled=_as_optional_bool(
+            _read_attr(context, "strict_native_provider_enabled")
+        ),
+        strict_native_provider_violation=_as_optional_bool(
+            _read_attr(context, "strict_native_provider_violation")
+        ),
+        ffi_table_provider=_as_optional_bool(_read_attr(context, "ffi_table_provider")),
+        predicate=_as_optional_str(_read_attr(context, "predicate")),
+        compatibility=source.compatibility,
+        registration_path=_as_optional_str(registration_path),
+        delta_scan_options=cast("DeltaScanOptions | None", delta_scan),
+        delta_scan_effective=_as_mapping(_read_attr(context, "delta_scan_effective")),
+        delta_scan_snapshot=_read_attr(context, "delta_scan_snapshot"),
+        delta_scan_identity_hash=_as_optional_str(
+            _read_attr(context, "delta_scan_identity_hash")
+        ),
+        delta_snapshot=_as_mapping(_read_attr(context, "snapshot")),
+        delta_scan_ignored=delta_scan_ignored,
+        delta_pruning_predicate=_as_optional_str(_read_attr(context, "predicate")),
+        delta_pruning_error=_as_optional_str(_read_attr(context, "predicate_error")),
+        delta_pruning_applied=pruning_applied,
+        delta_pruned_files=pruned_files_count,
+    )
+
+
+def provider_build_request_from_service_context(
+    source: ServiceProviderArtifactInput,
+) -> DeltaProviderBuildRequest:
+    """Build a provider artifact request from Delta service context.
+
+    Returns:
+    -------
+    DeltaProviderBuildRequest
+        Normalized provider-build request.
+    """
+    request = source.request
+    location = _read_attr(request, "location")
+    resolution = _read_attr(request, "resolution")
+    scan_files = _read_attr(request, "scan_files")
+    add_actions = _read_attr(resolution, "add_actions")
+    location_path = _as_optional_str(_read_attr(location, "path"))
+    location_format = _as_optional_str(_read_attr(location, "format"))
+    provider_kind = _as_optional_str(_read_attr(resolution, "provider_kind"))
+    if location_path is None:
+        location_path = ""
+    return DeltaProviderBuildRequest(
+        table_uri=location_path,
+        dataset_format=location_format,
+        provider_kind=provider_kind,
+        dataset_name=_as_optional_str(_read_attr(request, "name")),
+        provider_mode=source.provider_mode,
+        strict_native_provider_enabled=source.strict_native_provider_enabled,
+        strict_native_provider_violation=source.strict_native_provider_violation,
+        scan_files_requested=bool(scan_files),
+        scan_files_count=len(scan_files) if isinstance(scan_files, Sequence) else 0,
+        predicate=_as_optional_str(_read_attr(request, "predicate")),
+        compatibility=source.compatibility,
+        delta_version=coerce_int(_read_attr(location, "delta_version")),
+        delta_timestamp=_as_optional_str(_read_attr(location, "delta_timestamp")),
+        delta_log_storage_options=(
+            dict(log_options) if isinstance(log_options := _read_attr(location, "delta_log_storage_options"), Mapping) else None
+        ),
+        delta_storage_options=(
+            dict(storage_options)
+            if isinstance(storage_options := _read_attr(location, "storage_options"), Mapping)
+            else None
+        ),
+        delta_scan_options=cast("DeltaScanOptions | None", _read_attr(resolution, "delta_scan_options")),
+        delta_scan_effective=_as_mapping(_read_attr(resolution, "delta_scan_effective")),
+        delta_scan_snapshot=_read_attr(resolution, "delta_scan_snapshot"),
+        delta_scan_identity_hash=_as_optional_str(_read_attr(resolution, "delta_scan_identity_hash")),
+        delta_snapshot=_as_mapping(_read_attr(resolution, "delta_snapshot")),
+        delta_pruning_predicate=_as_optional_str(_read_attr(request, "predicate")),
+        delta_pruning_error=_as_optional_str(_read_attr(resolution, "predicate_error")),
+        delta_pruning_applied=add_actions is not None,
+        delta_pruned_files=len(add_actions) if isinstance(add_actions, Sequence) else None,
+        include_event_metadata=source.include_event_metadata,
+        run_id=source.run_id,
+    )
+
+
+def _as_optional_str(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _as_optional_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return cast("Mapping[str, object]", value)
+    return None
+
+
+def _read_attr(value: object, name: str) -> object:
+    return getattr(value, name, None)
+
+
+def build_delta_provider_build_result(
+    request: DeltaProviderBuildRequest,
 ) -> DeltaProviderBuildResult:
     """Build a canonical Delta provider artifact payload object.
 
@@ -109,54 +266,54 @@ def build_delta_provider_build_result(  # noqa: PLR0913
     DeltaProviderBuildResult
         Canonical Delta provider artifact payload.
     """
-    normalized_scan = delta_scan_payload(delta_scan_options)
-    normalized_scan_snapshot = delta_scan_snapshot_payload(delta_scan_snapshot)
+    normalized_scan = delta_scan_payload(request.delta_scan_options)
+    normalized_scan_snapshot = delta_scan_snapshot_payload(request.delta_scan_snapshot)
     snapshot_key = delta_snapshot_key_payload(
-        table_uri=table_uri,
-        snapshot=delta_snapshot,
+        table_uri=request.table_uri,
+        snapshot=request.delta_snapshot,
     )
     storage_profile = storage_profile_fingerprint(
-        table_uri=table_uri,
-        storage_options=delta_storage_options,
-        log_storage_options=delta_log_storage_options,
+        table_uri=request.table_uri,
+        storage_options=request.delta_storage_options,
+        log_storage_options=request.delta_log_storage_options,
     )
     return DeltaProviderBuildResult(
-        event_time_unix_ms=int(time.time() * 1000) if include_event_metadata else None,
-        run_id=run_id if include_event_metadata else None,
-        dataset_name=dataset_name,
-        path=table_uri,
-        table_uri=table_uri,
-        format=dataset_format,
-        provider_kind=provider_kind,
-        provider_mode=provider_mode,
-        strict_native_provider_enabled=strict_native_provider_enabled,
-        strict_native_provider_violation=strict_native_provider_violation,
-        ffi_table_provider=ffi_table_provider,
-        scan_files_requested=scan_files_requested,
-        scan_files_count=scan_files_count,
-        predicate=predicate,
-        module=getattr(compatibility, "module", None),
-        entrypoint=getattr(compatibility, "entrypoint", None),
-        ctx_kind=getattr(compatibility, "ctx_kind", None),
-        probe_result=getattr(compatibility, "probe_result", None),
-        compatible=getattr(compatibility, "compatible", None),
-        available=getattr(compatibility, "available", None),
-        error=getattr(compatibility, "error", None),
-        registration_path=registration_path,
-        delta_version=delta_version,
-        delta_timestamp=delta_timestamp,
-        delta_log_storage_options=delta_log_storage_options,
-        delta_storage_options=delta_storage_options,
+        event_time_unix_ms=int(time.time() * 1000) if request.include_event_metadata else None,
+        run_id=request.run_id if request.include_event_metadata else None,
+        dataset_name=request.dataset_name,
+        path=request.table_uri,
+        table_uri=request.table_uri,
+        format=request.dataset_format,
+        provider_kind=request.provider_kind,
+        provider_mode=request.provider_mode,
+        strict_native_provider_enabled=request.strict_native_provider_enabled,
+        strict_native_provider_violation=request.strict_native_provider_violation,
+        ffi_table_provider=request.ffi_table_provider,
+        scan_files_requested=request.scan_files_requested,
+        scan_files_count=request.scan_files_count,
+        predicate=request.predicate,
+        module=getattr(request.compatibility, "module", None),
+        entrypoint=getattr(request.compatibility, "entrypoint", None),
+        ctx_kind=getattr(request.compatibility, "ctx_kind", None),
+        probe_result=getattr(request.compatibility, "probe_result", None),
+        compatible=getattr(request.compatibility, "compatible", None),
+        available=getattr(request.compatibility, "available", None),
+        error=getattr(request.compatibility, "error", None),
+        registration_path=request.registration_path,
+        delta_version=request.delta_version,
+        delta_timestamp=request.delta_timestamp,
+        delta_log_storage_options=request.delta_log_storage_options,
+        delta_storage_options=request.delta_storage_options,
         delta_scan=normalized_scan,
-        delta_scan_effective=delta_scan_effective,
+        delta_scan_effective=request.delta_scan_effective,
         delta_scan_snapshot=normalized_scan_snapshot,
-        delta_scan_identity_hash=delta_scan_identity_hash,
-        delta_snapshot=delta_snapshot,
-        delta_scan_ignored=delta_scan_ignored,
-        delta_pruning_predicate=delta_pruning_predicate,
-        delta_pruning_error=delta_pruning_error,
-        delta_pruning_applied=delta_pruning_applied,
-        delta_pruned_files=delta_pruned_files,
+        delta_scan_identity_hash=request.delta_scan_identity_hash,
+        delta_snapshot=request.delta_snapshot,
+        delta_scan_ignored=request.delta_scan_ignored,
+        delta_pruning_predicate=request.delta_pruning_predicate,
+        delta_pruning_error=request.delta_pruning_error,
+        delta_pruning_applied=request.delta_pruning_applied,
+        delta_pruned_files=request.delta_pruned_files,
         snapshot_key=snapshot_key,
         storage_profile_fingerprint=storage_profile,
     )
@@ -220,14 +377,19 @@ def storage_profile_fingerprint(
             (str(k), str(v)) for k, v in (log_storage_options or {}).items()
         ),
     }
-    return cast("str", hash_msgpack_canonical(payload)[:16])
+    return hash_msgpack_canonical(payload)[:16]
 
 
 __all__ = [
+    "DeltaProviderBuildRequest",
     "DeltaProviderBuildResult",
+    "RegistrationProviderArtifactInput",
+    "ServiceProviderArtifactInput",
     "build_delta_provider_build_result",
     "delta_scan_payload",
     "delta_scan_snapshot_payload",
     "delta_snapshot_key_payload",
+    "provider_build_request_from_registration_context",
+    "provider_build_request_from_service_context",
     "storage_profile_fingerprint",
 ]

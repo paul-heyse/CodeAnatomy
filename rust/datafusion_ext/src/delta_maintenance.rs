@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use crate::delta_control_plane::load_delta_table;
 use crate::delta_mutations::commit_properties;
-use crate::DeltaCommitOptions;
 use crate::delta_protocol::{delta_snapshot_info, protocol_gate, DeltaSnapshotInfo};
+use crate::DeltaCommitOptions;
 use crate::DeltaFeatureGate;
 
 #[derive(Debug, Clone)]
@@ -182,7 +182,9 @@ pub async fn delta_restore(
     )
     .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
-    let mut builder = table.restore().with_commit_properties(commit_properties(commit_options));
+    let mut builder = table
+        .restore()
+        .with_commit_properties(commit_properties(commit_options));
     if let Some(restore_version) = restore_version {
         builder = builder.with_version_to_restore(restore_version);
     }

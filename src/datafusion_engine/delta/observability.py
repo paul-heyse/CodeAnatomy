@@ -475,15 +475,49 @@ def _ensure_observability_table(
     has_delta_log = delta_log_path.exists() and any(delta_log_path.glob("*.json"))
     if not has_delta_log:
         profile.record_artifact(
-            "delta_observability_missing_v1",
+            "delta_observability_bootstrap_started_v1",
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": name,
                 "path": str(table_path),
-                "error": "Delta log missing; observability table bootstrap skipped.",
+                "operation": "delta_observability_bootstrap",
             },
         )
-        return None
+        try:
+            _bootstrap_observability_table(
+                ctx,
+                profile,
+                table_path=table_path,
+                schema=schema,
+                operation="delta_observability_bootstrap",
+            )
+        except (
+            RuntimeError,
+            TypeError,
+            ValueError,
+            OSError,
+            ImportError,
+        ) as exc:
+            profile.record_artifact(
+                "delta_observability_bootstrap_failed_v1",
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "table": name,
+                    "path": str(table_path),
+                    "operation": "delta_observability_bootstrap",
+                    "error": str(exc),
+                },
+            )
+            return None
+        profile.record_artifact(
+            "delta_observability_bootstrap_completed_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": name,
+                "path": str(table_path),
+                "operation": "delta_observability_bootstrap",
+            },
+        )
     if not _ensure_observability_schema(
         ctx,
         profile,
@@ -519,6 +553,34 @@ def _ensure_observability_table(
         )
         return None
     return location
+
+
+def ensure_delta_observability_tables(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+) -> dict[str, DatasetLocation | None]:
+    """Ensure all Delta observability tables exist and are registered.
+
+    Returns:
+    -------
+    dict[str, DatasetLocation | None]
+        Mapping of observability table names to resolved locations.
+    """
+    specs = (
+        (DELTA_SNAPSHOT_TABLE_NAME, _delta_snapshot_schema()),
+        (DELTA_MUTATION_TABLE_NAME, _delta_mutation_schema()),
+        (DELTA_SCAN_PLAN_TABLE_NAME, _delta_scan_plan_schema()),
+        (DELTA_MAINTENANCE_TABLE_NAME, _delta_maintenance_schema()),
+    )
+    return {
+        name: _ensure_observability_table(
+            ctx,
+            profile,
+            name=name,
+            schema=schema,
+        )
+        for name, schema in specs
+    }
 
 
 def _ensure_observability_schema(
@@ -885,6 +947,7 @@ __all__ = [
     "DeltaMutationArtifact",
     "DeltaScanPlanArtifact",
     "DeltaSnapshotArtifact",
+    "ensure_delta_observability_tables",
     "record_delta_feature_state",
     "record_delta_maintenance",
     "record_delta_mutation",

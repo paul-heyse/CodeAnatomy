@@ -7739,6 +7739,7 @@ __all__ = [
     "PreparedStatementSpec",
     "SchemaHardeningProfile",
     "SessionRuntime",
+    "ZeroRowBootstrapConfig",
     "align_table_to_schema",
     "apply_execution_label",
     "apply_execution_policy",

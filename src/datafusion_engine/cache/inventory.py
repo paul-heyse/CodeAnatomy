@@ -100,15 +100,39 @@ def ensure_cache_inventory_table(
     has_delta_log = delta_log_path.exists() and any(delta_log_path.glob("*.json"))
     if not has_delta_log:
         profile.record_artifact(
-            "cache_inventory_missing_v1",
+            "cache_inventory_bootstrap_started_v1",
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": CACHE_INVENTORY_TABLE_NAME,
                 "path": str(table_path),
-                "error": "Delta log missing; cache inventory bootstrap skipped.",
             },
         )
-        return None
+        try:
+            _bootstrap_cache_inventory_table(
+                ctx,
+                profile,
+                table_path=table_path,
+                schema=_cache_inventory_schema(),
+            )
+        except (RuntimeError, TypeError, ValueError, OSError, ImportError) as exc:
+            profile.record_artifact(
+                "cache_inventory_bootstrap_failed_v1",
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "table": CACHE_INVENTORY_TABLE_NAME,
+                    "path": str(table_path),
+                    "error": str(exc),
+                },
+            )
+            return None
+        profile.record_artifact(
+            "cache_inventory_bootstrap_completed_v1",
+            {
+                "event_time_unix_ms": int(time.time() * 1000),
+                "table": CACHE_INVENTORY_TABLE_NAME,
+                "path": str(table_path),
+            },
+        )
     location = DatasetLocation(path=str(table_path), format="delta")
     try:
         register_dataset_df(
@@ -204,13 +228,7 @@ def _bootstrap_cache_inventory_table(
 ) -> None:
     _ = (ctx, profile)
     table_path.parent.mkdir(parents=True, exist_ok=True)
-    bootstrap_row = {
-        "event_time_unix_ms": 0,
-        "view_name": "__bootstrap__",
-        "cache_policy": "bootstrap",
-        "cache_path": "",
-    }
-    table = pa.Table.from_pylist([bootstrap_row], schema=schema)
+    table = pa.Table.from_pylist([], schema=schema)
     from deltalake.writer import write_deltalake
 
     write_deltalake(

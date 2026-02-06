@@ -6,8 +6,13 @@ DataFusion type system and UDF availability, focusing on error message quality.
 
 from __future__ import annotations
 
+import pyarrow as pa
 import pytest
 
+from datafusion_engine.arrow.build import empty_table
+from datafusion_engine.arrow.semantic import SEMANTIC_TYPE_META
+from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.schema.registry import validate_semantic_types
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from tests.test_helpers.datafusion_runtime import df_ctx
 
@@ -105,6 +110,35 @@ def test_missing_udf_return_metadata() -> None:
             snapshot,
             required=required_udfs,
         )
+
+
+@pytest.mark.integration
+def test_semantic_type_validation_accepts_zero_row_metadata_table(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> None:
+    """Semantic type validation should pass for empty metadata-bearing tables."""
+    ctx = runtime_profile.session_context()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    adapter.register_arrow_table(
+        "cpg_nodes",
+        empty_table(
+            pa.schema(
+                [
+                    pa.field(
+                        "node_id",
+                        pa.string(),
+                        metadata={SEMANTIC_TYPE_META: b"NodeId"},
+                    )
+                ]
+            )
+        ),
+        overwrite=True,
+    )
+    validate_semantic_types(
+        ctx,
+        table_names=("cpg_nodes",),
+        allow_row_probe_fallback=False,
+    )
 
 
 @pytest.mark.integration

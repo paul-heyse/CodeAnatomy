@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import pyarrow as pa
+import pytest
 
 from arrow_utils.core.schema_constants import KEY_FIELDS_META, REQUIRED_NON_NULL_META
+from datafusion_engine.arrow.semantic import SEMANTIC_TYPE_META
 from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.arrow.metadata_codec import encode_metadata_list
 from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.schema import registry as schema_registry
 from datafusion_engine.schema.registry import (
     AST_VIEW_NAMES,
     DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA,
@@ -18,6 +21,7 @@ from datafusion_engine.schema.registry import (
     LIBCST_FILES_SCHEMA,
     SYMTABLE_FILES_SCHEMA,
     nested_view_spec,
+    validate_semantic_types,
     validate_ast_views,
     validate_required_bytecode_functions,
     validate_required_cst_functions,
@@ -152,3 +156,49 @@ def test_hamilton_diagnostics_schemas_cover_plan_events() -> None:
         "event_payload_msgpack",
         "event_payload_hash",
     }.issubset(events_fields)
+
+
+def test_semantic_type_validation_uses_schema_metadata_on_zero_rows() -> None:
+    """Semantic type checks should pass on empty tables with metadata."""
+    profile = df_profile()
+    ctx = profile.session_context()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
+    schema = pa.schema(
+        [
+            pa.field(
+                "node_id",
+                pa.string(),
+                metadata={SEMANTIC_TYPE_META: b"NodeId"},
+            )
+        ]
+    )
+    adapter.register_arrow_table("cpg_nodes", empty_table(schema), overwrite=True)
+    validate_semantic_types(
+        ctx,
+        table_names=("cpg_nodes",),
+        allow_row_probe_fallback=False,
+    )
+
+
+def test_semantic_type_validation_raises_when_metadata_missing_and_no_row_fallback() -> None:
+    """Semantic type checks should fail without schema metadata in zero-row mode."""
+    profile = df_profile()
+    ctx = profile.session_context()
+    adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
+    schema = pa.schema([pa.field("node_id", pa.string())])
+    adapter.register_arrow_table("cpg_nodes", empty_table(schema), overwrite=True)
+    with pytest.raises(ValueError, match="Missing semantic type metadata"):
+        validate_semantic_types(
+            ctx,
+            table_names=("cpg_nodes",),
+            allow_row_probe_fallback=False,
+        )
+
+
+def test_semantic_validation_table_names_use_canonical_cpg_outputs() -> None:
+    """Semantic validation tables should only include canonical CPG outputs."""
+    tables = schema_registry._semantic_validation_tables()  # noqa: SLF001
+    assert "cpg_nodes" in tables
+    assert "cpg_edges" in tables
+    assert "cpg_nodes_v1" not in tables
+    assert "cpg_edges_v1" not in tables

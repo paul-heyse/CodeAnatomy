@@ -609,6 +609,51 @@ class TestSmartSearch:
         matched_files = cast("int", summary["matched_files"])
         assert scanned_files >= matched_files
 
+    def test_smart_search_classification_uses_fixed_worker_cap(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Classification path should use at most four worker processes."""
+        import importlib
+        from collections.abc import Callable, Iterable
+        from typing import Self
+
+        for idx in range(8):
+            (tmp_path / f"mod_{idx}.py").write_text(
+                "def build_graph():\n    return 1\n",
+                encoding="utf-8",
+            )
+
+        smart_search_module = importlib.import_module("tools.cq.search.smart_search")
+        calls: dict[str, object] = {}
+        class FakePool:
+            def __init__(self, *, max_workers: int) -> None:
+                calls["max_workers"] = max_workers
+
+            def __enter__(self) -> Self:
+                return self
+
+            def __exit__(self, *_args: object) -> bool:
+                return False
+
+            def map(
+                self,
+                fn: Callable[
+                    [tuple[str, str, list[tuple[int, RawMatch]]]],
+                    list[tuple[int, EnrichedMatch]],
+                ],
+                tasks: Iterable[tuple[str, str, list[tuple[int, RawMatch]]]],
+            ) -> list[list[tuple[int, EnrichedMatch]]]:
+                calls["map_called"] = True
+                return [fn(task) for task in tasks]
+
+        monkeypatch.setattr(smart_search_module, "ProcessPoolExecutor", FakePool)
+        clear_caches()
+        _ = smart_search_module.smart_search(tmp_path, "build_graph", lang_scope="python")
+        assert calls["map_called"] is True
+        assert calls["max_workers"] == 4
+
     def test_smart_search_with_include_globs(self, sample_repo: Path) -> None:
         """Test smart search with include globs."""
         clear_caches()
@@ -659,6 +704,36 @@ class TestSmartSearch:
         assert result.evidence
         assert result.evidence[0].details.get("language") == "python"
 
+    def test_context_snippet_keeps_header_and_anchor_block(self, tmp_path: Path) -> None:
+        """Context snippets should preserve function top and the match anchor block."""
+        filler = "\n".join(f"    filler_{i} = {i}" for i in range(40))
+        (tmp_path / "module.py").write_text(
+            "\n".join(
+                [
+                    "def outer():",
+                    '    """docstring should be omitted"""',
+                    "    head = 1",
+                    filler,
+                    "    if condition:",
+                    "        value = 10",
+                    "        target_marker = value",
+                    "    tail = head",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        clear_caches()
+        result = smart_search(tmp_path, "target_marker", lang_scope="python")
+        assert result.evidence
+        detail_data = result.evidence[0].details.data
+        snippet = detail_data.get("context_snippet")
+        assert isinstance(snippet, str)
+        assert "def outer():" in snippet
+        assert "if condition:" in snippet
+        assert "target_marker = value" in snippet
+        assert "docstring should be omitted" not in snippet
+
     def test_cross_language_warning_for_python_intent_rust_only(self, tmp_path: Path) -> None:
         """Python-oriented text with Rust-only matches should emit a warning."""
         (tmp_path / "only.rs").write_text("// decorator\nfn f() {}\n", encoding="utf-8")
@@ -686,7 +761,23 @@ class TestSmartSearch:
         assert result.evidence
         detail_data = result.evidence[0].details.data if result.evidence[0].details else None
         assert isinstance(detail_data, dict)
-        assert "rust_tree_sitter" in detail_data
+        enrichment = detail_data.get("enrichment")
+        assert isinstance(enrichment, dict)
+        assert enrichment.get("language") == "rust"
+        rust_payload = enrichment.get("rust")
+        assert isinstance(rust_payload, dict)
+        assert rust_payload.get("enrichment_status") in {"applied", "degraded", "skipped"}
+
+    def test_python_enrichment_dictionary_attached(self, sample_repo: Path) -> None:
+        """Python findings should expose structured enrichment payloads."""
+        clear_caches()
+        result = smart_search(sample_repo, "build_graph", lang_scope="python")
+        assert result.evidence
+        detail_data = result.evidence[0].details.data
+        enrichment = detail_data.get("enrichment")
+        assert isinstance(enrichment, dict)
+        assert enrichment.get("language") == "python"
+        assert isinstance(enrichment.get("python"), dict)
 
     def test_rust_tree_sitter_fail_open(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

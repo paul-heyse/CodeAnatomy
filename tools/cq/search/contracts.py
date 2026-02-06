@@ -14,6 +14,29 @@ from tools.cq.query.language import QueryLanguage, QueryLanguageScope
 Severity = Literal["info", "warning", "error"]
 
 
+def _coerce_diagnostic_languages(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return [str(item) for item in value]
+
+
+def _coerce_diagnostic_counts(value: object) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str) and isinstance(item, int) and not isinstance(item, bool)
+    }
+
+
+def _coerce_diagnostic_severity(value: object) -> Severity:
+    severity = str(value)
+    if severity in {"info", "warning", "error"}:
+        return cast("Severity", severity)
+    return "info"
+
+
 class LanguagePartitionStats(msgspec.Struct, omit_defaults=True):
     """Per-language summary partition statistics."""
 
@@ -131,46 +154,22 @@ class CrossLanguageDiagnostic(msgspec.Struct, omit_defaults=True):
     capability_level: str | None = None
 
     @classmethod
-    def from_mapping(  # noqa: C901
-        cls, payload: Mapping[str, object] | None
-    ) -> CrossLanguageDiagnostic:
+    def from_mapping(cls, payload: Mapping[str, object] | None) -> CrossLanguageDiagnostic:
         """Create a typed diagnostic from a loose mapping."""
         if payload is None:
             return cls()
         payload_map: Mapping[str, object] = payload
-
-        def _to_languages(value: object) -> list[str]:
-            if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
-                return []
-            return [str(item) for item in value]
-
-        def _to_counts(value: object) -> dict[str, int]:
-            if not isinstance(value, Mapping):
-                return {}
-            counts: dict[str, int] = {}
-            for key, item in value.items():
-                if not isinstance(key, str):
-                    continue
-                if isinstance(item, bool):
-                    continue
-                if isinstance(item, int):
-                    counts[key] = item
-            return counts
-
-        severity_value = str(payload_map.get("severity", "info"))
-        if severity_value not in {"info", "warning", "error"}:
-            severity_value = "info"
 
         feature = payload_map.get("feature")
         language = payload_map.get("language")
         capability_level = payload_map.get("capability_level")
         return cls(
             code=str(payload_map.get("code", "ML000")),
-            severity=cast("Severity", severity_value),
+            severity=_coerce_diagnostic_severity(payload_map.get("severity", "info")),
             message=str(payload_map.get("message", "")),
             intent=str(payload_map.get("intent", "unspecified")),
-            languages=_to_languages(payload_map.get("languages")),
-            counts=_to_counts(payload_map.get("counts")),
+            languages=_coerce_diagnostic_languages(payload_map.get("languages")),
+            counts=_coerce_diagnostic_counts(payload_map.get("counts")),
             remediation=str(payload_map.get("remediation", "")),
             feature=feature if isinstance(feature, str) else None,
             language=language if isinstance(language, str) else None,

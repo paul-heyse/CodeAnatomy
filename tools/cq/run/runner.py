@@ -16,6 +16,7 @@ from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
+from tools.cq.core.requests import MergeResultsRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, mk_result, ms
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
@@ -496,14 +497,16 @@ def _collapse_parent_q_results(
             tc=ctx.toolchain,
         )
         merged = merge_language_cq_results(
-            scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-            results=lang_results,
-            run=run,
-            diagnostics=diagnostics,
-            diagnostic_payloads=diagnostics_to_summary_payload(diagnostics),
-            language_capabilities=build_language_capabilities(
-                lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE
-            ),
+            MergeResultsRequest(
+                scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+                results=lang_results,
+                run=run,
+                diagnostics=diagnostics,
+                diagnostic_payloads=diagnostics_to_summary_payload(diagnostics),
+                language_capabilities=build_language_capabilities(
+                    lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE
+                ),
+            )
         )
         collapsed.append((step_id, merged))
     return collapsed

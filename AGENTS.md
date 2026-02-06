@@ -65,6 +65,9 @@ Smart Search automatically:
 - Hides non-code matches (strings/comments)
 - Suggests follow-up commands
 - Supports Rust via `--lang rust` (default scope is `auto`, which searches Python+Rust)
+- Runs 5-stage enrichment (ast_grep, python_ast, import_detail, libcst, tree_sitter)
+- Tracks cross-source agreement (full/partial/conflict) for confidence
+- Classifies in parallel (up to 4 workers, fail-open)
 
 **CQ-First Policy**
 - Use `/cq search` for code discovery instead of `rg`/`grep`.
@@ -145,6 +148,8 @@ imports, comments, etc.
 - **Non-Code Matches**: Strings/comments (collapsed)
 - **Hot Files**: Files with most matches
 - **Suggested Follow-ups**: Next commands to explore
+- **Enrichment Tables**: Per-finding semantic enrichment (resolution, behavior, structural, agreement)
+- **Enrichment Telemetry**: Pipeline performance (per-stage applied/degraded/skipped/timing)
 
 ### Query Command Examples
 

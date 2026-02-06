@@ -1,18 +1,15 @@
 # cq search
 
+## Code Overview
+- Query: `build_graph`
+- Mode: `identifier`
+- Language Scope: `auto`
+- Top Symbols: N/A — no symbol like matches
+- Top Files: N/A — no anchored matches
+- Match Categories: N/A — no findings
+
 ## Summary
-- **query**: build_graph
-- **mode**: identifier
-- **lang_scope**: auto
-- **language_order**: ["python","rust"]
-- **languages**: {"python":{"caps_hit":"none","matched_files":2,"scanned_files":3,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":4,"truncated":false},"rust":{"caps_hit":"none","matched_files":1,"scanned_files":1,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":1,"truncated":false}}
-- **cross_language_diagnostics**: []
-- **language_capabilities**: {"python":{},"rust":{},"shared":{}}
-- **include**: ["src/**"]
-- **exclude**: ["tests/**"]
-- **pattern**: \bbuild_graph\b
-- **caps_hit**: max_total_matches
-- **scanned_files_is_estimate**: False
+- {"caps_hit":"max_total_matches","cross_language_diagnostics":[],"exclude":["tests/**"],"include":["src/**"],"lang_scope":"auto","language_capabilities":{"python":{},"rust":{},"shared":{}},"language_order":["python","rust"],"languages":{"python":{"caps_hit":"none","matched_files":2,"scanned_files":3,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":4,"truncated":false},"rust":{"caps_hit":"none","matched_files":1,"scanned_files":1,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":1,"truncated":false}},"mode":"identifier","pattern":"\\bbuild_graph\\b","query":"build_graph","scanned_files_is_estimate":false}
 
 ---
 _Completed in 12ms | Schema: cq.v2_

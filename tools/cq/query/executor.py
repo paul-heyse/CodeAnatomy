@@ -21,6 +21,7 @@ from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
+from tools.cq.core.requests import MergeResultsRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -568,12 +569,14 @@ def _merge_auto_scope_results(
         tc=tc,
     )
     return merge_language_cq_results(
-        scope=query.lang_scope,
-        results=results,
-        run=run,
-        diagnostics=diagnostics,
-        diagnostic_payloads=diagnostic_payloads,
-        language_capabilities=language_capabilities,
+        MergeResultsRequest(
+            scope=query.lang_scope,
+            results=results,
+            run=run,
+            diagnostics=diagnostics,
+            diagnostic_payloads=diagnostic_payloads,
+            language_capabilities=language_capabilities,
+        )
     )
 
 

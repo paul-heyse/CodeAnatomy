@@ -1,0 +1,253 @@
+"""Tests for CQ markdown report rendering."""
+
+from __future__ import annotations
+
+import importlib
+import os
+import time
+from collections.abc import Callable, Iterable
+from pathlib import Path
+from typing import Self
+
+import pytest
+from tools.cq.core.report import render_markdown
+from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
+
+_RenderEnrichTask = tuple[str, str, int, int, str, tuple[str, ...]]
+_RenderEnrichResult = tuple[tuple[str, int, int, str], dict[str, object]]
+
+
+def _run_meta() -> RunMeta:
+    return RunMeta(
+        macro="search",
+        argv=["cq", "search", "build_graph"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=12.0,
+        toolchain={},
+    )
+
+
+def _build_enrichment_result(root: Path, file_count: int) -> CqResult:
+    findings = [
+        Finding(
+            category="callsite",
+            message=f"target in module_{idx}",
+            anchor=Anchor(file=f"src/module_{idx}.py", line=1, col=0),
+            details=DetailPayload.from_legacy(
+                {
+                    "language": "python",
+                    "name": "target",
+                }
+            ),
+        )
+        for idx in range(file_count)
+    ]
+    run = RunMeta(
+        macro="search",
+        argv=["cq", "search", "target"],
+        root=str(root),
+        started_ms=0.0,
+        elapsed_ms=12.0,
+        toolchain={},
+    )
+    return CqResult(run=run, key_findings=findings)
+
+
+def _extract_python_enrichment_pids(result: CqResult) -> set[int]:
+    pids: set[int] = set()
+    for finding in result.key_findings:
+        payloads: list[dict[str, object]] = []
+        direct_python = finding.details.get("python")
+        if isinstance(direct_python, dict):
+            payloads.append(direct_python)
+        python_enrichment = finding.details.get("python_enrichment")
+        if isinstance(python_enrichment, dict):
+            payloads.append(python_enrichment)
+        enrichment = finding.details.get("enrichment")
+        if isinstance(enrichment, dict):
+            nested_python = enrichment.get("python")
+            if isinstance(nested_python, dict):
+                payloads.append(nested_python)
+        for payload in payloads:
+            pid = payload.get("pid")
+            if isinstance(pid, int):
+                pids.add(pid)
+    return pids
+
+
+def _sleeping_pid_worker(
+    task: _RenderEnrichTask,
+) -> _RenderEnrichResult:
+    _root, file, line, col, lang, _candidates = task
+    time.sleep(0.2)
+    return (
+        (file, line, col, lang),
+        {
+            "language": lang,
+            "python": {"pid": os.getpid()},
+        },
+    )
+
+
+def test_render_summary_compacts_output() -> None:
+    result = CqResult(
+        run=_run_meta(),
+        summary={
+            "query": "build_graph",
+            "mode": "identifier",
+            "lang_scope": "auto",
+            "language_order": ["python", "rust"],
+            "languages": {"python": {"total_matches": 1}, "rust": {"total_matches": 0}},
+            "cross_language_diagnostics": [],
+            "language_capabilities": {"python": {}, "rust": {}, "shared": {}},
+            "pattern": r"\bbuild_graph\b",
+        },
+    )
+
+    output = render_markdown(result)
+    assert "## Summary" in output
+    assert "- {" in output
+    assert '"query":"build_graph"' in output
+    assert '"mode":"identifier"' in output
+    assert "- **query**:" not in output
+
+
+def test_render_finding_includes_enrichment_tables() -> None:
+    finding = Finding(
+        category="definition",
+        message="build_graph (src/module.py)",
+        anchor=Anchor(file="src/module.py", line=10),
+        details=DetailPayload.from_legacy(
+            {
+                "language": "python",
+                "context_window": {"start_line": 5, "end_line": 20},
+                "context_snippet": "def build_graph():\n    target = 1",
+                "enrichment": {
+                    "language": "python",
+                    "python": {
+                        "item_role": "free_function",
+                        "enrichment_status": "applied",
+                    },
+                },
+            }
+        ),
+    )
+    result = CqResult(
+        run=_run_meta(),
+        key_findings=[finding],
+        sections=[Section(title="Top Contexts", findings=[finding])],
+    )
+
+    output = render_markdown(result)
+    assert "Code Facts:" in output
+    assert "Identity" in output
+    assert "Interface" in output
+    assert "free_function" in output
+
+
+def test_render_query_finding_attaches_context_and_enrichment(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    src = repo / "src"
+    src.mkdir(parents=True)
+    (src / "module.py").write_text(
+        "def helper():\n"
+        "    return 1\n\n"
+        "def target(value: int) -> int:\n"
+        "    return helper() + value\n",
+        encoding="utf-8",
+    )
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q", "entity=function name=target"],
+        root=str(repo),
+        started_ms=0.0,
+        elapsed_ms=12.0,
+        toolchain={},
+    )
+    finding = Finding(
+        category="definition",
+        message="function: target",
+        anchor=Anchor(file="src/module.py", line=4, col=4),
+        details=DetailPayload.from_legacy({"name": "target"}),
+    )
+    result = CqResult(run=run, key_findings=[finding])
+    output = render_markdown(result)
+    assert "Context (lines" in output
+    assert "Code Facts:" in output
+    assert "Details:" in output
+
+
+def test_render_enrichment_uses_fixed_process_pool_workers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_module = importlib.import_module("tools.cq.core.report")
+    result = _build_enrichment_result(tmp_path, file_count=6)
+
+    calls: dict[str, object] = {}
+
+    class FakePool:
+        def __init__(self, *, max_workers: int) -> None:
+            calls["max_workers"] = max_workers
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> bool:
+            return False
+
+        def map(
+            self,
+            fn: Callable[[_RenderEnrichTask], _RenderEnrichResult],
+            tasks: Iterable[_RenderEnrichTask],
+        ) -> list[_RenderEnrichResult]:
+            calls["map_called"] = True
+            return [fn(task) for task in tasks]
+
+    def _fake_worker(
+        task: _RenderEnrichTask,
+    ) -> _RenderEnrichResult:
+        _root, file, line, col, lang, _candidates = task
+        return (
+            (file, line, col, lang),
+            {
+                "language": lang,
+                "python": {"pid": 7},
+            },
+        )
+
+    monkeypatch.setattr(report_module, "ProcessPoolExecutor", FakePool)
+    monkeypatch.setattr(report_module, "_compute_render_enrichment_worker", _fake_worker)
+
+    render_markdown(result)
+
+    assert calls["map_called"] is True
+    assert calls["max_workers"] == 4
+
+
+def test_render_enrichment_parallelization_workers_1_vs_4(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report_module = importlib.import_module("tools.cq.core.report")
+
+    monkeypatch.setattr(report_module, "_compute_render_enrichment_worker", _sleeping_pid_worker)
+
+    serial_result = _build_enrichment_result(tmp_path, file_count=8)
+    monkeypatch.setattr(report_module, "MAX_RENDER_ENRICH_WORKERS", 1)
+    serial_start = time.perf_counter()
+    render_markdown(serial_result)
+    serial_elapsed = time.perf_counter() - serial_start
+    serial_pids = _extract_python_enrichment_pids(serial_result)
+
+    parallel_result = _build_enrichment_result(tmp_path, file_count=8)
+    monkeypatch.setattr(report_module, "MAX_RENDER_ENRICH_WORKERS", 4)
+    parallel_start = time.perf_counter()
+    render_markdown(parallel_result)
+    parallel_elapsed = time.perf_counter() - parallel_start
+    parallel_pids = _extract_python_enrichment_pids(parallel_result)
+
+    assert len(serial_pids) == 1
+    assert len(parallel_pids) >= 2
+    assert parallel_elapsed < serial_elapsed * 0.8

@@ -10,6 +10,7 @@ from tools.cq.core.multilang_summary import (
     build_multilang_summary,
     partition_stats_from_result_summary,
 )
+from tools.cq.core.requests import MergeResultsRequest, SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, DetailPayload, Finding, Section, mk_result
 from tools.cq.query.language import (
@@ -133,16 +134,7 @@ def _result_match_count(result: CqResult) -> int:
     return len(result.key_findings)
 
 
-def merge_language_cq_results(  # noqa: PLR0913
-    *,
-    scope: QueryLanguageScope,
-    results: Mapping[QueryLanguage, CqResult],
-    run: RunMeta,
-    diagnostics: list[Finding] | None = None,
-    diagnostic_payloads: list[dict[str, object]] | None = None,
-    language_capabilities: dict[str, object] | None = None,
-    include_section_language_prefix: bool = True,
-) -> CqResult:
+def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
     """Merge per-language CQ results into a canonical multi-language result.
 
     Returns:
@@ -150,13 +142,13 @@ def merge_language_cq_results(  # noqa: PLR0913
     CqResult
         Unified result with deterministic ordering and multilang summary.
     """
-    merged = mk_result(run)
-    order = list(expand_language_scope(scope))
-    priority = language_priority(scope)
+    merged = mk_result(request.run)
+    order = list(expand_language_scope(request.scope))
+    priority = language_priority(request.scope)
     partitions: dict[QueryLanguage, dict[str, object]] = {}
 
     for lang in order:
-        result = results.get(lang)
+        result = request.results.get(lang)
         if result is None:
             partitions[lang] = {}
             continue
@@ -171,7 +163,11 @@ def merge_language_cq_results(  # noqa: PLR0913
             _clone_finding_with_language(finding, lang=lang) for finding in result.evidence
         )
         for section in result.sections:
-            title = f"{lang}: {section.title}" if include_section_language_prefix else section.title
+            title = (
+                f"{lang}: {section.title}"
+                if request.include_section_language_prefix
+                else section.title
+            )
             merged.sections.append(
                 Section(
                     title=title,
@@ -184,7 +180,7 @@ def merge_language_cq_results(  # noqa: PLR0913
             )
         merged.artifacts.extend(result.artifacts)
 
-    for lang, result in results.items():
+    for lang, result in request.results.items():
         if lang in partitions:
             continue
         partitions[lang] = partition_stats_from_result_summary(
@@ -209,10 +205,12 @@ def merge_language_cq_results(  # noqa: PLR0913
         )
     )
 
-    diag_findings = diagnostics or []
+    diag_findings: list[Finding] = (
+        list(request.diagnostics) if request.diagnostics is not None else []
+    )
     if diag_findings:
         merged.sections.append(Section(title="Cross-Language Diagnostics", findings=diag_findings))
-    summary_diagnostics = diagnostic_payloads
+    summary_diagnostics = request.diagnostic_payloads
     if summary_diagnostics is None:
         summary_diagnostics = [
             {
@@ -227,12 +225,14 @@ def merge_language_cq_results(  # noqa: PLR0913
             for finding in diag_findings
         ]
     merged.summary = build_multilang_summary(
-        common={},
-        lang_scope=scope,
-        language_order=order,
-        languages=partitions,
-        cross_language_diagnostics=summary_diagnostics,
-        language_capabilities=language_capabilities,
+        SummaryBuildRequest(
+            common={},
+            lang_scope=request.scope,
+            language_order=tuple(order),
+            languages=partitions,
+            cross_language_diagnostics=summary_diagnostics,
+            language_capabilities=request.language_capabilities,
+        )
     )
     if diag_findings:
         merged.key_findings.extend(diag_findings)

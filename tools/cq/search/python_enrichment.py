@@ -18,10 +18,13 @@ Two enrichment tiers:
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable, Iterator
+import os
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass, field
 from hashlib import blake2b
 from pathlib import Path
-from typing import TYPE_CHECKING
+from time import perf_counter
+from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.locations import byte_offset_to_line_col
 from tools.cq.search.enrichment.core import (
@@ -32,6 +35,12 @@ from tools.cq.search.enrichment.core import (
 )
 from tools.cq.search.enrichment.core import (
     payload_size_hint as _shared_payload_size_hint,
+)
+from tools.cq.search.libcst_python import enrich_python_resolution_by_byte_range
+from tools.cq.search.python_analysis_session import PythonAnalysisSession
+from tools.cq.search.requests import PythonByteRangeEnrichmentRequest, PythonNodeEnrichmentRequest
+from tools.cq.search.tree_sitter_python import (
+    enrich_python_context_by_byte_range as _ts_enrich_python_by_byte_range,
 )
 
 if TYPE_CHECKING:
@@ -61,6 +70,8 @@ _MAX_IMPORT_NAMES = 12
 _MAX_METHODS_SHOWN = 8
 _MAX_PROPERTIES_SHOWN = 8
 _MAX_PAYLOAD_BYTES = 4096
+_FULL_AGREEMENT_SOURCE_COUNT = 3
+_PYTHON_ENRICHMENT_CROSSCHECK_ENV = "CQ_PY_ENRICHMENT_CROSSCHECK"
 
 # ---------------------------------------------------------------------------
 # Parent-chain traversal depth limit
@@ -1509,6 +1520,12 @@ def _collect_extract(
     return result
 
 
+def _coerce_str_list(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def _enrich_ast_grep_core(
     node: SgNode,
     node_kind: str,
@@ -1532,7 +1549,7 @@ def _enrich_ast_grep_core(
         Accumulator list (mutated in place).
     """
     dec_result = _collect_extract(payload, degrade_reasons, "decorators", _extract_decorators, node)
-    decorators: list[str] = dec_result.get("decorators", [])  # type: ignore[assignment]
+    decorators = _coerce_str_list(dec_result.get("decorators"))
 
     role_result = _collect_extract(
         payload,
@@ -1753,159 +1770,470 @@ def _enforce_payload_budget(payload: dict[str, object]) -> tuple[list[str], int]
     )
 
 
+def _line_col_to_byte_offset(source_bytes: bytes, line: int, col: int) -> int | None:
+    """Convert 1-indexed line + 0-indexed column into absolute byte offset.
+
+    Returns:
+    -------
+    int | None
+        Absolute byte offset, or ``None`` when line/column is invalid.
+    """
+    if line < 1 or col < 0:
+        return None
+    lines = source_bytes.splitlines(keepends=True)
+    if line > len(lines):
+        return None
+    prefix = b"".join(lines[: line - 1])
+    target = lines[line - 1]
+    char_col = min(col, len(target.decode("utf-8", errors="replace")))
+    line_prefix = target.decode("utf-8", errors="replace")[:char_col].encode(
+        "utf-8", errors="replace"
+    )
+    return len(prefix) + len(line_prefix)
+
+
+def _extract_ast_grep_stage_fields(payload: dict[str, object]) -> dict[str, object]:
+    """Return ast-grep structural fields used for stage agreement checks."""
+    keys = {
+        "node_kind",
+        "item_role",
+        "call_target",
+        "scope_chain",
+        "class_name",
+        "class_kind",
+        "structural_context",
+    }
+    return {key: payload[key] for key in keys if key in payload}
+
+
+def _merge_gap_fill_fields(
+    payload: dict[str, object],
+    *,
+    supplemental: dict[str, object],
+) -> None:
+    for key, value in supplemental.items():
+        if key not in payload:
+            payload[key] = value
+
+
+def _build_agreement_section(
+    *,
+    ast_fields: dict[str, object],
+    libcst_fields: dict[str, object],
+    tree_sitter_fields: dict[str, object],
+) -> dict[str, object]:
+    """Build deterministic cross-source agreement metadata.
+
+    Returns:
+    -------
+    dict[str, object]
+        Agreement status, source presence, and conflict details.
+    """
+    conflicts: list[dict[str, object]] = []
+    comparison_sources = {
+        "ast_grep": ast_fields,
+        "libcst": libcst_fields,
+        "tree_sitter": tree_sitter_fields,
+    }
+    present_sources = [name for name, values in comparison_sources.items() if values]
+
+    for key in sorted(set(ast_fields).intersection(libcst_fields)):
+        left = ast_fields.get(key)
+        right = libcst_fields.get(key)
+        if left != right:
+            conflicts.append({"field": key, "ast_grep": left, "libcst": right})
+
+    for key in sorted(set(libcst_fields).intersection(tree_sitter_fields)):
+        left = libcst_fields.get(key)
+        right = tree_sitter_fields.get(key)
+        if left != right:
+            conflicts.append({"field": key, "libcst": left, "tree_sitter": right})
+
+    if conflicts:
+        status = "conflict"
+    elif len(present_sources) >= _FULL_AGREEMENT_SOURCE_COUNT:
+        status = "full"
+    else:
+        status = "partial"
+
+    return {
+        "status": status,
+        "sources": present_sources,
+        "conflicts": conflicts,
+    }
+
+
+@dataclass(slots=True)
+class _PythonEnrichmentState:
+    payload: dict[str, object]
+    stage_status: dict[str, str] = field(default_factory=dict)
+    stage_timings_ms: dict[str, float] = field(default_factory=dict)
+    degrade_reasons: list[str] = field(default_factory=list)
+    ast_fields: dict[str, object] = field(default_factory=dict)
+    libcst_fields: dict[str, object] = field(default_factory=dict)
+    tree_sitter_fields: dict[str, object] = field(default_factory=dict)
+
+
+def _resolve_python_enrichment_range(
+    *,
+    node: SgNode,
+    source_bytes: bytes,
+    line: int,
+    col: int,
+    byte_start: int | None,
+    byte_end: int | None,
+) -> tuple[int | None, int | None]:
+    resolved_start = byte_start
+    if resolved_start is None:
+        resolved_start = _line_col_to_byte_offset(source_bytes, line, col)
+    resolved_end = byte_end
+    if resolved_end is None and resolved_start is not None:
+        resolved_end = min(
+            len(source_bytes),
+            resolved_start + max(1, len(node.text().encode("utf-8"))),
+        )
+    return resolved_start, resolved_end
+
+
+def _run_ast_grep_stage(
+    state: _PythonEnrichmentState,
+    *,
+    node: SgNode,
+    node_kind: str,
+    source_bytes: bytes,
+) -> None:
+    ast_started = perf_counter()
+    sg_fields, degrade_reasons = _enrich_ast_grep_tier(node, node_kind, source_bytes)
+    state.stage_timings_ms["ast_grep"] = (perf_counter() - ast_started) * 1000.0
+    state.stage_status["ast_grep"] = "degraded" if degrade_reasons else "applied"
+    state.payload.update(sg_fields)
+    state.ast_fields = _extract_ast_grep_stage_fields(sg_fields)
+    state.degrade_reasons.extend(degrade_reasons)
+
+
+def _run_python_ast_stage(
+    state: _PythonEnrichmentState,
+    *,
+    node: SgNode,
+    source_bytes: bytes,
+    cache_key: str,
+) -> None:
+    if not _is_function_node(node):
+        state.stage_status["python_ast"] = "skipped"
+        state.stage_timings_ms["python_ast"] = 0.0
+        return
+
+    py_ast_started = perf_counter()
+    ast_extra_fields, ast_extra_reasons = _enrich_python_ast_tier(node, source_bytes, cache_key)
+    state.stage_timings_ms["python_ast"] = (perf_counter() - py_ast_started) * 1000.0
+    state.payload.update(ast_extra_fields)
+    state.degrade_reasons.extend(ast_extra_reasons)
+    state.stage_status["python_ast"] = "degraded" if ast_extra_reasons else "applied"
+    _append_source(state.payload, "python_ast")
+
+
+def _run_import_stage(
+    state: _PythonEnrichmentState,
+    *,
+    node: SgNode,
+    node_kind: str,
+    source_bytes: bytes,
+    cache_key: str,
+    line: int,
+) -> None:
+    if node_kind not in {"import_statement", "import_from_statement"}:
+        state.stage_status["import_detail"] = "skipped"
+        state.stage_timings_ms["import_detail"] = 0.0
+        return
+
+    import_started = perf_counter()
+    imp_fields, imp_reasons = _enrich_import_tier(node, source_bytes, cache_key, line)
+    state.stage_timings_ms["import_detail"] = (perf_counter() - import_started) * 1000.0
+    state.payload.update(imp_fields)
+    state.degrade_reasons.extend(imp_reasons)
+    state.stage_status["import_detail"] = "degraded" if imp_reasons else "applied"
+    _append_source(state.payload, "python_ast")
+
+
+def _decode_python_source_text(
+    *,
+    source_bytes: bytes,
+    session: PythonAnalysisSession | None,
+) -> str:
+    return session.source if session is not None else source_bytes.decode("utf-8", errors="replace")
+
+
+def _run_libcst_stage(
+    state: _PythonEnrichmentState,
+    *,
+    source_bytes: bytes,
+    byte_start: int | None,
+    byte_end: int | None,
+    cache_key: str,
+    session: PythonAnalysisSession | None,
+) -> None:
+    if byte_start is None or byte_end is None:
+        state.stage_status["libcst"] = "skipped"
+        state.stage_timings_ms["libcst"] = 0.0
+        return
+
+    libcst_started = perf_counter()
+    libcst_reasons: list[str] = []
+    try:
+        wrapper = session.ensure_libcst_wrapper() if session is not None else None
+        source_text = _decode_python_source_text(source_bytes=source_bytes, session=session)
+        state.libcst_fields = enrich_python_resolution_by_byte_range(
+            source_text,
+            byte_start=byte_start,
+            byte_end=byte_end,
+            cache_key=cache_key,
+            wrapper=wrapper,
+        )
+    except _ENRICHMENT_ERRORS as exc:
+        state.libcst_fields = {}
+        libcst_reasons.append(f"libcst: {type(exc).__name__}")
+    state.stage_timings_ms["libcst"] = (perf_counter() - libcst_started) * 1000.0
+    state.degrade_reasons.extend(libcst_reasons)
+    if state.libcst_fields:
+        state.payload.update(state.libcst_fields)
+        _append_source(state.payload, "libcst")
+        state.stage_status["libcst"] = "applied"
+        return
+    state.stage_status["libcst"] = "degraded" if libcst_reasons else "skipped"
+
+
+def _extract_tree_sitter_gap_fill(
+    ts_payload: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object] | None]:
+    parse_quality = ts_payload.get("parse_quality")
+    normalized_parse_quality = parse_quality if isinstance(parse_quality, dict) else None
+    excluded = {
+        "language",
+        "enrichment_status",
+        "enrichment_sources",
+        "degrade_reason",
+        "parse_quality",
+    }
+    gap_fill = {key: value for key, value in ts_payload.items() if key not in excluded}
+    return gap_fill, normalized_parse_quality
+
+
+def _run_tree_sitter_stage(
+    state: _PythonEnrichmentState,
+    *,
+    source_bytes: bytes,
+    byte_start: int | None,
+    byte_end: int | None,
+    cache_key: str,
+    session: PythonAnalysisSession | None,
+) -> None:
+    if byte_start is None or byte_end is None:
+        state.stage_status["tree_sitter"] = "skipped"
+        state.stage_timings_ms["tree_sitter"] = 0.0
+        return
+
+    ts_started = perf_counter()
+    tree_sitter_reasons: list[str] = []
+    try:
+        source_text = _decode_python_source_text(source_bytes=source_bytes, session=session)
+        ts_payload = _ts_enrich_python_by_byte_range(
+            source_text,
+            byte_start=byte_start,
+            byte_end=byte_end,
+            cache_key=cache_key,
+        )
+        if ts_payload:
+            gap_fill, parse_quality = _extract_tree_sitter_gap_fill(ts_payload)
+            _merge_gap_fill_fields(state.payload, supplemental=gap_fill)
+            state.tree_sitter_fields.update(gap_fill)
+            if parse_quality is not None:
+                state.tree_sitter_fields["parse_quality"] = parse_quality
+                state.payload["parse_quality"] = parse_quality
+            _append_source(state.payload, "tree_sitter")
+            ts_status = ts_payload.get("enrichment_status")
+            state.stage_status["tree_sitter"] = (
+                ts_status if isinstance(ts_status, str) else "applied"
+            )
+            ts_reason = ts_payload.get("degrade_reason")
+            if isinstance(ts_reason, str) and ts_reason:
+                tree_sitter_reasons.append(f"tree_sitter: {ts_reason}")
+        else:
+            state.stage_status["tree_sitter"] = "skipped"
+    except _ENRICHMENT_ERRORS as exc:
+        state.stage_status["tree_sitter"] = "degraded"
+        tree_sitter_reasons.append(f"tree_sitter: {type(exc).__name__}")
+    state.stage_timings_ms["tree_sitter"] = (perf_counter() - ts_started) * 1000.0
+    state.degrade_reasons.extend(tree_sitter_reasons)
+
+
+def _finalize_python_enrichment_payload(state: _PythonEnrichmentState) -> None:
+    agreement = _build_agreement_section(
+        ast_fields=state.ast_fields,
+        libcst_fields=state.libcst_fields,
+        tree_sitter_fields=state.tree_sitter_fields,
+    )
+    state.payload["agreement"] = agreement
+    if (
+        os.getenv(_PYTHON_ENRICHMENT_CROSSCHECK_ENV) == "1"
+        and agreement.get("status") == "conflict"
+    ):
+        conflicts = agreement.get("conflicts")
+        if isinstance(conflicts, list):
+            state.payload["crosscheck_mismatches"] = conflicts
+        state.degrade_reasons.append("crosscheck mismatch")
+
+    if state.degrade_reasons:
+        state.payload["enrichment_status"] = "degraded"
+        state.payload["degrade_reason"] = "; ".join(state.degrade_reasons)
+
+    state.payload["stage_status"] = state.stage_status
+    state.payload["stage_timings_ms"] = state.stage_timings_ms
+
+    if _truncation_tracker:
+        state.payload["truncated_fields"] = list(_truncation_tracker)
+        _truncation_tracker.clear()
+
+    dropped_fields, size_hint = _enforce_payload_budget(state.payload)
+    state.payload["payload_size_hint"] = size_hint
+    if dropped_fields:
+        state.payload["dropped_fields"] = dropped_fields
+
+
 # ---------------------------------------------------------------------------
 # Public entrypoints
 # ---------------------------------------------------------------------------
 
 
-def enrich_python_context(
-    sg_root: SgRoot,
-    node: SgNode,
-    source_bytes: bytes,
-    *,
-    line: int,
-    col: int,
-    cache_key: str,
-) -> dict[str, object] | None:
+def enrich_python_context(request: PythonNodeEnrichmentRequest) -> dict[str, object] | None:
     """Enrich a Python match with structured context fields.
 
     Parameters
     ----------
-    sg_root
-        Parsed ast-grep root for the file.
-    node
-        Resolved SgNode at the match position.
-    source_bytes
-        Raw source bytes (for Python ast tier).
-    line
-        1-indexed line number.
-    col
-        0-indexed column offset.
-    cache_key
-        File path for cache keying.
+    request
+        Typed request object containing node anchor and per-file context.
 
     Returns:
     -------
     dict[str, object] | None
         Enrichment payload, or None if enrichment not applicable.
     """
-    _ = sg_root  # Available for future byte-range lookups
-    _ = col  # Available for future column-based enrichment
-
+    node = cast("SgNode", request.node)
     node_kind = node.kind()
     if node_kind not in _ENRICHABLE_KINDS:
         return None
 
     _truncation_tracker.clear()
 
-    payload: dict[str, object] = {
-        "enrichment_status": "applied",
-        "enrichment_sources": ["ast_grep"],
-    }
+    state = _PythonEnrichmentState(
+        payload={
+            "enrichment_status": "applied",
+            "enrichment_sources": ["ast_grep"],
+        }
+    )
 
-    # ast-grep tier
-    sg_fields, degrade_reasons = _enrich_ast_grep_tier(node, node_kind, source_bytes)
-    payload.update(sg_fields)
+    byte_start, byte_end = _resolve_python_enrichment_range(
+        node=node,
+        source_bytes=request.source_bytes,
+        line=request.line,
+        col=request.col,
+        byte_start=request.byte_start,
+        byte_end=request.byte_end,
+    )
 
-    # Python ast tier (function nodes)
-    if _is_function_node(node):
-        ast_fields, ast_reasons = _enrich_python_ast_tier(node, source_bytes, cache_key)
-        payload.update(ast_fields)
-        degrade_reasons.extend(ast_reasons)
-        _append_source(payload, "python_ast")
+    _run_ast_grep_stage(state, node=node, node_kind=node_kind, source_bytes=request.source_bytes)
+    _run_python_ast_stage(
+        state,
+        node=node,
+        source_bytes=request.source_bytes,
+        cache_key=request.cache_key,
+    )
+    _run_import_stage(
+        state,
+        node=node,
+        node_kind=node_kind,
+        source_bytes=request.source_bytes,
+        cache_key=request.cache_key,
+        line=request.line,
+    )
+    _run_libcst_stage(
+        state,
+        source_bytes=request.source_bytes,
+        byte_start=byte_start,
+        byte_end=byte_end,
+        cache_key=request.cache_key,
+        session=cast("PythonAnalysisSession | None", request.session),
+    )
+    _run_tree_sitter_stage(
+        state,
+        source_bytes=request.source_bytes,
+        byte_start=byte_start,
+        byte_end=byte_end,
+        cache_key=request.cache_key,
+        session=cast("PythonAnalysisSession | None", request.session),
+    )
+    _finalize_python_enrichment_payload(state)
+    return state.payload
 
-    # Import detail (for import nodes)
-    if node_kind in {"import_statement", "import_from_statement"}:
-        imp_fields, imp_reasons = _enrich_import_tier(node, source_bytes, cache_key, line)
-        payload.update(imp_fields)
-        degrade_reasons.extend(imp_reasons)
-        _append_source(payload, "python_ast")
 
-    # Degradation metadata
-    if degrade_reasons:
-        payload["enrichment_status"] = "degraded"
-        payload["degrade_reason"] = "; ".join(degrade_reasons)
-
-    # Truncation metadata (O6)
-    if _truncation_tracker:
-        payload["truncated_fields"] = list(_truncation_tracker)
-        _truncation_tracker.clear()
-
-    dropped_fields, size_hint = _enforce_payload_budget(payload)
-    payload["payload_size_hint"] = size_hint
-    if dropped_fields:
-        payload["dropped_fields"] = dropped_fields
-
-    return payload
-
-
-def enrich_python_context_by_byte_range(  # noqa: PLR0913
-    sg_root: SgRoot,
-    source_bytes: bytes,
-    byte_start: int,
-    byte_end: int,
-    *,
-    cache_key: str,
-    resolved_node: SgNode | None = None,
-    resolved_line: int | None = None,
-    resolved_col: int | None = None,
+def enrich_python_context_by_byte_range(
+    request: PythonByteRangeEnrichmentRequest,
 ) -> dict[str, object] | None:
     """Enrich using byte-range anchor (preferred for ripgrep integration).
 
     Parameters
     ----------
-    sg_root
-        Parsed ast-grep root for the file.
-    source_bytes
-        Raw source bytes.
-    byte_start
-        0-based byte offset of the match start.
-    byte_end
-        0-based byte offset of the match end (exclusive).
-    cache_key
-        File path for cache keying.
-    resolved_node
-        Optional pre-resolved node to avoid duplicate lookup.
-    resolved_line
-        Optional resolved 1-indexed line (used with resolved_node).
-    resolved_col
-        Optional resolved 0-indexed column (used with resolved_node).
+    request
+        Typed request object containing byte-range anchor and optional resolved node.
 
     Returns:
     -------
     dict[str, object] | None
         Enrichment payload, or None if not applicable.
     """
-    if byte_start < 0 or byte_end <= byte_start or byte_end > len(source_bytes):
+    if (
+        request.byte_start < 0
+        or request.byte_end <= request.byte_start
+        or request.byte_end > len(request.source_bytes)
+    ):
         return None
 
     from tools.cq.search.classifier import get_node_index
 
-    if resolved_node is None:
-        line, col = byte_offset_to_line_col(source_bytes, byte_start)
-        index = get_node_index(Path(cache_key), sg_root, lang="python")
+    if request.resolved_node is None:
+        line, col = byte_offset_to_line_col(request.source_bytes, request.byte_start)
+        index = get_node_index(
+            Path(request.cache_key), cast("SgRoot", request.sg_root), lang="python"
+        )
         node = index.find_containing(line, col)
         if node is None:
-            line, col = byte_offset_to_line_col(source_bytes, max(byte_start, byte_end - 1))
+            line, col = byte_offset_to_line_col(
+                request.source_bytes,
+                max(request.byte_start, request.byte_end - 1),
+            )
             node = index.find_containing(line, col)
         if node is None:
             return None
     else:
-        node = _promote_enrichment_node(resolved_node)
-        if resolved_line is None or resolved_col is None:
-            line, col = byte_offset_to_line_col(source_bytes, byte_start)
+        node = _promote_enrichment_node(cast("SgNode", request.resolved_node))
+        if request.resolved_line is None or request.resolved_col is None:
+            line, col = byte_offset_to_line_col(request.source_bytes, request.byte_start)
         else:
-            line, col = resolved_line, resolved_col
+            line, col = request.resolved_line, request.resolved_col
 
     node = _promote_enrichment_node(node)
 
     return enrich_python_context(
-        sg_root,
-        node,
-        source_bytes,
-        line=line,
-        col=col,
-        cache_key=cache_key,
+        PythonNodeEnrichmentRequest(
+            sg_root=request.sg_root,
+            node=node,
+            source_bytes=request.source_bytes,
+            line=line,
+            col=col,
+            cache_key=request.cache_key,
+            byte_start=request.byte_start,
+            byte_end=request.byte_end,
+            session=request.session,
+        )
     )
 
 

@@ -106,7 +106,7 @@ def test_delta_service_provider_artifact_payload_includes_canonical_fields() -> 
             delta_scan_effective={"fallback": True},
             delta_scan_snapshot={"scan": "v1"},
             delta_scan_identity_hash="abc123",
-            delta_snapshot={"version": 7, "provider_mode": "pyarrow_dataset_degraded"},
+            delta_snapshot={"version": 7},
             add_actions=[{"path": "part-000.parquet"}],
             predicate_error="predicate parse failed",
         ),
@@ -128,9 +128,9 @@ def test_delta_service_provider_artifact_payload_includes_canonical_fields() -> 
         compatibility=compatibility,
     )
 
-    assert payload["provider_mode"] == "pyarrow_dataset_degraded"
+    assert payload["provider_mode"] == "delta_table_provider"
     assert payload["strict_native_provider_enabled"] is True
-    assert payload["strict_native_provider_violation"] is True
+    assert payload["strict_native_provider_violation"] is False
     assert payload["scan_files_count"] == 1
     assert payload["delta_pruned_files"] == 1
     assert payload["probe_result"] == "ok"

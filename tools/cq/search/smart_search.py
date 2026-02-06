@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -24,6 +25,7 @@ from tools.cq.core.multilang_summary import (
     assert_multilang_summary,
     build_multilang_summary,
 )
+from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -81,12 +83,19 @@ from tools.cq.search.multilang_diagnostics import (
     is_python_oriented_query_text,
 )
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search.python_analysis_session import get_python_analysis_session
 from tools.cq.search.python_enrichment import (
     _ENRICHMENT_ERRORS as _PYTHON_ENRICHMENT_ERRORS,
 )
 from tools.cq.search.python_enrichment import enrich_python_context_by_byte_range
+from tools.cq.search.requests import (
+    CandidateCollectionRequest,
+    PythonByteRangeEnrichmentRequest,
+    RgRunRequest,
+)
 from tools.cq.search.rg_native import build_rg_command, run_rg_json
 from tools.cq.search.rust_enrichment import enrich_rust_context_by_byte_range
+from tools.cq.search.tree_sitter_python import get_tree_sitter_python_cache_stats
 from tools.cq.search.tree_sitter_rust import get_tree_sitter_rust_cache_stats
 
 if TYPE_CHECKING:
@@ -106,18 +115,19 @@ _CASE_SENSITIVE_DEFAULT = True
 # Evidence disclosure cap to keep output high-signal
 MAX_EVIDENCE = 100
 _RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
+MAX_SEARCH_CLASSIFY_WORKERS = 4
 
 
 @lru_cache(maxsize=1)
 def _get_context_helpers() -> tuple[
     Callable[[int, list[tuple[int, int]], int], dict[str, int]],
-    Callable[[list[str], int, int], str | None],
+    Callable[..., str | None],
 ]:
     """Lazily import context helpers to avoid circular imports.
 
     Returns:
     -------
-    tuple[Callable[[int, list[tuple[int, int]], int], dict[str, int]], Callable[[list[str], int, int], str]]
+    tuple[Callable[[int, list[tuple[int, int]], int], dict[str, int]], Callable[..., str | None]]
         Context window and snippet helpers.
     """
     from tools.cq.macros.calls import _compute_context_window, _extract_context_snippet
@@ -426,16 +436,7 @@ def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchSta
     )
 
 
-def collect_candidates(  # noqa: PLR0913
-    root: Path,
-    *,
-    pattern: str,
-    mode: QueryMode,
-    limits: SearchLimits,
-    lang: QueryLanguage,
-    include_globs: list[str] | None = None,
-    exclude_globs: list[str] | None = None,
-) -> tuple[list[RawMatch], SearchStats]:
+def collect_candidates(request: CandidateCollectionRequest) -> tuple[list[RawMatch], SearchStats]:
     """Execute native ``rg`` search and collect raw matches.
 
     Parameters
@@ -461,15 +462,17 @@ def collect_candidates(  # noqa: PLR0913
         Raw matches and collection statistics.
     """
     proc = run_rg_json(
-        root=root,
-        pattern=pattern,
-        mode=mode,
-        lang_types=(ripgrep_type_for_language(lang),),
-        include_globs=include_globs or [],
-        exclude_globs=exclude_globs or [],
-        limits=limits,
+        RgRunRequest(
+            root=request.root,
+            pattern=request.pattern,
+            mode=request.mode,
+            lang_types=(ripgrep_type_for_language(request.lang),),
+            include_globs=request.include_globs or [],
+            exclude_globs=request.exclude_globs or [],
+            limits=request.limits,
+        )
     )
-    collector = RgCollector(limits=limits, match_factory=RawMatch)
+    collector = RgCollector(limits=request.limits, match_factory=RawMatch)
     for event in proc.events:
         collector.handle_event(event)
     collector.finalize()
@@ -697,6 +700,7 @@ def _build_context_enrichment(
         source_lines,
         context_window["start_line"],
         context_window["end_line"],
+        match_line=raw.line,
     )
     return context_window, context_snippet
 
@@ -848,6 +852,7 @@ def _maybe_python_enrichment(
     source = get_cached_source(file_path)
     if source is None:
         return None
+    session = get_python_analysis_session(file_path, source, sg_root=sg_root)
     source_bytes = source.encode("utf-8", errors="replace")
     abs_range = _raw_match_abs_byte_range(raw, source_bytes)
     if abs_range is None:
@@ -855,14 +860,17 @@ def _maybe_python_enrichment(
     byte_start, byte_end = abs_range
     try:
         payload = enrich_python_context_by_byte_range(
-            sg_root,
-            source_bytes,
-            byte_start,
-            byte_end,
-            cache_key=str(file_path),
-            resolved_node=resolved_python.node if resolved_python is not None else None,
-            resolved_line=resolved_python.line if resolved_python is not None else None,
-            resolved_col=resolved_python.col if resolved_python is not None else None,
+            PythonByteRangeEnrichmentRequest(
+                sg_root=sg_root,
+                source_bytes=source_bytes,
+                byte_start=byte_start,
+                byte_end=byte_end,
+                cache_key=str(file_path),
+                resolved_node=resolved_python.node if resolved_python is not None else None,
+                resolved_line=resolved_python.line if resolved_python is not None else None,
+                resolved_col=resolved_python.col if resolved_python is not None else None,
+                session=session,
+            )
         )
         return normalize_python_payload(payload)
     except _PYTHON_ENRICHMENT_ERRORS:
@@ -1072,12 +1080,15 @@ def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) ->
     match
         Enriched match with optional enrichment payloads.
     """
+    enrichment: dict[str, object] = {"language": match.language}
     if match.rust_tree_sitter:
-        data["rust_tree_sitter"] = match.rust_tree_sitter
+        enrichment["rust"] = match.rust_tree_sitter
     if match.python_enrichment:
-        for key, value in match.python_enrichment.items():
-            if key not in data:
-                data[key] = value
+        enrichment["python"] = match.python_enrichment
+    if match.symtable:
+        enrichment["symtable"] = match.symtable
+    if len(enrichment) > 1:
+        data["enrichment"] = enrichment
 
 
 def _symtable_flags(symtable: SymtableEnrichment) -> list[str]:
@@ -1294,12 +1305,14 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         "timed_out": inputs.stats.timed_out,
     }
     return build_multilang_summary(
-        common=common,
-        lang_scope=config.lang_scope,
-        language_order=inputs.languages,
-        languages=language_stats,
-        cross_language_diagnostics=(),
-        language_capabilities=build_language_capabilities(lang_scope=config.lang_scope),
+        SummaryBuildRequest(
+            common=common,
+            lang_scope=config.lang_scope,
+            language_order=inputs.languages,
+            languages=language_stats,
+            cross_language_diagnostics=[],
+            language_capabilities=build_language_capabilities(lang_scope=config.lang_scope),
+        )
     )
 
 
@@ -1541,13 +1554,15 @@ def _run_candidate_phase(
 ) -> tuple[list[RawMatch], SearchStats, str]:
     pattern = rf"\b{re.escape(ctx.query)}\b" if ctx.mode == QueryMode.IDENTIFIER else ctx.query
     raw_matches, stats = collect_candidates(
-        ctx.root,
-        pattern=pattern,
-        mode=ctx.mode,
-        limits=ctx.limits,
-        lang=lang,
-        include_globs=ctx.include_globs,
-        exclude_globs=ctx.exclude_globs,
+        CandidateCollectionRequest(
+            root=ctx.root,
+            pattern=pattern,
+            mode=ctx.mode,
+            limits=ctx.limits,
+            lang=lang,
+            include_globs=ctx.include_globs,
+            exclude_globs=ctx.exclude_globs,
+        )
     )
     return raw_matches, stats, pattern
 
@@ -1558,7 +1573,44 @@ def _run_classification_phase(
     lang: QueryLanguage,
     raw_matches: list[RawMatch],
 ) -> list[EnrichedMatch]:
-    return [classify_match(raw, ctx.root, lang=lang) for raw in raw_matches]
+    if not raw_matches:
+        return []
+
+    indexed: list[tuple[int, RawMatch]] = list(enumerate(raw_matches))
+    partitioned: dict[str, list[tuple[int, RawMatch]]] = {}
+    for idx, raw in indexed:
+        partitioned.setdefault(raw.file, []).append((idx, raw))
+    batches = list(partitioned.values())
+    workers = _resolve_search_worker_count(len(batches))
+
+    if workers <= 1 or len(batches) <= 1:
+        return [classify_match(raw, ctx.root, lang=lang) for raw in raw_matches]
+
+    tasks = [(str(ctx.root), lang, batch) for batch in batches]
+    try:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            indexed_results: list[tuple[int, EnrichedMatch]] = []
+            for batch_results in pool.map(_classify_partition_batch, tasks):
+                indexed_results.extend(batch_results)
+    except Exception:  # noqa: BLE001 - fail-open to sequential classification
+        return [classify_match(raw, ctx.root, lang=lang) for raw in raw_matches]
+
+    indexed_results.sort(key=lambda pair: pair[0])
+    return [match for _idx, match in indexed_results]
+
+
+def _resolve_search_worker_count(partition_count: int) -> int:
+    if partition_count <= 1:
+        return 1
+    return min(partition_count, MAX_SEARCH_CLASSIFY_WORKERS)
+
+
+def _classify_partition_batch(
+    task: tuple[str, QueryLanguage, list[tuple[int, RawMatch]]],
+) -> list[tuple[int, EnrichedMatch]]:
+    root_str, lang, batch = task
+    root = Path(root_str)
+    return [(idx, classify_match(raw, root, lang=lang)) for idx, raw in batch]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1640,10 +1692,87 @@ def _build_capability_diagnostics_for_search(
 def _status_from_enrichment(payload: dict[str, object] | None) -> str:
     if payload is None:
         return "skipped"
-    status = payload.get("enrichment_status")
+    meta = payload.get("meta")
+    status = None
+    if isinstance(meta, dict):
+        status = meta.get("enrichment_status")
+    if status is None:
+        status = payload.get("enrichment_status")
     if status in {"applied", "degraded", "skipped"}:
         return cast("str", status)
     return "applied"
+
+
+def _empty_enrichment_telemetry() -> dict[str, object]:
+    return {
+        "python": {
+            "applied": 0,
+            "degraded": 0,
+            "skipped": 0,
+            "stages": {
+                "ast_grep": {"applied": 0, "degraded": 0, "skipped": 0},
+                "python_ast": {"applied": 0, "degraded": 0, "skipped": 0},
+                "import_detail": {"applied": 0, "degraded": 0, "skipped": 0},
+                "libcst": {"applied": 0, "degraded": 0, "skipped": 0},
+                "tree_sitter": {"applied": 0, "degraded": 0, "skipped": 0},
+            },
+            "timings_ms": {
+                "ast_grep": 0.0,
+                "python_ast": 0.0,
+                "import_detail": 0.0,
+                "libcst": 0.0,
+                "tree_sitter": 0.0,
+            },
+        },
+        "rust": {"applied": 0, "degraded": 0, "skipped": 0},
+    }
+
+
+def _accumulate_stage_status(
+    stages_bucket: dict[str, object], stage_status: dict[str, object]
+) -> None:
+    for stage, stage_state in stage_status.items():
+        if not isinstance(stage, str) or not isinstance(stage_state, str):
+            continue
+        stage_bucket = stages_bucket.get(stage)
+        if isinstance(stage_bucket, dict) and stage_state in {"applied", "degraded", "skipped"}:
+            stage_bucket[stage_state] = cast("int", stage_bucket.get(stage_state, 0)) + 1
+
+
+def _accumulate_stage_timings(
+    timings_bucket: dict[str, object],
+    stage_timings: dict[str, object],
+) -> None:
+    for stage, stage_ms in stage_timings.items():
+        if isinstance(stage, str) and isinstance(stage_ms, (int, float)):
+            existing = timings_bucket.get(stage)
+            base_ms = float(existing) if isinstance(existing, (int, float)) else 0.0
+            timings_bucket[stage] = base_ms + float(stage_ms)
+
+
+def _accumulate_python_enrichment(
+    lang_bucket: dict[str, object], payload: dict[str, object]
+) -> None:
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        return
+    stage_status = meta.get("stage_status")
+    stages_bucket = lang_bucket.get("stages")
+    if isinstance(stage_status, dict) and isinstance(stages_bucket, dict):
+        _accumulate_stage_status(stages_bucket, stage_status)
+    stage_timings = meta.get("stage_timings_ms")
+    timings_bucket = lang_bucket.get("timings_ms")
+    if isinstance(stage_timings, dict) and isinstance(timings_bucket, dict):
+        _accumulate_stage_timings(timings_bucket, stage_timings)
+
+
+def _attach_enrichment_cache_stats(telemetry: dict[str, object]) -> None:
+    rust_bucket = telemetry.get("rust")
+    if isinstance(rust_bucket, dict):
+        rust_bucket.update(get_tree_sitter_rust_cache_stats())
+    python_bucket = telemetry.get("python")
+    if isinstance(python_bucket, dict):
+        python_bucket["tree_sitter_cache"] = get_tree_sitter_python_cache_stats()
 
 
 def _build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, object]:
@@ -1654,10 +1783,7 @@ def _build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, objec
     dict[str, object]
         Per-language enrichment status counters and Rust cache metrics.
     """
-    telemetry: dict[str, object] = {
-        "python": {"applied": 0, "degraded": 0, "skipped": 0},
-        "rust": {"applied": 0, "degraded": 0, "skipped": 0},
-    }
+    telemetry: dict[str, object] = _empty_enrichment_telemetry()
     for match in matches:
         lang_bucket = telemetry.get(match.language)
         if not isinstance(lang_bucket, dict):
@@ -1665,10 +1791,10 @@ def _build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, objec
         payload = match.python_enrichment if match.language == "python" else match.rust_tree_sitter
         status = _status_from_enrichment(payload)
         lang_bucket[status] = cast("int", lang_bucket.get(status, 0)) + 1
+        if match.language == "python" and isinstance(payload, dict):
+            _accumulate_python_enrichment(lang_bucket, payload)
 
-    rust_bucket = telemetry.get("rust")
-    if isinstance(rust_bucket, dict):
-        rust_bucket.update(get_tree_sitter_rust_cache_stats())
+    _attach_enrichment_cache_stats(telemetry)
     return telemetry
 
 

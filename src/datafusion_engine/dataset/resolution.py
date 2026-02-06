@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
@@ -32,18 +31,13 @@ from datafusion_engine.tables.metadata import TableProviderCapsule
 from utils.hashing import hash_msgpack_canonical
 
 if TYPE_CHECKING:
-    from datafusion_engine.delta.contracts import DeltaCdfContract
-    from datafusion_engine.delta.control_plane import (
-        DeltaCdfProviderBundle,
-        DeltaProviderBundle,
-    )
+    from datafusion_engine.delta.control_plane import DeltaProviderBundle
     from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.system import DeltaScanOptions
 
 DatasetProviderKind = Literal["delta", "delta_cdf"]
-_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -95,7 +89,6 @@ def resolve_dataset_provider(request: DatasetResolutionRequest) -> DatasetResolu
         return _resolve_delta_cdf(
             location=request.location,
             name=request.name,
-            runtime_profile=request.runtime_profile,
         )
     return _resolve_delta_table(request)
 
@@ -121,7 +114,6 @@ def _resolve_delta_table(request: DatasetResolutionRequest) -> DatasetResolution
         request.ctx,
         request=provider_request,
         scan_files=request.scan_files,
-        runtime_profile=request.runtime_profile,
     )
     if gate is not None and bundle.snapshot is not None:
         validate_delta_gate(bundle.snapshot, gate)
@@ -146,106 +138,29 @@ def _delta_provider_bundle(
     *,
     request: DeltaProviderRequest,
     scan_files: Sequence[str] | None,
-    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DeltaProviderBundle:
     try:
         if scan_files:
             return delta_provider_with_files(ctx, files=scan_files, request=request)
         return delta_provider_from_session(ctx, request=request)
     except (DataFusionEngineError, RuntimeError, TypeError, ValueError) as exc:
-        if _strict_native_provider_enabled(runtime_profile):
-            msg = (
-                "Delta provider control-plane failed in strict native-provider mode; "
-                "degraded fallback is disabled."
-            )
-            raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
-        _LOGGER.warning(
-            "Delta provider control-plane failed with strict provider enforcement disabled; "
-            "using degraded Python dataset provider: %s",
-            exc,
+        msg = (
+            "Delta provider control-plane failed; degraded Python fallback paths have been removed."
         )
-        return _degraded_delta_provider_bundle(
-            request=request,
-            scan_files=scan_files,
-            error=exc,
-        )
-
-
-def _strict_native_provider_enabled(
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> bool:
-    if runtime_profile is None:
-        return True
-    return runtime_profile.features.enforce_delta_ffi_provider
-
-
-def _degraded_delta_provider_bundle(
-    *,
-    request: DeltaProviderRequest,
-    scan_files: Sequence[str] | None,
-    error: Exception,
-) -> DeltaProviderBundle:
-    from deltalake import DeltaTable
-
-    from datafusion_engine.delta.control_plane import DeltaProviderBundle
-
-    storage_options = dict(request.storage_options) if request.storage_options else None
-    try:
-        table = DeltaTable(
-            request.table_uri,
-            version=request.version,
-            storage_options=storage_options,
-        )
-        if request.timestamp is not None:
-            table.load_as_version(request.timestamp)
-        provider = table.to_pyarrow_dataset()
-    except Exception as exc:
-        msg = "Delta provider degraded mode failed after control-plane failure."
-        raise DataFusionEngineError(msg, kind=ErrorKind.DELTA) from exc
-    snapshot: dict[str, object] = {
-        "table_uri": request.table_uri,
-        "version": table.version(),
-        "provider_mode": "pyarrow_dataset_degraded",
-        "fallback_error": str(error),
-    }
-    if scan_files:
-        snapshot["scan_files_requested"] = list(scan_files)
-        snapshot["scan_files_applied"] = False
-    return DeltaProviderBundle(
-        provider=provider,
-        snapshot=snapshot,
-        scan_config={},
-        scan_effective={
-            "fallback": True,
-            "scan_files_requested": bool(scan_files),
-        },
-        add_actions=None,
-        predicate_error=None,
-    )
+        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
 
 
 def _resolve_delta_cdf(
     *,
     location: DatasetLocation,
     name: str | None,
-    runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DatasetResolution:
     contract = build_delta_cdf_contract(location)
     try:
         bundle = delta_cdf_provider(request=contract.to_request())
     except (DataFusionEngineError, RuntimeError, TypeError, ValueError) as exc:
-        if _strict_native_provider_enabled(runtime_profile):
-            msg = (
-                "Delta CDF control-plane failed in strict native-provider mode; "
-                "degraded fallback is disabled."
-            )
-            raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
-        _LOGGER.warning(
-            "Delta CDF control-plane failed with strict provider enforcement disabled; "
-            "using degraded Python CDF reader: %s",
-            exc,
-        )
-        bundle = _degraded_delta_cdf_bundle(contract=contract, error=exc)
+        msg = "Delta CDF control-plane failed; degraded Python fallback paths have been removed."
+        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
     return DatasetResolution(
         name=name,
         location=location,
@@ -258,62 +173,6 @@ def _resolve_delta_cdf(
         delta_scan_identity_hash=None,
         delta_scan_options=None,
         cdf_options=bundle.cdf_options,
-    )
-
-
-def _degraded_delta_cdf_bundle(
-    *,
-    contract: DeltaCdfContract,
-    error: Exception,
-) -> DeltaCdfProviderBundle:
-    from deltalake import DeltaTable
-
-    from datafusion_engine.delta.control_plane import DeltaCdfProviderBundle
-
-    storage_options = dict(contract.storage_options) if contract.storage_options else None
-    try:
-        table = DeltaTable(
-            contract.table_uri,
-            version=contract.version,
-            storage_options=storage_options,
-        )
-        if contract.timestamp is not None:
-            table.load_as_version(contract.timestamp)
-        reader = table.load_cdf(
-            starting_version=contract.options.starting_version
-            if contract.options is not None and contract.options.starting_version is not None
-            else 0,
-            ending_version=contract.options.ending_version
-            if contract.options is not None
-            else None,
-            starting_timestamp=contract.options.starting_timestamp
-            if contract.options is not None
-            else None,
-            ending_timestamp=contract.options.ending_timestamp
-            if contract.options is not None
-            else None,
-            columns=list(contract.options.columns)
-            if contract.options is not None and contract.options.columns is not None
-            else None,
-            predicate=contract.options.predicate if contract.options is not None else None,
-            allow_out_of_range=contract.options.allow_out_of_range
-            if contract.options is not None
-            else False,
-        )
-        provider = reader.read_all()
-    except Exception as exc:
-        msg = "Delta CDF degraded mode failed after control-plane failure."
-        raise DataFusionEngineError(msg, kind=ErrorKind.DELTA) from exc
-    snapshot: dict[str, object] = {
-        "table_uri": contract.table_uri,
-        "version": table.version(),
-        "provider_mode": "pyarrow_cdf_degraded",
-        "fallback_error": str(error),
-    }
-    return DeltaCdfProviderBundle(
-        provider=provider,
-        snapshot=snapshot,
-        cdf_options=contract.to_request().options,
     )
 
 

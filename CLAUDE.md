@@ -30,7 +30,7 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 
 ### Mandatory cq Usage
 
-**Before searching for code:** Use `/cq search <query>` for semantic code discovery. It classifies matches and groups by containing function.
+**Before searching for code:** Use `/cq search <query>` for semantic code discovery. It classifies matches and groups by containing function, enriches with a 5-stage pipeline (ast_grep, python_ast, import_detail, libcst, tree_sitter), and tracks cross-source agreement for confidence. Output includes enrichment tables (resolution, behavior, structural, parse_quality, agreement) per finding.
 
 **Before searching Rust code:** Use `/cq search <query> --lang rust` to narrow scope to Rust files. Use `/cq q "entity=... lang=rust"` for Rust entity queries.
 

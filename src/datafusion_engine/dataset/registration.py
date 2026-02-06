@@ -1788,10 +1788,10 @@ def _register_delta_provider_with_adapter(
     )
 
 
-def _delta_registration_mode(state: _DeltaRegistrationState) -> str | None:
-    if state.format_name == "delta" and not state.provider_is_native:
-        return "dataset_fallback"
-    return None
+def _delta_registration_mode(state: _DeltaRegistrationState) -> str:
+    if state.resolution.provider_kind == "delta_cdf":
+        return "cdf_table_provider"
+    return "delta_table_provider"
 
 
 def _record_delta_cdf_registration_artifacts(
@@ -1805,8 +1805,16 @@ def _record_delta_cdf_registration_artifacts(
     details = _delta_cdf_artifact_payload(location, resolution=resolution)
     details["ffi_table_provider"] = state.provider_is_native
     provider_mode = _delta_registration_mode(state)
-    if provider_mode is not None:
-        details["provider_mode"] = provider_mode
+    details["provider_mode"] = provider_mode
+    strict_enabled = (
+        context.runtime_profile.features.enforce_delta_ffi_provider
+        if context.runtime_profile is not None
+        else None
+    )
+    details["strict_native_provider_enabled"] = strict_enabled
+    details["strict_native_provider_violation"] = (
+        bool(strict_enabled) and not state.provider_is_native
+    )
     if fingerprint_details:
         details.update(fingerprint_details)
     _record_table_provider_artifact(
@@ -1814,9 +1822,7 @@ def _record_delta_cdf_registration_artifacts(
         artifact=_TableProviderArtifact(
             name=context.name,
             provider=state.provider,
-            provider_kind="cdf_table_provider"
-            if state.provider_is_native
-            else "cdf_dataset_fallback",
+            provider_kind=provider_mode,
             source=None,
             details=details,
         ),
@@ -1844,13 +1850,13 @@ def _record_delta_table_registration_artifacts(
 ) -> None:
     location = context.location
     resolution = state.resolution
-    provider_mode = "delta_table_provider" if state.provider_is_native else "delta_dataset_fallback"
+    provider_mode = _delta_registration_mode(state)
     strict_enabled = (
         context.runtime_profile.features.enforce_delta_ffi_provider
         if context.runtime_profile is not None
         else None
     )
-    strict_violation = bool(strict_enabled) and provider_mode == "delta_dataset_fallback"
+    strict_violation = bool(strict_enabled) and not state.provider_is_native
     details = _delta_provider_artifact_payload(
         context.ctx,
         location,
@@ -2111,6 +2117,7 @@ def _delta_cdf_artifact_payload(
 ) -> dict[str, object]:
     return {
         "path": str(location.path),
+        "format": location.format,
         "delta_log_storage_options": (
             dict(location.delta_log_storage_options) if location.delta_log_storage_options else None
         ),
@@ -2265,16 +2272,15 @@ def _record_provider_mode_diagnostics(
             format_name = format_value
     provider_class = type(context.provider).__name__ if context.provider is not None else None
     ffi_table_provider = context.capsule_id is not None
-    severity = _provider_mode_severity(format_name, context.provider_kind)
+    severity = _provider_mode_severity(
+        format_name,
+        provider_is_native=ffi_table_provider,
+    )
     strict_native_provider_enabled = runtime_profile.features.enforce_delta_ffi_provider
     expected_native_provider = format_name == "delta"
-    native_provider_modes = {"delta_table_provider", "cdf_table_provider"}
-    fallback_provider_modes = {"delta_dataset_fallback", "cdf_dataset_fallback"}
-    provider_is_native = context.provider_kind in native_provider_modes
+    provider_is_native = ffi_table_provider
     strict_native_provider_violation = (
-        strict_native_provider_enabled
-        and expected_native_provider
-        and context.provider_kind in fallback_provider_modes
+        strict_native_provider_enabled and expected_native_provider and not provider_is_native
     )
     payload = {
         "dataset": context.name,
@@ -2293,11 +2299,12 @@ def _record_provider_mode_diagnostics(
     record_artifact(runtime_profile, "dataset_provider_mode_v1", payload)
 
 
-def _provider_mode_severity(format_name: str | None, provider_kind: str) -> str:
-    if format_name == "delta" and provider_kind not in {
-        "delta_table_provider",
-        "cdf_table_provider",
-    }:
+def _provider_mode_severity(
+    format_name: str | None,
+    *,
+    provider_is_native: bool,
+) -> str:
+    if format_name == "delta" and not provider_is_native:
         return "warn"
     return "info"
 

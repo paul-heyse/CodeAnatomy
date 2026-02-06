@@ -447,69 +447,6 @@ def _feature_control_span(
     )
 
 
-def query_delta_sql(
-    sql: str,
-    tables: Mapping[str, str],
-    storage_options: StorageOptions | None = None,
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-) -> RecordBatchReaderLike:
-    """Execute SQL over Delta tables using runtime sessions by default.
-
-    Returns:
-    -------
-    RecordBatchReaderLike
-        Query results as a record batch reader.
-    """
-    attrs = _storage_span_attributes(
-        operation="sql_query",
-        extra={
-            "codeanatomy.sql_len": len(sql),
-            "codeanatomy.table_count": len(tables),
-            "codeanatomy.tables": sorted(tables),
-            "codeanatomy.query_path": "runtime_session",
-        },
-    )
-    with stage_span(
-        "storage.sql_query",
-        stage="storage",
-        scope_name=SCOPE_STORAGE,
-        attributes=attrs,
-    ):
-        from datafusion_engine.dataset.registration import (
-            DatasetRegistrationOptions,
-            register_dataset_df,
-        )
-        from datafusion_engine.dataset.registry import DatasetLocation
-        from datafusion_engine.delta.service import delta_service_for_profile
-        from datafusion_engine.sql.options import statement_sql_options_for_profile
-
-        profile = _runtime_profile_for_delta(runtime_profile)
-        ctx = profile.session_context()
-        resolved_storage = dict(storage_options) if storage_options is not None else {}
-        service = (
-            delta_service_for_profile(profile)
-            if profile.diagnostics.diagnostics_sink is not None
-            else None
-        )
-        for name, path in sorted(tables.items()):
-            location = DatasetLocation(
-                path=path,
-                format="delta",
-                storage_options=resolved_storage,
-            )
-            if service is not None:
-                service.provider(location=location, name=name)
-            register_dataset_df(
-                ctx,
-                name=name,
-                location=location,
-                options=DatasetRegistrationOptions(runtime_profile=profile),
-            )
-        df = ctx.sql_with_options(sql, statement_sql_options_for_profile(profile))
-        return cast("RecordBatchReaderLike", to_reader(df))
-
-
 @dataclass(frozen=True)
 class DeltaSnapshotLookup:
     """Inputs for Delta snapshot retrieval."""
@@ -3531,7 +3468,6 @@ __all__ = [
     "enable_delta_v2_checkpoints",
     "enable_delta_vacuum_protocol_check",
     "idempotent_commit_properties",
-    "query_delta_sql",
     "read_delta_cdf",
     "read_delta_cdf_eager",
     "read_delta_table",

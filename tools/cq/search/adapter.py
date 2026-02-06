@@ -11,6 +11,7 @@ from tools.cq.query.language import (
 )
 from tools.cq.search.classifier import QueryMode
 from tools.cq.search.profiles import DEFAULT, SearchLimits
+from tools.cq.search.requests import RgRunRequest
 from tools.cq.search.rg_events import as_match_data, match_line_number, match_line_text, match_path
 from tools.cq.search.rg_native import run_rg_json
 from tools.cq.search.timeout import search_sync_with_timeout
@@ -79,13 +80,15 @@ def find_files_with_pattern(
             run_rg_json,
             limits.timeout_seconds,
             kwargs={
-                "root": root,
-                "pattern": pattern,
-                "mode": QueryMode.REGEX,
-                "lang_types": tuple(ripgrep_types_for_scope(lang_scope)),
-                "include_globs": include_globs,
-                "exclude_globs": exclude_globs,
-                "limits": limits,
+                "request": RgRunRequest(
+                    root=root,
+                    pattern=pattern,
+                    mode=QueryMode.REGEX,
+                    lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
+                    include_globs=include_globs,
+                    exclude_globs=exclude_globs,
+                    limits=limits,
+                )
             },
         )
     except TimeoutError:
@@ -128,13 +131,15 @@ def find_call_candidates(
             run_rg_json,
             limits.timeout_seconds,
             kwargs={
-                "root": root,
-                "pattern": pattern,
-                "mode": QueryMode.REGEX,
-                "lang_types": tuple(ripgrep_types_for_scope(lang_scope)),
-                "include_globs": [],
-                "exclude_globs": [],
-                "limits": limits,
+                "request": RgRunRequest(
+                    root=root,
+                    pattern=pattern,
+                    mode=QueryMode.REGEX,
+                    lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
+                    include_globs=[],
+                    exclude_globs=[],
+                    limits=limits,
+                )
             },
         )
     except TimeoutError:
@@ -195,13 +200,15 @@ def search_content(
             run_rg_json,
             limits.timeout_seconds,
             kwargs={
-                "root": root,
-                "pattern": pattern,
-                "mode": QueryMode.REGEX,
-                "lang_types": tuple(ripgrep_types_for_scope(lang_scope)),
-                "include_globs": file_globs or [],
-                "exclude_globs": [],
-                "limits": limits,
+                "request": RgRunRequest(
+                    root=root,
+                    pattern=pattern,
+                    mode=QueryMode.REGEX,
+                    lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
+                    include_globs=file_globs or [],
+                    exclude_globs=[],
+                    limits=limits,
+                )
             },
         )
     except TimeoutError:

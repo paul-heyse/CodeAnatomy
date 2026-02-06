@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.macros.calls import _find_function_signature, cmd_calls
+from tools.cq.macros.calls import _extract_context_snippet, _find_function_signature, cmd_calls
 
 
 def _write_file(path: Path, content: str) -> None:
@@ -142,3 +142,36 @@ def test_cmd_calls_signature_in_summary(tmp_path: Path) -> None:
 
     result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
     assert result.summary["signature"] == "(x, y)"
+
+
+def test_extract_context_snippet_prioritizes_anchor_block() -> None:
+    """Context snippet should include function top and matched anchor block."""
+    source = textwrap.dedent(
+        """\
+        def outer():
+            \"\"\"docstring should be omitted\"\"\"
+            head = 1
+            filler_a = 1
+            filler_b = 2
+            filler_c = 3
+            filler_d = 4
+            if condition:
+                a = 1
+                b = 2
+                target_marker = b
+            tail = head
+            end = tail
+        """
+    ).splitlines()
+    snippet = _extract_context_snippet(
+        source,
+        1,
+        len(source),
+        match_line=10,
+        max_lines=6,
+    )
+    assert isinstance(snippet, str)
+    assert "def outer():" in snippet
+    assert "if condition:" in snippet
+    assert "target_marker = b" in snippet
+    assert "docstring should be omitted" not in snippet

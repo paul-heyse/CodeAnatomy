@@ -20,4 +20,7 @@ def test_runtime_context_factory_smoke() -> None:
     compatibility = is_delta_extension_compatible(runtime.ctx)
     assert compatibility.available is True
     assert compatibility.compatible is True
+    assert compatibility.entrypoint == "delta_scan_config_from_session"
+    assert compatibility.module is not None
     assert compatibility.ctx_kind is not None
+    assert compatibility.probe_result == "ok"

@@ -46,9 +46,7 @@ class TestCapabilityNegotiation:
         from tests.test_helpers.optional_deps import _resolve_datafusion_extension
 
         # Valid attribute check
-        result = _resolve_datafusion_extension(
-            ("install_codeanatomy_policy_config",)
-        )
+        result = _resolve_datafusion_extension(("install_codeanatomy_policy_config",))
         # Should return module or None, not raise
         assert result is None or hasattr(result, "install_codeanatomy_policy_config")
 
@@ -57,6 +55,11 @@ class TestCapabilityNegotiation:
 
         When UDF support is unavailable and no fallback exists,
         the error message should include rebuild instructions.
+
+        Raises
+        ------
+        AssertionError
+            Raised when fallback RuntimeError lacks actionable guidance.
         """
         from tests.test_helpers.optional_deps import require_datafusion_udfs
 
@@ -64,8 +67,10 @@ class TestCapabilityNegotiation:
             result = require_datafusion_udfs()
             assert result is not None
         except RuntimeError as exc:
-            # Error should contain actionable guidance
-            assert "rebuild_rust_artifacts" in str(exc) or "UDF" in str(exc)
+            message = str(exc)
+            if "rebuild_rust_artifacts" not in message and "UDF" not in message:
+                msg = "RuntimeError should include rebuild instructions or UDF context."
+                raise AssertionError(msg) from exc
 
     def test_session_context_information_schema_required(self) -> None:
         """Verify DataFusionRuntimeProfile enforces information_schema.

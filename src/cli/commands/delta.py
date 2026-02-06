@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import msgspec
-from deltalake import DeltaTable
 from cyclopts import Parameter
+from deltalake import DeltaTable
 
 from cli.groups import restore_target_group
 from cli.kv_parser import parse_kv_pairs
@@ -19,8 +19,8 @@ from datafusion_engine.delta.control_plane import (
     delta_provider_from_session,
     delta_restore,
 )
-from datafusion_engine.errors import DataFusionEngineError
 from datafusion_engine.delta.service import delta_service_for_profile
+from datafusion_engine.errors import DataFusionEngineError
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.io.ingest import datafusion_from_arrow

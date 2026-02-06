@@ -76,6 +76,14 @@ class DataFusionCacheConfigRuntime(RuntimeBase):
     cache_policy: DataFusionCachePolicyRuntime | None = None
     diskcache_profile: DiskCacheProfileRuntime | None = None
     snapshot_pinned_mode: Literal["off", "delta_version"] = "off"
+    cache_profile_name: (
+        Literal[
+            "snapshot_pinned",
+            "always_latest_ttl30s",
+            "multi_tenant_strict",
+        ]
+        | None
+    ) = None
 
 
 class IncrementalConfigRuntime(RuntimeBase):

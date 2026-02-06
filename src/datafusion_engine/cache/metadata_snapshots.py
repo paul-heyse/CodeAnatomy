@@ -20,6 +20,7 @@ from datafusion_engine.session.helpers import deregister_table
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+    from datafusion.dataframe import DataFrame
 
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
@@ -76,6 +77,15 @@ def snapshot_datafusion_caches(
     -------
     list[dict[str, object]]
         Diagnostics payloads for each snapshot attempt.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when SQL execution or snapshot writes fail unexpectedly.
+    TypeError
+        Raised when a cache source or write payload has incompatible types.
+    ValueError
+        Raised when cache SQL, write options, or metadata values are invalid.
     """
     cache_root = Path(runtime_profile.io_ops.metadata_cache_snapshot_root())
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -105,11 +115,13 @@ def snapshot_datafusion_caches(
                 },
             ) as (_span, set_result):
                 try:
-                    source: object = ctx.sql(sql)
+                    source: DataFrame = ctx.sql(sql)
                 except (RuntimeError, TypeError, ValueError) as exc:
                     if "not found" not in str(exc).lower():
                         raise
-                    source = _fallback_cache_snapshot_source(ctx, table_name=table_name)
+                    source = ctx.from_arrow(
+                        _fallback_cache_snapshot_source(ctx, table_name=table_name)
+                    )
                 path = cache_root / snapshot_name
                 commit_metadata = cache_commit_metadata(
                     CacheCommitMetadataRequest(

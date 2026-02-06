@@ -527,6 +527,23 @@ fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
             "major": DF_PLUGIN_ABI_MAJOR,
             "minor": DF_PLUGIN_ABI_MINOR,
         },
+        "delta_control_plane": {
+            "available": true,
+            "entrypoints": [
+                "delta_table_provider_from_session",
+                "delta_table_provider_with_files",
+                "delta_scan_config_from_session",
+                "delta_write_ipc",
+                "delta_merge",
+                "delta_vacuum",
+            ],
+        },
+        "substrait": {
+            "available": cfg!(feature = "substrait"),
+        },
+        "async_udf": {
+            "available": cfg!(feature = "async-udf"),
+        },
         "udf_registry": {
             "scalar": snapshot.scalar.len(),
             "aggregate": snapshot.aggregate.len(),
@@ -2785,6 +2802,7 @@ fn delta_data_checker(
 
 pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     register_pyfunctions!(module, [
+        crate::codeanatomy_ext::capabilities_snapshot,
         crate::codeanatomy_ext::install_function_factory,
         crate::codeanatomy_ext::udf_expr,
     ]);

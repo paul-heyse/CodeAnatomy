@@ -15,7 +15,6 @@ import pytest
 
 from relspec.inferred_deps import InferredDeps
 from relspec.rustworkx_graph import build_task_graph_from_inferred_deps
-
 from tests.test_helpers.optional_deps import require_datafusion
 
 
@@ -26,7 +25,13 @@ def setup_module() -> None:
 
 @pytest.fixture
 def determinism_deps() -> tuple[InferredDeps, ...]:
-    """InferredDeps with explicit plan fingerprints for determinism testing."""
+    """InferredDeps with explicit plan fingerprints for determinism testing.
+
+    Returns
+    -------
+    tuple[InferredDeps, ...]
+        Stable dependency set used to assert deterministic graph behavior.
+    """
     return (
         InferredDeps(
             task_name="task_stable",

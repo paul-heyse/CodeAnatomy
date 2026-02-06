@@ -30,7 +30,8 @@ to a queryable graph using Hamilton DAG + DataFusion.
 | `/cq search` | Quick identifier search | `/cq search build_graph` |
 | `/cq search` | Regex code search | `/cq search "config.*path" --regex` |
 | `/cq search` | Include strings/comments | `/cq search foo --include-strings` |
-| `/cq search` | Scoped search | `/cq search CqResult --in tools/cq/core/` |
+| `/cq search` | Scoped search | `/cq search CqResult --in tools/cq/core` |
+| `/cq search` | Rust code search | `/cq search register_udf --lang rust` |
 | `/cq` | Modifying any function/class | `/cq calls <function>` |
 | `/cq` | Changing parameters | `/cq impact <function> --param <param>` |
 | `/cq` | Signature changes | `/cq sig-impact <function> --to "<new>"` |
@@ -39,6 +40,7 @@ to a queryable graph using Hamilton DAG + DataFusion.
 | `/cq q "pattern=..."` | Structural code search | `/cq q "pattern='getattr(\$X, \$Y)'"` |
 | `/cq q "...inside=..."` | Contextual code search | `/cq q "entity=function inside='class Config'"` |
 | `/cq q "...scope=..."` | Closure analysis | `/cq q "entity=function scope=closure"` |
+| `/cq q "...lang=rust"` | Rust entity/pattern queries | `/cq q "entity=function lang=rust"` |
 | `/cq q "all=..."` | Combined patterns (AND) | `/cq q "entity=function all='await \$X,return \$Y'"` |
 | `/cq q "any=..."` | Alternative patterns (OR) | `/cq q "any='logger.\$M(\$$$),print(\$$$)'"` |
 | `/cq q "not=..."` | Pattern exclusion | `/cq q "entity=function not.has='pass'"` |
@@ -63,6 +65,7 @@ Smart Search automatically:
 - Groups by containing function/scope
 - Hides non-code matches (strings/comments)
 - Suggests follow-up commands
+- Supports Rust via `--lang rust` (requires `CQ_ENABLE_RUST_QUERY=1`)
 
 **CQ-First Policy**
 - Use `/cq search` for code discovery instead of `rg`/`grep`.
@@ -90,6 +93,12 @@ Only use pattern queries (`/cq q "pattern=..."`) when you need:
 - Eval/exec usage → `/cq q "pattern='eval(\$X)'"` or `pattern='exec(\$X)'`
 - Security patterns → `/cq q "pattern='eval(\$X)'"` or `/cq q "pattern='pickle.load(\$X)'"`
 
+**Before searching Rust code:**
+- Rust symbols → `/cq search <query> --lang rust`
+- Rust entities → `/cq q "entity=function lang=rust"`
+- Rust patterns → `/cq q "pattern='pub fn \$F(\$$$)' lang=rust"`
+- Requires `CQ_ENABLE_RUST_QUERY=1` environment variable
+
 **Before refactoring closures:**
 - Find all closures → `/cq q "entity=function scope=closure in=<dir>"`
 - Understand capture → `/cq scopes <file>`
@@ -114,13 +123,16 @@ imports, comments, etc.
 /cq search "hello world" --literal
 
 # Scoped search (only in directory)
-/cq search CqResult --in tools/cq/core/
+/cq search CqResult --in tools/cq/core
 
 # Include matches in strings/comments/docstrings
 /cq search build_graph --include-strings
 
 # Plain queries in /cq q also fall back to search
 /cq q build_graph  # Same as: /cq search build_graph
+
+# Rust search (requires CQ_ENABLE_RUST_QUERY=1)
+/cq search register_udf --lang rust
 ```
 
 **Output structure:**
@@ -147,6 +159,10 @@ imports, comments, etc.
 
 # Understand import structure before refactoring
 /cq q "entity=import in=src/extract/"
+
+# Rust entity queries (requires CQ_ENABLE_RUST_QUERY=1)
+/cq q "entity=function lang=rust in=rust/"
+/cq q "entity=class name=~^Arrow lang=rust"
 ```
 
 ### Pattern Query Examples
@@ -174,6 +190,10 @@ Pattern queries find structural code patterns without false positives from strin
 
 # Find closures before extraction
 /cq q "entity=function scope=closure in=src/semantics/"
+
+# Rust pattern queries (requires CQ_ENABLE_RUST_QUERY=1)
+/cq q "pattern='pub fn \$F(\$$$) -> \$R' lang=rust"
+/cq q "pattern='impl \$T for \$Trait' lang=rust"
 ```
 
 ### Advanced Query Patterns
@@ -236,6 +256,7 @@ Pattern queries find structural code patterns without false positives from strin
 | Security scan | `pattern=...` | `/cq q "pattern='eval(\$X)'"` |
 | Closures | `scope=closure` | `/cq q "entity=function scope=closure"` |
 | Visualization | `--format mermaid*` | `/cq q "expand=callers" --format mermaid` |
+| Rust code search | `lang=rust` | `/cq q "entity=function lang=rust"` |
 
 **When to Prefer Pattern Queries over Grep:**
 - Finding code in strings/comments → Pattern query (no false positives)

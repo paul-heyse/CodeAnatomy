@@ -14,7 +14,7 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 
 | Skill | When to Use | Why |
 |-------|-------------|-----|
-| `/cq search` | Finding code patterns, symbols, identifiers | Fast semantic search with classification |
+| `/cq search` | Finding code patterns, symbols, identifiers | Fast semantic search with classification (Python default, `--lang rust` for Rust) |
 | `/cq` | Before ANY refactor, rename, or signature change | Finds all callsites, impact, and breaking changes |
 | `/cq q "entity=..."` | Finding functions/classes/imports | Entity-based code discovery |
 | `/cq q "pattern=..."` | Structural code patterns | Zero false positives from strings/comments |
@@ -32,6 +32,8 @@ CodeAnatomy is an inference-driven Code Property Graph (CPG) builder for Python.
 ### Mandatory cq Usage
 
 **Before searching for code:** Use `/cq search <query>` for semantic code discovery. It classifies matches and groups by containing function.
+
+**Before searching Rust code:** Use `/cq search <query> --lang rust` (requires `CQ_ENABLE_RUST_QUERY=1`). Use `/cq q "entity=... lang=rust"` for Rust entity queries.
 
 **Before modifying a function:** Run `/cq calls <function>` to find all call sites.
 
@@ -70,6 +72,15 @@ Pattern queries (`/cq q "pattern=..."`) use ast-grep for structural matching:
 
 # Find with meta-variable filter (string literal attrs only):
 /cq q "pattern='getattr(\$X, \$Y)' \$Y=~'^\"'"
+```
+
+**Example - Searching Rust code:**
+```bash
+# Find Rust function definitions matching a pattern
+/cq q "entity=function name=~^register lang=rust"
+
+# Structural pattern search in Rust
+/cq q "pattern='pub fn \$F(\$$$) -> \$R' lang=rust"
 ```
 
 ### Understanding Code with Visualization
@@ -295,6 +306,6 @@ Use the shared utilities before introducing new helpers:
 
 ## Environment
 
-- **Python**: 3.13.11 (pinned)
+- **Python**: 3.13.12 (pinned)
 - **Package Manager**: uv
 - **Key Dependencies**: DataFusion 50.1+, Rustworkx 0.17+, Hamilton 1.89+, PyArrow, LibCST, deltalake 1.3+

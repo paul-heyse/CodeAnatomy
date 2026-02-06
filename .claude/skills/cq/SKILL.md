@@ -1,6 +1,6 @@
 ---
 name: cq
-description: High-signal code queries (impact, calls, imports, exceptions, sig-impact, side-effects, scopes, bytecode-surface, pattern queries, scope filtering, visualization)
+description: High-signal code queries for Python and Rust (impact, calls, imports, exceptions, sig-impact, side-effects, scopes, bytecode-surface, pattern queries, scope filtering, visualization)
 allowed-tools: Bash
 ---
 
@@ -15,7 +15,8 @@ The cq tool provides markdown-formatted analysis injected directly into context.
 |------|---------|
 | **Search for code** | `/cq search <query>` |
 | Search with regex | `/cq search "pattern.*" --regex` |
-| Search in directory | `/cq search <query> --in src/` |
+| Search in directory | `/cq search <query> --in src` |
+| Search Rust code | `/cq search <query> --lang rust` |
 | Find callers | `/cq calls <fn>` |
 | Trace parameter | `/cq impact <fn> --param <p>` |
 | Check signature change | `/cq sig-impact <fn> --to "<sig>"` |
@@ -25,6 +26,7 @@ The cq tool provides markdown-formatted analysis injected directly into context.
 | Command chaining | `/cq chain q "entity=function name=foo" AND calls foo` |
 | Pattern search (AST) | `/cq q "pattern='getattr(\$X, \$Y)'"` |
 | Entity query | `/cq q "entity=function name=<name>"` |
+| Rust entity query | `/cq q "entity=function name=<name> lang=rust"` |
 | Context search | `/cq q "entity=function inside='class <C>'"` |
 | Find closures | `/cq q "entity=function scope=closure"` |
 | Visualize calls | `/cq q "entity=function name=<fn> expand=callers" --format mermaid` |
@@ -37,7 +39,73 @@ Use CQ first for code discovery and structural analysis:
 - Use `/cq q "pattern=..."` for AST-exact matching.
 - Use `/cq calls` or `/cq impact` before refactors.
 - Use `/cq run` for multi-step workflows to avoid repeated scans.
-- Use `rg` only for non-Python assets or explicit raw text needs.
+- Use `rg` only for non-Python/non-Rust assets or explicit raw text needs.
+
+## Rust Language Support
+
+cq supports searching and querying Rust code (`.rs` files) alongside Python. Rust support is feature-gated and must be enabled with an environment variable.
+
+### Enabling Rust Queries
+
+```bash
+export CQ_ENABLE_RUST_QUERY=1
+```
+
+### Supported Commands for Rust
+
+| Command | Rust Support | How to Use |
+|---------|-------------|------------|
+| `search` | Yes | `--lang rust` flag |
+| `q` (entity) | Yes | `lang=rust` in query string |
+| `q` (pattern) | Yes | `lang=rust` in query string |
+| `run` / `chain` | Yes | `lang` field in step specs |
+| `calls` | No | Python-only (AST/symtable) |
+| `impact` | No | Python-only (AST/symtable) |
+| `sig-impact` | No | Python-only (AST/symtable) |
+| `imports` | No | Python-only (ast module) |
+| `scopes` | No | Python-only (symtable) |
+| `bytecode-surface` | No | Python-only (dis module) |
+| `side-effects` | No | Python-only |
+| `exceptions` | No | Python-only |
+
+### Rust Entity Types
+
+| Query Entity | Matches in Rust |
+|-------------|-----------------|
+| `function` | `fn` declarations (`function_item`) |
+| `class` | `struct`, `enum`, `trait` definitions |
+| `method` | `fn` inside `impl` blocks |
+| `callsite` | Function/method call expressions |
+| `import` | `use` declarations |
+| `decorator` | Not applicable (empty) |
+
+### Rust Examples
+
+```bash
+# Search Rust code for a symbol
+/cq search register_udf --lang rust
+
+# Find all Rust function definitions
+/cq q "entity=function lang=rust"
+
+# Find Rust structs/enums/traits by name
+/cq q "entity=class name=~^Arrow lang=rust"
+
+# Find Rust use declarations
+/cq q "entity=import lang=rust in=rust/"
+
+# Pattern search in Rust code
+/cq q "pattern='pub fn \$F(\$$$) -> \$R' lang=rust"
+
+# Find impl blocks with pattern queries
+/cq q "pattern='impl \$T for \$Trait' lang=rust"
+
+# Scoped Rust search
+/cq search ScalarUDF --lang rust --in rust
+
+# Multi-step with Rust
+/cq run --steps '[{"type":"q","query":"entity=function lang=rust"},{"type":"q","query":"entity=import lang=rust in=rust"}]'
+```
 
 ## Smart Search (Default for Code Discovery)
 
@@ -56,7 +124,7 @@ Smart Search (`/cq search`) is the **primary tool for finding code**. It provide
 /cq search "hello world" --literal
 
 # Scoped to directory
-/cq search CqResult --in tools/cq/core/
+/cq search CqResult --in tools/cq/core
 
 # Include strings/comments/docstrings
 /cq search build_graph --include-strings
@@ -193,6 +261,7 @@ All commands support these global options:
 | `--format FMT` | `CQ_FORMAT` | `md` | Output format |
 | `--artifact-dir PATH` | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Artifact directory |
 | `--no-save-artifact` | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip saving artifacts |
+| — | `CQ_ENABLE_RUST_QUERY` | `false` | Enable Rust language queries |
 
 ### Filters
 
@@ -381,7 +450,7 @@ Example: /cq bytecode-surface tools/cq/macros/calls.py --show globals,attrs
 
 ### Bytecode Queries (dis Module Integration)
 
-Query bytecode instructions directly using Python's `dis` module.
+Query bytecode instructions directly using Python's `dis` module (Python-only).
 
 **Instruction Filters:**
 
@@ -421,15 +490,29 @@ The `q` command provides a composable query DSL for finding code entities.
 Results: !`./scripts/cq q "$1" --root .`
 Usage: /cq q "<query_string>"
 
-**Query Syntax:** `entity=TYPE [name=PATTERN] [in=DIR] [expand=KIND] [fields=FIELDS]`
+**Query Syntax:** `entity=TYPE [name=PATTERN] [in=DIR] [expand=KIND] [fields=FIELDS] [limit=N]`
 
-**Entity Types:**
+> **Note:** `limit=N` is enforced for pattern queries only. Entity queries do not currently cap results via `limit`.
+
+**Entity Types (Python, default):**
+| Entity | Finds | Notes |
+|--------|-------|-------|
+| `function` | Function definitions | |
+| `class` | Class definitions | |
+| `import` | Import statements (all forms) | |
+| `callsite` | Function/method call sites | |
+| `method` | Function definitions (not class-context validated) | Matches all functions, not just methods |
+| `module` | Not implemented | Always returns empty results |
+| `decorator` | Decorated definitions | See Decorator Queries section |
+
+**Entity Types (Rust, with `lang=rust`):**
 | Entity | Finds |
 |--------|-------|
-| `function` | Function definitions |
-| `class` | Class definitions |
-| `import` | Import statements (all forms) |
-| `callsite` | Function/method call sites |
+| `function` | `fn` declarations |
+| `class` | `struct`, `enum`, `trait` definitions |
+| `method` | `fn` inside `impl` blocks |
+| `import` | `use` declarations |
+| `callsite` | Call expressions |
 
 **Name Patterns:**
 - Exact: `name=build_graph_product`
@@ -692,13 +775,13 @@ Limit searches to specific AST fields (only for `inside`/`has`):
 
 ### Scope Filtering (Closure Analysis)
 
-Filter functions by scope characteristics using Python's symtable.
+Filter functions by scope characteristics using Python's symtable (Python-only).
 
 | Filter | Description |
 |--------|-------------|
 | `scope=closure` | Functions that capture variables |
-| `scope=module` | Module-level functions |
-| `scope=class` | Methods in classes |
+| `scope=nested` | Functions nested inside other functions |
+| `scope=toplevel` | Top-level (module-level) functions |
 | `captures=var_name` | Functions capturing specific variable |
 
 **Examples:**
@@ -715,27 +798,34 @@ Filter functions by scope characteristics using Python's symtable.
 
 ### Decorator Queries
 
-Find decorated functions or analyze decorator usage.
+Find decorated definitions using `entity=decorator`.
+
+> **Note:** `decorated_by` and `decorator_count_*` filters only take effect with `entity=decorator`. They are silently ignored for `entity=function` or `entity=class`.
 
 | Syntax | Description |
 |--------|-------------|
-| `entity=decorator` | Find decorator definitions |
-| `decorated_by=dataclass` | Functions with @dataclass |
-| `decorator_count_min=2` | Multiple decorators |
+| `entity=decorator` | Find decorated definitions |
+| `decorated_by=dataclass` | Filter to specific decorator |
+| `decorator_count_min=2` | Filter by decorator count |
 
 **Examples:**
 ```bash
-# Find all @pytest.fixture decorated functions
-/cq q "entity=function decorated_by=fixture"
+# Find all decorated definitions
+/cq q "entity=decorator"
 
-# Find heavily decorated functions
-/cq q "entity=function decorator_count_min=3"
+# Find definitions with @pytest.fixture
+/cq q "entity=decorator decorated_by=fixture"
 
-# Find @dataclass decorated classes
-/cq q "entity=class decorated_by=dataclass"
+# Find definitions with 3+ decorators
+/cq q "entity=decorator decorator_count_min=3"
+
+# Alternative: use pattern queries for decorator search on functions
+/cq q "pattern='@dataclass' inside='class \$C'"
 ```
 
-### Join Queries (Cross-Entity Relationships)
+### Join Queries (Cross-Entity Relationships) — Planned
+
+> **Status: Planned.** Join syntax is parsed but join filters are not yet enforced at runtime. Queries with join clauses will return unfiltered results. Use `expand=callers` or pattern queries for relationship analysis until joins are implemented.
 
 Find entities by their relationships to other entities.
 
@@ -884,8 +974,11 @@ Based on evidence quality:
 | Context-aware search | `/cq q "entity=function inside='class Config'"` |
 | Closure investigation | `/cq q "entity=function scope=closure"` |
 | Understanding code flow | `/cq q "entity=function expand=callers" --format mermaid` |
-| Decorator analysis | `/cq q "entity=function decorated_by=fixture"` |
+| Decorator analysis | `/cq q "entity=decorator decorated_by=fixture"` |
 | Security pattern queries | `/cq q "pattern='eval(\$X)'"` |
+| Searching Rust code | `/cq search <query> --lang rust` |
+| Finding Rust entities | `/cq q "entity=function lang=rust"` |
+| Rust structural patterns | `/cq q "pattern='impl \$T' lang=rust"` |
 
 ## Artifacts
 

@@ -77,14 +77,20 @@ class TestCacheIntrospectionCapabilities:
         original_import = importlib.import_module
 
         def blocked_import(name: str) -> object:
-            if name in ("datafusion._internal", "datafusion_ext"):
-                raise ImportError(f"Mocked: {name} unavailable")
+            blocked_modules = {"datafusion._internal", "datafusion_ext"}
+            if name in blocked_modules:
+                msg = f"Mocked: {name} unavailable"
+                raise ImportError(msg)
             return original_import(name)
 
         monkeypatch.setattr(importlib, "import_module", blocked_import)
 
-        with pytest.raises((ImportError, TypeError, RuntimeError)):
+        try:
             register_cache_introspection_functions(ctx)
+        except (ImportError, TypeError, RuntimeError):
+            pass
+        else:
+            pytest.fail("Expected extension registration to fail when hooks are unavailable.")
 
     def test_install_cache_tables_feature_gating(self) -> None:
         """Verify _install_cache_tables respects feature gate flags.

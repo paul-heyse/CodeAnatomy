@@ -42,6 +42,7 @@ def _delta_scan_defaults(ctx: SessionContext) -> Mapping[str, object]:
             "delta_scan_config_from_session",
             ctx=ctx,
             args=(None, None, None, None, None),
+            allow_fallback=False,
         )
     except Exception as exc:  # pragma: no cover - error paths depend on extension behavior
         msg = "Failed to derive Delta scan defaults from session."

@@ -121,6 +121,9 @@ def upsert_partitioned_dataset(
     if write_result.delta_result is None:
         msg = f"Partitioned delta write returned no result for {spec.name!r}."
         raise RuntimeError(msg)
+    if write_result.delta_result.version is None:
+        msg = f"Partitioned delta write did not resolve committed version for {spec.name!r}."
+        raise RuntimeError(msg)
     return write_result.delta_result.path
 
 
@@ -170,6 +173,9 @@ def write_overwrite_dataset(
     )
     if write_result.delta_result is None:
         msg = f"Overwrite delta write returned no result for {spec.name!r}."
+        raise RuntimeError(msg)
+    if write_result.delta_result.version is None:
+        msg = f"Overwrite delta write did not resolve committed version for {spec.name!r}."
         raise RuntimeError(msg)
     if data.row_count is not None and data.row_count > _STREAMING_ROW_THRESHOLD:
         record_artifact(
@@ -402,7 +408,11 @@ def _delete_delta_partitions(
     predicate = _partition_predicate(delete_partitions)
     if not predicate:
         return
-    commit_metadata = {"dataset": base_dir, "operation": "delete"}
+    commit_metadata = {
+        "dataset": base_dir,
+        "codeanatomy_operation": "delete",
+        "codeanatomy_mode": "delete",
+    }
     commit_options, commit_run = context.runtime.profile.delta_ops.reserve_delta_commit(
         key=base_dir,
         metadata=commit_metadata,

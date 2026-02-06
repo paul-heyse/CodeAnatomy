@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+import time
+from collections import deque
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
 from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
@@ -13,6 +16,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 from datafusion_engine.session.cache_policy import cache_policy_settings
+from datafusion_engine.session.helpers import deregister_table
 
 
 class _SettingsProvider(Protocol):
@@ -124,6 +128,71 @@ class _DeltaSessionBuildResult:
     installed: bool
     error: str | None
     cause: Exception | None
+
+
+@dataclass
+class DataFusionContextPool:
+    """Pool of SessionContext instances with deterministic cleanup semantics."""
+
+    profile: DataFusionRuntimeProfile
+    size: int = 1
+    run_name_prefix: str = "__run"
+    _queue: deque[SessionContext] = field(default_factory=deque, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """Normalize pool size and eagerly allocate pooled contexts."""
+        resolved_size = max(1, int(self.size))
+        object.__setattr__(self, "size", resolved_size)
+        for _ in range(resolved_size):
+            self._queue.append(SessionFactory(self.profile).build())
+
+    @contextmanager
+    def checkout(
+        self,
+        *,
+        run_prefix: str | None = None,
+    ) -> Iterator[SessionContext]:
+        """Yield a pooled SessionContext and clean up run-scoped artifacts.
+
+        Yields
+        ------
+        SessionContext
+            Session context borrowed from the pool for the caller's work.
+        """
+        ctx = self._queue.popleft() if self._queue else SessionFactory(self.profile).build()
+        resolved_prefix = run_prefix or self.next_run_prefix()
+        try:
+            yield ctx
+        finally:
+            type(self).cleanup_ephemeral_objects(ctx, prefix=resolved_prefix)
+            self._queue.append(ctx)
+
+    def next_run_prefix(self) -> str:
+        """Return a deterministic run-scoped object prefix.
+
+        Returns
+        -------
+        str
+            Prefix used to identify temporary run-scoped objects.
+        """
+        return f"{self.run_name_prefix}_{int(time.time() * 1000)}"
+
+    @staticmethod
+    def cleanup_ephemeral_objects(ctx: SessionContext, *, prefix: str) -> None:
+        """Deregister run-scoped tables from the session context."""
+        try:
+            rows = ctx.sql("SHOW TABLES").to_arrow_table().to_pylist()
+        except (RuntimeError, TypeError, ValueError):
+            return
+        for row in rows:
+            name = (
+                row.get("table_name") or row.get("name") or row.get("table") or row.get("tableName")
+            )
+            if not isinstance(name, str):
+                continue
+            if not name.startswith(prefix):
+                continue
+            deregister_table(ctx, name)
 
 
 def _build_delta_session_context(
@@ -376,4 +445,4 @@ class SessionFactory:
         return result.ctx
 
 
-__all__ = ["SessionFactory"]
+__all__ = ["DataFusionContextPool", "SessionFactory"]

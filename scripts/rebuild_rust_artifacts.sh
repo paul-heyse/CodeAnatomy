@@ -35,6 +35,10 @@ if [ "${CODEANATOMY_SUBSTRAIT_PROTOC:-}" = "1" ]; then
 fi
 feature_csv="$(IFS=,; echo "${datafusion_python_features[*]}")"
 datafusion_feature_flags=(--features "${feature_csv}")
+maturin_common_flags=(--locked)
+if [ "${profile}" = "release" ] && [ "${CODEANATOMY_WHEEL_BUILD_SDIST:-1}" = "1" ]; then
+  maturin_common_flags+=(--sdist)
+fi
 
 uv run maturin develop -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}"
 uv run maturin develop -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}"
@@ -58,9 +62,9 @@ if [ "$(uname -s)" = "Linux" ] && [ "${compatibility}" = "pypi" ]; then
     manylinux_args=(--manylinux "${manylinux_policy}")
   fi
 fi
-uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion-ext
 
 (

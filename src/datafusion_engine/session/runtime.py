@@ -106,6 +106,7 @@ from datafusion_engine.session.cache_policy import CachePolicyConfig, cache_poli
 from datafusion_engine.session.factory import SessionFactory
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import (
+    planning_sql_options,
     sql_options_for_profile,
     statement_sql_options_for_profile,
 )
@@ -130,6 +131,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.catalog.introspection import IntrospectionCache
     from datafusion_engine.delta.service import DeltaService
+    from datafusion_engine.session.factory import DataFusionContextPool
     from datafusion_engine.udf.catalog import UdfCatalog
     from obs.datafusion_runs import DataFusionRun
     from storage.deltalake.delta import IdempotentWriteOptions
@@ -306,6 +308,7 @@ _TELEMETRY_SCHEMA = pa.schema(
         pa.field("datafusion_version", pa.string()),
         pa.field("architecture_version", pa.string()),
         pa.field("sql_policy_name", pa.string()),
+        pa.field("cache_profile_name", pa.string()),
         pa.field("session_config", pa.list_(_MAP_ENTRY_SCHEMA)),
         pa.field("settings_hash", pa.string()),
         pa.field("external_table_options", pa.list_(_MAP_ENTRY_SCHEMA)),
@@ -317,6 +320,7 @@ _TELEMETRY_SCHEMA = pa.schema(
         pa.field("param_identifier_allowlist", pa.list_(pa.string())),
         pa.field("write_policy", _WRITE_POLICY_SCHEMA),
         pa.field("feature_gates", pa.list_(_MAP_ENTRY_SCHEMA)),
+        pa.field("cache_profile_settings", pa.list_(_MAP_ENTRY_SCHEMA)),
         pa.field("join_policy", pa.list_(_MAP_ENTRY_SCHEMA)),
         pa.field("parquet_read", pa.list_(_MAP_ENTRY_SCHEMA)),
         pa.field("listing_table", pa.list_(_MAP_ENTRY_SCHEMA)),
@@ -1367,6 +1371,22 @@ DATAFUSION_POLICY_PRESETS: Mapping[str, DataFusionConfigPolicy] = {
     "symtable": SYMTABLE_DF_POLICY,
 }
 
+CACHE_PROFILES: Mapping[str, Mapping[str, str]] = {
+    "snapshot_pinned": {
+        "datafusion.runtime.list_files_cache_limit": str(64 * MIB),
+        "datafusion.runtime.metadata_cache_limit": str(128 * MIB),
+    },
+    "always_latest_ttl30s": {
+        "datafusion.runtime.list_files_cache_limit": str(64 * MIB),
+        "datafusion.runtime.list_files_cache_ttl": "30s",
+        "datafusion.runtime.metadata_cache_limit": str(128 * MIB),
+    },
+    "multi_tenant_strict": {
+        "datafusion.runtime.list_files_cache_limit": "0",
+        "datafusion.runtime.metadata_cache_limit": "0",
+    },
+}
+
 SCHEMA_HARDENING_PRESETS: Mapping[str, SchemaHardeningProfile] = {
     "schema_hardening": SchemaHardeningProfile(),
     "arrow_performance": SchemaHardeningProfile(enable_view_types=True),
@@ -1778,12 +1798,7 @@ def _stable_repr(value: object) -> str:
 
 
 def _read_only_sql_options() -> SQLOptions:
-    return (
-        SQLOptions()
-        .with_allow_ddl(allow=True)
-        .with_allow_dml(allow=True)
-        .with_allow_statements(allow=True)
-    )
+    return planning_sql_options(None)
 
 
 def _sql_with_options(
@@ -2428,6 +2443,7 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         "datafusion_version": datafusion.__version__,
         "architecture_version": profile.architecture_version,
         "sql_policy_name": profile.policies.sql_policy_name,
+        "cache_profile_name": profile.policies.cache_profile_name,
         "session_config": _map_entries(settings),
         "settings_hash": profile.settings_hash(),
         "external_table_options": (
@@ -2447,6 +2463,11 @@ def _build_telemetry_payload_row(profile: DataFusionRuntimeProfile) -> dict[str,
         ),
         "write_policy": write_policy_payload,
         "feature_gates": _map_entries(profile.policies.feature_gates.settings()),
+        "cache_profile_settings": (
+            _map_entries(_cache_profile_settings(profile))
+            if profile.policies.cache_profile_name is not None
+            else None
+        ),
         "join_policy": (
             _map_entries(profile.policies.join_policy.settings())
             if profile.policies.join_policy is not None
@@ -2572,6 +2593,17 @@ def _extra_settings_payload(profile: DataFusionRuntimeProfile) -> dict[str, str]
     return payload
 
 
+def _cache_profile_settings(profile: DataFusionRuntimeProfile) -> dict[str, str]:
+    name = profile.policies.cache_profile_name
+    if name is None:
+        return {}
+    settings = CACHE_PROFILES.get(name)
+    if settings is None:
+        msg = f"Unknown cache profile name: {name!r}."
+        raise ValueError(msg)
+    return dict(settings)
+
+
 class _RuntimeDiagnosticsMixin:
     def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
         """Record an artifact through DiagnosticsRecorder when configured."""
@@ -2611,6 +2643,7 @@ class _RuntimeDiagnosticsMixin:
         )
         if profile.policies.cache_policy is not None:
             payload.update(cache_policy_settings(profile.policies.cache_policy))
+        payload.update(_cache_profile_settings(profile))
         resolved_schema_hardening = _resolved_schema_hardening_for_profile(profile)
         if resolved_schema_hardening is not None:
             payload.update(resolved_schema_hardening.settings())
@@ -2822,6 +2855,7 @@ class _RuntimeDiagnosticsMixin:
             if resolved_policy is not None
             else None,
             "sql_policy_name": policies.sql_policy_name,
+            "cache_profile_name": policies.cache_profile_name,
             "sql_policy": (
                 {
                     "allow_ddl": policies.sql_policy.allow_ddl,
@@ -2842,6 +2876,11 @@ class _RuntimeDiagnosticsMixin:
             "write_policy": _datafusion_write_policy_payload(policies.write_policy),
             "settings_overrides": dict(policies.settings_overrides),
             "feature_gates": policies.feature_gates.settings(),
+            "cache_profile_settings": (
+                _cache_profile_settings(profile)
+                if policies.cache_profile_name is not None
+                else None
+            ),
             "join_policy": (
                 policies.join_policy.settings() if policies.join_policy is not None else None
             ),
@@ -2873,6 +2912,7 @@ class _RuntimeDiagnosticsMixin:
             "datafusion_version": datafusion.__version__,
             "schema_hardening_name": policies.schema_hardening_name,
             "sql_policy_name": policies.sql_policy_name,
+            "cache_profile_name": policies.cache_profile_name,
             "session_config": dict(settings),
             "settings_hash": profile.settings_hash(),
             "external_table_options": dict(policies.external_table_options)
@@ -2894,6 +2934,11 @@ class _RuntimeDiagnosticsMixin:
             ),
             "write_policy": _datafusion_write_policy_payload(policies.write_policy),
             "feature_gates": dict(policies.feature_gates.settings()),
+            "cache_profile_settings": (
+                _cache_profile_settings(profile)
+                if policies.cache_profile_name is not None
+                else None
+            ),
             "join_policy": policies.join_policy.settings()
             if policies.join_policy is not None
             else None,
@@ -3448,7 +3493,7 @@ class FeatureGatesConfig(StructBaseStrict, frozen=True):
     enable_delta_querybuilder: bool = False
     enable_delta_data_checker: bool = False
     enable_delta_plan_codecs: bool = False
-    enforce_delta_ffi_provider: bool = False
+    enforce_delta_ffi_provider: bool = True
     enable_metrics: bool = False
     enable_tracing: bool = False
     enforce_preflight: bool = True
@@ -3518,6 +3563,14 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
     config_policy_name: str | None = "symtable"
     config_policy: DataFusionConfigPolicy | None = None
     cache_policy: CachePolicyConfig | None = None
+    cache_profile_name: (
+        Literal[
+            "snapshot_pinned",
+            "always_latest_ttl30s",
+            "multi_tenant_strict",
+        ]
+        | None
+    ) = None
     scan_policy: ScanPolicyConfig = msgspec.field(default_factory=ScanPolicyConfig)
     schema_hardening_name: str | None = "schema_hardening"
     schema_hardening: SchemaHardeningProfile | None = None
@@ -3644,6 +3697,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
             "cache_policy": (
                 self.cache_policy.fingerprint() if self.cache_policy is not None else None
             ),
+            "cache_profile_name": self.cache_profile_name,
             "schema_hardening_name": self.schema_hardening_name,
             "schema_hardening": schema_hardening_payload,
             "sql_policy_name": self.sql_policy_name,
@@ -4018,7 +4072,7 @@ class RuntimeProfileCatalog:
         return location
 
 
-class DataFusionRuntimeProfile(  # noqa: PLR0904
+class DataFusionRuntimeProfile(
     _RuntimeDiagnosticsMixin,
     StructBaseStrict,
     frozen=True,
@@ -4437,6 +4491,27 @@ class DataFusionRuntimeProfile(  # noqa: PLR0904
             Planning-ready session runtime.
         """
         return build_session_runtime(self, use_cache=True)
+
+    def context_pool(
+        self,
+        *,
+        size: int = 1,
+        run_name_prefix: str = "__run",
+    ) -> DataFusionContextPool:
+        """Return a pooled SessionContext manager for isolated run execution.
+
+        Returns
+        -------
+        DataFusionContextPool
+            Reusable context pool configured for this runtime profile.
+        """
+        from datafusion_engine.session.factory import DataFusionContextPool
+
+        return DataFusionContextPool(
+            self,
+            size=size,
+            run_name_prefix=run_name_prefix,
+        )
 
     def _ephemeral_context_phases(
         self,
@@ -5771,6 +5846,7 @@ class DataFusionRuntimeProfile(  # noqa: PLR0904
                 ctx,
                 _prepare_statement_sql(statement),
                 sql_options=self._statement_sql_options(),
+                allow_statements=True,
             )
             self._record_prepared_statement(statement)
 
@@ -6431,8 +6507,7 @@ class DataFusionRuntimeProfile(  # noqa: PLR0904
             return DataFusionSqlPolicy()
         return resolve_sql_policy(self.policies.sql_policy_name)
 
-    @staticmethod
-    def _sql_options() -> SQLOptions:
+    def _sql_options(self) -> SQLOptions:
         """Return SQLOptions for SQL execution.
 
         Returns
@@ -6440,12 +6515,7 @@ class DataFusionRuntimeProfile(  # noqa: PLR0904
         datafusion.SQLOptions
             SQL options for use with DataFusion contexts.
         """
-        return (
-            SQLOptions()
-            .with_allow_ddl(allow=True)
-            .with_allow_dml(allow=True)
-            .with_allow_statements(allow=True)
-        )
+        return sql_options_for_profile(self)
 
     def sql_options(self) -> SQLOptions:
         """Return SQLOptions derived from the resolved SQL policy.
@@ -6465,7 +6535,7 @@ class DataFusionRuntimeProfile(  # noqa: PLR0904
         datafusion.SQLOptions
             SQL options with statement execution enabled.
         """
-        return self._sql_options()
+        return statement_sql_options_for_profile(self)
 
     def _diskcache(self, kind: DiskCacheKind) -> Cache | FanoutCache | None:
         """Return a DiskCache instance for the requested kind.
@@ -7507,6 +7577,7 @@ def _apply_readiness_status(
 
 
 __all__ = [
+    "CACHE_PROFILES",
     "DATAFUSION_POLICY_PRESETS",
     "DEFAULT_DF_POLICY",
     "DEV_DF_POLICY",

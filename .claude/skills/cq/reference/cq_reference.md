@@ -303,7 +303,7 @@ All commands support filtering options; see **Filtering Options** for details.
 /cq search "config.*path" --regex
 
 # Search only in core directory
-/cq search CqResult --in tools/cq/core/
+/cq search CqResult --in tools/cq/core
 
 # Include documentation matches
 /cq search api_key --include-strings
@@ -824,15 +824,19 @@ Plain queries without `key=value` pairs fall back to smart search:
 entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS] [expand=KIND(depth=N)] [fields=FIELDS] [limit=N] [explain=true]
 ```
 
+> **Note:** `limit=N` is enforced for pattern queries only. Entity queries do not currently cap results via `limit`.
+
 **Entity Types:**
 
 | Entity | ast-grep Kinds | Description |
 |--------|---------------|-------------|
 | `function` | function, async_function | Function definitions |
 | `class` | class, class_bases | Class definitions |
-| `method` | function (in class context) | Method definitions |
 | `import` | import, import_as, from_import, from_import_as, from_import_multi, from_import_paren | All import forms |
 | `callsite` | call_name, call_attr | Call sites |
+| `method` | function (not class-context validated) | Matches all functions, not just methods |
+| `module` | — | Not implemented (always empty) |
+| `decorator` | — | Decorated definitions (see Decorator Queries) |
 
 **Name Patterns:**
 
@@ -872,7 +876,6 @@ Depth syntax: `expand=callers(depth=2)` for transitive analysis.
 | `def` | Definition signature and location (default) |
 | `callers` | Section showing calling functions |
 | `callees` | Section showing called functions |
-| `hazards` | Hazard detection (dynamic dispatch, forwarding) |
 | `evidence` | Supporting evidence with scores |
 
 **Output Structure:**
@@ -890,12 +893,12 @@ For `entity=function/class`, findings have:
 
 **Hazard Detection:**
 
-When `fields=hazards` is specified:
+Hazards are detected automatically in macro commands (`calls`, `impact`). For `q` queries, use pattern queries to find hazard patterns directly:
 
-| Hazard | Pattern | Reason |
-|--------|---------|--------|
-| dynamic_dispatch | `getattr(...)` | May resolve dynamically |
-| forwarding | `*args`/`**kwargs` in call | Obscures call target |
+```bash
+/cq q "pattern='getattr(\$X, \$Y)'"   # Dynamic dispatch
+/cq q "pattern='eval(\$X)'"           # Code execution
+```
 
 **Examples:**
 
@@ -912,8 +915,8 @@ When `fields=hazards` is specified:
 # Find functions by pattern with caller analysis
 /cq q "entity=function name=~^compile expand=callers(depth=2)"
 
-# Class definitions with hazards
-/cq q "entity=class fields=def,hazards in=src/"
+# Class definitions with def info
+/cq q "entity=class fields=def in=src/"
 
 # Limit results
 /cq q "entity=import limit=20"
@@ -1541,10 +1544,9 @@ Filter functions by scope characteristics using Python's symtable module. Essent
 
 | Type | Description |
 |------|-------------|
-| `module` | Module-level (top-level) functions |
-| `function` | Functions nested inside other functions |
-| `class` | Methods defined inside classes |
 | `closure` | Functions that capture variables from enclosing scope |
+| `nested` | Functions nested inside other functions |
+| `toplevel` | Top-level (module-level) functions |
 
 ### Query Syntax
 
@@ -1557,8 +1559,8 @@ Filter functions by scope characteristics using Python's symtable module. Essent
 | Filter | Description |
 |--------|-------------|
 | `scope=closure` | Functions that capture variables (have free vars) |
-| `scope=module` | Top-level module functions |
-| `scope=class` | Methods in classes |
+| `scope=nested` | Functions nested inside other functions |
+| `scope=toplevel` | Top-level (module-level) functions |
 | `captures=<var>` | Functions capturing a specific variable |
 | `has_cells=true` | Functions that provide variables to nested scopes |
 
@@ -1578,7 +1580,7 @@ Filter functions by scope characteristics using Python's symtable module. Essent
 /cq q "entity=function has_cells=true"
 
 # Find module-level functions only
-/cq q "entity=function scope=module in=src/"
+/cq q "entity=function scope=toplevel in=src/"
 ```
 
 ### Understanding Scope Output
@@ -1598,42 +1600,33 @@ The scope analysis output includes:
 
 ## Decorator Queries
 
-Find decorated functions or analyze decorator usage patterns.
+Find decorated definitions using `entity=decorator`.
 
-### Entity Type
-
-```bash
-/cq q "entity=decorator"  # Find decorator definitions
-```
+> **Note:** `decorated_by` and `decorator_count_*` filters are only enforced with `entity=decorator`. They are silently ignored for `entity=function` or `entity=class`.
 
 ### Decorator Filters
 
 | Filter | Description |
 |--------|-------------|
-| `decorated_by=<name>` | Functions with specific decorator |
-| `decorator_count_min=N` | Functions with at least N decorators |
-| `decorator_count_max=N` | Functions with at most N decorators |
+| `decorated_by=<name>` | Filter to specific decorator name |
+| `decorator_count_min=N` | Definitions with at least N decorators |
+| `decorator_count_max=N` | Definitions with at most N decorators |
 
 ### Examples
 
 ```bash
-# Find all @pytest.fixture decorated functions
-/cq q "entity=function decorated_by=fixture"
+# Find all decorated definitions
+/cq q "entity=decorator"
 
-# Find @dataclass decorated classes
-/cq q "entity=class decorated_by=dataclass"
+# Find definitions with @pytest.fixture
+/cq q "entity=decorator decorated_by=fixture"
 
-# Find heavily decorated functions (3+ decorators)
-/cq q "entity=function decorator_count_min=3"
+# Find definitions with 3+ decorators
+/cq q "entity=decorator decorator_count_min=3"
 
-# Find functions with @staticmethod decorator
-/cq q "entity=function decorated_by=staticmethod"
-
-# Find functions with @property decorator
-/cq q "entity=function decorated_by=property"
-
-# Find async functions with decorators
-/cq q "entity=function decorated_by=asynccontextmanager"
+# Alternative: use pattern queries for decorator-aware search
+/cq q "pattern='@dataclass' inside='class \$C'"
+/cq q "pattern='@staticmethod' inside='class \$C'"
 ```
 
 ### Decorator Extraction
@@ -1650,9 +1643,9 @@ When using `fields=def`, decorator information is included:
 
 ---
 
-## Join Queries (Cross-Entity Relationships)
+## Join Queries (Cross-Entity Relationships) — Planned
 
-Find entities by their relationships to other entities using join operations.
+> **Status: Planned.** Join syntax is parsed but join filters are not yet enforced at runtime. Queries with join clauses will return unfiltered results. Use `expand=callers` or pattern queries for relationship analysis until joins are implemented.
 
 ### Join Target Syntax
 
@@ -1944,11 +1937,11 @@ Hazards apply confidence penalties to call site resolution:
 ### Using Hazard Detection
 
 ```bash
-# Include hazards in output
-/cq q "entity=function fields=hazards"
+# Find security-sensitive patterns
+/cq q "pattern='eval(\$X)'"
 
-# Find functions with hazards in a directory
-/cq q "entity=function in=src/ fields=def,hazards"
+# Find functions with definition info in a directory
+/cq q "entity=function in=src/ fields=def"
 
 # Combine with pattern search
 /cq q "pattern='eval(\$X)'"
@@ -1956,7 +1949,7 @@ Hazards apply confidence penalties to call site resolution:
 
 ### Hazard Output Format
 
-When `fields=hazards` is specified, findings include:
+Hazard output format (from macro commands):
 
 ```json
 {
@@ -2070,7 +2063,7 @@ entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS]
 
 | Parameter | Values | Description |
 |-----------|--------|-------------|
-| `entity` | function, class, import, callsite, decorator, module | Entity type to find |
+| `entity` | function, class, import, callsite, decorator | Entity type to find (`method` and `module` have limited support) |
 | `name` | exact or `~regex` | Name pattern |
 | `in` | directory path | Search scope |
 | `exclude` | comma-separated dirs | Exclusions |
@@ -2080,7 +2073,7 @@ entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS]
 | `has` | ast-grep pattern | Nested context |
 | `precedes` | ast-grep pattern | Sequential before |
 | `follows` | ast-grep pattern | Sequential after |
-| `scope` | module, function, class, closure | Scope type filter |
+| `scope` | closure, nested, toplevel | Scope type filter |
 | `captures` | variable name | Captured variable filter |
 | `has_cells` | true/false | Cell variable filter |
 | `decorated_by` | decorator name | Decorator filter |
@@ -2090,7 +2083,7 @@ entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS]
 | `defines` | type:name | Definition join |
 | `raises` | type:name | Exception join |
 | `expand` | callers, callees, imports, raises, scope | Graph expansion |
-| `fields` | def, callers, callees, hazards, evidence | Output fields |
+| `fields` | def, loc, callers, callees, evidence, imports, decorators, decorated_functions | Output fields |
 | `limit` | integer | Result limit |
 | `explain` | true | Show query plan |
 
@@ -2101,9 +2094,6 @@ entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS]
 ### Security Audit
 
 ```bash
-# Find all security hazards
-/cq q "entity=function fields=hazards" | grep -i security
-
 # Find eval/exec usage
 /cq q "pattern='eval(\$X)'"
 /cq q "pattern='exec(\$X)'"
@@ -2131,13 +2121,13 @@ entity=TYPE [name=PATTERN] [in=DIR] [exclude=DIRS]
 
 ```bash
 # Find all entry points (module-level functions)
-/cq q "entity=function scope=module decorated_by=main"
+/cq q "entity=function scope=toplevel"
 
-# Find all dataclasses
-/cq q "entity=class decorated_by=dataclass"
+# Find all decorated definitions
+/cq q "entity=decorator decorated_by=dataclass"
 
-# Find complex functions (many decorators)
-/cq q "entity=function decorator_count_min=3"
+# Find definitions with many decorators
+/cq q "entity=decorator decorator_count_min=3"
 
 # Understand class hierarchy
 /cq q "entity=class in=src/semantics/" --format mermaid-class

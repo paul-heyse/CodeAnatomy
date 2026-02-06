@@ -23,7 +23,6 @@ from datafusion_engine.semantics_runtime import (
     semantic_runtime_from_profile,
 )
 from semantics.runtime import SemanticRuntimeConfig
-
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion
 

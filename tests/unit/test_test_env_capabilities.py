@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 from datafusion_engine.session.runtime import (
     DataFusionRuntimeProfile,
@@ -30,6 +31,17 @@ def test_required_runtime_capabilities_available() -> None:
     extension = importlib.import_module("datafusion_ext")
     assert callable(getattr(extension, "register_codeanatomy_udfs", None))
     assert callable(getattr(extension, "delta_write_ipc", None))
+    capabilities = extension.capabilities_snapshot()
+    assert isinstance(capabilities, dict)
+    for name in ("delta_control_plane", "substrait", "async_udf"):
+        payload = capabilities.get(name)
+        assert isinstance(payload, dict)
+        assert isinstance(payload.get("available"), bool)
+    manifest = extension.plugin_manifest()
+    assert isinstance(manifest, dict)
+    plugin_path = manifest.get("plugin_path")
+    assert isinstance(plugin_path, str)
+    assert Path(plugin_path).exists()
     assert hasattr(datafusion, "SessionContext")
 
     profile = DataFusionRuntimeProfile(

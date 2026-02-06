@@ -92,10 +92,14 @@ if [ "${#datafusion_python_features[@]}" -gt 0 ]; then
   datafusion_feature_csv="$(IFS=,; echo "${datafusion_python_features[*]}")"
   datafusion_feature_flags=(--features "${datafusion_feature_csv}")
 fi
+maturin_common_flags=(--locked)
+if [ "${profile}" = "release" ] && [ "${CODEANATOMY_WHEEL_BUILD_SDIST:-1}" = "1" ]; then
+  maturin_common_flags+=(--sdist)
+fi
 
-uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion-ext
 
 datafusion_wheel="$(ls -1 "${wheel_dir}"/datafusion-*.whl | sort | tail -n 1)"
@@ -141,15 +145,22 @@ with tempfile.TemporaryDirectory() as tmpdir:
     if not callable(ctx_builder):
         raise SystemExit("delta_session_context() missing from datafusion_ext wheel.")
     capabilities = getattr(ext, "capabilities_snapshot", None)
-    if callable(capabilities):
-        capabilities()
-    else:
-        snapshot = getattr(ext, "registry_snapshot", None)
-        if not callable(snapshot):
-            raise SystemExit(
-                "Neither capabilities_snapshot() nor registry_snapshot() is available in datafusion_ext."
-            )
-        snapshot(ctx_builder())
+    if not callable(capabilities):
+        raise SystemExit("capabilities_snapshot() is missing from datafusion_ext wheel.")
+    caps = capabilities()
+    if not isinstance(caps, dict):
+        raise SystemExit("capabilities_snapshot() must return a dict payload.")
+    required_caps = ("delta_control_plane", "substrait", "async_udf")
+    missing_caps = [name for name in required_caps if name not in caps]
+    if missing_caps:
+        raise SystemExit(f"Missing required capabilities: {missing_caps}")
+    plugin_manifest = getattr(ext, "plugin_manifest", None)
+    if not callable(plugin_manifest):
+        raise SystemExit("plugin_manifest() is missing from datafusion_ext wheel.")
+    manifest = plugin_manifest()
+    plugin_path = manifest.get("plugin_path") if isinstance(manifest, dict) else None
+    if not plugin_path or not Path(str(plugin_path)).exists():
+        raise SystemExit(f"plugin_manifest() returned invalid plugin_path: {plugin_path!r}")
     register_udfs = getattr(ext, "register_codeanatomy_udfs", None)
     if not callable(register_udfs):
         raise SystemExit("register_codeanatomy_udfs() missing from datafusion_ext wheel.")

@@ -197,9 +197,9 @@
       "name": "cpg_edges_by_dst"
     }
   ],
-  "ir_hash": "cb1798ed3c5ddb6821c9261d23851a5cd6da6ed11f4370b9ca176a2b70c69d8b",
+  "ir_hash": "836b43d89e1a1ee6f119d93f143f814d351378199743db8006a20c6990a6ba53",
   "join_groups": [],
-  "model_hash": "f7f6ff1cb4eb27849390633a2cebf4620ac2584a16457c4055576262f03c5cad",
+  "model_hash": "4b8c16a144f26c4c558cb4f7a8ff2b79d32a241edf033ed7f0224672420a2195",
   "views": [
     {
       "inputs": [
@@ -550,7 +550,10 @@
       ]
     },
     {
-      "inputs": [],
+      "inputs": [
+        "cst_defs_norm",
+        "rel_def_symbol"
+      ],
       "kind": "export",
       "name": "dim_exported_defs",
       "outputs": [

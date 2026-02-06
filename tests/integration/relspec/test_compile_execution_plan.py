@@ -41,9 +41,7 @@ class _MockPlanArtifacts:
             "return_types": {},
         }
 
-    udf_snapshot: dict[str, object] = field(
-        default_factory=_default_udf_snapshot
-    )
+    udf_snapshot: dict[str, object] = field(default_factory=_default_udf_snapshot)
 
 
 @dataclass(frozen=True)
@@ -166,9 +164,7 @@ def _stub_plan_with_delta_pins(monkeypatch: pytest.MonkeyPatch) -> None:
                 inputs=tuple(node.deps),
                 plan_fingerprint=getattr(node.plan_bundle, "plan_signature", ""),
                 required_udfs=tuple(getattr(node.plan_bundle, "required_udfs", ())),
-                required_rewrite_tags=tuple(
-                    getattr(node.plan_bundle, "required_rewrite_tags", ())
-                ),
+                required_rewrite_tags=tuple(getattr(node.plan_bundle, "required_rewrite_tags", ())),
             )
             for node in view_nodes
         )
@@ -214,9 +210,7 @@ def _stub_plan_with_delta_pins(monkeypatch: pytest.MonkeyPatch) -> None:
                 inputs=tuple(node.deps),
                 plan_fingerprint=getattr(node.plan_bundle, "plan_signature", ""),
                 required_udfs=tuple(getattr(node.plan_bundle, "required_udfs", ())),
-                required_rewrite_tags=tuple(
-                    getattr(node.plan_bundle, "required_rewrite_tags", ())
-                ),
+                required_rewrite_tags=tuple(getattr(node.plan_bundle, "required_rewrite_tags", ())),
             )
             for node in nodes
         )

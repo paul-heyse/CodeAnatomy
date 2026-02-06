@@ -238,12 +238,15 @@ def hash_expr_ir_from_parts(
     prepared = [_coalesced_expr(_require_expr_ir(spec), null_sentinel) for spec in parts]
     if as_string and prefix:
         effective_use_128 = use_128 if use_128 is not None else as_string
-        call_name = "stable_id_parts" if effective_use_128 else "prefixed_hash_parts64"
         id_parts = list(prepared)
         if not id_parts:
             msg = "stable_id_parts expressions require at least one part."
             raise ValueError(msg)
-        expr_ir = _call_expr(call_name, _literal_expr(prefix), *id_parts)
+        if effective_use_128:
+            expr_ir = _call_expr("stable_id_parts", _literal_expr(prefix), *id_parts)
+        else:
+            joined = _join_parts_expr(id_parts)
+            expr_ir = _call_expr("prefixed_hash64", _literal_expr(prefix), joined)
         return ExprSpec(expr_ir=expr_ir)
     parts_for_hash = list(prepared)
     if prefix:
@@ -297,9 +300,11 @@ def _hash_expr_ir(spec: HashExprSpec, *, use_128: bool | None) -> ExprIR:
     parts_for_hash = _hash_parts_expr(spec)
     if spec.as_string and spec.prefix:
         effective_use_128 = use_128 if use_128 is not None else spec.as_string
-        call_name = "stable_id_parts" if effective_use_128 else "prefixed_hash_parts64"
         id_parts = _stable_id_parts_expr(spec)
-        return _call_expr(call_name, _literal_expr(spec.prefix), *id_parts)
+        if effective_use_128:
+            return _call_expr("stable_id_parts", _literal_expr(spec.prefix), *id_parts)
+        joined = _join_parts_expr(id_parts)
+        return _call_expr("prefixed_hash64", _literal_expr(spec.prefix), joined)
     joined = _join_parts_expr(parts_for_hash)
     hash_name = _hash_name(spec, use_128=use_128)
     hashed = _call_expr(hash_name, joined)

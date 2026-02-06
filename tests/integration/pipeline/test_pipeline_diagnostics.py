@@ -47,17 +47,44 @@ def captured_diagnostics() -> list[dict[str, Any]]:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Requires full pipeline execution which is slow and complex")
 def test_plan_execution_diff_emitted_on_success(
-    minimal_python_repo: Path,
-    captured_diagnostics: list[dict[str, Any]],
     monkeypatch: pytest.MonkeyPatch,
+    captured_diagnostics: list[dict[str, Any]],
 ) -> None:
     """Run pipeline to completion; verify plan_execution_diff_v1 artifact emitted.
 
     Artifact should be present in diagnostics with missing_task_count == 0 and
     unexpected_task_count == 0.
     """
+    from hamilton_pipeline.execution import _emit_plan_execution_diff
+
+    def mock_emit(event_name: str, *, payload: dict[str, Any], event_kind: str) -> None:
+        _ = event_kind
+        captured_diagnostics.append({"event_name": event_name, "payload": payload})
+
+    monkeypatch.setattr("hamilton_pipeline.execution.emit_diagnostics_event", mock_emit)
+
+    mock_plan = Mock()
+    mock_plan.active_tasks = frozenset(["task_a", "task_b"])
+    mock_plan.plan_fingerprints = {"task_a": "fp_a", "task_b": "fp_b"}
+    mock_plan.plan_task_signatures = {"task_a": "sig_a", "task_b": "sig_b"}
+    mock_plan.plan_signature = "plan_sig_ok"
+    mock_plan.task_dependency_signature = "task_dep_ok"
+    mock_plan.reduced_task_dependency_signature = "reduced_ok"
+
+    mock_runtime = Mock()
+    mock_runtime.execution_order = ["task_a", "task_b"]
+
+    _emit_plan_execution_diff({"execution_plan": mock_plan, "runtime_artifacts": mock_runtime})
+
+    diff_events = [e for e in captured_diagnostics if e["event_name"] == "plan_execution_diff_v1"]
+    assert len(diff_events) == 1, "Should emit exactly one plan_execution_diff_v1 event"
+
+    payload = diff_events[0]["payload"]
+    assert payload["missing_task_count"] == 0
+    assert payload["unexpected_task_count"] == 0
+    assert payload["missing_tasks"] == []
+    assert payload["unexpected_tasks"] == []
 
 
 @pytest.mark.integration
@@ -213,7 +240,6 @@ def test_plan_execution_diff_payload_shape(
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Requires complex mock of scan unit metadata")
 def test_plan_execution_diff_blocked_datasets(
     monkeypatch: pytest.MonkeyPatch,
     captured_diagnostics: list[dict[str, Any]],
@@ -223,16 +249,99 @@ def test_plan_execution_diff_blocked_datasets(
     blocked_datasets should be non-empty list, blocked_scan_units should reflect
     affected scan units.
     """
+    from hamilton_pipeline.execution import _emit_plan_execution_diff
+
+    def mock_emit(event_name: str, *, payload: dict[str, Any], event_kind: str) -> None:
+        _ = event_kind
+        captured_diagnostics.append({"event_name": event_name, "payload": payload})
+
+    monkeypatch.setattr("hamilton_pipeline.execution.emit_diagnostics_event", mock_emit)
+
+    mock_plan = Mock()
+    mock_plan.active_tasks = frozenset(["task_a", "task_b", "task_c"])
+    empty_sigs: dict[str, str] = {}
+    mock_plan.plan_fingerprints = empty_sigs
+    mock_plan.plan_task_signatures = empty_sigs
+    mock_plan.plan_signature = "plan_sig_blocked"
+    mock_plan.task_dependency_signature = "task_dep_blocked"
+    mock_plan.reduced_task_dependency_signature = "reduced_blocked"
+    mock_plan.scan_task_names_by_task = {
+        "task_b": ("scan_b",),
+        "task_c": ("scan_c",),
+    }
+    mock_plan.scan_task_units_by_name = {
+        "scan_b": Mock(dataset_name="dataset_b"),
+        "scan_c": Mock(dataset_name="dataset_c"),
+    }
+
+    mock_runtime = Mock()
+    mock_runtime.execution_order = ["task_a"]
+
+    _emit_plan_execution_diff({"execution_plan": mock_plan, "runtime_artifacts": mock_runtime})
+
+    diff_events = [e for e in captured_diagnostics if e["event_name"] == "plan_execution_diff_v1"]
+    assert len(diff_events) == 1
+    payload = diff_events[0]["payload"]
+    assert payload["missing_task_count"] == 2
+    assert payload["blocked_datasets"] == ["dataset_b", "dataset_c"]
+    assert payload["blocked_scan_units"] == ["scan_b", "scan_c"]
 
 
 @pytest.mark.integration
-@pytest.mark.skip(reason="Requires full pipeline with partial failures")
 def test_pipeline_partial_output_handling(
     minimal_python_repo: Path,
     captured_diagnostics: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pipeline with some failing nodes; verify partial results recorded.
 
     Results mapping should have entries for successful nodes, failing nodes
     recorded in diagnostics.
     """
+    from hamilton_pipeline.execution import PipelineExecutionOptions, execute_pipeline
+
+    def mock_emit(event_name: str, *, payload: dict[str, Any], event_kind: str) -> None:
+        _ = event_kind
+        captured_diagnostics.append({"event_name": event_name, "payload": payload})
+
+    monkeypatch.setattr("hamilton_pipeline.execution.emit_diagnostics_event", mock_emit)
+
+    class _StubDriver:
+        def materialize(
+            self,
+            *,
+            additional_vars: list[object],
+            inputs: dict[str, object],
+            overrides: dict[str, object],
+        ) -> tuple[dict[str, object], dict[str, object]]:
+            _ = (additional_vars, inputs, overrides)
+            plan = Mock()
+            plan.active_tasks = frozenset(["task_a"])
+            plan.plan_fingerprints = {"task_a": "fp_a"}
+            plan.plan_task_signatures = {"task_a": "sig_a"}
+            plan.plan_signature = "plan_sig_partial"
+            plan.task_dependency_signature = "task_dep_partial"
+            plan.reduced_task_dependency_signature = "reduced_partial"
+            runtime = Mock()
+            runtime.execution_order = ["task_a"]
+            return (
+                {},
+                {
+                    "output_a": {"status": "ok"},
+                    "execution_plan": plan,
+                    "runtime_artifacts": runtime,
+                },
+            )
+
+    result = execute_pipeline(
+        repo_root=minimal_python_repo,
+        options=PipelineExecutionOptions(
+            outputs=("output_a", "output_b"),
+            pipeline_driver=_StubDriver(),
+        ),
+    )
+
+    assert result["output_a"] == {"status": "ok"}
+    assert result["output_b"] is None
+    diff_events = [e for e in captured_diagnostics if e["event_name"] == "plan_execution_diff_v1"]
+    assert len(diff_events) == 1

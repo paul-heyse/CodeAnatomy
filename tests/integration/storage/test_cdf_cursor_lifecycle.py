@@ -206,10 +206,6 @@ def _verify_second_read(
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="Integration test requires real Delta CDF infrastructure. "
-    "Test implementation documents expected behavior for cursor state progression."
-)
 def test_cursor_state_progression_through_cdf_reads(tmp_path: Path) -> None:
     """Cursor state progresses correctly through multiple CDF reads.
 

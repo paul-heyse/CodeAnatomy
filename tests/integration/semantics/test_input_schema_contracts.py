@@ -11,6 +11,11 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from semantics.validation import (
+    ColumnValidationSpec,
+    SemanticInputValidationError,
+    validate_semantic_input_columns,
+)
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.datafusion_runtime import df_ctx
 
@@ -28,50 +33,75 @@ def runtime_profile() -> DataFusionRuntimeProfile:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="Requires semantic input registry setup with schema validation. "
-    "Implementation needs understanding of validate_semantic_inputs error paths "
-    "for wrong column types, specifically how it reports table name, column name, "
-    "expected type, and actual type in error messages."
-)
 def test_wrong_column_type_error_message_quality() -> None:
-    """Test error message quality for wrong column types.
+    """Validation error payloads should include table and missing column details."""
+    ctx = df_ctx()
+    register_arrow_table(
+        ctx,
+        name="cst_refs",
+        value=pa.table(
+            {
+                "file_id": ["file-1"],
+                "path": ["src/example.py"],
+                # Deliberately wrong type to document current coercion gap.
+                "bstart": ["0"],
+            }
+        ),
+    )
 
-    Verifies that when a table is registered with a column having the wrong type
-    (e.g., bstart as string instead of int64), the error message names the table,
-    column, expected type, and actual type.
-    """
-    # Would require:
-    # 1. Set up semantic input registry with expected schema for cst_refs
-    # 2. Register cst_refs table with bstart: string instead of int64
-    # 3. Call validate_semantic_inputs
-    # 4. Verify error message contains:
-    #    - Table name: "cst_refs"
-    #    - Column name: "bstart"
-    #    - Expected type: "int64"
-    #    - Actual type: "string"
+    validation = validate_semantic_input_columns(
+        ctx,
+        input_mapping={"cst_refs": "cst_refs"},
+        specs=(
+            ColumnValidationSpec(
+                canonical_name="cst_refs",
+                required_columns=("file_id", "path", "bstart", "bend"),
+            ),
+        ),
+    )
+    assert not validation.valid
+    assert validation.missing_columns["cst_refs"] == ("bend",)
+
+    error = SemanticInputValidationError(validation)
+    message = str(error)
+    assert "cst_refs" in message
+    assert "bend" in message
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="Requires understanding of semantic input validation across module boundaries. "
-    "Implementation needs cross-module input validation setup with clear error "
-    "reporting that includes source module and expected column specifications."
-)
 def test_missing_required_typed_column_cross_module_error() -> None:
-    """Test error message for missing required column across module boundaries.
+    """Missing-column payload should preserve canonical->physical table mapping."""
+    ctx = df_ctx()
+    register_arrow_table(
+        ctx,
+        name="module_a_cst_refs",
+        value=pa.table(
+            {
+                "file_id": ["file-1"],
+                "bstart": [0],
+                "bend": [5],
+            }
+        ),
+    )
 
-    Verifies that when a required column is missing from a semantic input that
-    comes from a different module, the error payload includes the source module
-    and expected column specification.
-    """
-    # Would require:
-    # 1. Set up semantic input from module A expecting column X
-    # 2. Provide input missing column X
-    # 3. Verify error includes:
-    #    - Source module name
-    #    - Expected column specification (name + type)
-    #    - Clear indication of which module expected the column
+    validation = validate_semantic_input_columns(
+        ctx,
+        input_mapping={"cst_refs": "module_a_cst_refs"},
+        specs=(
+            ColumnValidationSpec(
+                canonical_name="cst_refs",
+                required_columns=("file_id", "path", "bstart", "bend"),
+            ),
+        ),
+    )
+    assert not validation.valid
+    assert validation.resolved_tables["cst_refs"] == "module_a_cst_refs"
+    assert validation.missing_columns["module_a_cst_refs"] == ("path",)
+
+    error = SemanticInputValidationError(validation)
+    message = str(error)
+    assert "module_a_cst_refs" in message
+    assert "path" in message
 
 
 @pytest.mark.integration

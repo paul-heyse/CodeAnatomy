@@ -9,8 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pyarrow as pa
 import pytest
 
+from extract.extractors.ast_extract import AstExtractOptions, extract_ast_tables
+from extract.extractors.cst_extract import CstExtractOptions, extract_cst_tables
+from extract.extractors.tree_sitter.extract import TreeSitterExtractOptions, extract_ts_tables
 from tests.test_helpers.datafusion_runtime import df_ctx
 
 
@@ -95,11 +99,6 @@ def crlf_python_file(tmp_path: Path) -> tuple[Path, str]:
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="Requires full extraction pipeline setup with CST and AST extractors. "
-    "Implementation requires coordination between extract.extractors.cst_extract "
-    "and extract.extractors.ast_extract with scip_to_byte_offsets normalization."
-)
 def test_byte_span_consistency_cst_vs_ast(
     sample_python_file: tuple[Path, str],
 ) -> None:
@@ -114,19 +113,32 @@ def test_byte_span_consistency_cst_vs_ast(
     sample_python_file
         Tuple of (file path, content) for the test Python file.
     """
-    # Would require:
-    # 1. extract_cst_tables(repo_files) -> cst output with col_unit="utf32"
-    # 2. extract_ast_tables(repo_files) -> ast output with line/col
-    # 3. scip_to_byte_offsets(ctx, occurrences_table=..., line_index_table=...)
-    # 4. Compare bstart/bend for function definitions across both
+    file_path, content = sample_python_file
+    repo_files = _repo_files_table(file_path, content)
+
+    cst_table = _bundle_table(
+        extract_cst_tables(
+            repo_files=repo_files,
+            options=CstExtractOptions(max_workers=1),
+        )["libcst_files"]
+    )
+    ast_table = _bundle_table(
+        extract_ast_tables(
+            repo_files=repo_files,
+            options=AstExtractOptions(max_workers=1),
+        )["ast_files"]
+    )
+
+    cst_spans = _cst_def_spans(cst_table)
+    ast_spans = _ast_def_spans(ast_table)
+    shared = sorted(set(cst_spans) & set(ast_spans))
+
+    assert shared, "Expected shared definitions between CST and AST outputs"
+    for name in shared:
+        assert cst_spans[name] == ast_spans[name], f"Span mismatch for definition {name!r}"
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="Requires tree-sitter extractor integration. "
-    "Implementation needs extract.extractors.tree_sitter_extract coordination "
-    "with CST extraction and byte offset normalization."
-)
 def test_byte_span_consistency_cst_vs_tree_sitter(
     sample_python_file: tuple[Path, str],
 ) -> None:
@@ -140,11 +152,29 @@ def test_byte_span_consistency_cst_vs_tree_sitter(
     sample_python_file
         Tuple of (file path, content) for the test Python file.
     """
-    # Would require:
-    # 1. extract_cst_tables(repo_files) -> cst output
-    # 2. extract_tree_sitter_tables(repo_files) -> tree-sitter output
-    # 3. Byte offset normalization for both
-    # 4. Compare bstart/bend for shared entities
+    file_path, content = sample_python_file
+    repo_files = _repo_files_table(file_path, content)
+
+    cst_table = _bundle_table(
+        extract_cst_tables(
+            repo_files=repo_files,
+            options=CstExtractOptions(max_workers=1),
+        )["libcst_files"]
+    )
+    ts_table = _bundle_table(
+        extract_ts_tables(
+            repo_files=repo_files,
+            options=TreeSitterExtractOptions(max_workers=1),
+        )["tree_sitter_files"]
+    )
+
+    cst_spans = _cst_def_spans(cst_table)
+    ts_spans = _ts_def_spans(ts_table)
+    shared = sorted(set(cst_spans) & set(ts_spans))
+
+    assert shared, "Expected shared definitions between CST and tree-sitter outputs"
+    for name in shared:
+        assert cst_spans[name] == ts_spans[name], f"Span mismatch for definition {name!r}"
 
 
 @pytest.mark.integration
@@ -269,3 +299,92 @@ def test_file_line_index_alignment(sample_python_file: tuple[Path, str]) -> None
     # Each offset should be a valid position in the file
     for offset in expected_offsets:
         assert 0 <= offset <= len(content_bytes)
+
+
+def _repo_files_table(file_path: Path, content: str) -> pa.Table:
+    file_bytes = content.encode("utf-8")
+    return pa.table(
+        {
+            "file_id": [file_path.name],
+            "path": [str(file_path)],
+            "text": [content],
+            "file_sha256": [str(len(file_bytes))],
+        }
+    )
+
+
+def _bundle_table(value: object) -> pa.Table:
+    if isinstance(value, pa.RecordBatchReader):
+        return value.read_all()
+    if isinstance(value, pa.Table):
+        return value
+    msg = f"Unsupported table type: {type(value)}"
+    raise TypeError(msg)
+
+
+def _cst_def_spans(table: pa.Table) -> dict[str, tuple[int, int]]:
+    rows = table.to_pylist()
+    if not rows:
+        return {}
+    defs = rows[0].get("defs")
+    if not isinstance(defs, list):
+        return {}
+    spans: dict[str, tuple[int, int]] = {}
+    for entry in defs:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        bstart = entry.get("def_bstart")
+        bend = entry.get("def_bend")
+        if isinstance(name, str) and isinstance(bstart, int) and isinstance(bend, int):
+            spans[name] = (bstart, bend)
+    return spans
+
+
+def _ast_def_spans(table: pa.Table) -> dict[str, tuple[int, int]]:
+    rows = table.to_pylist()
+    if not rows:
+        return {}
+    defs = rows[0].get("defs")
+    if not isinstance(defs, list):
+        return {}
+    spans: dict[str, tuple[int, int]] = {}
+    for entry in defs:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        span = _byte_span_tuple(entry.get("span"))
+        if isinstance(name, str) and span is not None:
+            spans[name] = span
+    return spans
+
+
+def _ts_def_spans(table: pa.Table) -> dict[str, tuple[int, int]]:
+    rows = table.to_pylist()
+    if not rows:
+        return {}
+    defs = rows[0].get("defs")
+    if not isinstance(defs, list):
+        return {}
+    spans: dict[str, tuple[int, int]] = {}
+    for entry in defs:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        span = _byte_span_tuple(entry.get("span"))
+        if isinstance(name, str) and span is not None:
+            spans[name] = span
+    return spans
+
+
+def _byte_span_tuple(value: object) -> tuple[int, int] | None:
+    if not isinstance(value, dict):
+        return None
+    raw_byte_span = value.get("byte_span")
+    if not isinstance(raw_byte_span, dict):
+        return None
+    byte_start = raw_byte_span.get("byte_start")
+    byte_len = raw_byte_span.get("byte_len")
+    if not isinstance(byte_start, int) or not isinstance(byte_len, int):
+        return None
+    return byte_start, byte_start + byte_len

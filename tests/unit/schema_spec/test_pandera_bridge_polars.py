@@ -31,3 +31,22 @@ def test_validate_dataframe_arrow_table_roundtrip() -> None:
     result = validate_dataframe(table, schema_spec=spec, policy=_policy())
 
     assert result is table
+
+
+def test_validate_dataframe_clamps_sample_windows() -> None:
+    schema = pa.schema([("id", pa.int64()), ("name", pa.string())])
+    spec = TableSchemaSpec.from_schema("sample_validate", schema)
+    df = pl.DataFrame({"id": [1], "name": ["a"]})
+    policy = ValidationPolicySpec(
+        enabled=True,
+        strict=True,
+        coerce=False,
+        lazy=True,
+        sample=100,
+        head=100,
+        tail=100,
+    )
+
+    result = validate_dataframe(df, schema_spec=spec, policy=policy)
+
+    assert result is df

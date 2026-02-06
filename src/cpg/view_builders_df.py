@@ -229,14 +229,14 @@ def _span_exprs_from_df(
     bstart_expr = (
         _coalesce_cols(df, bstart_cols, pa.int64())
         if any(name in df.schema().names for name in bstart_cols)
-        else udf_expr("span_start", col("span"))
+        else col("span")["bstart"]
         if "span" in df.schema().names
         else _null_expr("Int64")
     )
     bend_expr = (
         _coalesce_cols(df, bend_cols, pa.int64())
         if any(name in df.schema().names for name in bend_cols)
-        else udf_expr("span_end", col("span"))
+        else col("span")["bend"]
         if "span" in df.schema().names
         else _null_expr("Int64")
     )
@@ -461,7 +461,7 @@ def _edge_span_bounds(names: set[str]) -> tuple[Expr, Expr]:
     if "bstart" in names and "bend" in names:
         return col("bstart"), col("bend")
     if "span" in names:
-        return udf_expr("span_start", col("span")), udf_expr("span_end", col("span"))
+        return col("span")["bstart"], col("span")["bend"]
     return _null_expr("Int64"), _null_expr("Int64")
 
 
@@ -667,14 +667,14 @@ def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
         bstart = (
             col("bstart")
             if "bstart" in names
-            else udf_expr("span_start", col("span"))
+            else col("span")["bstart"]
             if "span" in names
             else _null_expr("Int64")
         )
         bend = (
             col("bend")
             if "bend" in names
-            else udf_expr("span_end", col("span"))
+            else col("span")["bend"]
             if "span" in names
             else _null_expr("Int64")
         )
@@ -721,14 +721,14 @@ def build_cpg_edges_by_dst_df(session_runtime: SessionRuntime) -> DataFrame:
         bstart = (
             col("bstart")
             if "bstart" in names
-            else udf_expr("span_start", col("span"))
+            else col("span")["bstart"]
             if "span" in names
             else _null_expr("Int64")
         )
         bend = (
             col("bend")
             if "bend" in names
-            else udf_expr("span_end", col("span"))
+            else col("span")["bend"]
             if "span" in names
             else _null_expr("Int64")
         )

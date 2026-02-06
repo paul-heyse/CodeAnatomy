@@ -53,6 +53,7 @@ class ScheduleOptions:
         Callable[[str], SchemaContract | DatasetSpec | ContractSpec | None] | None
     ) = None
     allow_partial: bool = False
+    auto_register_output_evidence: bool = True
     reduced_dependency_graph: rx.PyDiGraph | None = None
     cost_context: ScheduleCostContext = field(default_factory=ScheduleCostContext)
 
@@ -75,6 +76,7 @@ def schedule_tasks(
     """
     working = evidence.clone()
     resolved_options = options or ScheduleOptions()
+    auto_register_outputs = resolved_options.auto_register_output_evidence
     sorter = _make_sorter(graph, seed_nodes=_seed_nodes(graph, working.sources))
     ordered: list[str] = []
     visited_tasks: set[str] = set()
@@ -97,17 +99,20 @@ def schedule_tasks(
                 graph,
                 task_idx,
                 catalog=working,
+                include_internal_evidence=not auto_register_outputs,
+                require_declared_columns=not auto_register_outputs,
             ):
                 continue
             ordered.append(task.name)
             visited_tasks.add(task.name)
             valid_tasks.append(task)
-        _register_ready_evidence(
-            graph,
-            ready_evidence,
-            evidence=working,
-            output_schema_for=resolved_options.output_schema_for,
-        )
+        if auto_register_outputs:
+            _register_ready_evidence(
+                graph,
+                ready_evidence,
+                evidence=working,
+                output_schema_for=resolved_options.output_schema_for,
+            )
         sorter.done([*ready_evidence, *[graph.task_idx[task.name] for task in valid_tasks]])
     missing = tuple(sorted(set(graph.task_idx) - visited_tasks))
     validation_summary = graph_edge_validation.validate_graph_edges(graph, catalog=working)

@@ -6,9 +6,9 @@
       "anchor": {
         "col": 0,
         "end_col": 39,
-        "end_line": 479,
+        "end_line": 509,
         "file": "tools/cq/query/executor.py",
-        "line": 441
+        "line": 471
       },
       "category": "definition",
       "details": {
@@ -162,6 +162,8 @@
         "total_matches": 0,
         "truncated": false
       }
-    }
+    },
+    "mode": "entity",
+    "query": "entity=function name=execute_plan"
   }
 }

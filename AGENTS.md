@@ -24,6 +24,8 @@ to a queryable graph using Hamilton DAG + DataFusion.
 ## 2. Skills (Use Before Guessing)
 
 **CRITICAL:** These skills exist to prevent incorrect assumptions. Use them proactively.
+For canonical CQ behavior/output semantics, use
+`.claude/skills/cq/reference/cq_reference.md`.
 
 | Skill | Trigger | Command |
 |-------|---------|---------|
@@ -67,7 +69,7 @@ Smart Search automatically:
 - Supports Rust via `--lang rust` (default scope is `auto`, which searches Python+Rust)
 - Runs 5-stage enrichment (ast_grep, python_ast, import_detail, libcst, tree_sitter)
 - Tracks cross-source agreement (full/partial/conflict) for confidence
-- Classifies in parallel (up to 4 workers, fail-open)
+- Classifies in parallel (up to 4 workers, fail-open, multiprocessing `spawn`)
 
 **CQ-First Policy**
 - Use `/cq search` for code discovery instead of `rg`/`grep`.
@@ -102,6 +104,7 @@ Only use pattern queries (`/cq q "pattern=..."`) when you need:
 - Rust symbols → `/cq search <query> --lang rust`
 - Rust entities → `/cq q "entity=function lang=rust"`
 - Rust patterns → `/cq q "pattern='pub fn \$F(\$$$)' lang=rust"`
+- Scope enforcement is extension-authoritative: `python` => `.py/.pyi`, `rust` => `.rs`, `auto` => union.
 
 **Before refactoring closures:**
 - Find all closures → `/cq q "entity=function scope=closure in=<dir>"`
@@ -148,8 +151,10 @@ imports, comments, etc.
 - **Non-Code Matches**: Strings/comments (collapsed)
 - **Hot Files**: Files with most matches
 - **Suggested Follow-ups**: Next commands to explore
-- **Enrichment Tables**: Per-finding semantic enrichment (resolution, behavior, structural, agreement)
-- **Enrichment Telemetry**: Pipeline performance (per-stage applied/degraded/skipped/timing)
+- **Code Facts**: Per-finding enrichment clusters (Identity, Scope, Interface, Behavior, Structure)
+- **Code Overview**: Query-focused top block (query/mode/scope/top symbols/top files/categories)
+- **Enrichment Telemetry**: Summary/footer diagnostics (pipeline performance and stage stats)
+- **Scope Diagnostics**: Summary/footer includes `dropped_by_scope` when strict language filtering removes candidates
 
 ### Query Command Examples
 

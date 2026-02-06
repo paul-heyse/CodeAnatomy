@@ -1,10 +1,23 @@
 # Code Query (cq) Reference Documentation
 
-> Version 0.3.0 | Schema: cq.v1
+> Version 0.1.0 | Schema: cq.v2
 
 ## Overview
 
 Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It provides structured, markdown-formatted analysis that integrates directly into the conversation context. Unlike simple grep searches, cq performs semantic analysis using Python's AST, symtable, bytecode inspection, and intelligent call resolution.
+
+## Scope Integrity and Code Overview Metadata
+
+- Language scope is extension-authoritative:
+  - `python` scope accepts only `.py` and `.pyi`.
+  - `rust` scope accepts only `.rs`.
+  - `auto` scope accepts the union.
+- Top-level Code Overview metadata is guaranteed by convention:
+  - `summary.query` and `summary.mode` are populated for `search`, `q`, `run`, and macro outputs.
+  - `run` uses synthetic metadata for mixed plans (`mode="run"`, `query="multi-step plan (<n> steps)"`).
+  - macro outputs use `mode="macro:<name>"` and derive `query` from macro intent fields with argv fallback.
+- Scope drops are surfaced in summary diagnostics:
+  - `summary.dropped_by_scope` reports per-language candidate counts removed by strict extension filtering.
 
 ## Architecture
 
@@ -300,6 +313,7 @@ All commands support filtering options; see **Filtering Options** for details.
 For large result sets, the classification phase runs in parallel:
 - Matches are partitioned by file
 - Up to 4 worker processes classify partitions concurrently
+- Worker pools run with multiprocessing `spawn` context (safe in multi-threaded parents)
 - Results are merged back in original order
 - On any worker failure, classification falls back to sequential processing
 
@@ -413,48 +427,54 @@ Sessions are keyed by content hash with a maximum cache of 64 entries. When mult
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CQ_PY_ENRICHMENT_CROSSCHECK` | `true` | Enable/disable cross-source agreement checking |
+| `CQ_PY_ENRICHMENT_CROSSCHECK` | `0` | Emit Python cross-source mismatch payloads when set to `1` |
+| `CQ_RUST_ENRICHMENT_CROSSCHECK` | `0` | Emit Rust ast-grep/tree-sitter mismatch payloads when set to `1` |
 
 ---
 
-## Enrichment Tables in Markdown Output
+## Code Facts Rendering in Markdown Output
 
-When using markdown format (`--format md`), enriched findings include structured tables showing enrichment data organized by section.
+When using markdown format (`--format md`), each finding renders enrichment as a
+**Code Facts** block (not tables). Code Facts appears immediately below the finding
+line and before the context snippet.
 
-### Table Format
+### Code Facts Clusters
 
-Each enrichment section renders as a compact 3-row table (header, separator, values) with a maximum of 5 columns. If a section has more fields, multiple tables are rendered.
+Each finding is grouped into stable clusters:
 
-### Rendered Sections
+| Cluster | Purpose |
+|---------|---------|
+| **Identity** | Language, symbol role, qualified names, binding candidates |
+| **Scope** | Enclosing callable/class, import alias chain, visibility |
+| **Interface** | Signature, parameters, return type, attributes/decorators |
+| **Behavior** | Async/generator, await/yield, raise/control-flow context |
+| **Structure** | Shape-oriented fields (struct/enum metadata where available) |
 
-| Section Header | Content | When Shown |
-|---------------|---------|------------|
-| **meta** | Pipeline status, stage outcomes, timing | Always (when enrichment present) |
-| **resolution** | Qualified names, bindings, call targets | When resolution data available |
-| **behavior** | Async/yield/raise/try/loop flags | When behavior flags derived |
-| **structural** | Enclosing scope, nesting, decorators | When structural context available |
-| **parse_quality** | Syntax validity, error counts, node counts | When tree-sitter ran |
-| **agreement** | Cross-source agreement status | When multiple sources contributed |
-| **python** | Python-specific enrichment data | Python findings |
-| **rust** | Rust-specific enrichment data | Rust findings |
-| **symtable** | Symbol table enrichment (closure, free vars) | When symtable ran |
+The renderer uses language-specific enrichment for each finding:
+- Python findings render Python enrichment payloads.
+- Rust findings render Rust enrichment payloads.
+- The opposite language payload is not materialized for that finding.
 
-### Interpreting Enrichment Data
+### N/A Semantics
 
-**Resolution section** - Use to understand what a symbol resolves to:
-- `qualified_name_candidates`: Fully qualified names the symbol could refer to
-- `binding_candidates`: Where the symbol is defined/bound
-- `call_target` / `call_receiver` / `call_method`: For call sites, the decomposed target
+Missing values are rendered explicitly:
 
-**Behavior section** - Use to understand runtime characteristics:
-- `has_await`: Contains await expressions (async code)
-- `has_yield`: Is a generator function
-- `in_try` / `in_except`: Inside exception handling (may affect control flow)
+| Value | Meaning |
+|-------|---------|
+| `N/A — not applicable` | Source field/section not applicable for this finding |
+| `N/A — not resolved` | Source ran but no confident value was resolved |
+| `N/A — enrichment unavailable` | Enrichment payload was unavailable for this finding |
 
-**Agreement section** - Use to gauge confidence:
-- `full` agreement = high confidence in classification
-- `partial` = reasonable confidence, some sources unavailable
-- `conflict` = manual review recommended
+Use these meanings to guide follow-up actions:
+- `not applicable`: expected absence (language/kind mismatch); usually no follow-up required.
+- `not resolved`: applicable but unresolved; narrow scope (`--in`), run structural query (`q pattern=...`), or inspect nearby symbols/imports.
+- `enrichment unavailable`: enrichment did not run or failed-open; retry with focused input (single file/symbol) to improve enrichment coverage.
+
+### Placement and Prioritization
+
+- Code-first content appears near the top of each finding (`Code Facts`, then `Context`).
+- Residual compact `Details` are rendered after context.
+- Tooling/diagnostic metadata stays in summary/footer (`scan_method`, telemetry, capabilities).
 
 ---
 
@@ -466,14 +486,14 @@ For findings that were not enriched during the initial search phase (e.g., from 
 
 1. During `render_markdown()`, findings without enrichment data are identified
 2. A pre-computation pass collects enrichment for up to 9 unique files (`MAX_RENDER_ENRICH_FILES`)
-3. Enrichment runs in parallel via `ProcessPoolExecutor` with up to 4 workers
+3. Enrichment runs in parallel via `ProcessPoolExecutor` with up to 4 workers using `spawn`
 4. Results are cached by `(file, line, col, language)` tuple
-5. Each finding is then rendered with its enrichment tables
+5. Each finding is then rendered with `Code Facts` clusters
 
 ### Limitations
 
-- Limited to the first 9 files encountered (to bound render time)
-- Findings in files beyond this limit render without enrichment
+- Limited to the first 9 files encountered (original anchor file + next 8)
+- Findings in files beyond this limit render without render-time enrichment
 - Parallel workers are capped at 4 to avoid resource contention
 
 ---
@@ -484,32 +504,39 @@ Smart search results include telemetry data about the enrichment pipeline's perf
 
 ### Telemetry Fields
 
+Telemetry lives under `summary.enrichment_telemetry` in markdown summary JSON.
+
 | Field | Description |
 |-------|-------------|
-| `enrichment.applied` | Total findings that received enrichment |
-| `enrichment.degraded` | Findings with partial/degraded enrichment |
-| `enrichment.skipped` | Findings where enrichment was skipped |
-| `enrichment.stages` | Per-stage breakdown (ast_grep, python_ast, import_detail, libcst, tree_sitter) |
+| `summary.enrichment_telemetry.python.applied` | Python findings that received enrichment |
+| `summary.enrichment_telemetry.python.degraded` | Python findings with partial/degraded enrichment |
+| `summary.enrichment_telemetry.python.skipped` | Python findings skipped for enrichment |
+| `summary.enrichment_telemetry.python.stages.*` | Per-stage breakdown (ast_grep, python_ast, import_detail, libcst, tree_sitter) |
+| `summary.enrichment_telemetry.rust.applied` | Rust findings that received enrichment |
+| `summary.enrichment_telemetry.rust.degraded` | Rust findings with partial/degraded enrichment |
+| `summary.enrichment_telemetry.rust.skipped` | Rust findings skipped for enrichment |
+| `summary.enrichment_telemetry.rust.cache_hits/misses/evictions` | Rust enrichment cache behavior |
 
 ### Per-Stage Metrics
 
-Each stage in `enrichment.stages` reports:
+Each stage in `summary.enrichment_telemetry.python.stages` reports:
 
 | Metric | Description |
 |--------|-------------|
 | `applied` | Number of findings this stage enriched |
 | `degraded` | Number of findings with degraded results |
 | `skipped` | Number of findings this stage skipped |
-| `total_ms` | Total wall-clock time for this stage |
+| `summary.enrichment_telemetry.python.timings_ms.<stage>` | Total wall-clock time for that stage |
 
 ### Cache Statistics
 
-When PythonAnalysisSession caching is active:
+When Python tree-sitter caching is active:
 
 | Metric | Description |
 |--------|-------------|
-| `cache_hits` | Sessions reused from cache |
-| `cache_misses` | New sessions created |
+| `summary.enrichment_telemetry.python.tree_sitter_cache.cache_hits` | Tree-sitter parse cache reused |
+| `summary.enrichment_telemetry.python.tree_sitter_cache.cache_misses` | New tree-sitter parse entries created |
+| `summary.enrichment_telemetry.python.tree_sitter_cache.cache_evictions` | Cache evictions due to bounded size |
 
 ### Using Telemetry
 
@@ -1225,16 +1252,38 @@ All commands support these filtering options:
 Summary output appears at the end of markdown output (after artifacts) as a single ordered JSON line:
 
 ```
-{"macro":"search","total_matches":45,"definitions":3,"callsites":12,"imports":5,...}
+{"query":"build_graph","mode":"identifier","lang_scope":"auto","language_order":["python","rust"],"returned_matches":12,"total_matches":12,"matched_files":4,"scanned_files":19,"languages":{"python":{...},"rust":{...}},"dropped_by_scope":{"rust":2},"cross_language_diagnostics":[],"language_capabilities":{...},"enrichment_telemetry":{...}}
 ```
 
 Summary keys are ordered by priority:
-1. Core metrics (macro, total counts)
-2. Classification breakdown
-3. Enrichment telemetry
-4. Timing data
+1. Query intent and scope (`query`, `mode`, `lang_scope`, `language_order`)
+2. Match counters (`returned_matches`, `total_matches`, `matched_files`, `scanned_files`)
+3. Per-language partitions (`languages`)
+4. Diagnostics and capabilities (`dropped_by_scope`, `cross_language_diagnostics`, `language_capabilities`)
+5. Telemetry and command-specific metrics (`enrichment_telemetry`, macro-specific counters)
 
 This compact format enables efficient parsing while preserving all key metrics in a deterministic order.
+
+### Markdown Output Structure
+
+The markdown report is ordered for code-first analysis:
+
+1. Title (`# cq <command>`)
+2. `Code Overview` (query/mode/language scope/top symbols/top files/categories)
+3. `Key Findings`
+4. `Sections` (Top Contexts/Definitions/Imports/Callsites/etc.)
+5. `Evidence`
+6. `Artifacts`
+7. `Summary` (single compact JSON line)
+8. Footer (`Completed in ... | Schema ...`)
+
+### Output Interpretation
+
+Use this priority when reading CQ markdown:
+1. `Code Overview`: confirm intent, scope, and headline coverage.
+2. `Code Facts`: primary actionable context for each finding.
+3. `Context` + `Details`: local source evidence and compact residual payload.
+4. `Summary` + footer: diagnostics, capabilities, telemetry, and processing metadata.
 
 ---
 

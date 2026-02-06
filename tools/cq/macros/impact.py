@@ -875,6 +875,7 @@ def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> Cq
         root=root,
         pattern=function_name,
         macro_name="impact",
+        query=function_name,
     )
 
 

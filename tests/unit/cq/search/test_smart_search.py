@@ -307,6 +307,23 @@ class TestClassifyMatch:
         enriched = classify_match(raw, sample_repo)
         assert enriched.category == "import"
 
+    def test_classify_import_force_semantic_enrichment(self, sample_repo: Path) -> None:
+        """Forced semantic enrichment should attach Python enrichment for imports."""
+        clear_caches()
+        raw = RawMatch(
+            span=_span("src/module_a.py", 1, 7, 18),
+            text="import build_graph",
+            match_text="build_graph",
+            match_start=7,
+            match_end=18,
+            match_byte_start=7,
+            match_byte_end=18,
+        )
+        (sample_repo / "src" / "module_a.py").write_text("import build_graph\n", encoding="utf-8")
+        enriched = classify_match(raw, sample_repo, force_semantic_enrichment=True)
+        assert enriched.category == "import"
+        assert isinstance(enriched.python_enrichment, dict)
+
 
 class TestBuildFinding:
     """Tests for Finding construction."""
@@ -627,9 +644,12 @@ class TestSmartSearch:
 
         smart_search_module = importlib.import_module("tools.cq.search.smart_search")
         calls: dict[str, object] = {}
+
         class FakePool:
-            def __init__(self, *, max_workers: int) -> None:
+            def __init__(self, *, max_workers: int, mp_context: object) -> None:
                 calls["max_workers"] = max_workers
+                get_start_method = getattr(mp_context, "get_start_method", None)
+                calls["start_method"] = get_start_method() if callable(get_start_method) else None
 
             def __enter__(self) -> Self:
                 return self
@@ -653,6 +673,7 @@ class TestSmartSearch:
         _ = smart_search_module.smart_search(tmp_path, "build_graph", lang_scope="python")
         assert calls["map_called"] is True
         assert calls["max_workers"] == 4
+        assert calls["start_method"] == "spawn"
 
     def test_smart_search_with_include_globs(self, sample_repo: Path) -> None:
         """Test smart search with include globs."""
@@ -703,6 +724,30 @@ class TestSmartSearch:
         assert summary["language_order"] == ["python", "rust"]
         assert result.evidence
         assert result.evidence[0].details.get("language") == "python"
+
+    def test_rust_scope_filters_out_python_files(self, tmp_path: Path) -> None:
+        """Rust scope should not emit findings anchored to Python files."""
+        (tmp_path / "mod.py").write_text("def classify_match():\n    return 1\n", encoding="utf-8")
+        (tmp_path / "lib.rs").write_text("fn classify_match() -> i32 { 1 }\n", encoding="utf-8")
+
+        clear_caches()
+        result = smart_search(tmp_path, "classify_match", lang_scope="rust")
+        anchors = [finding.anchor for finding in result.evidence if finding.anchor is not None]
+        assert anchors
+        assert all(Path(anchor.file).suffix == ".rs" for anchor in anchors)
+        assert all(finding.details.get("language") == "rust" for finding in result.evidence)
+
+    def test_python_scope_filters_out_rust_files(self, tmp_path: Path) -> None:
+        """Python scope should not emit findings anchored to Rust files."""
+        (tmp_path / "mod.py").write_text("def classify_match():\n    return 1\n", encoding="utf-8")
+        (tmp_path / "lib.rs").write_text("fn classify_match() -> i32 { 1 }\n", encoding="utf-8")
+
+        clear_caches()
+        result = smart_search(tmp_path, "classify_match", lang_scope="python")
+        anchors = [finding.anchor for finding in result.evidence if finding.anchor is not None]
+        assert anchors
+        assert all(Path(anchor.file).suffix in {".py", ".pyi"} for anchor in anchors)
+        assert all(finding.details.get("language") == "python" for finding in result.evidence)
 
     def test_context_snippet_keeps_header_and_anchor_block(self, tmp_path: Path) -> None:
         """Context snippets should preserve function top and the match anchor block."""

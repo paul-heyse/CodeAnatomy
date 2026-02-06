@@ -619,6 +619,7 @@ def _apply_rust_fallback(
         root=root,
         pattern=pattern,
         macro_name="imports",
+        query=module,
     )
 
 

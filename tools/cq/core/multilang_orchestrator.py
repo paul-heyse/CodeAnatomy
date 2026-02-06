@@ -226,7 +226,7 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
         ]
     merged.summary = build_multilang_summary(
         SummaryBuildRequest(
-            common={},
+            common=request.summary_common or {},
             lang_scope=request.scope,
             language_order=tuple(order),
             languages=partitions,

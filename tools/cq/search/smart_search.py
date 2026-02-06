@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -44,6 +45,7 @@ from tools.cq.query.language import (
     QueryLanguageScope,
     expand_language_scope,
     file_globs_for_scope,
+    is_path_in_lang_scope,
     ripgrep_type_for_language,
     ripgrep_types_for_scope,
 )
@@ -238,6 +240,8 @@ class SearchStats(CqStruct, frozen=True):
         Whether results were truncated.
     timed_out
         Whether search timed out.
+    dropped_by_scope
+        Number of candidate matches discarded due to scope extension mismatch.
     """
 
     scanned_files: int
@@ -248,6 +252,7 @@ class SearchStats(CqStruct, frozen=True):
     timed_out: bool = False
     max_files_hit: bool = False
     max_matches_hit: bool = False
+    dropped_by_scope: int = 0
 
 
 class EnrichedMatch(CqStruct, frozen=True):
@@ -476,8 +481,18 @@ def collect_candidates(request: CandidateCollectionRequest) -> tuple[list[RawMat
     for event in proc.events:
         collector.handle_event(event)
     collector.finalize()
+    scope_filtered = [
+        match for match in collector.matches if is_path_in_lang_scope(match.file, request.lang)
+    ]
+    dropped_by_scope = len(collector.matches) - len(scope_filtered)
     stats = _build_search_stats(collector, timed_out=proc.timed_out)
-    return collector.matches, stats
+    stats = msgspec.structs.replace(
+        stats,
+        matched_files=len({match.file for match in scope_filtered}),
+        total_matches=len(scope_filtered),
+        dropped_by_scope=dropped_by_scope,
+    )
+    return scope_filtered, stats
 
 
 def classify_match(
@@ -486,6 +501,7 @@ def classify_match(
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
     enable_symtable: bool = True,
+    force_semantic_enrichment: bool = False,
 ) -> EnrichedMatch:
     """Run three-stage classification pipeline on a raw match.
 
@@ -499,6 +515,8 @@ def classify_match(
         Query language used by parsing/classification stages.
     enable_symtable
         Whether to run symtable enrichment.
+    force_semantic_enrichment
+        Force AST-driven enrichment even when heuristics could short-circuit.
 
     Returns:
     -------
@@ -510,7 +528,7 @@ def classify_match(
     # Stage 1: Fast heuristic
     heuristic = classify_heuristic(raw.text, raw.col, match_text)
 
-    if heuristic.skip_deeper and heuristic.category is not None:
+    if heuristic.skip_deeper and heuristic.category is not None and not force_semantic_enrichment:
         return _build_heuristic_enriched(raw, heuristic, match_text, lang=lang)
 
     file_path = root / raw.file
@@ -1573,10 +1591,11 @@ def _run_classification_phase(
     lang: QueryLanguage,
     raw_matches: list[RawMatch],
 ) -> list[EnrichedMatch]:
-    if not raw_matches:
+    filtered_raw_matches = [m for m in raw_matches if is_path_in_lang_scope(m.file, lang)]
+    if not filtered_raw_matches:
         return []
 
-    indexed: list[tuple[int, RawMatch]] = list(enumerate(raw_matches))
+    indexed: list[tuple[int, RawMatch]] = list(enumerate(filtered_raw_matches))
     partitioned: dict[str, list[tuple[int, RawMatch]]] = {}
     for idx, raw in indexed:
         partitioned.setdefault(raw.file, []).append((idx, raw))
@@ -1584,16 +1603,19 @@ def _run_classification_phase(
     workers = _resolve_search_worker_count(len(batches))
 
     if workers <= 1 or len(batches) <= 1:
-        return [classify_match(raw, ctx.root, lang=lang) for raw in raw_matches]
+        return [classify_match(raw, ctx.root, lang=lang) for raw in filtered_raw_matches]
 
     tasks = [(str(ctx.root), lang, batch) for batch in batches]
     try:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        ) as pool:
             indexed_results: list[tuple[int, EnrichedMatch]] = []
             for batch_results in pool.map(_classify_partition_batch, tasks):
                 indexed_results.extend(batch_results)
     except Exception:  # noqa: BLE001 - fail-open to sequential classification
-        return [classify_match(raw, ctx.root, lang=lang) for raw in raw_matches]
+        return [classify_match(raw, ctx.root, lang=lang) for raw in filtered_raw_matches]
 
     indexed_results.sort(key=lambda pair: pair[0])
     return [match for _idx, match in indexed_results]
@@ -1620,6 +1642,7 @@ class _LanguageSearchResult:
     stats: SearchStats
     pattern: str
     enriched_matches: list[EnrichedMatch]
+    dropped_by_scope: int
 
 
 def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchResult]:
@@ -1642,6 +1665,7 @@ def _run_single_partition(
         stats=stats,
         pattern=pattern,
         enriched_matches=enriched,
+        dropped_by_scope=stats.dropped_by_scope,
     )
 
 
@@ -1833,6 +1857,11 @@ def _assemble_smart_search_result(
         pattern=patterns.get("python") or next(iter(patterns.values()), None),
     )
     summary = build_summary(summary_inputs)
+    dropped_by_scope = {
+        result.lang: result.dropped_by_scope
+        for result in partition_results
+        if result.dropped_by_scope > 0
+    }
     python_matches = sum(1 for match in enriched_matches if match.language == "python")
     rust_matches = sum(1 for match in enriched_matches if match.language == "rust")
     diagnostics = _build_cross_language_diagnostics_for_search(
@@ -1848,6 +1877,8 @@ def _assemble_smart_search_result(
     summary["cross_language_diagnostics"] = diagnostics_to_summary_payload(all_diagnostics)
     summary["language_capabilities"] = build_language_capabilities(lang_scope=ctx.lang_scope)
     summary["enrichment_telemetry"] = _build_enrichment_telemetry(enriched_matches)
+    if dropped_by_scope:
+        summary["dropped_by_scope"] = dropped_by_scope
     assert_multilang_summary(summary)
     sections = build_sections(
         enriched_matches,

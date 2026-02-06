@@ -8,6 +8,8 @@ allowed-tools: Bash
 
 Use this skill for high-recall, structured repository analysis before proposing changes.
 The cq tool provides markdown-formatted analysis injected directly into context.
+Canonical behavior and output semantics are documented in
+`/home/paul/CodeAnatomy/.claude/skills/cq/reference/cq_reference.md`.
 
 ## Quick Reference
 
@@ -46,6 +48,11 @@ Use CQ first for code discovery and structural analysis:
 cq supports searching and querying Rust code (`.rs` files) alongside Python.
 Language scope defaults to `auto` (search both Python and Rust); use `--lang rust` or
 `lang=rust` to narrow scope.
+
+Scope is extension-authoritative:
+- `python` => `.py`, `.pyi`
+- `rust` => `.rs`
+- `auto` => union
 
 ## Contract and Runtime Policy
 
@@ -181,6 +188,9 @@ Smart Search (`/cq search`) is the **primary tool for finding code**. It provide
 - **Non-Code Matches**: Strings/comments (collapsed)
 - **Hot Files**: Files with most matches
 - **Suggested Follow-ups**: Next commands to explore
+- **Code Facts**: Per-finding enrichment clusters (Identity, Scope, Interface, Behavior, Structure)
+- **Code Overview**: Top-level query-focused summary (query/mode/scope/top symbols/top files/categories)
+- **Summary/Footer diagnostics**: Capability + telemetry data (including `dropped_by_scope`)
 
 ### Enrichment Pipeline
 
@@ -210,22 +220,32 @@ Enrichment data is organized into structured sections in the output:
 - `partial` = reasonable confidence (some sources unavailable)
 - `conflict` = manual review recommended (sources disagree)
 
-### Enrichment Tables in Markdown
+### Code Facts in Markdown
 
-When using `--format md`, findings include compact enrichment tables:
+When using `--format md`, findings include a compact **Code Facts** block before the
+context snippet. Values are grouped by cluster:
 
-```
-| qualified_name | symbol_role | enclosing_callable |
-|----------------|-------------|---------------------|
-| mod.func       | definition  | None                |
-```
+- **Identity**: language, role, qualified name, binding candidates
+- **Scope**: enclosing callable/class, alias chain, visibility
+- **Interface**: signature, parameters, return type, attributes/decorators
+- **Behavior**: async/generator, await/yield, raise/control-flow context
+- **Structure**: shape-oriented fields (for example struct/enum metadata when available)
 
-Tables render up to 5 columns per row. Known sections (meta, resolution, behavior, structural, parse_quality, agreement) each get their own table.
+Missing values are explicit:
+- `N/A — not applicable`
+- `N/A — not resolved`
+- `N/A — enrichment unavailable`
+
+Interpretation guidance:
+- `not applicable`: expected for this language/kind.
+- `not resolved`: applicable but unresolved; narrow scope or run a structural follow-up query.
+- `enrichment unavailable`: fail-open/missing enrichment; retry with focused scope if needed.
 
 ### Parallel Classification
 
 Smart search classification runs in parallel for large result sets:
 - Matches partitioned by file across up to 4 worker processes
+- Uses multiprocessing `spawn` context for safety in multi-threaded parents
 - Fail-open: falls back to sequential on any worker error
 - Transparent to output (same results, faster execution)
 
@@ -233,8 +253,9 @@ Smart search classification runs in parallel for large result sets:
 
 For findings missing enrichment (e.g., from macro commands), cq performs on-demand enrichment at markdown render time:
 - Enriches up to 9 unique files in parallel (4 workers)
+- Uses multiprocessing `spawn` context
 - Results cached by `(file, line, col, language)` for deduplication
-- Findings beyond the file limit render without enrichment tables
+- Findings beyond the file limit render without render-time enrichment
 
 ### Plain Query Fallback
 
@@ -405,6 +426,8 @@ All options can be set via environment variables with `CQ_` prefix:
 export CQ_FORMAT=json
 export CQ_VERBOSE=1
 export CQ_ROOT=/path/to/repo
+export CQ_PY_ENRICHMENT_CROSSCHECK=1
+export CQ_RUST_ENRICHMENT_CROSSCHECK=1
 ```
 
 ### Precedence
@@ -972,10 +995,13 @@ Smart search summary includes pipeline performance data:
 
 | Metric | Description |
 |--------|-------------|
-| `enrichment.applied` | Findings that received enrichment |
-| `enrichment.degraded` | Findings with partial enrichment |
-| `enrichment.skipped` | Findings where enrichment was skipped |
-| `enrichment.stages.*` | Per-stage applied/degraded/skipped counts and timing |
+| `summary.enrichment_telemetry.python.applied` | Python findings that received enrichment |
+| `summary.enrichment_telemetry.python.degraded` | Python findings with partial enrichment |
+| `summary.enrichment_telemetry.python.skipped` | Python findings where enrichment was skipped |
+| `summary.enrichment_telemetry.python.stages.*` | Per-stage applied/degraded/skipped counts and timing |
+| `summary.enrichment_telemetry.rust.applied` | Rust findings that received enrichment |
+| `summary.enrichment_telemetry.rust.degraded` | Rust findings with partial enrichment |
+| `summary.enrichment_telemetry.rust.skipped` | Rust findings where enrichment was skipped |
 
 Per-stage breakdown covers: `ast_grep`, `python_ast`, `import_detail`, `libcst`, `tree_sitter`.
 
@@ -986,11 +1012,12 @@ Use telemetry to diagnose enrichment issues: high degraded counts suggest parse 
 The markdown output follows this ordering:
 
 1. **Title** - Command and target
-2. **Key Findings** - Top-level actionable insights
-3. **Sections** - Organized finding groups with enrichment tables
-4. **Evidence** - Supporting details
-5. **Artifacts** - Saved JSON artifact references
-6. **Summary** - Single ordered JSON line with priority-keyed metrics
+2. **Code Overview** - Query-focused overview (code-informative, not diagnostics-first)
+3. **Key Findings** - Top-level actionable insights
+4. **Sections** - Organized finding groups with per-finding Code Facts
+5. **Evidence** - Supporting details
+6. **Artifacts** - Saved JSON artifact references
+7. **Summary** - Single ordered JSON line with priority-keyed metrics
 
 The summary appears at the end as a compact JSON line:
 ```

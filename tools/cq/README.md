@@ -1,6 +1,8 @@
 # cq tool
 
 High-signal code queries for LLM agents.
+Canonical detailed behavior reference:
+`.claude/skills/cq/reference/cq_reference.md`.
 
 ## Quick Start
 
@@ -26,7 +28,12 @@ High-signal code queries for LLM agents.
 - `search`, `q`, and `run` use a language scope selector: `auto | python | rust`.
 - Default scope is `auto`.
 - Use `--lang rust` (search) or `lang=rust` (q queries) to narrow to Rust.
+- Scope is extension-authoritative:
+  - `python` => `.py`, `.pyi`
+  - `rust` => `.rs`
+  - `auto` => union of Python and Rust extensions
 - Python-first ordering is preserved for merged results.
+- Scope drops are surfaced in summary diagnostics via `dropped_by_scope`.
 
 ## Global Options
 
@@ -100,20 +107,56 @@ Enrichment payloads are structured into sections: `meta`, `resolution`, `behavio
 `structural`, `parse_quality`, `agreement`. Cross-source agreement tracking compares
 ast_grep, libcst, and tree_sitter results ("full"/"partial"/"conflict").
 
-### Markdown Enrichment Tables
+### Markdown Code Facts
 
-In `--format md`, findings include compact enrichment tables organized by section.
-Tables use a 3-row format (header, separator, values) with max 5 columns each.
+In `--format md`, findings render enrichment as a **Code Facts** block (before context)
+with clustered fields:
+
+- `Identity`
+- `Scope`
+- `Interface`
+- `Behavior`
+- `Structure`
+
+Missing values are explicit (`N/A — not applicable`, `N/A — not resolved`,
+`N/A — enrichment unavailable`).
+
+Python findings render Python enrichment payloads; Rust findings render Rust payloads.
 
 ### Render-Time Enrichment
 
 Findings missing enrichment (e.g., from macro commands) receive on-demand enrichment
-at markdown render time, parallelized across up to 4 workers for up to 9 files.
+at markdown render time, parallelized across up to 4 workers for up to 9 files
+(anchor file + next 8). Worker pools use multiprocessing `spawn` context.
+
+### Markdown Output Structure
+
+`render_markdown` is code-first and ordered as:
+
+1. Title
+2. `Code Overview`
+3. Key Findings
+4. Sections
+5. Evidence
+6. Artifacts
+7. Summary (compact JSON line)
+8. Footer
+
+Code Overview guarantees best-effort `Query` and `Mode` values:
+- `search`/`q`: taken from result summary.
+- `run`: synthesized when needed (`mode="run"`, `query="multi-step plan (<n> steps)"` for mixed plans).
+- macro commands: standardized to `mode="macro:<macro_name>"` with macro-specific query text.
 
 ### Parallel Classification
 
 Smart search classification runs in parallel (up to 4 workers, partitioned by file)
-with fail-open fallback to sequential processing.
+with fail-open fallback to sequential processing. Worker pools use multiprocessing
+`spawn` context for safety in multi-threaded parents.
+
+## Enrichment Debug Env Vars
+
+- `CQ_PY_ENRICHMENT_CROSSCHECK=1`: include Python cross-source mismatch details.
+- `CQ_RUST_ENRICHMENT_CROSSCHECK=1`: include Rust ast-grep/tree-sitter mismatch details.
 
 ## Request Objects
 

@@ -64,6 +64,8 @@ def test_auto_scope_summary_uses_multilang_partitions(tmp_path: Path) -> None:
     plan = compile_query(query)
     result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
 
+    assert result.summary["query"] == "entity=function name=target"
+    assert result.summary["mode"] == "entity"
     assert result.summary["lang_scope"] == "auto"
     assert result.summary["language_order"] == ["python", "rust"]
     languages = result.summary["languages"]

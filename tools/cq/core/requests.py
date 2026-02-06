@@ -17,9 +17,9 @@ class SummaryBuildRequest(CqStruct, frozen=True):
     languages: Mapping[QueryLanguage, Mapping[str, object]]
     common: Mapping[str, object] | None = None
     language_order: tuple[QueryLanguage, ...] | None = None
-    cross_language_diagnostics: Sequence[
-        CrossLanguageDiagnostic | Mapping[str, object]
-    ] | None = None
+    cross_language_diagnostics: Sequence[CrossLanguageDiagnostic | Mapping[str, object]] | None = (
+        None
+    )
     language_capabilities: LanguageCapabilities | Mapping[str, object] | None = None
     enrichment_telemetry: Mapping[str, object] | None = None
 
@@ -33,6 +33,7 @@ class MergeResultsRequest(CqStruct, frozen=True):
     diagnostics: Sequence[Finding] | None = None
     diagnostic_payloads: Sequence[Mapping[str, object]] | None = None
     language_capabilities: Mapping[str, object] | None = None
+    summary_common: Mapping[str, object] | None = None
     include_section_language_prefix: bool = True
 
 

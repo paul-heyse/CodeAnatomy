@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal, cast
 
 QueryLanguage = Literal["python", "rust"]
@@ -176,6 +177,38 @@ def ripgrep_types_for_scope(scope: QueryLanguageScope) -> tuple[RipgrepLanguageT
     return tuple(ripgrep_type_for_language(lang) for lang in expand_language_scope(scope))
 
 
+def infer_language_for_path(path: str | Path) -> QueryLanguage | None:
+    """Infer concrete language from file extension.
+
+    Args:
+        path: File path string or path object.
+
+    Returns:
+        QueryLanguage | None: Inferred language, or ``None`` for non-source files.
+    """
+    suffix = Path(path).suffix.lower()
+    for lang, extensions in LANGUAGE_FILE_EXTENSIONS.items():
+        if suffix in extensions:
+            return lang
+    return None
+
+
+def is_path_in_lang_scope(path: str | Path, scope: QueryLanguageScope) -> bool:
+    """Check whether a path belongs to a language scope.
+
+    Args:
+        path: File path to validate.
+        scope: Target language scope.
+
+    Returns:
+        bool: ``True`` when the file extension belongs to the scope.
+    """
+    lang = infer_language_for_path(path)
+    if lang is None:
+        return False
+    return lang in expand_language_scope(scope)
+
+
 __all__ = [
     "DEFAULT_QUERY_LANGUAGE",
     "DEFAULT_QUERY_LANGUAGE_SCOPE",
@@ -192,6 +225,8 @@ __all__ = [
     "file_extensions_for_scope",
     "file_globs_for_language",
     "file_globs_for_scope",
+    "infer_language_for_path",
+    "is_path_in_lang_scope",
     "parse_query_language",
     "parse_query_language_scope",
     "primary_language",

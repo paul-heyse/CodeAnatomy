@@ -94,6 +94,7 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = Fa
     merged.summary["plan_version"] = plan.version
 
     steps = normalize_step_ids(plan.steps)
+    executed_results: list[tuple[str, CqResult]] = []
     q_steps: list[QStep] = []
     other_steps: list[RunStep] = []
     for step in steps:
@@ -104,6 +105,7 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = Fa
 
     for step_id, result in _execute_q_steps(q_steps, plan, ctx, stop_on_error=stop_on_error):
         merge_step_results(merged, step_id, result)
+        executed_results.append((step_id, result))
 
     for step in other_steps:
         step_id = step.id or step_type(step)
@@ -112,12 +114,67 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = Fa
         except Exception as exc:  # noqa: BLE001 - deliberate boundary
             result = _error_result(step_id, step_type(step), exc, ctx)
             merge_step_results(merged, step_id, result)
+            executed_results.append((step_id, result))
             if stop_on_error:
                 break
             continue
         merge_step_results(merged, step_id, result)
+        executed_results.append((step_id, result))
+
+    _populate_run_summary_metadata(merged, executed_results, total_steps=len(steps))
 
     return merged
+
+
+def _populate_run_summary_metadata(
+    merged: CqResult,
+    executed_results: list[tuple[str, CqResult]],
+    *,
+    total_steps: int,
+) -> None:
+    if isinstance(merged.summary.get("query"), str) and isinstance(merged.summary.get("mode"), str):
+        return
+    mode, query = _derive_run_summary_metadata(executed_results, total_steps=total_steps)
+    merged.summary.setdefault("mode", mode)
+    merged.summary.setdefault("query", query)
+
+
+def _derive_run_summary_metadata(
+    executed_results: list[tuple[str, CqResult]],
+    *,
+    total_steps: int,
+) -> tuple[str, str]:
+    if not executed_results:
+        return "run", "multi-step plan (0 steps)"
+
+    summaries = [result.summary for _, result in executed_results]
+    modes = [
+        value for summary in summaries if isinstance((value := summary.get("mode")), str) and value
+    ]
+    queries = [
+        value for summary in summaries if isinstance((value := summary.get("query")), str) and value
+    ]
+    unique_modes = list(dict.fromkeys(modes))
+    unique_queries = list(dict.fromkeys(queries))
+
+    if len(executed_results) == 1:
+        mode = unique_modes[0] if unique_modes else "run"
+        query = unique_queries[0] if unique_queries else "multi-step plan (1 step)"
+        return mode, query
+
+    if len(unique_modes) == 1 and unique_modes[0] in {
+        "entity",
+        "pattern",
+        "identifier",
+        "regex",
+        "literal",
+    }:
+        if unique_queries:
+            joined_query = " | ".join(unique_queries)
+            return unique_modes[0], joined_query
+        return unique_modes[0], f"multi-step plan ({total_steps} steps)"
+
+    return "run", f"multi-step plan ({total_steps} steps)"
 
 
 def _execute_q_steps(
@@ -413,6 +470,18 @@ def _result_language(result: CqResult) -> QueryLanguage | None:
     return None
 
 
+def _result_query_mode(result: CqResult) -> str | None:
+    mode = result.summary.get("mode")
+    if isinstance(mode, str) and mode:
+        return mode
+    plan_summary = result.summary.get("plan")
+    if isinstance(plan_summary, dict):
+        is_pattern_query = plan_summary.get("is_pattern_query")
+        if isinstance(is_pattern_query, bool):
+            return "pattern" if is_pattern_query else "entity"
+    return None
+
+
 def _result_match_count(result: CqResult | None) -> int:
     if result is None:
         return 0
@@ -454,11 +523,9 @@ def _build_collapse_diagnostics(
     return diagnostics
 
 
-def _collapse_parent_q_results(
+def _group_results_by_step(
     step_results: list[tuple[str, CqResult]],
-    *,
-    ctx: CliContext,
-) -> list[tuple[str, CqResult]]:
+) -> tuple[dict[str, list[CqResult]], list[str]]:
     grouped: dict[str, list[CqResult]] = {}
     order: list[str] = []
     for step_id, result in step_results:
@@ -466,49 +533,87 @@ def _collapse_parent_q_results(
             grouped[step_id] = []
             order.append(step_id)
         grouped[step_id].append(result)
+    return grouped, order
 
+
+def _normalize_single_group_result(result: CqResult) -> CqResult:
+    query_text = result.summary.get("query_text")
+    if isinstance(query_text, str) and query_text:
+        result.summary.setdefault("query", query_text)
+    mode = _result_query_mode(result)
+    if mode is not None:
+        result.summary.setdefault("mode", mode)
+    result.summary.pop("lang", None)
+    result.summary.pop("query_text", None)
+    return result
+
+
+def _collect_collapse_group_metadata(
+    group: list[CqResult],
+) -> tuple[dict[QueryLanguage, CqResult], str, str | None]:
+    lang_results: dict[QueryLanguage, CqResult] = {}
+    query_text = ""
+    mode: str | None = None
+    for result in group:
+        lang = _result_language(result)
+        if lang is not None and lang not in lang_results:
+            lang_results[lang] = result
+        if not query_text:
+            candidate = result.summary.get("query_text")
+            if isinstance(candidate, str):
+                query_text = candidate
+        if mode is None:
+            mode = _result_query_mode(result)
+    return lang_results, query_text, mode
+
+
+def _summary_common_for_collapse(query_text: str, mode: str | None) -> dict[str, object]:
+    summary_common: dict[str, object] = {}
+    if query_text:
+        summary_common["query"] = query_text
+    if mode is not None:
+        summary_common["mode"] = mode
+    return summary_common
+
+
+def _merge_collapsed_q_group(group: list[CqResult], *, ctx: CliContext) -> CqResult:
+    lang_results, query_text, mode = _collect_collapse_group_metadata(group)
+    diagnostics = _build_collapse_diagnostics(lang_results, query_text)
+    run = runmeta_for_scope_merge(
+        macro="q",
+        root=ctx.root,
+        argv=ctx.argv,
+        tc=ctx.toolchain,
+    )
+    return merge_language_cq_results(
+        MergeResultsRequest(
+            scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+            results=lang_results,
+            run=run,
+            diagnostics=diagnostics,
+            diagnostic_payloads=diagnostics_to_summary_payload(diagnostics),
+            language_capabilities=build_language_capabilities(
+                lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE
+            ),
+            summary_common=_summary_common_for_collapse(query_text, mode),
+        )
+    )
+
+
+def _collapse_parent_q_results(
+    step_results: list[tuple[str, CqResult]],
+    *,
+    ctx: CliContext,
+) -> list[tuple[str, CqResult]]:
+    grouped, order = _group_results_by_step(step_results)
     collapsed: list[tuple[str, CqResult]] = []
     for step_id in order:
         group = grouped[step_id]
         if len(group) == 1:
-            group[0].summary.pop("lang", None)
-            group[0].summary.pop("query_text", None)
-            collapsed.append((step_id, group[0]))
+            collapsed.append((step_id, _normalize_single_group_result(group[0])))
             continue
 
-        lang_results: dict[QueryLanguage, CqResult] = {}
-        query_text = ""
-        for result in group:
-            lang = _result_language(result)
-            if lang is None:
-                continue
-            if lang not in lang_results:
-                lang_results[lang] = result
-            if not query_text:
-                candidate = result.summary.get("query_text")
-                if isinstance(candidate, str):
-                    query_text = candidate
-
-        diagnostics = _build_collapse_diagnostics(lang_results, query_text)
-        run = runmeta_for_scope_merge(
-            macro="q",
-            root=ctx.root,
-            argv=ctx.argv,
-            tc=ctx.toolchain,
-        )
-        merged = merge_language_cq_results(
-            MergeResultsRequest(
-                scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-                results=lang_results,
-                run=run,
-                diagnostics=diagnostics,
-                diagnostic_payloads=diagnostics_to_summary_payload(diagnostics),
-                language_capabilities=build_language_capabilities(
-                    lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE
-                ),
-            )
-        )
-        collapsed.append((step_id, merged))
+        collapsed.append((step_id, _merge_collapsed_q_group(group, ctx=ctx)))
     return collapsed
 
 

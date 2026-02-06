@@ -142,8 +142,68 @@ def test_render_finding_includes_enrichment_tables() -> None:
     output = render_markdown(result)
     assert "Code Facts:" in output
     assert "Identity" in output
-    assert "Interface" in output
     assert "free_function" in output
+
+
+def test_render_enrichment_parameters_uses_params_alias() -> None:
+    finding = Finding(
+        category="definition",
+        message="function: target",
+        anchor=Anchor(file="src/module.py", line=10, col=4),
+        details=DetailPayload.from_legacy(
+            {
+                "language": "python",
+                "enrichment": {
+                    "language": "python",
+                    "python": {
+                        "meta": {"language": "python"},
+                        "resolution": {"symbol_role": "write"},
+                        "behavior": {"is_async": False},
+                        "structural": {
+                            "node_kind": "function_definition",
+                            "signature": "def target(value: int) -> int",
+                            "params": ["value: int"],
+                            "return_type": "int",
+                        },
+                    },
+                },
+            }
+        ),
+    )
+    result = CqResult(run=_run_meta(), key_findings=[finding])
+
+    output = render_markdown(result)
+    assert 'Parameters: ["value: int"]' in output
+    assert "Language: python" in output
+
+
+def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    src = repo / "src"
+    src.mkdir(parents=True)
+    (src / "module.py").write_text("import os\n", encoding="utf-8")
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q", "entity=import in=src"],
+        root=str(repo),
+        started_ms=0.0,
+        elapsed_ms=8.0,
+        toolchain={},
+    )
+    finding = Finding(
+        category="import",
+        message="import: os",
+        anchor=Anchor(file="src/module.py", line=1, col=7),
+        details=DetailPayload.from_legacy(
+            {"language": "python", "line_text": "import os", "match_text": "os"}
+        ),
+    )
+    result = CqResult(run=run, key_findings=[finding])
+
+    output = render_markdown(result)
+    assert "Code Facts:" in output
+    assert "Symbol Role:" in output
+    assert "Symbol Role: N/A — enrichment unavailable" not in output
 
 
 def test_render_query_finding_attaches_context_and_enrichment(tmp_path: Path) -> None:
@@ -178,6 +238,39 @@ def test_render_query_finding_attaches_context_and_enrichment(tmp_path: Path) ->
     assert "Details:" in output
 
 
+def test_render_code_overview_falls_back_for_run_query_mode() -> None:
+    run = RunMeta(
+        macro="run",
+        argv=["cq", "run"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=5.0,
+        toolchain={},
+    )
+    result = CqResult(
+        run=run,
+        summary={"steps": ["q_0", "search_1"]},
+    )
+    output = render_markdown(result)
+    assert "- Query: `multi-step plan (2 steps)`" in output
+    assert "- Mode: `run`" in output
+
+
+def test_render_code_overview_falls_back_for_macro_query_mode() -> None:
+    run = RunMeta(
+        macro="calls",
+        argv=["cq", "calls", "build_graph"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=5.0,
+        toolchain={},
+    )
+    result = CqResult(run=run, summary={})
+    output = render_markdown(result)
+    assert "- Query: `build_graph`" in output
+    assert "- Mode: `macro:calls`" in output
+
+
 def test_render_enrichment_uses_fixed_process_pool_workers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -188,8 +281,10 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
     calls: dict[str, object] = {}
 
     class FakePool:
-        def __init__(self, *, max_workers: int) -> None:
+        def __init__(self, *, max_workers: int, mp_context: object) -> None:
             calls["max_workers"] = max_workers
+            get_start_method = getattr(mp_context, "get_start_method", None)
+            calls["start_method"] = get_start_method() if callable(get_start_method) else None
 
         def __enter__(self) -> Self:
             return self
@@ -224,6 +319,7 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
 
     assert calls["map_called"] is True
     assert calls["max_workers"] == 4
+    assert calls["start_method"] == "spawn"
 
 
 def test_render_enrichment_parallelization_workers_1_vs_4(

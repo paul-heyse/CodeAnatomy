@@ -279,3 +279,23 @@ def test_q_and_search_share_multilang_summary_contract(
         assert result.summary["language_order"] == ["python", "rust"]
         assert "languages" in result.summary
         assert "cross_language_diagnostics" in result.summary
+
+
+def test_search_lang_scope_filters_file_extensions(tmp_path: Path) -> None:
+    """Rust scope should exclude Python findings and Python scope should exclude Rust."""
+    (tmp_path / "mod.py").write_text("def classify_match():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "mod.rs").write_text("fn classify_match() -> i32 { 1 }\n", encoding="utf-8")
+
+    rust_result = smart_search(tmp_path, "classify_match", lang_scope="rust")
+    rust_files = [
+        finding.anchor.file for finding in rust_result.evidence if finding.anchor is not None
+    ]
+    assert rust_files
+    assert all(file.endswith(".rs") for file in rust_files)
+
+    python_result = smart_search(tmp_path, "classify_match", lang_scope="python")
+    python_files = [
+        finding.anchor.file for finding in python_result.evidence if finding.anchor is not None
+    ]
+    assert python_files
+    assert all(file.endswith((".py", ".pyi")) for file in python_files)

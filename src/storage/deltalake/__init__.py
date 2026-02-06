@@ -23,11 +23,13 @@ __all__ = (
     "FilePruningPolicy",
     "FilePruningResult",
     "PartitionFilter",
+    "SnapshotKey",
     "StatsFilter",
     "StorageOptions",
     "build_commit_properties",
     "build_delta_file_index_from_add_actions",
     "build_delta_scan_config",
+    "canonical_table_uri",
     "cleanup_delta_log",
     "coerce_delta_input",
     "coerce_delta_table",
@@ -78,6 +80,7 @@ __all__ = (
     "read_delta_table",
     "read_delta_table_eager",
     "select_candidate_files",
+    "snapshot_key_for_table",
     "vacuum_delta",
 )
 
@@ -95,10 +98,12 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaMergeArrowRequest": ("storage.deltalake.delta", "DeltaMergeArrowRequest"),
     "DeltaReadRequest": ("storage.deltalake.delta", "DeltaReadRequest"),
     "DeltaSchemaRequest": ("storage.deltalake.delta", "DeltaSchemaRequest"),
+    "SnapshotKey": ("storage.deltalake.delta", "SnapshotKey"),
     "DeltaVacuumOptions": ("storage.deltalake.delta", "DeltaVacuumOptions"),
     "DeltaWriteResult": ("storage.deltalake.delta", "DeltaWriteResult"),
     "StorageOptions": ("storage.deltalake.delta", "StorageOptions"),
     "build_commit_properties": ("storage.deltalake.delta", "build_commit_properties"),
+    "canonical_table_uri": ("storage.deltalake.delta", "canonical_table_uri"),
     "idempotent_commit_properties": ("storage.deltalake.delta", "idempotent_commit_properties"),
     "build_delta_scan_config": ("storage.deltalake.scan_profile", "build_delta_scan_config"),
     "cleanup_delta_log": ("storage.deltalake.delta", "cleanup_delta_log"),
@@ -121,6 +126,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "read_delta_cdf_eager": ("storage.deltalake.delta", "read_delta_cdf_eager"),
     "read_delta_table": ("storage.deltalake.delta", "read_delta_table"),
     "read_delta_table_eager": ("storage.deltalake.delta", "read_delta_table_eager"),
+    "snapshot_key_for_table": ("storage.deltalake.delta", "snapshot_key_for_table"),
     "disable_delta_change_data_feed": (
         "storage.deltalake.delta",
         "disable_delta_change_data_feed",
@@ -231,10 +237,12 @@ if TYPE_CHECKING:
     DeltaMergeArrowRequest = _delta_io.DeltaMergeArrowRequest
     DeltaReadRequest = _delta_io.DeltaReadRequest
     DeltaSchemaRequest = _delta_io.DeltaSchemaRequest
+    SnapshotKey = _delta_io.SnapshotKey
     DeltaVacuumOptions = _delta_io.DeltaVacuumOptions
     DeltaWriteResult = _delta_io.DeltaWriteResult
     StorageOptions = _delta_io.StorageOptions
     build_commit_properties = _delta_io.build_commit_properties
+    canonical_table_uri = _delta_io.canonical_table_uri
     idempotent_commit_properties = _delta_io.idempotent_commit_properties
     build_delta_scan_config = _scan_profile.build_delta_scan_config
     cleanup_delta_log = _delta_io.cleanup_delta_log
@@ -281,6 +289,7 @@ if TYPE_CHECKING:
     read_delta_cdf_eager = _delta_io.read_delta_cdf_eager
     read_delta_table = _delta_io.read_delta_table
     read_delta_table_eager = _delta_io.read_delta_table_eager
+    snapshot_key_for_table = _delta_io.snapshot_key_for_table
     vacuum_delta = _delta_io.vacuum_delta
     FileIndexEntry = _file_index.FileIndexEntry
     build_delta_file_index_from_add_actions = _file_index.build_delta_file_index_from_add_actions

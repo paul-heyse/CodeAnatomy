@@ -310,6 +310,7 @@ def _apply_datafusion_cache_config(
         cache_policy=cache_policy,
         diskcache_profile=diskcache_profile,
         snapshot_pinned_mode=resolved.snapshot_pinned_mode,
+        cache_profile_name=resolved.cache_profile_name,
     )
     return msgspec.structs.replace(profile, policies=updated_policies)
 

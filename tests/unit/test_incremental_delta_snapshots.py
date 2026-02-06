@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_runtime import read_cdf_changes
 from semantics.incremental.changes import file_changes_from_cdf
@@ -13,6 +14,7 @@ from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.runtime import IncrementalRuntime
 from semantics.incremental.snapshot import write_repo_snapshot
 from semantics.incremental.state_store import StateStore
+from storage.deltalake import canonical_table_uri
 from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
 
 require_deltalake()
@@ -44,6 +46,9 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     )
     result_one = write_repo_snapshot(store, snapshot_one, context=context)
     assert result_one.version is not None
+    assert result_one.snapshot_key is not None
+    assert result_one.snapshot_key.version == result_one.version
+    assert result_one.snapshot_key.canonical_uri == canonical_table_uri(str(store.repo_snapshot_path()))
 
     snapshot_two = _snapshot_table(
         [
@@ -57,6 +62,9 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
     )
     result_two = write_repo_snapshot(store, snapshot_two, context=context)
     assert result_two.version is not None
+    assert result_two.snapshot_key is not None
+    assert result_two.snapshot_key.version == result_two.version
+    assert result_two.snapshot_key.canonical_uri == canonical_table_uri(str(store.repo_snapshot_path()))
 
     cdf_result = read_cdf_changes(
         context,
@@ -73,6 +81,10 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
 
 
 def _runtime_or_skip() -> IncrementalRuntime:
-    runtime = IncrementalRuntime.build()
+    runtime = IncrementalRuntime.build(
+        profile=DataFusionRuntimeProfile(
+            features=FeatureGatesConfig(enforce_delta_ffi_provider=False),
+        )
+    )
     _ = runtime.session_context()
     return runtime

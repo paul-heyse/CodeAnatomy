@@ -709,13 +709,14 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
     for candidate in candidates:
         try:
             register(candidate, payload)
-            return
         except TypeError as exc:
             message = str(exc)
             if "cannot be converted" in message:
                 type_mismatch_errors.append(message)
                 continue
             raise
+        else:
+            return
     if type_mismatch_errors:
         _LOGGER.warning(
             "Skipping cache introspection table registration due to SessionContext ABI mismatch: %s",

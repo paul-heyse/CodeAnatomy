@@ -29,5 +29,7 @@ jobs:
         shell: bash
         env:
           CODEANATOMY_WHEEL_PROFILE: release
+          CODEANATOMY_WHEEL_COMPATIBILITY: pypi
+          CODEANATOMY_WHEEL_BUILD_SDIST: "1"
         run: |
           bash scripts/build_datafusion_wheels.sh

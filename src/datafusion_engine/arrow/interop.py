@@ -153,6 +153,25 @@ class RecordBatchReaderLike(Protocol):
         """Iterate over record batches."""
         ...
 
+    def __arrow_c_stream__(  # noqa: PLW3201 - pyarrow protocol surface
+        self,
+        requested_schema: pa.Schema | None = None,
+    ) -> object:
+        """Export record batches via Arrow C stream."""
+        ...
+
+
+@runtime_checkable
+class ArrowStreamExportable(Protocol):
+    """Protocol for objects exposing the Arrow C stream export surface."""
+
+    def __arrow_c_stream__(  # noqa: PLW3201 - pyarrow protocol surface
+        self,
+        requested_schema: pa.Schema | None = None,
+    ) -> object:
+        """Return an Arrow C stream capsule."""
+        ...
+
 
 @runtime_checkable
 class NativeFileLike(Protocol):
@@ -604,6 +623,49 @@ def coerce_table_like(
     raise TypeError(msg)
 
 
+def as_reader(
+    obj: object,
+    *,
+    requested_schema: pa.Schema | None = None,
+) -> RecordBatchReaderLike:
+    """Return a RecordBatchReader for Arrow table/stream-compatible inputs.
+
+    Parameters
+    ----------
+    obj
+        Input object implementing table, reader, or Arrow stream export contracts.
+    requested_schema
+        Optional projection schema for stream-capable exporters.
+
+    Returns
+    -------
+    RecordBatchReaderLike
+        Reader view over the provided input.
+
+    Raises
+    ------
+    TypeError
+        Raised when the object cannot be adapted to a reader.
+    """
+    if isinstance(obj, RecordBatchReaderLike):
+        return obj
+    if isinstance(obj, TableLike):
+        reader = obj.to_reader()
+        if isinstance(reader, RecordBatchReaderLike):
+            return reader
+        msg = "Table-like object returned a non-reader result from to_reader()."
+        raise TypeError(msg)
+    if isinstance(obj, ArrowStreamExportable) or hasattr(obj, "__arrow_c_stream__"):
+        return reader_from_arrow_stream(obj, requested_schema=requested_schema)
+    to_reader = getattr(obj, "to_reader", None)
+    if callable(to_reader):
+        reader = to_reader()
+        if isinstance(reader, RecordBatchReaderLike):
+            return reader
+    msg = "Object is not reader-adaptable; expected table, reader, or Arrow stream exporter."
+    raise TypeError(msg)
+
+
 def concat_readers(readers: Sequence[RecordBatchReaderLike]) -> RecordBatchReaderLike:
     """Return a RecordBatchReader that concatenates reader batches in order.
 
@@ -776,6 +838,7 @@ __all__ = [
     "Array",
     "ArrayLike",
     "ArrowInvalid",
+    "ArrowStreamExportable",
     "ArrowTypeError",
     "ChunkedArray",
     "ChunkedArrayLike",
@@ -803,6 +866,7 @@ __all__ = [
     "TableLike",
     "UdfContext",
     "array",
+    "as_reader",
     "binary",
     "bool_",
     "call_expression_function",

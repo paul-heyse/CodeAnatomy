@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datafusion_engine.session.runtime import (
+    CACHE_PROFILES,
     DataFusionRuntimeProfile,
     PolicyBundleConfig,
     cache_prefix_for_delta_snapshot,
@@ -19,3 +20,17 @@ def test_cache_prefix_for_delta_snapshot() -> None:
     assert prefix is not None
     assert prefix.endswith("::events::12")
     assert prefix.startswith(profile.context_cache_key())
+
+
+def test_named_cache_profile_applies_settings_and_telemetry() -> None:
+    profile = DataFusionRuntimeProfile(
+        policies=PolicyBundleConfig(cache_profile_name="snapshot_pinned"),
+    )
+    settings = profile.settings_payload()
+    expected = CACHE_PROFILES["snapshot_pinned"]
+    for key, value in expected.items():
+        assert settings.get(key) == value
+
+    telemetry = profile.telemetry_payload()
+    assert telemetry.get("cache_profile_name") == "snapshot_pinned"
+    assert telemetry.get("cache_profile_settings") == dict(expected)

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from datafusion_engine.delta.store_policy import StorageProfile, resolve_storage_profile
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from utils.value_coercion import coerce_bool
 
@@ -183,6 +184,7 @@ def register_delta_object_store(
     *,
     table_uri: str,
     storage_options: Mapping[str, str] | None,
+    storage_profile: StorageProfile | None = None,
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> DeltaObjectStoreSpec | None:
     """Register an object store for a Delta table URI when supported.
@@ -192,7 +194,16 @@ def register_delta_object_store(
     DeltaObjectStoreSpec | None
         Registered object store spec or ``None`` when registration is skipped.
     """
-    spec = _resolve_store_spec(table_uri=table_uri, storage_options=storage_options)
+    profile = storage_profile or resolve_storage_profile(
+        table_uri=table_uri,
+        policy=None,
+        storage_options=storage_options,
+        log_storage_options=None,
+    )
+    spec = _resolve_store_spec(
+        table_uri=profile.canonical_uri,
+        storage_options=profile.to_datafusion_object_store_options(),
+    )
     if spec is None:
         return None
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)

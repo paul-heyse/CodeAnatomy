@@ -7,7 +7,32 @@ from typing import TYPE_CHECKING
 from datafusion import SQLOptions
 
 if TYPE_CHECKING:
+    from datafusion_engine.compile.options import DataFusionSqlPolicy
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+
+def _default_read_only_sql_options() -> SQLOptions:
+    return (
+        SQLOptions()
+        .with_allow_ddl(allow=False)
+        .with_allow_dml(allow=False)
+        .with_allow_statements(allow=False)
+    )
+
+
+def _policy_for_profile(profile: DataFusionRuntimeProfile | None) -> DataFusionSqlPolicy | None:
+    if profile is None:
+        return None
+    from datafusion_engine.compile.options import DataFusionSqlPolicy, resolve_sql_policy
+
+    if profile.policies.sql_policy is not None:
+        return profile.policies.sql_policy
+    fallback = DataFusionSqlPolicy(
+        allow_ddl=False,
+        allow_dml=False,
+        allow_statements=False,
+    )
+    return resolve_sql_policy(profile.policies.sql_policy_name, fallback=fallback)
 
 
 def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
@@ -23,13 +48,10 @@ def sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOpti
     SQLOptions
         SQL options for use with DataFusion contexts.
     """
-    _ = profile
-    return (
-        SQLOptions()
-        .with_allow_ddl(allow=True)
-        .with_allow_dml(allow=True)
-        .with_allow_statements(allow=True)
-    )
+    policy = _policy_for_profile(profile)
+    if policy is None:
+        return _default_read_only_sql_options()
+    return policy.to_sql_options()
 
 
 def safe_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
@@ -41,12 +63,7 @@ def safe_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQ
         SQL options that disallow DDL/DML statements.
     """
     _ = profile
-    return (
-        SQLOptions()
-        .with_allow_ddl(allow=False)
-        .with_allow_dml(allow=False)
-        .with_allow_statements(allow=False)
-    )
+    return _default_read_only_sql_options()
 
 
 def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
@@ -62,13 +79,7 @@ def statement_sql_options_for_profile(profile: DataFusionRuntimeProfile | None) 
     SQLOptions
         SQL options for statement execution.
     """
-    _ = profile
-    return (
-        SQLOptions()
-        .with_allow_ddl(allow=True)
-        .with_allow_dml(allow=True)
-        .with_allow_statements(allow=True)
-    )
+    return sql_options_for_profile(profile)
 
 
 def planning_sql_options(profile: DataFusionRuntimeProfile | None) -> SQLOptions:
@@ -84,7 +95,7 @@ def planning_sql_options(profile: DataFusionRuntimeProfile | None) -> SQLOptions
     SQLOptions
         SQL options for planning contexts.
     """
-    return sql_options_for_profile(profile)
+    return safe_sql_options_for_profile(profile)
 
 
 __all__ = [

@@ -117,7 +117,7 @@ def _split_top_level_types(text: str) -> list[str]:
 def _strip_type_prefix(text: str) -> str:
     if ":" in text:
         prefix, rest = text.split(":", 1)
-        if prefix in {"item", "field", "key", "value"}:
+        if prefix in {"item", "field", "key", "value", "element"}:
             return rest
     return text
 

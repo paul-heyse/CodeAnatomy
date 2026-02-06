@@ -15,6 +15,7 @@ from datafusion_engine.plan.udf_analysis import extract_udfs_from_plan_bundle
 from datafusion_engine.session.runtime import (
     DataFusionRuntimeProfile,
     DiagnosticsConfig,
+    FeatureGatesConfig,
     record_view_definition,
 )
 from datafusion_engine.views.artifacts import (
@@ -65,6 +66,7 @@ class _DiagnosticsSink(DiagnosticsSink):
 def _runtime_with_sink() -> tuple[IncrementalRuntime, _DiagnosticsSink]:
     sink = _DiagnosticsSink()
     df_profile = DataFusionRuntimeProfile(
+        features=FeatureGatesConfig(enforce_delta_ffi_provider=False),
         diagnostics=DiagnosticsConfig(diagnostics_sink=sink),
     )
     runtime = IncrementalRuntime.build(profile=df_profile)
@@ -132,6 +134,13 @@ def test_invalidation_snapshot_round_trip(tmp_path: Path) -> None:
     snapshot = build_invalidation_snapshot(context, state_store=store)
     path = write_invalidation_snapshot(store, snapshot, context=context)
     assert path
+    resolved = context.resolve_storage(table_uri=path)
+    version = runtime.profile.delta_ops.delta_service().table_version(
+        path=path,
+        storage_options=resolved.storage_options,
+        log_storage_options=resolved.log_storage_options,
+    )
+    assert version is not None
 
     loaded = read_invalidation_snapshot(store, context=context)
     assert loaded is not None

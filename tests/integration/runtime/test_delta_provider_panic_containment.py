@@ -21,28 +21,25 @@ from tests.test_helpers.optional_deps import require_datafusion, require_delta_e
 def setup_module() -> None:
     """Ensure DataFusion and Delta extension are available."""
     require_datafusion()
+    require_delta_extension()
 
 
 @pytest.mark.integration
 class TestDeltaProviderPanicContainment:
     """Verify Delta provider construction contains FFI failures."""
 
-    def test_bad_uri_yields_structured_error(self, tmp_path: object) -> None:
+    def test_bad_uri_yields_structured_error(self) -> None:
         """Verify invalid Delta URI produces structured error, not panic.
 
         Given an invalid Delta table URI, delta_provider_from_session()
         should raise a structured error (RuntimeError or DataFusionEngineError),
         not an uncaught FFI panic.
         """
-        try:
-            require_delta_extension()
-        except RuntimeError:
-            pytest.skip("Delta extension not available")
-
         from datafusion_engine.delta.control_plane import (
             DeltaProviderRequest,
             delta_provider_from_session,
         )
+        from datafusion_engine.errors import DataFusionEngineError
         from tests.test_helpers.datafusion_runtime import df_ctx
 
         ctx = df_ctx()
@@ -54,8 +51,12 @@ class TestDeltaProviderPanicContainment:
             delta_scan=None,
         )
 
-        with pytest.raises((RuntimeError, OSError, ValueError)):
+        try:
             delta_provider_from_session(ctx, request=request)
+        except (RuntimeError, OSError, ValueError, DataFusionEngineError):
+            pass
+        else:
+            pytest.fail("Expected structured provider error for invalid Delta URI.")
 
     def test_corrupt_metadata_yields_structured_error(self, tmp_path: object) -> None:
         """Verify corrupt Delta metadata produces structured error.
@@ -65,15 +66,11 @@ class TestDeltaProviderPanicContainment:
         """
         from pathlib import Path
 
-        try:
-            require_delta_extension()
-        except RuntimeError:
-            pytest.skip("Delta extension not available")
-
         from datafusion_engine.delta.control_plane import (
             DeltaProviderRequest,
             delta_provider_from_session,
         )
+        from datafusion_engine.errors import DataFusionEngineError
         from tests.test_helpers.datafusion_runtime import df_ctx
 
         # Create a fake Delta directory with invalid log
@@ -92,8 +89,12 @@ class TestDeltaProviderPanicContainment:
             delta_scan=None,
         )
 
-        with pytest.raises((RuntimeError, OSError, ValueError)):
+        try:
             delta_provider_from_session(ctx, request=request)
+        except (RuntimeError, OSError, ValueError, DataFusionEngineError):
+            pass
+        else:
+            pytest.fail("Expected structured provider error for corrupt Delta metadata.")
 
     def test_provider_request_is_frozen(self) -> None:
         """Verify DeltaProviderRequest is immutable."""

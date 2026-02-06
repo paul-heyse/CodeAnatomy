@@ -545,22 +545,36 @@ def _bootstrap_observability_row(schema: pa.Schema) -> dict[str, object]:
 
 def _append_observability_row(request: _AppendObservabilityRequest) -> int | None:
     table = pa.Table.from_pylist([dict(request.payload)], schema=request.schema)
-    df = datafusion_from_arrow(request.ctx, name=f"{request.location.path}_append", value=table)
+    append_name = f"{request.location.path}_append_{time.time_ns()}"
+    df = datafusion_from_arrow(request.ctx, name=append_name, value=table)
     pipeline = WritePipeline(ctx=request.ctx, runtime_profile=request.runtime_profile)
-    result = pipeline.write(
-        WriteRequest(
-            source=df,
-            destination=str(request.location.path),
-            format=WriteFormat.DELTA,
-            mode=WriteMode.APPEND,
-            format_options={
-                "commit_metadata": {
-                    "operation": request.operation,
-                    **(request.commit_metadata or {}),
-                }
-            },
+    try:
+        result = pipeline.write(
+            WriteRequest(
+                source=df,
+                destination=str(request.location.path),
+                format=WriteFormat.DELTA,
+                mode=WriteMode.APPEND,
+                format_options={
+                    "commit_metadata": {
+                        "operation": request.operation,
+                        **(request.commit_metadata or {}),
+                    }
+                },
+            )
         )
-    )
+    except Exception as exc:  # pragma: no cover - defensive fail-open path
+        if request.runtime_profile is not None:
+            request.runtime_profile.record_artifact(
+                "delta_observability_append_failed_v1",
+                {
+                    "event_time_unix_ms": int(time.time() * 1000),
+                    "table": request.location.path,
+                    "operation": request.operation,
+                    "error": str(exc),
+                },
+            )
+        return None
     if result.delta_result is None:
         return None
     return result.delta_result.version

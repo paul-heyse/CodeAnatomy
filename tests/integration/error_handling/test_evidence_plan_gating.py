@@ -28,7 +28,13 @@ from extract.coordination.spec_helpers import (
 
 @pytest.fixture
 def evidence_plan_cst_only() -> EvidencePlan:
-    """Evidence plan requiring only CST-related datasets."""
+    """Evidence plan requiring only CST-related datasets.
+
+    Returns
+    -------
+    EvidencePlan
+        Plan containing only CST sources and cst_refs projection.
+    """
     return EvidencePlan(
         sources=("cst_refs", "cst_defs", "cst_callsites"),
         required_columns={"cst_refs": ("file_id", "bstart", "bend", "qualified_name")},
@@ -37,7 +43,13 @@ def evidence_plan_cst_only() -> EvidencePlan:
 
 @pytest.fixture
 def evidence_plan_with_ast() -> EvidencePlan:
-    """Evidence plan requiring CST and AST datasets."""
+    """Evidence plan requiring CST and AST datasets.
+
+    Returns
+    -------
+    EvidencePlan
+        Plan containing CST and AST sources.
+    """
     return EvidencePlan(
         sources=("cst_refs", "cst_defs", "ast_files", "ast_nodes"),
     )
@@ -45,7 +57,13 @@ def evidence_plan_with_ast() -> EvidencePlan:
 
 @pytest.fixture
 def evidence_plan_compiled() -> EvidencePlan:
-    """Evidence plan compiled from string output names."""
+    """Evidence plan compiled from string output names.
+
+    Returns
+    -------
+    EvidencePlan
+        Compiled plan built via ``compile_evidence_plan``.
+    """
     return compile_evidence_plan(
         rules=["cst_refs", "cst_defs"],
         extra_sources=("ast_files",),
@@ -179,7 +197,8 @@ class TestEvidencePlanGating:
         plan = EvidencePlan(sources=("cst_refs",))
         # Find the metadata row for cst_refs
         matching_rows = [
-            row for row in extract_metadata_specs()
+            row
+            for row in extract_metadata_specs()
             if row.name == "cst_refs" or row.output_name() == "cst_refs"
         ]
         if matching_rows:

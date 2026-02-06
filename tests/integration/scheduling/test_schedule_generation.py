@@ -34,7 +34,13 @@ from relspec.rustworkx_schedule import (
 
 @pytest.fixture
 def simple_linear_deps() -> tuple[InferredDeps, ...]:
-    """Two tasks with linear dependency: task_a -> ev_a -> task_b."""
+    """Two tasks with linear dependency: task_a -> ev_a -> task_b.
+
+    Returns
+    -------
+    tuple[InferredDeps, ...]
+        Dependency set encoding a simple linear chain.
+    """
     return (
         InferredDeps(
             task_name="task_a",
@@ -54,7 +60,13 @@ def simple_linear_deps() -> tuple[InferredDeps, ...]:
 
 @pytest.fixture
 def independent_deps() -> tuple[InferredDeps, ...]:
-    """Three independent tasks with no inter-dependencies."""
+    """Three independent tasks with no inter-dependencies.
+
+    Returns
+    -------
+    tuple[InferredDeps, ...]
+        Dependency set containing three independent tasks.
+    """
     return (
         InferredDeps(
             task_name="task_x",
@@ -79,8 +91,16 @@ def independent_deps() -> tuple[InferredDeps, ...]:
 
 @pytest.fixture
 def diamond_deps() -> tuple[InferredDeps, ...]:
-    """Diamond dependency: task_a -> ev_a, task_b consumes ev_a,
-    task_c consumes ev_a, task_d consumes ev_b and ev_c."""
+    """Diamond dependency fixture.
+
+    task_a produces ev_a, task_b and task_c consume ev_a, and task_d
+    consumes both ev_b and ev_c.
+
+    Returns
+    -------
+    tuple[InferredDeps, ...]
+        Dependency set encoding a diamond-shaped graph.
+    """
     return (
         InferredDeps(
             task_name="task_a",
@@ -111,25 +131,49 @@ def diamond_deps() -> tuple[InferredDeps, ...]:
 
 @pytest.fixture
 def simple_linear_graph(simple_linear_deps: tuple[InferredDeps, ...]) -> TaskGraph:
-    """Build TaskGraph from simple linear deps."""
+    """Build TaskGraph from simple linear deps.
+
+    Returns
+    -------
+    TaskGraph
+        Task graph built from ``simple_linear_deps``.
+    """
     return build_task_graph_from_inferred_deps(simple_linear_deps)
 
 
 @pytest.fixture
 def independent_graph(independent_deps: tuple[InferredDeps, ...]) -> TaskGraph:
-    """Build TaskGraph from independent deps."""
+    """Build TaskGraph from independent deps.
+
+    Returns
+    -------
+    TaskGraph
+        Task graph built from ``independent_deps``.
+    """
     return build_task_graph_from_inferred_deps(independent_deps)
 
 
 @pytest.fixture
 def diamond_graph(diamond_deps: tuple[InferredDeps, ...]) -> TaskGraph:
-    """Build TaskGraph from diamond deps."""
+    """Build TaskGraph from diamond deps.
+
+    Returns
+    -------
+    TaskGraph
+        Task graph built from ``diamond_deps``.
+    """
     return build_task_graph_from_inferred_deps(diamond_deps)
 
 
 @pytest.fixture
 def empty_evidence_catalog() -> EvidenceCatalog:
-    """Empty evidence catalog (no pre-registered evidence)."""
+    """Empty evidence catalog (no pre-registered evidence).
+
+    Returns
+    -------
+    EvidenceCatalog
+        Empty catalog instance.
+    """
     return EvidenceCatalog()
 
 
@@ -139,6 +183,11 @@ def evidence_catalog_with_ev_a() -> EvidenceCatalog:
 
     This simulates an evidence source that already exists (e.g.,
     from a previous extraction run).
+
+    Returns
+    -------
+    EvidenceCatalog
+        Catalog containing a registered schema for ``ev_a``.
     """
     catalog = EvidenceCatalog()
     schema = pa.schema([("col_x", pa.string()), ("col_y", pa.int64())])
@@ -156,9 +205,7 @@ class TestScheduleGeneration:
         empty_evidence_catalog: EvidenceCatalog,
     ) -> None:
         """Verify schedule_tasks() returns a TaskSchedule."""
-        schedule = schedule_tasks(
-            simple_linear_graph, evidence=empty_evidence_catalog
-        )
+        schedule = schedule_tasks(simple_linear_graph, evidence=empty_evidence_catalog)
         assert isinstance(schedule, TaskSchedule)
 
     def test_schedule_ordered_tasks_are_strings(
@@ -167,9 +214,7 @@ class TestScheduleGeneration:
         empty_evidence_catalog: EvidenceCatalog,
     ) -> None:
         """Verify ordered_tasks contains task name strings."""
-        schedule = schedule_tasks(
-            simple_linear_graph, evidence=empty_evidence_catalog
-        )
+        schedule = schedule_tasks(simple_linear_graph, evidence=empty_evidence_catalog)
         assert isinstance(schedule.ordered_tasks, tuple)
         for name in schedule.ordered_tasks:
             assert isinstance(name, str)
@@ -187,9 +232,7 @@ class TestScheduleGeneration:
         IMPORTANT: Check via predecessor graph topology, not by comparing
         TaskNode.inputs (which are evidence names, not task names).
         """
-        schedule = schedule_tasks(
-            simple_linear_graph, evidence=empty_evidence_catalog
-        )
+        schedule = schedule_tasks(simple_linear_graph, evidence=empty_evidence_catalog)
         task_positions = {name: i for i, name in enumerate(schedule.ordered_tasks)}
 
         # task_a must appear before task_b
@@ -204,9 +247,7 @@ class TestScheduleGeneration:
         empty_evidence_catalog: EvidenceCatalog,
     ) -> None:
         """Verify diamond dependency ordering."""
-        schedule = schedule_tasks(
-            diamond_graph, evidence=empty_evidence_catalog
-        )
+        schedule = schedule_tasks(diamond_graph, evidence=empty_evidence_catalog)
         positions = {name: i for i, name in enumerate(schedule.ordered_tasks)}
 
         # task_a must come before task_b and task_c
@@ -228,9 +269,7 @@ class TestScheduleGeneration:
         empty_evidence_catalog: EvidenceCatalog,
     ) -> None:
         """Verify independent tasks placed in same generation."""
-        schedule = schedule_tasks(
-            independent_graph, evidence=empty_evidence_catalog
-        )
+        schedule = schedule_tasks(independent_graph, evidence=empty_evidence_catalog)
         # Independent tasks should have at least one generation with multiple tasks
         multi_task_gens = [g for g in schedule.generations if len(g) > 1]
         assert len(multi_task_gens) > 0, "Expected parallel tasks in some generation"
@@ -241,9 +280,7 @@ class TestScheduleGeneration:
         empty_evidence_catalog: EvidenceCatalog,
     ) -> None:
         """Verify generation waves respect dependencies."""
-        schedule = schedule_tasks(
-            diamond_graph, evidence=empty_evidence_catalog
-        )
+        schedule = schedule_tasks(diamond_graph, evidence=empty_evidence_catalog)
         # Build generation index
         gen_for_task: dict[str, int] = {}
         for gen_idx, gen_tasks in enumerate(schedule.generations):
@@ -305,9 +342,7 @@ class TestScheduleGeneration:
         empty_evidence_catalog: EvidenceCatalog,
     ) -> None:
         """Verify all graph tasks appear in schedule output."""
-        schedule = schedule_tasks(
-            simple_linear_graph, evidence=empty_evidence_catalog
-        )
+        schedule = schedule_tasks(simple_linear_graph, evidence=empty_evidence_catalog)
         all_tasks = set(schedule.ordered_tasks) | set(schedule.missing_tasks)
         graph_tasks = set(simple_linear_graph.task_idx.keys())
         assert all_tasks == graph_tasks
@@ -387,7 +422,7 @@ class TestBipartiteGraphStructure:
         """
         from relspec.rustworkx_graph import GraphNode, TaskNode
 
-        for _name, idx in simple_linear_graph.task_idx.items():
+        for idx in simple_linear_graph.task_idx.values():
             node = simple_linear_graph.graph[idx]
             if isinstance(node, GraphNode) and isinstance(node.payload, TaskNode):
                 for input_name in node.payload.inputs:
@@ -408,5 +443,5 @@ class TestBipartiteGraphStructure:
             edge = simple_linear_graph.graph.get_edge_data_by_index(edge_idx)
             if isinstance(edge, GraphEdge):
                 edge_count += 1
-                assert edge.kind in ("requires", "produces")
+                assert edge.kind in {"requires", "produces"}
         assert edge_count > 0, "Graph should have edges with metadata"

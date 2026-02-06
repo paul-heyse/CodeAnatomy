@@ -1,6 +1,6 @@
 # cq tool
 
-High-signal code queries for LLM agents.
+High-signal code queries for LLM agents. Supports Python (default) and Rust.
 
 ## Quick Start
 
@@ -23,6 +23,10 @@ uv run python -m tools.cq.cli calls build_graph_product
 
 # Chained command frontend
 /cq chain q "entity=function name=build_graph_product" AND calls build_graph_product AND search build_graph_product
+
+# Rust code search (requires CQ_ENABLE_RUST_QUERY=1)
+/cq search register_udf --lang rust
+/cq q "entity=function lang=rust in=rust/"
 ```
 
 ## Global Options
@@ -38,6 +42,7 @@ All commands support these global options:
 | `--format` | `CQ_FORMAT` | `md` | Output format |
 | `--artifact-dir` | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Artifact output directory |
 | `--no-save-artifact` | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip artifact saving |
+| — | `CQ_ENABLE_RUST_QUERY` | `false` | Enable Rust language queries |
 
 ### Filters
 
@@ -84,6 +89,17 @@ save_artifact = true
 
 Smart search uses ripgrep via rpygrep. Ensure `rg` is installed and on `PATH`.
 
+### Rust Language Support
+
+Rust queries are feature-gated. Enable with:
+
+```bash
+export CQ_ENABLE_RUST_QUERY=1
+```
+
+Supported for Rust: `search` (`--lang rust`), `q` (`lang=rust`), `run`/`chain`.
+Not supported for Rust: `calls`, `impact`, `sig-impact`, `imports`, `scopes`, `bytecode-surface`, `side-effects`, `exceptions` (Python-only).
+
 ## Command Groups
 
 ### Analysis Commands
@@ -91,6 +107,7 @@ Smart search uses ripgrep via rpygrep. Ensure `rg` is installed and on `PATH`.
 | Command | Purpose | Example |
 |---------|---------|---------|
 | `search` | Smart code search with enrichment | `/cq search build_graph` |
+| | ↳ Rust: `--lang rust` | `/cq search register_udf --lang rust` |
 | `impact` | Trace data flow from a parameter | `/cq impact build_graph --param root` |
 | `calls` | Census all call sites for a function | `/cq calls DefIndex.build` |
 | `sig-impact` | Test signature change viability | `/cq sig-impact foo --to "foo(a, *, b=None)"` |

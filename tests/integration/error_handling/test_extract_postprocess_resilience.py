@@ -26,15 +26,19 @@ def setup_module() -> None:
 
 
 # Canonical postprocess status taxonomy
-POSTPROCESS_STATUSES = frozenset({
-    "register_view_failed",
-    "view_artifact_failed",
-    "schema_contract_failed",
-})
+POSTPROCESS_STATUSES = frozenset(
+    {
+        "register_view_failed",
+        "view_artifact_failed",
+        "schema_contract_failed",
+    }
+)
 
-POSTPROCESS_STAGES = frozenset({
-    "postprocess",
-})
+POSTPROCESS_STAGES = frozenset(
+    {
+        "postprocess",
+    }
+)
 
 
 def assert_diagnostic_event_taxonomy(
@@ -88,9 +92,7 @@ class TestExtractPostprocessResilience:
             location_format=None,
             issue="view registration failed",
         )
-        assert_diagnostic_event_taxonomy(
-            event, expected_status="register_view_failed"
-        )
+        assert_diagnostic_event_taxonomy(event, expected_status="register_view_failed")
 
     def test_view_artifact_failed_taxonomy(self) -> None:
         """Verify view_artifact_failed event uses canonical taxonomy."""
@@ -105,9 +107,7 @@ class TestExtractPostprocessResilience:
             location_format=None,
             issue="artifact failed",
         )
-        assert_diagnostic_event_taxonomy(
-            event, expected_status="view_artifact_failed"
-        )
+        assert_diagnostic_event_taxonomy(event, expected_status="view_artifact_failed")
 
     def test_schema_contract_failed_taxonomy(self) -> None:
         """Verify schema_contract_failed event uses canonical taxonomy."""
@@ -122,9 +122,7 @@ class TestExtractPostprocessResilience:
             location_format=None,
             issue="contract violation",
         )
-        assert_diagnostic_event_taxonomy(
-            event, expected_status="schema_contract_failed"
-        )
+        assert_diagnostic_event_taxonomy(event, expected_status="schema_contract_failed")
 
     def test_extract_quality_event_to_payload(self) -> None:
         """Verify ExtractQualityEvent.to_payload() returns dict."""
@@ -179,7 +177,7 @@ class TestExtractPostprocessResilience:
         in _write_and_record_extract_output().
         """
         expected = {"register_view_failed", "view_artifact_failed", "schema_contract_failed"}
-        assert POSTPROCESS_STATUSES == expected
+        assert expected == POSTPROCESS_STATUSES
 
     def test_postprocess_stage_is_canonical(self) -> None:
         """Verify the canonical stage name for postprocess events."""

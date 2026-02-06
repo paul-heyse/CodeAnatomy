@@ -27,7 +27,13 @@ from extract.coordination.spec_helpers import (
 
 @pytest.fixture
 def plan_without_bytecode() -> EvidencePlan:
-    """Evidence plan that does not require bytecode datasets."""
+    """Evidence plan that does not require bytecode datasets.
+
+    Returns
+    -------
+    EvidencePlan
+        Evidence plan excluding bytecode-backed sources.
+    """
     return EvidencePlan(
         sources=("cst_refs", "cst_defs", "ast_files"),
     )
@@ -35,7 +41,13 @@ def plan_without_bytecode() -> EvidencePlan:
 
 @pytest.fixture
 def plan_cst_only() -> EvidencePlan:
-    """Evidence plan requiring only CST datasets."""
+    """Evidence plan requiring only CST datasets.
+
+    Returns
+    -------
+    EvidencePlan
+        Evidence plan scoped to CST sources and required columns.
+    """
     return EvidencePlan(
         sources=("cst_refs", "cst_defs", "cst_callsites"),
         required_columns={
@@ -46,7 +58,13 @@ def plan_cst_only() -> EvidencePlan:
 
 @pytest.fixture
 def plan_all_sources() -> EvidencePlan:
-    """Evidence plan compiled with all available sources."""
+    """Evidence plan compiled with all available sources.
+
+    Returns
+    -------
+    EvidencePlan
+        Fully compiled evidence plan including all default sources.
+    """
     return compile_evidence_plan()
 
 
@@ -112,7 +130,7 @@ class TestEvidencePlanToExtractorPipeline:
         flags = plan_feature_flags("cst", plan)
         # If there are flags for "cst" template, they should be False
         # when the plan doesn't require the cst template
-        for _flag_name, flag_value in flags.items():
+        for flag_value in flags.values():
             if not plan.requires_template("cst"):
                 assert flag_value is False
 
@@ -139,5 +157,5 @@ class TestEvidencePlanToExtractorPipeline:
         """Verify empty plan (no sources) disables all feature flags."""
         plan = EvidencePlan(sources=())
         flags = plan_feature_flags("cst", plan)
-        for _flag_name, flag_value in flags.items():
+        for flag_value in flags.values():
             assert flag_value is False

@@ -65,12 +65,8 @@ class TestObjectStoreRegistrationContracts:
 
         ctx = df_ctx()
         # Register twice - should not raise
-        result1 = register_delta_object_store(
-            ctx, table_uri=str(tmp_path), storage_options=None
-        )
-        result2 = register_delta_object_store(
-            ctx, table_uri=str(tmp_path), storage_options=None
-        )
+        result1 = register_delta_object_store(ctx, table_uri=str(tmp_path), storage_options=None)
+        result2 = register_delta_object_store(ctx, table_uri=str(tmp_path), storage_options=None)
         assert result1 is None
         assert result2 is None
 

@@ -82,6 +82,7 @@ from datafusion_engine.delta.protocol import (
 from datafusion_engine.delta.scan_config import (
     delta_scan_config_snapshot_from_options,
 )
+from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
@@ -1647,7 +1648,7 @@ def _provider_for_registration(provider: object) -> object:
     return TableProviderCapsule(provider)
 
 
-def _register_delta_provider(  # noqa: C901
+def _register_delta_provider(
     context: DataFusionRegistrationContext,
 ) -> tuple[DataFrame, str | None]:
     location = context.location
@@ -1677,7 +1678,7 @@ def _register_delta_provider(  # noqa: C901
             context.runtime_profile is not None
             and context.runtime_profile.features.enforce_delta_ffi_provider
         ):
-            raise RuntimeError(msg)
+            raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
         logger.warning(msg)
     if resolution.provider_kind == "delta_cdf":
         adapter.register_delta_cdf_provider(context.name, provider_to_register)
@@ -1773,20 +1774,30 @@ def _register_delta_provider(  # noqa: C901
     )
     if resolution.delta_snapshot is not None:
         from datafusion_engine.delta.observability import (
+            DELTA_MAINTENANCE_TABLE_NAME,
+            DELTA_MUTATION_TABLE_NAME,
+            DELTA_SCAN_PLAN_TABLE_NAME,
+            DELTA_SNAPSHOT_TABLE_NAME,
             DeltaSnapshotArtifact,
             record_delta_snapshot,
         )
-
-        record_delta_snapshot(
-            context.runtime_profile,
-            artifact=DeltaSnapshotArtifact(
-                table_uri=str(location.path),
-                snapshot=resolution.delta_snapshot,
-                dataset_name=context.name,
-                schema_identity_hash=schema_identity_hash_value,
-                ddl_fingerprint=ddl_fingerprint,
-            ),
-        )
+        observability_tables = {
+            DELTA_SNAPSHOT_TABLE_NAME,
+            DELTA_MUTATION_TABLE_NAME,
+            DELTA_SCAN_PLAN_TABLE_NAME,
+            DELTA_MAINTENANCE_TABLE_NAME,
+        }
+        if context.name not in observability_tables:
+            record_delta_snapshot(
+                context.runtime_profile,
+                artifact=DeltaSnapshotArtifact(
+                    table_uri=str(location.path),
+                    snapshot=resolution.delta_snapshot,
+                    dataset_name=context.name,
+                    schema_identity_hash=schema_identity_hash_value,
+                    ddl_fingerprint=ddl_fingerprint,
+                ),
+            )
     _update_table_provider_capabilities(
         context.ctx,
         name=context.name,
@@ -2774,7 +2785,7 @@ def _adapter_factory_payload(factory: object | None) -> str | None:
     return repr(factory)
 
 
-def _table_provenance_snapshot(  # noqa: PLR0913
+def _table_provenance_snapshot(
     ctx: SessionContext,
     *,
     name: str,

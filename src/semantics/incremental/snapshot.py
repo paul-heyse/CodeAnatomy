@@ -121,8 +121,8 @@ def write_repo_snapshot(
     if existing_version is None:
         commit_metadata = {
             **metadata,
-            "operation": "snapshot_overwrite",
-            "mode": "overwrite",
+            "codeanatomy_operation": "snapshot_overwrite",
+            "codeanatomy_mode": "overwrite",
         }
         write_result = write_delta_table_via_pipeline(
             runtime=context.runtime,
@@ -161,8 +161,8 @@ def _merge_repo_snapshot(
     commit_key = str(target)
     commit_metadata = {
         **metadata,
-        "operation": "snapshot_merge",
-        "mode": "merge",
+        "codeanatomy_operation": "snapshot_merge",
+        "codeanatomy_mode": "merge",
     }
     commit_options, commit_run = context.runtime.profile.delta_ops.reserve_delta_commit(
         key=commit_key,
@@ -234,6 +234,9 @@ def _merge_repo_snapshot(
         storage_options=storage.storage_options,
         log_storage_options=storage.log_storage_options,
     )
+    if final_version is None:
+        msg = f"Committed snapshot merge did not resolve Delta version: {target}"
+        raise RuntimeError(msg)
     record_delta_feature_state(
         context.runtime.profile,
         artifact=DeltaFeatureStateArtifact(
@@ -254,9 +257,12 @@ def _merge_repo_snapshot(
         storage_options=storage.storage_options,
         log_storage_options=storage.log_storage_options,
     )
+    from storage.deltalake import canonical_table_uri, snapshot_key_for_table
+
     return DeltaWriteResult(
-        path=str(target),
+        path=canonical_table_uri(str(target)),
         version=final_version,
+        snapshot_key=snapshot_key_for_table(str(target), final_version),
     )
 
 

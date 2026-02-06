@@ -7,11 +7,13 @@ import time
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 import pyarrow as pa
 from deltalake import CommitProperties, DeltaTable, Transaction
+from deltalake.exceptions import TableNotFoundError
 
 from arrow_utils.core.streaming import to_reader
 from datafusion_engine.arrow.coercion import to_arrow_table
@@ -20,6 +22,7 @@ from datafusion_engine.arrow.interop import (
     RecordBatchReaderLike,
     SchemaLike,
     TableLike,
+    as_reader,
     coerce_table_like,
 )
 from datafusion_engine.encoding import apply_encoding
@@ -50,6 +53,49 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 type StorageOptions = Mapping[str, str]
+
+
+def canonical_table_uri(table_uri: str) -> str:
+    """Return a canonical URI form for Delta snapshot identity keys.
+
+    Returns
+    -------
+    str
+        Canonicalized table URI suitable for snapshot identity keys.
+    """
+    raw = str(table_uri).strip()
+    parsed = urlparse(raw)
+    if not parsed.scheme:
+        return str(Path(raw).expanduser().resolve())
+    scheme = parsed.scheme.lower()
+    if scheme in {"s3a", "s3n"}:
+        scheme = "s3"
+    netloc = parsed.netloc
+    if scheme in {"s3", "gs", "az", "abfs", "abfss", "http", "https"}:
+        netloc = netloc.lower()
+    path = parsed.path or ""
+    if netloc and path and not path.startswith("/"):
+        path = f"/{path}"
+    return parsed._replace(scheme=scheme, netloc=netloc, path=path).geturl()
+
+
+@dataclass(frozen=True)
+class SnapshotKey:
+    """Deterministic Delta snapshot identity."""
+
+    canonical_uri: str
+    version: int
+
+
+def snapshot_key_for_table(table_uri: str, version: int) -> SnapshotKey:
+    """Return a stable snapshot key for a table URI/version pair.
+
+    Returns
+    -------
+    SnapshotKey
+        Stable snapshot identity for the URI/version pair.
+    """
+    return SnapshotKey(canonical_uri=canonical_table_uri(table_uri), version=int(version))
 
 
 @dataclass(frozen=True)
@@ -292,8 +338,9 @@ def _execute_delta_merge_fallback(
         commit_properties = build_commit_properties(commit_metadata=request.commit_metadata)
     storage = dict(storage_options) if storage_options is not None else None
     table = DeltaTable(request.path, storage_options=storage)
+    source_reader = as_reader(source)
     merger = table.merge(
-        source,
+        source_reader,
         request.predicate,
         source_alias=source_alias,
         target_alias=target_alias,
@@ -375,8 +422,11 @@ def query_delta_sql(
     sql: str,
     tables: Mapping[str, str],
     storage_options: StorageOptions | None = None,
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+    use_querybuilder: bool = False,
 ) -> RecordBatchReaderLike:
-    """Execute SQL over Delta tables using the embedded QueryBuilder engine.
+    """Execute SQL over Delta tables using runtime sessions by default.
 
     Returns
     -------
@@ -389,6 +439,7 @@ def query_delta_sql(
             "codeanatomy.sql_len": len(sql),
             "codeanatomy.table_count": len(tables),
             "codeanatomy.tables": sorted(tables),
+            "codeanatomy.query_path": "query_builder" if use_querybuilder else "runtime_session",
         },
     )
     with stage_span(
@@ -397,13 +448,38 @@ def query_delta_sql(
         scope_name=SCOPE_STORAGE,
         attributes=attrs,
     ):
-        from storage.deltalake.query_builder import execute_query, open_delta_table
+        if use_querybuilder:
+            from storage.deltalake.query_builder import execute_query, open_delta_table
 
-        delta_tables = {
-            name: open_delta_table(path, storage_options=storage_options)
-            for name, path in tables.items()
-        }
-        return execute_query(sql, delta_tables)
+            delta_tables = {
+                name: open_delta_table(path, storage_options=storage_options)
+                for name, path in tables.items()
+            }
+            return as_reader(execute_query(sql, delta_tables))
+
+        from datafusion_engine.dataset.registration import (
+            DatasetRegistrationOptions,
+            register_dataset_df,
+        )
+        from datafusion_engine.dataset.registry import DatasetLocation
+        from datafusion_engine.sql.options import statement_sql_options_for_profile
+
+        profile = _runtime_profile_for_delta(runtime_profile)
+        ctx = profile.session_context()
+        resolved_storage = dict(storage_options) if storage_options is not None else {}
+        for name, path in sorted(tables.items()):
+            register_dataset_df(
+                ctx,
+                name=name,
+                location=DatasetLocation(
+                    path=path,
+                    format="delta",
+                    storage_options=resolved_storage,
+                ),
+                options=DatasetRegistrationOptions(runtime_profile=profile),
+            )
+        df = ctx.sql_with_options(sql, statement_sql_options_for_profile(profile))
+        return cast("RecordBatchReaderLike", to_reader(df))
 
 
 @dataclass(frozen=True)
@@ -451,6 +527,7 @@ class DeltaWriteResult:
     path: str
     version: int | None
     report: Mapping[str, object] | None = None
+    snapshot_key: SnapshotKey | None = None
 
 
 @dataclass(frozen=True)
@@ -657,7 +734,7 @@ def _open_delta_table(
         )
         if timestamp is not None:
             table.load_as_version(timestamp)
-    except Exception:  # pragma: no cover - exact exception types vary by deltalake build
+    except (RuntimeError, TypeError, ValueError, OSError, TableNotFoundError):
         return None
     return table
 
@@ -2309,10 +2386,6 @@ def vacuum_delta(
     list[str]
         Files eligible for deletion (or removed when ``dry_run`` is False).
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane vacuum call fails.
     """
     options = options or DeltaVacuumOptions()
     attrs = _storage_span_attributes(
@@ -2369,7 +2442,8 @@ def vacuum_delta(
                 if options.keep_versions is not None
                 else None,
             )
-            span.set_attribute("codeanatomy.vacuum_fallback", True)
+            vacuum_fallback = True
+            span.set_attribute("codeanatomy.vacuum_fallback", vacuum_fallback)
             span.set_attribute("codeanatomy.vacuum_fallback_error", str(exc))
             if isinstance(files, Sequence) and not isinstance(files, (str, bytes, bytearray)):
                 return [str(item) for item in files]
@@ -2399,10 +2473,6 @@ def create_delta_checkpoint(
     Mapping[str, object]
         Control-plane maintenance report payload.
 
-    Raises
-    ------
-    RuntimeError
-        Raised when the Rust control-plane checkpoint call fails.
     """
     attrs = _storage_span_attributes(
         operation="checkpoint",
@@ -2828,7 +2898,7 @@ def delta_delete_where(
         return report
 
 
-def delta_merge_arrow(  # noqa: PLR0914
+def delta_merge_arrow(
     ctx: SessionContext,
     *,
     request: DeltaMergeArrowRequest,
@@ -2921,7 +2991,8 @@ def delta_merge_arrow(  # noqa: PLR0914
             except Exception as exc:
                 if not _should_fallback_delta_merge(exc):
                     raise
-                span.set_attribute("codeanatomy.merge_fallback", True)
+                merge_fallback = True
+                span.set_attribute("codeanatomy.merge_fallback", merge_fallback)
                 span.set_attribute("codeanatomy.merge_fallback_error", str(exc))
                 report = _execute_delta_merge_fallback(
                     source=delta_input.data,
@@ -3359,8 +3430,10 @@ __all__ = [
     "DeltaWriteResult",
     "EncodingPolicy",
     "IdempotentWriteOptions",
+    "SnapshotKey",
     "StorageOptions",
     "build_commit_properties",
+    "canonical_table_uri",
     "cleanup_delta_log",
     "coerce_delta_table",
     "create_delta_checkpoint",
@@ -3397,9 +3470,11 @@ __all__ = [
     "enable_delta_v2_checkpoints",
     "enable_delta_vacuum_protocol_check",
     "idempotent_commit_properties",
+    "query_delta_sql",
     "read_delta_cdf",
     "read_delta_cdf_eager",
     "read_delta_table",
     "read_delta_table_eager",
+    "snapshot_key_for_table",
     "vacuum_delta",
 ]

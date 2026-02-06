@@ -53,6 +53,7 @@ from datafusion_engine.delta.service import (
     delta_service_for_profile,
 )
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
+from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.contracts import delta_constraints_for_location
 from datafusion_engine.session.runtime import (
@@ -65,7 +66,12 @@ from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints, dataset
 from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
 from serde_msgspec import convert, convert_from_attributes
-from storage.deltalake import DeltaWriteResult, idempotent_commit_properties
+from storage.deltalake import (
+    DeltaWriteResult,
+    canonical_table_uri,
+    idempotent_commit_properties,
+    snapshot_key_for_table,
+)
 from storage.deltalake.config import (
     DeltaSchemaPolicy,
     DeltaWritePolicy,
@@ -1652,6 +1658,8 @@ class WritePipeline:
         ------
         ValueError
             Raised when ERROR mode encounters an existing destination.
+        DataFusionEngineError
+            Raised when Delta protocol, feature, or schema validation fails.
         """
         local_path = Path(spec.table_uri)
         delta_service = delta_service_for_profile(self.runtime_profile)
@@ -1721,16 +1729,11 @@ class WritePipeline:
                         "mode": spec.mode,
                     },
                 )
-            return DeltaWriteOutcome(
-                delta_result=DeltaWriteResult(
-                    path=spec.table_uri,
-                    version=None,
-                    report=delta_result.report,
-                ),
-                enabled_features=enabled_features,
-                commit_app_id=spec.commit_app_id,
-                commit_version=spec.commit_version,
+            msg = (
+                "Committed Delta write did not resolve a table version; "
+                f"table_uri={spec.table_uri} mode={spec.mode}"
             )
+            raise DataFusionEngineError(msg, kind=ErrorKind.DELTA)
         if self.runtime_profile is not None:
             from datafusion_engine.delta.observability import (
                 DeltaFeatureStateArtifact,
@@ -1758,11 +1761,13 @@ class WritePipeline:
             )
         )
         self._run_post_write_maintenance(spec=spec, delta_version=final_version)
+        canonical_uri = canonical_table_uri(spec.table_uri)
         return DeltaWriteOutcome(
             delta_result=DeltaWriteResult(
-                path=spec.table_uri,
+                path=canonical_uri,
                 version=final_version,
                 report=delta_result.report,
+                snapshot_key=snapshot_key_for_table(spec.table_uri, final_version),
             ),
             enabled_features=enabled_features,
             commit_app_id=spec.commit_app_id,
@@ -1843,7 +1848,11 @@ class WritePipeline:
                     "row_count": row_count,
                 },
             )
-        return DeltaWriteResult(path=spec.table_uri, version=None, report=None)
+        return DeltaWriteResult(
+            path=canonical_table_uri(spec.table_uri),
+            version=None,
+            report=None,
+        )
 
     @staticmethod
     def _delta_insert_table_name(spec: DeltaWriteSpec) -> str:

@@ -57,9 +57,33 @@ def test_delta_extension_compatibility_uses_fallback_context(
 
     assert compatibility.available is True
     assert compatibility.compatible is True
+    assert compatibility.entrypoint == "delta_scan_config_from_session"
     assert compatibility.module == "datafusion_ext"
     assert compatibility.ctx_kind == "fallback"
     assert compatibility.probe_result == "ok"
+
+
+def test_delta_extension_compatibility_strict_non_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject fallback-only compatibility when strict probing is requested."""
+    module = _FallbackOnlyModule()
+    monkeypatch.setattr(capabilities, "_DELTA_EXTENSION_MODULES", ("datafusion_ext",))
+    monkeypatch.setattr(
+        importlib, "import_module", _import_override(module, match="datafusion_ext")
+    )
+
+    compatibility = capabilities.is_delta_extension_compatible(
+        SessionContext(),
+        require_non_fallback=True,
+    )
+
+    assert compatibility.available is True
+    assert compatibility.compatible is False
+    assert compatibility.entrypoint == "delta_scan_config_from_session"
+    assert compatibility.module == "datafusion_ext"
+    assert compatibility.ctx_kind == "fallback"
+    assert compatibility.probe_result == "fallback_disallowed"
 
 
 def test_delta_extension_compatibility_reports_missing_entrypoint(
@@ -74,6 +98,9 @@ def test_delta_extension_compatibility_reports_missing_entrypoint(
 
     compatibility = capabilities.is_delta_extension_compatible(SessionContext())
 
-    assert compatibility.available is False
+    assert compatibility.available is True
     assert compatibility.compatible is False
-    assert compatibility.probe_result == "module_unavailable"
+    assert compatibility.entrypoint == "delta_scan_config_from_session"
+    assert compatibility.module == "datafusion_ext"
+    assert compatibility.ctx_kind is None
+    assert compatibility.probe_result == "entrypoint_unavailable"

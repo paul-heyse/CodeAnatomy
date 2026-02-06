@@ -13,6 +13,7 @@ def test_diskcache_profile_overrides() -> None:
                 "metadata_cache_size": 456,
                 "stats_cache_size": 789,
             },
+            "cache_profile_name": "always_latest_ttl30s",
             "diskcache_profile": {
                 "overrides": {"schema": {"size_limit_bytes": 1024}},
                 "ttl_seconds": {"schema": 42.0},
@@ -34,3 +35,7 @@ def test_diskcache_profile_overrides() -> None:
     assert cache_policy.listing_cache_size == 123
     assert cache_policy.metadata_cache_size == 456
     assert cache_policy.stats_cache_size == 789
+    assert updated.policies.cache_profile_name == "always_latest_ttl30s"
+    settings = updated.settings_payload()
+    assert settings.get("datafusion.runtime.list_files_cache_ttl") == "30s"
+    assert settings.get("datafusion.runtime.metadata_cache_limit") == "134217728"

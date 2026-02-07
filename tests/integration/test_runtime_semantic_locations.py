@@ -89,7 +89,8 @@ def test_incremental_resolver_matches_compile_bindings(tmp_path: Path) -> None:
 
     if checked == 0:
         first_name = next(iter(compile_bindings.names()))
-        expected = compile_bindings.require_location(first_name)
+        expected = compile_bindings.location(first_name)
+        assert expected is not None
         resolved = incremental_bindings.location(first_name)
         assert resolved is not None
         assert str(resolved.path) == str(expected.path)

@@ -1121,11 +1121,11 @@ def _record_plan_artifact_summary(
         "view_names": sorted({row.view_name for row in rows}),
         "delta_version": version,
     }
-    from serde_artifact_specs import PLAN_ARTIFACTS_STORE_SPEC
+    from serde_artifact_specs import DATAFUSION_PLAN_ARTIFACTS_SPEC, PLAN_ARTIFACTS_STORE_SPEC
 
     record_artifact(profile, PLAN_ARTIFACTS_STORE_SPEC, payload)
     for row in rows:
-        record_artifact(profile, table_name, row.to_row())
+        record_artifact(profile, DATAFUSION_PLAN_ARTIFACTS_SPEC, row.to_row())
 
 
 def _hamilton_events_schema() -> pa.Schema:
@@ -1199,11 +1199,11 @@ def _record_hamilton_events_summary(
         "run_ids": sorted({row.run_id for row in rows}),
         "delta_version": version,
     }
-    from serde_artifact_specs import HAMILTON_EVENTS_STORE_SPEC
+    from serde_artifact_specs import DATAFUSION_HAMILTON_EVENTS_SPEC, HAMILTON_EVENTS_STORE_SPEC
 
     record_artifact(profile, HAMILTON_EVENTS_STORE_SPEC, payload)
     for row in rows:
-        record_artifact(profile, HAMILTON_EVENTS_TABLE_NAME, row.to_row())
+        record_artifact(profile, DATAFUSION_HAMILTON_EVENTS_SPEC, row.to_row())
 
 
 def _commit_metadata_for_rows(rows: Sequence[PlanArtifactRow]) -> dict[str, str]:

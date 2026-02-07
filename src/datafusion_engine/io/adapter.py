@@ -24,6 +24,7 @@ from datafusion_engine.lineage.diagnostics import record_artifact, recorder_for_
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from obs.diagnostics import ArtifactSpec
 
 _REGISTERED_OBJECT_STORES: dict[int, set[tuple[str, str | None]]] = {}
 
@@ -162,8 +163,10 @@ class DataFusionIOAdapter:
             registration_type="object_store",
             location=host,
         )
+        from serde_artifact_specs import OBJECT_STORE_REGISTERED_SPEC
+
         self._record_artifact(
-            "object_store_registered",
+            OBJECT_STORE_REGISTERED_SPEC,
             {
                 "scheme": scheme,
                 "host": host,
@@ -231,8 +234,10 @@ class DataFusionIOAdapter:
             name=name,
             registration_type="table",
         )
+        from serde_artifact_specs import TABLE_PROVIDER_REGISTERED_SPEC
+
         self._record_artifact(
-            "table_provider_registered",
+            TABLE_PROVIDER_REGISTERED_SPEC,
             {"name": name, "provider_type": type(provider).__name__},
         )
 
@@ -270,8 +275,10 @@ class DataFusionIOAdapter:
             name=registration.name,
             registration_type="listing_table",
         )
+        from serde_artifact_specs import LISTING_TABLE_REGISTERED_SPEC
+
         self._record_artifact(
-            "listing_table_registered",
+            LISTING_TABLE_REGISTERED_SPEC,
             {
                 "name": registration.name,
                 "path": registration.path,
@@ -317,8 +324,10 @@ class DataFusionIOAdapter:
             name=name,
             registration_type="catalog",
         )
+        from serde_artifact_specs import CATALOG_PROVIDER_REGISTERED_SPEC
+
         self._record_artifact(
-            "catalog_provider_registered",
+            CATALOG_PROVIDER_REGISTERED_SPEC,
             {"name": name, "provider_type": type(provider).__name__},
         )
 
@@ -362,8 +371,10 @@ class DataFusionIOAdapter:
             name=name,
             registration_type="view",
         )
+        from serde_artifact_specs import VIEW_REGISTERED_SPEC
+
         self._record_artifact(
-            "view_registered",
+            VIEW_REGISTERED_SPEC,
             {"name": name, "temporary": temporary},
         )
 
@@ -489,7 +500,7 @@ class DataFusionIOAdapter:
             location=location,
         )
 
-    def _record_artifact(self, name: str, payload: dict[str, object]) -> None:
+    def _record_artifact(self, name: ArtifactSpec, payload: dict[str, object]) -> None:
         """Record diagnostics artifact.
 
         Records a diagnostics artifact if a diagnostics sink is
@@ -498,7 +509,7 @@ class DataFusionIOAdapter:
         Parameters
         ----------
         name
-            Artifact name for diagnostics recording.
+            Artifact specification for diagnostics recording.
         payload
             Artifact payload containing metadata to record.
 

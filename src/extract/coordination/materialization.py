@@ -447,8 +447,6 @@ def _dataset_location(
 
 
 def _resolve_dataset_resolver(
-    runtime_profile: DataFusionRuntimeProfile,
-    *,
     dataset_resolver: ManifestDatasetResolver | None = None,
     execution_context: SemanticExecutionContext | None = None,
 ) -> ManifestDatasetResolver:
@@ -456,9 +454,11 @@ def _resolve_dataset_resolver(
         return dataset_resolver
     if execution_context is not None:
         return execution_context.dataset_resolver
-    from semantics.compile_context import CompileContext
-
-    return CompileContext(runtime_profile=runtime_profile).dataset_bindings()
+    msg = (
+        "ManifestDatasetResolver is required for extract coordination materialization. "
+        "Provide dataset_resolver or execution_context."
+    )
+    raise ValueError(msg)
 
 
 def _streaming_supported_for_extract(
@@ -575,7 +575,6 @@ def _write_and_record_extract_output(
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> None:
     resolved_dataset_resolver = _resolve_dataset_resolver(
-        runtime_profile,
         dataset_resolver=dataset_resolver,
     )
     write_extract_outputs(
@@ -699,7 +698,6 @@ def materialize_extract_plan(
     """
     resolved = options or ExtractMaterializeOptions()
     dataset_resolver = _resolve_dataset_resolver(
-        runtime_profile,
         execution_context=execution_context,
     )
     _record_extract_compile(name, plan, runtime_profile=runtime_profile)

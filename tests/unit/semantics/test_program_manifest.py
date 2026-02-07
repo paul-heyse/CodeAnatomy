@@ -10,7 +10,7 @@ from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from semantics.compile_context import (
     CompileContext,
     SemanticExecutionContext,
-    dataset_bindings_for_profile,
+    build_semantic_execution_context,
 )
 from semantics.ir import SemanticIR
 from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
@@ -88,7 +88,7 @@ def test_dataset_bindings_helper_matches_compile_context() -> None:
             ),
         )
     )
-    helper_bindings = dataset_bindings_for_profile(profile)
+    helper_bindings = build_semantic_execution_context(runtime_profile=profile).dataset_resolver
     compile_bindings = CompileContext(runtime_profile=profile).dataset_bindings()
     assert helper_bindings.payload() == compile_bindings.payload()
 

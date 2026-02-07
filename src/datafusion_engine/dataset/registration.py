@@ -1170,10 +1170,12 @@ def register_dataset_df(
     resolved = options or DatasetRegistrationOptions()
     if resolved.runtime_profile is not None:
         from datafusion_engine.registry_facade import registry_facade_for_context
+        from semantics.program_manifest import ManifestDatasetBindings
 
         facade = registry_facade_for_context(
             ctx,
             runtime_profile=resolved.runtime_profile,
+            dataset_resolver=ManifestDatasetBindings(locations={}),
         )
         return facade.register_dataset_df(
             name=name,

@@ -23,7 +23,7 @@ from datafusion_engine.views.artifacts import (
     ViewArtifactRequest,
     build_view_artifact_from_bundle,
 )
-from semantics.compile_context import dataset_bindings_for_profile
+from semantics.compile_context import build_semantic_execution_context
 from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.invalidations import (
     build_invalidation_snapshot,
@@ -49,9 +49,8 @@ class _DiagnosticsSink(DiagnosticsSink):
     def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
         self.events.setdefault(name, []).extend(dict(row) for row in rows)
 
-    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, object]) -> None:
-        key: str = name if isinstance(name, str) else name.canonical_name
-        self.artifacts.setdefault(key, []).append(dict(payload))
+    def record_artifact(self, name: ArtifactSpec, payload: Mapping[str, object]) -> None:
+        self.artifacts.setdefault(name.canonical_name, []).append(dict(payload))
 
     def record_event(self, name: str, properties: Mapping[str, object]) -> None:
         self.events.setdefault(name, []).append(dict(properties))
@@ -75,7 +74,9 @@ def _runtime_with_sink() -> tuple[IncrementalRuntime, _DiagnosticsSink]:
     runtime = IncrementalRuntime.build(
         IncrementalRuntimeBuildRequest(
             profile=df_profile,
-            dataset_resolver=dataset_bindings_for_profile(df_profile),
+            dataset_resolver=build_semantic_execution_context(
+                runtime_profile=df_profile
+            ).dataset_resolver,
         )
     )
     return runtime, sink

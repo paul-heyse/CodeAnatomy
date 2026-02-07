@@ -117,42 +117,6 @@ class SemanticExecutionContext:
     facade: DataFusionExecutionFacade | None = None
 
 
-def _dataset_bindings_for_profile(
-    runtime_profile: DataFusionRuntimeProfile,
-) -> ManifestDatasetBindings:
-    """Resolve manifest dataset bindings from the compile boundary.
-
-    This is the internal implementation. External callers should use
-    ``SemanticExecutionContext.dataset_resolver`` instead.
-
-    Returns:
-        ManifestDatasetBindings: Manifest-backed dataset bindings for the profile.
-    """
-    return CompileContext(runtime_profile=runtime_profile).dataset_bindings()
-
-
-def dataset_bindings_for_profile(
-    runtime_profile: DataFusionRuntimeProfile,
-) -> ManifestDatasetBindings:
-    """Resolve manifest dataset bindings from the compile boundary.
-
-    .. deprecated::
-        Use ``SemanticExecutionContext.dataset_resolver`` instead.
-
-    Returns:
-        ManifestDatasetBindings: Manifest-backed dataset bindings for the profile.
-    """
-    import warnings
-
-    warnings.warn(
-        "dataset_bindings_for_profile() is deprecated; "
-        "use SemanticExecutionContext.dataset_resolver instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _dataset_bindings_for_profile(runtime_profile)
-
-
 def compile_semantic_program(
     *,
     runtime_profile: DataFusionRuntimeProfile,
@@ -218,6 +182,5 @@ __all__ = [
     "SemanticExecutionContext",
     "build_semantic_execution_context",
     "compile_semantic_program",
-    "dataset_bindings_for_profile",
     "semantic_ir_for_outputs",
 ]

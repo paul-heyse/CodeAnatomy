@@ -1882,6 +1882,8 @@ def _scan_units_for_bundle(
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[ScanUnit, ...]:
     scan_units: tuple[ScanUnit, ...] = ()
+    if dataset_resolver is None:
+        return scan_units
     if session_runtime is not None and plan is not None:
         try:
             from datafusion_engine.lineage.datafusion import extract_lineage
@@ -1891,9 +1893,7 @@ def _scan_units_for_bundle(
         else:
             lineage = extract_lineage(plan)
             if lineage.scans:
-                locations = _manifest_dataset_locations(
-                    session_runtime, dataset_resolver=dataset_resolver
-                )
+                locations = _manifest_dataset_locations(dataset_resolver=dataset_resolver)
                 if locations:
                     try:
                         scan_units, _ = plan_scan_units(
@@ -1908,18 +1908,9 @@ def _scan_units_for_bundle(
 
 
 def _manifest_dataset_locations(
-    session_runtime: SessionRuntime | object,
-    *,
-    dataset_resolver: ManifestDatasetResolver | None = None,
+    dataset_resolver: ManifestDatasetResolver,
 ) -> dict[str, DatasetLocation]:
     locations: dict[str, DatasetLocation] = {}
-    if dataset_resolver is None:
-        runtime_profile = getattr(session_runtime, "profile", None)
-        if runtime_profile is None:
-            return locations
-        from semantics.compile_context import dataset_bindings_for_profile
-
-        dataset_resolver = dataset_bindings_for_profile(runtime_profile)
     for name in dataset_resolver.names():
         location = dataset_resolver.location(name)
         if location is None:
@@ -1933,9 +1924,9 @@ def _cdf_window_snapshot(
     *,
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[dict[str, object], ...]:
-    if session_runtime is None:
+    if session_runtime is None or dataset_resolver is None:
         return ()
-    locations = _manifest_dataset_locations(session_runtime, dataset_resolver=dataset_resolver)
+    locations = _manifest_dataset_locations(dataset_resolver=dataset_resolver)
     payloads: list[dict[str, object]] = []
     for name, location in sorted(locations.items(), key=lambda item: item[0]):
         options = location.delta_cdf_options
@@ -1978,9 +1969,9 @@ def _snapshot_keys_for_manifest(
     session_runtime: SessionRuntime | None,
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[dict[str, object], ...]:
-    if session_runtime is None:
+    if session_runtime is None or dataset_resolver is None:
         return ()
-    locations = _manifest_dataset_locations(session_runtime, dataset_resolver=dataset_resolver)
+    locations = _manifest_dataset_locations(dataset_resolver=dataset_resolver)
     payloads: list[dict[str, object]] = []
     seen: set[tuple[str, str, int]] = set()
     for pin in delta_inputs:

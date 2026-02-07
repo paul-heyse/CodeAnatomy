@@ -188,7 +188,7 @@ def _ensure_runtime_artifact_specs_registered() -> None:
 
 def record_artifact(
     profile: DataFusionRuntimeProfile,
-    name: ArtifactSpec | str,
+    name: ArtifactSpec,
     payload: Mapping[str, object],
 ) -> None:
     """Record an artifact after ensuring artifact-spec side effects are loaded."""
@@ -2656,7 +2656,7 @@ def _cache_profile_settings(profile: DataFusionRuntimeProfile) -> dict[str, str]
 
 
 class _RuntimeDiagnosticsMixin:
-    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, object]) -> None:
+    def record_artifact(self, name: ArtifactSpec, payload: Mapping[str, object]) -> None:
         """Record an artifact through DiagnosticsRecorder when configured."""
         profile = cast("DataFusionRuntimeProfile", self)
         record_artifact(profile, name, payload)
@@ -4159,6 +4159,7 @@ class RuntimeProfileCatalog:
 
         Args:
             name: Description.
+            dataset_resolver: Pre-resolved manifest resolver.
 
         Raises:
             KeyError: If the operation cannot be completed.
@@ -4208,7 +4209,6 @@ class _RuntimeProfileCatalogFacadeMixin:
         DatasetLocation | None
             Dataset location when configured.
         """
-        profile = cast("DataFusionRuntimeProfile", self)
         return dataset_resolver.location(name)
 
 

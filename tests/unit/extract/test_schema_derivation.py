@@ -13,7 +13,7 @@ from extract.schema_derivation import (
     extraction_schema_to_arrow,
     validate_extraction_schema,
 )
-from schema_spec.arrow_type_coercion import coerce_arrow_type
+from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import FieldBundle
 
@@ -99,7 +99,7 @@ class TestExtractionSchemaBuilder:
 
     def test_builder_with_field_spec(self) -> None:
         """Test builder with FieldSpec objects."""
-        custom_spec = FieldSpec(name="custom_field", dtype=coerce_arrow_type(pa.float64()))
+        custom_spec = FieldSpec(name="custom_field", dtype=arrow_type_from_pyarrow(pa.float64()))
         schema = ExtractionSchemaBuilder("test_dataset").with_fields(custom_spec).build()
         field_names = {f.name for f in schema.fields}
         assert "custom_field" in field_names
@@ -109,8 +109,8 @@ class TestExtractionSchemaBuilder:
         bundle = FieldBundle(
             name="custom_bundle",
             fields=(
-                FieldSpec(name="bundle_field1", dtype=coerce_arrow_type(pa.string())),
-                FieldSpec(name="bundle_field2", dtype=coerce_arrow_type(pa.int64())),
+                FieldSpec(name="bundle_field1", dtype=arrow_type_from_pyarrow(pa.string())),
+                FieldSpec(name="bundle_field2", dtype=arrow_type_from_pyarrow(pa.int64())),
             ),
         )
         schema = ExtractionSchemaBuilder("test_dataset").with_bundle(bundle).build()
@@ -223,7 +223,7 @@ class TestExtractionSchemaTemplates:
 
     def test_build_template_with_extra_fields(self) -> None:
         """Test building template with extra fields."""
-        extra = [FieldSpec(name="extra_col", dtype=coerce_arrow_type(pa.binary()))]
+        extra = [FieldSpec(name="extra_col", dtype=arrow_type_from_pyarrow(pa.binary()))]
         schema = build_schema_from_template("ast", "custom_ast", extra_fields=extra)
         field_names = {f.name for f in schema.fields}
         assert "extra_col" in field_names

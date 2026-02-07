@@ -14,7 +14,7 @@ from datafusion_engine.dataset.registration import (
 )
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.schema.introspection import SchemaIntrospector
-from schema_spec.arrow_type_coercion import coerce_arrow_type
+from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
 from tests.test_helpers.datafusion_runtime import df_profile
@@ -30,10 +30,10 @@ def test_information_schema_column_defaults(tmp_path: Path) -> None:
     table_spec = TableSchemaSpec(
         name="defaults_tbl",
         fields=[
-            FieldSpec(name="id", dtype=coerce_arrow_type(pa.int64()), nullable=False),
+            FieldSpec(name="id", dtype=arrow_type_from_pyarrow(pa.int64()), nullable=False),
             FieldSpec(
                 name="status",
-                dtype=coerce_arrow_type(pa.string()),
+                dtype=arrow_type_from_pyarrow(pa.string()),
                 default_value="unknown",
             ),
         ],

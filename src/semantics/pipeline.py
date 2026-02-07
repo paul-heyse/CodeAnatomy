@@ -85,9 +85,38 @@ CPG_INPUT_TABLES: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class CpgBuildOptions:
-    """Configuration for semantic CPG construction."""
+    """Configuration for semantic CPG construction.
+
+    Attributes
+    ----------
+    cache_policy
+        Explicit per-view cache policy override.  When provided this takes
+        precedence over both ``compiled_cache_policy`` and the naming
+        heuristic fallback.
+    compiled_cache_policy
+        Topology-derived cache policy mapping produced by the policy
+        compiler.  Used as an intermediate fallback between the explicit
+        ``cache_policy`` and the ``_default_semantic_cache_policy()``
+        naming heuristic.  Typically populated from
+        ``CompiledExecutionPolicy.cache_policy_by_view``.
+    validate_schema
+        Whether to validate output schemas.
+    config
+        Optional semantic pipeline configuration.
+    use_cdf
+        Whether to enable CDF-aware incremental joins.
+    cdf_inputs
+        CDF input overrides.
+    materialize_outputs
+        Whether to materialize semantic output tables.
+    requested_outputs
+        Subset of output views to build.
+    schema_policy
+        Schema evolution policy for Delta writes.
+    """
 
     cache_policy: Mapping[str, CachePolicy] | None = None
+    compiled_cache_policy: Mapping[str, str] | None = None
     validate_schema: bool = True
     config: SemanticConfig | None = None
     use_cdf: bool | None = None
@@ -105,6 +134,7 @@ class CpgViewNodesRequest:
     runtime_profile: DataFusionRuntimeProfile
     output_locations: Mapping[str, DatasetLocation]
     cache_policy: Mapping[str, CachePolicy] | None
+    compiled_cache_policy: Mapping[str, str] | None
     config: SemanticConfig | None
     input_mapping: Mapping[str, str]
     use_cdf: bool
@@ -1236,6 +1266,49 @@ def _cpg_output_view_specs(
     ]
 
 
+def _resolve_cache_policy_hierarchy(
+    *,
+    explicit_policy: Mapping[str, CachePolicy] | None,
+    compiled_policy: Mapping[str, str] | None,
+    view_names: Sequence[str],
+    output_locations: Mapping[str, DatasetLocation],
+) -> Mapping[str, str]:
+    """Resolve cache policy through a three-tier fallback hierarchy.
+
+    Resolution order (highest priority first):
+
+    1. ``explicit_policy`` -- caller-provided per-view overrides.
+    2. ``compiled_policy`` -- topology-derived policy from the policy
+       compiler (``CompiledExecutionPolicy.cache_policy_by_view``).
+    3. ``_default_semantic_cache_policy()`` -- naming-convention heuristic.
+
+    Parameters
+    ----------
+    explicit_policy
+        Direct cache policy override, typically from ``CpgBuildOptions.cache_policy``.
+    compiled_policy
+        Topology-derived policy mapping from the compiled execution policy.
+    view_names
+        Ordered view names in the current build.
+    output_locations
+        Mapping of output view names to dataset locations, used by the
+        naming heuristic fallback.
+
+    Returns
+    -------
+    Mapping[str, str]
+        Resolved cache policy mapping covering all views.
+    """
+    if explicit_policy is not None:
+        return explicit_policy
+    if compiled_policy is not None:
+        return compiled_policy
+    return _default_semantic_cache_policy(
+        view_names=view_names,
+        output_locations=output_locations,
+    )
+
+
 def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
     from datafusion_engine.views.graph import ViewNode
 
@@ -1250,12 +1323,12 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
             semantic_ir=request.semantic_ir,
         )
     )
-    resolved_cache = request.cache_policy
-    if resolved_cache is None:
-        resolved_cache = _default_semantic_cache_policy(
-            view_names=[name for name, _builder in view_specs],
-            output_locations=request.output_locations,
-        )
+    resolved_cache = _resolve_cache_policy_hierarchy(
+        explicit_policy=request.cache_policy,
+        compiled_policy=request.compiled_cache_policy,
+        view_names=[name for name, _builder in view_specs],
+        output_locations=request.output_locations,
+    )
     cache_overrides = request.runtime_profile.data_sources.semantic_output.cache_overrides
     if cache_overrides:
         resolved_cache = {**resolved_cache, **cache_overrides}
@@ -1532,6 +1605,7 @@ def build_cpg(
             "codeanatomy.validate_schema": resolved.validate_schema,
             "codeanatomy.use_cdf": resolved.use_cdf,
             "codeanatomy.has_cache_policy": resolved.cache_policy is not None,
+            "codeanatomy.has_compiled_cache_policy": resolved.compiled_cache_policy is not None,
             "codeanatomy.has_config": resolved.config is not None,
         },
     ):
@@ -1571,6 +1645,7 @@ def build_cpg(
                 runtime_profile=runtime_profile,
                 output_locations=semantic_output_locations_for_profile(runtime_profile),
                 cache_policy=resolved.cache_policy,
+                compiled_cache_policy=resolved.compiled_cache_policy,
                 config=resolved.config,
                 input_mapping=input_mapping,
                 use_cdf=use_cdf,
@@ -2147,6 +2222,7 @@ def build_cpg_from_inferred_deps(
                 runtime_profile=runtime_profile,
                 output_locations=semantic_output_locations_for_profile(runtime_profile),
                 cache_policy=resolved.cache_policy,
+                compiled_cache_policy=resolved.compiled_cache_policy,
                 config=resolved.config,
                 input_mapping=compile_resolution.input_mapping,
                 use_cdf=compile_resolution.use_cdf,

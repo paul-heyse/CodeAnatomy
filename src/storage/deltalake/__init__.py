@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import warnings
 from typing import TYPE_CHECKING
 
 __all__ = (
@@ -20,7 +19,6 @@ __all__ = (
     "DeltaVacuumOptions",
     "DeltaWritePolicy",
     "DeltaWriteResult",
-    "FileIndexEntry",
     "FilePruningPolicy",
     "FilePruningResult",
     "PartitionFilter",
@@ -29,7 +27,6 @@ __all__ = (
     "StorageOptions",
     "build_commit_properties",
     "build_delta_file_index_from_add_actions",
-    "build_delta_scan_config",
     "canonical_table_uri",
     "cleanup_delta_log",
     "coerce_delta_input",
@@ -51,16 +48,12 @@ __all__ = (
     "delta_write_configuration",
     "enable_delta_change_data_feed",
     "enable_delta_check_constraints",
-    "enable_delta_checkpoint_protection",
     "enable_delta_column_mapping",
     "enable_delta_deletion_vectors",
     "enable_delta_features",
-    "enable_delta_generated_columns",
     "enable_delta_in_commit_timestamps",
-    "enable_delta_invariants",
     "enable_delta_row_tracking",
     "enable_delta_v2_checkpoints",
-    "enable_delta_vacuum_protocol_check",
     "evaluate_and_select_files",
     "evaluate_filters_against_index",
     "idempotent_commit_properties",
@@ -94,7 +87,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "build_commit_properties": ("storage.deltalake.delta", "build_commit_properties"),
     "canonical_table_uri": ("storage.deltalake.delta", "canonical_table_uri"),
     "idempotent_commit_properties": ("storage.deltalake.delta", "idempotent_commit_properties"),
-    "build_delta_scan_config": ("storage.deltalake.scan_profile", "build_delta_scan_config"),
     "cleanup_delta_log": ("storage.deltalake.delta", "cleanup_delta_log"),
     "coerce_delta_input": ("storage.deltalake.delta", "coerce_delta_input"),
     "coerce_delta_table": ("storage.deltalake.delta", "coerce_delta_table"),
@@ -125,32 +117,18 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
         "storage.deltalake.delta",
         "enable_delta_check_constraints",
     ),
-    "enable_delta_checkpoint_protection": (
-        "storage.deltalake.delta",
-        "enable_delta_checkpoint_protection",
-    ),
     "enable_delta_column_mapping": ("storage.deltalake.delta", "enable_delta_column_mapping"),
     "enable_delta_deletion_vectors": (
         "storage.deltalake.delta",
         "enable_delta_deletion_vectors",
     ),
-    "enable_delta_generated_columns": (
-        "storage.deltalake.delta",
-        "enable_delta_generated_columns",
-    ),
     "enable_delta_in_commit_timestamps": (
         "storage.deltalake.delta",
         "enable_delta_in_commit_timestamps",
     ),
-    "enable_delta_invariants": ("storage.deltalake.delta", "enable_delta_invariants"),
     "enable_delta_row_tracking": ("storage.deltalake.delta", "enable_delta_row_tracking"),
     "enable_delta_v2_checkpoints": ("storage.deltalake.delta", "enable_delta_v2_checkpoints"),
-    "enable_delta_vacuum_protocol_check": (
-        "storage.deltalake.delta",
-        "enable_delta_vacuum_protocol_check",
-    ),
     "vacuum_delta": ("storage.deltalake.delta", "vacuum_delta"),
-    "FileIndexEntry": ("storage.deltalake.file_index", "FileIndexEntry"),
     "build_delta_file_index_from_add_actions": (
         "storage.deltalake.file_index",
         "build_delta_file_index_from_add_actions",
@@ -167,14 +145,11 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "select_candidate_files": ("storage.deltalake.file_pruning", "select_candidate_files"),
 }
 
-_DEPRECATED_EXPORTS: dict[str, str] = {}
-
 if TYPE_CHECKING:
     import storage.deltalake.config as _delta_config
     import storage.deltalake.delta as _delta_io
     import storage.deltalake.file_index as _file_index
     import storage.deltalake.file_pruning as _file_pruning
-    import storage.deltalake.scan_profile as _scan_profile
 
     DeltaMutationPolicy = _delta_config.DeltaMutationPolicy
     DeltaRetryPolicy = _delta_config.DeltaRetryPolicy
@@ -196,7 +171,6 @@ if TYPE_CHECKING:
     build_commit_properties = _delta_io.build_commit_properties
     canonical_table_uri = _delta_io.canonical_table_uri
     idempotent_commit_properties = _delta_io.idempotent_commit_properties
-    build_delta_scan_config = _scan_profile.build_delta_scan_config
     cleanup_delta_log = _delta_io.cleanup_delta_log
     coerce_delta_input = _delta_io.coerce_delta_input
     coerce_delta_table = _delta_io.coerce_delta_table
@@ -216,22 +190,17 @@ if TYPE_CHECKING:
     enable_delta_features = _delta_io.enable_delta_features
     enable_delta_change_data_feed = _delta_io.enable_delta_change_data_feed
     enable_delta_check_constraints = _delta_io.enable_delta_check_constraints
-    enable_delta_checkpoint_protection = _delta_io.enable_delta_checkpoint_protection
     enable_delta_column_mapping = _delta_io.enable_delta_column_mapping
     enable_delta_deletion_vectors = _delta_io.enable_delta_deletion_vectors
-    enable_delta_generated_columns = _delta_io.enable_delta_generated_columns
     enable_delta_in_commit_timestamps = _delta_io.enable_delta_in_commit_timestamps
-    enable_delta_invariants = _delta_io.enable_delta_invariants
     enable_delta_row_tracking = _delta_io.enable_delta_row_tracking
     enable_delta_v2_checkpoints = _delta_io.enable_delta_v2_checkpoints
-    enable_delta_vacuum_protocol_check = _delta_io.enable_delta_vacuum_protocol_check
     read_delta_cdf = _delta_io.read_delta_cdf
     read_delta_cdf_eager = _delta_io.read_delta_cdf_eager
     read_delta_table = _delta_io.read_delta_table
     read_delta_table_eager = _delta_io.read_delta_table_eager
     snapshot_key_for_table = _delta_io.snapshot_key_for_table
     vacuum_delta = _delta_io.vacuum_delta
-    FileIndexEntry = _file_index.FileIndexEntry
     build_delta_file_index_from_add_actions = _file_index.build_delta_file_index_from_add_actions
     PartitionFilter = _file_pruning.PartitionFilter
     StatsFilter = _file_pruning.StatsFilter
@@ -247,8 +216,6 @@ def __getattr__(name: str) -> object:
     if export is None:
         msg = f"module {__name__!r} has no attribute {name!r}"
         raise AttributeError(msg)
-    if warning := _DEPRECATED_EXPORTS.get(name):
-        warnings.warn(warning, DeprecationWarning, stacklevel=2)
     module_name, attr = export
     module = importlib.import_module(module_name)
     value = getattr(module, attr)

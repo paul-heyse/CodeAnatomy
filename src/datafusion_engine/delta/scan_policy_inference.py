@@ -22,6 +22,19 @@ if TYPE_CHECKING:
 # Sourced from the canonical table size tiers to prevent drift.
 _SMALL_TABLE_ROW_THRESHOLD = _DEFAULT_THRESHOLDS.small_threshold
 
+# Projection ratio below which column pruning is considered highly beneficial.
+# When only a small fraction of columns are projected, enabling parquet
+# pushdown is especially valuable because it avoids reading unused columns.
+_NARROW_PROJECTION_RATIO_THRESHOLD = 0.5
+
+# Confidence floor for sort-order exploitation signal.  Sort-key matching
+# is structural (from plan lineage) and does not depend on statistics,
+# so confidence is relatively high.
+_SORT_ORDER_CONFIDENCE = 0.85
+
+# Confidence floor for narrow projection signal.
+_NARROW_PROJECTION_CONFIDENCE = 0.8
+
 
 @dataclass(frozen=True)
 class ScanPolicyOverride:
@@ -86,6 +99,8 @@ def derive_scan_policy_overrides(
             base_policy=effective_base,
             stats=signals.stats,
             capability_snapshot=capability_snapshot,
+            sort_keys=signals.sort_keys,
+            projection_ratio=signals.projection_ratio,
         )
         if override is not None:
             overrides.append(override)
@@ -98,6 +113,8 @@ def _infer_override_for_scan(
     base_policy: ScanPolicyConfig,
     stats: NormalizedPlanStats | None,
     capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+    sort_keys: tuple[str, ...] = (),
+    projection_ratio: float | None = None,
 ) -> ScanPolicyOverride | None:
     """Infer scan policy override for a single scan lineage entry.
 
@@ -112,6 +129,14 @@ def _infer_override_for_scan(
     capability_snapshot
         Optional runtime capability payload used to gate stats-dependent
         heuristics when stats signals are unavailable.
+    sort_keys
+        Column names appearing in plan Sort nodes.  When the scan's
+        projected columns already cover the sort keys, a sort-order
+        exploitation signal is emitted.
+    projection_ratio
+        Ratio of projected columns to total schema columns.  When the
+        ratio is below the narrow-projection threshold, column pruning
+        via parquet pushdown is signaled.
 
     Returns:
     -------
@@ -142,6 +167,20 @@ def _infer_override_for_scan(
         delta_scan_overrides["enable_parquet_pushdown"] = True
         reasons.append("has_pushed_filters")
         confidence = min(confidence, 0.8)
+
+    # Sort-order exploitation: when the scan's projected columns already
+    # include all sort keys, downstream sorts may be redundant.  This is a
+    # structural signal (no stats dependency) so confidence is relatively high.
+    if sort_keys and _scan_covers_sort_keys(scan, sort_keys):
+        reasons.append("sort_order_aligned")
+        confidence = min(confidence, _SORT_ORDER_CONFIDENCE)
+
+    # Narrow projection: when only a small fraction of columns are projected,
+    # enable parquet pushdown to exploit column pruning at the storage layer.
+    if _is_narrow_projection(scan, projection_ratio):
+        delta_scan_overrides["enable_parquet_pushdown"] = True
+        reasons.append("narrow_projection")
+        confidence = min(confidence, _NARROW_PROJECTION_CONFIDENCE)
 
     if not reasons:
         return None
@@ -174,6 +213,59 @@ def _infer_override_for_scan(
         reasons=tuple(reasons),
         confidence=confidence,
     )
+
+
+def _scan_covers_sort_keys(
+    scan: ScanLineage,
+    sort_keys: tuple[str, ...],
+) -> bool:
+    """Return True when a scan's projected columns include all sort keys.
+
+    Parameters
+    ----------
+    scan
+        Scan lineage entry with projected columns.
+    sort_keys
+        Column names from plan Sort nodes.
+
+    Returns
+    -------
+    bool
+        ``True`` when every sort key is present in the scan's projection.
+    """
+    if not sort_keys or not scan.projected_columns:
+        return False
+    projected = set(scan.projected_columns)
+    return all(key in projected for key in sort_keys)
+
+
+def _is_narrow_projection(
+    scan: ScanLineage,
+    projection_ratio: float | None,
+) -> bool:
+    """Return True when projection ratio indicates high column-pruning benefit.
+
+    The check requires both a valid projection ratio and the scan to have
+    projected columns (avoiding false positives from wildcard projections).
+
+    Parameters
+    ----------
+    scan
+        Scan lineage entry with projected columns.
+    projection_ratio
+        Ratio of projected columns to total schema columns.
+
+    Returns
+    -------
+    bool
+        ``True`` when the projection is narrow enough to benefit from
+        column pruning.
+    """
+    if projection_ratio is None:
+        return False
+    if not scan.projected_columns:
+        return False
+    return projection_ratio < _NARROW_PROJECTION_RATIO_THRESHOLD
 
 
 def _is_small_table(

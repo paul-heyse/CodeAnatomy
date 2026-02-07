@@ -13,12 +13,7 @@ from semantics.quality_specs import (
     REL_IMPORT_SYMBOL,
     REL_NAME_SYMBOL,
 )
-from semantics.specs import (
-    ForeignKeyDerivation,
-    IdDerivation,
-    SemanticTableSpec,
-    SpanBinding,
-)
+from semantics.specs import SemanticTableSpec
 from utils.registry_protocol import MappingRegistryAdapter
 
 if TYPE_CHECKING:
@@ -28,115 +23,24 @@ if TYPE_CHECKING:
     from semantics.catalog.dataset_rows import SemanticDatasetRow
     from semantics.cpg_entity_specs import CpgEntitySpec
 
-SEMANTIC_TABLE_SPECS: Final[dict[str, SemanticTableSpec]] = {
-    "cst_refs": SemanticTableSpec(
-        table="cst_refs",
-        primary_span=SpanBinding("bstart", "bend"),
-        entity_id=IdDerivation(
-            out_col="ref_id",
-            namespace="cst_ref",
-            start_col="bstart",
-            end_col="bend",
-        ),
-        text_cols=("ref_text",),
-    ),
-    "cst_defs": SemanticTableSpec(
-        table="cst_defs",
-        primary_span=SpanBinding("def_bstart", "def_bend"),
-        entity_id=IdDerivation(
-            out_col="def_id",
-            namespace="cst_def",
-            start_col="def_bstart",
-            end_col="def_bend",
-        ),
-        foreign_keys=(
-            ForeignKeyDerivation(
-                out_col="container_def_id",
-                target_namespace="cst_def",
-                start_col="container_def_bstart",
-                end_col="container_def_bend",
-                guard_null_if=("container_def_kind",),
-            ),
-        ),
-    ),
-    "cst_imports": SemanticTableSpec(
-        table="cst_imports",
-        primary_span=SpanBinding("alias_bstart", "alias_bend"),
-        entity_id=IdDerivation(
-            out_col="import_id",
-            namespace="cst_import",
-            start_col="alias_bstart",
-            end_col="alias_bend",
-        ),
-    ),
-    "cst_callsites": SemanticTableSpec(
-        table="cst_callsites",
-        primary_span=SpanBinding("call_bstart", "call_bend"),
-        entity_id=IdDerivation(
-            out_col="call_id",
-            namespace="cst_call",
-            start_col="call_bstart",
-            end_col="call_bend",
-        ),
-    ),
-    "cst_call_args": SemanticTableSpec(
-        table="cst_call_args",
-        primary_span=SpanBinding("bstart", "bend"),
-        entity_id=IdDerivation(
-            out_col="call_arg_id",
-            namespace="cst_call_arg",
-            start_col="bstart",
-            end_col="bend",
-        ),
-        foreign_keys=(
-            ForeignKeyDerivation(
-                out_col="call_id",
-                target_namespace="cst_call",
-                start_col="call_bstart",
-                end_col="call_bend",
-            ),
-        ),
-        text_cols=("arg_text",),
-    ),
-    "cst_docstrings": SemanticTableSpec(
-        table="cst_docstrings",
-        primary_span=SpanBinding("bstart", "bend"),
-        entity_id=IdDerivation(
-            out_col="docstring_id",
-            namespace="cst_docstring",
-            start_col="bstart",
-            end_col="bend",
-        ),
-        foreign_keys=(
-            ForeignKeyDerivation(
-                out_col="owner_def_id",
-                target_namespace="cst_def",
-                start_col="owner_def_bstart",
-                end_col="owner_def_bend",
-            ),
-        ),
-        text_cols=("docstring",),
-    ),
-    "cst_decorators": SemanticTableSpec(
-        table="cst_decorators",
-        primary_span=SpanBinding("bstart", "bend"),
-        entity_id=IdDerivation(
-            out_col="decorator_id",
-            namespace="cst_decorator",
-            start_col="bstart",
-            end_col="bend",
-        ),
-        foreign_keys=(
-            ForeignKeyDerivation(
-                out_col="owner_def_id",
-                target_namespace="cst_def",
-                start_col="owner_def_bstart",
-                end_col="owner_def_bend",
-            ),
-        ),
-        text_cols=("decorator_text",),
-    ),
-}
+
+def _generate_semantic_table_specs() -> dict[str, SemanticTableSpec]:
+    """Generate semantic table specs from entity declarations.
+
+    Deferred into a helper to break the import cycle between
+    ``semantics.registry`` and ``semantics.entity_registry``.
+
+    Returns:
+    -------
+    dict[str, SemanticTableSpec]
+        Table specs keyed by source table name.
+    """
+    from semantics.entity_registry import ENTITY_DECLARATIONS, generate_table_specs
+
+    return generate_table_specs(ENTITY_DECLARATIONS)
+
+
+SEMANTIC_TABLE_SPECS: Final[dict[str, SemanticTableSpec]] = _generate_semantic_table_specs()
 
 
 @dataclass(frozen=True)

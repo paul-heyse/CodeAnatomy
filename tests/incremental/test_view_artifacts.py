@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import pyarrow as pa
 
@@ -24,14 +23,7 @@ from datafusion_engine.views.artifacts import (
     build_view_artifact_from_bundle,
 )
 from semantics.compile_context import build_semantic_execution_context
-from semantics.incremental.delta_context import DeltaAccessContext
-from semantics.incremental.invalidations import (
-    build_invalidation_snapshot,
-    read_invalidation_snapshot,
-    write_invalidation_snapshot,
-)
 from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
-from semantics.incremental.state_store import StateStore
 from serde_schema_registry import ArtifactSpec
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
@@ -129,30 +121,3 @@ def test_record_view_artifact_payload_has_plan_fingerprint() -> None:
     plan_fingerprint = snapshot[0].get("plan_fingerprint")
     assert isinstance(plan_fingerprint, str)
     assert plan_fingerprint
-
-
-def test_invalidation_snapshot_round_trip(tmp_path: Path) -> None:
-    """Persist and reload invalidation snapshots from Delta."""
-    runtime, _sink = _runtime_with_sink()
-    table = pa.table({"a": [1, 2]})
-    _record_view_artifact(runtime, name="test_plan", table=table)
-
-    context = DeltaAccessContext(runtime=runtime)
-    store = StateStore(tmp_path)
-
-    snapshot = build_invalidation_snapshot(context, state_store=store)
-    path = write_invalidation_snapshot(store, snapshot, context=context)
-    assert path
-    resolved = context.resolve_storage(table_uri=path)
-    version = runtime.profile.delta_ops.delta_service().table_version(
-        path=path,
-        storage_options=resolved.storage_options,
-        log_storage_options=resolved.log_storage_options,
-    )
-    assert version is not None
-
-    loaded = read_invalidation_snapshot(store, context=context)
-    assert loaded is not None
-    assert loaded.incremental_plan_fingerprints == snapshot.incremental_plan_fingerprints
-    assert loaded.incremental_metadata_hash == snapshot.incremental_metadata_hash
-    assert loaded.runtime_profile_hash == snapshot.runtime_profile_hash

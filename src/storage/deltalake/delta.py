@@ -1565,96 +1565,6 @@ def enable_delta_change_data_feed(
     return report
 
 
-def enable_delta_generated_columns(
-    options: DeltaFeatureMutationOptions,
-    *,
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    """Enable Delta generated columns via the Rust control plane.
-
-    Args:
-        options: Delta feature mutation options.
-        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
-
-    Returns:
-        Mapping[str, object]: Result.
-
-    Raises:
-        RuntimeError: If enabling generated columns fails.
-    """
-    with _feature_control_span(options, operation="enable_generated_columns"):
-        ctx, request = _feature_enable_request(options)
-        try:
-            from datafusion_engine.delta.control_plane import delta_enable_generated_columns
-
-            report = delta_enable_generated_columns(
-                ctx,
-                request=request,
-                allow_protocol_versions_increase=allow_protocol_versions_increase,
-            )
-        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-            msg = f"Failed to enable Delta generated columns: {exc}"
-            raise RuntimeError(msg) from exc
-        _record_delta_feature_mutation(
-            _DeltaFeatureMutationRecord(
-                runtime_profile=options.runtime_profile,
-                report=report,
-                operation="enable_generated_columns",
-                path=options.path,
-                storage_options=options.storage_options,
-                log_storage_options=options.log_storage_options,
-                dataset_name=options.dataset_name,
-                commit_metadata=options.commit_metadata,
-            )
-        )
-    return report
-
-
-def enable_delta_invariants(
-    options: DeltaFeatureMutationOptions,
-    *,
-    allow_protocol_versions_increase: bool = True,
-) -> Mapping[str, object]:
-    """Enable Delta invariants via the Rust control plane.
-
-    Args:
-        options: Delta feature mutation options.
-        allow_protocol_versions_increase: Whether protocol upgrade is allowed.
-
-    Returns:
-        Mapping[str, object]: Result.
-
-    Raises:
-        RuntimeError: If enabling invariants fails.
-    """
-    with _feature_control_span(options, operation="enable_invariants"):
-        ctx, request = _feature_enable_request(options)
-        try:
-            from datafusion_engine.delta.control_plane import delta_enable_invariants
-
-            report = delta_enable_invariants(
-                ctx,
-                request=request,
-                allow_protocol_versions_increase=allow_protocol_versions_increase,
-            )
-        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-            msg = f"Failed to enable Delta invariants: {exc}"
-            raise RuntimeError(msg) from exc
-        _record_delta_feature_mutation(
-            _DeltaFeatureMutationRecord(
-                runtime_profile=options.runtime_profile,
-                report=report,
-                operation="enable_invariants",
-                path=options.path,
-                storage_options=options.storage_options,
-                log_storage_options=options.log_storage_options,
-                dataset_name=options.dataset_name,
-                commit_metadata=options.commit_metadata,
-            )
-        )
-    return report
-
-
 def enable_delta_check_constraints(
     options: DeltaFeatureMutationOptions,
     *,
@@ -1783,84 +1693,6 @@ def enable_delta_v2_checkpoints(
                 runtime_profile=options.runtime_profile,
                 report=report,
                 operation="enable_v2_checkpoints",
-                path=options.path,
-                storage_options=options.storage_options,
-                log_storage_options=options.log_storage_options,
-                dataset_name=options.dataset_name,
-                commit_metadata=options.commit_metadata,
-            )
-        )
-    return report
-
-
-def enable_delta_vacuum_protocol_check(
-    options: DeltaFeatureMutationOptions,
-) -> Mapping[str, object]:
-    """Enable Delta vacuum protocol checks via the Rust control plane.
-
-    Args:
-        options: Description.
-
-    Returns:
-        Mapping[str, object]: Result.
-
-    Raises:
-        RuntimeError: If the operation cannot be completed.
-    """
-    with _feature_control_span(options, operation="enable_vacuum_protocol_check"):
-        ctx, request = _feature_enable_request(options)
-        try:
-            from datafusion_engine.delta.control_plane import (
-                delta_enable_vacuum_protocol_check,
-            )
-
-            report = delta_enable_vacuum_protocol_check(ctx, request=request)
-        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-            msg = f"Failed to enable Delta vacuum protocol check: {exc}"
-            raise RuntimeError(msg) from exc
-        _record_delta_feature_mutation(
-            _DeltaFeatureMutationRecord(
-                runtime_profile=options.runtime_profile,
-                report=report,
-                operation="enable_vacuum_protocol_check",
-                path=options.path,
-                storage_options=options.storage_options,
-                log_storage_options=options.log_storage_options,
-                dataset_name=options.dataset_name,
-                commit_metadata=options.commit_metadata,
-            )
-        )
-    return report
-
-
-def enable_delta_checkpoint_protection(
-    options: DeltaFeatureMutationOptions,
-) -> Mapping[str, object]:
-    """Enable Delta checkpoint protection via the Rust control plane.
-
-    Args:
-        options: Description.
-
-    Returns:
-        Mapping[str, object]: Result.
-
-    Raises:
-        RuntimeError: If the operation cannot be completed.
-    """
-    with _feature_control_span(options, operation="enable_checkpoint_protection"):
-        ctx, request = _feature_enable_request(options)
-        try:
-            from datafusion_engine.delta.control_plane import delta_enable_checkpoint_protection
-
-            report = delta_enable_checkpoint_protection(ctx, request=request)
-        except (ImportError, RuntimeError, TypeError, ValueError) as exc:
-            msg = f"Failed to enable Delta checkpoint protection: {exc}"
-            raise RuntimeError(msg) from exc
-        _record_delta_feature_mutation(
-            _DeltaFeatureMutationRecord(
-                runtime_profile=options.runtime_profile,
-                report=report,
-                operation="enable_checkpoint_protection",
                 path=options.path,
                 storage_options=options.storage_options,
                 log_storage_options=options.log_storage_options,
@@ -2976,16 +2808,12 @@ __all__ = [
     "delta_table_version",
     "enable_delta_change_data_feed",
     "enable_delta_check_constraints",
-    "enable_delta_checkpoint_protection",
     "enable_delta_column_mapping",
     "enable_delta_deletion_vectors",
     "enable_delta_features",
-    "enable_delta_generated_columns",
     "enable_delta_in_commit_timestamps",
-    "enable_delta_invariants",
     "enable_delta_row_tracking",
     "enable_delta_v2_checkpoints",
-    "enable_delta_vacuum_protocol_check",
     "idempotent_commit_properties",
     "read_delta_cdf",
     "read_delta_cdf_eager",

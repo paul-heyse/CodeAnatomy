@@ -13,6 +13,10 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
 
+# Conservative per-predicate selectivity decay factor.  Each independent
+# pushed predicate is modeled as reducing candidate rows by this factor.
+_SELECTIVITY_DECAY_PER_PREDICATE = 0.5
+
 
 @dataclass(frozen=True)
 class NormalizedPlanStats:
@@ -75,6 +79,18 @@ class PlanSignals:
         Per-scan-unit Delta protocol compatibility summaries.
     plan_fingerprint
         Stable plan fingerprint for deterministic comparison.
+    sort_keys
+        Column names appearing in plan Sort nodes, for sort-order
+        exploitation. Empty tuple when no sort information is available.
+    predicate_selectivity_estimate
+        Rough selectivity estimate for pushed predicates, in the range
+        ``[0.0, 1.0]``.  ``None`` when plan statistics are unavailable
+        or no pushed predicates exist.  Derived defensively from plan
+        statistics and pushed filter count.
+    projection_ratio
+        Ratio of projected columns to total schema columns, in the range
+        ``(0.0, 1.0]``.  ``None`` when schema or projection metadata is
+        unavailable.  Lower values indicate higher column-pruning benefit.
     """
 
     schema: pa.Schema | None = None
@@ -85,6 +101,9 @@ class PlanSignals:
     explain_analyze_duration_ms: float | None = None
     explain_analyze_output_rows: int | None = None
     repartition_count: int | None = None
+    sort_keys: tuple[str, ...] = ()
+    predicate_selectivity_estimate: float | None = None
+    projection_ratio: float | None = None
 
 
 def _extract_stats(plan_details: object) -> NormalizedPlanStats:
@@ -211,6 +230,109 @@ def _extract_scan_compat(
     )
 
 
+def _extract_sort_keys(lineage: LineageReport | None) -> tuple[str, ...]:
+    """Extract sort key column names from lineage sort expressions.
+
+    Parameters
+    ----------
+    lineage
+        Lineage report that may contain Sort-kind expressions.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Deduplicated column names referenced in Sort expressions,
+        in discovery order.
+    """
+    if lineage is None:
+        return ()
+    columns: list[str] = []
+    seen: set[str] = set()
+    for expr in lineage.exprs:
+        if expr.kind != "Sort":
+            continue
+        for _dataset, column in expr.referenced_columns:
+            if column and column not in seen:
+                seen.add(column)
+                columns.append(column)
+    return tuple(columns)
+
+
+def _estimate_predicate_selectivity(
+    lineage: LineageReport | None,
+    stats: NormalizedPlanStats | None,
+) -> float | None:
+    """Estimate predicate selectivity from pushed filters and plan statistics.
+
+    Return a rough selectivity estimate in ``[0.0, 1.0]``.  The heuristic
+    uses a simple exponential decay per pushed predicate: each independent
+    predicate is assumed to halve the candidate rows.  This is intentionally
+    conservative and should be replaced by a calibration-based model in
+    Phase C.2.
+
+    Parameters
+    ----------
+    lineage
+        Lineage report containing scan entries with pushed filters.
+    stats
+        Normalized plan statistics.  When ``num_rows`` is unavailable the
+        function returns ``None`` because selectivity is meaningless
+        without a row-count baseline.
+
+    Returns
+    -------
+    float | None
+        Estimated selectivity, or ``None`` when evidence is insufficient.
+    """
+    if lineage is None or stats is None or stats.num_rows is None:
+        return None
+    total_pushed = sum(len(scan.pushed_filters) for scan in lineage.scans)
+    if total_pushed == 0:
+        return None
+    # Each independent predicate is conservatively modeled as halving rows.
+    selectivity = _SELECTIVITY_DECAY_PER_PREDICATE**total_pushed
+    return max(selectivity, 0.0)
+
+
+def _compute_projection_ratio(
+    lineage: LineageReport | None,
+    schema: pa.Schema | None,
+) -> float | None:
+    """Compute projection ratio from lineage scans and output schema.
+
+    The ratio measures how many columns are actually projected vs the total
+    columns available in the output schema.  A low ratio indicates high
+    column-pruning benefit.
+
+    Parameters
+    ----------
+    lineage
+        Lineage report containing scan entries with projected columns.
+    schema
+        Output schema from the plan DataFrame.
+
+    Returns
+    -------
+    float | None
+        Ratio in ``(0.0, 1.0]``, or ``None`` when evidence is insufficient.
+    """
+    if lineage is None or schema is None:
+        return None
+    total_schema_cols = len(schema.names)
+    if total_schema_cols == 0:
+        return None
+    # Collect all distinct projected columns across scans.
+    projected: set[str] = set()
+    for scan in lineage.scans:
+        projected.update(scan.projected_columns)
+    if not projected:
+        return None
+    ratio = len(projected) / total_schema_cols
+    # Clamp to (0.0, 1.0] — projected can exceed schema when scans span
+    # multiple datasets.
+    return min(ratio, 1.0)
+
+
 def extract_plan_signals(
     bundle: DataFusionPlanBundle,
     *,
@@ -263,6 +385,11 @@ def extract_plan_signals(
     resolved_units = scan_units if scan_units is not None else bundle.scan_units
     scan_compat = _extract_scan_compat(resolved_units)
 
+    # Enriched signals (Phase C.1)
+    sort_keys = _extract_sort_keys(lineage)
+    predicate_selectivity_estimate = _estimate_predicate_selectivity(lineage, stats)
+    projection_ratio = _compute_projection_ratio(lineage, schema)
+
     return PlanSignals(
         schema=schema,
         lineage=lineage,
@@ -272,6 +399,9 @@ def extract_plan_signals(
         explain_analyze_duration_ms=_float_or_none(details.get("explain_analyze_duration_ms")),
         explain_analyze_output_rows=_int_or_none(details.get("explain_analyze_output_rows")),
         repartition_count=_int_or_none(details.get("repartition_count")),
+        sort_keys=sort_keys,
+        predicate_selectivity_estimate=predicate_selectivity_estimate,
+        projection_ratio=projection_ratio,
     )
 
 
@@ -303,6 +433,9 @@ def plan_signals_payload(signals: PlanSignals) -> dict[str, object]:
         "explain_analyze_duration_ms": signals.explain_analyze_duration_ms,
         "explain_analyze_output_rows": signals.explain_analyze_output_rows,
         "repartition_count": signals.repartition_count,
+        "sort_keys": list(signals.sort_keys),
+        "predicate_selectivity_estimate": signals.predicate_selectivity_estimate,
+        "projection_ratio": signals.projection_ratio,
     }
 
 

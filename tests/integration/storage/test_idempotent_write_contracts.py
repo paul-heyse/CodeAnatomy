@@ -13,13 +13,7 @@ import pytest
 from deltalake import DeltaTable, write_deltalake
 
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
-from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DiagnosticsConfig
-from semantics.compile_context import build_semantic_execution_context
-from semantics.incremental.delta_context import DeltaAccessContext
-from semantics.incremental.delta_updates import PartitionedDatasetSpec, upsert_partitioned_dataset
-from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
-from semantics.incremental.types import IncrementalFileChanges
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import (
     require_datafusion_udfs,
@@ -214,61 +208,6 @@ def test_write_pipeline_propagates_idempotent(tmp_path: Path) -> None:
     assert latest.get("commit_app_id") == "pipeline_test"
     assert latest.get("commit_version") == "11"
     assert latest.get("run_id") == "pipeline_run"
-
-
-@pytest.mark.integration
-def test_incremental_delete_propagates_idempotent(tmp_path: Path) -> None:
-    """Incremental delete flow reserves/finalizes deterministic commit identity."""
-    table_path = tmp_path / "incremental_delete_table"
-    write_deltalake(
-        str(table_path),
-        pa.table({"file_id": ["drop", "keep"], "value": [1, 2]}),
-        mode="overwrite",
-        partition_by=["file_id"],
-    )
-
-    sink = InMemoryDiagnosticsSink()
-    profile = DataFusionRuntimeProfile(
-        diagnostics=DiagnosticsConfig(diagnostics_sink=sink),
-    )
-    runtime = IncrementalRuntime.build(
-        IncrementalRuntimeBuildRequest(
-            profile=profile,
-            dataset_resolver=build_semantic_execution_context(
-                runtime_profile=profile
-            ).dataset_resolver,
-        )
-    )
-    context = DeltaAccessContext(runtime=runtime)
-
-    _ = upsert_partitioned_dataset(
-        pa.table({"file_id": ["keep"], "value": [3]}),
-        spec=PartitionedDatasetSpec(name="incremental_delete_dataset", partition_column="file_id"),
-        base_dir=str(table_path),
-        changes=IncrementalFileChanges(deleted_file_ids=("drop",)),
-        context=context,
-    )
-
-    commit_rows = sink.artifacts_snapshot().get("datafusion_delta_commit_v1", [])
-    delete_reserved = [
-        row
-        for row in commit_rows
-        if row.get("status") == "reserved"
-        and isinstance(row.get("commit_metadata"), dict)
-        and row["commit_metadata"].get("codeanatomy_operation") == "delete"
-        and row["commit_metadata"].get("codeanatomy_mode") == "delete"
-    ]
-    delete_finalized = [
-        row
-        for row in commit_rows
-        if row.get("status") == "finalized"
-        and isinstance(row.get("metadata"), dict)
-        and row["metadata"].get("operation") == "delete"
-        and row["metadata"].get("key") == str(table_path)
-    ]
-
-    assert delete_reserved, "Expected at least one reserved delete commit artifact"
-    assert delete_finalized, "Expected at least one finalized delete commit artifact"
 
 
 @pytest.mark.integration

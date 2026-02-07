@@ -35,21 +35,6 @@ cleanup_run_wheel_dir() {
 }
 trap cleanup_run_wheel_dir EXIT
 
-if [ "${CODEANATOMY_SKIP_UV_SYNC:-}" != "1" ]; then
-  if ls -1 "${wheel_dir}"/datafusion-*.whl >/dev/null 2>&1; then
-    uv lock --refresh-package datafusion
-  fi
-  if ls -1 "${wheel_dir}"/datafusion_ext-*.whl >/dev/null 2>&1; then
-    uv lock --refresh-package datafusion-ext
-  fi
-  if ! uv sync; then
-    echo "uv sync failed; refreshing datafusion wheel hashes and retrying..." >&2
-    uv lock --refresh-package datafusion
-    uv lock --refresh-package datafusion-ext
-    uv sync
-  fi
-fi
-
 (
   cd rust/df_plugin_codeanatomy
   cargo build --${profile}
@@ -105,13 +90,13 @@ if [ "${profile}" = "release" ] && [ "${CODEANATOMY_WHEEL_BUILD_SDIST:-1}" = "1"
   maturin_common_flags+=(--sdist)
 fi
 
-uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
-uv lock --refresh-package datafusion
+uv_run_cmd=(uv run --no-sync)
+
+"${uv_run_cmd[@]}" maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 (
   cd rust/datafusion_ext_py
-  uv run maturin build --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
+  "${uv_run_cmd[@]}" maturin build --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 )
-uv lock --refresh-package datafusion-ext
 
 shopt -s nullglob
 datafusion_wheels=("${run_wheel_dir}"/datafusion-*.whl)
@@ -155,7 +140,7 @@ fi
 # Ensure the plugin shared library is embedded in the ext wheel payload.
 # We include both `datafusion_ext/<lib>` (preferred lookup path) and
 # `datafusion_ext/plugin/<lib>` (legacy compatibility path), then rewrite RECORD.
-uv run python - <<PY
+"${uv_run_cmd[@]}" python - <<PY
 from __future__ import annotations
 
 import base64
@@ -236,7 +221,7 @@ cp -f "${run_wheel_dir}"/* "${wheel_dir}/"
 datafusion_wheel="${wheel_dir}/$(basename "${datafusion_wheel}")"
 datafusion_ext_wheel="${wheel_dir}/$(basename "${datafusion_ext_wheel}")"
 
-uv run python - <<PY
+"${uv_run_cmd[@]}" python - <<PY
 from __future__ import annotations
 
 import importlib
@@ -304,7 +289,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
         raise SystemExit(f"Async UDF feature validation failed: {exc}") from exc
 PY
 
-uv run python - <<PY
+"${uv_run_cmd[@]}" python - <<PY
 from __future__ import annotations
 
 from pathlib import Path
@@ -362,7 +347,7 @@ PY
 
 mkdir -p build
 plugin_abs_path="$(pwd)/rust/datafusion_ext_py/plugin/$(basename "${plugin_lib}")"
-uv run python - <<PY
+"${uv_run_cmd[@]}" python - <<PY
 from __future__ import annotations
 
 import json
@@ -408,6 +393,17 @@ Path("build/datafusion_plugin_manifest.json").write_text(
     encoding="utf-8",
 )
 PY
+
+if [ "${CODEANATOMY_SKIP_UV_SYNC:-}" != "1" ]; then
+  uv lock --refresh-package datafusion
+  uv lock --refresh-package datafusion-ext
+  if ! uv sync; then
+    echo "uv sync failed; refreshing datafusion wheel hashes and retrying..." >&2
+    uv lock --refresh-package datafusion
+    uv lock --refresh-package datafusion-ext
+    uv sync
+  fi
+fi
 
 echo "Wheel build complete."
 echo "  profile: ${profile}"

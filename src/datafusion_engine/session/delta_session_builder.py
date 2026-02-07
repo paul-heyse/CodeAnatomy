@@ -63,16 +63,6 @@ class _RuntimePolicySettingRule:
     parser: Callable[[str], object | None]
 
 
-@dataclass(frozen=True)
-class _BuilderInvocation:
-    resolution: DeltaSessionBuilderResolution
-    settings: dict[str, str]
-    runtime_env: RuntimeEnvBuilder
-    delta_runtime: object
-    runtime_policy_options: object | None
-    runtime_policy_bridge: Mapping[str, object] | None
-
-
 def split_runtime_settings(
     settings: Mapping[str, str],
 ) -> tuple[dict[str, str], dict[str, str]]:
@@ -235,16 +225,20 @@ def build_delta_session_context(
             profile.catalog.enable_information_schema
         ).lower()
         delta_runtime = delta_runtime_env_options(profile)
-        ctx, runtime_policy_bridge = _invoke_builder_with_compat(
-            _BuilderInvocation(
-                resolution=resolution,
-                settings=settings,
-                runtime_env=runtime_env,
-                delta_runtime=delta_runtime,
-                runtime_policy_options=bridge.options,
-                runtime_policy_bridge=bridge.payload,
+        runtime_policy_bridge = bridge.payload
+        if resolution.module_name != "datafusion_ext":
+            ctx = resolution.builder(
+                list(settings.items()),
+                runtime_env,
+                delta_runtime,
             )
-        )
+        else:
+            ctx = resolution.builder(
+                list(settings.items()),
+                None,
+                delta_runtime,
+                bridge.options,
+            )
     except (RuntimeError, TypeError, ValueError) as exc:
         return DeltaSessionBuildResult(
             ctx=None,
@@ -287,43 +281,6 @@ def _bridge_payload_for_runtime_policy(
     return build_runtime_policy_options(resolution.module_owner, runtime_settings)
 
 
-def _invoke_builder_with_compat(
-    invocation: _BuilderInvocation,
-) -> tuple[object, Mapping[str, object] | None]:
-    resolution = invocation.resolution
-    if resolution.builder is None:
-        msg = "Delta session builder is unavailable."
-        raise RuntimeError(msg)
-    if resolution.module_name != "datafusion_ext":
-        return (
-            resolution.builder(
-                list(invocation.settings.items()),
-                invocation.runtime_env,
-                invocation.delta_runtime,
-            ),
-            invocation.runtime_policy_bridge,
-        )
-    try:
-        return (
-            resolution.builder(
-                list(invocation.settings.items()),
-                None,
-                invocation.delta_runtime,
-                invocation.runtime_policy_options,
-            ),
-            invocation.runtime_policy_bridge,
-        )
-    except TypeError as exc:
-        if not _is_legacy_delta_session_signature(exc):
-            raise
-        legacy_payload: dict[str, object] = dict(invocation.runtime_policy_bridge or {})
-        legacy_payload.update({"enabled": False, "reason": "legacy_builder_signature"})
-        return (
-            resolution.builder(list(invocation.settings.items()), None, invocation.delta_runtime),
-            legacy_payload,
-        )
-
-
 def _normalize_session_context(ctx: object) -> SessionContext | None:
     if isinstance(ctx, SessionContext):
         return ctx
@@ -332,13 +289,6 @@ def _normalize_session_context(ctx: object) -> SessionContext | None:
         wrapper.ctx = ctx
         return wrapper
     return None
-
-
-def _is_legacy_delta_session_signature(exc: TypeError) -> bool:
-    message = str(exc)
-    if "positional argument" not in message:
-        return False
-    return "4 were given" in message or "4 positional arguments" in message
 
 
 def _parse_suffixed_runtime_size(value: str) -> int | None:

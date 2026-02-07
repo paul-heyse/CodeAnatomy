@@ -12,7 +12,7 @@ from datafusion_engine.dataset.registry import (
     resolve_dataset_location,
     resolve_dataset_policies,
 )
-from schema_spec.arrow_type_coercion import coerce_arrow_type
+from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.dataset_spec_ops import dataset_spec_schema
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
@@ -33,7 +33,7 @@ def _table_spec(name: str, field_name: str) -> TableSchemaSpec:
         fields=[
             FieldSpec(
                 name=field_name,
-                dtype=coerce_arrow_type(pa.int64()),
+                dtype=arrow_type_from_pyarrow(pa.int64()),
                 nullable=False,
             )
         ],

@@ -1,15 +1,15 @@
 """Entity registry: declarations and converters to table specs.
 
-Provide a parallel entity-centric registry that converts
-``EntityDeclaration`` instances into the existing ``SemanticTableSpec``
-and ``SemanticNormalizationSpec`` types.  The generated specs must be
-structurally identical to the hand-written entries in
-``semantics.registry``.
+Provide the canonical entity-centric registry that converts
+``EntityDeclaration`` instances into ``SemanticTableSpec`` and
+``SemanticNormalizationSpec`` types.  ``SEMANTIC_TABLE_SPECS`` in
+``semantics.registry`` is generated from the declarations defined here
+via ``generate_table_specs(ENTITY_DECLARATIONS)``.
 """
 
 from __future__ import annotations
 
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from semantics.entity_model import (
     EntityDeclaration,
@@ -17,13 +17,15 @@ from semantics.entity_model import (
     IdentitySpec,
     LocationSpec,
 )
-from semantics.registry import SemanticNormalizationSpec
 from semantics.specs import (
     ForeignKeyDerivation,
     IdDerivation,
     SemanticTableSpec,
     SpanBinding,
 )
+
+if TYPE_CHECKING:
+    from semantics.registry import SemanticNormalizationSpec
 
 
 def entity_to_table_spec(decl: EntityDeclaration) -> SemanticTableSpec:
@@ -95,6 +97,8 @@ def entity_to_normalization_spec(decl: EntityDeclaration) -> SemanticNormalizati
     SemanticNormalizationSpec
         Equivalent normalization spec.
     """
+    from semantics.registry import SemanticNormalizationSpec
+
     return SemanticNormalizationSpec(
         source_table=decl.source_table,
         normalized_name=decl.effective_normalized_name(),

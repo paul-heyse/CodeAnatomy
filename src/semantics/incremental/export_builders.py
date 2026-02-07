@@ -12,6 +12,8 @@ from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.udf.expr import udf_expr
 from semantics.catalog.dataset_specs import dataset_spec
+from semantics.types.annotated_schema import AnnotatedSchema
+from semantics.types.core import SemanticType
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -47,10 +49,11 @@ def exported_defs_df_builder(ctx: SessionContext) -> DataFrame:
     symbol_roles_expr = safe_cast(lit(None), "Int32")
     if ctx.table_exist("rel_def_symbol"):
         rel_source_df = ctx.table("rel_def_symbol")
-        rel_schema_names = set(rel_source_df.schema().names)
+        rel_annotated = AnnotatedSchema.from_arrow_schema(rel_source_df.schema())
+        rel_schema_names = set(rel_annotated.column_names)
         rel_symbol_expr = (
             col("symbol").alias("rel_symbol")
-            if "symbol" in rel_schema_names
+            if rel_annotated.has_semantic_type(SemanticType.SYMBOL)
             else safe_cast(lit(None), "Utf8").alias("rel_symbol")
         )
         rel_symbol_roles_expr = (

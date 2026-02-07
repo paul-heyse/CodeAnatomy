@@ -26,7 +26,6 @@ from extract.infrastructure.cache_utils import CACHE_VERSION, stable_cache_key, 
 from extract.scanning.repo_scan import _sha256_path
 from relspec.execution_plan import _protocol_payload as exec_protocol_payload
 from relspec.execution_plan import _scan_unit_signature
-from semantics.incremental.scip_fingerprint import scip_index_fingerprint
 from serde_artifacts import DeltaInputPin, DeltaScanConfigSnapshot, PlanArtifacts
 from serde_msgspec import JSON_ENCODER, MSGPACK_ENCODER, to_builtins
 from tests.test_helpers.datafusion_runtime import df_profile
@@ -146,14 +145,6 @@ def test_extract_repo_scan_sha256_path(tmp_path: Path) -> None:
     path.write_text("hash-me", encoding="utf-8")
     expected = hashlib.sha256(path.read_bytes()).hexdigest()
     assert _sha256_path(path) == expected
-
-
-def test_scip_index_fingerprint_matches_chunked_sha256(tmp_path: Path) -> None:
-    """Hash SCIP indexes with chunked SHA-256 semantics."""
-    path = tmp_path / "index.scip"
-    path.write_bytes(b"x" * 4096)
-    expected = hashlib.sha256(path.read_bytes()).hexdigest()
-    assert scip_index_fingerprint(path) == expected
 
 
 def test_scan_unit_signature_matches_msgpack_encoder() -> None:

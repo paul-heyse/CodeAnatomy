@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from semantics.types.annotated_schema import AnnotatedSchema
+from semantics.types.core import CompatibilityGroup, SemanticType
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from datafusion.dataframe import DataFrame
     from datafusion.expr import Expr
 
@@ -44,6 +49,49 @@ class RelationOutputSpec:
     ambiguity_group_col: str | None = None
 
 
+def _resolve_edge_owner(
+    annotated: AnnotatedSchema,
+    null_expr: Expr,
+    *,
+    coalesce: Callable[..., Expr],
+) -> Expr:
+    """Resolve the edge_owner expression from file-identity columns.
+
+    Uses the FILE_IDENTITY compatibility group to find available file
+    identity columns, then applies coalesce logic: prefer
+    ``edge_owner_file_id`` with ``file_id`` as fallback.
+
+    Parameters
+    ----------
+    annotated
+        Annotated schema for the input DataFrame.
+    null_expr
+        Null string expression to use when no file identity column is available.
+    coalesce
+        DataFusion ``coalesce`` function reference.
+
+    Returns
+    -------
+    Expr
+        Expression for the edge_owner_file_id output column.
+    """
+    from datafusion import col
+
+    file_id_cols = {
+        c.name for c in annotated.columns_by_compatibility_group(CompatibilityGroup.FILE_IDENTITY)
+    }
+    has_edge_owner = "edge_owner_file_id" in file_id_cols
+    has_file_id = "file_id" in file_id_cols
+
+    if has_edge_owner and has_file_id:
+        return coalesce(col("edge_owner_file_id"), col("file_id"))
+    if has_edge_owner:
+        return col("edge_owner_file_id")
+    if has_file_id:
+        return col("file_id")
+    return null_expr
+
+
 def relation_output_projection(
     df: DataFrame,
     spec: RelationOutputSpec,
@@ -68,7 +116,9 @@ def relation_output_projection(
     from datafusion import col, lit
     from datafusion import functions as f
 
-    names = set(df.schema().names)
+    schema = df.schema()
+    names = set(schema.names)
+    annotated = AnnotatedSchema.from_arrow_schema(schema)
     null_str = lit(None).cast(pa.string())
 
     def _optional(name: str, dtype: pa.DataType, *, default: Expr | None = None) -> Expr:
@@ -78,18 +128,11 @@ def relation_output_projection(
             return lit(None).cast(dtype)
         return default.cast(dtype)
 
-    if "edge_owner_file_id" in names and "file_id" in names:
-        edge_owner = f.coalesce(col("edge_owner_file_id"), col("file_id"))
-    elif "edge_owner_file_id" in names:
-        edge_owner = col("edge_owner_file_id")
-    elif "file_id" in names:
-        edge_owner = col("file_id")
-    else:
-        edge_owner = null_str
+    edge_owner = _resolve_edge_owner(annotated, null_str, coalesce=f.coalesce)
 
     if "resolution_method" in names:
         resolution_method = col("resolution_method").cast(pa.string())
-    elif "origin" in names:
+    elif annotated.has_semantic_type(SemanticType.ORIGIN):
         resolution_method = col("origin").cast(pa.string())
     else:
         resolution_method = null_str

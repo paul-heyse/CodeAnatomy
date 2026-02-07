@@ -4,66 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import pyarrow as pa
 
 from datafusion_engine.arrow.interop import empty_table_for_schema
-
-
-@dataclass(frozen=True)
-class FileIndexEntry:
-    """Typed representation of a Delta file index entry.
-
-    Attributes:
-    ----------
-    path : str
-        Relative path to the data file.
-    size_bytes : int
-        Size of the file in bytes.
-    modification_time : int
-        Modification timestamp in milliseconds since epoch.
-    partition_values : dict[str, str]
-        Partition column values for this file.
-    stats_min : dict[str, Any] | None
-        Minimum values per column from file statistics.
-    stats_max : dict[str, Any] | None
-        Maximum values per column from file statistics.
-    num_records : int | None
-        Number of records in the file.
-    """
-
-    path: str
-    size_bytes: int
-    modification_time: int
-    partition_values: dict[str, str]
-    stats_min: dict[str, Any] | None
-    stats_max: dict[str, Any] | None
-    num_records: int | None
-
-    @classmethod
-    def from_row(cls, row: dict[str, Any]) -> FileIndexEntry:
-        """Create FileIndexEntry from a row dictionary.
-
-        Parameters
-        ----------
-        row : dict[str, Any]
-            Row data from the file index table.
-
-        Returns:
-        -------
-        FileIndexEntry
-            Typed file index entry.
-        """
-        return cls(
-            path=str(row.get("path", "")),
-            size_bytes=int(row.get("size_bytes", 0)),
-            modification_time=int(row.get("modification_time", 0)),
-            partition_values=dict(row.get("partition_values") or {}),
-            stats_min=row.get("stats_min"),
-            stats_max=row.get("stats_max"),
-            num_records=row.get("num_records"),
-        )
 
 
 def _parse_int_field(value: object, *, field: str) -> int:
@@ -360,6 +304,5 @@ def _empty_file_index_table() -> pa.Table:
 
 
 __all__ = [
-    "FileIndexEntry",
     "build_delta_file_index_from_add_actions",
 ]

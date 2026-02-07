@@ -30,7 +30,9 @@ class DecisionRecorder:
             confidence_score=0.9,
             evidence=(
                 EvidenceRecord(
-                    source="stats", key="num_rows", value="500",
+                    source="stats",
+                    key="num_rows",
+                    value="500",
                 ),
             ),
             context_label="my_dataset",

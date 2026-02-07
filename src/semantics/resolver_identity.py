@@ -54,10 +54,8 @@ class ResolverIdentityTracker:
         """Return the count of distinct resolver instances recorded.
 
         Returns:
-        -------
-        int
-            Number of unique ``id()`` values across all registrations.
-            Returns ``0`` when no registrations have been recorded.
+            int: Number of unique ``id()`` values across all registrations.
+                Returns ``0`` when no registrations have been recorded.
         """
         with self._lock:
             return len(set(self._resolver_ids))
@@ -66,10 +64,9 @@ class ResolverIdentityTracker:
         """Return a list of identity violation descriptions.
 
         Returns:
-        -------
-        list[str]
-            Empty when all registrations share the same resolver instance.
-            Contains one description per violation when drift is detected.
+            list[str]: Empty when all registrations share the same resolver
+                instance. Contains one description per violation when drift
+                is detected.
         """
         with self._lock:
             unique_ids = set(self._resolver_ids)
@@ -78,7 +75,7 @@ class ResolverIdentityTracker:
 
             # Build a mapping from resolver id to the labels that used it.
             id_to_labels: dict[int, list[str]] = {}
-            for rid, lbl in zip(self._resolver_ids, self._labels):
+            for rid, lbl in zip(self._resolver_ids, self._labels, strict=True):
                 id_to_labels.setdefault(rid, []).append(lbl)
 
             violations: list[str] = []
@@ -95,9 +92,8 @@ class ResolverIdentityTracker:
         """Raise ``RuntimeError`` when multiple distinct resolvers are detected.
 
         Raises:
-        ------
-        RuntimeError
-            When more than one distinct resolver instance has been recorded.
+            RuntimeError: When more than one distinct resolver instance
+                has been recorded.
         """
         violations = self.verify_identity()
         if violations:
@@ -131,9 +127,7 @@ def resolver_identity_tracking(
         When ``False``, the caller must inspect the tracker manually.
 
     Yields:
-    ------
-    ResolverIdentityTracker
-        Active tracker for the pipeline run scope.
+        ResolverIdentityTracker: Active tracker for the pipeline run scope.
     """
     tracker = ResolverIdentityTracker(label=label)
     with _tracker_lock:
@@ -152,10 +146,8 @@ def get_active_resolver_tracker() -> ResolverIdentityTracker | None:
     """Return the active resolver identity tracker, or ``None``.
 
     Returns:
-    -------
-    ResolverIdentityTracker | None
-        Active tracker when ``resolver_identity_tracking()`` is in scope,
-        else ``None``.
+        ResolverIdentityTracker | None: Active tracker when
+            ``resolver_identity_tracking()`` is in scope, else ``None``.
     """
     return _tracker_state["active"]
 

@@ -13,7 +13,6 @@ from semantics.resolver_identity import (
     resolver_identity_tracking,
 )
 
-
 # ---------------------------------------------------------------------------
 # ResolverIdentityTracker unit tests
 # ---------------------------------------------------------------------------
@@ -104,6 +103,13 @@ class TestResolverIdentityTracker:
 # ---------------------------------------------------------------------------
 
 
+def _run_tracking_with_drift(resolver_a: object, resolver_b: object) -> None:
+    """Run identity tracking with two distinct resolver instances."""
+    with resolver_identity_tracking(strict=True) as tracker:
+        tracker.record_resolver(resolver_a, label="a")
+        tracker.record_resolver(resolver_b, label="b")
+
+
 class TestResolverIdentityTracking:
     """Tests for the resolver_identity_tracking context manager."""
 
@@ -127,16 +133,18 @@ class TestResolverIdentityTracking:
 
     def test_strict_mode_raises_on_violation(self) -> None:
         """Verify strict mode raises on context exit when drift detected."""
+        resolver_a = object()
+        resolver_b = object()
         with pytest.raises(RuntimeError, match="Resolver identity violation"):
-            with resolver_identity_tracking(strict=True) as tracker:
-                tracker.record_resolver(object(), label="a")
-                tracker.record_resolver(object(), label="b")
+            _run_tracking_with_drift(resolver_a, resolver_b)
 
     def test_non_strict_mode_does_not_raise(self) -> None:
         """Verify non-strict mode does not raise even with violations."""
+        resolver_a = object()
+        resolver_b = object()
         with resolver_identity_tracking(strict=False) as tracker:
-            tracker.record_resolver(object(), label="a")
-            tracker.record_resolver(object(), label="b")
+            tracker.record_resolver(resolver_a, label="a")
+            tracker.record_resolver(resolver_b, label="b")
         # Non-strict should not raise, even though there are violations.
         assert tracker.distinct_resolvers() == 2
 
@@ -195,13 +203,10 @@ class TestThreadSafety:
                 barrier.wait(timeout=5)
                 for _ in range(50):
                     tracker.record_resolver(resolver, label=lbl)
-            except Exception as exc:
+            except (RuntimeError, threading.BrokenBarrierError) as exc:
                 errors.append(str(exc))
 
-        threads = [
-            threading.Thread(target=worker, args=(f"thread-{i}",))
-            for i in range(4)
-        ]
+        threads = [threading.Thread(target=worker, args=(f"thread-{i}",)) for i in range(4)]
         for t in threads:
             t.start()
         for t in threads:
@@ -224,13 +229,10 @@ class TestThreadSafety:
                 barrier.wait(timeout=5)
                 for _ in range(10):
                     tracker.record_resolver(local_resolver, label=lbl)
-            except Exception as exc:
+            except (RuntimeError, threading.BrokenBarrierError) as exc:
                 errors.append(str(exc))
 
-        threads = [
-            threading.Thread(target=worker, args=(f"thread-{i}",))
-            for i in range(4)
-        ]
+        threads = [threading.Thread(target=worker, args=(f"thread-{i}",)) for i in range(4)]
         for t in threads:
             t.start()
         for t in threads:

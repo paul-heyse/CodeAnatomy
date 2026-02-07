@@ -217,8 +217,15 @@ def _execution_authority_context_node(options: PlanModuleOptions) -> object:
             artifact="execution_authority_context",
         )
     )
-    def execution_authority_context() -> ExecutionAuthorityContext | None:
-        return options.execution_authority_context
+    def execution_authority_context() -> ExecutionAuthorityContext:
+        authority = options.execution_authority_context
+        if isinstance(authority, ExecutionAuthorityContext):
+            return authority
+        msg = (
+            "ExecutionAuthorityContext is required for plan-context assembly. "
+            "Provide plan_module_options.execution_authority_context."
+        )
+        raise ValueError(msg)
 
     return execution_authority_context
 
@@ -230,7 +237,7 @@ def _plan_context_node() -> object:
         active_task_names: frozenset[str],
         plan_bundles_by_task: Mapping[str, DataFusionPlanBundle],
         plan_scan_inputs: task_execution.PlanScanInputs,
-        execution_authority_context: ExecutionAuthorityContext | None = None,
+        execution_authority_context: ExecutionAuthorityContext,
     ) -> task_execution.PlanExecutionContext:
         return task_execution.PlanExecutionContext(
             plan_signature=plan_signature,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import inject, resolve_from_config, source
@@ -55,6 +55,7 @@ else:
     DataFusionPlanBundle = object
     DataFusionRuntimeProfile = object
     SessionRuntime = object
+    EvidencePlan = object
     ExtractSession = object
     ScipExtractOptions = object
     RepoScanConfig = object
@@ -88,7 +89,7 @@ class TaskExecutionInputs:
     cache_salt: str
     scip_index_path: str | None
     scip_extract_options: ScipExtractOptions
-    execution_authority_context: ExecutionAuthorityContext | None = None
+    execution_authority_context: ExecutionAuthorityContext
 
 
 @dataclass(frozen=True)
@@ -129,7 +130,7 @@ class PlanExecutionContext:
     active_task_names: frozenset[str]
     plan_bundles_by_task: Mapping[str, DataFusionPlanBundle]
     plan_scan_inputs: PlanScanInputs
-    execution_authority_context: ExecutionAuthorityContext | None = None
+    execution_authority_context: ExecutionAuthorityContext
 
 
 @dataclass(frozen=True)
@@ -913,9 +914,24 @@ def _ensure_extract_executors_registered() -> None:
 def ensure_extract_executors_registered(*, force: bool = False) -> None:
     """Populate extract executor registry for extract-template dispatch.
 
-    Args:
-        force: When ``True``, reset registration state before initializing.
+    .. deprecated::
+        Executors are now resolved via
+        ``ExecutionAuthorityContext.extract_executor_map``.
+        This function is retained for legacy compatibility only.
+
+    Parameters
+    ----------
+    force
+        When ``True``, reset registration state before initializing.
     """
+    import warnings
+
+    warnings.warn(
+        "ensure_extract_executors_registered() is deprecated; "
+        "executors are resolved via ExecutionAuthorityContext.extract_executor_map",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if force:
         _EXTRACT_EXECUTOR_REGISTRATION_STATE["registered"] = False
     _ensure_extract_executors_registered()
@@ -986,6 +1002,17 @@ def _dataset_location_for_output(
     return None
 
 
+def _require_execution_authority(inputs: TaskExecutionInputs) -> ExecutionAuthorityContext:
+    authority = inputs.execution_authority_context
+    if isinstance(authority, ExecutionAuthorityContext):
+        return authority
+    msg = (
+        "ExecutionAuthorityContext is required for extract dispatch; "
+        "missing execution authority in task execution inputs."
+    )
+    raise ValueError(msg)
+
+
 def _ensure_extract_output(
     *,
     inputs: TaskExecutionInputs,
@@ -1030,6 +1057,23 @@ def _ensure_extract_output(
         )
 
 
+def _resolve_extract_handler(
+    authority_context: ExecutionAuthorityContext,
+    adapter_name: str,
+) -> Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]:
+    """Resolve extract handlers exclusively from the execution authority context.
+
+    Returns:
+    -------
+    Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]
+        Extract executor callable bound to the requested adapter.
+    """
+    return cast(
+        "Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]",
+        authority_context.executor_for_adapter(adapter_name),
+    )
+
+
 def _execute_extract_task(
     inputs: TaskExecutionInputs,
     *,
@@ -1039,7 +1083,6 @@ def _execute_extract_task(
         msg = "RuntimeArtifacts.execution must be configured for extract execution."
         raise ValueError(msg)
     from datafusion_engine.extract.adapter_registry import (
-        adapter_executor_key,
         extract_template_adapter,
     )
     from extract.session import ExtractSession
@@ -1052,10 +1095,7 @@ def _execute_extract_task(
         raise ValueError(msg)
     extract_session = ExtractSession(engine_session=inputs.engine_session)
     profile_name = inputs.engine_session.datafusion_profile.policies.config_policy_name or "default"
-
-    def _missing_extract_executor(adapter_name: str) -> NoReturn:
-        msg = f"Missing extract executor for adapter {adapter_name!r}."
-        raise ValueError(msg)
+    authority_context = _require_execution_authority(inputs)
 
     try:
         try:
@@ -1063,21 +1103,8 @@ def _execute_extract_task(
         except KeyError as exc:
             msg = f"Unsupported extract template {task_spec.extractor!r}."
             raise ValueError(msg) from exc
-        authority_context = inputs.execution_authority_context
         handler: Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]
-        if authority_context is None:
-            raw_handler = build_extract_executor_map().get(adapter_executor_key(adapter.name))
-            if not callable(raw_handler):
-                _missing_extract_executor(adapter.name)
-            handler = cast(
-                "Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]",
-                raw_handler,
-            )
-        else:
-            handler = cast(
-                "Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]",
-                authority_context.executor_for_adapter(adapter.name),
-            )
+        handler = _resolve_extract_handler(authority_context, adapter.name)
         outputs = handler(inputs, extract_session, profile_name)
         normalized = _normalize_extract_outputs(outputs)
     except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:

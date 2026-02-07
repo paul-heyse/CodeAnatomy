@@ -58,6 +58,7 @@ from datafusion_engine.delta.service import (
 from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import delta_constraints_for_location
 from datafusion_engine.sql.options import sql_options_for_profile
 from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints, dataset_spec_name
@@ -321,33 +322,6 @@ def compute_adaptive_file_size(
     return base_target
 
 
-def plan_stats_from_bundle(
-    bundle: DataFusionPlanBundle,
-) -> dict[str, object] | None:
-    """Extract statistics from a plan bundle's plan details.
-
-    Read raw statistics from the existing ``plan_details`` structure.
-    Do NOT add new properties or methods to ``DataFusionPlanBundle``.
-
-    Parameters
-    ----------
-    bundle
-        DataFusion plan bundle with plan details.
-
-    Returns:
-    -------
-    dict[str, object] | None
-        Raw statistics dict, or None when unavailable.
-    """
-    details = bundle.plan_details
-    if not isinstance(details, dict):
-        return None
-    stats = details.get("statistics")
-    if isinstance(stats, dict):
-        return stats
-    return None
-
-
 def _delta_policy_context(
     *,
     options: Mapping[str, object],
@@ -393,16 +367,11 @@ def _delta_policy_context(
     )
     # Plan-derived file size enrichment (10.3)
     if plan_bundle is not None and target_file_size is not None:
-        stats = plan_stats_from_bundle(plan_bundle)
-        if stats is not None:
-            row_count_raw = stats.get("num_rows") or stats.get("row_count")
-            if isinstance(row_count_raw, (int, float, str)):
-                try:
-                    row_count = int(row_count_raw)
-                except (TypeError, ValueError):
-                    row_count = None
-                if row_count is not None:
-                    target_file_size = compute_adaptive_file_size(row_count, target_file_size)
+        signals = extract_plan_signals(plan_bundle)
+        stats = signals.stats
+        row_count = stats.num_rows if stats is not None else None
+        if row_count is not None:
+            target_file_size = compute_adaptive_file_size(row_count, target_file_size)
     storage_options, log_storage_options = _delta_storage_options(
         options,
         dataset_location=dataset_location,
@@ -2105,8 +2074,10 @@ def _validate_delta_protocol_support(
 ) -> None:
     if runtime_profile is None or runtime_profile.policies.delta_protocol_support is None:
         return
-    from datafusion_engine.delta.protocol import delta_protocol_compatibility
-    from serde_msgspec import to_builtins
+    from datafusion_engine.delta.protocol import (
+        delta_protocol_artifact_payload,
+        delta_protocol_compatibility,
+    )
 
     service = delta_service_for_profile(runtime_profile)
     snapshot = service.protocol_snapshot(
@@ -2119,9 +2090,9 @@ def _validate_delta_protocol_support(
         snapshot,
         runtime_profile.policies.delta_protocol_support,
     )
-    compatibility_payload = cast(
-        "dict[str, object]",
-        to_builtins(compatibility, str_keys=True),
+    compatibility_payload = delta_protocol_artifact_payload(
+        compatibility,
+        table_uri=table_uri,
     )
     compatible = compatibility.compatible
     if compatible is True or runtime_profile.policies.delta_protocol_mode == "ignore":

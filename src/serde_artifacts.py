@@ -258,6 +258,32 @@ class DeltaScanConfigSnapshot(StructBaseCompat, frozen=True):
     schema: dict[str, JsonValueLax] | None = None
 
 
+class DeltaProtocolArtifact(StructBaseCompat, frozen=True):
+    """Canonical artifact payload for Delta protocol compatibility diagnostics.
+
+    Fields mirror ``DeltaProtocolCompatibility`` with additional context fields
+    (``table_uri``, ``dataset_name``) for artifact provenance.
+    """
+
+    compatible: bool | None = None
+    reason: str | None = None
+    required_reader_version: int | None = None
+    required_writer_version: int | None = None
+    supported_reader_version: int | None = None
+    supported_writer_version: int | None = None
+    required_reader_features: tuple[str, ...] = ()
+    required_writer_features: tuple[str, ...] = ()
+    supported_reader_features: tuple[str, ...] = ()
+    supported_writer_features: tuple[str, ...] = ()
+    missing_reader_features: tuple[str, ...] = ()
+    missing_writer_features: tuple[str, ...] = ()
+    reader_version_ok: bool | None = None
+    writer_version_ok: bool | None = None
+    feature_support_ok: bool | None = None
+    table_uri: str | None = None
+    dataset_name: str | None = None
+
+
 class PlanArtifactRow(StructBaseCompat, frozen=True):
     """Serializable plan artifact row persisted to the Delta store."""
 
@@ -655,6 +681,7 @@ def export_artifact_schemas(output_dir: Path) -> tuple[Path, ...]:
 __all__ = [
     "ArtifactEnvelopeBase",
     "DeltaInputPin",
+    "DeltaProtocolArtifact",
     "DeltaScanConfigSnapshot",
     "DeltaStatsDecision",
     "DeltaStatsDecisionEnvelope",

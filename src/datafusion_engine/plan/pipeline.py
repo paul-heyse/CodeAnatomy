@@ -92,7 +92,10 @@ def plan_with_delta_pins(
     semantic_manifest = semantic_ctx.manifest
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     # Baseline registration ensures UDF platform and registry views exist.
-    facade.ensure_view_graph(semantic_manifest=semantic_manifest)
+    facade.ensure_view_graph(
+        semantic_manifest=semantic_manifest,
+        dataset_resolver=dataset_resolver,
+    )
     baseline_nodes = _plan_view_nodes(
         ctx,
         view_nodes=view_nodes,

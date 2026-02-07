@@ -1,4 +1,10 @@
-"""Centralized extract adapter execution registry.
+"""Centralized extract adapter execution registry (legacy compatibility).
+
+.. deprecated::
+    Executors are now resolved via
+    ``ExecutionAuthorityContext.extract_executor_map``.  This module is
+    retained only for backward compatibility and will be removed in a
+    future release.
 
 Adapter template names from ``datafusion_engine.extract.adapter_registry``
 are the canonical key source. Execution callables live here in the orchestration
@@ -12,6 +18,7 @@ no back-import of private helpers.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
@@ -33,6 +40,11 @@ def register_extract_executor(
 ) -> None:
     """Register an extract executor for an adapter template name.
 
+    .. deprecated::
+        Executors are now resolved via
+        ``ExecutionAuthorityContext.extract_executor_map``.
+        This function is retained for legacy compatibility only.
+
     Parameters
     ----------
     adapter_name
@@ -40,6 +52,12 @@ def register_extract_executor(
     executor
         Callable implementing the extract execution contract.
     """
+    warnings.warn(
+        "register_extract_executor() is deprecated; "
+        "executors are resolved via ExecutionAuthorityContext.extract_executor_map",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     _EXTRACT_ADAPTER_EXECUTORS[adapter_name] = executor
 
 

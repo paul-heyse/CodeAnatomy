@@ -202,6 +202,10 @@ def ensure_view_graph(
     if runtime_profile is None:
         msg = "Runtime profile is required for view registration."
         raise ValueError(msg)
+    if dataset_resolver is not None:
+        from semantics.resolver_identity import record_resolver_if_tracking
+
+        record_resolver_if_tracking(dataset_resolver, label="view_registration")
     registration = _ViewGraphRegistrationContext(
         ctx=ctx,
         runtime_profile=runtime_profile,

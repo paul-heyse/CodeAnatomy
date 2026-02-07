@@ -113,12 +113,20 @@ def detect_plan_capabilities(ctx: SessionContext) -> DataFusionPlanCapabilities:
     except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
         _LOGGER.debug("Plan capability probe failed: %s", exc)
 
-    return DataFusionPlanCapabilities(
+    caps = DataFusionPlanCapabilities(
         has_execution_plan_statistics=has_stats,
         has_execution_plan_schema=has_schema,
         datafusion_version=version,
         has_dataframe_execution_plan=has_df_exec_plan,
     )
+    _LOGGER.debug(
+        "Plan capability detection: version=%s exec_plan=%s stats=%s schema=%s",
+        version,
+        has_df_exec_plan,
+        has_stats,
+        has_schema,
+    )
+    return caps
 
 
 def collect_delta_compatibility(

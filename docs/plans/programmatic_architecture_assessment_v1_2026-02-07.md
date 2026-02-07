@@ -2898,9 +2898,9 @@ already uses injected resolver directly - no fallback to remove.
 - ✅ Wave 2 completes (all orchestration entry points thread execution context)
 - ⚠️ Extract coordination paths (`src/extract/coordination/materialization.py`) migrated
 
-**Final state:** All `CompileContext` instantiation happens only in `compile_semantic_program()`.
-One canonical compile entrypoint per pipeline run (`build_semantic_execution_context`),
-with the resulting `SemanticExecutionContext` passed downstream to all consumers.
+**Final state:** The canonical compile boundary is `build_semantic_execution_context()`.
+`compile_semantic_program()` has been removed, and orchestration paths consume the
+manifest from the execution context.
 `build_semantic_execution_context(...)` callsites (`src/datafusion_engine/plan/pipeline.py:80`,
 `src/datafusion_engine/session/runtime.py:4572`) converge to a single authority call.
 Enforced via `CompileTracker` context manager with test-level compile counters
@@ -2947,7 +2947,9 @@ Enforced via `CompileTracker` context manager with test-level compile counters
 - ⚠️ All maintenance callsites migrated to outcome-based resolver
 - ⚠️ Feature flag `USE_OUTCOME_BASED_MAINTENANCE` enabled by default
 
-**Final state:** `resolve_delta_maintenance_plan()` logic changed to threshold-based, policy-presence fallback removed
+**Final state:** `resolve_maintenance_from_execution()` is the sole maintenance API.
+`resolve_delta_maintenance_plan()` has been removed and threshold-based outcome logic
+is canonical.
 
 ---
 
@@ -2981,7 +2983,8 @@ Enforced via `CompileTracker` context manager with test-level compile counters
 - ⚠️ Single-compile invariant enforced in integration tests
 - ⚠️ `CompileTracker` context manager deployed to all entry points
 
-**Final state:** Only one `compile_semantic_program()` call per pipeline run, all other paths receive pre-compiled manifest
+**Final state:** One boundary `build_semantic_execution_context()` call per pipeline
+run, with all downstream paths receiving the pre-compiled manifest.
 
 ---
 
@@ -3030,3 +3033,32 @@ Enforced via `CompileTracker` context manager with test-level compile counters
 - ✅ = Required wave/proposal for decommission
 - ⚠️ = Staged removal or keep as internal
 - `-` = Not applicable
+
+### Completed Decommission Cuts (2026-02-07)
+
+The following high/medium decommission items are now implemented as canonical removals:
+
+1. `resolve_delta_maintenance_plan()` removed from `src/datafusion_engine/delta/maintenance.py`.
+   Evidence:
+   - `./cq calls resolve_delta_maintenance_plan --format summary` => `0` callsites
+   - `uv run pytest -q tests/unit/datafusion_engine/delta/test_maintenance_outcomes.py` passed
+   - `uv run pytest -q tests/integration/test_delta_maintenance_outcomes.py` passed
+2. `compile_semantic_program()` removed from `src/semantics/compile_context.py`; test usage migrated to `build_semantic_execution_context(...).manifest`.
+   Evidence:
+   - `./cq calls compile_semantic_program --format summary` => `0` callsites
+   - `uv run pytest -q tests/unit/datafusion_engine/test_zero_row_bootstrap.py` passed
+3. `ManifestDatasetBindings.to_payload()` and `SemanticProgramManifest.to_payload()` removed; `payload()` is canonical.
+   Evidence:
+   - `rg -n "to_payload\\(" src/semantics/program_manifest.py tests/unit/semantics/test_program_manifest.py` => no findings
+   - `uv run pytest -q tests/unit/semantics/test_program_manifest.py` passed
+4. `cdf_options_from_spec(...)` removed from `src/storage/deltalake/delta.py`.
+   Evidence:
+   - `./cq calls cdf_options_from_spec --format summary` => `0` callsites
+5. All 11 `disable_delta_*` functions removed from `src/storage/deltalake/delta.py` and compat re-exports removed from `src/storage/deltalake/__init__.py`.
+   Evidence:
+   - `./cq search "def disable_delta_" --in src/storage/deltalake/delta.py --format summary` => no findings
+   - `./cq search disable_delta_ --in src/storage/deltalake/__init__.py --include-strings --format summary` => no findings
+6. Root `storage` compatibility re-export shim removed; canonical usage is `storage.io` and `storage.deltalake`.
+   Evidence:
+   - `./cq q "entity=import name=storage in=src" --format summary` => no findings
+   - `uv run pytest -q tests/unit/test_storage_compat_deprecations.py` passed

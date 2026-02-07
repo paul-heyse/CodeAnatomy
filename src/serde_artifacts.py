@@ -159,6 +159,41 @@ ArtifactStatus = Annotated[
 ]
 
 
+class RuntimeCapabilitiesPlanSnapshot(StructBaseCompat, frozen=True):
+    """Plan-level capability detection snapshot."""
+
+    has_execution_plan_statistics: bool = False
+    has_execution_plan_schema: bool = False
+    datafusion_version: str = "unknown"
+    has_dataframe_execution_plan: bool = False
+
+
+class RuntimeCapabilitiesSnapshotArtifact(StructBaseCompat, frozen=True):
+    """Typed artifact payload for DataFusion runtime capability snapshots.
+
+    Fields mirror the flattened payload produced by
+    ``runtime_capabilities_payload()`` in the capability detection module.
+    """
+
+    event_time_unix_ms: NonNegativeInt
+    profile_name: ProfileName | None
+    settings_hash: HashValue
+    strict_native_provider_enabled: bool
+    delta_entrypoint: NonEmptyStr
+    delta_module: str | None = None
+    delta_ctx_kind: str | None = None
+    delta_probe_result: str | None = None
+    delta_compatible: bool = False
+    delta_available: bool = False
+    delta_error: str | None = None
+    extension_capabilities: dict[str, JsonValueLax] | None = None
+    plugin_manifest: dict[str, JsonValueLax] | None = None
+    capabilities_snapshot: dict[str, JsonValueLax] | None = None
+    plugin_error: str | None = None
+    execution_metrics: dict[str, JsonValueLax] | None = None
+    plan_capabilities: RuntimeCapabilitiesPlanSnapshot | None = None
+
+
 class PlanArtifacts(StructBaseCompat, frozen=True):
     """Serializable plan artifacts captured during planning."""
 
@@ -237,6 +272,21 @@ class PerformancePolicyArtifact(StructBaseCompat, frozen=True):
     statistics: dict[str, JsonValueLax]
     comparison: dict[str, JsonValueLax]
     applied_knobs: dict[str, JsonValueLax] | None = None
+
+
+class CompiledExecutionPolicyArtifact(StructBaseCompat, frozen=True):
+    """Serializable summary of the compiled execution policy.
+
+    Captures key metrics from the ``CompiledExecutionPolicy`` for
+    diagnostic artifact recording.
+    """
+
+    cache_policy_count: NonNegativeInt
+    scan_override_count: NonNegativeInt
+    udf_requirement_count: NonNegativeInt
+    validation_mode: str = "warn"
+    policy_fingerprint: str | None = None
+    cache_policy_distribution: dict[str, NonNegativeInt] | None = None
 
 
 class ViewCacheArtifact(StructBaseHotPath, frozen=True):
@@ -659,6 +709,93 @@ class RunManifestEnvelope(ArtifactEnvelopeBase, tag="run_manifest", frozen=True)
     payload: RunManifest
 
 
+class WorkloadClassificationArtifact(StructBaseCompat, frozen=True):
+    """Workload classification artifact payload.
+
+    Parameters
+    ----------
+    workload_class
+        Classified workload category string.
+    plan_fingerprint
+        Plan fingerprint used during classification.
+    num_rows_signal
+        Row-count signal from plan statistics.
+    total_bytes_signal
+        Total-bytes signal from plan statistics.
+    scan_count
+        Number of scan operators in plan lineage.
+    classification_reason
+        Human-readable reason for the classification.
+    """
+
+    workload_class: str = ""
+    plan_fingerprint: str | None = None
+    num_rows_signal: int | None = None
+    total_bytes_signal: int | None = None
+    scan_count: int | None = None
+    classification_reason: str = ""
+
+
+class PruningMetricsArtifact(StructBaseCompat, frozen=True):
+    """Pruning metrics artifact payload for a single execution.
+
+    Parameters
+    ----------
+    view_name
+        Logical name of the view that was executed.
+    row_groups_total
+        Total row groups considered by the scan operator.
+    row_groups_pruned
+        Row groups eliminated by statistics-based pruning.
+    pages_total
+        Total column pages considered by the scan operator.
+    pages_pruned
+        Column pages eliminated by page-index pruning.
+    filters_pushed
+        Number of filter predicates pushed down to the scan.
+    statistics_available
+        Whether file-level statistics were available.
+    pruning_effectiveness
+        Ratio of pruned row groups to total (0.0--1.0).
+    """
+
+    view_name: str = ""
+    row_groups_total: int = 0
+    row_groups_pruned: int = 0
+    pages_total: int = 0
+    pages_pruned: int = 0
+    filters_pushed: int = 0
+    statistics_available: bool = False
+    pruning_effectiveness: float = 0.0
+
+
+class DecisionProvenanceGraphArtifact(StructBaseCompat, frozen=True):
+    """Decision provenance graph summary for artifact recording.
+
+    Attributes:
+    ----------
+    run_id
+        Pipeline run identifier.
+    decision_count
+        Total number of decisions in the graph.
+    root_count
+        Number of root (parentless) decisions.
+    domain_counts
+        Per-domain decision counts.
+    fallback_count
+        Number of decisions that used a fallback.
+    mean_confidence
+        Mean confidence score across all decisions.
+    """
+
+    run_id: NonEmptyStr
+    decision_count: NonNegativeInt
+    root_count: NonNegativeInt
+    domain_counts: dict[str, NonNegativeInt] | None = None
+    fallback_count: NonNegativeInt = 0
+    mean_confidence: NonNegativeFloat | None = None
+
+
 def artifact_envelope_id(envelope: ArtifactEnvelopeBase) -> str:
     """Return a deterministic hash identifier for an artifact envelope.
 
@@ -715,6 +852,7 @@ def export_artifact_schemas(output_dir: Path) -> tuple[Path, ...]:
 __all__ = [
     "ArtifactEnvelopeBase",
     "CompileResolverInvariantArtifact",
+    "DecisionProvenanceGraphArtifact",
     "DeltaInputPin",
     "DeltaMaintenanceDecisionArtifact",
     "DeltaProtocolArtifact",
@@ -727,6 +865,7 @@ __all__ = [
     "LogicalPlanProtoBytes",
     "NormalizeOutputsArtifact",
     "OptimizedPlanProtoBytes",
+    "PerformancePolicyArtifact",
     "PlanArtifactRow",
     "PlanArtifacts",
     "PlanProtoStatus",
@@ -735,9 +874,11 @@ __all__ = [
     "PlanSignalsArtifact",
     "PlanValidationArtifact",
     "PlanValidationEnvelope",
-    "PerformancePolicyArtifact",
+    "PruningMetricsArtifact",
     "RunManifest",
     "RunManifestEnvelope",
+    "RuntimeCapabilitiesPlanSnapshot",
+    "RuntimeCapabilitiesSnapshotArtifact",
     "RuntimeProfileSnapshot",
     "SemanticValidationArtifact",
     "SemanticValidationArtifactEnvelope",
@@ -747,6 +888,7 @@ __all__ = [
     "ViewArtifactPayload",
     "ViewCacheArtifact",
     "ViewCacheArtifactEnvelope",
+    "WorkloadClassificationArtifact",
     "WriteArtifactRow",
     "artifact_envelope_id",
     "artifact_schema_types",

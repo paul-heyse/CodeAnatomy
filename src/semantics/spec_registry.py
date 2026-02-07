@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 from semantics import registry as _registry
+from semantics.view_kinds import ViewKindStr
 
 RELATIONSHIP_SPECS = _registry.RELATIONSHIP_SPECS
 SEMANTIC_NORMALIZATION_SPECS = _registry.SEMANTIC_NORMALIZATION_SPECS
@@ -30,22 +31,10 @@ relationship_names = _registry.relationship_names
 spec_for_relationship = _registry.spec_for_relationship
 spec_for_table = _registry.spec_for_table
 
-SpecKind = Literal[
-    "normalize",
-    "scip_normalize",
-    "bytecode_line_index",
-    "span_unnest",
-    "symtable",
-    "diagnostic",
-    "export",
-    "projection",
-    "finalize",
-    "artifact",
-    "join_group",
-    "relate",
-    "union_nodes",
-    "union_edges",
-]
+# Backward-compatible alias.  ``SpecKind`` is the canonical Literal type
+# for spec kind annotations; ``ViewKindStr`` is the single source of truth
+# defined in ``semantics.view_kinds``.
+SpecKind = ViewKindStr
 
 
 @dataclass(frozen=True)

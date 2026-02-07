@@ -10,7 +10,7 @@ NAReason = Literal["not_applicable", "not_resolved", "enrichment_unavailable"]
 
 _LANG_KEYS: tuple[str, ...] = ("python", "rust")
 _STRUCTURED_KEYS: frozenset[str] = frozenset(
-    {"meta", "resolution", "behavior", "structural", "parse_quality", "agreement"}
+    {"meta", "resolution", "behavior", "structural", "parse_quality", "agreement", "pyrefly"}
 )
 
 _FUNCTION_LIKE_KINDS: frozenset[str] = frozenset(
@@ -75,7 +75,7 @@ class ResolvedFactCluster(CqStruct, frozen=True):
 
 FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
     FactClusterSpec(
-        title="Identity",
+        title="Identity & Grounding",
         fields=(
             FactFieldSpec(
                 label="Language",
@@ -96,6 +96,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Qualified Name",
                 paths=(
+                    ("pyrefly", "symbol_grounding", "definition_targets"),
                     ("resolution", "qualified_name_candidates"),
                     ("qualified_name_candidates",),
                 ),
@@ -103,60 +104,57 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Binding Candidates",
                 paths=(
+                    ("pyrefly", "symbol_grounding", "declaration_targets"),
                     ("resolution", "binding_candidates"),
                     ("binding_candidates",),
                 ),
             ),
-        ),
-    ),
-    FactClusterSpec(
-        title="Scope",
-        fields=(
             FactFieldSpec(
-                label="Enclosing Callable",
-                paths=(
-                    ("resolution", "enclosing_callable"),
-                    ("containing_scope",),
-                ),
+                label="Definition Targets",
+                paths=(("pyrefly", "symbol_grounding", "definition_targets"),),
+                applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
-                label="Enclosing Class",
-                paths=(
-                    ("resolution", "enclosing_class"),
-                    ("enclosing_class",),
-                ),
+                label="Declaration Targets",
+                paths=(("pyrefly", "symbol_grounding", "declaration_targets"),),
+                applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
-                label="Import Alias Chain",
-                paths=(
-                    ("resolution", "import_alias_chain"),
-                    ("import_alias_chain",),
-                ),
+                label="Type Definition Targets",
+                paths=(("pyrefly", "symbol_grounding", "type_definition_targets"),),
+                applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
-                label="Visibility",
-                paths=(
-                    ("structural", "visibility"),
-                    ("visibility",),
-                ),
-                applicable_languages=frozenset({"rust"}),
+                label="Implementation Targets",
+                paths=(("pyrefly", "symbol_grounding", "implementation_targets"),),
+                applicable_languages=frozenset({"python"}),
             ),
         ),
     ),
     FactClusterSpec(
-        title="Interface",
+        title="Type Contract",
         fields=(
             FactFieldSpec(
                 label="Signature",
                 paths=(
+                    ("pyrefly", "type_contract", "callable_signature"),
                     ("structural", "signature"),
                     ("signature",),
                 ),
                 applicable_kinds=_FUNCTION_LIKE_KINDS | _CLASS_LIKE_KINDS,
             ),
             FactFieldSpec(
+                label="Resolved Type",
+                paths=(
+                    ("pyrefly", "type_contract", "resolved_type"),
+                    ("resolved_type",),
+                ),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
                 label="Parameters",
                 paths=(
+                    ("pyrefly", "type_contract", "parameters"),
                     ("structural", "params"),
                     ("structural", "parameters"),
                     ("params",),
@@ -167,10 +165,42 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Return Type",
                 paths=(
+                    ("pyrefly", "type_contract", "return_type"),
                     ("structural", "return_type"),
                     ("return_type",),
                 ),
                 applicable_kinds=_FUNCTION_LIKE_KINDS,
+            ),
+            FactFieldSpec(
+                label="Generic Params",
+                paths=(("pyrefly", "type_contract", "generic_params"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Async",
+                paths=(
+                    ("pyrefly", "type_contract", "is_async"),
+                    ("behavior", "is_async"),
+                    ("is_async",),
+                ),
+                applicable_kinds=_FUNCTION_LIKE_KINDS,
+            ),
+            FactFieldSpec(
+                label="Generator",
+                paths=(
+                    ("pyrefly", "type_contract", "is_generator"),
+                    ("behavior", "is_generator"),
+                    ("is_generator",),
+                ),
+                applicable_kinds=_FUNCTION_LIKE_KINDS,
+            ),
+            FactFieldSpec(
+                label="Visibility",
+                paths=(
+                    ("structural", "visibility"),
+                    ("visibility",),
+                ),
+                applicable_languages=frozenset({"rust"}),
             ),
             FactFieldSpec(
                 label="Attributes or Decorators",
@@ -185,62 +215,52 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
         ),
     ),
     FactClusterSpec(
-        title="Behavior",
+        title="Call Graph",
         fields=(
             FactFieldSpec(
-                label="Async or Generator",
+                label="Incoming Callers",
                 paths=(
-                    ("behavior", "is_async"),
-                    ("behavior", "is_generator"),
-                    ("is_async",),
-                    ("is_generator",),
-                ),
-                applicable_kinds=_FUNCTION_LIKE_KINDS,
-            ),
-            FactFieldSpec(
-                label="Await or Yield",
-                paths=(
-                    ("behavior", "has_await"),
-                    ("behavior", "awaits"),
-                    ("behavior", "has_yield"),
-                    ("behavior", "yields"),
-                    ("has_await",),
-                    ("awaits",),
-                    ("has_yield",),
-                    ("yields",),
-                ),
-                applicable_kinds=_FUNCTION_LIKE_KINDS,
-            ),
-            FactFieldSpec(
-                label="Raises",
-                paths=(
-                    ("behavior", "has_raise"),
-                    ("behavior", "raises_exception"),
-                    ("has_raise",),
-                    ("raises_exception",),
-                ),
-                applicable_kinds=_FUNCTION_LIKE_KINDS,
-            ),
-            FactFieldSpec(
-                label="Control Flow Context",
-                paths=(
-                    ("behavior", "in_try"),
-                    ("behavior", "in_except"),
-                    ("behavior", "in_with"),
-                    ("behavior", "in_loop"),
-                    ("in_try",),
-                    ("in_except",),
-                    ("in_with",),
-                    ("in_loop",),
+                    ("pyrefly", "call_graph", "incoming_callers"),
+                    ("pyrefly", "call_graph", "incoming_total"),
                 ),
                 applicable_languages=frozenset({"python"}),
-                applicable_kinds=_FUNCTION_LIKE_KINDS,
+            ),
+            FactFieldSpec(
+                label="Outgoing Callees",
+                paths=(
+                    ("pyrefly", "call_graph", "outgoing_callees"),
+                    ("pyrefly", "call_graph", "outgoing_total"),
+                ),
+                applicable_languages=frozenset({"python"}),
             ),
         ),
     ),
     FactClusterSpec(
-        title="Structure",
+        title="Class/Method Context",
         fields=(
+            FactFieldSpec(
+                label="Enclosing Class",
+                paths=(
+                    ("pyrefly", "class_method_context", "enclosing_class"),
+                    ("resolution", "enclosing_class"),
+                    ("enclosing_class",),
+                ),
+            ),
+            FactFieldSpec(
+                label="Base Classes",
+                paths=(("pyrefly", "class_method_context", "base_classes"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Overridden Methods",
+                paths=(("pyrefly", "class_method_context", "overridden_methods"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Overriding Methods",
+                paths=(("pyrefly", "class_method_context", "overriding_methods"),),
+                applicable_languages=frozenset({"python"}),
+            ),
             FactFieldSpec(
                 label="Struct Fields",
                 paths=(
@@ -276,6 +296,67 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
                 ),
                 applicable_languages=frozenset({"rust"}),
                 applicable_kinds=frozenset({"enum_item"}),
+            ),
+        ),
+    ),
+    FactClusterSpec(
+        title="Local Scope Context",
+        fields=(
+            FactFieldSpec(
+                label="Enclosing Callable",
+                paths=(
+                    ("resolution", "enclosing_callable"),
+                    ("containing_scope",),
+                ),
+            ),
+            FactFieldSpec(
+                label="Same-Scope Symbols",
+                paths=(("pyrefly", "local_scope_context", "same_scope_symbols"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Nearest Assignments",
+                paths=(("pyrefly", "local_scope_context", "nearest_assignments"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Narrowing Hints",
+                paths=(("pyrefly", "local_scope_context", "narrowing_hints"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+            FactFieldSpec(
+                label="Reference Locations",
+                paths=(("pyrefly", "local_scope_context", "reference_locations"),),
+                applicable_languages=frozenset({"python"}),
+            ),
+        ),
+    ),
+    FactClusterSpec(
+        title="Imports/Aliases",
+        fields=(
+            FactFieldSpec(
+                label="Import Alias Chain",
+                paths=(
+                    ("pyrefly", "import_alias_resolution", "alias_chain"),
+                    ("resolution", "import_alias_chain"),
+                    ("import_alias_chain",),
+                ),
+            ),
+            FactFieldSpec(
+                label="Resolved Import Path",
+                paths=(("pyrefly", "import_alias_resolution", "resolved_path"),),
+                applicable_languages=frozenset({"python"}),
+                applicable_kinds=_IMPORT_LIKE_KINDS | _FUNCTION_LIKE_KINDS | _CLASS_LIKE_KINDS,
+            ),
+        ),
+    ),
+    FactClusterSpec(
+        title="Diagnostics",
+        fields=(
+            FactFieldSpec(
+                label="Anchor Diagnostics",
+                paths=(("pyrefly", "anchor_diagnostics"),),
+                applicable_languages=frozenset({"python"}),
             ),
         ),
     ),
@@ -362,8 +443,6 @@ def resolve_fact_clusters(
             )
             for field in cluster.fields
         )
-        if rows and all(row.reason == "not_applicable" for row in rows):
-            continue
         clusters.append(ResolvedFactCluster(title=cluster.title, rows=rows))
     return tuple(clusters)
 

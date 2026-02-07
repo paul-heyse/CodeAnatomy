@@ -19,6 +19,7 @@ from datafusion_engine.dataset.registry import (
 )
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
+from datafusion_engine.plan.perf_policy import PlanBundleComparisonPolicy
 from datafusion_engine.plan.signals import extract_plan_signals, plan_signals_payload
 from datafusion_engine.sql.options import planning_sql_options
 from schema_spec.system import dataset_spec_from_schema
@@ -254,6 +255,108 @@ def _events_snapshot_as_lists(
     return normalized
 
 
+def _comparison_policy_for_profile(
+    profile: DataFusionRuntimeProfile,
+) -> PlanBundleComparisonPolicy:
+    performance_policy = getattr(profile.policies, "performance_policy", None)
+    if performance_policy is None:
+        return PlanBundleComparisonPolicy()
+    return performance_policy.comparison
+
+
+def _apply_plan_artifact_retention(
+    row: PlanArtifactRow,
+    *,
+    comparison_policy: PlanBundleComparisonPolicy,
+) -> PlanArtifactRow:
+    retained = row
+    if not comparison_policy.retain_p2_artifacts:
+        retained = msgspec.structs.replace(
+            retained,
+            substrait_msgpack=b"",
+            logical_plan_proto_msgpack=None,
+            optimized_plan_proto_msgpack=None,
+            execution_plan_proto_msgpack=None,
+            substrait_validation_msgpack=None,
+        )
+    if not comparison_policy.retain_p1_artifacts:
+        retained = msgspec.structs.replace(
+            retained,
+            explain_tree_rows_msgpack=None,
+            explain_verbose_rows_msgpack=None,
+            explain_analyze_duration_ms=None,
+            explain_analyze_output_rows=None,
+            lineage_msgpack=_msgpack_payload({}),
+            scan_units_msgpack=_msgpack_payload(()),
+            plan_details_msgpack=_msgpack_payload({"retained": False}),
+            plan_signals_msgpack=_msgpack_payload({"retained": False}),
+            udf_snapshot_msgpack=_msgpack_payload({}),
+            udf_planner_snapshot_msgpack=None,
+            udf_compatibility_detail_msgpack=_msgpack_payload({"retained": False}),
+        )
+    return retained
+
+
+def _latest_plan_snapshot_by_view(
+    ctx: SessionContext,
+    profile: DataFusionRuntimeProfile,
+    *,
+    table_path: str,
+    view_names: Sequence[str],
+) -> dict[str, tuple[str | None, str | None]]:
+    sql_options = planning_sql_options(profile)
+    snapshots: dict[str, tuple[str | None, str | None]] = {}
+    for view_name in sorted(set(view_names)):
+        escaped_view = view_name.replace("'", "''")
+        query = (
+            "SELECT plan_fingerprint, plan_identity_hash "
+            f"FROM delta_scan('{table_path}') "
+            f"WHERE view_name = '{escaped_view}' "
+            "ORDER BY event_time_unix_ms DESC LIMIT 1"
+        )
+        try:
+            batches = ctx.sql_with_options(query, sql_options).collect()
+        except (RuntimeError, ValueError, TypeError):
+            continue
+        rows: list[dict[str, object]] = (
+            [dict(row) for row in pa.Table.from_batches(batches).to_pylist()] if batches else []
+        )
+        if not rows:
+            continue
+        payload = rows[0]
+        plan_fingerprint = payload.get("plan_fingerprint")
+        plan_identity = payload.get("plan_identity_hash")
+        snapshots[view_name] = (
+            str(plan_fingerprint) if isinstance(plan_fingerprint, str) else None,
+            str(plan_identity) if isinstance(plan_identity, str) else None,
+        )
+    return snapshots
+
+
+def _plan_diff_gate_violations(
+    rows: Sequence[PlanArtifactRow],
+    *,
+    previous_by_view: Mapping[str, tuple[str | None, str | None]],
+) -> tuple[dict[str, object], ...]:
+    violations: list[dict[str, object]] = []
+    for row in rows:
+        previous = previous_by_view.get(row.view_name)
+        if previous is None:
+            continue
+        previous_fingerprint, previous_identity = previous
+        if previous_identity is not None and previous_identity != row.plan_identity_hash:
+            violations.append(
+                {
+                    "view_name": row.view_name,
+                    "previous_plan_fingerprint": previous_fingerprint,
+                    "previous_plan_identity_hash": previous_identity,
+                    "current_plan_fingerprint": row.plan_fingerprint,
+                    "current_plan_identity_hash": row.plan_identity_hash,
+                }
+            )
+    return tuple(violations)
+
+
 def persist_plan_artifacts_for_views(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
@@ -272,13 +375,25 @@ def persist_plan_artifacts_for_views(
         Plan artifact persistence request payload.
 
     Returns:
-    -------
-    tuple[PlanArtifactRow, ...]
-        Persisted plan artifact rows.
+        tuple[PlanArtifactRow, ...]: Persisted plan artifact rows.
+
+    Raises:
+        RuntimeError: If diff-gate mode is enabled and plan identity changes are detected.
     """
     location = ensure_plan_artifacts_table(ctx, profile)
     if location is None:
         return ()
+    comparison_policy = _comparison_policy_for_profile(profile)
+    if not comparison_policy.retain_p0_artifacts:
+        return ()
+    previous_by_view: dict[str, tuple[str | None, str | None]] = {}
+    if comparison_policy.enable_diff_gates:
+        previous_by_view = _latest_plan_snapshot_by_view(
+            ctx,
+            profile,
+            table_path=str(location.path),
+            view_names=[node.name for node in request.view_nodes],
+        )
     rows: list[PlanArtifactRow] = []
     for node in request.view_nodes:
         bundle = node.plan_bundle
@@ -288,21 +403,36 @@ def persist_plan_artifacts_for_views(
             tuple(request.scan_keys_by_view.get(node.name, ())) if request.scan_keys_by_view else ()
         )
         lineage = request.lineage_by_view.get(node.name) if request.lineage_by_view else None
+        row = build_plan_artifact_row(
+            ctx,
+            profile,
+            request=PlanArtifactBuildRequest(
+                view_name=node.name,
+                bundle=bundle,
+                lineage=lineage,
+                scan_units=request.scan_units,
+                scan_keys=scan_keys,
+            ),
+        )
         rows.append(
-            build_plan_artifact_row(
-                ctx,
-                profile,
-                request=PlanArtifactBuildRequest(
-                    view_name=node.name,
-                    bundle=bundle,
-                    lineage=lineage,
-                    scan_units=request.scan_units,
-                    scan_keys=scan_keys,
-                ),
+            _apply_plan_artifact_retention(
+                row,
+                comparison_policy=comparison_policy,
             )
         )
     if not rows:
         return ()
+    if comparison_policy.enable_diff_gates:
+        violations = _plan_diff_gate_violations(
+            rows,
+            previous_by_view=previous_by_view,
+        )
+        if violations:
+            msg = (
+                "Plan artifact comparison gate failed: "
+                f"{len(violations)} view(s) changed plan identity."
+            )
+            raise RuntimeError(msg)
     return persist_plan_artifact_rows(ctx, profile, rows=rows, location=location)
 
 
@@ -510,10 +640,17 @@ def persist_execution_artifact(
     location = ensure_plan_artifacts_table(ctx, profile)
     if location is None:
         return None
+    comparison_policy = _comparison_policy_for_profile(profile)
+    if not comparison_policy.retain_p0_artifacts:
+        return None
     row = build_plan_artifact_row(
         ctx,
         profile,
         request=replace(request, event_kind=_EXECUTION_EVENT_KIND),
+    )
+    row = _apply_plan_artifact_retention(
+        row,
+        comparison_policy=comparison_policy,
     )
     persisted = persist_plan_artifact_rows(ctx, profile, rows=(row,), location=location)
     return persisted[0] if persisted else None

@@ -81,6 +81,10 @@ from datafusion_engine.lineage.diagnostics import (
     record_artifact as _lineage_record_artifact,
 )
 from datafusion_engine.plan.cache import PlanCache, PlanProtoCache
+from datafusion_engine.plan.perf_policy import (
+    PerformancePolicy,
+    performance_policy_artifact_payload,
+)
 from datafusion_engine.registry_facade import RegistrationPhase, RegistrationPhaseOrchestrator
 from datafusion_engine.schema.introspection import (
     SchemaIntrospector,
@@ -119,12 +123,16 @@ from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from serde_msgspec import MSGPACK_ENCODER, StructBaseCompat, StructBaseStrict
 from storage.deltalake.config import DeltaMutationPolicy
 from storage.ipc_utils import payload_hash
+from utils.env_utils import env_bool
 from utils.registry_protocol import Registry
 from utils.uuid_factory import uuid7_str
 from utils.validation import find_missing
 from utils.value_coercion import coerce_int
 
 _MISSING = object()
+_COMPILE_RESOLVER_STRICT_ENV = "CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT"
+_CI_ENV = "CI"
+_DEFAULT_PERFORMANCE_POLICY = PerformancePolicy()
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -137,7 +145,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.factory import DataFusionContextPool
     from datafusion_engine.udf.catalog import UdfCatalog
     from obs.datafusion_runs import DataFusionRun
-    from semantics.program_manifest import ManifestDatasetResolver
+    from semantics.program_manifest import ManifestDatasetResolver, SemanticProgramManifest
     from serde_schema_registry import ArtifactSpec
     from storage.deltalake.delta import IdempotentWriteOptions
 
@@ -191,9 +199,101 @@ def record_artifact(
     name: ArtifactSpec,
     payload: Mapping[str, object],
 ) -> None:
-    """Record an artifact after ensuring artifact-spec side effects are loaded."""
+    """Record an artifact after ensuring artifact-spec side effects are loaded.
+
+    Raises:
+        TypeError: If ``name`` is not an ``ArtifactSpec`` instance.
+    """
+    from serde_schema_registry import ArtifactSpec as RuntimeArtifactSpec
+
+    if not isinstance(name, RuntimeArtifactSpec):
+        msg = (
+            "record_artifact() requires an ArtifactSpec instance for `name`; "
+            f"got {type(name).__name__}."
+        )
+        raise TypeError(msg)
     _ensure_runtime_artifact_specs_registered()
     _lineage_record_artifact(profile, name, payload)
+
+
+def compile_resolver_invariants_strict_mode() -> bool:
+    """Resolve strict-mode behavior for compile/resolver invariant enforcement.
+
+    Returns:
+        bool: True when strict invariant enforcement is enabled for this runtime.
+    """
+    strict_override = env_bool(
+        _COMPILE_RESOLVER_STRICT_ENV,
+        default=None,
+        on_invalid="none",
+    )
+    if strict_override is not None:
+        return strict_override
+    return bool(env_bool(_CI_ENV, default=False, on_invalid="false"))
+
+
+def compile_resolver_invariant_artifact_payload(
+    *,
+    label: str,
+    compile_count: int,
+    max_compiles: int,
+    distinct_resolver_count: int,
+    strict: bool,
+    violations: Sequence[str],
+) -> dict[str, object]:
+    """Return payload for ``compile_resolver_invariants_v1`` artifacts.
+
+    Returns:
+    -------
+    dict[str, object]
+        Normalized artifact payload for compile/resolver invariants.
+    """
+    normalized_violations = tuple(item for item in violations if item)
+    return {
+        "label": label,
+        "compile_count": compile_count,
+        "max_compiles": max_compiles,
+        "distinct_resolver_count": distinct_resolver_count,
+        "strict": strict,
+        "violations": normalized_violations,
+    }
+
+
+def record_compile_resolver_invariants(  # noqa: PLR0913
+    profile: DataFusionRuntimeProfile,
+    *,
+    label: str,
+    compile_count: int,
+    max_compiles: int,
+    distinct_resolver_count: int,
+    strict: bool,
+    violations: Sequence[str],
+) -> tuple[str, ...]:
+    """Record compile/resolver invariant artifact and optionally enforce strict mode.
+
+    Returns:
+        tuple[str, ...]: Normalized violations written into the artifact payload.
+
+    Raises:
+        RuntimeError: If strict mode is enabled and at least one violation is present.
+    """
+    from serde_artifact_specs import COMPILE_RESOLVER_INVARIANTS_SPEC
+
+    normalized_violations = tuple(item for item in violations if item)
+    profile.record_artifact(
+        COMPILE_RESOLVER_INVARIANTS_SPEC,
+        compile_resolver_invariant_artifact_payload(
+            label=label,
+            compile_count=compile_count,
+            max_compiles=max_compiles,
+            distinct_resolver_count=distinct_resolver_count,
+            strict=strict,
+            violations=normalized_violations,
+        ),
+    )
+    if strict and normalized_violations:
+        raise RuntimeError("\n".join(normalized_violations))
+    return normalized_violations
 
 
 def _encode_telemetry_msgpack(payload: object) -> bytes:
@@ -626,6 +726,13 @@ def normalize_dataset_locations_for_profile(
         when normalize output root is not configured.
     """
     normalize_root = profile.data_sources.semantic_output.normalize_output_root
+    return _normalize_dataset_locations_for_root(normalize_root)
+
+
+def _normalize_dataset_locations_for_root(
+    normalize_root: str | None,
+) -> Mapping[str, DatasetLocation]:
+    """Return normalize dataset locations for an explicit normalize root."""
     if normalize_root is None:
         return {}
     root = Path(normalize_root)
@@ -721,6 +828,101 @@ def _semantic_output_config_for_profile(
 ) -> SemanticOutputConfig:
     """Return the semantic output config from the profile's data_sources."""
     return runtime_profile.data_sources.semantic_output
+
+
+def datasource_config_from_manifest(
+    manifest: SemanticProgramManifest,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    extract_output: ExtractOutputConfig | None = None,
+    semantic_output: SemanticOutputConfig | None = None,
+    cdf_cursor_store: CdfCursorStore | None = None,
+) -> DataSourceConfig:
+    """Build DataSourceConfig in post-compile semantic-authority mode.
+
+    Fail closed when semantic compile bindings are empty.
+
+    Returns:
+        DataSourceConfig: Manifest-authoritative data source configuration.
+
+    Raises:
+        ValueError: If manifest dataset bindings are empty.
+    """
+    locations = dict(manifest.dataset_bindings.locations)
+    if not locations:
+        msg = (
+            "Manifest dataset bindings are empty; cannot build DataSourceConfig "
+            "in semantic-authority mode."
+        )
+        raise ValueError(msg)
+    resolved_extract_output = (
+        extract_output
+        if extract_output is not None
+        else _extract_output_config_for_profile(runtime_profile)
+    )
+    resolved_semantic_output = (
+        semantic_output
+        if semantic_output is not None
+        else _semantic_output_config_for_profile(runtime_profile)
+    )
+    resolved_cdf_cursor_store = (
+        cdf_cursor_store
+        if cdf_cursor_store is not None
+        else runtime_profile.data_sources.cdf_cursor_store
+    )
+    return DataSourceConfig(
+        dataset_templates=locations,
+        extract_output=resolved_extract_output,
+        semantic_output=resolved_semantic_output,
+        cdf_cursor_store=resolved_cdf_cursor_store,
+    )
+
+
+def datasource_config_from_profile(
+    runtime_profile: DataFusionRuntimeProfile,
+    *,
+    extract_output: ExtractOutputConfig | None = None,
+    semantic_output: SemanticOutputConfig | None = None,
+    dataset_templates: Mapping[str, DatasetLocation] | None = None,
+    cdf_cursor_store: CdfCursorStore | None = None,
+) -> DataSourceConfig:
+    """Build DataSourceConfig in pre-compile runtime-bootstrap mode.
+
+    Returns:
+    -------
+    DataSourceConfig
+        Bootstrap data source configuration derived from runtime profile.
+    """
+    resolved_extract_output = (
+        extract_output
+        if extract_output is not None
+        else _extract_output_config_for_profile(runtime_profile)
+    )
+    resolved_semantic_output = (
+        semantic_output
+        if semantic_output is not None
+        else _semantic_output_config_for_profile(runtime_profile)
+    )
+    if dataset_templates is None:
+        derived_templates = _normalize_dataset_locations_for_root(
+            resolved_semantic_output.normalize_output_root
+        )
+        merged_templates = dict(runtime_profile.data_sources.dataset_templates)
+        for name, location in derived_templates.items():
+            merged_templates.setdefault(name, location)
+    else:
+        merged_templates = dict(dataset_templates)
+    resolved_cdf_cursor_store = (
+        cdf_cursor_store
+        if cdf_cursor_store is not None
+        else runtime_profile.data_sources.cdf_cursor_store
+    )
+    return DataSourceConfig(
+        dataset_templates=merged_templates,
+        extract_output=resolved_extract_output,
+        semantic_output=resolved_semantic_output,
+        cdf_cursor_store=resolved_cdf_cursor_store,
+    )
 
 
 def _introspection_cache_for_ctx(
@@ -2655,6 +2857,126 @@ def _cache_profile_settings(profile: DataFusionRuntimeProfile) -> dict[str, str]
     return dict(settings)
 
 
+def _seconds_ttl(value: int | None) -> str | None:
+    if value is None:
+        return None
+    return f"{int(value)}s"
+
+
+def _plan_statistics_capability_available(
+    runtime_capabilities: Mapping[str, object] | None,
+) -> bool | None:
+    if runtime_capabilities is None:
+        return None
+    plan_caps = runtime_capabilities.get("plan_capabilities")
+    if not isinstance(plan_caps, Mapping):
+        return None
+    has_stats = plan_caps.get("has_execution_plan_statistics")
+    if isinstance(has_stats, bool):
+        return has_stats
+    return None
+
+
+def _resolved_collect_statistics_setting(
+    policy: PerformancePolicy,
+    *,
+    has_plan_statistics: bool | None,
+) -> tuple[bool, str]:
+    requested = bool(policy.statistics.collect_statistics)
+    fallback = policy.statistics.fallback_when_unavailable
+    if has_plan_statistics is False and requested:
+        if fallback == "skip":
+            return False, "fallback_skip"
+        if fallback == "estimate":
+            return True, "fallback_estimate"
+        if fallback == "error":
+            return False, "fallback_error"
+    return requested, "native"
+
+
+def _performance_policy_settings(
+    policy: PerformancePolicy,
+    *,
+    collect_statistics_override: bool | None = None,
+) -> dict[str, str]:
+    collect_statistics = (
+        collect_statistics_override
+        if collect_statistics_override is not None
+        else policy.statistics.collect_statistics
+    )
+    settings: dict[str, str] = {
+        "datafusion.execution.collect_statistics": str(bool(collect_statistics)).lower(),
+        "datafusion.execution.meta_fetch_concurrency": str(
+            int(policy.statistics.meta_fetch_concurrency)
+        ),
+    }
+    listing_limit = policy.cache.listing_cache_max_entries
+    if listing_limit is not None:
+        settings["datafusion.runtime.list_files_cache_limit"] = str(int(listing_limit))
+    metadata_limit = policy.cache.metadata_cache_max_entries
+    if metadata_limit is not None:
+        settings["datafusion.runtime.metadata_cache_limit"] = str(int(metadata_limit))
+    listing_ttl = _seconds_ttl(policy.cache.listing_cache_ttl_seconds)
+    if listing_ttl is not None:
+        settings["datafusion.runtime.list_files_cache_ttl"] = listing_ttl
+    return settings
+
+
+def performance_policy_settings(
+    profile: DataFusionRuntimeProfile,
+    *,
+    runtime_capabilities: Mapping[str, object] | None = None,
+) -> dict[str, str]:
+    """Return DataFusion settings derived from the runtime performance policy."""
+    policy = profile.policies.performance_policy
+    if policy == _DEFAULT_PERFORMANCE_POLICY:
+        return {}
+    has_plan_stats = _plan_statistics_capability_available(runtime_capabilities)
+    collect_statistics, _ = _resolved_collect_statistics_setting(
+        policy,
+        has_plan_statistics=has_plan_stats,
+    )
+    return _performance_policy_settings(
+        policy,
+        collect_statistics_override=collect_statistics,
+    )
+
+
+def performance_policy_applied_knobs(
+    profile: DataFusionRuntimeProfile,
+    *,
+    runtime_capabilities: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Return applied performance-policy knobs including capability gating details."""
+    policy = profile.policies.performance_policy
+    has_plan_stats = _plan_statistics_capability_available(runtime_capabilities)
+    collect_statistics, stats_mode = _resolved_collect_statistics_setting(
+        policy,
+        has_plan_statistics=has_plan_stats,
+    )
+    settings = (
+        _performance_policy_settings(
+            policy,
+            collect_statistics_override=collect_statistics,
+        )
+        if policy != _DEFAULT_PERFORMANCE_POLICY
+        else {}
+    )
+    knobs: dict[str, object] = {
+        "enabled": policy != _DEFAULT_PERFORMANCE_POLICY,
+        "statistics_mode": stats_mode,
+        "statistics_fallback_when_unavailable": policy.statistics.fallback_when_unavailable,
+        "statistics_capability_available": has_plan_stats,
+        "cache_enable_dataframe_cache": policy.cache.enable_dataframe_cache,
+        "comparison_enable_diff_gates": policy.comparison.enable_diff_gates,
+        "comparison_retain_p0_artifacts": policy.comparison.retain_p0_artifacts,
+        "comparison_retain_p1_artifacts": policy.comparison.retain_p1_artifacts,
+        "comparison_retain_p2_artifacts": policy.comparison.retain_p2_artifacts,
+    }
+    knobs.update(settings)
+    return knobs
+
+
 class _RuntimeDiagnosticsMixin:
     def record_artifact(self, name: ArtifactSpec, payload: Mapping[str, object]) -> None:
         """Record an artifact through DiagnosticsRecorder when configured."""
@@ -2699,6 +3021,7 @@ class _RuntimeDiagnosticsMixin:
         if resolved_schema_hardening is not None:
             payload.update(resolved_schema_hardening.settings())
         payload.update(_runtime_settings_payload(profile))
+        payload.update(performance_policy_settings(profile))
         if profile.policies.settings_overrides:
             payload.update(
                 {str(key): str(value) for key, value in profile.policies.settings_overrides.items()}
@@ -3655,6 +3978,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
         ]
         | None
     ) = None
+    performance_policy: PerformancePolicy = msgspec.field(default_factory=PerformancePolicy)
     scan_policy: ScanPolicyConfig = msgspec.field(default_factory=ScanPolicyConfig)
     schema_hardening_name: str | None = "schema_hardening"
     schema_hardening: SchemaHardeningProfile | None = None
@@ -3782,6 +4106,7 @@ class PolicyBundleConfig(StructBaseStrict, frozen=True):
                 self.cache_policy.fingerprint() if self.cache_policy is not None else None
             ),
             "cache_profile_name": self.cache_profile_name,
+            "performance_policy": performance_policy_artifact_payload(self.performance_policy),
             "schema_hardening_name": self.schema_hardening_name,
             "schema_hardening": schema_hardening_payload,
             "sql_policy_name": self.sql_policy_name,
@@ -6206,6 +6531,7 @@ class DataFusionRuntimeProfile(
             DATAFUSION_RUNTIME_CAPABILITIES_SPEC,
             runtime_capabilities,
         )
+        self._record_performance_policy(runtime_capabilities=runtime_capabilities)
 
     def _runtime_capabilities_payload(self, ctx: SessionContext) -> dict[str, object]:
         from datafusion_engine.extensions.runtime_capabilities import (
@@ -6220,6 +6546,25 @@ class DataFusionRuntimeProfile(
             strict_native_provider_enabled=self.features.enforce_delta_ffi_provider,
         )
         return runtime_capabilities_payload(snapshot)
+
+    def _record_performance_policy(
+        self,
+        *,
+        runtime_capabilities: Mapping[str, object] | None,
+    ) -> None:
+        if self.diagnostics.diagnostics_sink is None:
+            return
+        policy_payload = performance_policy_artifact_payload(
+            self.policies.performance_policy,
+            applied_knobs=performance_policy_applied_knobs(
+                self,
+                runtime_capabilities=runtime_capabilities,
+            ),
+        )
+        self.record_artifact(
+            PERFORMANCE_POLICY_SPEC,
+            policy_payload,
+        )
 
     def _record_cache_diagnostics(self, ctx: SessionContext) -> None:
         """Record cache configuration and state diagnostics.
@@ -7711,6 +8056,9 @@ def record_dataset_readiness(
     dataset_resolver: ManifestDatasetResolver,
 ) -> None:
     """Record readiness diagnostics for configured dataset locations."""
+    from semantics.resolver_identity import record_resolver_if_tracking
+
+    record_resolver_if_tracking(dataset_resolver, label="dataset_readiness")
     if profile.diagnostics.diagnostics_sink is None:
         return
     from datafusion_engine.lineage.diagnostics import record_artifact
@@ -7881,8 +8229,12 @@ __all__ = [
     "cache_prefix_for_delta_snapshot",
     "collect_datafusion_metrics",
     "collect_datafusion_traces",
+    "compile_resolver_invariant_artifact_payload",
+    "compile_resolver_invariants_strict_mode",
     "dataset_schema_from_context",
     "dataset_spec_from_context",
+    "datasource_config_from_manifest",
+    "datasource_config_from_profile",
     "diagnostics_arrow_ingest_hook",
     "diagnostics_dml_hook",
     "evict_diskcache_entries",
@@ -7890,6 +8242,7 @@ __all__ = [
     "feature_state_snapshot",
     "normalize_dataset_locations_for_profile",
     "read_delta_as_reader",
+    "record_compile_resolver_invariants",
     "record_dataset_readiness",
     "record_runtime_setting_override",
     "record_schema_snapshots_for_profile",
@@ -7954,6 +8307,7 @@ from serde_artifact_specs import (
     DATAFUSION_UDF_VALIDATION_SPEC,
     DATAFUSION_VIEW_ARTIFACTS_SPEC,
     DATASET_READINESS_SPEC,
+    PERFORMANCE_POLICY_SPEC,
     SCHEMA_REGISTRY_VALIDATION_ADVISORY_SPEC,
     SEMANTIC_PROGRAM_MANIFEST_SPEC,
     ZERO_ROW_BOOTSTRAP_VALIDATION_SPEC,

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from relspec.table_size_tiers import _DEFAULT_THRESHOLDS
+
 if TYPE_CHECKING:
     from datafusion_engine.extensions.runtime_capabilities import RuntimeCapabilitiesSnapshot
     from datafusion_engine.lineage.datafusion import ScanLineage
@@ -17,7 +19,8 @@ if TYPE_CHECKING:
 
 
 # Threshold below which file pruning overhead is not worthwhile.
-_SMALL_TABLE_ROW_THRESHOLD = 10_000
+# Sourced from the canonical table size tiers to prevent drift.
+_SMALL_TABLE_ROW_THRESHOLD = _DEFAULT_THRESHOLDS.small_threshold
 
 
 @dataclass(frozen=True)
@@ -32,11 +35,15 @@ class ScanPolicyOverride:
         Inferred scan policy config for this dataset.
     reasons
         Human-readable reasons for policy derivation.
+    confidence
+        Inference confidence score in [0.0, 1.0].  Higher values
+        indicate stronger evidence backing the override.
     """
 
     dataset_name: str
     policy: ScanPolicyConfig
     reasons: tuple[str, ...] = ()
+    confidence: float = 1.0
 
 
 def derive_scan_policy_overrides(
@@ -114,16 +121,27 @@ def _infer_override_for_scan(
     reasons: list[str] = []
     delta_scan_overrides: dict[str, object] = {}
     listing_overrides: dict[str, object] = {}
+    confidence = 1.0
+
+    has_stats = stats is not None and stats.num_rows is not None
+    has_cap = _stats_heuristics_capable(capability_snapshot)
 
     # Small tables: disable statistics collection (overhead not worthwhile)
     if _is_small_table(stats, capability_snapshot=capability_snapshot):
         listing_overrides["collect_statistics"] = False
         reasons.append("small_table")
+        if has_cap and has_stats:
+            confidence = min(confidence, 0.9)
+        elif has_stats:
+            confidence = min(confidence, 0.7)
+        else:
+            confidence = min(confidence, 0.5)
 
     # Tables with pushed filters: enable Parquet pushdown
     if scan.pushed_filters:
         delta_scan_overrides["enable_parquet_pushdown"] = True
         reasons.append("has_pushed_filters")
+        confidence = min(confidence, 0.8)
 
     if not reasons:
         return None
@@ -154,6 +172,7 @@ def _infer_override_for_scan(
         dataset_name=scan.dataset_name,
         policy=inferred_policy,
         reasons=tuple(reasons),
+        confidence=confidence,
     )
 
 
@@ -292,6 +311,7 @@ def scan_policy_override_artifact_payload(
         "dataset_name": override.dataset_name,
         "reasons": list(override.reasons),
         "override_applied": True,
+        "confidence": override.confidence,
     }
 
 

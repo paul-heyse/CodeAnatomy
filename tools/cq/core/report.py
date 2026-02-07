@@ -27,6 +27,8 @@ MAX_RENDER_ENRICH_FILES = 9  # original anchor file + next 8 files
 MAX_RENDER_ENRICH_WORKERS = 4
 SHOW_UNRESOLVED_FACTS_ENV = "CQ_SHOW_UNRESOLVED_FACTS"
 MAX_CODE_OVERVIEW_ITEMS = 5
+MAX_FACT_VALUE_ITEMS = 8
+MAX_FACT_MAPPING_SCALAR_PAIRS = 4
 RUN_QUERY_ARG_START_INDEX = 2
 SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
     "query",
@@ -44,6 +46,9 @@ SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
     "cross_language_diagnostics",
     "language_capabilities",
     "enrichment_telemetry",
+    "pyrefly_overview",
+    "pyrefly_telemetry",
+    "pyrefly_diagnostics",
 )
 DETAILS_SUPPRESS_KEYS: frozenset[str] = frozenset(
     {
@@ -130,11 +135,6 @@ def _format_finding(
 
     rendered_lines.extend(_format_context_block(f))
 
-    details_payload = _extract_compact_details_payload(f)
-    if details_payload is not None:
-        rendered = dumps_json_value(details_payload, indent=None)
-        rendered_lines.append(f"  Details: `{rendered}`")
-
     return "\n".join(rendered_lines)
 
 
@@ -208,13 +208,147 @@ def _show_unresolved_facts() -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _format_fact_value(value: object) -> str:
-    rendered = (
-        value if isinstance(value, str) else dumps_json_value(to_builtins(value), indent=None)
-    )
-    if not isinstance(rendered, str):
-        rendered = str(rendered)
-    return rendered.strip() or _na("not_resolved")
+def _clean_scalar(value: object) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None
+
+
+def _safe_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _format_location(
+    file_value: str | None, line_value: int | None, col_value: int | None
+) -> str | None:
+    if not file_value and line_value is None:
+        return None
+    base = file_value or "<unknown>"
+    if line_value is not None and line_value > 0:
+        base = f"{base}:{line_value}"
+        if col_value is not None and col_value >= 0:
+            base = f"{base}:{col_value}"
+    return base
+
+
+def _format_target_mapping(value: dict[str, object]) -> str | None:
+    symbol = None
+    for key in ("symbol", "name", "label"):
+        symbol = _clean_scalar(value.get(key))
+        if symbol:
+            break
+    kind = _clean_scalar(value.get("kind"))
+    file_value = _clean_scalar(value.get("file")) or _clean_scalar(value.get("resolved_path"))
+    line_value = _safe_int(value.get("line"))
+    col_value = _safe_int(value.get("col"))
+    location = _format_location(file_value, line_value, col_value)
+
+    if symbol and location:
+        kind_suffix = f" [{kind}]" if kind and kind not in {"reference"} else ""
+        return f"{symbol}{kind_suffix} @ {location}"
+    if location:
+        kind_prefix = f"{kind}: " if kind else ""
+        return f"{kind_prefix}{location}"
+    return symbol
+
+
+def _format_diagnostic_mapping(value: dict[str, object]) -> str | None:
+    message = _clean_scalar(value.get("message"))
+    if not message:
+        return None
+    severity = _clean_scalar(value.get("severity"))
+    code = _clean_scalar(value.get("code"))
+    line_value = _safe_int(value.get("line"))
+    col_value = _safe_int(value.get("col"))
+    file_value = _clean_scalar(value.get("file"))
+    location = _format_location(file_value, line_value, col_value)
+    prefix_parts = [part for part in (severity, code) if part]
+    prefix = " ".join(prefix_parts)
+    if prefix:
+        prefix = f"{prefix}: "
+    if location:
+        return f"{prefix}{message} @ {location}"
+    return f"{prefix}{message}"
+
+
+def _format_name_source_mapping(value: dict[str, object]) -> str | None:
+    label = _clean_scalar(value.get("name")) or _clean_scalar(value.get("label"))
+    source = _clean_scalar(value.get("source"))
+    if label and source:
+        return f"{label} ({source})"
+    return label
+
+
+def _format_scalar_pairs_mapping(value: dict[str, object]) -> str | None:
+    scalar_pairs: list[str] = []
+    for key in sorted(value):
+        if key.startswith("byte"):
+            continue
+        scalar = _clean_scalar(value.get(key))
+        if scalar is None:
+            continue
+        scalar_pairs.append(f"{key}={scalar}")
+        if len(scalar_pairs) >= MAX_FACT_MAPPING_SCALAR_PAIRS:
+            break
+    if scalar_pairs:
+        return ", ".join(scalar_pairs)
+    return None
+
+
+def _format_fact_mapping(value: dict[str, object]) -> str | None:
+    if "message" in value and ("severity" in value or "code" in value):
+        diagnostic_line = _format_diagnostic_mapping(value)
+        if diagnostic_line:
+            return diagnostic_line
+
+    target_line = _format_target_mapping(value)
+    if target_line:
+        return target_line
+
+    name_source_line = _format_name_source_mapping(value)
+    if name_source_line:
+        return name_source_line
+
+    return _format_scalar_pairs_mapping(value)
+
+
+def _append_formatted_items(items: list[str], value: object) -> None:
+    if len(items) >= MAX_FACT_VALUE_ITEMS:
+        return
+    scalar = _clean_scalar(value)
+    if scalar is not None:
+        items.append(scalar)
+        return
+    if isinstance(value, dict):
+        line = _format_fact_mapping(value)
+        if line:
+            items.append(line)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            _append_formatted_items(items, item)
+            if len(items) >= MAX_FACT_VALUE_ITEMS:
+                return
+
+
+def _format_fact_values(value: object) -> list[str]:
+    rendered: list[str] = []
+    _append_formatted_items(rendered, value)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in rendered:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
 
 
 def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
@@ -228,17 +362,24 @@ def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
     show_unresolved = _show_unresolved_facts()
     for cluster in clusters:
         rows = [row for row in cluster.rows if show_unresolved or row.reason != "not_resolved"]
-        if not rows:
-            continue
         lines.append(f"  - {cluster.title}")
+        if not rows:
+            lines.append(f"    - N/A: {_na('not_resolved')}")
+            continue
         for row in rows:
-            rendered = _format_fact_value(row.value) if row.reason is None else _na(row.reason)
-            lines.append(f"    - {row.label}: {rendered}")
+            if row.reason is not None:
+                lines.append(f"    - {row.label}: {_na(row.reason)}")
+                continue
+            values = _format_fact_values(row.value)
+            if not values:
+                lines.append(f"    - {row.label}: {_na('not_resolved')}")
+                continue
+            for idx, rendered in enumerate(values, start=1):
+                suffix = "" if idx == 1 else f" #{idx}"
+                lines.append(f"    - {row.label}{suffix}: {rendered}")
 
-    additional_payload = additional_language_payload(language_payload)
-    if additional_payload:
-        rendered = dumps_json_value(to_builtins(additional_payload), indent=None)
-        lines.append(f"  - Additional Facts: `{rendered}`")
+    # Suppress raw JSON "Additional Facts" payloads in markdown output.
+    _ = additional_language_payload(language_payload)
     if isinstance(language, str):
         lines.append(f"  - Enrichment Language: `{language}`")
     return lines
@@ -396,6 +537,27 @@ def _summarize_categories(findings: list[Finding]) -> str:
     return f"`{category_summary}`"
 
 
+def _format_pyrefly_overview(summary: dict[str, object]) -> str:
+    payload = summary.get("pyrefly_overview")
+    if not isinstance(payload, dict) or not payload:
+        return _na("pyrefly_overview_missing")
+    fields: tuple[tuple[str, str], ...] = (
+        ("primary_symbol", "primary"),
+        ("matches_enriched", "enriched"),
+        ("total_incoming_callers", "incoming"),
+        ("total_outgoing_callees", "outgoing"),
+    )
+    parts: list[str] = []
+    for key, label in fields:
+        value = _clean_scalar(payload.get(key))
+        if value is None:
+            continue
+        parts.append(f"{label}: {value}")
+    if not parts:
+        return _na("pyrefly_overview_missing")
+    return "; ".join(parts)
+
+
 def _render_code_overview(result: CqResult) -> list[str]:
     lines = ["## Code Overview"]
     all_findings = _iter_result_findings(result)
@@ -406,6 +568,7 @@ def _render_code_overview(result: CqResult) -> list[str]:
     lines.append(f"- Top Symbols: {_collect_top_symbols(all_findings)}")
     lines.append(f"- Top Files: {_collect_top_files(all_findings)}")
     lines.append(f"- Match Categories: {_summarize_categories(all_findings)}")
+    lines.append(f"- Pyrefly Overview: {_format_pyrefly_overview(summary)}")
 
     lines.append("")
     return lines
@@ -537,6 +700,7 @@ def _compute_render_enrichment_payload_from_anchor(
             root,
             lang=language,
             force_semantic_enrichment=True,
+            enable_pyrefly=True,
         )
         enriched_finding = build_finding(enriched, root)
         payload = to_builtins(enriched_finding.details.data)

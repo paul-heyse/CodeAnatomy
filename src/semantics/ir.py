@@ -5,27 +5,67 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from semantics.view_kinds import ViewKindStr
+
 if TYPE_CHECKING:
     from cpg.specs import NodePlanSpec, PropTableSpec
     from semantics.catalog.dataset_rows import SemanticDatasetRow
     from semantics.quality import JoinHow
 
-SemanticIRKind = Literal[
-    "normalize",
-    "scip_normalize",
-    "bytecode_line_index",
-    "span_unnest",
-    "symtable",
-    "diagnostic",
-    "export",
-    "projection",
-    "finalize",
-    "artifact",
-    "join_group",
-    "relate",
-    "union_nodes",
-    "union_edges",
+# Backward-compatible alias.  ``SemanticIRKind`` is the canonical Literal
+# type for view kind annotations; ``ViewKindStr`` is the single source of
+# truth defined in ``semantics.view_kinds``.
+SemanticIRKind = ViewKindStr
+
+GraphPosition = Literal[
+    "source",
+    "intermediate",
+    "terminal",
+    "high_fan_out",
 ]
+"""View position within the IR dependency graph.
+
+source
+    No upstream dependencies (input views).
+intermediate
+    Has both upstream and downstream dependencies.
+terminal
+    No downstream consumers in the IR.
+high_fan_out
+    Has three or more downstream consumers.
+"""
+
+
+@dataclass(frozen=True)
+class InferredViewProperties:
+    """Properties inferred from schemas and graph topology during the infer phase.
+
+    All fields are optional to support graceful degradation: if inference
+    fails for any property, it is left as None and the view continues to
+    work with its original static declarations.
+
+    Attributes:
+    ----------
+    inferred_join_strategy
+        Join strategy type inferred from upstream schema metadata
+        (e.g., ``"span_overlap"``, ``"foreign_key"``).  None when the
+        view is not a join/relate kind or when inference is inconclusive.
+    inferred_join_keys
+        Join key column pairs inferred from schema compatibility groups.
+        Each element is a ``(left_col, right_col)`` tuple.  None when no
+        compatible keys can be determined.
+    inferred_cache_policy
+        Cache policy hint derived from the view's position in the
+        dependency graph.  None when no heuristic applies.
+    graph_position
+        Topological position of the view in the IR dependency graph.
+        None when position cannot be determined.
+    """
+
+    inferred_join_strategy: str | None = None
+    inferred_join_keys: tuple[tuple[str, str], ...] | None = None
+    inferred_cache_policy: str | None = None
+    graph_position: GraphPosition | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +76,7 @@ class SemanticIRView:
     kind: SemanticIRKind
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
+    inferred_properties: InferredViewProperties | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +106,8 @@ class SemanticIR:
 
 
 __all__ = [
+    "GraphPosition",
+    "InferredViewProperties",
     "SemanticIR",
     "SemanticIRJoinGroup",
     "SemanticIRKind",

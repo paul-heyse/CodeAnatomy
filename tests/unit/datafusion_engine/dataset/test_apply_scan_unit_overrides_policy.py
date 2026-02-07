@@ -144,3 +144,24 @@ def test_apply_scan_unit_overrides_preserves_location_without_policy_overrides(
 
     assert len(captured) == 1
     assert captured[0].location.overrides is None
+
+
+def test_apply_scan_unit_overrides_records_resolver_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scan override boundary should always record resolver identity when provided."""
+    calls: list[tuple[object, str]] = []
+    resolver = object()
+    monkeypatch.setattr(
+        "semantics.resolver_identity.record_resolver_if_tracking",
+        lambda tracked_resolver, *, label="unknown": calls.append((tracked_resolver, label)),
+    )
+
+    resolution_module.apply_scan_unit_overrides(
+        cast("SessionContext", object()),
+        scan_units=(),
+        runtime_profile=None,
+        dataset_resolver=cast("Any", resolver),
+    )
+
+    assert calls == [(resolver, "scan_override")]

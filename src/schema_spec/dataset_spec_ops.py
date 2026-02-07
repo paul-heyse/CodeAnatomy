@@ -197,6 +197,17 @@ def dataset_spec_dataframe_validation(spec: DatasetSpec) -> ValidationPolicySpec
     return spec.policies.dataframe_validation
 
 
+def dataset_spec_strict_schema_validation(spec: DatasetSpec) -> bool | None:
+    """Return strict schema-divergence validation mode from policy bundle.
+
+    Returns:
+    -------
+    bool | None
+        ``True`` or ``False`` when explicitly configured; otherwise ``None``.
+    """
+    return spec.policies.strict_schema_validation
+
+
 def dataset_spec_schema(spec: DatasetSpec) -> SchemaLike:
     """Return the Arrow schema with dataset metadata applied.
 
@@ -417,6 +428,7 @@ __all__ = [
     "dataset_spec_query",
     "dataset_spec_resolved_view_specs",
     "dataset_spec_schema",
+    "dataset_spec_strict_schema_validation",
     "dataset_spec_unify_tables",
     "dataset_spec_validation",
 ]

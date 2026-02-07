@@ -5,6 +5,7 @@ This module contains the 'search' command for smart code search.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 from cyclopts import Parameter
@@ -55,7 +56,11 @@ def search(
     # Treat --in as scan scope, not a root override
     include_globs: list[str] = list(options.include) if options.include else []
     if options.in_dir:
-        include_globs.append(f"{options.in_dir}/**")
+        in_value = options.in_dir.rstrip("/")
+        requested = Path(in_value)
+        candidate = requested if requested.is_absolute() else (ctx.root / requested)
+        looks_like_file = candidate.is_file() or (requested.suffix and not in_value.endswith("/"))
+        include_globs.append(in_value if looks_like_file else f"{in_value}/**")
 
     result = smart_search(
         ctx.root,

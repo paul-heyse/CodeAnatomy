@@ -56,6 +56,9 @@ def register_cdf_inputs(
     if dataset_resolver is None:
         msg = "dataset_resolver is required for CDF input registration."
         raise ValueError(msg)
+    from semantics.resolver_identity import record_resolver_if_tracking
+
+    record_resolver_if_tracking(dataset_resolver, label="cdf_registration")
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     mapping: dict[str, str] = {}

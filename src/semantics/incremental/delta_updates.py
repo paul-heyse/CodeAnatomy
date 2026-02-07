@@ -14,6 +14,7 @@ from datafusion_engine.extract.bundles import dataset_name_for_output
 from datafusion_engine.io.write import WriteMode
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.schema.contracts import delta_constraints_for_location
+from relspec.table_size_tiers import _DEFAULT_THRESHOLDS
 from semantics.catalog.dataset_specs import dataset_name_from_alias
 from semantics.incremental.delta_context import (
     DeltaAccessContext,
@@ -35,7 +36,7 @@ from storage.deltalake import (
 if TYPE_CHECKING:
     import pyarrow as pa
 
-_STREAMING_ROW_THRESHOLD: int = 100_000
+_STREAMING_ROW_THRESHOLD: int = _DEFAULT_THRESHOLDS.streaming_threshold
 
 
 def _dataset_location(

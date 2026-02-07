@@ -190,6 +190,10 @@ def apply_scan_unit_overrides(
     scan_policy_overrides_by_dataset: Mapping[str, ScanPolicyConfig] | None = None,
 ) -> None:
     """Apply scan-unit derived overrides to registered Delta datasets."""
+    if dataset_resolver is not None:
+        from semantics.resolver_identity import record_resolver_if_tracking
+
+        record_resolver_if_tracking(dataset_resolver, label="scan_override")
     if runtime_profile is None or not scan_units:
         return
     units_by_dataset = _scan_units_by_dataset(scan_units)

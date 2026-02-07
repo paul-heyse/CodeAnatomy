@@ -879,7 +879,19 @@ class SchemaContract:
             pa.float64(): "Float64",
             pa.bool_(): "Boolean",
         }
-        return type_map.get(arrow_type, str(arrow_type))
+        try:
+            mapped = type_map.get(arrow_type)
+        except TypeError:
+            mapped = None
+        if mapped is not None:
+            return mapped
+        for candidate, sql_type in type_map.items():
+            if arrow_type == candidate:
+                return sql_type
+        storage_type = getattr(arrow_type, "storage_type", None)
+        if isinstance(storage_type, pa.DataType) and storage_type is not arrow_type:
+            return SchemaContract._arrow_type_to_sql(storage_type)
+        return str(arrow_type)
 
     @staticmethod
     def _normalize_type_string(value: str) -> str:

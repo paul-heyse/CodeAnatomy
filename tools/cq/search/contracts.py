@@ -231,6 +231,112 @@ class EnrichmentTelemetry(msgspec.Struct, omit_defaults=True):
         )
 
 
+class PyreflyOverview(msgspec.Struct, omit_defaults=True):
+    """Aggregate Pyrefly semantic summary for code-overview rendering."""
+
+    primary_symbol: str | None = None
+    enclosing_class: str | None = None
+    total_incoming_callers: int = 0
+    total_outgoing_callees: int = 0
+    total_implementations: int = 0
+    targeted_diagnostics: int = 0
+    matches_enriched: int = 0
+
+
+class PyreflyTelemetry(msgspec.Struct, omit_defaults=True):
+    """Execution telemetry for Pyrefly enrichment retrieval."""
+
+    attempted: int = 0
+    applied: int = 0
+    failed: int = 0
+    skipped: int = 0
+    timed_out: int = 0
+
+
+class PyreflyDiagnostic(msgspec.Struct, omit_defaults=True):
+    """Diagnostic emitted by Pyrefly integration policy."""
+
+    code: str = "PYREFLY000"
+    severity: Severity = "info"
+    message: str = ""
+    reason: str | None = None
+
+
+def coerce_pyrefly_overview(value: Mapping[str, object] | None) -> PyreflyOverview:
+    """Normalize loose overview mapping into typed contract."""
+    if value is None:
+        return PyreflyOverview()
+    primary_symbol_value = value.get("primary_symbol")
+    enclosing_class_value = value.get("enclosing_class")
+    total_incoming_value = value.get("total_incoming_callers")
+    total_outgoing_value = value.get("total_outgoing_callees")
+    total_implementations_value = value.get("total_implementations")
+    targeted_diagnostics_value = value.get("targeted_diagnostics")
+    matches_enriched_value = value.get("matches_enriched")
+    return PyreflyOverview(
+        primary_symbol=primary_symbol_value if isinstance(primary_symbol_value, str) else None,
+        enclosing_class=enclosing_class_value if isinstance(enclosing_class_value, str) else None,
+        total_incoming_callers=total_incoming_value if isinstance(total_incoming_value, int) else 0,
+        total_outgoing_callees=total_outgoing_value if isinstance(total_outgoing_value, int) else 0,
+        total_implementations=(
+            total_implementations_value if isinstance(total_implementations_value, int) else 0
+        ),
+        targeted_diagnostics=(
+            targeted_diagnostics_value if isinstance(targeted_diagnostics_value, int) else 0
+        ),
+        matches_enriched=matches_enriched_value if isinstance(matches_enriched_value, int) else 0,
+    )
+
+
+def coerce_pyrefly_telemetry(value: Mapping[str, object] | None) -> PyreflyTelemetry:
+    """Normalize loose telemetry mapping into typed contract."""
+    if value is None:
+        return PyreflyTelemetry()
+    attempted_value = value.get("attempted")
+    applied_value = value.get("applied")
+    failed_value = value.get("failed")
+    skipped_value = value.get("skipped")
+    timed_out_value = value.get("timed_out")
+    return PyreflyTelemetry(
+        attempted=attempted_value if isinstance(attempted_value, int) else 0,
+        applied=applied_value if isinstance(applied_value, int) else 0,
+        failed=failed_value if isinstance(failed_value, int) else 0,
+        skipped=skipped_value if isinstance(skipped_value, int) else 0,
+        timed_out=timed_out_value if isinstance(timed_out_value, int) else 0,
+    )
+
+
+def coerce_pyrefly_diagnostics(
+    value: Sequence[Mapping[str, object] | PyreflyDiagnostic] | None,
+) -> list[PyreflyDiagnostic]:
+    """Normalize loose diagnostics into typed rows."""
+    if not value:
+        return []
+    rows: list[PyreflyDiagnostic] = []
+    for item in value:
+        if isinstance(item, PyreflyDiagnostic):
+            rows.append(item)
+            continue
+        if not isinstance(item, Mapping):
+            continue
+        severity_value = item.get("severity")
+        severity: Severity = (
+            cast("Severity", severity_value)
+            if isinstance(severity_value, str) and severity_value in {"info", "warning", "error"}
+            else "info"
+        )
+        reason_value = item.get("reason")
+        rows.append(
+            PyreflyDiagnostic(
+                code=str(item.get("code", "PYREFLY000")),
+                severity=severity,
+                message=str(item.get("message", "")),
+                reason=reason_value if isinstance(reason_value, str) else None,
+            )
+        )
+    return rows
+
+
 class SearchSummaryContract(msgspec.Struct):
     """Canonical multi-language summary contract for CQ outputs."""
 
@@ -366,10 +472,16 @@ __all__ = [
     "EnrichmentTelemetryBucket",
     "LanguageCapabilities",
     "LanguagePartitionStats",
+    "PyreflyDiagnostic",
+    "PyreflyOverview",
+    "PyreflyTelemetry",
     "SearchSummaryContract",
     "coerce_diagnostics",
     "coerce_language_capabilities",
     "coerce_language_partitions",
+    "coerce_pyrefly_diagnostics",
+    "coerce_pyrefly_overview",
+    "coerce_pyrefly_telemetry",
     "diagnostic_to_dict",
     "diagnostics_to_dicts",
     "summary_contract_to_dict",

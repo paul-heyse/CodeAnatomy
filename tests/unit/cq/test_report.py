@@ -151,6 +151,58 @@ def test_render_finding_includes_enrichment_tables() -> None:
     assert "free_function" in output
 
 
+def test_render_includes_pyrefly_overview_and_code_facts() -> None:
+    finding = Finding(
+        category="callsite",
+        message="target call",
+        anchor=Anchor(file="src/module.py", line=10, col=4),
+        details=DetailPayload.from_legacy(
+            {
+                "language": "python",
+                "enrichment": {
+                    "language": "python",
+                    "python": {
+                        "meta": {"language": "python"},
+                        "structural": {"node_kind": "function_definition"},
+                        "pyrefly": {
+                            "type_contract": {
+                                "resolved_type": "(x: int) -> int",
+                                "callable_signature": "target(x: int) -> int",
+                            },
+                            "call_graph": {"incoming_total": 1, "outgoing_total": 2},
+                            "anchor_diagnostics": [],
+                        },
+                    },
+                    "pyrefly": {
+                        "type_contract": {
+                            "resolved_type": "(x: int) -> int",
+                        }
+                    },
+                },
+            }
+        ),
+    )
+    result = CqResult(
+        run=_run_meta(),
+        summary={
+            "query": "target",
+            "mode": "identifier",
+            "lang_scope": "python",
+            "language_order": ["python"],
+            "languages": {"python": {"total_matches": 1}},
+            "cross_language_diagnostics": [],
+            "language_capabilities": {"python": {}, "rust": {}, "shared": {}},
+            "pyrefly_overview": {"primary_symbol": "target", "matches_enriched": 1},
+        },
+        key_findings=[finding],
+    )
+
+    output = render_markdown(result)
+    assert "Pyrefly Overview:" in output
+    assert "Resolved Type: (x: int) -> int" in output
+    assert "Incoming Callers: 1" in output
+
+
 def test_render_enrichment_parameters_uses_params_alias() -> None:
     finding = Finding(
         category="definition",
@@ -179,7 +231,7 @@ def test_render_enrichment_parameters_uses_params_alias() -> None:
     result = CqResult(run=_run_meta(), key_findings=[finding])
 
     output = render_markdown(result)
-    assert 'Parameters: ["value: int"]' in output
+    assert "Parameters: value: int" in output
     assert "Language: python" in output
 
 
@@ -202,7 +254,8 @@ def test_render_hides_unresolved_facts_by_default() -> None:
         ),
     )
     output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
-    assert "N/A — not resolved" not in output
+    assert "N/A — not resolved" in output
+    assert "Diagnostics" in output
 
 
 def test_render_can_show_unresolved_facts_with_env(
@@ -288,7 +341,7 @@ def test_render_query_finding_attaches_context_and_enrichment(tmp_path: Path) ->
     output = render_markdown(result)
     assert "Context (lines" in output
     assert "Code Facts:" in output
-    assert "Details:" in output
+    assert "Details:" not in output
 
 
 def test_render_code_overview_falls_back_for_run_query_mode() -> None:

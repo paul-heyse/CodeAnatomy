@@ -19,7 +19,6 @@ from datafusion_engine.delta.maintenance import (
     WriteOutcomeMetrics,
     maintenance_decision_artifact_payload,
     resolve_maintenance_from_execution,
-    resolve_delta_maintenance_plan,
     run_delta_maintenance,
 )
 from datafusion_engine.delta.service import delta_service_for_profile
@@ -249,9 +248,6 @@ def run_delta_maintenance_if_configured(
         ),
     )
     plan = decision.plan
-    if plan is None and metrics is None:
-        # Compatibility fallback path for metric-free maintenance contexts.
-        plan = resolve_delta_maintenance_plan(plan_input)
     if plan is None:
         return
     run_delta_maintenance(

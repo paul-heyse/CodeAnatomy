@@ -7,10 +7,17 @@ from typing import TYPE_CHECKING
 
 from semantics.catalog.dataset_registry import DatasetRegistrySpec
 from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
-from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
+from semantics.ir import (
+    GraphPosition,
+    InferredViewProperties,
+    SemanticIR,
+    SemanticIRJoinGroup,
+    SemanticIRView,
+)
 from semantics.ir_optimize import IRCost, order_join_groups, prune_ir
 from semantics.naming import canonical_output_name
 from semantics.registry import SEMANTIC_MODEL, SemanticModel, SemanticOutputSpec
+from semantics.view_kinds import VIEW_KIND_ORDER
 from utils.hashing import hash64_from_text, hash_msgpack_canonical
 
 if TYPE_CHECKING:
@@ -18,22 +25,8 @@ if TYPE_CHECKING:
     from semantics.quality import JoinHow, QualityRelationshipSpec
     from semantics.registry import SemanticNormalizationSpec
 
-_KIND_ORDER: Mapping[str, int] = {
-    "normalize": 0,
-    "scip_normalize": 1,
-    "bytecode_line_index": 2,
-    "span_unnest": 2,
-    "symtable": 2,
-    "join_group": 3,
-    "relate": 4,
-    "union_edges": 5,
-    "union_nodes": 6,
-    "projection": 7,
-    "diagnostic": 8,
-    "export": 9,
-    "finalize": 10,
-    "artifact": 11,
-}
+# Backward-compatible alias.
+_KIND_ORDER = VIEW_KIND_ORDER
 _MIN_JOIN_GROUP_SIZE = 2
 
 
@@ -854,19 +847,247 @@ def emit_semantics(ir: SemanticIR) -> SemanticIR:
     )
 
 
+_SPAN_FIELD_NAMES: frozenset[str] = frozenset({"bstart", "bend"})
+_FILE_IDENTITY_NAMES: frozenset[str] = frozenset({"file_id", "path"})
+_SYMBOL_NAMES: frozenset[str] = frozenset({"symbol", "qname"})
+_MIN_BINARY_INPUTS = 2
+_HIGH_FAN_OUT_THRESHOLD = 3
+
+
+def _build_consumer_map(
+    views: Sequence[SemanticIRView],
+) -> dict[str, list[str]]:
+    consumers: dict[str, list[str]] = {}
+    view_names = {view.name for view in views}
+    for view in views:
+        for inp in view.inputs:
+            if inp in view_names:
+                consumers.setdefault(inp, []).append(view.name)
+    return consumers
+
+
+def _classify_graph_position(
+    view: SemanticIRView,
+    view_names: frozenset[str],
+    consumer_map: Mapping[str, list[str]],
+) -> GraphPosition:
+    has_upstream = any(inp in view_names for inp in view.inputs)
+    downstream = consumer_map.get(view.name, [])
+    if len(downstream) >= _HIGH_FAN_OUT_THRESHOLD:
+        return "high_fan_out"
+    if not has_upstream:
+        return "source"
+    if not downstream:
+        return "terminal"
+    return "intermediate"
+
+
+def _infer_join_strategy_from_fields(
+    left_fields: frozenset[str],
+    right_fields: frozenset[str],
+) -> str | None:
+    left_has_spans = _SPAN_FIELD_NAMES.issubset(left_fields)
+    right_has_spans = _SPAN_FIELD_NAMES.issubset(right_fields)
+    left_has_file = bool(left_fields & _FILE_IDENTITY_NAMES)
+    right_has_file = bool(right_fields & _FILE_IDENTITY_NAMES)
+
+    if left_has_spans and right_has_spans and left_has_file and right_has_file:
+        return "span_overlap"
+
+    left_fk = {f for f in left_fields if f.endswith("_id") and f != "entity_id"}
+    right_has_entity = "entity_id" in right_fields
+    right_fk = {f for f in right_fields if f.endswith("_id") and f != "entity_id"}
+    left_has_entity = "entity_id" in left_fields
+    if (left_fk and right_has_entity) or (right_fk and left_has_entity):
+        return "foreign_key"
+
+    left_has_symbol = bool(left_fields & _SYMBOL_NAMES)
+    right_has_symbol = bool(right_fields & _SYMBOL_NAMES)
+    if left_has_symbol and right_has_symbol:
+        return "symbol_match"
+
+    if left_has_file and right_has_file:
+        return "equi_join"
+
+    return None
+
+
+def _infer_join_keys_from_fields(
+    left_fields: frozenset[str],
+    right_fields: frozenset[str],
+) -> tuple[tuple[str, str], ...] | None:
+    common = sorted(left_fields & right_fields)
+    if not common:
+        return None
+    priority_groups = [_FILE_IDENTITY_NAMES, _SPAN_FIELD_NAMES, _SYMBOL_NAMES]
+    result: list[tuple[str, str]] = []
+    for group in priority_groups:
+        for name in sorted(group):
+            if name in left_fields and name in right_fields and (name, name) not in result:
+                result.append((name, name))
+    for name in common:
+        if (name, name) not in result:
+            result.append((name, name))
+    return tuple(result) if result else None
+
+
+def _cache_policy_for_position(position: GraphPosition) -> str | None:
+    if position == "high_fan_out":
+        return "eager"
+    if position == "terminal":
+        return "lazy"
+    return None
+
+
+def _infer_view_properties(
+    view: SemanticIRView,
+    *,
+    view_names: frozenset[str],
+    consumer_map: Mapping[str, list[str]],
+    field_index: Mapping[str, frozenset[str]],
+    relationship_specs: Mapping[str, QualityRelationshipSpec],
+) -> InferredViewProperties | None:
+    position = _classify_graph_position(view, view_names, consumer_map)
+    cache_hint = _cache_policy_for_position(position)
+
+    if view.kind not in {"relate", "join_group"}:
+        return InferredViewProperties(
+            graph_position=position,
+            inferred_cache_policy=cache_hint,
+        )
+
+    rel_spec = relationship_specs.get(view.name)
+    if rel_spec is not None:
+        left_name = rel_spec.left_view
+        right_name = rel_spec.right_view
+    elif len(view.inputs) >= _MIN_BINARY_INPUTS:
+        left_name = view.inputs[0]
+        right_name = view.inputs[1]
+    else:
+        return InferredViewProperties(
+            graph_position=position,
+            inferred_cache_policy=cache_hint,
+        )
+
+    left_fields = field_index.get(left_name, frozenset())
+    right_fields = field_index.get(right_name, frozenset())
+
+    if not left_fields or not right_fields:
+        return InferredViewProperties(
+            graph_position=position,
+            inferred_cache_policy=cache_hint,
+        )
+
+    strategy = _infer_join_strategy_from_fields(left_fields, right_fields)
+    keys = _infer_join_keys_from_fields(left_fields, right_fields)
+
+    return InferredViewProperties(
+        inferred_join_strategy=strategy,
+        inferred_join_keys=keys,
+        inferred_cache_policy=cache_hint,
+        graph_position=position,
+    )
+
+
+_BUNDLE_IMPLIED_FIELDS: Mapping[str, frozenset[str]] = {
+    "file_identity": frozenset({"file_id", "path"}),
+    "span": frozenset({"bstart", "bend", "span"}),
+}
+
+
+def _build_field_index(
+    model: SemanticModel,
+) -> dict[str, frozenset[str]]:
+    rows = _dataset_rows_for_model(model)
+    index: dict[str, frozenset[str]] = {}
+    for row in rows:
+        explicit = frozenset(row.fields) if row.fields else frozenset()
+        implied: frozenset[str] = frozenset()
+        for bundle_name in row.bundles:
+            implied |= _BUNDLE_IMPLIED_FIELDS.get(bundle_name, frozenset())
+        combined = explicit | implied
+        if combined:
+            index[row.name] = combined
+    return index
+
+
+def infer_semantics(ir: SemanticIR) -> SemanticIR:
+    """Infer derivable properties from schemas and graph topology.
+
+    Insert between compile and optimize to enrich each view with
+    inferred join strategies, join keys, cache policy hints, and
+    graph position metadata.  This phase is **additive** -- it
+    populates inferred_properties on each view without modifying
+    any existing fields.
+
+    Graceful degradation: if inference fails for any individual view,
+    its inferred_properties is left as None.
+
+    Parameters
+    ----------
+    ir
+        Compiled semantic IR (output of compile_semantics).
+
+    Returns:
+    -------
+    SemanticIR
+        IR with inferred_properties populated on each view.
+    """
+    if not ir.views:
+        return ir
+
+    view_names = frozenset(view.name for view in ir.views)
+    consumer_map = _build_consumer_map(ir.views)
+    field_index = _build_field_index(SEMANTIC_MODEL)
+    relationship_specs = {spec.name: spec for spec in SEMANTIC_MODEL.relationship_specs}
+
+    enriched: list[SemanticIRView] = []
+    for view in ir.views:
+        try:
+            props = _infer_view_properties(
+                view,
+                view_names=view_names,
+                consumer_map=consumer_map,
+                field_index=field_index,
+                relationship_specs=relationship_specs,
+            )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            props = None
+        enriched.append(
+            SemanticIRView(
+                name=view.name,
+                kind=view.kind,
+                inputs=view.inputs,
+                outputs=view.outputs,
+                inferred_properties=props,
+            )
+        )
+
+    return SemanticIR(
+        views=tuple(enriched),
+        dataset_rows=ir.dataset_rows,
+        cpg_node_specs=ir.cpg_node_specs,
+        cpg_prop_specs=ir.cpg_prop_specs,
+        join_groups=ir.join_groups,
+        model_hash=ir.model_hash,
+        ir_hash=ir.ir_hash,
+    )
+
+
 def build_semantic_ir(*, outputs: Collection[str] | None = None) -> SemanticIR:
     """Build the end-to-end semantic IR pipeline.
 
     Returns:
     -------
     SemanticIR
-        Semantic IR after compile/optimize/emit.
+        Semantic IR after compile/infer/optimize/emit.
     """
     resolved_outputs = None
     if outputs is not None:
         resolved_outputs = {canonical_output_name(name) for name in outputs}
     compiled = compile_semantics(SEMANTIC_MODEL)
-    optimized = optimize_semantics(compiled, outputs=resolved_outputs)
+    inferred = infer_semantics(compiled)
+    optimized = optimize_semantics(inferred, outputs=resolved_outputs)
     return emit_semantics(optimized)
 
 
@@ -874,6 +1095,7 @@ __all__ = [
     "build_semantic_ir",
     "compile_semantics",
     "emit_semantics",
+    "infer_semantics",
     "optimize_semantics",
     "semantic_ir_fingerprint",
     "semantic_model_fingerprint",

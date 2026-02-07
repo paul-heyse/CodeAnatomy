@@ -157,6 +157,7 @@ class TestInferJoinStrategy:
 
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.SPAN_OVERLAP
+        assert strategy.confidence == 0.95
 
     def test_infer_span_contains_with_hint(self) -> None:
         """Force span contains with hint."""
@@ -183,6 +184,7 @@ class TestInferJoinStrategy:
 
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.SPAN_CONTAINS
+        assert strategy.confidence == 0.95
 
     def test_infer_fk_join(self) -> None:
         """Infer FK join when left has FK and right has entity_id."""
@@ -198,6 +200,7 @@ class TestInferJoinStrategy:
         assert strategy.strategy_type == JoinStrategyType.FOREIGN_KEY
         assert strategy.left_keys == ("def_id",)
         assert strategy.right_keys == ("entity_id",)
+        assert strategy.confidence == 0.85
 
     def test_infer_symbol_join(self) -> None:
         """Infer symbol join when both have symbols."""
@@ -214,6 +217,7 @@ class TestInferJoinStrategy:
 
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.SYMBOL_MATCH
+        assert strategy.confidence == 0.75
 
     def test_infer_file_equi_join(self) -> None:
         """Infer file equi-join when both have file_id but no spans."""
@@ -227,6 +231,7 @@ class TestInferJoinStrategy:
 
         assert strategy is not None
         assert strategy.strategy_type == JoinStrategyType.EQUI_JOIN
+        assert strategy.confidence == 0.6
 
     def test_infer_none_no_common(self) -> None:
         """Return None when no common join capability."""

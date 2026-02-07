@@ -109,6 +109,7 @@ class CpgViewNodesRequest:
     input_mapping: Mapping[str, str]
     use_cdf: bool
     requested_outputs: Collection[str] | None
+    manifest: SemanticProgramManifest
     semantic_ir: SemanticIR
 
 
@@ -121,6 +122,7 @@ class CpgViewSpecsRequest:
     use_cdf: bool
     runtime_profile: DataFusionRuntimeProfile | None
     requested_outputs: Collection[str] | None
+    manifest: SemanticProgramManifest
     semantic_ir: SemanticIR
 
 
@@ -165,6 +167,7 @@ def _resolve_cpg_compile_artifacts(
         Resolved compile artifacts including resolver, manifest, and mapping.
     """
     early_resolver = execution_context.dataset_resolver
+    manifest = execution_context.manifest
     input_mapping, use_cdf = _resolve_semantic_input_mapping(
         ctx,
         runtime_profile=runtime_profile,
@@ -172,7 +175,10 @@ def _resolve_cpg_compile_artifacts(
         cdf_inputs=resolved.cdf_inputs,
         dataset_resolver=early_resolver,
     )
-    resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
+    resolved_outputs = _resolve_requested_outputs(
+        resolved.requested_outputs,
+        manifest=manifest,
+    )
     incremental_outputs = _incremental_requested_outputs(
         _IncrementalOutputRequest(
             ctx=ctx,
@@ -185,7 +191,6 @@ def _resolve_cpg_compile_artifacts(
     )
     if incremental_outputs is not None:
         resolved_outputs = incremental_outputs
-    manifest = execution_context.manifest
     return _CpgCompileResolution(
         resolver=early_resolver,
         manifest=manifest,
@@ -615,10 +620,12 @@ def _ordered_semantic_specs(
 
 def _resolve_requested_outputs(
     requested_outputs: Collection[str] | None,
+    *,
+    manifest: SemanticProgramManifest,
 ) -> set[str] | None:
     if requested_outputs is None:
         return {spec.name for spec in SEMANTIC_MODEL.outputs if spec.kind == "table"}
-    return {canonical_output_name(name) for name in requested_outputs}
+    return {canonical_output_name(name, manifest=manifest) for name in requested_outputs}
 
 
 def _incremental_requested_outputs(
@@ -813,6 +820,7 @@ def _cpg_view_specs(
         join_groups_by_name=join_groups_by_name,
         join_group_by_relationship=join_group_by_relationship,
         runtime_profile=request.runtime_profile,
+        manifest=request.manifest,
     )
     spec_index = tuple(
         SemanticSpecIndex(
@@ -840,6 +848,7 @@ class _SemanticSpecContext:
     join_groups_by_name: Mapping[str, SemanticIRJoinGroup]
     join_group_by_relationship: Mapping[str, SemanticIRJoinGroup]
     runtime_profile: DataFusionRuntimeProfile
+    manifest: SemanticProgramManifest
 
 
 def _semantic_view_specs(
@@ -855,6 +864,59 @@ def _semantic_view_specs(
         )
         view_specs.append((spec.name, builder))
     return view_specs
+
+
+# ---------------------------------------------------------------------------
+# Builder dispatch factory
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_from_registry(
+    registry_factory: Callable[[_SemanticSpecContext], Mapping[str, DataFrameBuilder]],
+    context_label: str,
+    *,
+    finalize: bool = False,
+) -> Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]:
+    """Create a handler that resolves builders from a name-keyed registry.
+
+    Parameters
+    ----------
+    registry_factory
+        Callable that receives the spec context and returns a mapping from
+        spec name to builder.  For context-independent registries, ignore
+        the context argument.
+    context_label
+        Human-readable label used in ``KeyError`` messages.
+    finalize
+        When ``True``, wrap the resolved builder in
+        ``_finalize_output_builder``.
+
+    Returns:
+    -------
+    Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]
+        Handler compatible with the ``_builder_for_semantic_spec`` dispatch
+        table.
+    """
+
+    def _handler(
+        spec: SemanticSpecIndex,
+        context: _SemanticSpecContext,
+    ) -> DataFrameBuilder:
+        mapping = registry_factory(context)
+        builder = mapping.get(spec.name)
+        if builder is None:
+            msg = f"Missing {context_label} builder for output {spec.name!r}."
+            raise KeyError(msg)
+        if finalize:
+            return _finalize_output_builder(spec.name, builder)
+        return builder
+
+    return _handler
+
+
+# ---------------------------------------------------------------------------
+# Per-kind handlers (unique logic retained as individual functions)
+# ---------------------------------------------------------------------------
 
 
 def _builder_for_normalize_spec(
@@ -897,11 +959,10 @@ def _builder_for_bytecode_line_index_spec(
     )
 
 
-def _builder_for_span_unnest_spec(
-    spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
-) -> DataFrameBuilder:
-    _ = context
+def _span_unnest_registry(
+    _context: _SemanticSpecContext,
+) -> Mapping[str, DataFrameBuilder]:
+    """Return the span-unnest builder registry (lazy imports)."""
     from semantics.span_unnest import (
         ast_span_unnest_df_builder,
         py_bc_instruction_span_unnest_df_builder,
@@ -909,38 +970,27 @@ def _builder_for_span_unnest_spec(
         ts_span_unnest_df_builder,
     )
 
-    builders: dict[str, DataFrameBuilder] = {
+    return {
         "ast_span_unnest": ast_span_unnest_df_builder,
         "ts_span_unnest": ts_span_unnest_df_builder,
         "symtable_span_unnest": symtable_span_unnest_df_builder,
         "py_bc_instruction_span_unnest": py_bc_instruction_span_unnest_df_builder,
     }
-    builder = builders.get(spec.name)
-    if builder is None:
-        msg = f"Missing span-unnest builder for output {spec.name!r}."
-        raise KeyError(msg)
-    return builder
 
 
-def _builder_for_symtable_spec(
-    spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
-) -> DataFrameBuilder:
-    _ = context
+def _symtable_registry(
+    _context: _SemanticSpecContext,
+) -> Mapping[str, DataFrameBuilder]:
+    """Return the symtable builder registry (lazy imports)."""
     from datafusion_engine.symtable import views as symtable_views
 
-    builders: dict[str, DataFrameBuilder] = {
+    return {
         "symtable_bindings": symtable_views.symtable_bindings_df,
         "symtable_def_sites": symtable_views.symtable_def_sites_df,
         "symtable_use_sites": symtable_views.symtable_use_sites_df,
         "symtable_type_params": symtable_views.symtable_type_params_df,
         "symtable_type_param_edges": symtable_views.symtable_type_param_edges_df,
     }
-    builder = builders.get(spec.name)
-    if builder is None:
-        msg = f"Missing symtable builder for output {spec.name!r}."
-        raise KeyError(msg)
-    return builder
 
 
 def _builder_for_join_group_spec(
@@ -996,17 +1046,11 @@ def _builder_for_projection_spec(
     return _finalize_output_builder(spec.name, builder)
 
 
-def _builder_for_diagnostic_spec(
-    spec: SemanticSpecIndex,
-    context: _SemanticSpecContext,
-) -> DataFrameBuilder:
-    _ = context
-    builders = semantic_diagnostic_view_builders()
-    builder = builders.get(spec.name)
-    if builder is None:
-        msg = f"Missing diagnostic builder for output {spec.name!r}."
-        raise KeyError(msg)
-    return _finalize_output_builder(spec.name, builder)
+def _diagnostic_registry(
+    _context: _SemanticSpecContext,
+) -> Mapping[str, DataFrameBuilder]:
+    """Return the diagnostic builder registry."""
+    return semantic_diagnostic_view_builders()
 
 
 def _builder_for_export_spec(
@@ -1022,16 +1066,16 @@ def _builder_for_export_spec(
     raise ValueError(msg)
 
 
-def _builder_for_finalize_spec(
-    spec: SemanticSpecIndex,
+def _finalize_registry(
     context: _SemanticSpecContext,
-) -> DataFrameBuilder:
-    cpg_builders = dict(_cpg_output_view_specs(context.runtime_profile))
-    builder = cpg_builders.get(spec.name)
-    if builder is None:
-        msg = f"Missing finalize builder for output {spec.name!r}."
-        raise KeyError(msg)
-    return _finalize_output_builder(spec.name, builder)
+) -> Mapping[str, DataFrameBuilder]:
+    """Return the CPG finalize builder registry from context."""
+    return dict(
+        _cpg_output_view_specs(
+            context.runtime_profile,
+            manifest=context.manifest,
+        )
+    )
 
 
 def _builder_for_artifact_spec(
@@ -1043,28 +1087,32 @@ def _builder_for_artifact_spec(
     raise ValueError(msg)
 
 
+_BUILDER_HANDLERS: dict[
+    str, Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]
+] = {
+    "normalize": _builder_for_normalize_spec,
+    "scip_normalize": _builder_for_scip_normalize_spec,
+    "bytecode_line_index": _builder_for_bytecode_line_index_spec,
+    "span_unnest": _dispatch_from_registry(_span_unnest_registry, "span-unnest"),
+    "symtable": _dispatch_from_registry(_symtable_registry, "symtable"),
+    "join_group": _builder_for_join_group_spec,
+    "relate": _builder_for_relate_spec,
+    "union_edges": _builder_for_union_edges_spec,
+    "union_nodes": _builder_for_union_nodes_spec,
+    "projection": _builder_for_projection_spec,
+    "diagnostic": _dispatch_from_registry(_diagnostic_registry, "diagnostic", finalize=True),
+    "export": _builder_for_export_spec,
+    "finalize": _dispatch_from_registry(_finalize_registry, "finalize", finalize=True),
+    "artifact": _builder_for_artifact_spec,
+}
+
+
 def _builder_for_semantic_spec(
     spec: SemanticSpecIndex,
     *,
     context: _SemanticSpecContext,
 ) -> DataFrameBuilder:
-    handlers: dict[str, Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]] = {
-        "normalize": _builder_for_normalize_spec,
-        "scip_normalize": _builder_for_scip_normalize_spec,
-        "bytecode_line_index": _builder_for_bytecode_line_index_spec,
-        "span_unnest": _builder_for_span_unnest_spec,
-        "symtable": _builder_for_symtable_spec,
-        "join_group": _builder_for_join_group_spec,
-        "relate": _builder_for_relate_spec,
-        "union_edges": _builder_for_union_edges_spec,
-        "union_nodes": _builder_for_union_nodes_spec,
-        "projection": _builder_for_projection_spec,
-        "diagnostic": _builder_for_diagnostic_spec,
-        "export": _builder_for_export_spec,
-        "finalize": _builder_for_finalize_spec,
-        "artifact": _builder_for_artifact_spec,
-    }
-    handler = handlers.get(spec.kind)
+    handler = _BUILDER_HANDLERS.get(spec.kind)
     if handler is None:
         msg = f"Unsupported semantic spec kind: {spec.kind!r}."
         raise ValueError(msg)
@@ -1077,6 +1125,8 @@ def _input_table(input_mapping: Mapping[str, str], name: str) -> str:
 
 def _cpg_output_view_specs(
     runtime_profile: DataFusionRuntimeProfile,
+    *,
+    manifest: SemanticProgramManifest,
 ) -> list[tuple[str, DataFrameBuilder]]:
     from cpg.view_builders_df import (
         build_cpg_edges_by_dst_df,
@@ -1096,6 +1146,8 @@ def _cpg_output_view_specs(
         *,
         profile: DataFusionRuntimeProfile | None,
     ) -> DataFrame:
+        if view_name.startswith("cpg_"):
+            return df
         try:
             from semantics.catalog.dataset_specs import maybe_dataset_spec
         except (ImportError, RuntimeError):
@@ -1140,32 +1192,44 @@ def _cpg_output_view_specs(
 
     return [
         (
-            canonical_output_name("cpg_nodes"),
-            _wrap_cpg_builder(canonical_output_name("cpg_nodes"), build_cpg_nodes_df),
-        ),
-        (
-            canonical_output_name("cpg_edges"),
-            _wrap_cpg_builder(canonical_output_name("cpg_edges"), build_cpg_edges_df),
-        ),
-        (
-            canonical_output_name("cpg_props"),
-            _wrap_cpg_builder(canonical_output_name("cpg_props"), build_cpg_props_df),
-        ),
-        (
-            canonical_output_name("cpg_props_map"),
-            _wrap_cpg_builder(canonical_output_name("cpg_props_map"), build_cpg_props_map_df),
-        ),
-        (
-            canonical_output_name("cpg_edges_by_src"),
+            canonical_output_name("cpg_nodes", manifest=manifest),
             _wrap_cpg_builder(
-                canonical_output_name("cpg_edges_by_src"),
+                canonical_output_name("cpg_nodes", manifest=manifest),
+                build_cpg_nodes_df,
+            ),
+        ),
+        (
+            canonical_output_name("cpg_edges", manifest=manifest),
+            _wrap_cpg_builder(
+                canonical_output_name("cpg_edges", manifest=manifest),
+                build_cpg_edges_df,
+            ),
+        ),
+        (
+            canonical_output_name("cpg_props", manifest=manifest),
+            _wrap_cpg_builder(
+                canonical_output_name("cpg_props", manifest=manifest),
+                build_cpg_props_df,
+            ),
+        ),
+        (
+            canonical_output_name("cpg_props_map", manifest=manifest),
+            _wrap_cpg_builder(
+                canonical_output_name("cpg_props_map", manifest=manifest),
+                build_cpg_props_map_df,
+            ),
+        ),
+        (
+            canonical_output_name("cpg_edges_by_src", manifest=manifest),
+            _wrap_cpg_builder(
+                canonical_output_name("cpg_edges_by_src", manifest=manifest),
                 build_cpg_edges_by_src_df,
             ),
         ),
         (
-            canonical_output_name("cpg_edges_by_dst"),
+            canonical_output_name("cpg_edges_by_dst", manifest=manifest),
             _wrap_cpg_builder(
-                canonical_output_name("cpg_edges_by_dst"),
+                canonical_output_name("cpg_edges_by_dst", manifest=manifest),
                 build_cpg_edges_by_dst_df,
             ),
         ),
@@ -1182,6 +1246,7 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
             use_cdf=request.use_cdf,
             runtime_profile=request.runtime_profile,
             requested_outputs=request.requested_outputs,
+            manifest=request.manifest,
             semantic_ir=request.semantic_ir,
         )
     )
@@ -1510,6 +1575,7 @@ def build_cpg(
                 input_mapping=input_mapping,
                 use_cdf=use_cdf,
                 requested_outputs=resolved_outputs,
+                manifest=manifest,
                 semantic_ir=semantic_ir,
             )
         )
@@ -1543,6 +1609,7 @@ def build_cpg(
                 runtime_profile=runtime_profile,
                 schema_policy=resolved.schema_policy,
                 requested_outputs=resolved_outputs,
+                manifest=manifest,
             )
         _emit_semantic_quality_diagnostics(
             ctx,
@@ -1550,12 +1617,14 @@ def build_cpg(
             dataset_resolver=early_resolver,
             schema_policy=resolved.schema_policy,
             requested_outputs=resolved_outputs,
+            manifest=manifest,
         )
 
 
 def _semantic_output_view_names(
     *,
     requested_outputs: Collection[str] | None = None,
+    manifest: SemanticProgramManifest,
 ) -> list[str]:
     """Return semantic output view names.
 
@@ -1572,17 +1641,20 @@ def _semantic_output_view_names(
             view_names.append(RELATION_OUTPUT_NAME)
         return view_names
 
-    resolved = {canonical_output_name(name) for name in requested_outputs}
+    resolved = {canonical_output_name(name, manifest=manifest) for name in requested_outputs}
     return [spec.name for spec in SEMANTIC_MODEL.outputs if spec.name in resolved]
 
 
 def _ensure_canonical_output_locations(
     output_locations: Mapping[str, DatasetLocation],
+    *,
+    manifest: SemanticProgramManifest,
 ) -> None:
     """Validate that semantic output locations use canonical names.
 
     Args:
         output_locations: Description.
+        manifest: Compiled semantic manifest with canonical output name map.
 
     Raises:
         ValueError: If the operation cannot be completed.
@@ -1590,9 +1662,9 @@ def _ensure_canonical_output_locations(
     from semantics.naming import canonical_output_name
 
     non_canonical = {
-        name: canonical_output_name(name)
+        name: canonical_output_name(name, manifest=manifest)
         for name in output_locations
-        if canonical_output_name(name) != name
+        if canonical_output_name(name, manifest=manifest) != name
     }
     if non_canonical:
         msg = f"Semantic outputs must use canonical names: {non_canonical!r}."
@@ -1760,13 +1832,17 @@ def _materialize_semantic_outputs(
     runtime_profile: DataFusionRuntimeProfile,
     schema_policy: SchemaEvolutionPolicy,
     requested_outputs: Collection[str] | None,
+    manifest: SemanticProgramManifest,
 ) -> None:
     from datafusion_engine.io.write import WritePipeline
     from datafusion_engine.session.runtime import semantic_output_locations_for_profile
 
-    view_names = _semantic_output_view_names(requested_outputs=requested_outputs)
+    view_names = _semantic_output_view_names(
+        requested_outputs=requested_outputs,
+        manifest=manifest,
+    )
     base_locations = semantic_output_locations_for_profile(runtime_profile)
-    _ensure_canonical_output_locations(base_locations)
+    _ensure_canonical_output_locations(base_locations, manifest=manifest)
     output_locations = _semantic_output_locations(view_names, runtime_profile)
     _ensure_semantic_output_locations(view_names, output_locations)
 
@@ -1944,11 +2020,12 @@ def _emit_semantic_quality_views(
     context: _SemanticDiagnosticsContext,
     *,
     requested_outputs: Collection[str] | None,
+    manifest: SemanticProgramManifest,
 ) -> None:
     builders = semantic_diagnostic_view_builders()
     view_names = SEMANTIC_DIAGNOSTIC_VIEW_NAMES
     if requested_outputs is not None:
-        resolved = {canonical_output_name(name) for name in requested_outputs}
+        resolved = {canonical_output_name(name, manifest=manifest) for name in requested_outputs}
         view_names = tuple(name for name in view_names if name in resolved)
     for view_name in view_names:
         builder = builders.get(view_name)
@@ -1965,6 +2042,7 @@ def _emit_semantic_quality_diagnostics(
     dataset_resolver: ManifestDatasetResolver,
     schema_policy: SchemaEvolutionPolicy,
     requested_outputs: Collection[str] | None,
+    manifest: SemanticProgramManifest,
 ) -> None:
     if not runtime_profile.diagnostics.emit_semantic_quality_diagnostics:
         return
@@ -1977,7 +2055,11 @@ def _emit_semantic_quality_diagnostics(
     if context is None:
         return
     with _run_context_guard():
-        _emit_semantic_quality_views(context, requested_outputs=requested_outputs)
+        _emit_semantic_quality_views(
+            context,
+            requested_outputs=requested_outputs,
+            manifest=manifest,
+        )
 
 
 def build_cpg_from_inferred_deps(
@@ -2069,6 +2151,7 @@ def build_cpg_from_inferred_deps(
                 input_mapping=compile_resolution.input_mapping,
                 use_cdf=compile_resolution.use_cdf,
                 requested_outputs=compile_resolution.resolved_outputs,
+                manifest=manifest,
                 semantic_ir=semantic_ir,
             )
         )

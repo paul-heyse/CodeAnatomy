@@ -365,13 +365,10 @@ class DiagnosticsRecorder:
         """
         if not self.enabled or self._sink is None:
             return
-        from serde_schema_registry import ArtifactSpec
+        from serde_artifact_specs import SQL_COMPILATION_SPEC
 
         self._sink.record_artifact(
-            ArtifactSpec(
-                canonical_name="sql_compilation",
-                description="SQL compilation diagnostics artifact.",
-            ),
+            SQL_COMPILATION_SPEC,
             {
                 "session_id": self._context.session_id,
                 "operation_id": self._context.operation_id,
@@ -396,13 +393,10 @@ class DiagnosticsRecorder:
         """
         if not self.enabled or self._sink is None:
             return
-        from serde_schema_registry import ArtifactSpec
+        from serde_artifact_specs import SQL_EXECUTION_SPEC
 
         self._sink.record_artifact(
-            ArtifactSpec(
-                canonical_name="sql_execution",
-                description="SQL execution diagnostics artifact.",
-            ),
+            SQL_EXECUTION_SPEC,
             {
                 "session_id": self._context.session_id,
                 "operation_id": self._context.operation_id,
@@ -428,13 +422,10 @@ class DiagnosticsRecorder:
         """
         if not self.enabled or self._sink is None:
             return
-        from serde_schema_registry import ArtifactSpec
+        from serde_artifact_specs import WRITE_OPERATION_SPEC
 
         self._sink.record_artifact(
-            ArtifactSpec(
-                canonical_name="write_operation",
-                description="Write operation diagnostics artifact.",
-            ),
+            WRITE_OPERATION_SPEC,
             {
                 "session_id": self._context.session_id,
                 "operation_id": self._context.operation_id,
@@ -477,13 +468,10 @@ class DiagnosticsRecorder:
         """
         if not self.enabled or self._sink is None:
             return
-        from serde_schema_registry import ArtifactSpec
+        from serde_artifact_specs import REGISTRATION_SPEC
 
         self._sink.record_artifact(
-            ArtifactSpec(
-                canonical_name="registration",
-                description="Registration diagnostics artifact.",
-            ),
+            REGISTRATION_SPEC,
             {
                 "session_id": self._context.session_id,
                 "operation_id": self._context.operation_id,
@@ -519,13 +507,10 @@ class DiagnosticsRecorder:
         """
         if not self.enabled or self._sink is None:
             return
-        from serde_schema_registry import ArtifactSpec
+        from serde_artifact_specs import DATAFUSION_NAMESPACE_ACTIONS_SPEC
 
         self._sink.record_artifact(
-            ArtifactSpec(
-                canonical_name="datafusion_namespace_actions_v1",
-                description="DataFusion namespace actions diagnostics artifact.",
-            ),
+            DATAFUSION_NAMESPACE_ACTIONS_SPEC,
             {
                 "session_id": self._context.session_id,
                 "operation_id": self._context.operation_id,
@@ -623,7 +608,18 @@ def record_artifact(
         Artifact spec identifier.
     payload : dict[str, Any]
         Artifact payload.
+
+    Raises:
+        TypeError: If ``name`` is not an ``ArtifactSpec`` instance.
     """
+    from serde_schema_registry import ArtifactSpec as RuntimeArtifactSpec
+
+    if not isinstance(name, RuntimeArtifactSpec):
+        msg = (
+            "record_artifact() requires an ArtifactSpec instance for `name`; "
+            f"got {type(name).__name__}."
+        )
+        raise TypeError(msg)
     if profile is None or profile.diagnostics.diagnostics_sink is None:
         return
     recorder = recorder_for_profile(profile, operation_id=name.canonical_name)

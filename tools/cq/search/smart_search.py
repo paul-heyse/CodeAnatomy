@@ -5,8 +5,9 @@ from __future__ import annotations
 import multiprocessing
 import re
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -74,6 +75,11 @@ from tools.cq.search.context_window import (
     compute_search_context_window,
     extract_search_context_snippet,
 )
+from tools.cq.search.contracts import (
+    coerce_pyrefly_diagnostics,
+    coerce_pyrefly_overview,
+    coerce_pyrefly_telemetry,
+)
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
 from tools.cq.search.models import (
     CandidateSearchRequest,
@@ -87,6 +93,7 @@ from tools.cq.search.multilang_diagnostics import (
     is_python_oriented_query_text,
 )
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_lsp
 from tools.cq.search.python_analysis_session import get_python_analysis_session
 from tools.cq.search.python_enrichment import (
     _ENRICHMENT_ERRORS as _PYTHON_ENRICHMENT_ERRORS,
@@ -122,6 +129,8 @@ _CASE_SENSITIVE_DEFAULT = True
 MAX_EVIDENCE = 100
 _RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 MAX_SEARCH_CLASSIFY_WORKERS = 4
+MAX_PYREFLY_ENRICH_FINDINGS = 8
+_PyreflyAnchorKey = tuple[str, int, int, str]
 
 
 class RawMatch(CqStruct, frozen=True):
@@ -208,6 +217,7 @@ class MatchEnrichment:
     context_snippet: str | None
     rust_tree_sitter: dict[str, object] | None
     python_enrichment: dict[str, object] | None
+    pyrefly_enrichment: dict[str, object] | None
 
 
 class SearchStats(CqStruct, frozen=True):
@@ -288,6 +298,7 @@ class EnrichedMatch(CqStruct, frozen=True):
     symtable: SymtableEnrichment | None = None
     rust_tree_sitter: dict[str, object] | None = None
     python_enrichment: dict[str, object] | None = None
+    pyrefly_enrichment: dict[str, object] | None = None
     language: QueryLanguage = "python"
 
     @property
@@ -506,6 +517,7 @@ def classify_match(
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
     enable_symtable: bool = True,
     force_semantic_enrichment: bool = False,
+    enable_pyrefly: bool = False,
 ) -> EnrichedMatch:
     """Run three-stage classification pipeline on a raw match.
 
@@ -521,6 +533,8 @@ def classify_match(
         Whether to run symtable enrichment.
     force_semantic_enrichment
         Force AST-driven enrichment even when heuristics could short-circuit.
+    enable_pyrefly
+        Whether to attempt per-anchor Pyrefly LSP enrichment in this path.
 
     Returns:
     -------
@@ -572,6 +586,13 @@ def classify_match(
         lang=lang,
         resolved_python=resolved_python,
     )
+    pyrefly_enrichment = _maybe_pyrefly_enrichment(
+        root,
+        file_path,
+        raw,
+        lang=lang,
+        enable_pyrefly=enable_pyrefly,
+    )
     context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
     enrichment = MatchEnrichment(
         symtable=symtable_enrichment,
@@ -579,6 +600,7 @@ def classify_match(
         context_snippet=context_snippet,
         rust_tree_sitter=rust_tree_sitter,
         python_enrichment=python_enrichment,
+        pyrefly_enrichment=pyrefly_enrichment,
     )
     return _build_enriched_match(
         raw,
@@ -772,6 +794,7 @@ def _build_enriched_match(
         symtable=enrichment.symtable,
         rust_tree_sitter=enrichment.rust_tree_sitter,
         python_enrichment=enrichment.python_enrichment,
+        pyrefly_enrichment=enrichment.pyrefly_enrichment,
         language=lang,
     )
 
@@ -910,6 +933,32 @@ def _maybe_python_enrichment(
         )
         return normalize_python_payload(payload)
     except _PYTHON_ENRICHMENT_ERRORS:
+        return None
+
+
+def _maybe_pyrefly_enrichment(
+    root: Path,
+    file_path: Path,
+    raw: RawMatch,
+    *,
+    lang: QueryLanguage,
+    enable_pyrefly: bool,
+) -> dict[str, object] | None:
+    if not enable_pyrefly or lang != "python":
+        return None
+    if file_path.suffix not in {".py", ".pyi"}:
+        return None
+    try:
+        return enrich_with_pyrefly_lsp(
+            PyreflyLspRequest(
+                root=root,
+                file_path=file_path,
+                line=raw.line,
+                col=raw.col,
+                symbol_hint=raw.match_text,
+            )
+        )
+    except Exception:  # noqa: BLE001 - fail-open
         return None
 
 
@@ -1119,8 +1168,19 @@ def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) ->
     enrichment: dict[str, object] = {"language": match.language}
     if match.rust_tree_sitter:
         enrichment["rust"] = match.rust_tree_sitter
+    python_payload: dict[str, object] | None = None
     if match.python_enrichment:
-        enrichment["python"] = match.python_enrichment
+        python_payload = dict(match.python_enrichment)
+    elif match.language == "python":
+        # Keep a stable python payload container for Python findings even when
+        # only secondary enrichment sources are available.
+        python_payload = {}
+    if python_payload is not None:
+        if match.pyrefly_enrichment:
+            python_payload.setdefault("pyrefly", match.pyrefly_enrichment)
+        enrichment["python"] = python_payload
+    if match.pyrefly_enrichment:
+        enrichment["pyrefly"] = match.pyrefly_enrichment
     if match.symtable:
         enrichment["symtable"] = match.symtable
     if len(enrichment) > 1:
@@ -1348,6 +1408,15 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         ),
         "truncated": inputs.stats.truncated,
         "timed_out": inputs.stats.timed_out,
+        "pyrefly_overview": dict[str, object](),
+        "pyrefly_telemetry": {
+            "attempted": 0,
+            "applied": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+        },
+        "pyrefly_diagnostics": list[dict[str, object]](),
     }
     return build_multilang_summary(
         SummaryBuildRequest(
@@ -1720,6 +1789,15 @@ class _LanguageSearchResult:
     pattern: str
     enriched_matches: list[EnrichedMatch]
     dropped_by_scope: int
+    pyrefly_prefetch: _PyreflyPrefetchResult | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PyreflyPrefetchResult:
+    payloads: dict[_PyreflyAnchorKey, dict[str, object]] = dataclass_field(default_factory=dict)
+    attempted_keys: set[_PyreflyAnchorKey] = dataclass_field(default_factory=set)
+    telemetry: dict[str, int] = dataclass_field(default_factory=dict)
+    diagnostics: list[dict[str, object]] = dataclass_field(default_factory=list)
 
 
 def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchResult]:
@@ -1737,7 +1815,28 @@ def _run_single_partition(
     mode: QueryMode,
 ) -> _LanguageSearchResult:
     raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang, mode=mode)
+    pyrefly_prefetch_future: Future[_PyreflyPrefetchResult] | None = None
+    pyrefly_prefetch_pool: ThreadPoolExecutor | None = None
+    pyrefly_prefetch: _PyreflyPrefetchResult | None = None
+    if lang == "python" and raw_matches:
+        pyrefly_prefetch_pool = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="cq-pyrefly-prefetch",
+        )
+        pyrefly_prefetch_future = pyrefly_prefetch_pool.submit(
+            _prefetch_pyrefly_for_raw_matches,
+            ctx,
+            lang=lang,
+            raw_matches=raw_matches,
+        )
     enriched = _run_classification_phase(ctx, lang=lang, raw_matches=raw_matches)
+    if pyrefly_prefetch_future is not None:
+        try:
+            pyrefly_prefetch = pyrefly_prefetch_future.result()
+        except Exception:  # noqa: BLE001 - fail-open
+            pyrefly_prefetch = _PyreflyPrefetchResult(telemetry=_new_pyrefly_telemetry())
+    if pyrefly_prefetch_pool is not None:
+        pyrefly_prefetch_pool.shutdown(wait=False)
     return _LanguageSearchResult(
         lang=lang,
         raw_matches=raw_matches,
@@ -1745,6 +1844,38 @@ def _run_single_partition(
         pattern=pattern,
         enriched_matches=enriched,
         dropped_by_scope=stats.dropped_by_scope,
+        pyrefly_prefetch=pyrefly_prefetch,
+    )
+
+
+def _merge_pyrefly_prefetch_results(
+    partition_results: list[_LanguageSearchResult],
+) -> _PyreflyPrefetchResult | None:
+    payloads: dict[_PyreflyAnchorKey, dict[str, object]] = {}
+    attempted_keys: set[_PyreflyAnchorKey] = set()
+    telemetry = _new_pyrefly_telemetry()
+    diagnostics: list[dict[str, object]] = []
+    saw_prefetch = False
+
+    for partition in partition_results:
+        prefetched = partition.pyrefly_prefetch
+        if prefetched is None:
+            continue
+        saw_prefetch = True
+        payloads.update(prefetched.payloads)
+        attempted_keys.update(prefetched.attempted_keys)
+        diagnostics.extend(prefetched.diagnostics)
+        for key, value in prefetched.telemetry.items():
+            if key in telemetry:
+                telemetry[key] += int(value)
+
+    if not saw_prefetch:
+        return None
+    return _PyreflyPrefetchResult(
+        payloads=payloads,
+        attempted_keys=attempted_keys,
+        telemetry=telemetry,
+        diagnostics=diagnostics,
     )
 
 
@@ -1918,13 +2049,343 @@ def _build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, objec
     return telemetry
 
 
-def _assemble_smart_search_result(
+def _new_pyrefly_telemetry() -> dict[str, int]:
+    return {
+        "attempted": 0,
+        "applied": 0,
+        "failed": 0,
+        "skipped": 0,
+        "timed_out": 0,
+    }
+
+
+def _pyrefly_anchor_key(
+    *,
+    file: str,
+    line: int,
+    col: int,
+    match_text: str,
+) -> _PyreflyAnchorKey:
+    return (file, line, col, match_text)
+
+
+def _pyrefly_anchor_key_from_raw(raw: RawMatch) -> _PyreflyAnchorKey:
+    return _pyrefly_anchor_key(
+        file=raw.file,
+        line=raw.line,
+        col=raw.col,
+        match_text=raw.match_text,
+    )
+
+
+def _pyrefly_anchor_key_from_match(match: EnrichedMatch) -> _PyreflyAnchorKey:
+    return _pyrefly_anchor_key(
+        file=match.file,
+        line=match.line,
+        col=match.col,
+        match_text=match.match_text,
+    )
+
+
+def _pyrefly_failure_diagnostic() -> dict[str, object]:
+    return {
+        "code": "PYREFLY001",
+        "severity": "warning",
+        "message": "Pyrefly enrichment unavailable for one or more anchors",
+        "reason": "lsp_unavailable_or_unresolved",
+    }
+
+
+def _prefetch_pyrefly_for_raw_matches(
+    ctx: SmartSearchContext,
+    *,
+    lang: QueryLanguage,
+    raw_matches: list[RawMatch],
+) -> _PyreflyPrefetchResult:
+    if lang != "python" or not raw_matches:
+        return _PyreflyPrefetchResult(telemetry=_new_pyrefly_telemetry())
+
+    telemetry = _new_pyrefly_telemetry()
+    payloads: dict[_PyreflyAnchorKey, dict[str, object]] = {}
+    attempted_keys: set[_PyreflyAnchorKey] = set()
+    diagnostics: list[dict[str, object]] = []
+    pyrefly_budget_used = 0
+
+    for raw in raw_matches:
+        if pyrefly_budget_used >= MAX_PYREFLY_ENRICH_FINDINGS:
+            telemetry["skipped"] += 1
+            continue
+        if not is_path_in_lang_scope(raw.file, lang):
+            continue
+        key = _pyrefly_anchor_key_from_raw(raw)
+        if key in attempted_keys:
+            continue
+        attempted_keys.add(key)
+        pyrefly_budget_used += 1
+        telemetry["attempted"] += 1
+        file_path = ctx.root / raw.file
+        try:
+            payload = _maybe_pyrefly_enrichment(
+                ctx.root,
+                file_path,
+                raw,
+                lang=lang,
+                enable_pyrefly=True,
+            )
+        except TimeoutError:
+            telemetry["timed_out"] += 1
+            payload = None
+        except Exception:  # noqa: BLE001 - fail-open
+            telemetry["failed"] += 1
+            payload = None
+
+        if isinstance(payload, dict) and payload:
+            telemetry["applied"] += 1
+            payloads[key] = payload
+        else:
+            telemetry["failed"] += 1
+            diagnostics.append(_pyrefly_failure_diagnostic())
+
+    return _PyreflyPrefetchResult(
+        payloads=payloads,
+        attempted_keys=attempted_keys,
+        telemetry=telemetry,
+        diagnostics=diagnostics,
+    )
+
+
+def _pyrefly_enrich_match(
+    ctx: SmartSearchContext,
+    match: EnrichedMatch,
+) -> dict[str, object] | None:
+    if match.language != "python":
+        return None
+    file_path = ctx.root / match.file
+    if file_path.suffix not in {".py", ".pyi"}:
+        return None
+    return enrich_with_pyrefly_lsp(
+        PyreflyLspRequest(
+            root=ctx.root,
+            file_path=file_path,
+            line=match.line,
+            col=match.col,
+            symbol_hint=match.match_text,
+        )
+    )
+
+
+def _seed_pyrefly_state(
+    prefetched: _PyreflyPrefetchResult | None,
+) -> tuple[dict[str, int], list[dict[str, object]]]:
+    telemetry = _new_pyrefly_telemetry()
+    diagnostics: list[dict[str, object]] = []
+    if prefetched is None:
+        return telemetry, diagnostics
+    diagnostics.extend(prefetched.diagnostics)
+    for key, value in prefetched.telemetry.items():
+        if key in telemetry:
+            telemetry[key] += int(value)
+    return telemetry, diagnostics
+
+
+def _pyrefly_payload_from_prefetch(
+    prefetched: _PyreflyPrefetchResult | None,
+    key: _PyreflyAnchorKey,
+) -> dict[str, object] | None:
+    if prefetched is None or key not in prefetched.attempted_keys:
+        return None
+    return prefetched.payloads.get(key)
+
+
+def _fetch_pyrefly_payload(
+    *,
+    ctx: SmartSearchContext,
+    match: EnrichedMatch,
+    prefetched: _PyreflyPrefetchResult | None,
+    telemetry: dict[str, int],
+) -> tuple[dict[str, object] | None, bool]:
+    key = _pyrefly_anchor_key_from_match(match)
+    prefetched_payload = _pyrefly_payload_from_prefetch(prefetched, key)
+    if prefetched is not None and key in prefetched.attempted_keys:
+        return prefetched_payload, False
+
+    telemetry["attempted"] += 1
+    try:
+        return _pyrefly_enrich_match(ctx, match), True
+    except TimeoutError:
+        telemetry["timed_out"] += 1
+        return None, True
+    except Exception:  # noqa: BLE001 - fail-open
+        return None, True
+
+
+def _merge_match_with_pyrefly_payload(
+    *,
+    match: EnrichedMatch,
+    payload: dict[str, object] | None,
+    attempted_in_place: bool,
+    telemetry: dict[str, int],
+    diagnostics: list[dict[str, object]],
+) -> EnrichedMatch:
+    if isinstance(payload, dict) and payload:
+        if attempted_in_place:
+            telemetry["applied"] += 1
+        return msgspec.structs.replace(match, pyrefly_enrichment=payload)
+
+    if attempted_in_place:
+        telemetry["failed"] += 1
+        diagnostics.append(_pyrefly_failure_diagnostic())
+    return match
+
+
+def _pyrefly_summary_payload(
+    *,
+    overview: dict[str, object],
+    telemetry: dict[str, int],
+    diagnostics: list[dict[str, object]],
+) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
+    telemetry_payload = coerce_pyrefly_telemetry(telemetry)
+    diagnostics_payload = coerce_pyrefly_diagnostics(diagnostics)
+    return (
+        cast("dict[str, object]", msgspec.to_builtins(coerce_pyrefly_overview(overview))),
+        cast("dict[str, object]", msgspec.to_builtins(telemetry_payload)),
+        cast("list[dict[str, object]]", msgspec.to_builtins(diagnostics_payload)),
+    )
+
+
+def _attach_pyrefly_enrichment(
+    *,
+    ctx: SmartSearchContext,
+    matches: list[EnrichedMatch],
+    prefetched: _PyreflyPrefetchResult | None = None,
+) -> tuple[list[EnrichedMatch], dict[str, object], dict[str, object], list[dict[str, object]]]:
+    telemetry, diagnostics = _seed_pyrefly_state(prefetched)
+
+    if not matches:
+        overview, telemetry_map, diagnostic_rows = _pyrefly_summary_payload(
+            overview={},
+            telemetry=telemetry,
+            diagnostics=diagnostics,
+        )
+        return matches, overview, telemetry_map, diagnostic_rows
+
+    enriched: list[EnrichedMatch] = []
+    pyrefly_budget_used = 0
+
+    for match in matches:
+        if match.language != "python":
+            enriched.append(match)
+            continue
+        if pyrefly_budget_used >= MAX_PYREFLY_ENRICH_FINDINGS:
+            telemetry["skipped"] += 1
+            enriched.append(match)
+            continue
+        pyrefly_budget_used += 1
+        payload, attempted_in_place = _fetch_pyrefly_payload(
+            ctx=ctx,
+            match=match,
+            prefetched=prefetched,
+            telemetry=telemetry,
+        )
+        enriched.append(
+            _merge_match_with_pyrefly_payload(
+                match=match,
+                payload=payload,
+                attempted_in_place=attempted_in_place,
+                telemetry=telemetry,
+                diagnostics=diagnostics,
+            )
+        )
+
+    overview = _build_pyrefly_overview(enriched)
+    overview_map, telemetry_map, diagnostic_rows = _pyrefly_summary_payload(
+        overview=overview,
+        telemetry=telemetry,
+        diagnostics=diagnostics,
+    )
+    return enriched, overview_map, telemetry_map, diagnostic_rows
+
+
+def _first_string(*values: object) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _build_pyrefly_overview(matches: list[EnrichedMatch]) -> dict[str, object]:  # noqa: C901, PLR0914
+    primary_symbol: str | None = None
+    enclosing_class: str | None = None
+    total_incoming = 0
+    total_outgoing = 0
+    total_implementations = 0
+    diagnostics = 0
+    enriched_count = 0
+
+    for match in matches:
+        payload = match.pyrefly_enrichment
+        if not isinstance(payload, dict):
+            continue
+        enriched_count += 1
+        type_contract = payload.get("type_contract")
+        if isinstance(type_contract, dict):
+            primary_symbol = _first_string(
+                primary_symbol,
+                type_contract.get("callable_signature"),
+                type_contract.get("resolved_type"),
+                match.match_text,
+            )
+        class_ctx = payload.get("class_method_context")
+        if isinstance(class_ctx, dict):
+            enclosing_class = _first_string(enclosing_class, class_ctx.get("enclosing_class"))
+        call_graph = payload.get("call_graph")
+        if isinstance(call_graph, dict):
+            incoming = call_graph.get("incoming_total")
+            outgoing = call_graph.get("outgoing_total")
+            if isinstance(incoming, int):
+                total_incoming += incoming
+            if isinstance(outgoing, int):
+                total_outgoing += outgoing
+        grounding = payload.get("symbol_grounding")
+        if isinstance(grounding, dict):
+            implementations = grounding.get("implementation_targets")
+            if isinstance(implementations, list):
+                total_implementations += len(
+                    [row for row in implementations if isinstance(row, dict)]
+                )
+        anchor_diagnostics = payload.get("anchor_diagnostics")
+        if isinstance(anchor_diagnostics, list):
+            diagnostics += len([row for row in anchor_diagnostics if isinstance(row, dict)])
+
+    return {
+        "primary_symbol": primary_symbol,
+        "enclosing_class": enclosing_class,
+        "total_incoming_callers": total_incoming,
+        "total_outgoing_callees": total_outgoing,
+        "total_implementations": total_implementations,
+        "targeted_diagnostics": diagnostics,
+        "matches_enriched": enriched_count,
+    }
+
+
+def _assemble_smart_search_result(  # noqa: PLR0914
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
 ) -> CqResult:
     enriched_matches = _merge_language_matches(
         partition_results=partition_results,
         lang_scope=ctx.lang_scope,
+    )
+    prefetched_pyrefly = _merge_pyrefly_prefetch_results(partition_results)
+    (
+        enriched_matches,
+        pyrefly_overview,
+        pyrefly_telemetry,
+        pyrefly_diagnostics,
+    ) = _attach_pyrefly_enrichment(
+        ctx=ctx,
+        matches=enriched_matches,
+        prefetched=prefetched_pyrefly,
     )
     language_stats: dict[QueryLanguage, SearchStats] = {
         result.lang: result.stats for result in partition_results
@@ -1973,6 +2434,9 @@ def _assemble_smart_search_result(
     summary["cross_language_diagnostics"] = diagnostics_to_summary_payload(all_diagnostics)
     summary["language_capabilities"] = build_language_capabilities(lang_scope=ctx.lang_scope)
     summary["enrichment_telemetry"] = _build_enrichment_telemetry(enriched_matches)
+    summary["pyrefly_overview"] = pyrefly_overview
+    summary["pyrefly_telemetry"] = pyrefly_telemetry
+    summary["pyrefly_diagnostics"] = pyrefly_diagnostics
     if dropped_by_scope:
         summary["dropped_by_scope"] = dropped_by_scope
     assert_multilang_summary(summary)

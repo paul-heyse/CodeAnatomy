@@ -286,6 +286,95 @@ class SemanticCompiler:
             raise SemanticSchemaError(msg)
 
     @staticmethod
+    def _resolve_join_keys(
+        *,
+        left_info: TableInfo,
+        right_info: TableInfo,
+        left_on: Sequence[str],
+        right_on: Sequence[str],
+    ) -> tuple[Sequence[str], Sequence[str]]:
+        """Resolve join keys, inferring from annotated schemas when empty.
+
+        When both *left_on* and *right_on* are provided they are returned
+        unchanged.  When both are empty the method infers equi-join keys
+        from the ``FILE_IDENTITY`` compatibility group of the annotated
+        schemas attached to *left_info* and *right_info*.
+
+        Parameters
+        ----------
+        left_info
+            Left table metadata.
+        right_info
+            Right table metadata.
+        left_on
+            Explicit left join columns (may be empty).
+        right_on
+            Explicit right join columns (may be empty).
+
+        Returns:
+        -------
+        tuple[Sequence[str], Sequence[str]]
+            Resolved ``(left_on, right_on)`` pair.
+
+        Raises:
+            SemanticSchemaError: If keys are asymmetric or no
+                ``FILE_IDENTITY`` keys can be inferred.
+        """
+        if left_on and right_on:
+            return left_on, right_on
+
+        # Asymmetric specification is a configuration error.
+        if bool(left_on) != bool(right_on):
+            msg = (
+                "Join key specification must be symmetric: "
+                f"left_on={list(left_on)!r}, right_on={list(right_on)!r} "
+                f"for {left_info.name!r} -> {right_info.name!r}."
+            )
+            raise SemanticSchemaError(msg)
+
+        from semantics.types.core import CompatibilityGroup
+
+        inferred_pairs = left_info.annotated.infer_join_keys(right_info.annotated)
+
+        # Filter to FILE_IDENTITY group with exact name matches only.
+        # Span keys use different join strategies (overlap / contains) and
+        # must not be used as equi-join keys.  Cross-name pairs (e.g.
+        # path ↔ file_id) are semantically compatible but not suitable
+        # for equi-join.
+        file_id_pairs: list[tuple[str, str]] = []
+        for left_col_name, right_col_name in inferred_pairs:
+            if left_col_name != right_col_name:
+                continue
+            left_col = left_info.annotated.get(left_col_name)
+            right_col = right_info.annotated.get(right_col_name)
+            if left_col is None or right_col is None:
+                continue
+            if (
+                CompatibilityGroup.FILE_IDENTITY in left_col.compatibility_groups
+                and CompatibilityGroup.FILE_IDENTITY in right_col.compatibility_groups
+            ):
+                file_id_pairs.append((left_col_name, right_col_name))
+
+        if not file_id_pairs:
+            msg = (
+                "Cannot infer join keys: no FILE_IDENTITY columns shared between "
+                f"{left_info.name!r} and {right_info.name!r}."
+            )
+            raise SemanticSchemaError(msg)
+
+        resolved_left = [pair[0] for pair in file_id_pairs]
+        resolved_right = [pair[1] for pair in file_id_pairs]
+
+        logger.debug(
+            "Inferred join keys for %s -> %s: left=%r, right=%r.",
+            left_info.name,
+            right_info.name,
+            resolved_left,
+            resolved_right,
+        )
+        return resolved_left, resolved_right
+
+    @staticmethod
     def _validate_join_keys(
         *,
         left_info: TableInfo,
@@ -1149,6 +1238,15 @@ class SemanticCompiler:
     ) -> DataFrame:
         left_info = self.get(left_view)
         right_info = self.get(right_view)
+
+        # Resolve join keys (infer from schemas when empty).
+        left_on, right_on = self._resolve_join_keys(
+            left_info=left_info,
+            right_info=right_info,
+            left_on=left_on,
+            right_on=right_on,
+        )
+
         self._validate_join_keys(
             left_info=left_info,
             right_info=right_info,

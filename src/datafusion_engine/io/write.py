@@ -61,6 +61,7 @@ from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import delta_constraints_for_location
 from datafusion_engine.sql.options import sql_options_for_profile
+from relspec.table_size_tiers import _DEFAULT_THRESHOLDS
 from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints, dataset_spec_name
 from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
@@ -289,8 +290,8 @@ def _normalize_stats_dataset_name(name: str) -> str:
     return normalized
 
 
-_ADAPTIVE_SMALL_TABLE_THRESHOLD = 10_000
-_ADAPTIVE_LARGE_TABLE_THRESHOLD = 1_000_000
+_ADAPTIVE_SMALL_TABLE_THRESHOLD = _DEFAULT_THRESHOLDS.small_threshold
+_ADAPTIVE_LARGE_TABLE_THRESHOLD = _DEFAULT_THRESHOLDS.large_threshold
 _ADAPTIVE_SMALL_FILE_CAP = 32 * 1024 * 1024  # 32 MB
 _ADAPTIVE_LARGE_FILE_FLOOR = 128 * 1024 * 1024  # 128 MB
 
@@ -957,19 +958,28 @@ class WritePipeline:
         """
         if self.runtime_profile is None:
             return None
-        if self.dataset_resolver is None:
-            return None
-        loc = self.dataset_resolver.location(destination)
-        if loc is not None:
-            return destination, loc
         normalized_destination = str(destination)
         resolver = self.dataset_resolver
+        if resolver is not None:
+            loc = resolver.location(destination)
+            if loc is not None:
+                return destination, loc
+            return self._match_dataset_location(
+                (
+                    (name, resolved)
+                    for name in resolver.names()
+                    if (resolved := resolver.location(name)) is not None
+                ),
+                normalized_destination=normalized_destination,
+            )
+        profile = self.runtime_profile
+        candidates = dict(profile.data_sources.dataset_templates)
+        candidates.update(profile.data_sources.extract_output.dataset_locations)
+        loc = candidates.get(destination)
+        if loc is not None:
+            return destination, loc
         return self._match_dataset_location(
-            (
-                (name, resolved)
-                for name in resolver.names()
-                if (resolved := resolver.location(name)) is not None
-            ),
+            candidates.items(),
             normalized_destination=normalized_destination,
         )
 
@@ -1741,12 +1751,11 @@ class WritePipeline:
         if self.runtime_profile is None:
             return
         from datafusion_engine.delta.maintenance import (
-            WriteOutcomeMetrics,
             DeltaMaintenancePlanInput,
+            WriteOutcomeMetrics,
             build_write_outcome_metrics,
             maintenance_decision_artifact_payload,
             resolve_maintenance_from_execution,
-            resolve_delta_maintenance_plan,
             run_delta_maintenance,
         )
         from datafusion_engine.lineage.diagnostics import record_artifact
@@ -1792,9 +1801,6 @@ class WritePipeline:
             ),
         )
         plan = decision.plan
-        if plan is None and metrics is None:
-            # Compatibility fallback path for scenarios where no metrics are available.
-            plan = resolve_delta_maintenance_plan(plan_input)
         if plan is None:
             return
         run_delta_maintenance(self.ctx, plan=plan, runtime_profile=self.runtime_profile)

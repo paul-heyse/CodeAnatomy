@@ -12,7 +12,10 @@ from hamilton.function_modifiers import cache
 
 from core_types import DeterminismTier, JsonDict, parse_determinism_tier
 from datafusion_engine.materialize_policy import MaterializationPolicy, WriterStrategy
-from datafusion_engine.session.runtime import AdapterExecutionPolicy
+from datafusion_engine.session.runtime import (
+    AdapterExecutionPolicy,
+    datasource_config_from_profile,
+)
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from engine.session import EngineSession
 from engine.session_factory import EngineSessionOptions, build_engine_session
@@ -159,21 +162,23 @@ def runtime_profile_spec(
         return resolved
     resolved_semantic_catalog_name = catalog_name
     resolved_extract_catalog_name = extract_catalog_name
+    semantic_output_config = msgspec.structs.replace(
+        resolved.datafusion.data_sources.semantic_output,
+        normalize_output_root=normalize_root,
+        output_root=semantic_root,
+        output_catalog_name=resolved_semantic_catalog_name,
+    )
+    extract_output_config = msgspec.structs.replace(
+        resolved.datafusion.data_sources.extract_output,
+        output_root=extract_root,
+        output_catalog_name=resolved_extract_catalog_name,
+    )
     updated_profile = msgspec.structs.replace(
         resolved.datafusion,
-        data_sources=msgspec.structs.replace(
-            resolved.datafusion.data_sources,
-            semantic_output=msgspec.structs.replace(
-                resolved.datafusion.data_sources.semantic_output,
-                normalize_output_root=normalize_root,
-                output_root=semantic_root,
-                output_catalog_name=resolved_semantic_catalog_name,
-            ),
-            extract_output=msgspec.structs.replace(
-                resolved.datafusion.data_sources.extract_output,
-                output_root=extract_root,
-                output_catalog_name=resolved_extract_catalog_name,
-            ),
+        data_sources=datasource_config_from_profile(
+            resolved.datafusion,
+            semantic_output=semantic_output_config,
+            extract_output=extract_output_config,
         ),
         policies=msgspec.structs.replace(
             resolved.datafusion.policies,

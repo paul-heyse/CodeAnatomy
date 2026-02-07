@@ -15,6 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from datafusion_engine.extensions.runtime_capabilities import RuntimeCapabilitiesSnapshot
     from extract.coordination.evidence_plan import EvidencePlan
+    from relspec.compiled_policy import CompiledExecutionPolicy
     from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver, SemanticProgramManifest
 
@@ -52,6 +53,9 @@ class ExecutionAuthorityContext:
         Stable fingerprint of the session runtime configuration.
     enforcement_mode
         Validation enforcement mode (``warn`` or ``error``).
+    compiled_policy
+        Compile-time-resolved execution policy artifact.  Optional during
+        rollout; will become required once all callers populate it.
     """
 
     semantic_context: SemanticExecutionContext
@@ -60,6 +64,7 @@ class ExecutionAuthorityContext:
     capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None = None
     session_runtime_fingerprint: str | None = None
     enforcement_mode: ExecutionAuthorityEnforcement = "warn"
+    compiled_policy: CompiledExecutionPolicy | None = None
 
     def __post_init__(self) -> None:
         """Validate and optionally enforce authority requirements.
@@ -155,6 +160,13 @@ class ExecutionAuthorityContext:
                 ExecutionAuthorityValidationIssue(
                     code="missing_executor_map",
                     message="extract_executor_map is required when evidence_plan is present.",
+                )
+            )
+        if self.capability_snapshot is None:
+            issues.append(
+                ExecutionAuthorityValidationIssue(
+                    code="missing_capability_snapshot",
+                    message="capability_snapshot must be populated for runtime feature gating.",
                 )
             )
         missing = self.missing_adapter_keys()

@@ -240,6 +240,15 @@ def _summary_common_for_query(
     common: dict[str, object] = {
         "query": text,
         "mode": _query_mode(query),
+        "pyrefly_overview": dict[str, object](),
+        "pyrefly_telemetry": {
+            "attempted": 0,
+            "applied": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+        },
+        "pyrefly_diagnostics": list[dict[str, object]](),
     }
     if query.pattern_spec is not None:
         common["pattern"] = query.pattern_spec.pattern

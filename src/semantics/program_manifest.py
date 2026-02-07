@@ -31,10 +31,6 @@ class ManifestDatasetBindings:
             for name, location in sorted(self.locations.items())
         }
 
-    def to_payload(self) -> dict[str, object]:
-        """Return canonical payload for compatibility callsites."""
-        return self.payload()
-
     def location(self, name: str) -> DatasetLocation | None:
         """Return dataset location for a name, or None if not found.
 
@@ -202,10 +198,6 @@ class SemanticProgramManifest:
             if self.output_name_map is not None
             else None,
         }
-
-    def to_payload(self) -> dict[str, object]:
-        """Return canonical payload for compatibility callsites."""
-        return self.payload()
 
     def resolve_output_name(self, internal_name: str) -> str:
         """Resolve an internal view name to a canonical output name.

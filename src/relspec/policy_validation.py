@@ -17,11 +17,13 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.plan.signals import PlanSignals
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from relspec.compiled_policy import CompiledExecutionPolicy
     from relspec.execution_plan import ExecutionPlan
     from semantics.program_manifest import SemanticProgramManifest
 
 _SMALL_SCAN_ROW_THRESHOLD: int = 1000
 _DATASET_SUFFIX_SEGMENT_COUNT: int = 2
+_STATS_REASON_KEYWORDS: frozenset[str] = frozenset({"stats", "statistics", "row_count", "num_rows"})
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,7 @@ def validate_policy_bundle(
     udf_snapshot: Mapping[str, object],
     capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None = None,
     semantic_manifest: SemanticProgramManifest | None = None,
+    compiled_policy: CompiledExecutionPolicy | None = None,
 ) -> PolicyValidationResult:
     """Validate policy bundle against execution plan requirements.
 
@@ -177,6 +180,10 @@ def validate_policy_bundle(
         Runtime capabilities payload used for strict provider and metrics checks.
     semantic_manifest
         Optional semantic manifest used to validate scan dataset alignment.
+    compiled_policy
+        Compile-time-resolved execution policy artifact.  When provided,
+        additional consistency checks are run against the manifest and
+        capability snapshot.
 
     Returns:
     -------
@@ -195,6 +202,20 @@ def validate_policy_bundle(
     )
     issues.extend(_small_scan_policy_issues(execution_plan))
     issues.extend(_capability_issues(capability_snapshot=capability_snapshot))
+    if compiled_policy is not None:
+        issues.extend(
+            _compiled_policy_consistency_issues(
+                compiled_policy,
+                semantic_manifest=semantic_manifest,
+            )
+        )
+        issues.extend(
+            _statistics_availability_issues(
+                compiled_policy,
+                capability_snapshot=capability_snapshot,
+            )
+        )
+        issues.extend(_evidence_coherence_issues(compiled_policy))
     return PolicyValidationResult.from_issues(issues)
 
 
@@ -494,6 +515,170 @@ def _capability_issues(
             )
         )
     return issues
+
+
+def _compiled_policy_consistency_issues(
+    compiled_policy: CompiledExecutionPolicy,
+    *,
+    semantic_manifest: SemanticProgramManifest | None,
+) -> list[PolicyValidationIssue]:
+    if semantic_manifest is None:
+        return []
+    issues: list[PolicyValidationIssue] = []
+    manifest_view_names = _manifest_view_names(semantic_manifest)
+    if manifest_view_names is not None and compiled_policy.cache_policy_by_view:
+        extra_views = sorted(
+            set(compiled_policy.cache_policy_by_view) - manifest_view_names,
+        )
+        issues.extend(
+            _warn(
+                "compiled_policy_extra_cache_views",
+                task=view_name,
+                detail=(
+                    f"Cache policy references view {view_name!r} not present in semantic manifest."
+                ),
+            )
+            for view_name in extra_views
+        )
+    manifest_dataset_name_set = frozenset(_manifest_dataset_names(semantic_manifest))
+    if manifest_dataset_name_set and compiled_policy.scan_policy_overrides:
+        extra_datasets = sorted(
+            set(compiled_policy.scan_policy_overrides) - manifest_dataset_name_set,
+        )
+        issues.extend(
+            _warn(
+                "compiled_policy_extra_scan_overrides",
+                task=dataset_name,
+                detail=(
+                    f"Scan policy override references dataset {dataset_name!r} "
+                    "not present in semantic manifest."
+                ),
+            )
+            for dataset_name in extra_datasets
+        )
+    return issues
+
+
+def _statistics_availability_issues(
+    compiled_policy: CompiledExecutionPolicy,
+    *,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> list[PolicyValidationIssue]:
+    issues: list[PolicyValidationIssue] = []
+    has_stats_dependent = _has_statistics_dependent_overrides(compiled_policy)
+    if has_stats_dependent:
+        has_plan_stats = _capability_has_plan_statistics(capability_snapshot)
+        if has_plan_stats is False:
+            issues.append(
+                _warn(
+                    "stats_dependent_override_without_capabilities",
+                    detail=(
+                        "Scan policy overrides reference statistics-derived reasons "
+                        "but capability snapshot does not confirm "
+                        "has_execution_plan_statistics."
+                    ),
+                )
+            )
+    return issues
+
+
+def _evidence_coherence_issues(
+    compiled_policy: CompiledExecutionPolicy,
+) -> list[PolicyValidationIssue]:
+    issues: list[PolicyValidationIssue] = []
+    if compiled_policy.policy_fingerprint is None:
+        issues.append(
+            _warn(
+                "compiled_policy_missing_fingerprint",
+                detail="Compiled policy lacks a policy_fingerprint for determinism.",
+            )
+        )
+    has_other_sections = bool(
+        compiled_policy.scan_policy_overrides
+        or compiled_policy.udf_requirements_by_view
+        or compiled_policy.diagnostics_flags
+        or compiled_policy.maintenance_policy_by_dataset
+    )
+    if not compiled_policy.cache_policy_by_view and has_other_sections:
+        issues.append(
+            _warn(
+                "compiled_policy_empty_cache_section",
+                detail=(
+                    "Compiled policy has populated non-cache sections but "
+                    "cache_policy_by_view is empty, suggesting incomplete compilation."
+                ),
+            )
+        )
+    return issues
+
+
+def _manifest_view_names(
+    semantic_manifest: SemanticProgramManifest,
+) -> frozenset[str] | None:
+    ir = getattr(semantic_manifest, "semantic_ir", None)
+    if ir is None:
+        return None
+    views = getattr(ir, "views", None)
+    if views is None:
+        return None
+    names: set[str] = set()
+    for view in views:
+        name = getattr(view, "name", None)
+        if isinstance(name, str) and name:
+            names.add(name)
+    return frozenset(names) if names else None
+
+
+def _has_statistics_dependent_overrides(
+    compiled_policy: CompiledExecutionPolicy,
+) -> bool:
+    for override_value in compiled_policy.scan_policy_overrides.values():
+        reasons = _extract_reasons_from_override(override_value)
+        for reason in reasons:
+            reason_lower = reason.lower()
+            if any(kw in reason_lower for kw in _STATS_REASON_KEYWORDS):
+                return True
+    return False
+
+
+def _extract_reasons_from_override(override_value: object) -> tuple[str, ...]:
+    if isinstance(override_value, Mapping):
+        raw = override_value.get("reasons", ())
+        if isinstance(raw, (tuple, list)):
+            return tuple(r for r in raw if isinstance(r, str))
+        return ()
+    reasons = getattr(override_value, "reasons", None)
+    if isinstance(reasons, (tuple, list)):
+        return tuple(r for r in reasons if isinstance(r, str))
+    return ()
+
+
+def _capability_has_plan_statistics(
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> bool | None:
+    """Resolve ``has_execution_plan_statistics`` from the capability snapshot.
+
+    Returns:
+    -------
+    bool | None
+        True/False when resolvable, None when not available.
+    """
+    if capability_snapshot is None:
+        return None
+    # First try structured attribute access.
+    plan_caps = getattr(capability_snapshot, "plan_capabilities", None)
+    if plan_caps is not None:
+        value = getattr(plan_caps, "has_execution_plan_statistics", None)
+        if isinstance(value, bool):
+            return value
+    # Fall back to mapping-based access.
+    if isinstance(capability_snapshot, Mapping):
+        plan_caps_map = capability_snapshot.get("plan_capabilities")
+        if isinstance(plan_caps_map, Mapping):
+            value = plan_caps_map.get("has_execution_plan_statistics")
+            if isinstance(value, bool):
+                return value
+    return None
 
 
 def _capability_payload(

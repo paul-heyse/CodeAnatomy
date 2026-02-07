@@ -6,9 +6,6 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.dataset.registry import (
-    dataset_catalog_from_profile,
-)
 from datafusion_engine.lineage.datafusion import extract_lineage
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_unit
 from datafusion_engine.plan.execution import (
@@ -107,13 +104,15 @@ def _plan_scan_units(
     runtime: IncrementalRuntime,
 ) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
     session_runtime = runtime.session_runtime()
-    catalog = dataset_catalog_from_profile(runtime.profile)
+    from semantics.compile_context import dataset_bindings_for_profile
+
+    dataset_resolver = dataset_bindings_for_profile(runtime.profile)
     scan_units: dict[str, ScanUnit] = {}
     for scan in extract_lineage(
         bundle.optimized_logical_plan,
         udf_snapshot=bundle.artifacts.udf_snapshot,
     ).scans:
-        location = catalog.get(scan.dataset_name) if catalog.has(scan.dataset_name) else None
+        location = dataset_resolver.location(scan.dataset_name)
         if location is None:
             continue
         unit = plan_scan_unit(

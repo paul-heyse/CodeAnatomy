@@ -16,7 +16,6 @@ from datafusion_engine.arrow.metadata import (
     merge_metadata_specs,
     ordering_metadata_spec,
 )
-from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.schema.contracts import SchemaContract
 from datafusion_engine.udf.runtime import validate_rust_udf_snapshot
@@ -162,9 +161,6 @@ def _semantic_cache_policy_for_row(
             return override
         return "none"
     if manifest.dataset_bindings.locations.get(row.name) is not None:
-        return "delta_output"
-    catalog = dataset_catalog_from_profile(runtime_profile)
-    if catalog.has(row.name):
         return "delta_output"
     if runtime_profile.features.enable_delta_cdf and row.supports_cdf and row.merge_keys:
         return "delta_staging"
@@ -442,11 +438,7 @@ def _build_semantic_view_node(
     row = dataset_row(name, strict=False)
     if row is None:
         override = context.runtime_profile.data_sources.semantic_output.cache_overrides.get(name)
-        cache_policy = (
-            override
-            if override in {"none", "delta_staging", "delta_output"}
-            else "none"
-        )
+        cache_policy = override if override in {"none", "delta_staging", "delta_output"} else "none"
     else:
         cache_policy = _semantic_cache_policy_for_row(
             row,

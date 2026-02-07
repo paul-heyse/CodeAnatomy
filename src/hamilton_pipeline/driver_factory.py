@@ -71,6 +71,7 @@ if TYPE_CHECKING:
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.graph_snapshot import GraphSnapshotHook
     from relspec.execution_plan import ExecutionPlan
+    from semantics.program_manifest import ManifestDatasetResolver
 
 try:
     from hamilton_sdk import adapters as hamilton_adapters
@@ -555,11 +556,11 @@ def _cdf_impacted_tasks(
     view_ctx: ViewGraphContext,
     plan: ExecutionPlan,
     config: Mapping[str, JsonValue],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[tuple[str, ...] | None, str | None]:
     state_dir = _resolve_incremental_state_dir(config)
     if state_dir is None:
         return None, None
-    from datafusion_engine.dataset.registry import dataset_catalog_from_profile
     from relspec.incremental import CdfImpactRequest, impacted_tasks_for_cdf
     from semantics.incremental.cdf_cursors import CdfCursorStore
     from semantics.incremental.delta_context import DeltaAccessContext
@@ -576,7 +577,15 @@ def _cdf_impacted_tasks(
     context = DeltaAccessContext(runtime=runtime)
     state_store = StateStore(root=state_dir)
     cursor_store = CdfCursorStore(cursors_path=state_store.cdf_cursors_path())
-    catalog = dataset_catalog_from_profile(view_ctx.profile)
+    if dataset_resolver is None:
+        return None, str(state_dir)
+    from datafusion_engine.dataset.registry import DatasetCatalog
+
+    catalog = DatasetCatalog()
+    for name in dataset_resolver.names():
+        loc = dataset_resolver.location(name)
+        if loc is not None:
+            catalog.register(name, loc, overwrite=True)
     impacted = impacted_tasks_for_cdf(
         CdfImpactRequest(
             graph=plan.task_graph,

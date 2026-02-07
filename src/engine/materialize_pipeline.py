@@ -11,9 +11,6 @@ import pyarrow as pa
 from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import DeterminismTier
 from datafusion_engine.arrow.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
-from datafusion_engine.dataset.registry import (
-    dataset_catalog_from_profile,
-)
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.lineage.diagnostics import recorder_for_profile
@@ -43,6 +40,7 @@ from utils.value_coercion import coerce_to_recordbatch_reader
 if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import SessionRuntime
+    from semantics.program_manifest import ManifestDatasetResolver
     from semantics.runtime import CachePolicy as SemanticCachePolicy
 
 
@@ -248,18 +246,21 @@ def _plan_view_scan_units(
     bundle: DataFusionPlanBundle,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
     from datafusion_engine.lineage.datafusion import extract_lineage
     from datafusion_engine.lineage.scan import plan_scan_unit
 
+    if dataset_resolver is None:
+        msg = "dataset_resolver is required for _plan_view_scan_units; the dataset_catalog_from_profile fallback has been removed"
+        raise ValueError(msg)
     session_runtime = runtime_profile.session_runtime()
-    catalog = dataset_catalog_from_profile(runtime_profile)
     scan_units: dict[str, ScanUnit] = {}
     for scan in extract_lineage(
         bundle.optimized_logical_plan,
         udf_snapshot=bundle.artifacts.udf_snapshot,
     ).scans:
-        location = catalog.get(scan.dataset_name) if catalog.has(scan.dataset_name) else None
+        location = dataset_resolver.location(scan.dataset_name)
         if location is None:
             continue
         unit = plan_scan_unit(
@@ -279,6 +280,7 @@ def build_view_product(
     session_runtime: SessionRuntime,
     policy: MaterializationPolicy,
     view_id: str | None = None,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> PlanProduct:
     """Execute a registered view and return a PlanProduct wrapper.
 
@@ -287,6 +289,7 @@ def build_view_product(
         session_runtime: Session runtime to execute with.
         policy: Materialization policy.
         view_id: Optional explicit view identifier.
+        dataset_resolver: Optional manifest-based dataset resolver.
 
     Returns:
         PlanProduct: Result.
@@ -299,6 +302,10 @@ def build_view_product(
         options=OtelBootstrapOptions(resource_overrides={"codeanatomy.view_name": view_name}),
     )
     profile = session_runtime.profile
+    if dataset_resolver is None:
+        from semantics.compile_context import CompileContext
+
+        dataset_resolver = CompileContext(runtime_profile=profile).dataset_bindings()
     if is_semantic_view(view_name):
         ensure_semantic_views_registered(session_runtime.ctx, view_names=[view_name])
     if not session_runtime.ctx.table_exist(view_name):
@@ -312,7 +319,11 @@ def build_view_product(
         session_runtime=session_runtime,
         runtime_profile=profile,
     )
-    scan_units, scan_keys = _plan_view_scan_units(bundle, runtime_profile=profile)
+    scan_units, scan_keys = _plan_view_scan_units(
+        bundle,
+        runtime_profile=profile,
+        dataset_resolver=dataset_resolver,
+    )
     if scan_units:
         from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
 
@@ -320,15 +331,13 @@ def build_view_product(
             session_runtime.ctx,
             scan_units=scan_units,
             runtime_profile=profile,
+            dataset_resolver=dataset_resolver,
         )
-    view_artifact = (
-        profile.view_registry.entries.get(view_name) if profile.view_registry is not None else None
+    semantic_cache_policy: SemanticCachePolicy | None = (
+        profile.view_registry.entries[view_name].cache_policy
+        if profile.view_registry is not None and view_name in profile.view_registry.entries
+        else profile.data_sources.semantic_output.cache_overrides.get(view_name)
     )
-    semantic_cache_policy: SemanticCachePolicy | None = None
-    if view_artifact is not None:
-        semantic_cache_policy = view_artifact.cache_policy
-    else:
-        semantic_cache_policy = profile.data_sources.semantic_output.cache_overrides.get(view_name)
     prefer_reader = _resolve_prefer_reader(policy=policy)
     cache_decision = resolve_materialization_cache_decision(
         policy=policy,
@@ -420,15 +429,23 @@ def write_extract_outputs(
     data: TableLike | RecordBatchReaderLike | Iterable[pa.RecordBatch],
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> None:
     """Write extract outputs using DataFusion-native paths when configured.
 
     Emits diagnostics for extract output quality and write behavior.
+
+    Raises:
+    ------
+    ValueError
+        If *dataset_resolver* is ``None``.
     """
+    if dataset_resolver is None:
+        msg = "dataset_resolver is required for write_extract_outputs; the dataset_catalog_from_profile fallback has been removed"
+        raise ValueError(msg)
     record_schema_snapshots_for_profile(runtime_profile)
     recorder = EngineEventRecorder(runtime_profile)
-    catalog = dataset_catalog_from_profile(runtime_profile)
-    location = catalog.get(name) if catalog.has(name) else None
+    location = dataset_resolver.location(name)
     if location is None:
         recorder.record_extract_quality_events(
             [
@@ -491,6 +508,7 @@ def write_extract_outputs(
         sql_options=runtime_profile.sql_options(),
         recorder=recorder_for_profile(runtime_profile, operation_id=f"extract_write::{name}"),
         runtime_profile=runtime_profile,
+        dataset_resolver=dataset_resolver,
     )
     try:
         write_result = pipeline.write(

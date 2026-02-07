@@ -57,13 +57,32 @@ _CHECKS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "legacy cpg_edges_v1 reference",
         ("cpg_edges_v1",),
     ),
+    (
+        "orchestration-layer dataset_catalog_from_profile usage",
+        ("dataset_catalog_from_profile(",),
+    ),
+    (
+        "task_execution-local extract adapter executor mapping",
+        ("_EXTRACT_ADAPTER_EXECUTORS",),
+    ),
 )
 
 _ALLOWLIST_SUFFIXES: tuple[str, ...] = (
     "src/semantics/ir_pipeline.py",
     "src/semantics/compile_context.py",
-    "src/semantics/naming_compat.py",
     "tests/semantics/test_semantic_ir_snapshot.py",
+)
+
+# Compile-boundary modules allowed to call dataset_catalog_from_profile.
+_CATALOG_FROM_PROFILE_ALLOWLIST: tuple[str, ...] = (
+    # Compile-boundary resolver construction.
+    "src/semantics/compile_context.py",
+    # Dataset registry source module defining dataset_catalog_from_profile itself.
+    "src/datafusion_engine/dataset/registry.py",
+)
+
+_EXTRACT_EXECUTOR_ALLOWLIST: tuple[str, ...] = (
+    "src/hamilton_pipeline/modules/extract_execution_registry.py",
 )
 
 
@@ -74,6 +93,23 @@ def _iter_python_files(root: Path) -> list[Path]:
 def _is_allowlisted(path: Path) -> bool:
     normalized = str(path).replace("\\", "/")
     return any(normalized.endswith(suffix) for suffix in _ALLOWLIST_SUFFIXES)
+
+
+def _is_catalog_from_profile_allowlisted(path: Path) -> bool:
+    """Check if a file is in the compile-boundary allowlist for dataset_catalog_from_profile."""
+    normalized = str(path).replace("\\", "/")
+    return any(
+        normalized.endswith(suffix) if not suffix.endswith("/") else suffix in normalized
+        for suffix in _CATALOG_FROM_PROFILE_ALLOWLIST
+    )
+
+
+def _is_extract_executor_allowlisted(path: Path) -> bool:
+    normalized = str(path).replace("\\", "/")
+    return any(
+        normalized.endswith(suffix) if not suffix.endswith("/") else suffix in normalized
+        for suffix in _EXTRACT_EXECUTOR_ALLOWLIST
+    )
 
 
 def _find_violations(root: Path) -> list[str]:
@@ -87,6 +123,16 @@ def _find_violations(root: Path) -> list[str]:
                     or "cpg_nodes_v1" in patterns
                     or "cpg_edges_v1" in patterns
                 ) and _is_allowlisted(path):
+                    continue
+                if (
+                    "dataset_catalog_from_profile(" in patterns
+                    and _is_catalog_from_profile_allowlisted(path)
+                ):
+                    continue
+                if (
+                    "_EXTRACT_ADAPTER_EXECUTORS" in patterns
+                    and _is_extract_executor_allowlisted(path)
+                ):
                     continue
                 findings.append(f"{label}: {path}")
     return findings

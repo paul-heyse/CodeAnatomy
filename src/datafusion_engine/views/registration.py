@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.udf.platform import RustUdfPlatformOptions
     from datafusion_engine.views.graph import ViewNode
-    from semantics.program_manifest import SemanticProgramManifest
+    from semantics.program_manifest import ManifestDatasetResolver, SemanticProgramManifest
 
 
 @dataclass
@@ -31,6 +31,7 @@ class _ViewGraphRegistrationContext:
     runtime_profile: DataFusionRuntimeProfile
     scan_units: Sequence[ScanUnit]
     semantic_manifest: SemanticProgramManifest
+    dataset_resolver: ManifestDatasetResolver | None = None
     snapshot: Mapping[str, object] | None = None
     nodes: Sequence[ViewNode] = ()
 
@@ -70,6 +71,7 @@ class _ViewGraphRegistrationContext:
             self.ctx,
             scan_units=self.scan_units,
             runtime_profile=self.runtime_profile,
+            dataset_resolver=self.dataset_resolver,
         )
 
     def build_view_nodes(self) -> None:
@@ -97,6 +99,7 @@ class _ViewGraphRegistrationContext:
                 runtime_options=ViewGraphRuntimeOptions(
                     runtime_profile=self.runtime_profile,
                     require_artifacts=True,
+                    dataset_resolver=self.dataset_resolver,
                 ),
             )
         except Exception as exc:
@@ -172,6 +175,7 @@ def ensure_view_graph(
     runtime_profile: DataFusionRuntimeProfile | None,
     scan_units: Sequence[ScanUnit] = (),
     semantic_manifest: SemanticProgramManifest,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> Mapping[str, object]:
     """Install UDF platform (if needed) and register the semantic view graph.
 
@@ -180,6 +184,7 @@ def ensure_view_graph(
         runtime_profile: Active runtime profile.
         scan_units: Optional scan units for registration context.
         semantic_manifest: Compiled semantic program manifest.
+        dataset_resolver: Optional manifest-based dataset resolver.
 
     Returns:
         Mapping[str, object]: Result.
@@ -196,6 +201,7 @@ def ensure_view_graph(
         runtime_profile=runtime_profile,
         scan_units=scan_units,
         semantic_manifest=semantic_manifest,
+        dataset_resolver=dataset_resolver,
     )
     RegistrationPhaseOrchestrator().run(_view_graph_phases(registration))
     if registration.snapshot is None:

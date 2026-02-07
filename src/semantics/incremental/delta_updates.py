@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.arrow.metadata import encoding_policy_from_schema
-from datafusion_engine.dataset.registry import DatasetLocation, dataset_catalog_from_profile
+from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta import DeltaMutationRequest
 from datafusion_engine.extract.bundles import dataset_name_for_output
 from datafusion_engine.io.write import WriteMode
@@ -44,10 +44,9 @@ def _dataset_location(
 ) -> DatasetLocation | None:
     if dataset_name is None:
         return None
-    catalog = dataset_catalog_from_profile(context.runtime.profile)
-    if not catalog.has(dataset_name):
-        return None
-    return catalog.get(dataset_name)
+    from semantics.compile_context import dataset_bindings_for_profile
+
+    return dataset_bindings_for_profile(context.runtime.profile).location(dataset_name)
 
 
 @dataclass(frozen=True)

@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from datafusion_engine.views.graph import ViewNode
     from semantics.config import SemanticConfig
     from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
+    from semantics.program_manifest import ManifestDatasetResolver
     from semantics.spec_registry import SemanticNormalizationSpec, SemanticSpecIndex
 
 
@@ -128,6 +129,7 @@ class _IncrementalOutputRequest:
     input_mapping: Mapping[str, str]
     use_cdf: bool
     requested_outputs: Collection[str] | None
+    dataset_resolver: ManifestDatasetResolver | None = None
 
 
 @dataclass(frozen=True)
@@ -541,6 +543,7 @@ def _incremental_requested_outputs(
         runtime_profile=request.runtime_profile,
         runtime_config=request.runtime_config,
         input_mapping=request.input_mapping,
+        dataset_resolver=request.dataset_resolver,
     )
     if changed_inputs is None:
         return None
@@ -555,25 +558,27 @@ def _cdf_changed_inputs(
     runtime_profile: DataFusionRuntimeProfile,
     runtime_config: SemanticRuntimeConfig,
     input_mapping: Mapping[str, str],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> set[str] | None:
-    from datafusion_engine.dataset.registry import dataset_catalog_from_profile
     from semantics.incremental.cdf_cursors import CdfCursorStore
 
     _ = ctx
+    if dataset_resolver is None:
+        msg = "dataset_resolver is required for _cdf_changed_inputs."
+        raise ValueError(msg)
     cursor_store = runtime_config.cdf_cursor_store or runtime_profile.data_sources.cdf_cursor_store
     if cursor_store is None:
         return None
     if not isinstance(cursor_store, CdfCursorStore):
         return None
     delta_service = runtime_profile.delta_ops.delta_service()
-    catalog = dataset_catalog_from_profile(runtime_profile)
     changed: set[str] = set()
     for canonical, source in input_mapping.items():
         if canonical == "file_line_index_v1":
             continue
-        location = catalog.get(canonical) if catalog.has(canonical) else None
+        location = dataset_resolver.location(canonical)
         if location is None:
-            location = catalog.get(source) if catalog.has(source) else None
+            location = dataset_resolver.location(source)
         if location is None:
             continue
         storage_options = dict(location.storage_options)
@@ -1330,11 +1335,16 @@ def build_cpg(
             "codeanatomy.has_config": resolved.config is not None,
         },
     ):
+        from semantics.compile_context import CompileContext, compile_semantic_program
+
+        bindings_ctx = CompileContext(runtime_profile=runtime_profile)
+        early_resolver = bindings_ctx.dataset_bindings()
         input_mapping, use_cdf = _resolve_semantic_input_mapping(
             ctx,
             runtime_profile=runtime_profile,
             use_cdf=effective_use_cdf,
             cdf_inputs=resolved.cdf_inputs,
+            dataset_resolver=early_resolver,
         )
         from datafusion_engine.udf.runtime import rust_udf_snapshot
         from datafusion_engine.views.graph import (
@@ -1342,7 +1352,6 @@ def build_cpg(
             ViewGraphRuntimeOptions,
             register_view_graph,
         )
-        from semantics.compile_context import compile_semantic_program
         from semantics.validation import SemanticInputValidationError
 
         snapshot = rust_udf_snapshot(ctx)
@@ -1355,6 +1364,7 @@ def build_cpg(
                 input_mapping=input_mapping,
                 use_cdf=use_cdf,
                 requested_outputs=resolved.requested_outputs,
+                dataset_resolver=early_resolver,
             )
         )
         if incremental_outputs is not None:
@@ -1390,7 +1400,10 @@ def build_cpg(
             ctx,
             nodes=nodes,
             snapshot=snapshot,
-            runtime_options=ViewGraphRuntimeOptions(runtime_profile=runtime_profile),
+            runtime_options=ViewGraphRuntimeOptions(
+                runtime_profile=runtime_profile,
+                dataset_resolver=early_resolver,
+            ),
             options=ViewGraphOptions(
                 overwrite=True,
                 temporary=False,
@@ -1877,7 +1890,7 @@ def build_cpg_from_inferred_deps(
         If runtime profile or semantic configuration is invalid.
     """
     from datafusion_engine.views.bundle_extraction import extract_lineage_from_bundle
-    from semantics.compile_context import compile_semantic_program
+    from semantics.compile_context import CompileContext, compile_semantic_program
     from semantics.validation import SemanticInputValidationError
 
     resolved = options or CpgBuildOptions()
@@ -1903,11 +1916,13 @@ def build_cpg_from_inferred_deps(
         )
 
         deps: dict[str, object] = {}
+        early_resolver = CompileContext(runtime_profile=runtime_profile).dataset_bindings()
         input_mapping, use_cdf = _resolve_semantic_input_mapping(
             ctx,
             runtime_profile=runtime_profile,
             use_cdf=effective_use_cdf,
             cdf_inputs=resolved.cdf_inputs,
+            dataset_resolver=early_resolver,
         )
         resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
         incremental_outputs = _incremental_requested_outputs(
@@ -1918,6 +1933,7 @@ def build_cpg_from_inferred_deps(
                 input_mapping=input_mapping,
                 use_cdf=use_cdf,
                 requested_outputs=resolved.requested_outputs,
+                dataset_resolver=early_resolver,
             )
         )
         if incremental_outputs is not None:
@@ -1972,6 +1988,7 @@ def _resolve_semantic_input_mapping(
     runtime_profile: DataFusionRuntimeProfile | None,
     use_cdf: bool | None,
     cdf_inputs: Mapping[str, str] | None,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[dict[str, str], bool]:
     from semantics.validation import resolve_semantic_input_mapping
 
@@ -1988,6 +2005,7 @@ def _resolve_semantic_input_mapping(
         use_cdf=use_cdf,
         cdf_inputs=cdf_inputs,
         inputs=cdf_candidates,
+        dataset_resolver=dataset_resolver,
     )
 
     if not resolved_cdf:
@@ -2007,6 +2025,7 @@ def _resolve_cdf_inputs(
     use_cdf: bool | None,
     cdf_inputs: Mapping[str, str] | None,
     inputs: Sequence[str],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> Mapping[str, str] | None:
     if use_cdf is False:
         return None
@@ -2015,11 +2034,15 @@ def _resolve_cdf_inputs(
             msg = "CDF input registration requires a runtime profile."
             raise ValueError(msg)
         return dict(cdf_inputs) if cdf_inputs else None
-    if use_cdf is None and not _has_cdf_inputs(runtime_profile, inputs=inputs):
+    if use_cdf is None and not _has_cdf_inputs(
+        runtime_profile, inputs=inputs, dataset_resolver=dataset_resolver
+    ):
         return dict(cdf_inputs) if cdf_inputs else None
     from datafusion_engine.session.runtime import register_cdf_inputs_for_profile
 
-    mapping = register_cdf_inputs_for_profile(runtime_profile, ctx, table_names=inputs)
+    mapping = register_cdf_inputs_for_profile(
+        runtime_profile, ctx, table_names=inputs, dataset_resolver=dataset_resolver
+    )
     if cdf_inputs:
         mapping = {**mapping, **cdf_inputs}
     return mapping or None
@@ -2029,15 +2052,16 @@ def _has_cdf_inputs(
     runtime_profile: DataFusionRuntimeProfile,
     *,
     inputs: Sequence[str],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> bool:
-    from datafusion_engine.dataset.registry import (
-        dataset_catalog_from_profile,
-        resolve_datafusion_provider,
-    )
+    from datafusion_engine.dataset.registry import resolve_datafusion_provider
 
-    catalog = dataset_catalog_from_profile(runtime_profile)
+    _ = runtime_profile
+    if dataset_resolver is None:
+        msg = "dataset_resolver is required for _has_cdf_inputs."
+        raise ValueError(msg)
     for name in inputs:
-        location = catalog.get(name) if catalog.has(name) else None
+        location = dataset_resolver.location(name)
         if location is None:
             continue
         if location.delta_cdf_options is not None:

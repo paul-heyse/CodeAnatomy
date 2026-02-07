@@ -22,9 +22,6 @@ from datafusion_engine.arrow.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
-from datafusion_engine.dataset.registry import (
-    dataset_catalog_from_profile,
-)
 from datafusion_engine.expr.query_spec import apply_query_spec
 from datafusion_engine.extract.registry import dataset_query, dataset_schema, extract_metadata
 from datafusion_engine.io.ingest import datafusion_from_arrow
@@ -66,6 +63,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import SessionRuntime
+    from semantics.program_manifest import ManifestDatasetResolver
 
 
 @dataclass(frozen=True)
@@ -436,13 +434,14 @@ def extract_dataset_location_or_raise(
 
 
 def _dataset_location(
-    runtime_profile: DataFusionRuntimeProfile,
+    _runtime_profile: DataFusionRuntimeProfile,
     name: str,
+    *,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> DatasetLocation | None:
-    catalog = dataset_catalog_from_profile(runtime_profile)
-    if not catalog.has(name):
+    if dataset_resolver is None:
         return None
-    return catalog.get(name)
+    return dataset_resolver.location(name)
 
 
 def _streaming_supported_for_extract(
@@ -486,18 +485,20 @@ def _plan_scan_units_for_extract(
     plan: DataFusionPlanBundle,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
     from datafusion_engine.lineage.datafusion import extract_lineage
     from datafusion_engine.lineage.scan import plan_scan_unit
 
+    if dataset_resolver is None:
+        return (), ()
     session_runtime = runtime_profile.session_runtime()
-    catalog = dataset_catalog_from_profile(runtime_profile)
     scan_units: dict[str, ScanUnit] = {}
     for scan in extract_lineage(
         plan.optimized_logical_plan,
         udf_snapshot=plan.artifacts.udf_snapshot,
     ).scans:
-        location = catalog.get(scan.dataset_name) if catalog.has(scan.dataset_name) else None
+        location = dataset_resolver.location(scan.dataset_name)
         if location is None:
             continue
         unit = plan_scan_unit(

@@ -7,11 +7,16 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from semantics.naming import canonical_output_name
-from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
+from semantics.program_manifest import (
+    ManifestDatasetBindings,
+    ManifestDatasetResolver,
+    SemanticProgramManifest,
+)
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from datafusion_engine.session.facade import DataFusionExecutionFacade
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.ir import SemanticIR
     from semantics.validation.policy import SemanticInputValidationPolicy
@@ -99,6 +104,24 @@ class CompileContext:
         return replace(manifest, validation=validation).with_fingerprint()
 
 
+@dataclass(frozen=True)
+class SemanticExecutionContext:
+    """Shared execution context carrying compiled semantic authorities."""
+
+    manifest: SemanticProgramManifest
+    dataset_resolver: ManifestDatasetResolver
+    runtime_profile: DataFusionRuntimeProfile
+    ctx: SessionContext
+    facade: DataFusionExecutionFacade | None = None
+
+
+def dataset_bindings_for_profile(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> ManifestDatasetBindings:
+    """Resolve manifest dataset bindings from the compile boundary."""
+    return CompileContext(runtime_profile=runtime_profile).dataset_bindings()
+
+
 def compile_semantic_program(
     *,
     runtime_profile: DataFusionRuntimeProfile,
@@ -122,4 +145,38 @@ def compile_semantic_program(
     ).compile(ctx=ctx)
 
 
-__all__ = ["CompileContext", "compile_semantic_program", "semantic_ir_for_outputs"]
+def build_semantic_execution_context(
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    outputs: Collection[str] | None = None,
+    policy: SemanticInputValidationPolicy = "schema_only",
+    ctx: SessionContext | None = None,
+    input_mapping: Mapping[str, str] | None = None,
+    facade: DataFusionExecutionFacade | None = None,
+) -> SemanticExecutionContext:
+    """Compile semantic artifacts and return a shared execution context."""
+    compile_ctx = CompileContext(
+        runtime_profile=runtime_profile,
+        outputs=outputs,
+        policy=policy,
+        input_mapping=input_mapping,
+    )
+    active_ctx = ctx or runtime_profile.session_context()
+    manifest = compile_ctx.compile(ctx=active_ctx)
+    return SemanticExecutionContext(
+        manifest=manifest,
+        dataset_resolver=manifest.dataset_bindings,
+        runtime_profile=runtime_profile,
+        ctx=active_ctx,
+        facade=facade,
+    )
+
+
+__all__ = [
+    "CompileContext",
+    "SemanticExecutionContext",
+    "build_semantic_execution_context",
+    "compile_semantic_program",
+    "dataset_bindings_for_profile",
+    "semantic_ir_for_outputs",
+]

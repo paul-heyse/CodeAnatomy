@@ -11,7 +11,6 @@ from datafusion import DataFrame, SessionContext, col
 
 from cache.diskcache_factory import build_deque, build_index
 from datafusion_engine.arrow.interop import TableLike
-from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.schema.introspection import table_names_snapshot
 from extract.coordination.context import FileContext
@@ -25,6 +24,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from extract.scanning.scope_manifest import ScopeManifest
+    from semantics.program_manifest import ManifestDatasetResolver
 
 
 class _ArrowBatch(Protocol):
@@ -187,13 +187,15 @@ def _worklist_stream(
     *,
     repo_files: TableLike,
     output_table: str,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> Iterator[FileContext]:
     session_runtime = runtime_profile.session_runtime()
     df_ctx = session_runtime.ctx
     repo_name = f"__repo_files_{uuid7_hex()}"
     output_exists = _table_exists(df_ctx, output_table)
-    catalog = dataset_catalog_from_profile(runtime_profile)
-    output_location = catalog.get(output_table) if catalog.has(output_table) else None
+    output_location = (
+        dataset_resolver.location(output_table) if dataset_resolver is not None else None
+    )
     use_output = output_exists or output_location is not None
     output_name = output_table if use_output else None
     builder = worklist_builder(
@@ -219,6 +221,7 @@ def _worklist_stream(
             df_ctx,
             scan_units=(scan_unit,),
             runtime_profile=runtime_profile,
+            dataset_resolver=dataset_resolver,
         )
     with (
         _registered_table(df_ctx, name=repo_name, table=repo_files),

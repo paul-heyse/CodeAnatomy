@@ -69,6 +69,7 @@ def execute_plan_bundle(
             ctx,
             scan_units=resolved_units,
             runtime_profile=resolved_options.runtime_profile,
+            dataset_resolver=resolved_options.dataset_resolver,
         )
     # Lazy import to avoid circular dependency with facade.py
     from datafusion_engine.session.facade import DataFusionExecutionFacade

@@ -261,12 +261,42 @@ def _can_use_listing_table(location: DatasetLocation) -> bool:
     return location.files is None and location.filesystem is None
 
 
+_FORMAT_FILE_EXTENSIONS: dict[str, str] = {
+    "parquet": ".parquet",
+    "csv": ".csv",
+    "json": ".json",
+    "avro": ".avro",
+    "arrow": ".arrow",
+}
+
+
+def _resolve_file_extension(
+    location: DatasetLocation,
+    scan: DataFusionScanOptions | None,
+) -> str | None:
+    """Resolve the file extension for a listing table registration.
+
+    Return the explicit scan file extension when provided, otherwise infer
+    from the location format.  Returns ``None`` only when no format
+    information is available.
+
+    Returns:
+    -------
+    str | None
+        Resolved file extension (e.g. ``".parquet"``).
+    """
+    if scan is not None and scan.file_extension is not None:
+        return scan.file_extension
+    fmt = (location.format or "").lower()
+    return _FORMAT_FILE_EXTENSIONS.get(fmt)
+
+
 def _register_listing_table_native(
     context: ListingRegistrationContext,
     *,
     scan: DataFusionScanOptions | None,
 ) -> None:
-    file_extension = scan.file_extension if scan is not None else None
+    file_extension = _resolve_file_extension(context.location, scan)
     partition_cols = scan.partition_cols_pyarrow() if scan is not None else ()
     file_sort_order = scan.file_sort_order if scan is not None else ()
     arrow_schema = cast("pa.Schema | None", context.options.schema)

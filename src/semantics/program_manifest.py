@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from utils.hashing import hash_msgpack_canonical
 
@@ -31,6 +31,135 @@ class ManifestDatasetBindings:
             for name, location in sorted(self.locations.items())
         }
 
+    def to_payload(self) -> dict[str, object]:
+        """Return canonical payload for compatibility callsites."""
+        return self.payload()
+
+    def location(self, name: str) -> DatasetLocation | None:
+        """Return dataset location for a name, or None if not found.
+
+        Parameters
+        ----------
+        name
+            Dataset name to resolve.
+
+        Returns:
+        -------
+        DatasetLocation | None
+            Location if found, None otherwise.
+        """
+        return self.locations.get(name)
+
+    def has_location(self, name: str) -> bool:
+        """Check if a dataset location exists.
+
+        Parameters
+        ----------
+        name
+            Dataset name to check.
+
+        Returns:
+        -------
+        bool
+            True if location exists.
+        """
+        return name in self.locations
+
+    def names(self) -> Sequence[str]:
+        """Return all dataset names in the resolver.
+
+        Returns:
+        -------
+        Sequence[str]
+            All dataset names.
+        """
+        return tuple(self.locations.keys())
+
+    def require_location(self, name: str) -> DatasetLocation:
+        """Return dataset location or raise structured KeyError.
+
+        Parameters
+        ----------
+        name
+            Dataset name to resolve.
+
+        Returns:
+        -------
+        DatasetLocation
+            Location for the dataset.
+
+        Raises:
+        -------
+        KeyError
+            If dataset location is not found.
+        """
+        location = self.locations.get(name)
+        if location is None:
+            msg = f"Required dataset location not found: {name!r}"
+            raise KeyError(msg)
+        return location
+
+    def subset(self, names: Sequence[str]) -> ManifestDatasetBindings:
+        """Return a new bindings object filtered to the given names.
+
+        Parameters
+        ----------
+        names
+            Dataset names to include.
+
+        Returns:
+        -------
+        ManifestDatasetBindings
+            Filtered bindings.
+        """
+        return ManifestDatasetBindings(
+            locations={n: self.locations[n] for n in names if n in self.locations}
+        )
+
+
+class ManifestDatasetResolver(Protocol):
+    """Read-only protocol for resolving dataset locations from manifest bindings."""
+
+    def location(self, name: str) -> DatasetLocation | None:
+        """Return dataset location for a name, or None if not found.
+
+        Parameters
+        ----------
+        name
+            Dataset name to resolve.
+
+        Returns:
+        -------
+        DatasetLocation | None
+            Location if found, None otherwise.
+        """
+        ...
+
+    def has_location(self, name: str) -> bool:
+        """Check if a dataset location exists.
+
+        Parameters
+        ----------
+        name
+            Dataset name to check.
+
+        Returns:
+        -------
+        bool
+            True if location exists.
+        """
+        ...
+
+    def names(self) -> Sequence[str]:
+        """Return all dataset names in the resolver.
+
+        Returns:
+        -------
+        Sequence[str]
+            All dataset names.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class SemanticProgramManifest:
@@ -44,6 +173,7 @@ class SemanticProgramManifest:
     validation: SemanticInputValidationResult | None = None
     udf_snapshot: Mapping[str, object] | None = None
     fingerprint: str | None = None
+    manifest_version: int = 1
 
     def payload(self) -> dict[str, object]:
         """Return a JSON-serializable payload for diagnostics."""
@@ -71,6 +201,10 @@ class SemanticProgramManifest:
             "fingerprint": self.fingerprint,
         }
 
+    def to_payload(self) -> dict[str, object]:
+        """Return canonical payload for compatibility callsites."""
+        return self.payload()
+
     def with_fingerprint(self) -> SemanticProgramManifest:
         """Return manifest with deterministic fingerprint populated."""
         digest = hash_msgpack_canonical(self.payload())
@@ -86,4 +220,4 @@ class SemanticProgramManifest:
         )
 
 
-__all__ = ["ManifestDatasetBindings", "SemanticProgramManifest"]
+__all__ = ["ManifestDatasetBindings", "ManifestDatasetResolver", "SemanticProgramManifest"]

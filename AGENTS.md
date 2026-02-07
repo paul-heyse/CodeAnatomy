@@ -14,6 +14,7 @@ Agent operating protocol for the CodeAnatomy codebase.
 - **Bootstrap first** - Run `scripts/bootstrap_codex.sh && uv sync` on fresh clones
 - **Ruff is canonical** - All style rules live in `pyproject.toml`; do not duplicate
 - **pyrefly is the strict gate** - pyright runs in "basic" mode for IDE support
+- **Do not use any git commands that modify files** - this includes stash, checkout, etc. Only use git for informational purposes
 
 **Project:** CodeAnatomy is an inference-driven Code Property Graph (CPG) builder. It extracts
 evidence from Python source (LibCST, AST, symtable, bytecode, SCIP, tree-sitter) and compiles

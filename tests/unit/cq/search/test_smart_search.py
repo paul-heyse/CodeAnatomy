@@ -839,9 +839,7 @@ class TestSmartSearch:
         )
         assert result.evidence
         anchored_files = [
-            finding.anchor.file
-            for finding in result.evidence
-            if finding.anchor is not None
+            finding.anchor.file for finding in result.evidence if finding.anchor is not None
         ]
         assert anchored_files
         assert all(file.endswith("tools/cq/search/classifier.py") for file in anchored_files)

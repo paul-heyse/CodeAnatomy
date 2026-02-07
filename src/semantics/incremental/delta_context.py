@@ -15,7 +15,6 @@ from datafusion_engine.dataset.registration import (
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
-    dataset_catalog_from_profile,
     resolve_dataset_location,
 )
 from datafusion_engine.delta.maintenance import (
@@ -127,8 +126,9 @@ def register_delta_df(
     DataFrame
         DataFusion DataFrame for the registered Delta table.
     """
-    catalog = dataset_catalog_from_profile(context.runtime.profile)
-    profile_location = catalog.get(name) if catalog.has(name) else None
+    from semantics.compile_context import dataset_bindings_for_profile
+
+    profile_location = dataset_bindings_for_profile(context.runtime.profile).location(name)
     resolved_store = context.resolve_storage(table_uri=str(path))
     resolved_storage = resolved_store.storage_options or {}
     resolved_log_storage = resolved_store.log_storage_options or {}
@@ -200,8 +200,9 @@ def run_delta_maintenance_if_configured(
     if dataset_name is None:
         dataset_location = None
     else:
-        catalog = dataset_catalog_from_profile(runtime_profile)
-        dataset_location = catalog.get(dataset_name) if catalog.has(dataset_name) else None
+        from semantics.compile_context import dataset_bindings_for_profile
+
+        dataset_location = dataset_bindings_for_profile(runtime_profile).location(dataset_name)
     plan = resolve_delta_maintenance_plan(
         DeltaMaintenancePlanInput(
             dataset_location=dataset_location,

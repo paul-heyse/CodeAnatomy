@@ -75,8 +75,10 @@ from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.lineage.diagnostics import (
     DiagnosticsSink,
     ensure_recorder_sink,
-    record_artifact,
     record_events,
+)
+from datafusion_engine.lineage.diagnostics import (
+    record_artifact as _lineage_record_artifact,
 )
 from datafusion_engine.plan.cache import PlanCache, PlanProtoCache
 from datafusion_engine.registry_facade import RegistrationPhase, RegistrationPhaseOrchestrator
@@ -171,6 +173,27 @@ CacheEventHook = Callable[[DataFusionCacheEvent], None]
 SubstraitFallbackHook = Callable[[DataFusionSubstraitFallbackEvent], None]
 
 _TELEMETRY_MSGPACK_ENCODER = MSGPACK_ENCODER
+
+
+@lru_cache(maxsize=1)
+def _load_runtime_artifact_specs() -> None:
+    """Load artifact specs exactly once to avoid module import cycles."""
+    import serde_artifact_specs  # noqa: F401
+
+
+def _ensure_runtime_artifact_specs_registered() -> None:
+    """Ensure typed artifact specs are registered before artifact writes."""
+    _load_runtime_artifact_specs()
+
+
+def record_artifact(
+    profile: DataFusionRuntimeProfile,
+    name: ArtifactSpec | str,
+    payload: Mapping[str, object],
+) -> None:
+    """Record an artifact after ensuring artifact-spec side effects are loaded."""
+    _ensure_runtime_artifact_specs_registered()
+    _lineage_record_artifact(profile, name, payload)
 
 
 def _encode_telemetry_msgpack(payload: object) -> bytes:
@@ -535,7 +558,7 @@ def record_delta_session_defaults(
     if profile.diagnostics.diagnostics_sink is None:
         return
     profile.record_artifact(
-        "datafusion_delta_session_defaults_v1",
+        DATAFUSION_DELTA_SESSION_DEFAULTS_SPEC,
         {
             "enabled": profile.features.enable_delta_session_defaults,
             "available": available,
@@ -585,7 +608,10 @@ def record_schema_snapshots_for_profile(profile: DataFusionRuntimeProfile) -> No
             payload["datafusion_version"] = version
     except (RuntimeError, TypeError, ValueError) as exc:
         payload["error"] = str(exc)
-    profile.record_artifact("datafusion_schema_introspection_v1", payload)
+    profile.record_artifact(
+        DATAFUSION_SCHEMA_INTROSPECTION_SPEC,
+        payload,
+    )
 
 
 def normalize_dataset_locations_for_profile(
@@ -1894,7 +1920,7 @@ def record_view_definition(
         return
     profile.view_registry.record(name=artifact.name, artifact=artifact)
     payload = artifact.diagnostics_payload(event_time_unix_ms=int(time.time() * 1000))
-    record_artifact(profile, "datafusion_view_artifacts_v4", payload)
+    record_artifact(profile, DATAFUSION_VIEW_ARTIFACTS_SPEC, payload)
 
 
 def _datafusion_version(ctx: SessionContext) -> str | None:
@@ -2191,7 +2217,10 @@ def diagnostics_plan_artifacts_hook(
                 normalized["plan_identity_hash"] = fingerprint_value
             else:
                 normalized["plan_identity_hash"] = "unknown_plan_identity"
-        recorder_sink.record_artifact("datafusion_plan_artifacts_v10", normalized)
+        recorder_sink.record_artifact(
+            DATAFUSION_PLAN_ARTIFACTS_SPEC,
+            normalized,
+        )
 
     return _hook
 
@@ -2209,7 +2238,10 @@ def diagnostics_semantic_diff_hook(
 
     def _hook(payload: Mapping[str, object]) -> None:
         recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
-        recorder_sink.record_artifact("datafusion_semantic_diff_v1", payload)
+        recorder_sink.record_artifact(
+            DATAFUSION_SEMANTIC_DIFF_SPEC,
+            payload,
+        )
 
     return _hook
 
@@ -2227,7 +2259,10 @@ def diagnostics_sql_ingest_hook(
 
     def _hook(payload: Mapping[str, object]) -> None:
         recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
-        recorder_sink.record_artifact("datafusion_sql_ingest_v1", payload)
+        recorder_sink.record_artifact(
+            DATAFUSION_SQL_INGEST_SPEC,
+            payload,
+        )
 
     return _hook
 
@@ -2245,7 +2280,10 @@ def diagnostics_arrow_ingest_hook(
 
     def _hook(payload: Mapping[str, object]) -> None:
         recorder_sink = ensure_recorder_sink(sink, session_id=_RUNTIME_SESSION_ID)
-        recorder_sink.record_artifact("datafusion_arrow_ingest_v1", payload)
+        recorder_sink.record_artifact(
+            DATAFUSION_ARROW_INGEST_SPEC,
+            payload,
+        )
 
     return _hook
 
@@ -3881,7 +3919,10 @@ class RuntimeProfileDeltaOps:
                 "metadata": dict(run.metadata),
                 "commit_metadata": commit_meta_payload,
             }
-            self.profile.record_artifact("datafusion_delta_commit_v1", payload)
+            self.profile.record_artifact(
+                DATAFUSION_DELTA_COMMIT_SPEC,
+                payload,
+            )
         return options, updated
 
     def finalize_delta_commit(
@@ -3908,7 +3949,10 @@ class RuntimeProfileDeltaOps:
             "status": "finalized",
             "metadata": dict(run.metadata),
         }
-        self.profile.record_artifact("datafusion_delta_commit_v1", payload)
+        self.profile.record_artifact(
+            DATAFUSION_DELTA_COMMIT_SPEC,
+            payload,
+        )
 
     def ensure_delta_plan_codecs(self, ctx: SessionContext) -> bool:
         """Install Delta plan codecs when enabled.
@@ -4609,14 +4653,20 @@ class DataFusionRuntimeProfile(
             ),
         )
         manifest = semantic_ctx.manifest
-        self.record_artifact("semantic_program_manifest_v1", manifest.payload())
+        self.record_artifact(
+            SEMANTIC_PROGRAM_MANIFEST_SPEC,
+            manifest.payload(),
+        )
         report = run_bootstrap_validation(
             self,
             request=resolved_request,
             ctx=active_ctx,
             manifest=manifest,
         )
-        self.record_artifact("zero_row_bootstrap_validation_v1", report.payload())
+        self.record_artifact(
+            ZERO_ROW_BOOTSTRAP_VALIDATION_SPEC,
+            report.payload(),
+        )
         if report.events:
             self.record_events(
                 "zero_row_bootstrap_events_v1",
@@ -4999,7 +5049,7 @@ class DataFusionRuntimeProfile(
         if missing:
             if self.diagnostics.diagnostics_sink is not None:
                 self.record_artifact(
-                    "datafusion_udf_validation_v1",
+                    DATAFUSION_UDF_VALIDATION_SPEC,
                     {
                         "event_time_unix_ms": int(time.time() * 1000),
                         "udf_catalog_policy": self.policies.udf_catalog_policy,
@@ -5196,7 +5246,10 @@ class DataFusionRuntimeProfile(
                 import json
 
                 payload["sql_parse_errors"] = json.dumps(parse_errors, default=str)
-        self.record_artifact("datafusion_schema_registry_validation_v1", payload)
+        self.record_artifact(
+            DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SPEC,
+            payload,
+        )
         return result
 
     def _record_catalog_autoload_snapshot(self, ctx: SessionContext) -> None:
@@ -5224,7 +5277,7 @@ class DataFusionRuntimeProfile(
             payload["tables"] = tables
         except (RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
-        self.record_artifact("datafusion_catalog_autoload_v1", payload)
+        self.record_artifact(DATAFUSION_CATALOG_AUTOLOAD_SPEC, payload)
 
     @staticmethod
     def _ast_feature_gates(
@@ -5271,7 +5324,7 @@ class DataFusionRuntimeProfile(
     def _record_ast_feature_gates(self, payload: Mapping[str, object]) -> None:
         if self.diagnostics.diagnostics_sink is None:
             return
-        self.record_artifact("datafusion_ast_feature_gates_v1", payload)
+        self.record_artifact(DATAFUSION_AST_FEATURE_GATES_SPEC, payload)
 
     def _record_ast_span_metadata(self, ctx: SessionContext) -> None:
         if self.diagnostics.diagnostics_sink is None:
@@ -5292,7 +5345,7 @@ class DataFusionRuntimeProfile(
         version = _datafusion_version(ctx)
         if version is not None:
             payload["datafusion_version"] = version
-        self.record_artifact("datafusion_ast_span_metadata_v1", payload)
+        self.record_artifact(DATAFUSION_AST_SPAN_METADATA_SPEC, payload)
 
     def _dataset_template(self, name: str) -> DatasetLocation | None:
         templates = self.data_sources.dataset_templates
@@ -5407,7 +5460,7 @@ class DataFusionRuntimeProfile(
                 list(resolved.delta_constraints) if resolved.delta_constraints else None
             ),
         }
-        self.record_artifact("datafusion_ast_dataset_v1", payload)
+        self.record_artifact(DATAFUSION_AST_DATASET_SPEC, payload)
 
     def _record_bytecode_registration(self, *, location: DatasetLocation) -> None:
         if self.diagnostics.diagnostics_sink is None:
@@ -5446,7 +5499,7 @@ class DataFusionRuntimeProfile(
                 list(resolved.delta_constraints) if resolved.delta_constraints else None
             ),
         }
-        self.record_artifact("datafusion_bytecode_dataset_v1", payload)
+        self.record_artifact(DATAFUSION_BYTECODE_DATASET_SPEC, payload)
 
     def _record_scip_registration(
         self,
@@ -5493,7 +5546,7 @@ class DataFusionRuntimeProfile(
             "observed_schema_identity_hash": snapshot.actual_fingerprint,
             "schema_match": snapshot.schema_match,
         }
-        self.record_artifact("datafusion_scip_datasets_v1", payload)
+        self.record_artifact(DATAFUSION_SCIP_DATASETS_SPEC, payload)
 
     def _validate_ast_catalog_autoload(self, ctx: SessionContext) -> None:
         catalog_location, catalog_format = self._effective_catalog_autoload()
@@ -5538,7 +5591,10 @@ class DataFusionRuntimeProfile(
         }
         if not ctx.table_exist("cst_schema_diagnostics"):
             payload["available"] = False
-            self.record_artifact("datafusion_cst_schema_diagnostics_v1", payload)
+            self.record_artifact(
+                DATAFUSION_CST_SCHEMA_DIAGNOSTICS_SPEC,
+                payload,
+            )
             return
         try:
             table = ctx.table("cst_schema_diagnostics").to_arrow_table()
@@ -5556,7 +5612,10 @@ class DataFusionRuntimeProfile(
             )
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
-        self.record_artifact("datafusion_cst_schema_diagnostics_v1", payload)
+        self.record_artifact(
+            DATAFUSION_CST_SCHEMA_DIAGNOSTICS_SPEC,
+            payload,
+        )
 
     def _record_tree_sitter_stats(self, ctx: SessionContext) -> None:
         if self.diagnostics.diagnostics_sink is None:
@@ -5579,7 +5638,7 @@ class DataFusionRuntimeProfile(
             )
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
-        self.record_artifact("datafusion_tree_sitter_stats_v1", payload)
+        self.record_artifact(DATAFUSION_TREE_SITTER_STATS_SPEC, payload)
 
     def _record_tree_sitter_view_schemas(self, ctx: SessionContext) -> None:
         if self.diagnostics.diagnostics_sink is None:
@@ -5616,7 +5675,7 @@ class DataFusionRuntimeProfile(
         if version is not None:
             payload["datafusion_version"] = version
         self.record_artifact(
-            "datafusion_tree_sitter_plan_schema_v1",
+            DATAFUSION_TREE_SITTER_PLAN_SCHEMA_SPEC,
             payload,
         )
 
@@ -5682,7 +5741,10 @@ class DataFusionRuntimeProfile(
                 errors[name] = str(exc)
         if errors:
             payload["errors"] = errors
-        self.record_artifact("datafusion_tree_sitter_cross_checks_v1", payload)
+        self.record_artifact(
+            DATAFUSION_TREE_SITTER_CROSS_CHECKS_SPEC,
+            payload,
+        )
         return payload
 
     def _record_cst_view_plans(self, ctx: SessionContext) -> None:
@@ -5707,7 +5769,7 @@ class DataFusionRuntimeProfile(
         version = _datafusion_version(ctx)
         if version is not None:
             payload["datafusion_version"] = version
-        self.record_artifact("datafusion_cst_view_plans_v1", payload)
+        self.record_artifact(DATAFUSION_CST_VIEW_PLANS_SPEC, payload)
 
     def _record_cst_dfschema_snapshots(self, ctx: SessionContext) -> None:
         if self.diagnostics.diagnostics_sink is None:
@@ -5731,7 +5793,7 @@ class DataFusionRuntimeProfile(
         version = _datafusion_version(ctx)
         if version is not None:
             payload["datafusion_version"] = version
-        self.record_artifact("datafusion_cst_dfschema_v1", payload)
+        self.record_artifact(DATAFUSION_CST_DFSCHEMA_SPEC, payload)
 
     def _record_bytecode_metadata(self, ctx: SessionContext) -> None:
         if self.diagnostics.diagnostics_sink is None:
@@ -5756,7 +5818,7 @@ class DataFusionRuntimeProfile(
             )
         except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
-        self.record_artifact("datafusion_bytecode_metadata_v1", payload)
+        self.record_artifact(DATAFUSION_BYTECODE_METADATA_SPEC, payload)
 
     def _record_schema_snapshots(self, ctx: SessionContext) -> None:
         if self.diagnostics.diagnostics_sink is None:
@@ -5794,7 +5856,7 @@ class DataFusionRuntimeProfile(
         except (RuntimeError, TypeError, ValueError) as exc:
             payload["error"] = str(exc)
         self.record_artifact(
-            "datafusion_schema_introspection_v1",
+            DATAFUSION_SCHEMA_INTROSPECTION_SPEC,
             payload,
         )
 
@@ -5982,7 +6044,7 @@ class DataFusionRuntimeProfile(
         )
         if advisory:
             self.record_artifact(
-                "schema_registry_validation_advisory_v1",
+                SCHEMA_REGISTRY_VALIDATION_ADVISORY_SPEC,
                 {
                     "event_time_unix_ms": int(time.time() * 1000),
                     "issues": advisory,
@@ -6021,7 +6083,7 @@ class DataFusionRuntimeProfile(
         if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
-            "datafusion_prepared_statements_v1",
+            DATAFUSION_PREPARED_STATEMENTS_SPEC,
             {
                 "name": statement.name,
                 "sql": statement.sql,
@@ -6068,7 +6130,7 @@ class DataFusionRuntimeProfile(
         if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
-            "datafusion_udf_registry_v1",
+            DATAFUSION_UDF_REGISTRY_SPEC,
             dict(snapshot),
         )
 
@@ -6076,7 +6138,7 @@ class DataFusionRuntimeProfile(
         if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
-            "datafusion_udf_docs_v1",
+            DATAFUSION_UDF_DOCS_SPEC,
             dict(docs),
         )
 
@@ -6084,7 +6146,7 @@ class DataFusionRuntimeProfile(
         if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
-            "datafusion_delta_plan_codecs_v1",
+            DATAFUSION_DELTA_PLAN_CODECS_SPEC,
             {
                 "enabled": self.features.enable_delta_plan_codecs,
                 "available": available,
@@ -6104,7 +6166,7 @@ class DataFusionRuntimeProfile(
         if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
-            "datafusion_delta_session_defaults_v1",
+            DATAFUSION_DELTA_SESSION_DEFAULTS_SPEC,
             {
                 "enabled": self.features.enable_delta_session_defaults,
                 "available": available,
@@ -6128,11 +6190,11 @@ class DataFusionRuntimeProfile(
         payload["profile_name"] = self.policies.config_policy_name
         payload["settings_hash"] = self.settings_hash()
         self.record_artifact(
-            "datafusion_extension_parity_v1",
+            DATAFUSION_EXTENSION_PARITY_SPEC,
             payload,
         )
         self.record_artifact(
-            "datafusion_runtime_capabilities_v1",
+            DATAFUSION_RUNTIME_CAPABILITIES_SPEC,
             runtime_capabilities,
         )
 
@@ -6163,14 +6225,14 @@ class DataFusionRuntimeProfile(
             return
         cache_diag = _capture_cache_diagnostics(ctx)
         config_payload = _cache_config_payload(cache_diag)
-        self.record_artifact("datafusion_cache_config_v1", config_payload)
+        self.record_artifact(DATAFUSION_CACHE_CONFIG_SPEC, config_payload)
         self.record_artifact(
-            "datafusion_cache_root_v1",
+            DATAFUSION_CACHE_ROOT_SPEC,
             {"cache_root": self.io_ops.cache_root()},
         )
         if self.policies.cache_policy is not None:
             self.record_artifact(
-                "cache_policy_v1",
+                CACHE_POLICY_SPEC,
                 cache_policy_settings(self.policies.cache_policy),
             )
         cache_snapshots = _cache_snapshot_rows(cache_diag)
@@ -6200,7 +6262,7 @@ class DataFusionRuntimeProfile(
             if self.diagnostics.diagnostics_sink is None:
                 return
             self.record_artifact(
-                "datafusion_cache_snapshot_error_v1",
+                DATAFUSION_CACHE_SNAPSHOT_ERROR_SPEC,
                 {
                     "event_time_unix_ms": int(time.time() * 1000),
                     "error": str(exc),
@@ -6378,7 +6440,7 @@ class DataFusionRuntimeProfile(
         if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
-            "datafusion_expr_planners_v1",
+            DATAFUSION_EXPR_PLANNERS_SPEC,
             {
                 "enabled": self.features.enable_expr_planners,
                 "available": available,
@@ -6401,7 +6463,7 @@ class DataFusionRuntimeProfile(
         if self.diagnostics.diagnostics_sink is None:
             return
         self.record_artifact(
-            "datafusion_function_factory_v1",
+            DATAFUSION_FUNCTION_FACTORY_SPEC,
             {
                 "enabled": self.features.enable_function_factory,
                 "available": available,
@@ -6416,7 +6478,7 @@ class DataFusionRuntimeProfile(
         if self.diagnostics.diagnostics_sink is None:
             return
         payload = {"error": error, **details}
-        self.record_artifact("datafusion_tracing_install_v1", payload)
+        self.record_artifact(DATAFUSION_TRACING_INSTALL_SPEC, payload)
 
     def _install_tracing(self, ctx: SessionContext) -> None:
         """Enable tracing when configured.
@@ -6434,7 +6496,7 @@ class DataFusionRuntimeProfile(
         delta_installed, delta_error = ensure_delta_tracing()
         if self.diagnostics.diagnostics_sink is not None:
             self.record_artifact(
-                "datafusion_delta_tracing_v1",
+                DATAFUSION_DELTA_TRACING_SPEC,
                 {
                     "enabled": self.features.enable_tracing,
                     "installed": delta_installed,
@@ -7651,7 +7713,7 @@ def record_dataset_readiness(
         if location is None:
             record_artifact(
                 profile,
-                "dataset_readiness_v1",
+                DATASET_READINESS_SPEC,
                 {
                     "dataset": name,
                     "status": "missing_location",
@@ -7661,7 +7723,11 @@ def record_dataset_readiness(
             blockers.append(name)
             continue
         readiness = _dataset_readiness_payload(name, location)
-        record_artifact(profile, "dataset_readiness_v1", readiness)
+        record_artifact(
+            profile,
+            DATASET_READINESS_SPEC,
+            readiness,
+        )
         status = readiness.get("status")
         if isinstance(status, str) and status not in {"ok", "remote_path"}:
             blockers.append(name)
@@ -7829,3 +7895,57 @@ __all__ = [
     "sql_options_for_profile",
     "statement_sql_options_for_profile",
 ]
+
+# ---------------------------------------------------------------------------
+# Deferred import of artifact spec constants.
+#
+# ``serde_artifact_specs`` transitively imports modules that depend on symbols
+# defined *above* in this very file (``SessionRuntime``, ``dataset_spec_from_context``,
+# etc.).  Importing the module at the top of the file would create a circular
+# import chain.  By placing the import here -- after all definitions are
+# complete and ``__all__`` is declared -- every name that the downstream
+# modules need is already in scope.
+# ---------------------------------------------------------------------------
+from serde_artifact_specs import (
+    CACHE_POLICY_SPEC,
+    DATAFUSION_ARROW_INGEST_SPEC,
+    DATAFUSION_AST_DATASET_SPEC,
+    DATAFUSION_AST_FEATURE_GATES_SPEC,
+    DATAFUSION_AST_SPAN_METADATA_SPEC,
+    DATAFUSION_BYTECODE_DATASET_SPEC,
+    DATAFUSION_BYTECODE_METADATA_SPEC,
+    DATAFUSION_CACHE_CONFIG_SPEC,
+    DATAFUSION_CACHE_ROOT_SPEC,
+    DATAFUSION_CACHE_SNAPSHOT_ERROR_SPEC,
+    DATAFUSION_CATALOG_AUTOLOAD_SPEC,
+    DATAFUSION_CST_DFSCHEMA_SPEC,
+    DATAFUSION_CST_SCHEMA_DIAGNOSTICS_SPEC,
+    DATAFUSION_CST_VIEW_PLANS_SPEC,
+    DATAFUSION_DELTA_COMMIT_SPEC,
+    DATAFUSION_DELTA_PLAN_CODECS_SPEC,
+    DATAFUSION_DELTA_SESSION_DEFAULTS_SPEC,
+    DATAFUSION_DELTA_TRACING_SPEC,
+    DATAFUSION_EXPR_PLANNERS_SPEC,
+    DATAFUSION_EXTENSION_PARITY_SPEC,
+    DATAFUSION_FUNCTION_FACTORY_SPEC,
+    DATAFUSION_PLAN_ARTIFACTS_SPEC,
+    DATAFUSION_PREPARED_STATEMENTS_SPEC,
+    DATAFUSION_RUNTIME_CAPABILITIES_SPEC,
+    DATAFUSION_SCHEMA_INTROSPECTION_SPEC,
+    DATAFUSION_SCHEMA_REGISTRY_VALIDATION_SPEC,
+    DATAFUSION_SCIP_DATASETS_SPEC,
+    DATAFUSION_SEMANTIC_DIFF_SPEC,
+    DATAFUSION_SQL_INGEST_SPEC,
+    DATAFUSION_TRACING_INSTALL_SPEC,
+    DATAFUSION_TREE_SITTER_CROSS_CHECKS_SPEC,
+    DATAFUSION_TREE_SITTER_PLAN_SCHEMA_SPEC,
+    DATAFUSION_TREE_SITTER_STATS_SPEC,
+    DATAFUSION_UDF_DOCS_SPEC,
+    DATAFUSION_UDF_REGISTRY_SPEC,
+    DATAFUSION_UDF_VALIDATION_SPEC,
+    DATAFUSION_VIEW_ARTIFACTS_SPEC,
+    DATASET_READINESS_SPEC,
+    SCHEMA_REGISTRY_VALIDATION_ADVISORY_SPEC,
+    SEMANTIC_PROGRAM_MANIFEST_SPEC,
+    ZERO_ROW_BOOTSTRAP_VALIDATION_SPEC,
+)

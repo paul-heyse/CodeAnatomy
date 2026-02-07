@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 from datafusion import SQLOptions
 
 from datafusion_engine.schema.introspection import table_constraint_rows
-from datafusion_engine.session.runtime import SessionRuntime, dataset_spec_from_context
 from schema_spec.dataset_spec_ops import dataset_spec_name
 from schema_spec.system import (
     ContractCatalogSpec,
@@ -30,9 +29,28 @@ from serde_msgspec import StructBaseStrict
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from datafusion_engine.session.runtime import SessionRuntime
+
 RELATIONSHIP_SCHEMA_VERSION: int = 1
 
 SpecAccessor = Callable[["SessionContext | None"], DatasetSpec]
+
+
+def _dataset_spec_from_context(
+    name: str,
+    *,
+    ctx: SessionContext | None = None,
+) -> DatasetSpec:
+    """Resolve DatasetSpec via a lazy runtime import to avoid import cycles.
+
+    Returns:
+    -------
+    DatasetSpec
+        Dataset specification resolved from the runtime context.
+    """
+    from datafusion_engine.session.runtime import dataset_spec_from_context
+
+    return dataset_spec_from_context(name, ctx=ctx)
 
 
 # =============================================================================
@@ -196,7 +214,7 @@ def generate_relationship_contract_entry(
 
 @cache
 def _rel_name_symbol_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("rel_name_symbol")
+    return _dataset_spec_from_context("rel_name_symbol")
 
 
 def rel_name_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -214,12 +232,12 @@ def rel_name_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _rel_name_symbol_spec_cached()
-    return dataset_spec_from_context("rel_name_symbol", ctx=ctx)
+    return _dataset_spec_from_context("rel_name_symbol", ctx=ctx)
 
 
 @cache
 def _rel_import_symbol_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("rel_import_symbol")
+    return _dataset_spec_from_context("rel_import_symbol")
 
 
 def rel_import_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -237,12 +255,12 @@ def rel_import_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _rel_import_symbol_spec_cached()
-    return dataset_spec_from_context("rel_import_symbol", ctx=ctx)
+    return _dataset_spec_from_context("rel_import_symbol", ctx=ctx)
 
 
 @cache
 def _rel_def_symbol_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("rel_def_symbol")
+    return _dataset_spec_from_context("rel_def_symbol")
 
 
 def rel_def_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -260,12 +278,12 @@ def rel_def_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _rel_def_symbol_spec_cached()
-    return dataset_spec_from_context("rel_def_symbol", ctx=ctx)
+    return _dataset_spec_from_context("rel_def_symbol", ctx=ctx)
 
 
 @cache
 def _rel_callsite_symbol_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("rel_callsite_symbol")
+    return _dataset_spec_from_context("rel_callsite_symbol")
 
 
 def rel_callsite_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -283,12 +301,12 @@ def rel_callsite_symbol_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _rel_callsite_symbol_spec_cached()
-    return dataset_spec_from_context("rel_callsite_symbol", ctx=ctx)
+    return _dataset_spec_from_context("rel_callsite_symbol", ctx=ctx)
 
 
 @cache
 def _relation_output_spec_cached() -> DatasetSpec:
-    return dataset_spec_from_context("relation_output")
+    return _dataset_spec_from_context("relation_output")
 
 
 def relation_output_spec(ctx: SessionContext | None = None) -> DatasetSpec:
@@ -306,7 +324,7 @@ def relation_output_spec(ctx: SessionContext | None = None) -> DatasetSpec:
     """
     if ctx is None:
         return _relation_output_spec_cached()
-    return dataset_spec_from_context("relation_output", ctx=ctx)
+    return _dataset_spec_from_context("relation_output", ctx=ctx)
 
 
 # =============================================================================

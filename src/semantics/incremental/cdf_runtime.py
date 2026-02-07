@@ -474,7 +474,9 @@ def _record_cdf_read(
         "filter_policy": _cdf_filter_payload(record.filter_policy),
         "error": record.error,
     }
-    record_artifact(profile, "incremental_cdf_read_v1", payload)
+    from serde_artifact_specs import INCREMENTAL_CDF_READ_SPEC
+
+    record_artifact(profile, INCREMENTAL_CDF_READ_SPEC, payload)
 
 
 def _cdf_filter_payload(filter_policy: CdfFilterPolicy | None) -> dict[str, bool] | None:

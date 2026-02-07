@@ -8,16 +8,20 @@ NOT inside ``compile_semantic_program()`` which returns only
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
     from datafusion_engine.extensions.runtime_capabilities import RuntimeCapabilitiesSnapshot
+    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.plan.signals import PlanSignals
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from relspec.execution_plan import ExecutionPlan
+    from semantics.program_manifest import SemanticProgramManifest
 
 _SMALL_SCAN_ROW_THRESHOLD: int = 1000
+_DATASET_SUFFIX_SEGMENT_COUNT: int = 2
 
 
 @dataclass(frozen=True)
@@ -154,6 +158,7 @@ def validate_policy_bundle(
     runtime_profile: DataFusionRuntimeProfile,
     udf_snapshot: Mapping[str, object],
     capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None = None,
+    semantic_manifest: SemanticProgramManifest | None = None,
 ) -> PolicyValidationResult:
     """Validate policy bundle against execution plan requirements.
 
@@ -170,6 +175,8 @@ def validate_policy_bundle(
         Available UDF snapshot mapping (name -> UDF object).
     capability_snapshot
         Runtime capabilities payload used for strict provider and metrics checks.
+    semantic_manifest
+        Optional semantic manifest used to validate scan dataset alignment.
 
     Returns:
     -------
@@ -180,6 +187,12 @@ def validate_policy_bundle(
     issues.extend(_udf_feature_gate_issues(execution_plan, runtime_profile=runtime_profile))
     issues.extend(_udf_availability_issues(execution_plan, udf_snapshot=udf_snapshot))
     issues.extend(_delta_protocol_issues(execution_plan))
+    issues.extend(
+        _manifest_alignment_issues(
+            execution_plan,
+            semantic_manifest=semantic_manifest,
+        )
+    )
     issues.extend(_small_scan_policy_issues(execution_plan))
     issues.extend(_capability_issues(capability_snapshot=capability_snapshot))
     return PolicyValidationResult.from_issues(issues)
@@ -227,19 +240,205 @@ def _udf_availability_issues(
 
 
 def _delta_protocol_issues(execution_plan: ExecutionPlan) -> list[PolicyValidationIssue]:
+    return _delta_protocol_issues_from_signals(_validation_signals_by_task(execution_plan))
+
+
+def _delta_protocol_issues_from_signals(
+    signals_by_task: Mapping[str, PlanSignals],
+) -> list[PolicyValidationIssue]:
     issues: list[PolicyValidationIssue] = []
-    for unit in execution_plan.scan_units:
-        compat = unit.protocol_compatibility
-        if compat is not None and compat.compatible is False:
-            reason = compat.reason if hasattr(compat, "reason") else None
+    seen: set[tuple[str, str | None]] = set()
+    for task_name in sorted(signals_by_task):
+        for compat in signals_by_task[task_name].scan_compat:
+            if compat.compatible is not False:
+                continue
+            key = (compat.dataset_name, compat.reason)
+            if key in seen:
+                continue
+            seen.add(key)
             issues.append(
                 _error(
                     "DELTA_PROTOCOL_INCOMPATIBLE",
-                    task=unit.dataset_name,
-                    detail=reason,
+                    task=compat.dataset_name,
+                    detail=compat.reason,
                 )
             )
     return issues
+
+
+def _validation_signals_by_task(execution_plan: ExecutionPlan) -> dict[str, PlanSignals]:
+    existing = _existing_signals_by_task(execution_plan)
+    if existing:
+        return existing
+    return _derive_signals_by_task(execution_plan)
+
+
+def _manifest_alignment_issues(
+    execution_plan: ExecutionPlan,
+    *,
+    semantic_manifest: SemanticProgramManifest | None,
+) -> list[PolicyValidationIssue]:
+    if semantic_manifest is None:
+        return []
+    manifest_names = _manifest_dataset_names(semantic_manifest)
+    if not manifest_names:
+        return []
+    manifest_name_set = frozenset(manifest_names)
+    terminal_name_set = frozenset(
+        name.rsplit(".", 1)[-1] for name in manifest_name_set if isinstance(name, str) and name
+    )
+    suffix2_name_set = frozenset(
+        ".".join(parts[-_DATASET_SUFFIX_SEGMENT_COUNT:])
+        for name in manifest_name_set
+        if (parts := name.split(".")) and len(parts) >= _DATASET_SUFFIX_SEGMENT_COUNT
+    )
+    issues: list[PolicyValidationIssue] = []
+    seen: set[tuple[str, str]] = set()
+    signals_by_task = _validation_signals_by_task(execution_plan)
+    for task_name in sorted(signals_by_task):
+        dataset_names = tuple(
+            sorted(
+                {
+                    compat.dataset_name
+                    for compat in signals_by_task[task_name].scan_compat
+                    if isinstance(compat.dataset_name, str) and compat.dataset_name
+                }
+            )
+        )
+        for dataset_name in dataset_names:
+            if _dataset_name_matches_manifest(
+                dataset_name,
+                manifest_name_set=manifest_name_set,
+                terminal_name_set=terminal_name_set,
+                suffix2_name_set=suffix2_name_set,
+            ):
+                continue
+            key = (task_name, dataset_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            issues.append(
+                _warn(
+                    "SCAN_DATASET_NOT_IN_MANIFEST",
+                    task=task_name,
+                    detail=(
+                        f"Scan dataset {dataset_name!r} not found in semantic manifest "
+                        "dataset bindings."
+                    ),
+                )
+            )
+    return issues
+
+
+def _manifest_dataset_names(semantic_manifest: SemanticProgramManifest) -> tuple[str, ...]:
+    bindings = getattr(semantic_manifest, "dataset_bindings", None)
+    if bindings is None:
+        return ()
+    names: set[str] = set()
+    names_fn = getattr(bindings, "names", None)
+    if callable(names_fn):
+        candidates = names_fn()
+        if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
+            names.update(name for name in candidates if isinstance(name, str) and name)
+    locations = getattr(bindings, "locations", None)
+    if isinstance(locations, Mapping):
+        names.update(name for name in locations if isinstance(name, str) and name)
+    return tuple(sorted(names))
+
+
+def _dataset_name_matches_manifest(
+    dataset_name: str,
+    *,
+    manifest_name_set: frozenset[str],
+    terminal_name_set: frozenset[str],
+    suffix2_name_set: frozenset[str],
+) -> bool:
+    if dataset_name in manifest_name_set:
+        return True
+    parts = dataset_name.split(".")
+    if not parts:
+        return False
+    if parts[-1] in terminal_name_set:
+        return True
+    if len(parts) < _DATASET_SUFFIX_SEGMENT_COUNT:
+        return False
+    return ".".join(parts[-_DATASET_SUFFIX_SEGMENT_COUNT:]) in suffix2_name_set
+
+
+def _existing_signals_by_task(execution_plan: ExecutionPlan) -> dict[str, PlanSignals]:
+    payload = getattr(execution_plan, "plan_signals_by_task", None)
+    if not isinstance(payload, Mapping):
+        return {}
+    from datafusion_engine.plan.signals import PlanSignals as _PlanSignals
+
+    signals: dict[str, _PlanSignals] = {}
+    for task_name in sorted(payload):
+        candidate = payload[task_name]
+        if not isinstance(candidate, _PlanSignals):
+            continue
+        signals[str(task_name)] = candidate
+    return signals
+
+
+def _derive_signals_by_task(execution_plan: ExecutionPlan) -> dict[str, PlanSignals]:
+    from datafusion_engine.plan.signals import extract_plan_signals
+
+    scan_units = _plan_scan_units(execution_plan)
+    scan_by_key = {
+        key: unit
+        for unit in scan_units
+        if isinstance((key := getattr(unit, "key", None)), str) and key
+    }
+    scan_keys_by_task = _plan_scan_keys_by_task(execution_plan)
+    view_nodes = _plan_view_nodes(execution_plan)
+    signals: dict[str, PlanSignals] = {}
+    for node in sorted(view_nodes, key=lambda item: str(getattr(item, "name", ""))):
+        name = getattr(node, "name", None)
+        bundle = getattr(node, "plan_bundle", None)
+        if not isinstance(name, str) or not name or bundle is None:
+            continue
+        keys = scan_keys_by_task.get(name, ())
+        scoped_units = cast(
+            "tuple[ScanUnit, ...]",
+            tuple(scan_by_key[key] for key in keys if key in scan_by_key),
+        )
+        try:
+            signals[name] = extract_plan_signals(bundle, scan_units=scoped_units)
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            continue
+    return signals
+
+
+def _plan_view_nodes(execution_plan: ExecutionPlan) -> tuple[object, ...]:
+    payload = getattr(execution_plan, "view_nodes", ())
+    if isinstance(payload, Sequence):
+        return tuple(payload)
+    return ()
+
+
+def _plan_scan_units(execution_plan: ExecutionPlan) -> tuple[object, ...]:
+    payload = getattr(execution_plan, "scan_units", ())
+    if isinstance(payload, Sequence):
+        return tuple(payload)
+    return ()
+
+
+def _plan_scan_keys_by_task(
+    execution_plan: ExecutionPlan,
+) -> Mapping[str, tuple[str, ...]]:
+    payload = getattr(execution_plan, "scan_keys_by_task", None)
+    if isinstance(payload, Mapping):
+        normalized: dict[str, tuple[str, ...]] = {}
+        for task_name in sorted(payload):
+            keys = payload[task_name]
+            if (
+                isinstance(task_name, str)
+                and isinstance(keys, Sequence)
+                and not isinstance(keys, (str, bytes))
+            ):
+                normalized[task_name] = tuple(key for key in keys if isinstance(key, str))
+        return normalized
+    return {}
 
 
 def _small_scan_policy_issues(execution_plan: ExecutionPlan) -> list[PolicyValidationIssue]:

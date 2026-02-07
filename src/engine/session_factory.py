@@ -124,9 +124,11 @@ def build_engine_session(
         determinism_tier=runtime_spec.determinism_tier,
     )
     if resolved.diagnostics is not None:
+        from serde_artifact_specs import DATAFUSION_INPUT_PLUGINS_SPEC, ENGINE_RUNTIME_SPEC
+
         if not resolved.diagnostics.artifacts_snapshot().get("engine_runtime_v2"):
             resolved.diagnostics.record_artifact(
-                "engine_runtime_v2",
+                ENGINE_RUNTIME_SPEC,
                 engine_runtime_artifact(
                     df_profile,
                     name=profile_name,
@@ -134,7 +136,7 @@ def build_engine_session(
                 ),
             )
         resolved.diagnostics.record_artifact(
-            "datafusion_input_plugins_v1",
+            DATAFUSION_INPUT_PLUGINS_SPEC,
             {
                 "plugins": input_plugin_names,
                 "prefixes": list(input_plugin_prefixes()),

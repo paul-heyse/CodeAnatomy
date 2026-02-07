@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import cast
 
@@ -17,8 +19,9 @@ def test_require_execution_authority_rejects_missing() -> None:
         "TaskExecutionInputs",
         SimpleNamespace(execution_authority_context=None),
     )
+    require_execution_authority = task_execution.__dict__["_require_execution_authority"]
     with pytest.raises(ValueError, match="ExecutionAuthorityContext is required"):
-        task_execution._require_execution_authority(inputs)
+        require_execution_authority(inputs)
 
 
 def test_execute_extract_task_dispatches_via_authority_executor(
@@ -28,7 +31,10 @@ def test_execute_extract_task_dispatches_via_authority_executor(
     called: dict[str, object] = {}
 
     class _Authority:
-        def executor_for_adapter(self, adapter_name: str):
+        def executor_for_adapter(
+            self,
+            adapter_name: str,
+        ) -> Callable[[object, object, str], dict[str, object]]:
             called["adapter_name"] = adapter_name
 
             def _handler(
@@ -43,9 +49,9 @@ def test_execute_extract_task_dispatches_via_authority_executor(
 
             return _handler
 
+    @dataclass
     class _ExtractSession:
-        def __init__(self, *, engine_session: object) -> None:
-            self.engine_session = engine_session
+        engine_session: object
 
     monkeypatch.setattr(
         task_execution,
@@ -61,7 +67,11 @@ def test_execute_extract_task_dispatches_via_authority_executor(
         lambda _extractor: SimpleNamespace(name="repo_scan"),
     )
     monkeypatch.setattr("extract.session.ExtractSession", _ExtractSession)
-    monkeypatch.setattr(task_execution, "_normalize_extract_outputs", lambda outputs: dict(outputs))
+
+    def _normalize_outputs(outputs: dict[str, object]) -> dict[str, object]:
+        return dict(outputs)
+
+    monkeypatch.setattr(task_execution, "_normalize_extract_outputs", _normalize_outputs)
     monkeypatch.setattr(
         task_execution,
         "_ensure_extract_output",
@@ -89,7 +99,8 @@ def test_execute_extract_task_dispatches_via_authority_executor(
         task_kind="extract",
     )
 
-    output = task_execution._execute_extract_task(inputs, spec=spec)
+    execute_extract_task = task_execution.__dict__["_execute_extract_task"]
+    output = execute_extract_task(inputs, spec=spec)
 
     assert called["adapter_name"] == "repo_scan"
     assert called["profile_name"] == "test_profile"

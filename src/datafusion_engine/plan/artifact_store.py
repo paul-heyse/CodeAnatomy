@@ -593,7 +593,9 @@ def persist_write_artifact(
         status=request.status,
         error=request.error,
     )
-    record_artifact(profile, "write_artifact_v2", row.to_row())
+    from serde_artifact_specs import WRITE_ARTIFACT_SPEC
+
+    record_artifact(profile, WRITE_ARTIFACT_SPEC, row.to_row())
     return row
 
 
@@ -829,14 +831,11 @@ def build_plan_artifact_row(
     """Build a plan artifact row from a plan bundle and optional lineage.
 
     Returns:
-    -------
-    PlanArtifactRow
-        Serialized plan artifact row.
+        PlanArtifactRow: Serialized plan artifact row.
 
     Raises:
-    ------
-    ValueError
-        If lineage is unavailable from both the request and extracted plan signals.
+        ValueError: If lineage is unavailable from both the request and extracted
+        plan signals.
     """
     signals = extract_plan_signals(request.bundle, scan_units=request.scan_units)
     resolved_lineage = request.lineage or signals.lineage
@@ -1000,9 +999,11 @@ def _reset_artifacts_table_path(
     if table_path.exists():
         shutil.rmtree(table_path)
     table_path.mkdir(parents=True, exist_ok=True)
+    from serde_artifact_specs import ARTIFACT_STORE_RESET_SPEC
+
     record_artifact(
         profile,
-        "artifact_store_reset_v1",
+        ARTIFACT_STORE_RESET_SPEC,
         {
             "event_time_unix_ms": int(time.time() * 1000),
             "table": table_name,
@@ -1022,9 +1023,11 @@ def _plan_artifacts_root(profile: DataFusionRuntimeProfile) -> Path | None:
         else:
             root_value = str(_DEFAULT_ARTIFACTS_ROOT)
     if "://" in root_value:
+        from serde_artifact_specs import PLAN_ARTIFACTS_STORE_UNAVAILABLE_SPEC
+
         record_artifact(
             profile,
-            "plan_artifacts_store_unavailable_v1",
+            PLAN_ARTIFACTS_STORE_UNAVAILABLE_SPEC,
             {
                 "reason": "non_local_root",
                 "root": root_value,
@@ -1118,7 +1121,9 @@ def _record_plan_artifact_summary(
         "view_names": sorted({row.view_name for row in rows}),
         "delta_version": version,
     }
-    record_artifact(profile, "plan_artifacts_store_v2", payload)
+    from serde_artifact_specs import PLAN_ARTIFACTS_STORE_SPEC
+
+    record_artifact(profile, PLAN_ARTIFACTS_STORE_SPEC, payload)
     for row in rows:
         record_artifact(profile, table_name, row.to_row())
 
@@ -1194,7 +1199,9 @@ def _record_hamilton_events_summary(
         "run_ids": sorted({row.run_id for row in rows}),
         "delta_version": version,
     }
-    record_artifact(profile, "hamilton_events_store_v2", payload)
+    from serde_artifact_specs import HAMILTON_EVENTS_STORE_SPEC
+
+    record_artifact(profile, HAMILTON_EVENTS_STORE_SPEC, payload)
     for row in rows:
         record_artifact(profile, HAMILTON_EVENTS_TABLE_NAME, row.to_row())
 

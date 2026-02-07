@@ -48,11 +48,7 @@ check_metric() {
 count_lines() {
     local n
     n=$(wc -l | tr -d ' ')
-    if [ -z "$n" ]; then
-        echo 0
-    else
-        echo "$n"
-    fi
+    if [ -z "$n" ]; then echo 0; else echo "$n"; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -64,20 +60,21 @@ echo "Source root: $SRC_DIR"
 echo ""
 
 # ---------------------------------------------------------------------------
+# Disable pipefail for all grep pipelines below.  Re-enabled at the summary.
+# grep returns exit 1 when no lines match, which kills the script under
+# set -eo pipefail.  Metrics are advisory; a zero-match grep is not an error.
+# ---------------------------------------------------------------------------
+set +o pipefail
+
+# ---------------------------------------------------------------------------
 # Check 1: dataset_bindings_for_profile() consumer files
-#
-# What: Files in src/ (excluding the definition in compile_context.py) that
-#        call dataset_bindings_for_profile(). Each consumer re-derives dataset
-#        locations from a runtime profile rather than using the compiled manifest.
-# Why:  The target architecture routes all dataset resolution through a single
-#        compiled manifest, eliminating redundant profile-to-binding lookups.
 # ---------------------------------------------------------------------------
 
 COUNT=$(grep -rl "dataset_bindings_for_profile" "$SRC_DIR" \
     --include="*.py" 2>/dev/null \
     | grep -v "compile_context\.py" \
     | grep -v "__pycache__" \
-    | count_lines || echo 0)
+    | count_lines)
 
 echo "1. dataset_bindings_for_profile() consumer files"
 echo "   (files outside compile_context.py that call this function)"
@@ -86,18 +83,13 @@ echo ""
 
 # ---------------------------------------------------------------------------
 # Check 2: Direct CompileContext(runtime_profile=...) outside compile boundary
-#
-# What: Callsites that instantiate CompileContext with a runtime profile
-#        outside the canonical compile boundary (compile_context.py).
-# Why:  Multiple instantiation points mean multiple compile operations per
-#        pipeline run, violating the single-compilation invariant.
 # ---------------------------------------------------------------------------
 
 COUNT=$(grep -rn "CompileContext(runtime_profile" "$SRC_DIR" \
     --include="*.py" 2>/dev/null \
     | grep -v "compile_context\.py" \
     | grep -v "__pycache__" \
-    | count_lines || echo 0)
+    | count_lines)
 
 echo "2. Direct CompileContext(runtime_profile=...) outside compile boundary"
 echo "   (callsites outside compile_context.py)"
@@ -106,26 +98,17 @@ echo ""
 
 # ---------------------------------------------------------------------------
 # Check 3: Global mutable registries in pipeline modules
-#
-# What: Module-level mutable dict/list state used for executor registration
-#        or other cross-call coordination.
-# Why:  Global mutable state prevents dependency injection, complicates
-#        testing, and creates implicit coupling between pipeline phases.
-#
-# Tracked patterns:
-#   _EXTRACT_ADAPTER_EXECUTORS  (extract_execution_registry.py)
-#   _EXTRACT_EXECUTOR_REGISTRATION_STATE  (task_execution.py)
 # ---------------------------------------------------------------------------
 
 COUNT_EXECUTORS=$(grep -rl "_EXTRACT_ADAPTER_EXECUTORS" "$SRC_DIR" \
     --include="*.py" 2>/dev/null \
     | grep -v "__pycache__" \
-    | count_lines || echo 0)
+    | count_lines)
 
 COUNT_STATE=$(grep -rl "_EXTRACT_EXECUTOR_REGISTRATION_STATE" "$SRC_DIR" \
     --include="*.py" 2>/dev/null \
     | grep -v "__pycache__" \
-    | count_lines || echo 0)
+    | count_lines)
 
 GLOBAL_MUTABLE_TOTAL=$((COUNT_EXECUTORS + COUNT_STATE))
 
@@ -137,22 +120,12 @@ echo ""
 
 # ---------------------------------------------------------------------------
 # Check 4: record_artifact() callsite typing
-#
-# What: Production callsites of record_artifact (method or free function)
-#        that pass string literal names vs typed ArtifactSpec objects.
-# Why:  Typed specs enable schema validation, fingerprinting, and registry
-#        governance. String names bypass all of these safeguards.
-#
-# Counting methodology:
-#   - Total: all record_artifact( lines in src/ that are not definition,
-#     resolver, or comment lines.
-#   - Typed: callsites referencing _SPEC constants or ArtifactSpec.
-#   - String: Total minus Typed.
 # ---------------------------------------------------------------------------
 
-# Total production callsites (exclude definitions and internal plumbing)
-TOTAL=$(grep -rn "record_artifact(" "$SRC_DIR" \
-    --include="*.py" 2>/dev/null \
+ARTIFACT_LINES=$(mktemp)
+trap 'rm -f "$ARTIFACT_LINES"' EXIT
+
+grep -rn "record_artifact(" "$SRC_DIR" --include="*.py" 2>/dev/null \
     | grep -v "__pycache__" \
     | grep -v "def record_artifact" \
     | grep -v "def _record_artifact" \
@@ -160,18 +133,10 @@ TOTAL=$(grep -rn "record_artifact(" "$SRC_DIR" \
     | grep -v '"""' \
     | grep -v "# " \
     | grep -v "suitable for" \
-    | count_lines || echo 0)
+    > "$ARTIFACT_LINES" || true
 
-# Typed callsites: those passing ArtifactSpec objects or _SPEC constants
-TYPED=$(grep -rn "record_artifact(" "$SRC_DIR" \
-    --include="*.py" 2>/dev/null \
-    | grep -v "__pycache__" \
-    | grep -v "def record_artifact" \
-    | grep -v "def _record_artifact" \
-    | grep -v "_resolve_artifact_name" \
-    | grep -E "_SPEC[,) ]|ArtifactSpec\(" \
-    | count_lines || echo 0)
-
+TOTAL=$(wc -l < "$ARTIFACT_LINES" | tr -d ' ')
+TYPED=$(grep -cE "_SPEC[,) ]|ArtifactSpec\(" "$ARTIFACT_LINES" || true)
 STRING_COUNT=$((TOTAL - TYPED))
 
 echo "4. record_artifact() callsite typing"
@@ -183,17 +148,8 @@ echo ""
 
 # ---------------------------------------------------------------------------
 # Check 5: Redundant compile_semantic_program() call sites
-#
-# What: Production callsites of compile_semantic_program() in src/.
-#        The target is exactly 1 canonical entrypoint.
-# Why:  Multiple compile sites risk inconsistent manifests across subsystems
-#        within a single pipeline run.
 # ---------------------------------------------------------------------------
 
-# Filter out definitions, triple-quoted docstrings, comments, and
-# backtick-quoted references that appear in docstrings but are not
-# actual callsites. The closing-paren form compile_semantic_program()
-# appears only in docstring references; actual callsites continue with args.
 COMPILE_SITES=$(grep -rn "compile_semantic_program(" "$SRC_DIR" \
     --include="*.py" 2>/dev/null \
     | grep -v "__pycache__" \
@@ -203,7 +159,7 @@ COMPILE_SITES=$(grep -rn "compile_semantic_program(" "$SRC_DIR" \
     | grep -v 'compile_semantic_program()' \
     | grep -v "NOT inside" \
     | grep -v "Call this from" \
-    | count_lines || echo 0)
+    | count_lines)
 
 echo "5. compile_semantic_program() callsites"
 echo "   (excluding definition; target is 1 canonical entrypoint)"
@@ -213,6 +169,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
+set -o pipefail
 
 echo "=== Summary ==="
 echo "Checks run: $TOTAL_CHECKS"

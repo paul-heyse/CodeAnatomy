@@ -419,10 +419,11 @@ class ProviderRegistry(
         if self.runtime_profile is None:
             return
         from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import TABLE_PROVIDER_REGISTERED_SPEC
 
         record_artifact(
             self.runtime_profile,
-            "table_provider_registered_v1",
+            TABLE_PROVIDER_REGISTERED_SPEC,
             metadata.payload(),
         )
 

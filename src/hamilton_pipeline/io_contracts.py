@@ -37,6 +37,7 @@ from hamilton_pipeline.tag_policy import TagPolicy, apply_tag, tag_outputs_by_na
 from hamilton_pipeline.types import OutputConfig, RepoScanConfig
 from schema_spec.system import DeltaMaintenancePolicy
 from semantics.incremental import SemanticIncrementalConfig
+from serde_artifact_specs import EXTRACT_ERRORS_SPEC, NORMALIZE_OUTPUTS_SPEC, RUN_MANIFEST_V2_SPEC
 from serde_artifacts import (
     ExtractErrorsArtifact,
     NormalizeOutputsArtifact,
@@ -1014,7 +1015,7 @@ def write_normalize_outputs_delta(
     payload = to_builtins(artifact, str_keys=True)
     record_artifact(
         output_runtime_context.runtime_profile_spec.datafusion,
-        "normalize_outputs_v1",
+        NORMALIZE_OUTPUTS_SPEC,
         cast("Mapping[str, object]", payload),
     )
     delta_inputs = _delta_input_tokens(
@@ -1099,7 +1100,7 @@ def write_extract_error_artifacts_delta(
     payload = to_builtins(artifact, str_keys=True)
     record_artifact(
         output_runtime_context.runtime_profile_spec.datafusion,
-        "extract_errors_v1",
+        EXTRACT_ERRORS_SPEC,
         cast("Mapping[str, object]", payload),
     )
     delta_inputs = _delta_input_tokens(
@@ -1417,7 +1418,7 @@ def write_run_manifest_delta(
     manifest_payload_map = to_builtins(validated, str_keys=True)
     record_artifact(
         output_runtime_context.runtime_profile_spec.datafusion,
-        "run_manifest_v2",
+        RUN_MANIFEST_V2_SPEC,
         cast("Mapping[str, object]", manifest_payload_map),
     )
     result = _write_run_manifest_table(

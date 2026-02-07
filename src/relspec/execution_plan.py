@@ -553,9 +553,10 @@ def _record_plan_signals_artifact(
     if runtime_profile is None:
         return
     from datafusion_engine.plan.signals import plan_signals_payload
+    from serde_artifact_specs import PLAN_SIGNALS_SPEC
 
     runtime_profile.record_artifact(
-        "plan_signals_v1",
+        PLAN_SIGNALS_SPEC,
         {
             "plan_signature": plan_signature,
             "task_count": len(signals_by_task),
@@ -736,10 +737,11 @@ def _prepare_plan_context(
             )
         except (RuntimeError, ValueError, OSError, KeyError, ImportError, TypeError) as exc:
             from datafusion_engine.lineage.diagnostics import record_artifact
+            from serde_artifact_specs import PLAN_ARTIFACTS_STORE_FAILED_SPEC
 
             record_artifact(
                 runtime_profile,
-                "plan_artifacts_store_failed_v1",
+                PLAN_ARTIFACTS_STORE_FAILED_SPEC,
                 {
                     "error_type": type(exc).__name__,
                     "error": str(exc),

@@ -95,9 +95,16 @@ def ensure_cache_inventory_table(
     table_path = _cache_inventory_root(profile) / CACHE_INVENTORY_TABLE_NAME
     delta_log_path = table_path / "_delta_log"
     has_delta_log = delta_log_path.exists() and any(delta_log_path.glob("*.json"))
+    from serde_artifact_specs import (
+        CACHE_INVENTORY_BOOTSTRAP_COMPLETED_SPEC,
+        CACHE_INVENTORY_BOOTSTRAP_FAILED_SPEC,
+        CACHE_INVENTORY_BOOTSTRAP_STARTED_SPEC,
+        CACHE_INVENTORY_REGISTER_FAILED_SPEC,
+    )
+
     if not has_delta_log:
         profile.record_artifact(
-            "cache_inventory_bootstrap_started_v1",
+            CACHE_INVENTORY_BOOTSTRAP_STARTED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": CACHE_INVENTORY_TABLE_NAME,
@@ -113,7 +120,7 @@ def ensure_cache_inventory_table(
             )
         except (RuntimeError, TypeError, ValueError, OSError, ImportError) as exc:
             profile.record_artifact(
-                "cache_inventory_bootstrap_failed_v1",
+                CACHE_INVENTORY_BOOTSTRAP_FAILED_SPEC,
                 {
                     "event_time_unix_ms": int(time.time() * 1000),
                     "table": CACHE_INVENTORY_TABLE_NAME,
@@ -123,7 +130,7 @@ def ensure_cache_inventory_table(
             )
             return None
         profile.record_artifact(
-            "cache_inventory_bootstrap_completed_v1",
+            CACHE_INVENTORY_BOOTSTRAP_COMPLETED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": CACHE_INVENTORY_TABLE_NAME,
@@ -142,7 +149,7 @@ def ensure_cache_inventory_table(
         )
     except (RuntimeError, ValueError, TypeError, OSError, KeyError) as exc:
         profile.record_artifact(
-            "cache_inventory_register_failed_v1",
+            CACHE_INVENTORY_REGISTER_FAILED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": CACHE_INVENTORY_TABLE_NAME,

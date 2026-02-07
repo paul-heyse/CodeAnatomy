@@ -354,8 +354,9 @@ def _record_python_external_stats(
         "repo_id": options.repo_id,
     }
     from datafusion_engine.lineage.diagnostics import record_artifact
+    from serde_artifact_specs import PYTHON_EXTERNAL_STATS_SPEC
 
-    record_artifact(profile, "python_external_stats_v1", payload)
+    record_artifact(profile, PYTHON_EXTERNAL_STATS_SPEC, payload)
 
 
 class _ExternalTablesKwargs(TypedDict, total=False):

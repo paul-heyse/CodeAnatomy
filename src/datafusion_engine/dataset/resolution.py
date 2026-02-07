@@ -11,6 +11,7 @@ from datafusion import SessionContext
 from datafusion_engine.catalog.introspection import invalidate_introspection_cache
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
+    apply_scan_policy_overrides_to_location,
     resolve_datafusion_provider,
 )
 from datafusion_engine.delta.contracts import (
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.system import DeltaScanOptions
+    from schema_spec.system import DeltaScanOptions, ScanPolicyConfig
     from semantics.program_manifest import ManifestDatasetResolver
 
 DatasetProviderKind = Literal["delta", "delta_cdf"]
@@ -186,6 +187,7 @@ def apply_scan_unit_overrides(
     scan_units: Sequence[ScanUnit],
     runtime_profile: DataFusionRuntimeProfile | None,
     dataset_resolver: ManifestDatasetResolver | None = None,
+    scan_policy_overrides_by_dataset: Mapping[str, ScanPolicyConfig] | None = None,
 ) -> None:
     """Apply scan-unit derived overrides to registered Delta datasets."""
     if runtime_profile is None or not scan_units:
@@ -198,6 +200,13 @@ def apply_scan_unit_overrides(
             continue
         if location.datafusion_provider == "delta_cdf" or location.delta_cdf_options is not None:
             continue
+        if scan_policy_overrides_by_dataset is not None:
+            override_policy = scan_policy_overrides_by_dataset.get(dataset_name)
+            if override_policy is not None:
+                location = apply_scan_policy_overrides_to_location(
+                    location,
+                    policy=override_policy,
+                )
         units = units_by_dataset[dataset_name]
         scan_files = _scan_files_for_units(location, units)
         if not scan_files:
@@ -340,7 +349,9 @@ def _record_override_artifact(
         "scan_file_count": len(request.scan_files),
         "scan_files_hash": scan_files_hash,
     }
-    record_artifact(runtime_profile, "scan_unit_overrides_v1", payload)
+    from serde_artifact_specs import SCAN_UNIT_OVERRIDES_SPEC
+
+    record_artifact(runtime_profile, SCAN_UNIT_OVERRIDES_SPEC, payload)
 
 
 __all__ = [

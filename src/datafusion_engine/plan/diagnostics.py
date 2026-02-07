@@ -112,8 +112,10 @@ def record_plan_bundle_diagnostics(
         operation_id=f"plan_bundle:{plan_hash}",
     )
     if recorder is not None:
+        from serde_artifact_specs import DATAFUSION_PLAN_BUNDLE_SPEC
+
         recorder.record_artifact(
-            "datafusion_plan_bundle_v1",
+            DATAFUSION_PLAN_BUNDLE_SPEC,
             to_builtins_mapping(payload, str_keys=True),
         )
 
@@ -191,8 +193,10 @@ def record_plan_execution_diagnostics(
         operation_id=f"plan_execution:{plan_hash}",
     )
     if recorder is not None:
+        from serde_artifact_specs import DATAFUSION_PLAN_EXECUTION_SPEC
+
         recorder.record_artifact(
-            "datafusion_plan_execution_v1",
+            DATAFUSION_PLAN_EXECUTION_SPEC,
             to_builtins_mapping(payload, str_keys=True),
         )
     if span is None or not span.is_recording():
@@ -236,8 +240,10 @@ def record_plan_phase_diagnostics(*, request: PlanPhaseDiagnostics) -> None:
         operation_id=f"plan_phase:{request.plan_hash}:{request.phase}",
     )
     if recorder is not None:
+        from serde_artifact_specs import DATAFUSION_PLAN_PHASE_SPEC
+
         recorder.record_artifact(
-            "datafusion_plan_phase_v1",
+            DATAFUSION_PLAN_PHASE_SPEC,
             to_builtins_mapping(payload, str_keys=True),
         )
 

@@ -489,9 +489,9 @@ class TestNewArtifactSpecs:
             seen[spec.canonical_name] = attr_name
 
     def test_total_spec_count(self) -> None:
-        """Verify the total number of registered specs is at least 25."""
+        """Verify the total number of registered specs is at least 145."""
         registry = artifact_spec_registry()
-        assert len(registry) >= 25, f"Expected at least 25 specs, found {len(registry)}"
+        assert len(registry) >= 145, f"Expected at least 145 specs, found {len(registry)}"
 
 
 # ---------------------------------------------------------------------------

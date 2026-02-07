@@ -426,6 +426,8 @@ class DeltaService:
     ) -> None:
         if self.profile.diagnostics.diagnostics_sink is None:
             return
+        from serde_artifact_specs import DELTA_SERVICE_PROVIDER_SPEC
+
         compatibility = is_delta_extension_compatible(
             request.ctx,
             entrypoint="delta_provider_from_session",
@@ -435,7 +437,7 @@ class DeltaService:
             request=request,
             compatibility=compatibility,
         )
-        record_artifact(self.profile, "delta_service_provider_v1", payload)
+        record_artifact(self.profile, DELTA_SERVICE_PROVIDER_SPEC, payload)
 
     def _provider_artifact_payload(
         self,

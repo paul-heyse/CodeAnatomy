@@ -1174,7 +1174,15 @@ def _record_semantic_compile_artifacts(
         "join_group_count": len(semantic_ir.join_groups),
         "requested_outputs": tuple(sorted(requested_outputs or ())),
     }
-    record_artifact(runtime_profile, "semantic_ir_fingerprint_v1", payload)
+    from serde_artifact_specs import (
+        SEMANTIC_EXPLAIN_PLAN_REPORT_SPEC,
+        SEMANTIC_EXPLAIN_PLAN_SPEC,
+        SEMANTIC_IR_FINGERPRINT_SPEC,
+        SEMANTIC_JOIN_GROUP_STATS_SPEC,
+        SEMANTIC_VIEW_PLAN_STATS_SPEC,
+    )
+
+    record_artifact(runtime_profile, SEMANTIC_IR_FINGERPRINT_SPEC, payload)
 
     explain_payload = {
         "semantic_model_hash": semantic_ir.model_hash,
@@ -1201,13 +1209,13 @@ def _record_semantic_compile_artifacts(
             for group in semantic_ir.join_groups
         ],
     }
-    record_artifact(runtime_profile, "semantic_explain_plan_v1", explain_payload)
+    record_artifact(runtime_profile, SEMANTIC_EXPLAIN_PLAN_SPEC, explain_payload)
 
     view_stats = _view_plan_stats(semantic_ir, plan_bundles=plan_bundles)
     if view_stats:
         record_artifact(
             runtime_profile,
-            "semantic_view_plan_stats_v1",
+            SEMANTIC_VIEW_PLAN_STATS_SPEC,
             {
                 "semantic_model_hash": semantic_ir.model_hash,
                 "semantic_ir_hash": semantic_ir.ir_hash,
@@ -1220,7 +1228,7 @@ def _record_semantic_compile_artifacts(
     )
     record_artifact(
         runtime_profile,
-        "semantic_explain_plan_report_v1",
+        SEMANTIC_EXPLAIN_PLAN_REPORT_SPEC,
         {
             "semantic_model_hash": semantic_ir.model_hash,
             "semantic_ir_hash": semantic_ir.ir_hash,
@@ -1247,7 +1255,7 @@ def _record_semantic_compile_artifacts(
                 selectivity = row_count / denom
         record_artifact(
             runtime_profile,
-            "semantic_join_group_stats_v1",
+            SEMANTIC_JOIN_GROUP_STATS_SPEC,
             {
                 "join_group": group.name,
                 "left_view": group.left_view,

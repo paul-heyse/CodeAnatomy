@@ -64,6 +64,7 @@ from obs.otel.run_context import get_run_id
 from relspec.errors import RelspecValidationError
 from relspec.execution_authority import ExecutionAuthorityContext
 from relspec.view_defs import RELATION_OUTPUT_NAME
+from serde_artifact_specs import EXECUTION_AUTHORITY_VALIDATION_SPEC, POLICY_VALIDATION_SPEC
 from utils.env_utils import env_bool, env_value
 from utils.hashing import CacheKeyBuilder
 
@@ -612,7 +613,7 @@ def _build_execution_authority(
         enforcement_mode=_execution_authority_enforcement(config),
     )
     view_ctx.profile.record_artifact(
-        "execution_authority_validation_v1",
+        EXECUTION_AUTHORITY_VALIDATION_SPEC,
         {
             "enforcement_mode": authority.enforcement_mode,
             "issues": [
@@ -651,6 +652,7 @@ def _record_policy_validation_artifact(
     result: PolicyValidationResult,
     mode: Literal["warn", "error"],
     runtime_hash: str,
+    semantic_manifest_present: bool,
 ) -> None:
     from relspec.policy_validation import build_policy_validation_artifact
 
@@ -665,6 +667,7 @@ def _record_policy_validation_artifact(
         "error_codes": list(artifact.error_codes),
         "runtime_hash": artifact.runtime_hash,
         "is_deterministic": artifact.is_deterministic,
+        "semantic_manifest_present": semantic_manifest_present,
         "errors": len(result.errors),
         "warnings": len(result.warnings),
         "issues": [
@@ -677,7 +680,7 @@ def _record_policy_validation_artifact(
             for issue in result.issues
         ],
     }
-    view_ctx.profile.record_artifact("policy_validation_v1", payload)
+    view_ctx.profile.record_artifact(POLICY_VALIDATION_SPEC, payload)
 
 
 def _enforce_policy_validation_result(
@@ -2002,12 +2005,14 @@ def build_plan_context(
         runtime_profile=resolved_view_ctx.profile,
         udf_snapshot=_policy_validation_udf_snapshot(resolved_plan),
         capability_snapshot=authority_context.capability_snapshot,
+        semantic_manifest=authority_context.semantic_context.manifest,
     )
     _record_policy_validation_artifact(
         view_ctx=resolved_view_ctx,
         result=policy_validation_result,
         mode=authority_context.enforcement_mode,
         runtime_hash=authority_context.session_runtime_fingerprint or "",
+        semantic_manifest_present=authority_context.semantic_context.manifest is not None,
     )
     _enforce_policy_validation_result(
         result=policy_validation_result,

@@ -138,10 +138,11 @@ def _record_missing_dataset(
     if runtime_profile is None:
         return
     from datafusion_engine.lineage.diagnostics import record_artifact
+    from serde_artifact_specs import MISSING_DATASET_LOCATION_SPEC
 
     record_artifact(
         runtime_profile,
-        "missing_dataset_location_v1",
+        MISSING_DATASET_LOCATION_SPEC,
         {
             "name": name,
             "path": str(location.path),

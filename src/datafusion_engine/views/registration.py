@@ -16,6 +16,12 @@ from datafusion_engine.views.graph import (
     view_graph_registry,
 )
 from datafusion_engine.views.registry_specs import view_graph_nodes
+from serde_artifact_specs import (
+    RUST_UDF_SNAPSHOT_SPEC,
+    VIEW_CONTRACT_VIOLATIONS_SPEC,
+    VIEW_FINGERPRINTS_SPEC,
+    VIEW_UDF_PARITY_SPEC,
+)
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
@@ -118,7 +124,7 @@ class _ViewGraphRegistrationContext:
                         for violation in exc.violations
                     ],
                 }
-                record_artifact(self.runtime_profile, "view_contract_violations_v1", payload)
+                record_artifact(self.runtime_profile, VIEW_CONTRACT_VIOLATIONS_SPEC, payload)
             raise
 
 
@@ -216,12 +222,12 @@ def ensure_view_graph(
 
     record_artifact(
         runtime_profile,
-        "rust_udf_snapshot_v1",
+        RUST_UDF_SNAPSHOT_SPEC,
         rust_udf_snapshot_payload(registration.snapshot),
     )
     record_artifact(
         runtime_profile,
-        "view_udf_parity_v1",
+        VIEW_UDF_PARITY_SPEC,
         view_udf_parity_payload(
             snapshot=registration.snapshot,
             view_nodes=registration.nodes,
@@ -230,7 +236,7 @@ def ensure_view_graph(
     )
     record_artifact(
         runtime_profile,
-        "view_fingerprints_v1",
+        VIEW_FINGERPRINTS_SPEC,
         view_fingerprint_payload(view_nodes=registration.nodes),
     )
     return registration.snapshot

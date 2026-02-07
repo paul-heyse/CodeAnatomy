@@ -24,6 +24,7 @@ from datafusion_engine.views.bundle_extraction import (
     resolve_required_udfs_from_bundle,
 )
 from datafusion_engine.views.graph import ViewNode
+from serde_artifact_specs import SCHEMA_DIVERGENCE_SPEC, SEMANTIC_INPUT_SCHEMA_VALIDATION_SPEC
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -366,7 +367,7 @@ def _validated_semantic_inputs(
     if not validation.valid:
         record_artifact(
             runtime_profile,
-            "semantic_input_schema_validation_v1",
+            SEMANTIC_INPUT_SCHEMA_VALIDATION_SPEC,
             {
                 "missing_tables": list(validation.missing_tables),
                 "missing_columns": {
@@ -431,13 +432,10 @@ def _build_semantic_view_node(
     )
     # Schema divergence detection (10.2): compare spec vs plan output
     if expected_schema is not None and bundle is not None:
+        from datafusion_engine.plan.signals import extract_plan_signals
         from datafusion_engine.schema.contracts import compute_schema_divergence
-        from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
 
-        try:
-            plan_schema = arrow_schema_from_df(bundle.df)
-        except (TypeError, AttributeError):
-            plan_schema = None
+        plan_schema = extract_plan_signals(bundle).schema
         if plan_schema is not None:
             divergence = compute_schema_divergence(expected_schema, plan_schema)
             if divergence.has_divergence:
@@ -445,7 +443,7 @@ def _build_semantic_view_node(
 
                 record_artifact(
                     context.runtime_profile,
-                    "schema_divergence_v1",
+                    SCHEMA_DIVERGENCE_SPEC,
                     {
                         "view_name": name,
                         "spec_columns": list(expected_schema.names),

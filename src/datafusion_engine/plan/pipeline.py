@@ -6,20 +6,30 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+import msgspec
 from datafusion import SessionContext
 
 from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
+from datafusion_engine.delta.scan_policy_inference import (
+    ScanPolicyOverride,
+    derive_scan_policy_overrides,
+    record_scan_policy_decisions,
+    scan_policy_overrides_by_dataset,
+)
 from datafusion_engine.lineage.datafusion import LineageReport
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_units
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.plan.diagnostics import record_plan_bundle_diagnostics
+from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.session.facade import DataFusionExecutionFacade
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
 from utils.hashing import hash_msgpack_canonical, hash_sha256_hex
 
 if TYPE_CHECKING:
+    from datafusion_engine.extensions.runtime_capabilities import RuntimeCapabilitiesSnapshot
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
+    from schema_spec.system import ScanPolicyConfig
     from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
 
@@ -52,7 +62,7 @@ class _ScanPlanning:
     scan_task_names_by_task: Mapping[str, tuple[str, ...]]
 
 
-def plan_with_delta_pins(
+def plan_with_delta_pins(  # noqa: PLR0914
     ctx: SessionContext,
     *,
     view_nodes: Sequence[ViewNode],
@@ -108,19 +118,25 @@ def plan_with_delta_pins(
         ctx=ctx,
         snapshot=snapshot,
     )
+    capability_snapshot = _planning_capability_snapshot(
+        ctx=ctx,
+        runtime_profile=runtime_profile,
+    )
     scan_planning = _scan_planning(
         ctx,
         runtime_profile=runtime_profile,
         inferred=baseline_inferred,
         dataset_resolver=dataset_resolver,
     )
+    _apply_inferred_scan_policy_overrides(
+        ctx=ctx,
+        baseline_nodes=baseline_nodes,
+        scan_planning=scan_planning,
+        runtime_profile=runtime_profile,
+        dataset_resolver=dataset_resolver,
+        capability_snapshot=capability_snapshot,
+    )
     if scan_planning.scan_units:
-        apply_scan_unit_overrides(
-            ctx,
-            scan_units=scan_planning.scan_units,
-            runtime_profile=runtime_profile,
-            dataset_resolver=dataset_resolver,
-        )
         facade.ensure_view_graph(
             scan_units=scan_planning.scan_units,
             semantic_manifest=semantic_manifest,
@@ -151,6 +167,35 @@ def plan_with_delta_pins(
         scan_units_by_evidence_name=scan_planning.scan_task_units_by_name,
         lineage_by_view=lineage_by_view,
         session_runtime=session_runtime,
+    )
+
+
+def _apply_inferred_scan_policy_overrides(
+    *,
+    ctx: SessionContext,
+    baseline_nodes: Sequence[ViewNode],
+    scan_planning: _ScanPlanning,
+    runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver | None,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> None:
+    overrides = _derive_scan_policy_overrides_for_views(
+        baseline_nodes,
+        base_policy=runtime_profile.policies.scan_policy,
+        capability_snapshot=capability_snapshot,
+    )
+    record_scan_policy_decisions(
+        runtime_profile,
+        overrides=overrides,
+    )
+    if not scan_planning.scan_units:
+        return
+    apply_scan_unit_overrides(
+        ctx,
+        scan_units=scan_planning.scan_units,
+        runtime_profile=runtime_profile,
+        dataset_resolver=dataset_resolver,
+        scan_policy_overrides_by_dataset=scan_policy_overrides_by_dataset(overrides),
     )
 
 
@@ -285,6 +330,133 @@ def _scan_fingerprint(unit: ScanUnit) -> str:
         "pushed_filters": unit.pushed_filters,
     }
     return hash_msgpack_canonical(payload)
+
+
+def _derive_scan_policy_overrides_for_views(
+    view_nodes: Sequence[ViewNode],
+    *,
+    base_policy: ScanPolicyConfig,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> tuple[ScanPolicyOverride, ...]:
+    overrides: list[ScanPolicyOverride] = []
+    for node in sorted(view_nodes, key=lambda item: item.name):
+        bundle = node.plan_bundle
+        if bundle is None:
+            continue
+        signals = extract_plan_signals(bundle)
+        overrides.extend(
+            derive_scan_policy_overrides(
+                signals,
+                base_policy=base_policy,
+                capability_snapshot=capability_snapshot,
+            )
+        )
+    return _merge_scan_policy_overrides(overrides)
+
+
+def _planning_capability_snapshot(
+    *,
+    ctx: SessionContext,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> RuntimeCapabilitiesSnapshot | None:
+    from datafusion_engine.extensions.runtime_capabilities import (
+        build_runtime_capabilities_snapshot,
+    )
+
+    profile_name = getattr(getattr(runtime_profile, "policies", None), "config_policy_name", None)
+    settings_hash_fn = getattr(runtime_profile, "settings_hash", None)
+    settings_hash = settings_hash_fn() if callable(settings_hash_fn) else ""
+    strict_native_provider_enabled = bool(
+        getattr(getattr(runtime_profile, "features", None), "enforce_delta_ffi_provider", False)
+    )
+    try:
+        return build_runtime_capabilities_snapshot(
+            ctx,
+            profile_name=profile_name if isinstance(profile_name, str) else None,
+            settings_hash=settings_hash if isinstance(settings_hash, str) else "",
+            strict_native_provider_enabled=strict_native_provider_enabled,
+        )
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _merge_scan_policy_overrides(
+    overrides: Sequence[ScanPolicyOverride],
+) -> tuple[ScanPolicyOverride, ...]:
+    merged: dict[str, ScanPolicyOverride] = {}
+    for override in overrides:
+        existing = merged.get(override.dataset_name)
+        if existing is None:
+            merged[override.dataset_name] = override
+            continue
+        merged[override.dataset_name] = _merge_scan_policy_override(existing, override)
+    return tuple(merged[name] for name in sorted(merged))
+
+
+def _merge_scan_policy_override(
+    current: ScanPolicyOverride,
+    incoming: ScanPolicyOverride,
+) -> ScanPolicyOverride:
+    merged_policy = _merge_scan_policy_config(current.policy, incoming.policy)
+    merged_reasons = tuple(sorted(set(current.reasons) | set(incoming.reasons)))
+    return ScanPolicyOverride(
+        dataset_name=current.dataset_name,
+        policy=merged_policy,
+        reasons=merged_reasons,
+    )
+
+
+def _merge_scan_policy_config(
+    current: ScanPolicyConfig,
+    incoming: ScanPolicyConfig,
+) -> ScanPolicyConfig:
+    listing = msgspec.structs.replace(
+        current.listing,
+        collect_statistics=_merge_collect_statistics(
+            current=current.listing.collect_statistics,
+            incoming=incoming.listing.collect_statistics,
+        ),
+    )
+    delta_listing = msgspec.structs.replace(
+        current.delta_listing,
+        collect_statistics=_merge_collect_statistics(
+            current=current.delta_listing.collect_statistics,
+            incoming=incoming.delta_listing.collect_statistics,
+        ),
+    )
+    delta_scan = msgspec.structs.replace(
+        current.delta_scan,
+        enable_parquet_pushdown=_merge_enable_parquet_pushdown(
+            current=current.delta_scan.enable_parquet_pushdown,
+            incoming=incoming.delta_scan.enable_parquet_pushdown,
+        ),
+    )
+    return msgspec.structs.replace(
+        current,
+        listing=listing,
+        delta_listing=delta_listing,
+        delta_scan=delta_scan,
+    )
+
+
+def _merge_collect_statistics(*, current: bool | None, incoming: bool | None) -> bool | None:
+    if current is False or incoming is False:
+        return False
+    if current is True or incoming is True:
+        return True
+    return None
+
+
+def _merge_enable_parquet_pushdown(
+    *,
+    current: bool | None,
+    incoming: bool | None,
+) -> bool | None:
+    if current is True or incoming is True:
+        return True
+    if current is False or incoming is False:
+        return False
+    return None
 
 
 def _lineage_by_view(view_nodes: Sequence[ViewNode]) -> dict[str, LineageReport]:

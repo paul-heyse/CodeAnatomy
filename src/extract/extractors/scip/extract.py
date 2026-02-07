@@ -788,8 +788,9 @@ def _record_scip_index_stats(
     payload = _index_stats_row(counts, index_id=index_id, index_path=index_path)
     payload["event_time_unix_ms"] = int(time.time() * 1000)
     from datafusion_engine.lineage.diagnostics import record_artifact
+    from serde_artifact_specs import SCIP_INDEX_STATS_SPEC
 
-    record_artifact(runtime_profile, "scip_index_stats_v1", payload)
+    record_artifact(runtime_profile, SCIP_INDEX_STATS_SPEC, payload)
 
 
 def _record_scip_health_events(

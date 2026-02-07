@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 from hamilton.lifecycle import api as lifecycle_api
 
 from core_types import JsonValue
+from serde_artifact_specs import HAMILTON_RUN_LOG_SPEC
 from serde_msgspec import JSON_ENCODER, StructBaseCompat
 
 if TYPE_CHECKING:
@@ -80,7 +81,7 @@ class StructuredLogHook(lifecycle_api.GraphExecutionHook):
 
         record_artifact(
             self.profile,
-            "hamilton_run_log_v1",
+            HAMILTON_RUN_LOG_SPEC,
             {
                 "run_id": run_id,
                 "plan_signature": self.plan_signature,

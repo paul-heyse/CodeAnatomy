@@ -1014,8 +1014,9 @@ def _record_repo_scope_stats(
         "pathspec_stats": pathspec_stats,
     }
     from datafusion_engine.lineage.diagnostics import record_artifact
+    from serde_artifact_specs import REPO_SCOPE_STATS_SPEC
 
-    record_artifact(runtime_profile, "repo_scope_stats_v1", payload)
+    record_artifact(runtime_profile, REPO_SCOPE_STATS_SPEC, payload)
 
 
 def _trace_sample_paths(paths: Sequence[str], limit: int | None) -> list[str]:
@@ -1104,8 +1105,9 @@ def _record_repo_scope_trace(
         "traces": traces,
     }
     from datafusion_engine.lineage.diagnostics import record_artifact
+    from serde_artifact_specs import REPO_SCOPE_TRACE_SPEC
 
-    record_artifact(runtime_profile, "repo_scope_trace_v1", payload)
+    record_artifact(runtime_profile, REPO_SCOPE_TRACE_SPEC, payload)
 
 
 @dataclass
@@ -1166,8 +1168,9 @@ def _record_repo_blame(
         ],
     }
     from datafusion_engine.lineage.diagnostics import record_artifact
+    from serde_artifact_specs import REPO_SCAN_BLAME_SPEC
 
-    record_artifact(runtime_profile, "repo_scan_blame_v1", payload)
+    record_artifact(runtime_profile, REPO_SCAN_BLAME_SPEC, payload)
 
 
 def _blame_paths(

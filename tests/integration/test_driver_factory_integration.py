@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 import pytest
 
@@ -76,6 +76,12 @@ class _SessionRuntimeStub:
     udf_snapshot_hash: str
     udf_rewrite_tags: tuple[str, ...]
     domain_planner_names: tuple[str, ...]
+
+
+class _SemanticContextStub:
+    def __init__(self) -> None:
+        self.manifest: object | None = None
+        self.dataset_resolver: object = object()
 
 
 def _stub_view_node(name: str) -> ViewNode:
@@ -175,7 +181,7 @@ def _stub_view_context(plan: ExecutionPlan) -> ViewGraphContext:
         determinism_tier=DeterminismTier.BEST_EFFORT,
         snapshot={},
         view_nodes=plan.view_nodes,
-        semantic_context=cast("SemanticExecutionContext", object()),
+        semantic_context=cast("SemanticExecutionContext", _SemanticContextStub()),
         runtime_profile_spec=profile_spec,
     )
 
@@ -219,8 +225,9 @@ def test_build_plan_context_invokes_policy_validation(monkeypatch: pytest.Monkey
 
     class _Authority:
         enforcement_mode = "warn"
-        capability_snapshot = {"strict_native_provider_enabled": False}
+        capability_snapshot: ClassVar[dict[str, object]] = {"strict_native_provider_enabled": False}
         session_runtime_fingerprint = "runtime:test"
+        semantic_context = _SemanticContextStub()
 
     def _fake_build_execution_authority(**kwargs: object) -> _Authority:
         called["authority_kwargs"] = kwargs
@@ -232,11 +239,13 @@ def test_build_plan_context_invokes_policy_validation(monkeypatch: pytest.Monkey
         runtime_profile: object,
         udf_snapshot: object,
         capability_snapshot: object,
+        semantic_manifest: object | None = None,
     ) -> PolicyValidationResult:
         called["execution_plan"] = execution_plan
         called["runtime_profile"] = runtime_profile
         called["udf_snapshot"] = udf_snapshot
         called["capability_snapshot"] = capability_snapshot
+        called["semantic_manifest"] = semantic_manifest
         return PolicyValidationResult.empty()
 
     monkeypatch.setattr(
@@ -263,3 +272,4 @@ def test_build_plan_context_invokes_policy_validation(monkeypatch: pytest.Monkey
     assert called["execution_plan"] is plan
     assert called["runtime_profile"] is view_ctx.profile
     assert called["capability_snapshot"] == {"strict_native_provider_enabled": False}
+    assert called["semantic_manifest"] is view_ctx.semantic_context.manifest

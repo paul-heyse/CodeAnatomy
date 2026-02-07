@@ -54,6 +54,15 @@
 - Test `expected_names` list in `tests/unit/test_artifact_spec_registry.py` must be updated when adding specs
 - `StructBaseCompat` from `serde_msgspec` is forward-compatible base for serialized structs
 
+### serde_artifact_specs Circular Import Chain (CRITICAL)
+- Chain: `serde_artifact_specs` -> `serde_schema_registry` -> `schema_spec.relationship_specs` -> `datafusion_engine.session.runtime`
+- `session/runtime.py` uses deferred import at END of file (after `__all__`, line ~7838) to break the cycle
+- This works because by end-of-file, `SessionRuntime` and `dataset_spec_from_context` are already defined
+- Other files (obs/, views/) can import `serde_artifact_specs` at top-level normally (no cycle)
+- E402 (module-level import not at top) is globally ignored in `pyproject.toml`, so no `# noqa` needed
+- PLC0414: do NOT use `X as X` pattern for deferred imports (redundant alias triggers lint error)
+- When migrating callsites that use `record_artifact()`, update tests that assert on raw string artifact names
+
 ## msgspec Serialization Behavior
 - `msgspec.to_builtins` omits fields at default values (empty tuples, None)
 - Tuples stay as tuples (not lists) in `to_builtins` output
@@ -74,8 +83,13 @@
 - Accepts `ArtifactSpec | str` as name parameter via `_resolve_artifact_name()`
 - 3 calling patterns: standalone `record_artifact(profile, name, payload)`, method `self.record_artifact(name, payload)`, and `profile.record_artifact(name, payload)`
 - For standalone calls name is args[1]; for method/attribute calls name is args[0]
-- 26 registered specs in `src/serde_artifact_specs.py` (14 typed, 12 untyped)
-- ~161 non-definition callsites across ~39 files; ~3% typed coverage as of Feb 2026
+- 100+ registered specs in `src/serde_artifact_specs.py`
+- Phase 4 migration (session/runtime, views, obs/diagnostics): 72 callsites across 6 files migrated
+- Phase 4 session/runtime.py complete: 46 string literals replaced with spec constants
+- Deferred import at END of file (after `__all__`, line ~7899): 41 unique `ArtifactSpec` constants from `serde_artifact_specs`
+- `_load_runtime_artifact_specs()` + `_ensure_runtime_artifact_specs_registered()` remain as side-effect guard in `record_artifact()`
+- Auto-formatting tools may rewrite bare constants into lazy-load indirection patterns; use `python3 -c` batch scripts to resist
+- `DiagnosticsSink` protocol widened: `record_artifact(name: ArtifactSpec | str, ...)` (diagnostics.py)
 - Existing audit script: `scripts/audit_artifact_callsites.py` (plain text, no spec matching)
 - Migration script: `scripts/migrate_artifact_callsites.py` (markdown/JSON, spec matching, phase classification)
 

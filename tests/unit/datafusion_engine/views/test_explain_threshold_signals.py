@@ -9,6 +9,7 @@ import pytest
 
 from datafusion_engine.plan.signals import PlanSignals
 from datafusion_engine.views import graph as graph_module
+from serde_artifact_specs import VIEW_EXPLAIN_ANALYZE_THRESHOLD_SPEC
 
 if TYPE_CHECKING:
     from datafusion_engine.views.graph import ViewGraphContext, ViewNode
@@ -53,12 +54,12 @@ def test_maybe_record_explain_analyze_threshold_uses_plan_signals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Threshold diagnostics should read duration/output rows from plan signals."""
-    captured: list[tuple[str, dict[str, Any]]] = []
+    captured: list[tuple[object, dict[str, Any]]] = []
 
     def _fake_extract_plan_signals(*_args: object, **_kwargs: object) -> PlanSignals:
         return PlanSignals(explain_analyze_duration_ms=25.0, explain_analyze_output_rows=11)
 
-    def _fake_record_artifact(profile: object, name: str, payload: dict[str, Any]) -> None:
+    def _fake_record_artifact(profile: object, name: object, payload: dict[str, Any]) -> None:
         _ = profile
         captured.append((name, payload))
 
@@ -78,7 +79,7 @@ def test_maybe_record_explain_analyze_threshold_uses_plan_signals(
 
     assert len(captured) == 1
     event_name, payload = captured[0]
-    assert event_name == "view_explain_analyze_threshold_v1"
+    assert event_name is VIEW_EXPLAIN_ANALYZE_THRESHOLD_SPEC
     assert payload["duration_ms"] == 25.0
     assert payload["output_rows"] == 11
 

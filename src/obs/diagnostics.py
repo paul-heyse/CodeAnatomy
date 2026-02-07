@@ -23,6 +23,17 @@ from obs.otel.logs import emit_diagnostics_event
 from obs.otel.metrics import record_artifact_count
 from schema_spec.pandera_bridge import validation_policy_payload
 from schema_spec.system import ValidationPolicySpec
+from serde_artifact_specs import (
+    DATAFRAME_VALIDATION_ERRORS_SPEC,
+    DATAFUSION_PREPARED_STATEMENTS_SPEC,
+    DATAFUSION_VIEW_ARTIFACTS_SPEC,
+    HAMILTON_CACHE_LINEAGE_SPEC,
+    RUST_UDF_SNAPSHOT_SPEC,
+    SEMANTIC_QUALITY_ARTIFACT_SPEC,
+    VIEW_CONTRACT_VIOLATIONS_SPEC,
+    VIEW_FINGERPRINTS_SPEC,
+    VIEW_UDF_PARITY_SPEC,
+)
 from serde_msgspec import StructBaseCompat
 from utils.uuid_factory import uuid7_str
 
@@ -156,7 +167,7 @@ def prepared_statement_hook(
 
     def _hook(spec: PreparedStatementSpec) -> None:
         recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
-        recorder_sink.record_artifact("datafusion_prepared_statements_v1", spec.payload())
+        recorder_sink.record_artifact(DATAFUSION_PREPARED_STATEMENTS_SPEC, spec.payload())
 
     return _hook
 
@@ -176,7 +187,7 @@ def record_semantic_quality_artifact(
         Semantic diagnostics artifact summary payload.
     """
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
-    recorder_sink.record_artifact("semantic_quality_artifact_v1", artifact.payload())
+    recorder_sink.record_artifact(SEMANTIC_QUALITY_ARTIFACT_SPEC, artifact.payload())
 
 
 def record_semantic_quality_events(
@@ -208,7 +219,7 @@ def record_view_fingerprints(
     """Record policy-aware view fingerprints into diagnostics."""
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
-        "view_fingerprints_v1",
+        VIEW_FINGERPRINTS_SPEC,
         view_fingerprint_payload(view_nodes=view_nodes),
     )
 
@@ -223,7 +234,7 @@ def record_view_udf_parity(
     """Record view/UDF parity diagnostics into the sink."""
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
-        "view_udf_parity_v1",
+        VIEW_UDF_PARITY_SPEC,
         view_udf_parity_payload(snapshot=snapshot, view_nodes=view_nodes, ctx=ctx),
     )
 
@@ -236,7 +247,7 @@ def record_rust_udf_snapshot(
     """Record a Rust UDF snapshot summary payload."""
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
-        "rust_udf_snapshot_v1",
+        RUST_UDF_SNAPSHOT_SPEC,
         rust_udf_snapshot_payload(snapshot),
     )
 
@@ -261,7 +272,7 @@ def record_view_contract_violations(
         ],
     }
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
-    recorder_sink.record_artifact("view_contract_violations_v1", payload)
+    recorder_sink.record_artifact(VIEW_CONTRACT_VIOLATIONS_SPEC, payload)
 
 
 def _normalize_failure_cases(error: Exception) -> list[dict[str, object]] | None:
@@ -299,14 +310,14 @@ def record_dataframe_validation_error(
         "failure_cases": failure_cases_payload,
     }
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
-    recorder_sink.record_artifact("dataframe_validation_errors_v1", payload)
+    recorder_sink.record_artifact(DATAFRAME_VALIDATION_ERRORS_SPEC, payload)
 
 
 def record_view_artifact(sink: DiagnosticsCollector, *, artifact: DataFusionViewArtifact) -> None:
     """Record a deterministic view artifact payload."""
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
     recorder_sink.record_artifact(
-        "datafusion_view_artifacts_v4",
+        DATAFUSION_VIEW_ARTIFACTS_SPEC,
         artifact.diagnostics_payload(event_time_unix_ms=int(time.time() * 1000)),
     )
 
@@ -319,7 +330,7 @@ def record_cache_lineage(
 ) -> None:
     """Record cache lineage artifacts and optional per-node rows."""
     recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
-    recorder_sink.record_artifact("hamilton_cache_lineage_v2", payload)
+    recorder_sink.record_artifact(HAMILTON_CACHE_LINEAGE_SPEC, payload)
     if rows:
         recorder_sink.record_events("hamilton_cache_lineage_nodes_v1", rows)
 

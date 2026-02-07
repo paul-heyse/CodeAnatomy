@@ -7,6 +7,7 @@
 - Top Symbols: N/A — no symbol like matches
 - Top Files: N/A — no anchored matches
 - Match Categories: N/A — no findings
+- Pyrefly Overview: N/A — pyrefly overview missing
 
 ## Summary
 - {"caps_hit":"max_total_matches","cross_language_diagnostics":[],"exclude":["tests/**"],"include":["src/**"],"lang_scope":"auto","language_capabilities":{"python":{},"rust":{},"shared":{}},"language_order":["python","rust"],"languages":{"python":{"caps_hit":"none","matched_files":2,"scanned_files":3,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":4,"truncated":false},"rust":{"caps_hit":"none","matched_files":1,"scanned_files":1,"scanned_files_is_estimate":false,"timed_out":false,"total_matches":1,"truncated":false}},"mode":"identifier","pattern":"\\bbuild_graph\\b","query":"build_graph","render_enrichment_applied":0,"render_enrichment_attempted":0,"render_enrichment_failed":0,"render_enrichment_skipped":0,"scanned_files_is_estimate":false}

@@ -116,44 +116,6 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "read_delta_table": ("storage.deltalake.delta", "read_delta_table"),
     "read_delta_table_eager": ("storage.deltalake.delta", "read_delta_table_eager"),
     "snapshot_key_for_table": ("storage.deltalake.delta", "snapshot_key_for_table"),
-    "disable_delta_change_data_feed": (
-        "storage.deltalake.delta",
-        "disable_delta_change_data_feed",
-    ),
-    "disable_delta_check_constraints": (
-        "storage.deltalake.delta",
-        "disable_delta_check_constraints",
-    ),
-    "disable_delta_checkpoint_protection": (
-        "storage.deltalake.delta",
-        "disable_delta_checkpoint_protection",
-    ),
-    "disable_delta_column_mapping": (
-        "storage.deltalake.delta",
-        "disable_delta_column_mapping",
-    ),
-    "disable_delta_deletion_vectors": (
-        "storage.deltalake.delta",
-        "disable_delta_deletion_vectors",
-    ),
-    "disable_delta_generated_columns": (
-        "storage.deltalake.delta",
-        "disable_delta_generated_columns",
-    ),
-    "disable_delta_in_commit_timestamps": (
-        "storage.deltalake.delta",
-        "disable_delta_in_commit_timestamps",
-    ),
-    "disable_delta_invariants": ("storage.deltalake.delta", "disable_delta_invariants"),
-    "disable_delta_row_tracking": ("storage.deltalake.delta", "disable_delta_row_tracking"),
-    "disable_delta_v2_checkpoints": (
-        "storage.deltalake.delta",
-        "disable_delta_v2_checkpoints",
-    ),
-    "disable_delta_vacuum_protocol_check": (
-        "storage.deltalake.delta",
-        "disable_delta_vacuum_protocol_check",
-    ),
     "enable_delta_features": ("storage.deltalake.delta", "enable_delta_features"),
     "enable_delta_change_data_feed": (
         "storage.deltalake.delta",
@@ -205,52 +167,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "select_candidate_files": ("storage.deltalake.file_pruning", "select_candidate_files"),
 }
 
-_DEPRECATED_EXPORTS: dict[str, str] = {
-    "disable_delta_change_data_feed": (
-        "storage.deltalake.disable_delta_change_data_feed is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_check_constraints": (
-        "storage.deltalake.disable_delta_check_constraints is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_checkpoint_protection": (
-        "storage.deltalake.disable_delta_checkpoint_protection is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_column_mapping": (
-        "storage.deltalake.disable_delta_column_mapping is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_deletion_vectors": (
-        "storage.deltalake.disable_delta_deletion_vectors is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_generated_columns": (
-        "storage.deltalake.disable_delta_generated_columns is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_in_commit_timestamps": (
-        "storage.deltalake.disable_delta_in_commit_timestamps is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_invariants": (
-        "storage.deltalake.disable_delta_invariants is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_row_tracking": (
-        "storage.deltalake.disable_delta_row_tracking is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_v2_checkpoints": (
-        "storage.deltalake.disable_delta_v2_checkpoints is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-    "disable_delta_vacuum_protocol_check": (
-        "storage.deltalake.disable_delta_vacuum_protocol_check is deprecated and will be removed; "
-        "prefer explicit feature mutation entrypoints in storage.deltalake.delta."
-    ),
-}
+_DEPRECATED_EXPORTS: dict[str, str] = {}
 
 if TYPE_CHECKING:
     import storage.deltalake.config as _delta_config
@@ -296,17 +213,6 @@ if TYPE_CHECKING:
     delta_table_features = _delta_io.delta_table_features
     delta_table_schema = _delta_io.delta_table_schema
     delta_table_version = _delta_io.delta_table_version
-    disable_delta_change_data_feed = _delta_io.disable_delta_change_data_feed
-    disable_delta_check_constraints = _delta_io.disable_delta_check_constraints
-    disable_delta_checkpoint_protection = _delta_io.disable_delta_checkpoint_protection
-    disable_delta_column_mapping = _delta_io.disable_delta_column_mapping
-    disable_delta_deletion_vectors = _delta_io.disable_delta_deletion_vectors
-    disable_delta_generated_columns = _delta_io.disable_delta_generated_columns
-    disable_delta_in_commit_timestamps = _delta_io.disable_delta_in_commit_timestamps
-    disable_delta_invariants = _delta_io.disable_delta_invariants
-    disable_delta_row_tracking = _delta_io.disable_delta_row_tracking
-    disable_delta_v2_checkpoints = _delta_io.disable_delta_v2_checkpoints
-    disable_delta_vacuum_protocol_check = _delta_io.disable_delta_vacuum_protocol_check
     enable_delta_features = _delta_io.enable_delta_features
     enable_delta_change_data_feed = _delta_io.enable_delta_change_data_feed
     enable_delta_check_constraints = _delta_io.enable_delta_check_constraints

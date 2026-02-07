@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -9,11 +10,15 @@ from typing import cast
 import pytest
 from tools.cq.core.locations import SourceSpan
 from tools.cq.search.classifier import QueryMode, clear_caches
+from tools.cq.search.models import SearchConfig
 from tools.cq.search.smart_search import (
     SMART_SEARCH_LIMITS,
     EnrichedMatch,
     RawMatch,
     SearchStats,
+    _attach_pyrefly_enrichment,
+    _PyreflyPrefetchResult,
+    _run_single_partition,
     build_candidate_searcher,
     build_finding,
     build_followups,
@@ -602,7 +607,7 @@ class TestBuildSections:
         assert len(sections_with_strings[0].findings) == 1
 
 
-class TestSmartSearch:
+class TestSmartSearch:  # noqa: PLR0904
     """Tests for the full smart search pipeline."""
 
     def test_smart_search_identifier(self, sample_repo: Path) -> None:
@@ -922,6 +927,153 @@ class TestSmartSearch:
         first = cast("dict[str, object]", payloads[0])
         assert first.get("language") == "python"
         assert isinstance(first.get("python"), dict)
+
+    def test_pyrefly_summary_fields_present(self, sample_repo: Path) -> None:
+        """Search summaries should include additive Pyrefly metadata blocks."""
+        clear_caches()
+        result = smart_search(sample_repo, "build_graph", lang_scope="python")
+        summary = cast("Mapping[str, object]", result.summary)
+        assert "pyrefly_overview" in summary
+        assert "pyrefly_telemetry" in summary
+        assert "pyrefly_diagnostics" in summary
+
+    def test_pyrefly_payload_key_attached_when_available(self, sample_repo: Path) -> None:
+        """Per-finding enrichment should expose a dedicated pyrefly payload key."""
+        clear_caches()
+        result = smart_search(sample_repo, "build_graph", lang_scope="python")
+        assert result.evidence
+        first = result.evidence[0]
+        enrichment = first.details.data.get("enrichment")
+        assert isinstance(enrichment, dict)
+        # Key is always present when Pyrefly enrichment is materialized.
+        if "pyrefly" in enrichment:
+            assert isinstance(enrichment["pyrefly"], dict)
+
+    def test_attach_pyrefly_uses_prefetched_payload(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Prefetched Pyrefly payloads should bypass synchronous fallback calls."""
+        clear_caches()
+        ctx = SearchConfig(
+            root=tmp_path,
+            query="target",
+            mode=QueryMode.IDENTIFIER,
+            limits=SMART_SEARCH_LIMITS,
+        )
+        match = EnrichedMatch(
+            span=_span("sample.py", 3, 4),
+            text="target()",
+            match_text="target",
+            category="callsite",
+            confidence=0.9,
+            evidence_kind="resolved_ast",
+            language="python",
+        )
+        key = ("sample.py", 3, 4, "target")
+        prefetched_payload: dict[str, object] = {
+            "call_graph": {"incoming_total": 1, "outgoing_total": 0}
+        }
+        prefetched = _PyreflyPrefetchResult(
+            payloads={key: prefetched_payload},
+            attempted_keys={key},
+            telemetry={"attempted": 1, "applied": 1, "failed": 0, "skipped": 0, "timed_out": 0},
+            diagnostics=[],
+        )
+
+        def _boom(*_args: object, **_kwargs: object) -> dict[str, object] | None:
+            msg = "fallback pyrefly call should not run when prefetched payload exists"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr("tools.cq.search.smart_search._pyrefly_enrich_match", _boom)
+        enriched, _overview, telemetry, diagnostics = _attach_pyrefly_enrichment(
+            ctx=ctx,
+            matches=[match],
+            prefetched=prefetched,
+        )
+        assert not diagnostics
+        assert enriched[0].pyrefly_enrichment == prefetched_payload
+        telemetry_map = cast("Mapping[str, object]", telemetry)
+        assert telemetry_map.get("attempted") == 1
+        assert telemetry_map.get("applied") == 1
+
+    def test_run_single_partition_starts_pyrefly_prefetch_before_classification(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pyrefly prefetch should run concurrently with classification."""
+        clear_caches()
+        ctx = SearchConfig(
+            root=tmp_path,
+            query="target",
+            mode=QueryMode.IDENTIFIER,
+            limits=SMART_SEARCH_LIMITS,
+        )
+        raw_match = RawMatch(
+            span=_span("sample.py", 3, 4),
+            text="target()",
+            match_text="target",
+            match_start=4,
+            match_end=10,
+            match_byte_start=4,
+            match_byte_end=10,
+        )
+        prefetch_started = threading.Event()
+        release_prefetch = threading.Event()
+
+        def _fake_candidate_phase(
+            _ctx: SearchConfig,
+            *,
+            lang: str,
+            mode: QueryMode,
+        ) -> tuple[list[RawMatch], SearchStats, str]:
+            assert lang == "python"
+            assert mode == QueryMode.IDENTIFIER
+            return (
+                [raw_match],
+                SearchStats(scanned_files=1, matched_files=1, total_matches=1),
+                r"\btarget\b",
+            )
+
+        def _fake_prefetch(
+            _ctx: SearchConfig,
+            *,
+            lang: str,
+            raw_matches: list[RawMatch],
+        ) -> _PyreflyPrefetchResult:
+            assert lang == "python"
+            assert raw_matches == [raw_match]
+            prefetch_started.set()
+            release_prefetch.wait(timeout=1.0)
+            return _PyreflyPrefetchResult(
+                telemetry={"attempted": 0, "applied": 0, "failed": 0, "skipped": 0, "timed_out": 0}
+            )
+
+        def _fake_classification(
+            _ctx: SearchConfig,
+            *,
+            lang: str,
+            raw_matches: list[RawMatch],
+        ) -> list[EnrichedMatch]:
+            assert lang == "python"
+            assert raw_matches == [raw_match]
+            assert prefetch_started.wait(timeout=1.0), (
+                "prefetch should start before classification returns"
+            )
+            release_prefetch.set()
+            return []
+
+        monkeypatch.setattr(
+            "tools.cq.search.smart_search._run_candidate_phase", _fake_candidate_phase
+        )
+        monkeypatch.setattr(
+            "tools.cq.search.smart_search._prefetch_pyrefly_for_raw_matches",
+            _fake_prefetch,
+        )
+        monkeypatch.setattr(
+            "tools.cq.search.smart_search._run_classification_phase", _fake_classification
+        )
+
+        result = _run_single_partition(ctx, "python", mode=QueryMode.IDENTIFIER)
+        assert result.pyrefly_prefetch is not None
 
     def test_rust_tree_sitter_fail_open(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

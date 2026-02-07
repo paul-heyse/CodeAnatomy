@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -64,7 +65,11 @@ from obs.otel.run_context import get_run_id
 from relspec.errors import RelspecValidationError
 from relspec.execution_authority import ExecutionAuthorityContext
 from relspec.view_defs import RELATION_OUTPUT_NAME
-from serde_artifact_specs import EXECUTION_AUTHORITY_VALIDATION_SPEC, POLICY_VALIDATION_SPEC
+from serde_artifact_specs import (
+    COMPILED_EXECUTION_POLICY_SPEC,
+    EXECUTION_AUTHORITY_VALIDATION_SPEC,
+    POLICY_VALIDATION_SPEC,
+)
 from utils.env_utils import env_bool, env_value
 from utils.hashing import CacheKeyBuilder
 
@@ -77,6 +82,7 @@ if TYPE_CHECKING:
     from extract.coordination.evidence_plan import EvidencePlan
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.graph_snapshot import GraphSnapshotHook
+    from relspec.compiled_policy import CompiledExecutionPolicy
     from relspec.execution_plan import ExecutionPlan
     from relspec.policy_validation import PolicyValidationResult
     from semantics.compile_context import SemanticExecutionContext
@@ -467,6 +473,15 @@ def build_view_graph_context(
     datafusion_engine.views.registry_specs._semantics_view_nodes : Semantic view registration.
     hamilton_pipeline.task_module_builder.build_task_execution_module : Dynamic task module.
     """
+    from datafusion_engine.session.runtime import (
+        compile_resolver_invariants_strict_mode,
+        datasource_config_from_manifest,
+        datasource_config_from_profile,
+        record_compile_resolver_invariants,
+    )
+    from semantics.compile_invariants import compile_tracking
+    from semantics.resolver_identity import resolver_identity_tracking
+
     runtime_profile_spec = resolve_runtime_profile(
         _runtime_profile_name(config),
         determinism=_determinism_override(config),
@@ -482,33 +497,81 @@ def build_view_graph_context(
     from datafusion_engine.session.runtime import refresh_session_runtime
     from datafusion_engine.views.registry_specs import view_graph_nodes
 
-    session_runtime = profile.session_runtime()
-    if execution_context is not None:
-        semantic_context = execution_context
-    else:
-        from semantics.compile_context import build_semantic_execution_context
+    strict_invariants = compile_resolver_invariants_strict_mode()
+    expected_compiles = 0 if execution_context is not None else 1
+    with (
+        compile_tracking(
+            max_compiles=expected_compiles,
+            label="build_view_graph_context",
+            strict=False,
+        ) as compile_tracker,
+        resolver_identity_tracking(
+            label="build_view_graph_context",
+            strict=False,
+        ) as resolver_tracker,
+    ):
+        session_runtime = profile.session_runtime()
+        if execution_context is not None:
+            semantic_context = execution_context
+        else:
+            from semantics.compile_context import build_semantic_execution_context
 
-        semantic_context = build_semantic_execution_context(
-            runtime_profile=profile,
-            ctx=session_runtime.ctx,
+            semantic_context = build_semantic_execution_context(
+                runtime_profile=profile,
+                ctx=session_runtime.ctx,
+            )
+        semantic_manifest = semantic_context.manifest
+        if semantic_manifest.dataset_bindings.locations:
+            resolved_data_sources = datasource_config_from_manifest(
+                semantic_manifest,
+                runtime_profile=profile,
+            )
+        else:
+            resolved_data_sources = datasource_config_from_profile(profile)
+        replaced_profile = False
+        try:
+            profile = msgspec.structs.replace(profile, data_sources=resolved_data_sources)
+            replaced_profile = True
+        except (TypeError, ValueError, AttributeError):
+            with contextlib.suppress(AttributeError, TypeError):
+                cast("Any", profile).data_sources = resolved_data_sources
+        if replaced_profile:
+            runtime_profile_spec = msgspec.structs.replace(
+                runtime_profile_spec,
+                datafusion=profile,
+            )
+            semantic_context = replace(semantic_context, runtime_profile=profile)
+        semantic_ir = semantic_manifest.semantic_ir
+        facade = DataFusionExecutionFacade(ctx=session_runtime.ctx, runtime_profile=profile)
+        # Single registration point: ensure_view_graph registers ALL views including
+        # semantic views via registry_specs.view_graph_nodes(). Hamilton consumes only.
+        snapshot = facade.ensure_view_graph(
+            semantic_manifest=semantic_manifest,
+            dataset_resolver=semantic_context.dataset_resolver,
         )
-    semantic_manifest = semantic_context.manifest
-    semantic_ir = semantic_manifest.semantic_ir
-    facade = DataFusionExecutionFacade(ctx=session_runtime.ctx, runtime_profile=profile)
-    # Single registration point: ensure_view_graph registers ALL views including
-    # semantic views via registry_specs.view_graph_nodes(). Hamilton consumes only.
-    snapshot = facade.ensure_view_graph(
-        semantic_manifest=semantic_manifest,
-        dataset_resolver=semantic_context.dataset_resolver,
-    )
-    session_runtime = refresh_session_runtime(profile, ctx=session_runtime.ctx)
-    validate_edge_kind_requirements(_relation_output_schema(session_runtime))
-    nodes = view_graph_nodes(
-        session_runtime.ctx,
-        snapshot=snapshot,
-        runtime_profile=profile,
-        semantic_ir=semantic_ir,
-        manifest=semantic_manifest,
+        session_runtime = refresh_session_runtime(profile, ctx=session_runtime.ctx)
+        validate_edge_kind_requirements(_relation_output_schema(session_runtime))
+        nodes = view_graph_nodes(
+            session_runtime.ctx,
+            snapshot=snapshot,
+            runtime_profile=profile,
+            semantic_ir=semantic_ir,
+            manifest=semantic_manifest,
+        )
+    violations: list[str] = []
+    try:
+        compile_tracker.assert_compile_count()
+    except RuntimeError as exc:
+        violations.append(str(exc))
+    violations.extend(resolver_tracker.verify_identity())
+    record_compile_resolver_invariants(
+        profile,
+        label="build_view_graph_context",
+        compile_count=compile_tracker.compile_count,
+        max_compiles=compile_tracker.max_compiles,
+        distinct_resolver_count=resolver_tracker.distinct_resolvers(),
+        strict=strict_invariants,
+        violations=violations,
     )
     return ViewGraphContext(
         profile=profile,
@@ -585,6 +648,72 @@ def _authority_evidence_plan(
     return compile_evidence_plan(rules=outputs)
 
 
+def _compile_authority_policy(
+    *,
+    plan: ExecutionPlan,
+    profile: DataFusionRuntimeProfile,
+) -> CompiledExecutionPolicy | None:
+    from relspec.policy_compiler import compile_execution_policy
+
+    try:
+        output_locations = profile.data_sources.semantic_output.locations
+        return compile_execution_policy(
+            task_graph=plan.task_graph,
+            output_locations=output_locations,
+            runtime_profile=profile,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _record_compiled_policy_artifact(
+    profile: DataFusionRuntimeProfile,
+    compiled_policy: CompiledExecutionPolicy | None,
+) -> None:
+
+    if compiled_policy is None:
+        return
+    cache_dist: dict[str, int] = {}
+    for value in compiled_policy.cache_policy_by_view.values():
+        cache_dist[value] = cache_dist.get(value, 0) + 1
+    profile.record_artifact(
+        COMPILED_EXECUTION_POLICY_SPEC,
+        {
+            "cache_policy_count": len(compiled_policy.cache_policy_by_view),
+            "scan_override_count": len(compiled_policy.scan_policy_overrides),
+            "udf_requirement_count": len(compiled_policy.udf_requirements_by_view),
+            "validation_mode": compiled_policy.validation_mode,
+            "policy_fingerprint": compiled_policy.policy_fingerprint,
+            "cache_policy_distribution": cache_dist or None,
+        },
+    )
+
+
+def _record_execution_package(
+    *,
+    profile: DataFusionRuntimeProfile,
+    manifest: object | None,
+    compiled_policy: object | None,
+    capability_snapshot: object | None,
+    plan_fingerprints: Mapping[str, str],
+) -> None:
+    from relspec.execution_package import build_execution_package
+    from serde_artifact_specs import EXECUTION_PACKAGE_SPEC
+    from serde_msgspec import to_builtins_mapping
+
+    package = build_execution_package(
+        manifest=manifest,
+        compiled_policy=compiled_policy,
+        capability_snapshot=capability_snapshot,
+        plan_bundle_fingerprints=plan_fingerprints,
+        session_config=profile,
+    )
+    profile.record_artifact(
+        EXECUTION_PACKAGE_SPEC,
+        to_builtins_mapping(package, str_keys=True),
+    )
+
+
 def _build_execution_authority(
     *,
     view_ctx: ViewGraphContext,
@@ -604,6 +733,10 @@ def _build_execution_authority(
         settings_hash=view_ctx.profile.settings_hash(),
         strict_native_provider_enabled=view_ctx.profile.features.enforce_delta_ffi_provider,
     )
+    compiled_policy = _compile_authority_policy(
+        plan=plan,
+        profile=view_ctx.profile,
+    )
     authority = ExecutionAuthorityContext(
         semantic_context=view_ctx.semantic_context,
         evidence_plan=evidence_plan,
@@ -611,6 +744,7 @@ def _build_execution_authority(
         capability_snapshot=capability_snapshot,
         session_runtime_fingerprint=session_runtime_hash(view_ctx.session_runtime),
         enforcement_mode=_execution_authority_enforcement(config),
+        compiled_policy=compiled_policy,
     )
     view_ctx.profile.record_artifact(
         EXECUTION_AUTHORITY_VALIDATION_SPEC,
@@ -628,6 +762,7 @@ def _build_execution_authority(
             "required_adapter_keys": list(authority.required_adapter_keys()),
         },
     )
+    _record_compiled_policy_artifact(view_ctx.profile, compiled_policy)
     return authority
 
 
@@ -2006,6 +2141,7 @@ def build_plan_context(
         udf_snapshot=_policy_validation_udf_snapshot(resolved_plan),
         capability_snapshot=authority_context.capability_snapshot,
         semantic_manifest=authority_context.semantic_context.manifest,
+        compiled_policy=authority_context.compiled_policy,
     )
     _record_policy_validation_artifact(
         view_ctx=resolved_view_ctx,
@@ -2017,6 +2153,13 @@ def build_plan_context(
     _enforce_policy_validation_result(
         result=policy_validation_result,
         mode=authority_context.enforcement_mode,
+    )
+    _record_execution_package(
+        profile=resolved_view_ctx.profile,
+        manifest=authority_context.semantic_context.manifest,
+        compiled_policy=authority_context.compiled_policy,
+        capability_snapshot=authority_context.capability_snapshot,
+        plan_fingerprints=resolved_plan.plan_fingerprints,
     )
     from hamilton_pipeline.validators import set_schema_contracts
 

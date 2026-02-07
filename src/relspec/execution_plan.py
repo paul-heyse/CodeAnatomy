@@ -749,6 +749,9 @@ def _prepare_plan_context(
                     "scan_unit_count": len(pruned.scan_units),
                 },
             )
+            comparison_policy = runtime_profile.policies.performance_policy.comparison
+            if comparison_policy.enable_diff_gates:
+                raise
     contracts_evidence = _contracts_and_evidence(
         session=session,
         pruned=pruned,
@@ -1959,6 +1962,35 @@ def prune_execution_plan(
     )
 
 
+def derive_task_costs_from_plan(
+    plan_metrics: Mapping[str, TaskPlanMetrics],
+) -> dict[str, float]:
+    """Derive scheduling task costs from plan statistics.
+
+    Use ``stats_row_count`` and ``stats_total_bytes`` from captured plan
+    metrics to produce non-uniform costs for HEFT-style scheduling.  When
+    metrics lack statistics, fall back to the same priority cascade used by
+    the internal cost pipeline (duration -> output_rows -> partition_count ->
+    repartition_count -> 1.0).
+
+    Parameters
+    ----------
+    plan_metrics : Mapping[str, TaskPlanMetrics]
+        Per-task plan metrics captured from DataFusion explains.
+
+    Returns:
+    -------
+    dict[str, float]
+        Mapping of task name to derived cost.
+    """
+    costs: dict[str, float] = {}
+    for name, metric in plan_metrics.items():
+        base_cost = _base_cost_from_metrics(metric)
+        if base_cost is not None:
+            costs[name] = _apply_physical_adjustments(base_cost, metric)
+    return costs
+
+
 __all__ = [
     "ExecutionPlan",
     "ExecutionPlanRequest",
@@ -1966,6 +1998,7 @@ __all__ = [
     "bottom_level_costs",
     "compile_execution_plan",
     "dependency_map_from_inferred",
+    "derive_task_costs_from_plan",
     "downstream_task_closure",
     "priority_for_task",
     "prune_execution_plan",

@@ -141,6 +141,18 @@ def _populate_run_summary_metadata(
     lang_scope, language_order = _derive_run_scope_metadata(executed_results)
     merged.summary.setdefault("lang_scope", lang_scope)
     merged.summary.setdefault("language_order", list(language_order))
+    merged.summary.setdefault("pyrefly_overview", {})
+    merged.summary.setdefault(
+        "pyrefly_telemetry",
+        {
+            "attempted": 0,
+            "applied": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+        },
+    )
+    merged.summary.setdefault("pyrefly_diagnostics", [])
 
 
 def _derive_run_summary_metadata(

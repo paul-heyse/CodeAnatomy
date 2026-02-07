@@ -23,7 +23,7 @@ from datafusion_engine.session.runtime import (
     ExtractOutputConfig,
     SemanticOutputConfig,
 )
-from semantics.compile_context import compile_semantic_program
+from semantics.compile_context import build_semantic_execution_context
 from semantics.program_manifest import SemanticProgramManifest
 from tests.test_helpers.optional_deps import require_datafusion_udfs, require_deltalake
 
@@ -37,11 +37,11 @@ def _manifest_for(
     ctx: SessionContext | None = None,
 ) -> SemanticProgramManifest:
     resolved_ctx = ctx or profile.session_context()
-    return compile_semantic_program(
+    return build_semantic_execution_context(
         runtime_profile=profile,
         policy="schema_plus_optional_probe",
         ctx=resolved_ctx,
-    )
+    ).manifest
 
 
 def test_build_zero_row_plan_includes_semantic_inputs_and_canonical_outputs(

@@ -169,7 +169,10 @@ def test_build_plan_context_passes_semantic_manifest_to_policy_validation(
         runtime_profile_spec=_stub_profile_spec(),
         session_runtime=object(),
     )
-    plan = cast("ExecutionPlan", SimpleNamespace(output_contracts={}, view_nodes=()))
+    plan = cast(
+        "ExecutionPlan",
+        SimpleNamespace(output_contracts={}, view_nodes=(), plan_fingerprints={}),
+    )
 
     monkeypatch.setattr(
         "hamilton_pipeline.driver_factory.default_modules",
@@ -182,6 +185,7 @@ def test_build_plan_context_passes_semantic_manifest_to_policy_validation(
             capability_snapshot={"strict_native_provider_enabled": False},
             session_runtime_fingerprint="runtime-hash",
             semantic_context=semantic_context,
+            compiled_policy=None,
         ),
     )
 
@@ -192,8 +196,9 @@ def test_build_plan_context_passes_semantic_manifest_to_policy_validation(
         udf_snapshot: object,
         capability_snapshot: object,
         semantic_manifest: object | None = None,
+        compiled_policy: object | None = None,
     ) -> PolicyValidationResult:
-        _ = runtime_profile, udf_snapshot, capability_snapshot
+        _ = runtime_profile, udf_snapshot, capability_snapshot, compiled_policy
         called["semantic_manifest"] = semantic_manifest
         return PolicyValidationResult.empty()
 
@@ -207,6 +212,10 @@ def test_build_plan_context_passes_semantic_manifest_to_policy_validation(
     )
     monkeypatch.setattr(
         "hamilton_pipeline.driver_factory._enforce_policy_validation_result",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory._record_execution_package",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(

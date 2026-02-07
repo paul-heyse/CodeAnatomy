@@ -7,6 +7,7 @@ reproducible.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 
 
@@ -100,6 +101,8 @@ class PerformancePolicy:
 
 def performance_policy_artifact_payload(
     policy: PerformancePolicy,
+    *,
+    applied_knobs: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Return an artifact-ready payload for a performance policy.
 
@@ -114,11 +117,14 @@ def performance_policy_artifact_payload(
         Artifact-ready payload mapping with cache, statistics, and
         comparison sub-dictionaries.
     """
-    return {
+    payload: dict[str, object] = {
         "cache": asdict(policy.cache),
         "statistics": asdict(policy.statistics),
         "comparison": asdict(policy.comparison),
     }
+    if applied_knobs is not None:
+        payload["applied_knobs"] = dict(applied_knobs)
+    return payload
 
 
 __all__ = [

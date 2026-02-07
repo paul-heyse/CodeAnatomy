@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any, cast
 
 import msgspec
 import pytest
@@ -298,6 +299,11 @@ class TestGlobalRegistry:
             "extract_errors_v1",
             "runtime_profile_snapshot_v1",
             "incremental_metadata_v1",
+            "compiled_execution_policy_v1",
+            "execution_package_v1",
+            "workload_classification_v1",
+            "pruning_metrics_v1",
+            "decision_provenance_graph_v1",
         ]
         for name in expected_names:
             assert name in registry, f"Expected {name!r} in artifact spec registry"
@@ -579,3 +585,25 @@ class TestRecordArtifactTypedContract:
         adapter.record_artifact(spec, {"value": 42})
         artifacts = sink.get_artifacts("adapter_test_v1")
         assert len(artifacts) == 1
+
+    def test_runtime_record_artifact_rejects_non_artifact_spec(self) -> None:
+        """Runtime record_artifact rejects non-ArtifactSpec name values."""
+        from datafusion_engine.session.runtime import record_artifact
+
+        with pytest.raises(TypeError, match="requires an ArtifactSpec instance"):
+            record_artifact(
+                cast("Any", object()),
+                cast("Any", "not_a_spec"),
+                {"x": 1},
+            )
+
+    def test_lineage_record_artifact_rejects_non_artifact_spec(self) -> None:
+        """Lineage record_artifact rejects non-ArtifactSpec name values."""
+        from datafusion_engine.lineage.diagnostics import record_artifact
+
+        with pytest.raises(TypeError, match="requires an ArtifactSpec instance"):
+            record_artifact(
+                None,
+                cast("Any", "not_a_spec"),
+                {"x": 1},
+            )

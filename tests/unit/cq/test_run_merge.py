@@ -68,6 +68,9 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
     assert "rust" in merged.summary["languages"]
     assert isinstance(merged.summary["cross_language_diagnostics"], list)
     assert isinstance(merged.summary["language_capabilities"], dict)
+    assert "pyrefly_overview" in merged.summary
+    assert "pyrefly_telemetry" in merged.summary
+    assert "pyrefly_diagnostics" in merged.summary
 
 
 def test_merge_language_cq_results_preserves_summary_common() -> None:

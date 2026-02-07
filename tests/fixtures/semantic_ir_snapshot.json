@@ -85,6 +85,10 @@
       "name": "symtable_def_sites"
     },
     {
+      "category": "analysis",
+      "name": "symtable_use_sites"
+    },
+    {
       "category": "diagnostic",
       "name": "scip_diagnostics"
     },
@@ -199,7 +203,7 @@
   ],
   "ir_hash": "836b43d89e1a1ee6f119d93f143f814d351378199743db8006a20c6990a6ba53",
   "join_groups": [],
-  "model_hash": "4b8c16a144f26c4c558cb4f7a8ff2b79d32a241edf033ed7f0224672420a2195",
+  "model_hash": "35a01c89c7dd995255acb2559a28dc16af9c35543eb7638e844553c52a9f0bf2",
   "views": [
     {
       "inputs": [

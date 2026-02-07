@@ -33,7 +33,7 @@ def _manifest(bindings: ManifestDatasetBindings) -> SemanticProgramManifest:
     )
 
 
-def test_manifest_dataset_bindings_lookup_subset_and_payload_alias() -> None:
+def test_manifest_dataset_bindings_lookup_subset_and_payload() -> None:
     bindings = ManifestDatasetBindings(
         locations={
             "zeta": DatasetLocation(path="/tmp/zeta", format="delta"),
@@ -50,7 +50,6 @@ def test_manifest_dataset_bindings_lookup_subset_and_payload_alias() -> None:
     subset = bindings.subset(("alpha", "missing"))
     assert set(subset.names()) == {"alpha"}
     assert list(bindings.payload().keys()) == ["alpha", "zeta"]
-    assert bindings.to_payload() == bindings.payload()
 
 
 def test_manifest_dataset_bindings_require_location_raises_key_error() -> None:
@@ -59,7 +58,7 @@ def test_manifest_dataset_bindings_require_location_raises_key_error() -> None:
         _ = bindings.require_location("missing_dataset")
 
 
-def test_semantic_program_manifest_payload_alias_and_fingerprint_stability() -> None:
+def test_semantic_program_manifest_payload_and_fingerprint_stability() -> None:
     bindings = ManifestDatasetBindings(
         locations={"alpha": DatasetLocation(path="/tmp/alpha", format="delta")}
     )
@@ -67,7 +66,6 @@ def test_semantic_program_manifest_payload_alias_and_fingerprint_stability() -> 
 
     with_fingerprint = manifest.with_fingerprint()
     with_fingerprint_again = manifest.with_fingerprint()
-    assert with_fingerprint.to_payload() == with_fingerprint.payload()
     assert with_fingerprint.fingerprint is not None
     assert with_fingerprint.fingerprint == with_fingerprint_again.fingerprint
     assert with_fingerprint.manifest_version == 1

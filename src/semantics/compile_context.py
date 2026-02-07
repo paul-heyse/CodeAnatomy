@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
@@ -43,12 +44,22 @@ class CompileContext:
     outputs: Collection[str] | None = None
     policy: SemanticInputValidationPolicy = "schema_only"
     input_mapping: Mapping[str, str] | None = None
+    _internal: bool = field(default=False, repr=False)
     _semantic_ir_cache: SemanticIR | None = field(default=None, init=False, repr=False)
     _dataset_bindings_cache: ManifestDatasetBindings | None = field(
         default=None,
         init=False,
         repr=False,
     )
+
+    def __post_init__(self) -> None:
+        """Emit deprecation warning for direct external construction."""
+        if not self._internal:
+            warnings.warn(
+                "CompileContext is deprecated. Use build_semantic_execution_context() instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
     def semantic_ir(self) -> SemanticIR:
         """Return cached semantic IR for this compile context."""
@@ -59,6 +70,13 @@ class CompileContext:
 
     def dataset_bindings(self) -> ManifestDatasetBindings:
         """Return cached dataset bindings from runtime catalog resolution."""
+        if not self._internal:
+            warnings.warn(
+                "CompileContext.dataset_bindings() is deprecated. Access the "
+                "dataset_resolver from SemanticExecutionContext instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if self._dataset_bindings_cache is not None:
             return self._dataset_bindings_cache
         from datafusion_engine.dataset.registry import dataset_catalog_from_profile
@@ -117,32 +135,6 @@ class SemanticExecutionContext:
     facade: DataFusionExecutionFacade | None = None
 
 
-def compile_semantic_program(
-    *,
-    runtime_profile: DataFusionRuntimeProfile,
-    outputs: Collection[str] | None = None,
-    policy: SemanticInputValidationPolicy = "schema_only",
-    ctx: SessionContext | None = None,
-    input_mapping: Mapping[str, str] | None = None,
-) -> SemanticProgramManifest:
-    """Compile and validate a semantic program manifest.
-
-    Returns:
-    -------
-    SemanticProgramManifest
-        Manifest enriched with validation status and fingerprint.
-    """
-    from semantics.compile_invariants import record_compile_if_tracking
-
-    record_compile_if_tracking()
-    return CompileContext(
-        runtime_profile=runtime_profile,
-        outputs=outputs,
-        policy=policy,
-        input_mapping=input_mapping,
-    ).compile(ctx=ctx)
-
-
 def build_semantic_execution_context(
     *,
     runtime_profile: DataFusionRuntimeProfile,
@@ -165,6 +157,7 @@ def build_semantic_execution_context(
         outputs=outputs,
         policy=policy,
         input_mapping=input_mapping,
+        _internal=True,
     )
     active_ctx = ctx or runtime_profile.session_context()
     manifest = compile_ctx.compile(ctx=active_ctx)
@@ -181,6 +174,5 @@ __all__ = [
     "CompileContext",
     "SemanticExecutionContext",
     "build_semantic_execution_context",
-    "compile_semantic_program",
     "semantic_ir_for_outputs",
 ]

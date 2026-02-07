@@ -31,12 +31,8 @@ from semantics.exprs import (
     is_not_null,
     is_not_null_expr,
     is_null,
-    span_contains_expr,
     span_end_expr,
-    span_overlaps_expr,
     span_start_expr,
-    stable_hash64,
-    truthy_expr,
     v,
 )
 from semantics.quality import (
@@ -48,6 +44,7 @@ from semantics.quality import (
     SelectExpr,
     SignalsSpec,
 )
+from semantics.quality_templates import EntitySymbolConfig, entity_symbol_relationship
 
 # -----------------------------------------------------------------------------
 # Docstring-to-Owner Relationships
@@ -57,8 +54,6 @@ REL_CST_DOCSTRING_OWNER_BY_ID: Final = QualityRelationshipSpec(
     name="rel_cst_docstring_owner_by_id",
     left_view="cst_docstrings_norm",
     right_view="cst_defs_norm",
-    left_on=["file_id"],
-    right_on=["file_id"],
     how="inner",
     provider="libcst",
     origin="semantic_compiler",
@@ -97,8 +92,6 @@ REL_CST_DOCSTRING_OWNER_BY_SPAN: Final = QualityRelationshipSpec(
     name="rel_cst_docstring_owner_by_span",
     left_view="cst_docstrings_norm",
     right_view="cst_defs_norm",
-    left_on=["file_id"],
-    right_on=["file_id"],
     how="inner",
     provider="libcst",
     origin="semantic_compiler",
@@ -140,61 +133,20 @@ REL_CST_DOCSTRING_OWNER_BY_SPAN: Final = QualityRelationshipSpec(
 # CST Reference to SCIP Symbol Relationships
 # -----------------------------------------------------------------------------
 
-REL_NAME_SYMBOL: Final = QualityRelationshipSpec(
-    name="rel_name_symbol",
-    left_view="cst_refs_norm",
-    right_view="scip_occurrences_norm",
-    left_on=["file_id"],
-    right_on=["file_id"],
-    how="inner",
-    provider="scip",
-    origin="cst_ref_text",
-    rule_name="rel_name_symbol",
-    signals=SignalsSpec(
-        base_score=2000,
-        base_confidence=0.95,
-        hard=[
-            HardPredicate(span_overlaps_expr("l__span", "r__span")),
-            HardPredicate(truthy_expr("r__is_read")),
-        ],
-        features=[
-            Feature(
-                "exact_span",
-                case_eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
-                weight=20.0,
-            ),
-            Feature(
-                "exact_end",
-                case_eq_expr(span_end_expr("l__span"), span_end_expr("r__span")),
-                weight=10.0,
-            ),
-        ],
+REL_NAME_SYMBOL: Final = entity_symbol_relationship(
+    EntitySymbolConfig(
+        name="rel_name_symbol",
+        left_view="cst_refs_norm",
+        entity_id_col="l__ref_id",
+        origin="cst_ref_text",
+        scip_role_filter="r__is_read",
     ),
-    rank=RankSpec(
-        ambiguity_key_expr=c("l__ref_id"),
-        ambiguity_group_id_expr=stable_hash64("l__ref_id"),
-        order_by=[
-            OrderSpec(c("score"), direction="desc"),
-            OrderSpec(span_start_expr("r__span"), direction="asc"),
-        ],
-        keep="best",
-        top_k=1,
-    ),
-    select_exprs=[
-        SelectExpr(c("l__ref_id"), "entity_id"),
-        SelectExpr(c("r__symbol"), "symbol"),
-        SelectExpr(c("l__path"), "path"),
-        SelectExpr(span_start_expr("l__span"), "bstart"),
-        SelectExpr(span_end_expr("l__span"), "bend"),
-    ],
 )
 
 REL_CST_REF_TO_SCIP_SYMBOL: Final = QualityRelationshipSpec(
     name="rel_cst_ref_to_scip_symbol",
     left_view="cst_refs_norm",
     right_view="scip_occurrences_norm",
-    left_on=["file_id"],
-    right_on=["file_id"],
     how="inner",
     provider="scip",
     origin="semantic_compiler",
@@ -243,158 +195,42 @@ REL_CST_REF_TO_SCIP_SYMBOL: Final = QualityRelationshipSpec(
 # Call-to-Definition Relationships
 # -----------------------------------------------------------------------------
 
-REL_DEF_SYMBOL: Final = QualityRelationshipSpec(
-    name="rel_def_symbol",
-    left_view="cst_defs_norm",
-    right_view="scip_occurrences_norm",
-    left_on=["file_id"],
-    right_on=["file_id"],
-    how="inner",
-    provider="scip",
-    origin="cst_def_name",
-    rule_name="rel_def_symbol",
-    signals=SignalsSpec(
-        base_score=2000,
-        base_confidence=0.95,
-        hard=[
-            HardPredicate(span_contains_expr("l__span", "r__span")),
-            HardPredicate(truthy_expr("r__is_definition")),
-        ],
-        features=[
-            Feature(
-                "exact_span_start",
-                case_eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
-                weight=15.0,
-            ),
-            Feature(
-                "exact_span_end",
-                case_eq_expr(span_end_expr("l__span"), span_end_expr("r__span")),
-                weight=10.0,
-            ),
-        ],
+REL_DEF_SYMBOL: Final = entity_symbol_relationship(
+    EntitySymbolConfig(
+        name="rel_def_symbol",
+        left_view="cst_defs_norm",
+        entity_id_col="l__def_id",
+        origin="cst_def_name",
+        span_strategy="contains",
+        scip_role_filter="r__is_definition",
+        exact_span_weight=15.0,
     ),
-    rank=RankSpec(
-        ambiguity_key_expr=c("l__def_id"),
-        ambiguity_group_id_expr=stable_hash64("l__def_id"),
-        order_by=[
-            OrderSpec(c("score"), direction="desc"),
-            OrderSpec(span_start_expr("r__span"), direction="asc"),
-        ],
-        keep="best",
-        top_k=1,
-    ),
-    select_exprs=[
-        SelectExpr(c("l__def_id"), "entity_id"),
-        SelectExpr(c("r__symbol"), "symbol"),
-        SelectExpr(c("l__path"), "path"),
-        SelectExpr(span_start_expr("l__span"), "bstart"),
-        SelectExpr(span_end_expr("l__span"), "bend"),
-    ],
 )
 
-REL_IMPORT_SYMBOL: Final = QualityRelationshipSpec(
-    name="rel_import_symbol",
-    left_view="cst_imports_norm",
-    right_view="scip_occurrences_norm",
-    left_on=["file_id"],
-    right_on=["file_id"],
-    how="inner",
-    provider="scip",
-    origin="cst_import_name",
-    rule_name="rel_import_symbol",
-    signals=SignalsSpec(
-        base_score=2000,
-        base_confidence=0.95,
-        hard=[
-            HardPredicate(span_overlaps_expr("l__span", "r__span")),
-            HardPredicate(truthy_expr("r__is_import")),
-        ],
-        features=[
-            Feature(
-                "exact_span",
-                case_eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
-                weight=20.0,
-            ),
-            Feature(
-                "exact_end",
-                case_eq_expr(span_end_expr("l__span"), span_end_expr("r__span")),
-                weight=10.0,
-            ),
-        ],
+REL_IMPORT_SYMBOL: Final = entity_symbol_relationship(
+    EntitySymbolConfig(
+        name="rel_import_symbol",
+        left_view="cst_imports_norm",
+        entity_id_col="l__import_id",
+        origin="cst_import_name",
+        scip_role_filter="r__is_import",
     ),
-    rank=RankSpec(
-        ambiguity_key_expr=c("l__import_id"),
-        ambiguity_group_id_expr=stable_hash64("l__import_id"),
-        order_by=[
-            OrderSpec(c("score"), direction="desc"),
-            OrderSpec(span_start_expr("r__span"), direction="asc"),
-        ],
-        keep="best",
-        top_k=1,
-    ),
-    select_exprs=[
-        SelectExpr(c("l__import_id"), "entity_id"),
-        SelectExpr(c("r__symbol"), "symbol"),
-        SelectExpr(c("l__path"), "path"),
-        SelectExpr(span_start_expr("l__span"), "bstart"),
-        SelectExpr(span_end_expr("l__span"), "bend"),
-    ],
 )
 
-REL_CALLSITE_SYMBOL: Final = QualityRelationshipSpec(
-    name="rel_callsite_symbol",
-    left_view="cst_calls_norm",
-    right_view="scip_occurrences_norm",
-    left_on=["file_id"],
-    right_on=["file_id"],
-    how="inner",
-    provider="scip",
-    origin="cst_callsite",
-    rule_name="rel_callsite_symbol",
-    signals=SignalsSpec(
-        base_score=2000,
-        base_confidence=0.95,
-        hard=[
-            HardPredicate(span_overlaps_expr("l__span", "r__span")),
-        ],
-        features=[
-            Feature(
-                "exact_span",
-                case_eq_expr(span_start_expr("l__span"), span_start_expr("r__span")),
-                weight=15.0,
-            ),
-            Feature(
-                "exact_end",
-                case_eq_expr(span_end_expr("l__span"), span_end_expr("r__span")),
-                weight=10.0,
-            ),
-        ],
+REL_CALLSITE_SYMBOL: Final = entity_symbol_relationship(
+    EntitySymbolConfig(
+        name="rel_callsite_symbol",
+        left_view="cst_calls_norm",
+        entity_id_col="l__call_id",
+        origin="cst_callsite",
+        exact_span_weight=15.0,
     ),
-    rank=RankSpec(
-        ambiguity_key_expr=c("l__call_id"),
-        ambiguity_group_id_expr=stable_hash64("l__call_id"),
-        order_by=[
-            OrderSpec(c("score"), direction="desc"),
-            OrderSpec(span_start_expr("r__span"), direction="asc"),
-        ],
-        keep="best",
-        top_k=1,
-    ),
-    select_exprs=[
-        SelectExpr(c("l__call_id"), "entity_id"),
-        SelectExpr(c("r__symbol"), "symbol"),
-        SelectExpr(c("l__path"), "path"),
-        SelectExpr(span_start_expr("l__span"), "bstart"),
-        SelectExpr(span_end_expr("l__span"), "bend"),
-    ],
 )
 
 REL_CALL_TO_DEF_SCIP: Final = QualityRelationshipSpec(
     name="rel_call_to_def_scip",
     left_view="cst_calls_norm",
     right_view="scip_occurrences_norm",
-    left_on=["file_id"],
-    right_on=["file_id"],
     how="inner",
     provider="scip",
     origin="semantic_compiler",
@@ -433,8 +269,6 @@ REL_CALL_TO_DEF_NAME: Final = QualityRelationshipSpec(
     name="rel_call_to_def_name",
     left_view="cst_calls_norm",
     right_view="cst_defs_norm",
-    left_on=["file_id"],
-    right_on=["file_id"],
     how="inner",
     provider="libcst",
     origin="semantic_compiler",

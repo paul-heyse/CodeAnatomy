@@ -66,15 +66,13 @@ class DeltaMaintenancePlanInput:
     policy: DeltaMaintenancePolicy | None
 
 
-def resolve_delta_maintenance_plan(
+def _resolve_base_maintenance_plan(
     request: DeltaMaintenancePlanInput,
 ) -> DeltaMaintenancePlan | None:
-    """Resolve a maintenance plan from location and policy inputs.
+    """Resolve base maintenance plan from request inputs.
 
     Returns:
-    -------
-    DeltaMaintenancePlan | None
-        Maintenance plan when maintenance is configured, otherwise ``None``.
+        DeltaMaintenancePlan | None: The resolved plan when maintenance is configured.
     """
     resolved = request.policy
     if resolved is None and request.dataset_location is not None:
@@ -237,42 +235,74 @@ def _has_executable_operations(policy: DeltaMaintenancePolicy) -> bool:
     )
 
 
+def _set_policy_flag(
+    policy: DeltaMaintenancePolicy,
+    *,
+    flag_name: str,
+) -> DeltaMaintenancePolicy:
+    """Return policy with ``flag_name`` enabled when currently disabled."""
+    if bool(getattr(policy, flag_name, False)):
+        return policy
+    return msgspec.structs.replace(policy, **{flag_name: True})
+
+
 def _apply_execution_thresholds(
     policy: DeltaMaintenancePolicy,
     *,
     metrics: WriteOutcomeMetrics,
 ) -> tuple[DeltaMaintenancePolicy, tuple[str, ...]]:
-    """Apply outcome thresholds and return effective policy plus reasons."""
+    """Apply outcome thresholds and return effective policy plus reasons.
+
+    Returns:
+    -------
+    tuple[DeltaMaintenancePolicy, tuple[str, ...]]
+        Effective policy with threshold-driven flags and ordered reason codes.
+    """
     effective = policy
     reasons: list[str] = []
-    if _threshold_exceeded(metrics.files_created, policy.optimize_file_threshold):
-        reasons.append("optimize_file_threshold_exceeded")
-        if not effective.optimize_on_write:
-            effective = msgspec.structs.replace(effective, optimize_on_write=True)
-    if _threshold_exceeded(metrics.total_file_count, policy.total_file_threshold):
-        reasons.append("total_file_threshold_exceeded")
-        if not effective.optimize_on_write:
-            effective = msgspec.structs.replace(effective, optimize_on_write=True)
-    if _threshold_exceeded(metrics.version_delta, policy.vacuum_version_threshold):
-        reasons.append("vacuum_version_threshold_exceeded")
-        if not effective.vacuum_on_write:
-            effective = msgspec.structs.replace(effective, vacuum_on_write=True)
-    if _checkpoint_interval_reached(metrics.final_version, policy.checkpoint_version_interval):
-        reasons.append("checkpoint_interval_reached")
-        if not effective.checkpoint_on_write:
-            effective = msgspec.structs.replace(effective, checkpoint_on_write=True)
-    if effective.optimize_on_write and not reasons:
-        reasons.append("optimize_on_write")
-    if effective.vacuum_on_write and "vacuum_on_write" not in reasons:
-        reasons.append("vacuum_on_write")
-    if effective.checkpoint_on_write and "checkpoint_on_write" not in reasons:
-        reasons.append("checkpoint_on_write")
-    if effective.enable_deletion_vectors:
-        reasons.append("enable_deletion_vectors")
-    if effective.enable_v2_checkpoints:
-        reasons.append("enable_v2_checkpoints")
-    if effective.enable_log_compaction:
-        reasons.append("enable_log_compaction")
+    threshold_checks = (
+        (
+            "optimize_on_write",
+            _threshold_exceeded(metrics.files_created, policy.optimize_file_threshold),
+            "optimize_file_threshold_exceeded",
+        ),
+        (
+            "optimize_on_write",
+            _threshold_exceeded(metrics.total_file_count, policy.total_file_threshold),
+            "total_file_threshold_exceeded",
+        ),
+        (
+            "vacuum_on_write",
+            _threshold_exceeded(metrics.version_delta, policy.vacuum_version_threshold),
+            "vacuum_version_threshold_exceeded",
+        ),
+        (
+            "checkpoint_on_write",
+            _checkpoint_interval_reached(metrics.final_version, policy.checkpoint_version_interval),
+            "checkpoint_interval_reached",
+        ),
+    )
+    for flag_name, is_triggered, reason in threshold_checks:
+        if not is_triggered:
+            continue
+        reasons.append(reason)
+        effective = _set_policy_flag(effective, flag_name=flag_name)
+
+    for flag_name, reason in (
+        ("optimize_on_write", "optimize_on_write"),
+        ("vacuum_on_write", "vacuum_on_write"),
+        ("checkpoint_on_write", "checkpoint_on_write"),
+    ):
+        if bool(getattr(effective, flag_name, False)) and reason not in reasons:
+            reasons.append(reason)
+
+    for flag_name, reason in (
+        ("enable_deletion_vectors", "enable_deletion_vectors"),
+        ("enable_v2_checkpoints", "enable_v2_checkpoints"),
+        ("enable_log_compaction", "enable_log_compaction"),
+    ):
+        if bool(getattr(effective, flag_name, False)):
+            reasons.append(reason)
     return effective, tuple(dict.fromkeys(reasons))
 
 
@@ -288,7 +318,7 @@ def resolve_maintenance_from_execution(
     DeltaMaintenanceDecision
         Decision bundle containing optional plan, metrics, and reasons.
     """
-    base_plan = resolve_delta_maintenance_plan(request)
+    base_plan = _resolve_base_maintenance_plan(request)
     resolved_metrics = metrics or WriteOutcomeMetrics()
     if base_plan is None:
         return DeltaMaintenanceDecision(
@@ -655,6 +685,5 @@ __all__ = [
     "maintenance_decision_artifact_payload",
     "maintenance_z_order_cols",
     "resolve_maintenance_from_execution",
-    "resolve_delta_maintenance_plan",
     "run_delta_maintenance",
 ]

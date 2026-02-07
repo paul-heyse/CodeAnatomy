@@ -4,15 +4,22 @@ from __future__ import annotations
 
 from typing import cast
 
+from datafusion_engine.plan.perf_policy import (
+    CachePolicyTier,
+    PerformancePolicy,
+    StatisticsPolicy,
+)
 from datafusion_engine.session.runtime import (
     DataFusionJoinPolicy,
     DataFusionRuntimeProfile,
+    DiagnosticsConfig,
     ExecutionConfig,
     FeatureGatesConfig,
     PolicyBundleConfig,
     ZeroRowBootstrapConfig,
 )
 from engine.runtime_profile import PROFILE_HASH_VERSION, runtime_profile_snapshot
+from obs.diagnostics import DiagnosticsCollector
 from tests.test_helpers.datafusion_runtime import df_profile
 
 HASH_LENGTH: int = 64
@@ -106,3 +113,85 @@ def test_zero_row_bootstrap_config_is_in_telemetry_and_fingerprint() -> None:
         "bootstrap_mode": "seeded_minimal_rows",
         "seeded_datasets": ["cst_refs"],
     }
+
+
+def test_settings_hash_changes_with_performance_policy() -> None:
+    """Performance-policy changes should affect runtime settings hash."""
+    baseline = DataFusionRuntimeProfile()
+    modified = DataFusionRuntimeProfile(
+        policies=PolicyBundleConfig(
+            performance_policy=PerformancePolicy(
+                cache=CachePolicyTier(
+                    listing_cache_ttl_seconds=45,
+                    listing_cache_max_entries=4096,
+                    metadata_cache_max_entries=8192,
+                ),
+                statistics=StatisticsPolicy(
+                    collect_statistics=False,
+                    meta_fetch_concurrency=2,
+                    fallback_when_unavailable="skip",
+                ),
+            )
+        ),
+    )
+    assert baseline.settings_hash() != modified.settings_hash()
+
+
+def test_settings_payload_includes_performance_policy_knobs() -> None:
+    """Performance policy should map to DataFusion runtime settings keys."""
+    profile = DataFusionRuntimeProfile(
+        policies=PolicyBundleConfig(
+            performance_policy=PerformancePolicy(
+                cache=CachePolicyTier(
+                    listing_cache_ttl_seconds=15,
+                    listing_cache_max_entries=2048,
+                    metadata_cache_max_entries=4096,
+                ),
+                statistics=StatisticsPolicy(
+                    collect_statistics=False,
+                    meta_fetch_concurrency=3,
+                    fallback_when_unavailable="skip",
+                ),
+            )
+        )
+    )
+    settings = profile.settings_payload()
+    assert settings["datafusion.runtime.list_files_cache_ttl"] == "15s"
+    assert settings["datafusion.runtime.list_files_cache_limit"] == "2048"
+    assert settings["datafusion.runtime.metadata_cache_limit"] == "4096"
+    assert settings["datafusion.execution.collect_statistics"] == "false"
+    assert settings["datafusion.execution.meta_fetch_concurrency"] == "3"
+
+
+def test_session_startup_records_performance_policy_artifact() -> None:
+    """Runtime startup should emit performance-policy artifact with applied knobs."""
+    diagnostics = DiagnosticsCollector()
+    profile = DataFusionRuntimeProfile(
+        diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),
+        policies=PolicyBundleConfig(
+            performance_policy=PerformancePolicy(
+                cache=CachePolicyTier(
+                    listing_cache_ttl_seconds=12,
+                    listing_cache_max_entries=1024,
+                    metadata_cache_max_entries=2048,
+                ),
+                statistics=StatisticsPolicy(
+                    collect_statistics=True,
+                    meta_fetch_concurrency=5,
+                    fallback_when_unavailable="skip",
+                ),
+            )
+        ),
+    )
+    _ = profile.session_context()
+    artifacts = diagnostics.artifacts_snapshot().get("performance_policy_v1", [])
+    assert artifacts
+    payload = cast("dict[str, object]", artifacts[-1])
+    cache_payload = cast("dict[str, object]", payload["cache"])
+    statistics_payload = cast("dict[str, object]", payload["statistics"])
+    assert cache_payload["listing_cache_ttl_seconds"] == 12
+    assert statistics_payload["meta_fetch_concurrency"] == 5
+    applied_knobs = cast("dict[str, object]", payload["applied_knobs"])
+    assert applied_knobs["datafusion.runtime.list_files_cache_ttl"] == "12s"
+    assert applied_knobs["datafusion.execution.meta_fetch_concurrency"] == "5"
+    assert "statistics_mode" in applied_knobs

@@ -228,19 +228,16 @@ def _span_exprs_from_df(
     bstart_cols: Sequence[str],
     bend_cols: Sequence[str],
 ) -> tuple[Expr, Expr]:
+    span_bstart, span_bend = _span_bounds_from_span_column(df)
     bstart_expr = (
         _coalesce_cols(df, bstart_cols, pa.int64())
         if any(name in df.schema().names for name in bstart_cols)
-        else col("span")["bstart"]
-        if "span" in df.schema().names
-        else _null_expr("Int64")
+        else span_bstart
     )
     bend_expr = (
         _coalesce_cols(df, bend_cols, pa.int64())
         if any(name in df.schema().names for name in bend_cols)
-        else col("span")["bend"]
-        if "span" in df.schema().names
-        else _null_expr("Int64")
+        else span_bend
     )
     return bstart_expr, bend_expr
 
@@ -459,12 +456,44 @@ def _optional_edge_expr(names: set[str], name: str, default: Expr) -> Expr:
     return col(name) if name in names else default
 
 
-def _edge_span_bounds(names: set[str]) -> tuple[Expr, Expr]:
+def _edge_span_bounds(df: DataFrame) -> tuple[Expr, Expr]:
+    names = set(df.schema().names)
     if "bstart" in names and "bend" in names:
         return col("bstart"), col("bend")
-    if "span" in names:
+    return _span_bounds_from_span_column(df)
+
+
+def _span_bounds_from_span_column(df: DataFrame) -> tuple[Expr, Expr]:
+    if "span" not in df.schema().names:
+        return _null_expr("Int64"), _null_expr("Int64")
+    schema = _schema_from_df(df)
+    try:
+        span_field = schema.field("span")
+    except KeyError:
+        return _null_expr("Int64"), _null_expr("Int64")
+    span_type = span_field.type
+    if not pa.types.is_struct(span_type):
+        return _null_expr("Int64"), _null_expr("Int64")
+    span_names = {field.name for field in span_type}
+    if "bstart" in span_names and "bend" in span_names:
         return col("span")["bstart"], col("span")["bend"]
+    if "byte_span" in span_names:
+        byte_span_type = span_type.field("byte_span").type
+        if pa.types.is_struct(byte_span_type):
+            byte_fields = {field.name for field in byte_span_type}
+            if "byte_start" in byte_fields and "byte_len" in byte_fields:
+                byte_start = _arrow_cast(col("span")["byte_span"]["byte_start"], "Int64")
+                byte_len = _arrow_cast(col("span")["byte_span"]["byte_len"], "Int64")
+                bend = _arrow_cast(byte_start + byte_len, "Int64")
+                return byte_start, bend
     return _null_expr("Int64"), _null_expr("Int64")
+
+
+def _adjacency_span_bounds(df: DataFrame) -> tuple[Expr, Expr]:
+    names = set(df.schema().names)
+    if "bstart" in names and "bend" in names:
+        return col("bstart"), col("bend")
+    return _span_bounds_from_span_column(df)
 
 
 def _edge_id_expr(edge_kind: Expr, span_bstart: Expr, span_bend: Expr) -> Expr:
@@ -519,7 +548,7 @@ def _emit_edges_from_relation_df(df: DataFrame) -> DataFrame:
     """
     names = set(df.schema().names)
     edge_kind = _optional_edge_expr(names, "kind", _null_expr("Utf8"))
-    span_bstart, span_bend = _edge_span_bounds(names)
+    span_bstart, span_bend = _edge_span_bounds(df)
     edge_id = _edge_id_expr(edge_kind, span_bstart, span_bend)
     attrs = _edge_attr_exprs(names)
     span_expr = udf_expr("span_make", span_bstart, span_bend)
@@ -591,7 +620,6 @@ def build_cpg_props_df(
                     continue
                 msg = f"Missing required source table {spec.table_ref!r} for CPG props."
                 raise ValueError(msg) from exc
-
             prop_df = _emit_props_df(
                 source_df,
                 spec=spec,
@@ -665,21 +693,7 @@ def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
     ):
         ctx = session_runtime.ctx
         df = ctx.table("cpg_edges")
-        names = df.schema().names
-        bstart = (
-            col("bstart")
-            if "bstart" in names
-            else col("span")["bstart"]
-            if "span" in names
-            else _null_expr("Int64")
-        )
-        bend = (
-            col("bend")
-            if "bend" in names
-            else col("span")["bend"]
-            if "span" in names
-            else _null_expr("Int64")
-        )
+        bstart, bend = _adjacency_span_bounds(df)
         entry = f.named_struct(
             [
                 ("edge_id", col("edge_id")),
@@ -719,21 +733,7 @@ def build_cpg_edges_by_dst_df(session_runtime: SessionRuntime) -> DataFrame:
     ):
         ctx = session_runtime.ctx
         df = ctx.table("cpg_edges")
-        names = df.schema().names
-        bstart = (
-            col("bstart")
-            if "bstart" in names
-            else col("span")["bstart"]
-            if "span" in names
-            else _null_expr("Int64")
-        )
-        bend = (
-            col("bend")
-            if "bend" in names
-            else col("span")["bend"]
-            if "span" in names
-            else _null_expr("Int64")
-        )
+        bstart, bend = _adjacency_span_bounds(df)
         entry = f.named_struct(
             [
                 ("edge_id", col("edge_id")),

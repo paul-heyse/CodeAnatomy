@@ -85,91 +85,129 @@ def plan_with_delta_pins(  # noqa: PLR0914
     Raises:
         ValueError: If runtime profile is not provided.
     """
+    from datafusion_engine.session.runtime import (
+        compile_resolver_invariants_strict_mode,
+        record_compile_resolver_invariants,
+    )
+    from semantics.compile_invariants import compile_tracking
+    from semantics.resolver_identity import resolver_identity_tracking
+
     if runtime_profile is None:
         msg = "Runtime profile is required for planning with Delta pins."
         raise ValueError(msg)
-    if semantic_context is not None:
-        semantic_ctx = semantic_context
-    else:
-        from semantics.compile_context import build_semantic_execution_context
+    strict_invariants = compile_resolver_invariants_strict_mode()
+    expected_compiles = 0 if semantic_context is not None else 1
+    with (
+        compile_tracking(
+            max_compiles=expected_compiles,
+            label="plan_with_delta_pins",
+            strict=False,
+        ) as compile_tracker,
+        resolver_identity_tracking(
+            label="plan_with_delta_pins",
+            strict=False,
+        ) as resolver_tracker,
+    ):
+        if semantic_context is not None:
+            semantic_ctx = semantic_context
+        else:
+            from semantics.compile_context import build_semantic_execution_context
 
-        semantic_ctx = build_semantic_execution_context(
-            runtime_profile=runtime_profile,
-            ctx=ctx,
-        )
-    dataset_resolver = semantic_ctx.dataset_resolver
-    session_runtime = runtime_profile.session_runtime()
-    semantic_manifest = semantic_ctx.manifest
-    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    # Baseline registration ensures UDF platform and registry views exist.
-    facade.ensure_view_graph(
-        semantic_manifest=semantic_manifest,
-        dataset_resolver=dataset_resolver,
-    )
-    baseline_nodes = _plan_view_nodes(
-        ctx,
-        view_nodes=view_nodes,
-        session_runtime=session_runtime,
-        scan_units=(),
-        dataset_resolver=dataset_resolver,
-    )
-    snapshot = snapshot or (session_runtime.udf_snapshot if session_runtime is not None else None)
-    baseline_inferred = infer_deps_from_view_nodes(
-        baseline_nodes,
-        ctx=ctx,
-        snapshot=snapshot,
-    )
-    capability_snapshot = _planning_capability_snapshot(
-        ctx=ctx,
-        runtime_profile=runtime_profile,
-    )
-    scan_planning = _scan_planning(
-        ctx,
-        runtime_profile=runtime_profile,
-        inferred=baseline_inferred,
-        dataset_resolver=dataset_resolver,
-    )
-    _apply_inferred_scan_policy_overrides(
-        ctx=ctx,
-        baseline_nodes=baseline_nodes,
-        scan_planning=scan_planning,
-        runtime_profile=runtime_profile,
-        dataset_resolver=dataset_resolver,
-        capability_snapshot=capability_snapshot,
-    )
-    if scan_planning.scan_units:
+            semantic_ctx = build_semantic_execution_context(
+                runtime_profile=runtime_profile,
+                ctx=ctx,
+            )
+        dataset_resolver = semantic_ctx.dataset_resolver
+        session_runtime = runtime_profile.session_runtime()
+        semantic_manifest = semantic_ctx.manifest
+        facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
+        # Baseline registration ensures UDF platform and registry views exist.
         facade.ensure_view_graph(
-            scan_units=scan_planning.scan_units,
             semantic_manifest=semantic_manifest,
             dataset_resolver=dataset_resolver,
         )
-    pinned_nodes = _plan_view_nodes(
-        ctx,
-        view_nodes=view_nodes,
-        session_runtime=session_runtime,
-        scan_units=scan_planning.scan_units,
-        dataset_resolver=dataset_resolver,
+        baseline_nodes = _plan_view_nodes(
+            ctx,
+            view_nodes=view_nodes,
+            session_runtime=session_runtime,
+            scan_units=(),
+            dataset_resolver=dataset_resolver,
+        )
+        snapshot = snapshot or (
+            session_runtime.udf_snapshot if session_runtime is not None else None
+        )
+        baseline_inferred = infer_deps_from_view_nodes(
+            baseline_nodes,
+            ctx=ctx,
+            snapshot=snapshot,
+        )
+        capability_snapshot = _planning_capability_snapshot(
+            ctx=ctx,
+            runtime_profile=runtime_profile,
+        )
+        scan_planning = _scan_planning(
+            ctx,
+            runtime_profile=runtime_profile,
+            inferred=baseline_inferred,
+            dataset_resolver=dataset_resolver,
+        )
+        _apply_inferred_scan_policy_overrides(
+            ctx=ctx,
+            baseline_nodes=baseline_nodes,
+            scan_planning=scan_planning,
+            runtime_profile=runtime_profile,
+            dataset_resolver=dataset_resolver,
+            capability_snapshot=capability_snapshot,
+        )
+        if scan_planning.scan_units:
+            facade.ensure_view_graph(
+                scan_units=scan_planning.scan_units,
+                semantic_manifest=semantic_manifest,
+                dataset_resolver=dataset_resolver,
+            )
+        pinned_nodes = _plan_view_nodes(
+            ctx,
+            view_nodes=view_nodes,
+            session_runtime=session_runtime,
+            scan_units=scan_planning.scan_units,
+            dataset_resolver=dataset_resolver,
+        )
+        pinned_inferred = infer_deps_from_view_nodes(
+            pinned_nodes,
+            ctx=ctx,
+            snapshot=snapshot,
+        )
+        lineage_by_view = _lineage_by_view(pinned_nodes)
+        scan_inferred = _scan_inferred_deps(scan_planning.scan_task_units_by_name)
+        inferred_all = (*pinned_inferred, *scan_inferred)
+        result = PlanningPipelineResult(
+            view_nodes=pinned_nodes,
+            inferred=tuple(inferred_all),
+            scan_units=scan_planning.scan_units,
+            scan_keys_by_task=scan_planning.scan_keys_by_task,
+            scan_task_name_by_key=scan_planning.scan_task_name_by_key,
+            scan_task_units_by_name=scan_planning.scan_task_units_by_name,
+            scan_task_names_by_task=scan_planning.scan_task_names_by_task,
+            scan_units_by_evidence_name=scan_planning.scan_task_units_by_name,
+            lineage_by_view=lineage_by_view,
+            session_runtime=session_runtime,
+        )
+    violations: list[str] = []
+    try:
+        compile_tracker.assert_compile_count()
+    except RuntimeError as exc:
+        violations.append(str(exc))
+    violations.extend(resolver_tracker.verify_identity())
+    record_compile_resolver_invariants(
+        runtime_profile,
+        label="plan_with_delta_pins",
+        compile_count=compile_tracker.compile_count,
+        max_compiles=compile_tracker.max_compiles,
+        distinct_resolver_count=resolver_tracker.distinct_resolvers(),
+        strict=strict_invariants,
+        violations=violations,
     )
-    pinned_inferred = infer_deps_from_view_nodes(
-        pinned_nodes,
-        ctx=ctx,
-        snapshot=snapshot,
-    )
-    lineage_by_view = _lineage_by_view(pinned_nodes)
-    scan_inferred = _scan_inferred_deps(scan_planning.scan_task_units_by_name)
-    inferred_all = (*pinned_inferred, *scan_inferred)
-    return PlanningPipelineResult(
-        view_nodes=pinned_nodes,
-        inferred=tuple(inferred_all),
-        scan_units=scan_planning.scan_units,
-        scan_keys_by_task=scan_planning.scan_keys_by_task,
-        scan_task_name_by_key=scan_planning.scan_task_name_by_key,
-        scan_task_units_by_name=scan_planning.scan_task_units_by_name,
-        scan_task_names_by_task=scan_planning.scan_task_names_by_task,
-        scan_units_by_evidence_name=scan_planning.scan_task_units_by_name,
-        lineage_by_view=lineage_by_view,
-        session_runtime=session_runtime,
-    )
+    return result
 
 
 def _apply_inferred_scan_policy_overrides(
@@ -403,10 +441,12 @@ def _merge_scan_policy_override(
 ) -> ScanPolicyOverride:
     merged_policy = _merge_scan_policy_config(current.policy, incoming.policy)
     merged_reasons = tuple(sorted(set(current.reasons) | set(incoming.reasons)))
+    merged_confidence = min(current.confidence, incoming.confidence)
     return ScanPolicyOverride(
         dataset_name=current.dataset_name,
         policy=merged_policy,
         reasons=merged_reasons,
+        confidence=merged_confidence,
     )
 
 

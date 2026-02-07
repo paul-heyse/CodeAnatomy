@@ -1,0 +1,43 @@
+name: Drift Surface Audit
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "scripts/check_drift_surfaces.py"
+      - "scripts/check_drift_surfaces.sh"
+      - "pyproject.toml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "scripts/check_drift_surfaces.py"
+      - "scripts/check_drift_surfaces.sh"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+jobs:
+  drift-surface-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Bootstrap environment
+        shell: bash
+        run: |
+          bash scripts/bootstrap_codex.sh
+          uv sync
+
+      - name: Run strict drift surface audit
+        shell: bash
+        run: uv run python scripts/check_drift_surfaces.py --strict

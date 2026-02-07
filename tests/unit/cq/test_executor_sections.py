@@ -66,6 +66,9 @@ def test_auto_scope_summary_uses_multilang_partitions(tmp_path: Path) -> None:
 
     assert result.summary["query"] == "entity=function name=target"
     assert result.summary["mode"] == "entity"
+    assert "pyrefly_overview" in result.summary
+    assert "pyrefly_telemetry" in result.summary
+    assert "pyrefly_diagnostics" in result.summary
     assert result.summary["lang_scope"] == "auto"
     assert result.summary["language_order"] == ["python", "rust"]
     languages = result.summary["languages"]
@@ -86,6 +89,9 @@ def test_single_scope_summary_uses_canonical_multilang_keys(tmp_path: Path) -> N
 
     assert result.summary["lang_scope"] == "python"
     assert result.summary["language_order"] == ["python"]
+    assert "pyrefly_overview" in result.summary
+    assert "pyrefly_telemetry" in result.summary
+    assert "pyrefly_diagnostics" in result.summary
     languages = result.summary["languages"]
     assert isinstance(languages, dict)
     assert set(languages) == {"python"}

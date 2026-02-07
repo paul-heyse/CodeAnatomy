@@ -52,12 +52,16 @@ class JoinStrategy:
         Column names from right table used in the join.
     filter_expr
         Optional SQL filter expression applied after join.
+    confidence
+        Inference confidence score in [0.0, 1.0].  Higher values
+        indicate stronger evidence backing the strategy selection.
     """
 
     strategy_type: JoinStrategyType
     left_keys: tuple[str, ...]
     right_keys: tuple[str, ...]
     filter_expr: str | None = None
+    confidence: float = 1.0
 
     def describe(self) -> str:
         """Generate human-readable description of the strategy.
@@ -100,6 +104,7 @@ class JoinStrategy:
             left_keys=self.left_keys,
             right_keys=self.right_keys,
             filter_expr=combined,
+            confidence=self.confidence,
         )
 
 

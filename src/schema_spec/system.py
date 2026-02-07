@@ -825,6 +825,7 @@ class DatasetPolicies(StructBaseStrict, frozen=True):
     delta: DeltaPolicyBundle | None = None
     validation: ArrowValidationOptions | None = None
     dataframe_validation: ValidationPolicySpec | None = None
+    strict_schema_validation: bool | None = None
 
 
 class DatasetSpec(StructBaseStrict, frozen=True):
@@ -967,6 +968,7 @@ class DatasetSpecKwargs(TypedDict, total=False):
     metadata_spec: SchemaMetadataSpec | None
     validation: ArrowValidationOptions | None
     dataframe_validation: ValidationPolicySpec | None
+    strict_schema_validation: bool | None
 
 
 def _merge_names(*parts: Iterable[str]) -> tuple[str, ...]:
@@ -1137,6 +1139,7 @@ def make_dataset_spec(
             delta=delta_bundle,
             validation=kwargs.get("validation"),
             dataframe_validation=kwargs.get("dataframe_validation"),
+            strict_schema_validation=kwargs.get("strict_schema_validation"),
         )
     return DatasetSpec(
         table_spec=table_spec,

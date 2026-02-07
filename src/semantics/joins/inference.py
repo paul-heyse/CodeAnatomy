@@ -14,7 +14,7 @@ The inference can be guided with optional hints to prefer specific strategies.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from semantics.joins.strategies import (
@@ -27,6 +27,14 @@ from semantics.types.core import CompatibilityGroup, SemanticType
 
 if TYPE_CHECKING:
     from semantics.types import AnnotatedSchema
+
+# Confidence scores assigned to inferred join strategies based on the
+# strength of the schema-level evidence.  Higher priority strategies
+# receive higher confidence.
+_SPAN_CONFIDENCE: float = 0.95
+_FK_CONFIDENCE: float = 0.85
+_SYMBOL_CONFIDENCE: float = 0.75
+_FILE_EQUI_CONFIDENCE: float = 0.6
 
 
 class JoinInferenceError(Exception):
@@ -297,6 +305,7 @@ def _infer_with_hint(
     if hint in {JoinStrategyType.SPAN_OVERLAP, JoinStrategyType.SPAN_CONTAINS}:
         if _can_span_join(left_caps, right_caps):
             strategy = _span_strategy(hint, left_schema, right_schema)
+            strategy = replace(strategy, confidence=_SPAN_CONFIDENCE)
     elif hint == JoinStrategyType.EQUI_JOIN:
         strategy = _resolve_equi_join(
             left_caps,
@@ -304,10 +313,13 @@ def _infer_with_hint(
             left_schema=left_schema,
             right_schema=right_schema,
         )
+        if strategy is not None:
+            strategy = replace(strategy, confidence=_FILE_EQUI_CONFIDENCE)
     elif hint == JoinStrategyType.FOREIGN_KEY:
         fk_match = _find_fk_match(left_caps, right_caps)
         if fk_match:
             strategy = make_fk_strategy(fk_match[0], fk_match[1])
+            strategy = replace(strategy, confidence=_FK_CONFIDENCE)
     elif hint == JoinStrategyType.SYMBOL_MATCH:
         strategy = _resolve_symbol_match(
             left_caps,
@@ -315,6 +327,8 @@ def _infer_with_hint(
             left_schema=left_schema,
             right_schema=right_schema,
         )
+        if strategy is not None:
+            strategy = replace(strategy, confidence=_SYMBOL_CONFIDENCE)
     return strategy
 
 
@@ -346,11 +360,12 @@ def _infer_default(
         Best inferred strategy, or None if no valid strategy.
     """
     if _can_span_join(left_caps, right_caps):
-        return _span_strategy(JoinStrategyType.SPAN_OVERLAP, left_schema, right_schema)
+        strategy = _span_strategy(JoinStrategyType.SPAN_OVERLAP, left_schema, right_schema)
+        return replace(strategy, confidence=_SPAN_CONFIDENCE)
 
     fk_match = _find_fk_match(left_caps, right_caps)
     if fk_match:
-        return make_fk_strategy(fk_match[0], fk_match[1])
+        return replace(make_fk_strategy(fk_match[0], fk_match[1]), confidence=_FK_CONFIDENCE)
 
     strategy = _resolve_symbol_match(
         left_caps,
@@ -359,14 +374,17 @@ def _infer_default(
         right_schema=right_schema,
     )
     if strategy is not None:
-        return strategy
+        return replace(strategy, confidence=_SYMBOL_CONFIDENCE)
 
-    return _resolve_equi_join(
+    equi = _resolve_equi_join(
         left_caps,
         right_caps,
         left_schema=left_schema,
         right_schema=right_schema,
     )
+    if equi is not None:
+        return replace(equi, confidence=_FILE_EQUI_CONFIDENCE)
+    return None
 
 
 def infer_join_strategy(

@@ -157,6 +157,15 @@
       }
     },
     "mode": "entity",
+    "pyrefly_diagnostics": [],
+    "pyrefly_overview": {},
+    "pyrefly_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "query": "entity=import name=Path"
   }
 }

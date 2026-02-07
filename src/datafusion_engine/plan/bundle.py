@@ -1882,34 +1882,43 @@ def _scan_units_for_bundle(
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[ScanUnit, ...]:
     scan_units: tuple[ScanUnit, ...] = ()
-    if dataset_resolver is None:
+    if session_runtime is None or plan is None:
         return scan_units
-    if session_runtime is not None and plan is not None:
-        try:
-            from datafusion_engine.lineage.datafusion import extract_lineage
-            from datafusion_engine.lineage.scan import plan_scan_units
-        except ImportError:
-            pass
-        else:
-            lineage = extract_lineage(plan)
-            if lineage.scans:
-                locations = _manifest_dataset_locations(dataset_resolver=dataset_resolver)
-                if locations:
-                    try:
-                        scan_units, _ = plan_scan_units(
-                            ctx,
-                            dataset_locations=locations,
-                            scans_by_task={"plan_bundle": lineage.scans},
-                            runtime_profile=session_runtime.profile,
-                        )
-                    except (RuntimeError, TypeError, ValueError):
-                        scan_units = ()
+    try:
+        from datafusion_engine.lineage.datafusion import extract_lineage
+        from datafusion_engine.lineage.scan import plan_scan_units
+    except ImportError:
+        return scan_units
+    lineage = extract_lineage(plan)
+    if lineage.scans:
+        locations = _manifest_dataset_locations(
+            dataset_resolver=dataset_resolver,
+            session_runtime=session_runtime,
+        )
+        if locations:
+            try:
+                scan_units, _ = plan_scan_units(
+                    ctx,
+                    dataset_locations=locations,
+                    scans_by_task={"plan_bundle": lineage.scans},
+                    runtime_profile=session_runtime.profile,
+                )
+            except (RuntimeError, TypeError, ValueError):
+                scan_units = ()
     return scan_units
 
 
 def _manifest_dataset_locations(
-    dataset_resolver: ManifestDatasetResolver,
+    *,
+    dataset_resolver: ManifestDatasetResolver | None,
+    session_runtime: SessionRuntime | None,
 ) -> dict[str, DatasetLocation]:
+    if dataset_resolver is None:
+        if session_runtime is None:
+            return {}
+        locations = dict(session_runtime.profile.data_sources.dataset_templates)
+        locations.update(session_runtime.profile.data_sources.extract_output.dataset_locations)
+        return locations
     locations: dict[str, DatasetLocation] = {}
     for name in dataset_resolver.names():
         location = dataset_resolver.location(name)
@@ -1924,9 +1933,12 @@ def _cdf_window_snapshot(
     *,
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[dict[str, object], ...]:
-    if session_runtime is None or dataset_resolver is None:
+    if session_runtime is None:
         return ()
-    locations = _manifest_dataset_locations(dataset_resolver=dataset_resolver)
+    locations = _manifest_dataset_locations(
+        dataset_resolver=dataset_resolver,
+        session_runtime=session_runtime,
+    )
     payloads: list[dict[str, object]] = []
     for name, location in sorted(locations.items(), key=lambda item: item[0]):
         options = location.delta_cdf_options
@@ -1969,9 +1981,12 @@ def _snapshot_keys_for_manifest(
     session_runtime: SessionRuntime | None,
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[dict[str, object], ...]:
-    if session_runtime is None or dataset_resolver is None:
+    if session_runtime is None:
         return ()
-    locations = _manifest_dataset_locations(dataset_resolver=dataset_resolver)
+    locations = _manifest_dataset_locations(
+        dataset_resolver=dataset_resolver,
+        session_runtime=session_runtime,
+    )
     payloads: list[dict[str, object]] = []
     seen: set[tuple[str, str, int]] = set()
     for pin in delta_inputs:

@@ -39,6 +39,25 @@ def _schema_names(df: DataFrame) -> list[str]:
     return []
 
 
+def _has_column(schema_names: list[str], name: str) -> bool:
+    if name in schema_names:
+        return True
+    dotted_suffix = f".{name}"
+    return any(schema_name.endswith(dotted_suffix) for schema_name in schema_names)
+
+
+def _resolved_column_expr(schema_names: list[str], *candidates: str) -> Expr | None:
+    for name in candidates:
+        if name in schema_names:
+            return col(name)
+    for name in candidates:
+        dotted_suffix = f".{name}"
+        for schema_name in schema_names:
+            if schema_name.endswith(dotted_suffix):
+                return col(schema_name)
+    return None
+
+
 def _scope_column_spec(scope_df: DataFrame) -> tuple[Expr, str, str]:
     schema_names = _schema_names(scope_df)
     scope_type_expr = _scope_type_expr(scope_df)
@@ -71,16 +90,81 @@ def _symbol_flag_exprs(symbols_df: DataFrame) -> tuple[str, dict[str, Expr]]:
     }
 
 
+def _binding_field_expr(
+    schema_names: list[str],
+    *,
+    canonical: str,
+    alternatives: tuple[str, ...] = (),
+    default: Expr | None = None,
+    relation: str = "symtable_bindings",
+) -> Expr:
+    resolved = _resolved_column_expr(schema_names, canonical, *alternatives)
+    if resolved is not None:
+        return resolved
+    if default is not None:
+        return default
+    msg = f"{relation} is missing required column {canonical!r} (alternatives={alternatives!r})."
+    raise ValueError(msg)
+
+
+def _normalized_bindings_df(bindings_df: DataFrame) -> DataFrame:
+    """Return ``symtable_bindings`` projected to canonical columns.
+
+    Raises:
+        ValueError: If required canonical binding columns are missing.
+    """
+    schema_names = _schema_names(bindings_df)
+    required_columns = (
+        "file_id",
+        "path",
+        "scope_id",
+        "binding_id",
+        "name",
+        "binding_kind",
+        "declared_here",
+    )
+    missing = [name for name in required_columns if not _has_column(schema_names, name)]
+    if missing:
+        msg = (
+            "symtable_bindings must expose canonical columns "
+            f"{required_columns!r}; missing={tuple(missing)!r}."
+        )
+        raise ValueError(msg)
+    return bindings_df.select(
+        _binding_field_expr(schema_names, canonical="file_id").alias("file_id"),
+        _binding_field_expr(schema_names, canonical="path").alias("path"),
+        _binding_field_expr(schema_names, canonical="scope_id").alias("scope_id"),
+        _binding_field_expr(schema_names, canonical="binding_id").alias("binding_id"),
+        _binding_field_expr(schema_names, canonical="name").alias("name"),
+        _binding_field_expr(schema_names, canonical="binding_kind").alias("binding_kind"),
+        _binding_field_expr(schema_names, canonical="declared_here")
+        .cast(pa.bool_())
+        .alias("declared_here"),
+    )
+
+
 def _scope_edges_df(ctx: SessionContext) -> DataFrame:
     edges_df = ctx.table("symtable_scope_edges")
-    edge_schema_names: list[str] = (
-        list(edges_df.schema().names) if hasattr(edges_df.schema(), "names") else []
-    )
-    if "child_scope_id" in edge_schema_names and "parent_scope_id" in edge_schema_names:
+    edge_schema_names = _schema_names(edges_df)
+    if _has_column(edge_schema_names, "child_scope_id") and _has_column(
+        edge_schema_names, "parent_scope_id"
+    ):
         return edges_df.select(
-            col("path"),
-            col("child_scope_id"),
-            col("parent_scope_id"),
+            _binding_field_expr(
+                edge_schema_names,
+                canonical="path",
+                relation="symtable_scope_edges",
+            ).alias("path"),
+            _binding_field_expr(
+                edge_schema_names,
+                canonical="child_scope_id",
+                relation="symtable_scope_edges",
+            ).alias("child_scope_id"),
+            _binding_field_expr(
+                edge_schema_names,
+                canonical="parent_scope_id",
+                relation="symtable_scope_edges",
+            ).alias("parent_scope_id"),
         )
     scopes = ctx.table("symtable_scopes")
     children = scopes.select(
@@ -196,20 +280,20 @@ def symtable_def_sites_df(ctx: SessionContext) -> DataFrame:
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of definition site records.
     """
-    bindings = ctx.table("symtable_bindings")
+    bindings = _normalized_bindings_df(ctx.table("symtable_bindings"))
     defs = ctx.table("cst_defs").select(
-        col("def_id"),
-        col("path"),
-        col("name"),
-        col("name_bstart"),
-        col("name_bend"),
-        col("def_bstart"),
-        col("def_bend"),
-        col("kind"),
+        col("def_id").alias("def_id"),
+        col("path").alias("def_path"),
+        col("name").alias("def_name"),
+        col("name_bstart").alias("name_bstart"),
+        col("name_bend").alias("name_bend"),
+        col("def_bstart").alias("def_bstart"),
+        col("def_bend").alias("def_bend"),
+        col("kind").alias("kind"),
     )
     joined = bindings.join(
         defs,
-        join_keys=(["path", "name"], ["path", "name"]),
+        join_keys=(["path", "name"], ["def_path", "def_name"]),
         how="inner",
         coalesce_duplicate_keys=True,
     )
@@ -253,18 +337,18 @@ def symtable_use_sites_df(ctx: SessionContext) -> DataFrame:
     datafusion.dataframe.DataFrame
         DataFusion DataFrame of use site records.
     """
-    bindings = ctx.table("symtable_bindings")
+    bindings = _normalized_bindings_df(ctx.table("symtable_bindings"))
     refs = ctx.table("cst_refs").select(
-        col("ref_id"),
-        col("path"),
-        col("ref_text"),
-        col("bstart"),
-        col("bend"),
-        col("expr_ctx"),
+        col("ref_id").alias("ref_id"),
+        col("path").alias("ref_path"),
+        col("ref_text").alias("ref_text"),
+        col("bstart").alias("bstart"),
+        col("bend").alias("bend"),
+        col("expr_ctx").alias("expr_ctx"),
     )
     joined = bindings.join(
         refs,
-        join_keys=(["path", "name"], ["path", "ref_text"]),
+        join_keys=(["path", "name"], ["ref_path", "ref_text"]),
         how="inner",
         coalesce_duplicate_keys=True,
     )
@@ -435,7 +519,8 @@ def _free_resolution_edges(
 
 
 def _resolution_bindings(ctx: SessionContext) -> DataFrame:
-    return ctx.table("symtable_bindings").select(
+    bindings = _normalized_bindings_df(ctx.table("symtable_bindings"))
+    return bindings.select(
         col("binding_id").cast(pa.string()),
         col("scope_id").cast(pa.string()),
         col("name").cast(pa.string()),
@@ -445,15 +530,12 @@ def _resolution_bindings(ctx: SessionContext) -> DataFrame:
 
 
 def _declared_bindings(ctx: SessionContext) -> DataFrame:
-    return (
-        ctx.table("symtable_bindings")
-        .filter(col("declared_here"))
-        .select(
-            col("path").cast(pa.string()),
-            col("scope_id").cast(pa.string()),
-            col("name").cast(pa.string()),
-            col("binding_id").cast(pa.string()).alias("outer_binding_id"),
-        )
+    bindings = _normalized_bindings_df(ctx.table("symtable_bindings"))
+    return bindings.filter(col("declared_here")).select(
+        col("path").cast(pa.string()).alias("declared_path"),
+        col("scope_id").cast(pa.string()).alias("declared_scope_id"),
+        col("name").cast(pa.string()).alias("declared_name"),
+        col("binding_id").cast(pa.string()).alias("outer_binding_id"),
     )
 
 
@@ -461,7 +543,7 @@ def _module_scopes(ctx: SessionContext) -> DataFrame:
     scopes = ctx.table("symtable_scopes")
     scope_type_expr = _scope_type_expr(scopes)
     return scopes.filter(scope_type_expr == lit("MODULE")).select(
-        col("path").cast(pa.string()),
+        col("path").cast(pa.string()).alias("module_path"),
         col("scope_id").cast(pa.string()).alias("module_scope_id"),
     )
 
@@ -470,35 +552,35 @@ def _scope_types(ctx: SessionContext) -> DataFrame:
     scopes = ctx.table("symtable_scopes")
     scope_type_expr = _scope_type_expr(scopes)
     return scopes.select(
-        col("path").cast(pa.string()),
-        col("scope_id").cast(pa.string()),
+        col("path").cast(pa.string()).alias("scope_path"),
+        col("scope_id").cast(pa.string()).alias("scope_scope_id"),
         scope_type_expr.cast(pa.string()).alias("scope_type"),
     )
 
 
 def _scope_ancestor_edges(ctx: SessionContext, *, max_depth: int) -> DataFrame:
     edges = _scope_edges_df(ctx).select(
-        col("path").cast(pa.string()),
-        col("child_scope_id").cast(pa.string()),
-        col("parent_scope_id").cast(pa.string()),
+        col("path").cast(pa.string()).alias("edge_path"),
+        col("child_scope_id").cast(pa.string()).alias("edge_child_scope_id"),
+        col("parent_scope_id").cast(pa.string()).alias("edge_parent_scope_id"),
     )
     ancestors = edges.select(
-        col("path"),
-        col("child_scope_id"),
-        col("parent_scope_id").alias("ancestor_scope_id"),
+        col("edge_path").alias("path"),
+        col("edge_child_scope_id").alias("child_scope_id"),
+        col("edge_parent_scope_id").alias("ancestor_scope_id"),
         lit(1).alias("depth"),
     )
     current = ancestors
     for depth in range(2, max_depth + 1):
         current = current.join(
             edges,
-            join_keys=(["path", "ancestor_scope_id"], ["path", "child_scope_id"]),
+            join_keys=(["path", "ancestor_scope_id"], ["edge_path", "edge_child_scope_id"]),
             how="inner",
             coalesce_duplicate_keys=True,
         ).select(
             col("path"),
             col("child_scope_id"),
-            col("parent_scope_id").alias("ancestor_scope_id"),
+            col("edge_parent_scope_id").alias("ancestor_scope_id"),
             lit(depth).alias("depth"),
         )
         ancestors = ancestors.union(current)
@@ -510,15 +592,23 @@ def _ancestor_candidates(
     ancestors: DataFrame,
     declared: DataFrame,
 ) -> DataFrame:
+    ancestor_keys = ancestors.select(
+        col("path").alias("ancestor_path"),
+        col("child_scope_id").alias("ancestor_child_scope_id"),
+        col("ancestor_scope_id").alias("ancestor_scope_id"),
+    )
     chained = bindings.join(
-        ancestors,
-        join_keys=(["path", "scope_id"], ["path", "child_scope_id"]),
+        ancestor_keys,
+        join_keys=(["path", "scope_id"], ["ancestor_path", "ancestor_child_scope_id"]),
         how="inner",
         coalesce_duplicate_keys=True,
     )
     return chained.join(
         declared,
-        join_keys=(["path", "ancestor_scope_id", "name"], ["path", "scope_id", "name"]),
+        join_keys=(
+            ["path", "ancestor_scope_id", "name"],
+            ["declared_path", "declared_scope_id", "declared_name"],
+        ),
         how="inner",
         coalesce_duplicate_keys=True,
     )
@@ -531,13 +621,16 @@ def _module_candidates(
 ) -> DataFrame:
     with_module = bindings.join(
         module_scopes,
-        join_keys=(["path"], ["path"]),
+        join_keys=(["path"], ["module_path"]),
         how="inner",
         coalesce_duplicate_keys=True,
     )
     return with_module.join(
         declared,
-        join_keys=(["path", "module_scope_id", "name"], ["path", "scope_id", "name"]),
+        join_keys=(
+            ["path", "module_scope_id", "name"],
+            ["declared_path", "declared_scope_id", "declared_name"],
+        ),
         how="inner",
         coalesce_duplicate_keys=True,
     )
@@ -546,7 +639,7 @@ def _module_candidates(
 def _with_scope_type(candidates: DataFrame, scope_types: DataFrame) -> DataFrame:
     return candidates.join(
         scope_types,
-        join_keys=(["path", "ancestor_scope_id"], ["path", "scope_id"]),
+        join_keys=(["path", "ancestor_scope_id"], ["scope_path", "scope_scope_id"]),
         how="left",
         coalesce_duplicate_keys=True,
     )

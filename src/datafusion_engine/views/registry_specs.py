@@ -25,6 +25,7 @@ from datafusion_engine.views.bundle_extraction import (
 )
 from datafusion_engine.views.graph import ViewNode
 from serde_artifact_specs import SCHEMA_DIVERGENCE_SPEC, SEMANTIC_INPUT_SCHEMA_VALIDATION_SPEC
+from utils.env_utils import env_bool
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -41,6 +42,8 @@ if TYPE_CHECKING:
 
 
 DataFrameBuilder = Callable[["SessionContext"], "DataFrame"]
+_SCHEMA_DIVERGENCE_STRICT_ENV = "CODEANATOMY_SCHEMA_DIVERGENCE_STRICT"
+_CI_ENV = "CI"
 
 
 @dataclass(frozen=True)
@@ -291,6 +294,49 @@ def _dataset_contract_for(
     return _arrow_schema_from_contract(dataset_spec_schema(dataset_spec)), True
 
 
+def _schema_divergence_strict_mode(*, dataset_spec: DatasetSpec | None) -> bool:
+    if dataset_spec is not None:
+        from schema_spec.dataset_spec_ops import dataset_spec_strict_schema_validation
+
+        strict_setting = dataset_spec_strict_schema_validation(dataset_spec)
+        if strict_setting is not None:
+            return strict_setting
+    strict_override = env_bool(
+        _SCHEMA_DIVERGENCE_STRICT_ENV,
+        default=None,
+        on_invalid="none",
+    )
+    if strict_override is not None:
+        return strict_override
+    return bool(env_bool(_CI_ENV, default=False, on_invalid="false"))
+
+
+def _schema_divergence_error_message(
+    *,
+    view_name: str,
+    added_columns: Sequence[str],
+    removed_columns: Sequence[str],
+    type_mismatches: Sequence[tuple[str, str, str]],
+) -> str:
+    details: list[str] = []
+    if added_columns:
+        details.append(f"added_columns={list(added_columns)}")
+    if removed_columns:
+        details.append(f"removed_columns={list(removed_columns)}")
+    if type_mismatches:
+        details.append(
+            "type_mismatches="
+            + str(
+                [
+                    {"column": col, "spec_type": spec_type, "plan_type": plan_type}
+                    for col, spec_type, plan_type in type_mismatches
+                ]
+            )
+        )
+    details_text = "; ".join(details) if details else "no divergence details available"
+    return f"Schema divergence detected for semantic view {view_name!r}: {details_text}"
+
+
 def _nested_view_nodes(
     ctx: SessionContext,
     *,
@@ -403,6 +449,7 @@ def _semantic_view_specs_for_registration(
             use_cdf=use_cdf,
             runtime_profile=runtime_profile,
             requested_outputs=None,
+            manifest=manifest,
             semantic_ir=semantic_ir,
         )
     )
@@ -430,6 +477,7 @@ def _build_semantic_view_node(
         name,
         dataset_specs=context.dataset_specs,
     )
+    strict_schema_validation = _schema_divergence_strict_mode(dataset_spec=dataset_spec)
     # Schema divergence detection (10.2): compare spec vs plan output
     if expected_schema is not None and bundle is not None:
         from datafusion_engine.plan.signals import extract_plan_signals
@@ -446,6 +494,8 @@ def _build_semantic_view_node(
                     SCHEMA_DIVERGENCE_SPEC,
                     {
                         "view_name": name,
+                        "strict": strict_schema_validation,
+                        "severity": "error" if strict_schema_validation else "warning",
                         "spec_columns": list(expected_schema.names),
                         "plan_columns": list(plan_schema.names),
                         "added_columns": list(divergence.added_columns),
@@ -456,6 +506,15 @@ def _build_semantic_view_node(
                         ],
                     },
                 )
+                if strict_schema_validation:
+                    raise ValueError(
+                        _schema_divergence_error_message(
+                            view_name=name,
+                            added_columns=divergence.added_columns,
+                            removed_columns=divergence.removed_columns,
+                            type_mismatches=divergence.type_mismatches,
+                        )
+                    )
     annotated_contract: AnnotatedSchema | None = None
     if expected_schema is not None:
         from semantics.types import AnnotatedSchema

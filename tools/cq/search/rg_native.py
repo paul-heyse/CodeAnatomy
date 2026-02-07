@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import time
 from dataclasses import dataclass
@@ -138,10 +139,10 @@ def run_rg_json(request: RgRunRequest) -> RgProcessResult:
     events: list[RgAnyEvent] = []
     timed_out = False
     deadline = time.monotonic() + request.limits.timeout_seconds
+    stderr_bytes = b""
 
-    assert process.stdout is not None
-    assert process.stderr is not None
     try:
+        assert process.stdout is not None
         for raw_line in iter(process.stdout.readline, b""):
             event = decode_rg_event(raw_line)
             if event is not None:
@@ -151,10 +152,25 @@ def run_rg_json(request: RgRunRequest) -> RgProcessResult:
                 process.kill()
                 break
     finally:
-        # Drain stderr regardless of process state to avoid zombies.
-        stderr_text = process.stderr.read().decode("utf-8", errors="replace")
         if process.poll() is None:
-            process.wait(timeout=1)
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1)
+        if process.stderr is not None:
+            try:
+                stderr_bytes = process.stderr.read()
+            except OSError:
+                stderr_bytes = b""
+            finally:
+                with contextlib.suppress(OSError):
+                    process.stderr.close()
+        if process.stdout is not None:
+            with contextlib.suppress(OSError):
+                process.stdout.close()
+
+    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
 
     return RgProcessResult(
         command=command,

@@ -263,6 +263,7 @@ class TestExecutionAuthorityValidation:
             semantic_context=semantic_context,
             evidence_plan=evidence_plan_mock,
             extract_executor_map={"ast": MagicMock(), "cst": MagicMock()},
+            capability_snapshot={"delta_compatible": True},
             session_runtime_fingerprint="fp_abc123",
         )
         assert authority.validation_issues() == ()
@@ -452,16 +453,17 @@ class TestCapabilitySnapshotPolymorphism:
         assert authority.capability_snapshot is snapshot
         assert authority.validation_issues() == ()
 
-    def test_none_snapshot_no_type_issue(self, semantic_context: SemanticExecutionContext) -> None:
-        """Allow None capability_snapshot without snapshot-related issues."""
+    def test_none_snapshot_produces_missing_issue(
+        self, semantic_context: SemanticExecutionContext
+    ) -> None:
+        """Produce missing_capability_snapshot when capability_snapshot is None."""
         authority = ExecutionAuthorityContext(
             semantic_context=semantic_context,
             capability_snapshot=None,
             session_runtime_fingerprint="fp_abc123",
         )
         codes = {issue.code for issue in authority.validation_issues()}
-        # Only capability_snapshot=None itself does not produce a validation issue
-        assert "missing_capability_snapshot" not in codes
+        assert "missing_capability_snapshot" in codes
 
 
 # ---------------------------------------------------------------------------

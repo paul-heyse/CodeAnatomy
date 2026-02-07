@@ -6,9 +6,9 @@
       "anchor": {
         "col": 0,
         "end_col": 39,
-        "end_line": 559,
+        "end_line": 568,
         "file": "tools/cq/query/executor.py",
-        "line": 513
+        "line": 522
       },
       "category": "definition",
       "details": {
@@ -164,6 +164,15 @@
       }
     },
     "mode": "entity",
+    "pyrefly_diagnostics": [],
+    "pyrefly_overview": {},
+    "pyrefly_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "query": "entity=function name=execute_plan"
   }
 }

@@ -15,6 +15,7 @@ import pytest
 from hamilton_pipeline.io_contracts import (
     OutputPlanContext,
     OutputRuntimeContext,
+    delta_output_spec_for,
     delta_output_specs,
     validate_delta_output_payload,
 )
@@ -232,10 +233,12 @@ def test_materializer_factory_wiring_against_delta_specs() -> None:
 @pytest.mark.integration
 def test_validate_delta_output_payload_accepts_valid() -> None:
     """Valid payload passes validate_delta_output_payload() without exception."""
+    spec = delta_output_spec_for("cpg_nodes")
+    assert spec is not None
     valid_payload = {
         "dataset_name": "cpg_nodes",
         "materialization": "delta",
-        "materialized_name": "semantic.cpg_nodes_v1",
+        "materialized_name": spec.materialized_name,
         "path": "/tmp/test/cpg_nodes",
         "rows": 100,
         "delta_version": 0,
@@ -247,10 +250,12 @@ def test_validate_delta_output_payload_accepts_valid() -> None:
 @pytest.mark.integration
 def test_validate_delta_output_payload_rejects_missing_key() -> None:
     """Payload missing required key raises ValueError naming the missing key."""
+    spec = delta_output_spec_for("cpg_nodes")
+    assert spec is not None
     invalid_payload = {
         "dataset_name": "cpg_nodes",
         "materialization": "delta",
-        "materialized_name": "semantic.cpg_nodes_v1",
+        "materialized_name": spec.materialized_name,
         "path": "/tmp/test/cpg_nodes",
         "delta_version": 0,
     }

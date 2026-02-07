@@ -1318,6 +1318,10 @@ def _build_registration_context(
         provider_metadata["delta_cdf_enabled"] = "true"
     if location.datafusion_provider is not None:
         provider_metadata["datafusion_provider"] = str(location.datafusion_provider)
+    default_values: dict[str, object] = {}
+    resolved_table_spec = location.resolved.table_spec
+    if resolved_table_spec is not None:
+        default_values = dict(_expected_column_defaults(resolved_table_spec.to_arrow_schema()))
     # Schema adapters are attached at SessionContext creation via the runtime
     # profile's physical expression adapter factory. When enabled, scan-time
     # adapters handle schema drift resolution at the TableProvider boundary.
@@ -1328,6 +1332,7 @@ def _build_registration_context(
         table_name=name,
         ddl=None,
         constraints=table_constraint_definitions(table_constraints_from_location(location)),
+        default_values=default_values,
         storage_location=str(location.path),
         file_format=location.format or "unknown",
         partition_columns=tuple(col for col, _ in options.scan.partition_cols)

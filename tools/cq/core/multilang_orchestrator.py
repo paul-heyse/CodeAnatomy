@@ -224,9 +224,23 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
             }
             for finding in diag_findings
         ]
+    summary_common = dict(request.summary_common or {})
+    summary_common.setdefault("pyrefly_overview", {})
+    summary_common.setdefault(
+        "pyrefly_telemetry",
+        {
+            "attempted": 0,
+            "applied": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+        },
+    )
+    summary_common.setdefault("pyrefly_diagnostics", [])
+
     merged.summary = build_multilang_summary(
         SummaryBuildRequest(
-            common=request.summary_common or {},
+            common=summary_common,
             lang_scope=request.scope,
             language_order=tuple(order),
             languages=partitions,

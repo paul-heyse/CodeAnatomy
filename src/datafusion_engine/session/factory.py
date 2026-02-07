@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
+import datafusion
 from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 
 if TYPE_CHECKING:
@@ -28,6 +29,21 @@ from datafusion_engine.session.delta_session_builder import (
     split_runtime_settings as _split_runtime_settings_impl,
 )
 from datafusion_engine.session.helpers import deregister_table
+
+_DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION = 51
+
+
+def _parse_major_version(version: str) -> int | None:
+    head = version.split(".", 1)[0]
+    if not head:
+        return None
+    try:
+        return int(head)
+    except ValueError:
+        return None
+
+
+_DATAFUSION_MAJOR_VERSION = _parse_major_version(datafusion.__version__)
 
 
 class _SettingsProvider(Protocol):
@@ -63,6 +79,12 @@ def _apply_settings_overrides(
     overrides: Mapping[str, str],
 ) -> SessionConfig:
     for key, value in overrides.items():
+        if (
+            key.startswith("datafusion.runtime.")
+            and _DATAFUSION_MAJOR_VERSION is not None
+            and _DATAFUSION_MAJOR_VERSION >= _DATAFUSION_RUNTIME_SETTINGS_SKIP_VERSION
+        ):
+            continue
         config = config.set(key, str(value))
     return config
 
@@ -257,6 +279,7 @@ class SessionFactory:
         from datafusion_engine.session.runtime import (
             effective_catalog_autoload,
             effective_ident_normalization,
+            performance_policy_settings,
             resolved_config_policy,
             resolved_schema_hardening,
             supports_explain_analyze_level,
@@ -348,6 +371,10 @@ class SessionFactory:
                 config,
                 cache_policy_settings(profile.policies.cache_policy),
             )
+        config = _apply_settings_overrides(
+            config,
+            performance_policy_settings(profile),
+        )
         schema_hardening = resolved_schema_hardening(profile)
         if schema_hardening is not None:
             config = schema_hardening.apply(config)

@@ -13,23 +13,29 @@ the registry.
 
 from __future__ import annotations
 
+from relspec.execution_package import ExecutionPackageArtifact
 from serde_artifacts import (
+    CompiledExecutionPolicyArtifact,
     CompileResolverInvariantArtifact,
+    DecisionProvenanceGraphArtifact,
     DeltaMaintenanceDecisionArtifact,
     DeltaProtocolArtifact,
     DeltaStatsDecision,
     ExtractErrorsArtifact,
     IncrementalMetadataSnapshot,
     NormalizeOutputsArtifact,
+    PerformancePolicyArtifact,
     PlanScheduleArtifact,
     PlanSignalsArtifact,
     PlanValidationArtifact,
-    PerformancePolicyArtifact,
+    PruningMetricsArtifact,
     RunManifest,
+    RuntimeCapabilitiesSnapshotArtifact,
     RuntimeProfileSnapshot,
     SemanticValidationArtifact,
     ViewArtifactPayload,
     ViewCacheArtifact,
+    WorkloadClassificationArtifact,
     WriteArtifactRow,
 )
 from serde_schema_registry import ArtifactSpec, register_artifact_spec
@@ -147,6 +153,14 @@ PERFORMANCE_POLICY_SPEC = register_artifact_spec(
         canonical_name="performance_policy_v1",
         description="Runtime-applied performance policy configuration and knobs.",
         payload_type=PerformancePolicyArtifact,
+    )
+)
+
+COMPILED_EXECUTION_POLICY_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="compiled_execution_policy_v1",
+        description="Compile-time-resolved execution policy from graph topology and plan signals.",
+        payload_type=CompiledExecutionPolicyArtifact,
     )
 )
 
@@ -336,6 +350,14 @@ EVIDENCE_CONTRACT_VIOLATIONS_SPEC = register_artifact_spec(
     )
 )
 
+EXECUTION_PACKAGE_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="execution_package_v1",
+        description="Reproducible execution package for deterministic replay and bisecting.",
+        payload_type=ExecutionPackageArtifact,
+    )
+)
+
 # ---------------------------------------------------------------------------
 # DataFusion Plan Diagnostics
 # ---------------------------------------------------------------------------
@@ -365,6 +387,41 @@ DATAFUSION_PLAN_ARTIFACTS_SPEC = register_artifact_spec(
     ArtifactSpec(
         canonical_name="datafusion_plan_artifacts_v10",
         description="DataFusion plan artifact collection with schema fingerprints.",
+    )
+)
+
+SQL_COMPILATION_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="sql_compilation",
+        description="SQL compilation diagnostics artifact.",
+    )
+)
+
+SQL_EXECUTION_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="sql_execution",
+        description="SQL execution diagnostics artifact.",
+    )
+)
+
+WRITE_OPERATION_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="write_operation",
+        description="Write operation diagnostics artifact.",
+    )
+)
+
+REGISTRATION_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="registration",
+        description="Registration diagnostics artifact.",
+    )
+)
+
+DATAFUSION_NAMESPACE_ACTIONS_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="datafusion_namespace_actions_v1",
+        description="DataFusion namespace actions diagnostics artifact.",
     )
 )
 
@@ -439,6 +496,7 @@ DATAFUSION_RUNTIME_CAPABILITIES_SPEC = register_artifact_spec(
     ArtifactSpec(
         canonical_name="datafusion_runtime_capabilities_v1",
         description="Runtime capability snapshot for DataFusion session features.",
+        payload_type=RuntimeCapabilitiesSnapshotArtifact,
     )
 )
 
@@ -1196,6 +1254,38 @@ SUBSTRAIT_FALLBACK_SPEC = register_artifact_spec(
     )
 )
 
+# ---------------------------------------------------------------------------
+# Workload & Pruning (Phase G, Section 12)
+# ---------------------------------------------------------------------------
+
+WORKLOAD_CLASSIFICATION_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="workload_classification_v1",
+        description="Plan workload classification for resource tuning.",
+        payload_type=WorkloadClassificationArtifact,
+    )
+)
+
+PRUNING_METRICS_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="pruning_metrics_v1",
+        description="Per-execution pruning effectiveness metrics.",
+        payload_type=PruningMetricsArtifact,
+    )
+)
+
+# ---------------------------------------------------------------------------
+# Decision Provenance (Section 12.3)
+# ---------------------------------------------------------------------------
+
+DECISION_PROVENANCE_GRAPH_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="decision_provenance_graph_v1",
+        description="Decision provenance graph capturing compile-time decisions, evidence, and outcomes.",
+        payload_type=DecisionProvenanceGraphArtifact,
+    )
+)
+
 __all__ = [
     "ADAPTIVE_WRITE_POLICY_SPEC",
     "ARTIFACT_STORE_RESET_SPEC",
@@ -1206,6 +1296,7 @@ __all__ = [
     "CACHE_INVENTORY_REGISTER_FAILED_SPEC",
     "CACHE_POLICY_SPEC",
     "CATALOG_PROVIDER_REGISTERED_SPEC",
+    "COMPILED_EXECUTION_POLICY_SPEC",
     "DATAFRAME_VALIDATION_ERRORS_SPEC",
     "DATAFUSION_ARROW_INGEST_SPEC",
     "DATAFUSION_AST_DATASET_SPEC",
@@ -1233,6 +1324,7 @@ __all__ = [
     "DATAFUSION_HAMILTON_EVENTS_SPEC",
     "DATAFUSION_INPUT_PLUGINS_SPEC",
     "DATAFUSION_LISTING_REFRESH_SPEC",
+    "DATAFUSION_NAMESPACE_ACTIONS_SPEC",
     "DATAFUSION_PLAN_ARTIFACTS_SPEC",
     "DATAFUSION_PLAN_BUNDLE_SPEC",
     "DATAFUSION_PLAN_EXECUTION_SPEC",
@@ -1255,11 +1347,12 @@ __all__ = [
     "DATAFUSION_UDF_REGISTRY_SPEC",
     "DATAFUSION_UDF_VALIDATION_SPEC",
     "DATAFUSION_VIEW_ARTIFACTS_SPEC",
+    "DECISION_PROVENANCE_GRAPH_SPEC",
     "DATASET_PROVIDER_MODE_SPEC",
     "DATASET_READINESS_SPEC",
     "DELTA_LOG_HEALTH_SPEC",
-    "DELTA_MAINTENANCE_SPEC",
     "DELTA_MAINTENANCE_DECISION_SPEC",
+    "DELTA_MAINTENANCE_SPEC",
     "DELTA_OBSERVABILITY_APPEND_FAILED_SPEC",
     "DELTA_OBSERVABILITY_BOOTSTRAP_COMPLETED_SPEC",
     "DELTA_OBSERVABILITY_BOOTSTRAP_FAILED_SPEC",
@@ -1280,6 +1373,7 @@ __all__ = [
     "ENGINE_RUNTIME_SPEC",
     "EVIDENCE_CONTRACT_VIOLATIONS_SPEC",
     "EXECUTION_AUTHORITY_VALIDATION_SPEC",
+    "EXECUTION_PACKAGE_SPEC",
     "EXTRACT_ERRORS_SPEC",
     "EXTRACT_PLAN_COMPILE_SPEC",
     "EXTRACT_PLAN_EXECUTE_SPEC",
@@ -1311,7 +1405,9 @@ __all__ = [
     "PLAN_VALIDATION_SPEC",
     "POLICY_VALIDATION_SPEC",
     "PROJECTION_VIEW_ARTIFACT_SKIPPED_SPEC",
+    "PRUNING_METRICS_SPEC",
     "PYTHON_EXTERNAL_STATS_SPEC",
+    "REGISTRATION_SPEC",
     "REPO_SCAN_BLAME_SPEC",
     "REPO_SCOPE_STATS_SPEC",
     "REPO_SCOPE_TRACE_SPEC",
@@ -1335,6 +1431,8 @@ __all__ = [
     "SEMANTIC_QUALITY_ARTIFACT_SPEC",
     "SEMANTIC_VALIDATION_SPEC",
     "SEMANTIC_VIEW_PLAN_STATS_SPEC",
+    "SQL_COMPILATION_SPEC",
+    "SQL_EXECUTION_SPEC",
     "SUBSTRAIT_FALLBACK_SPEC",
     "TABLE_PROVIDER_REGISTERED_SPEC",
     "UDF_AUDIT_SPEC",
@@ -1348,6 +1446,8 @@ __all__ = [
     "VIEW_FINGERPRINTS_SPEC",
     "VIEW_REGISTERED_SPEC",
     "VIEW_UDF_PARITY_SPEC",
+    "WORKLOAD_CLASSIFICATION_SPEC",
     "WRITE_ARTIFACT_SPEC",
+    "WRITE_OPERATION_SPEC",
     "ZERO_ROW_BOOTSTRAP_VALIDATION_SPEC",
 ]

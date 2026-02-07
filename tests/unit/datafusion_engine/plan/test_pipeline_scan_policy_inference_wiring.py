@@ -1,10 +1,9 @@
-# ruff: noqa: INP001
 """Tests for scan policy inference wiring in planning pipeline."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
@@ -27,12 +26,16 @@ if TYPE_CHECKING:
 class _RuntimeProfile:
     policies: object
     features: object | None = None
+    artifact_calls: list[tuple[object, Mapping[str, object]]] = field(default_factory=list)
 
     def session_runtime(self) -> object:
         return SimpleNamespace(udf_snapshot={})
 
     def settings_hash(self) -> str:
         return "settings-hash"
+
+    def record_artifact(self, name: object, payload: Mapping[str, object]) -> None:
+        self.artifact_calls.append((name, dict(payload)))
 
 
 def _policy(
@@ -47,7 +50,7 @@ def _policy(
     )
 
 
-def test_plan_with_delta_pins_wires_scan_policy_inference(
+def test_plan_with_delta_pins_wires_scan_policy_inference(  # noqa: PLR0914, PLR0915
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Planning should derive, merge, record, and apply inferred scan policies."""
@@ -154,6 +157,10 @@ def test_plan_with_delta_pins_wires_scan_policy_inference(
         lambda *_args, **_kwargs: capability_snapshot,
     )
     monkeypatch.setattr(pipeline, "derive_scan_policy_overrides", _derive)
+    monkeypatch.setattr(
+        "datafusion_engine.session.runtime.compile_resolver_invariants_strict_mode",
+        lambda: False,
+    )
 
     pipeline.plan_with_delta_pins(
         cast("SessionContext", object()),
@@ -179,3 +186,82 @@ def test_plan_with_delta_pins_wires_scan_policy_inference(
     dataset_policy = policy_map["dataset_a"]
     assert dataset_policy.listing.collect_statistics is False
     assert dataset_policy.delta_scan.enable_parquet_pushdown is True
+    assert len(runtime_profile.artifact_calls) == 1
+    spec, payload = runtime_profile.artifact_calls[0]
+    assert getattr(spec, "canonical_name", None) == "compile_resolver_invariants_v1"
+    assert payload["label"] == "plan_with_delta_pins"
+    assert payload["compile_count"] == 0
+    assert payload["max_compiles"] == 0
+    assert payload["distinct_resolver_count"] == 0
+    assert payload["strict"] is False
+    assert payload["violations"] == ()
+
+
+def test_plan_with_delta_pins_strict_mode_raises_on_resolver_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict mode should raise when resolver identity drift is recorded."""
+    runtime_profile = _RuntimeProfile(
+        policies=SimpleNamespace(
+            scan_policy=_policy(
+                collect_statistics=True,
+                enable_parquet_pushdown=False,
+            )
+        ),
+    )
+    semantic_context = SimpleNamespace(dataset_resolver=object(), manifest=object())
+
+    class _FacadeDrift:
+        resolver_a = object()
+        resolver_b = object()
+
+        def __init__(self, **_kwargs: object) -> None:
+            return None
+
+        def ensure_view_graph(self, **_kwargs: object) -> None:
+            from semantics.resolver_identity import record_resolver_if_tracking
+
+            record_resolver_if_tracking(self.resolver_a, label="view_registration_a")
+            record_resolver_if_tracking(self.resolver_b, label="view_registration_b")
+
+    monkeypatch.setattr(pipeline, "DataFusionExecutionFacade", _FacadeDrift)
+    monkeypatch.setattr(pipeline, "_plan_view_nodes", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(pipeline, "infer_deps_from_view_nodes", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        pipeline,
+        "_scan_planning",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            scan_units=(),
+            scan_keys_by_task={},
+            scan_task_name_by_key={},
+            scan_task_units_by_name={},
+            scan_task_names_by_task={},
+        ),
+    )
+    monkeypatch.setattr(pipeline, "_lineage_by_view", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(pipeline, "_scan_inferred_deps", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        "datafusion_engine.session.runtime.compile_resolver_invariants_strict_mode",
+        lambda: True,
+    )
+
+    with pytest.raises(RuntimeError, match="Resolver identity violation"):
+        pipeline.plan_with_delta_pins(
+            cast("SessionContext", object()),
+            view_nodes=cast("Sequence[ViewNode]", ()),
+            runtime_profile=cast("DataFusionRuntimeProfile", runtime_profile),
+            snapshot={},
+            semantic_context=cast("SemanticExecutionContext", semantic_context),
+        )
+
+    assert len(runtime_profile.artifact_calls) == 1
+    spec, payload = runtime_profile.artifact_calls[0]
+    assert getattr(spec, "canonical_name", None) == "compile_resolver_invariants_v1"
+    assert payload["label"] == "plan_with_delta_pins"
+    assert payload["compile_count"] == 0
+    assert payload["max_compiles"] == 0
+    assert payload["distinct_resolver_count"] == 2
+    assert payload["strict"] is True
+    violations = payload["violations"]
+    assert isinstance(violations, tuple)
+    assert any("Resolver identity violation" in item for item in violations)

@@ -77,6 +77,22 @@ class _NormalizationContext:
 
 
 @dataclass(frozen=True)
+class _ProfileDatasetResolver:
+    """Compatibility resolver backed by runtime-profile dataset templates."""
+
+    runtime_profile: DataFusionRuntimeProfile
+
+    def location(self, name: str) -> DatasetLocation | None:
+        return self.runtime_profile.data_sources.dataset_templates.get(name)
+
+    def has_location(self, name: str) -> bool:
+        return name in self.runtime_profile.data_sources.dataset_templates
+
+    def names(self) -> Sequence[str]:
+        return tuple(self.runtime_profile.data_sources.dataset_templates.keys())
+
+
+@dataclass(frozen=True)
 class ExtractPlanOptions:
     """Options for building extract plans."""
 
@@ -449,14 +465,17 @@ def _dataset_location(
 def _resolve_dataset_resolver(
     dataset_resolver: ManifestDatasetResolver | None = None,
     execution_context: SemanticExecutionContext | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> ManifestDatasetResolver:
     if dataset_resolver is not None:
         return dataset_resolver
     if execution_context is not None:
         return execution_context.dataset_resolver
+    if runtime_profile is not None:
+        return _ProfileDatasetResolver(runtime_profile)
     msg = (
         "ManifestDatasetResolver is required for extract coordination materialization. "
-        "Provide dataset_resolver or execution_context."
+        "Provide dataset_resolver, execution_context, or runtime_profile."
     )
     raise ValueError(msg)
 
@@ -576,6 +595,7 @@ def _write_and_record_extract_output(
 ) -> None:
     resolved_dataset_resolver = _resolve_dataset_resolver(
         dataset_resolver=dataset_resolver,
+        runtime_profile=runtime_profile,
     )
     write_extract_outputs(
         name,
@@ -699,6 +719,7 @@ def materialize_extract_plan(
     resolved = options or ExtractMaterializeOptions()
     dataset_resolver = _resolve_dataset_resolver(
         execution_context=execution_context,
+        runtime_profile=runtime_profile,
     )
     _record_extract_compile(name, plan, runtime_profile=runtime_profile)
     _record_extract_udf_parity(name, runtime_profile=runtime_profile)

@@ -45,6 +45,8 @@ class ExtractMetadata:
     enabled_when: str | None = None
     feature_flag: str | None = None
     postprocess: str | None = None
+    field_types: Mapping[str, str] = field(default_factory=dict)
+    nested_shapes: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     metadata_extra: dict[bytes, bytes] = field(default_factory=dict)
     evidence_required_columns: tuple[str, ...] = ()
     pipeline_name: str | None = None
@@ -130,6 +132,31 @@ def _metadata_extra(value: object | None) -> dict[bytes, bytes]:
     raise TypeError(msg)
 
 
+def _field_types(value: object | None) -> dict[str, str]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return {str(k): str(v) for k, v in value.items()}
+    msg = "field_types must be a mapping of str -> str."
+    raise TypeError(msg)
+
+
+def _nested_shapes(value: object | None) -> dict[str, tuple[str, ...]]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        result: dict[str, tuple[str, ...]] = {}
+        for k, v in value.items():
+            if isinstance(v, Sequence) and not isinstance(v, (str, bytes, bytearray)):
+                result[str(k)] = tuple(str(item) for item in v)
+            else:
+                msg = f"nested_shapes[{k!r}] must be a sequence of strings."
+                raise TypeError(msg)
+        return result
+    msg = "nested_shapes must be a mapping of str -> sequence[str]."
+    raise TypeError(msg)
+
+
 def _metadata_from_record(record: Mapping[str, object]) -> ExtractMetadata:
     return ExtractMetadata(
         name=str(record.get("name")),
@@ -145,6 +172,8 @@ def _metadata_from_record(record: Mapping[str, object]) -> ExtractMetadata:
         enabled_when=str(record.get("enabled_when")) if record.get("enabled_when") else None,
         feature_flag=str(record.get("feature_flag")) if record.get("feature_flag") else None,
         postprocess=str(record.get("postprocess")) if record.get("postprocess") else None,
+        field_types=_field_types(record.get("field_types")),
+        nested_shapes=_nested_shapes(record.get("nested_shapes")),
         metadata_extra=_metadata_extra(record.get("metadata_extra")),
         evidence_required_columns=_string_tuple(
             record.get("evidence_required_columns"),

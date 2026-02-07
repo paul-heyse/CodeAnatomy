@@ -10,7 +10,15 @@ from datafusion.dataframe import DataFrame
 
 from datafusion_engine.lineage.scan import ScanUnit
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+from datafusion_engine.plan.perf_policy import (
+    PerformancePolicy,
+    PlanBundleComparisonPolicy,
+)
+from datafusion_engine.session.runtime import (
+    DataFusionRuntimeProfile,
+    PolicyBundleConfig,
+    SessionRuntime,
+)
 from datafusion_engine.views.graph import ViewNode
 from relspec.execution_plan import (
     ExecutionPlan,
@@ -566,6 +574,54 @@ def test_plan_artifacts_store_failure_continues(
     assert plan.task_graph is not None
     assert plan.task_schedule is not None
     assert isinstance(plan.plan_signature, str)
+
+
+@pytest.mark.integration
+def test_plan_artifacts_store_failure_raises_when_diff_gates_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Raise when artifact persistence fails and diff gates are enabled."""
+    profile = DataFusionRuntimeProfile(
+        policies=PolicyBundleConfig(
+            performance_policy=PerformancePolicy(
+                comparison=PlanBundleComparisonPolicy(enable_diff_gates=True)
+            )
+        ),
+    )
+    runtime = SessionRuntime(
+        ctx=profile.session_context(),
+        profile=profile,
+        udf_snapshot_hash="test_hash",
+        udf_rewrite_tags=(),
+        domain_planner_names=(),
+        udf_snapshot={},
+        df_settings={},
+    )
+    view_nodes = [
+        _view_node_with_plan_bundle(name="task_a", plan_signature="sig_a", deps=()),
+    ]
+    request = ExecutionPlanRequest(
+        view_nodes=view_nodes,
+        snapshot=None,
+        runtime_profile=profile,
+        requested_task_names=None,
+        impacted_task_names=None,
+        allow_partial=False,
+        enable_metric_scheduling=True,
+    )
+
+    def mock_persist_failure(*args: Any, **kwargs: Any) -> None:
+        _ = (args, kwargs)
+        msg = "Artifact store unavailable"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(
+        "datafusion_engine.plan.artifact_store.persist_plan_artifacts_for_views",
+        mock_persist_failure,
+    )
+
+    with pytest.raises(RuntimeError, match="Artifact store unavailable"):
+        compile_execution_plan(session_runtime=runtime, request=request)
 
 
 @pytest.mark.integration

@@ -5,8 +5,9 @@ are the canonical key source. Execution callables live here in the orchestration
 layer to prevent import cycles between ``datafusion_engine`` and
 ``hamilton_pipeline``.
 
-Registration is deferred: ``task_execution`` calls :func:`register_extract_executor`
-at import time so that this module carries no back-import of private helpers.
+Registration is deferred: ``task_execution`` lazily invokes
+:func:`register_extract_executor` before extract dispatch so this module carries
+no back-import of private helpers.
 """
 
 from __future__ import annotations

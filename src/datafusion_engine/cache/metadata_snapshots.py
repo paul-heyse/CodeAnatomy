@@ -11,12 +11,9 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.dataset.registration import (
-    DatasetRegistrationOptions,
-    register_dataset_df,
-)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from datafusion_engine.session.helpers import deregister_table
 
 if TYPE_CHECKING:
@@ -158,11 +155,13 @@ def snapshot_datafusion_caches(
         path = cache_root / snapshot_name
         location = DatasetLocation(path=str(path), format="delta")
         deregister_table(ctx, snapshot_name)
-        register_dataset_df(
-            ctx,
+        DataFusionExecutionFacade(
+            ctx=ctx,
+            runtime_profile=runtime_profile,
+        ).register_dataset(
             name=snapshot_name,
             location=location,
-            options=DatasetRegistrationOptions(runtime_profile=runtime_profile),
+            overwrite=True,
         )
         snapshot_version = result.delta_result.version if result.delta_result else None
         record_cache_snapshot_registry(

@@ -8,13 +8,11 @@ Usage
 -----
 >>> from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 >>> from semantics.pipeline import build_cpg
->>> from semantics.runtime import SemanticRuntimeConfig
 >>>
 >>> profile = DataFusionRuntimeProfile()
 >>> ctx = profile.session_context()
->>> runtime_config = SemanticRuntimeConfig()
 >>> # ... register extraction tables ...
->>> build_cpg(ctx, runtime_profile=profile, runtime_config=runtime_config)
+>>> build_cpg(ctx, runtime_profile=profile)
 >>> # Outputs are registered with canonical names (e.g., cpg_nodes, cpg_edges).
 """
 

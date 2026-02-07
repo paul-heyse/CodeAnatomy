@@ -147,6 +147,7 @@ from datafusion_engine.dataset.registry import (
     DatasetCatalog,
     DatasetLocation,
 )
+from datafusion_engine.views.artifacts import CachePolicy
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
     DatasetSpec,
@@ -155,7 +156,6 @@ from schema_spec.system import (
     dataset_spec_from_schema,
 )
 from semantics.incremental.cdf_cursors import CdfCursorStore
-from semantics.runtime import CachePolicy
 
 if TYPE_CHECKING:
     ExplainRows = TableLike | RecordBatchReaderLike

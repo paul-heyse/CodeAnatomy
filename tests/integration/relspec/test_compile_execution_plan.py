@@ -563,7 +563,7 @@ def test_plan_artifacts_store_failure_continues(
 
 @pytest.mark.integration
 def test_plan_signature_changes_with_runtime_config(session_runtime: SessionRuntime) -> None:
-    """Compile with two different SemanticRuntimeConfig values, verify plan_signature differs.
+    """Compile with two different runtime profiles, verify plan_signature differs.
 
     Tests that compile_execution_plan produces different plan signatures when
     runtime configuration changes, while task_dependency_signature remains stable.

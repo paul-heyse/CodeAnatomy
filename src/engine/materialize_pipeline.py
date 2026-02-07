@@ -40,8 +40,8 @@ from utils.value_coercion import coerce_to_recordbatch_reader
 if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import SessionRuntime
+    from datafusion_engine.views.artifacts import CachePolicy as SemanticCachePolicy
     from semantics.program_manifest import ManifestDatasetResolver
-    from semantics.runtime import CachePolicy as SemanticCachePolicy
 
 
 def _resolve_prefer_reader(

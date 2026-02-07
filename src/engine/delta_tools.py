@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike
 from datafusion_engine.delta.service import delta_service_for_profile
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from engine.diagnostics import EngineEventRecorder
 from storage.deltalake import DeltaVacuumOptions, StorageOptions
 
@@ -201,10 +202,6 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
     storage = dict(request.storage_options or {})
     if request.log_storage_options:
         storage.update({str(key): str(value) for key, value in request.log_storage_options.items()})
-    from datafusion_engine.dataset.registration import (
-        DatasetRegistrationOptions,
-        register_dataset_df,
-    )
     from datafusion_engine.dataset.registry import DatasetLocation
 
     ctx = profile.session_context()
@@ -219,11 +216,13 @@ def delta_query(request: DeltaQueryRequest) -> RecordBatchReaderLike:
             location=location,
             name=request.table_name,
         )
-    register_dataset_df(
-        ctx,
+    DataFusionExecutionFacade(
+        ctx=ctx,
+        runtime_profile=profile,
+    ).register_dataset(
         name=request.table_name,
         location=location,
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        overwrite=True,
     )
     builder = request.builder
     df = builder(ctx, request.table_name) if builder is not None else ctx.table(request.table_name)

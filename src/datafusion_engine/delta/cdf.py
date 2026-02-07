@@ -12,6 +12,7 @@ from datafusion_engine.dataset.registry import (
     resolve_datafusion_provider,
 )
 from datafusion_engine.io.adapter import DataFusionIOAdapter
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -54,16 +55,13 @@ def register_cdf_inputs(
     ValueError
         If ``dataset_resolver`` is None.
     """
-    from datafusion_engine.dataset.registration import (
-        DatasetRegistrationOptions,
-        register_dataset_df,
-    )
     from datafusion_engine.tables.metadata import table_provider_metadata
 
     if dataset_resolver is None:
         msg = "dataset_resolver is required for CDF input registration."
         raise ValueError(msg)
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     mapping: dict[str, str] = {}
     for name in table_names:
         location = dataset_resolver.location(name)
@@ -72,11 +70,10 @@ def register_cdf_inputs(
         supports_cdf = bool(metadata.supports_cdf) if metadata is not None else False
         provider = resolve_datafusion_provider(location) if location is not None else None
         if location is not None and provider == "delta_cdf":
-            register_dataset_df(
-                ctx,
+            facade.register_dataset(
                 name=cdf_name,
                 location=location,
-                options=DatasetRegistrationOptions(runtime_profile=runtime_profile),
+                overwrite=True,
             )
             cdf_df = ctx.table(cdf_name)
         elif supports_cdf:

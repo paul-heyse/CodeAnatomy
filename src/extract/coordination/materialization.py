@@ -125,6 +125,7 @@ class _StreamingMaterializeRequest:
     normalization_ctx: _NormalizationContext
     options: ExtractMaterializeOptions
     streaming_supported: bool
+    dataset_resolver: ManifestDatasetResolver | None = None
 
 
 def _build_plan_bundle_from_df(
@@ -444,13 +445,33 @@ def _dataset_location(
     return dataset_resolver.location(name)
 
 
+def _resolve_dataset_resolver(
+    runtime_profile: DataFusionRuntimeProfile,
+    *,
+    dataset_resolver: ManifestDatasetResolver | None = None,
+) -> ManifestDatasetResolver:
+    if dataset_resolver is not None:
+        return dataset_resolver
+    from semantics.compile_context import CompileContext
+
+    return CompileContext(runtime_profile=runtime_profile).dataset_bindings()
+
+
 def _streaming_supported_for_extract(
     name: str,
     *,
     runtime_profile: DataFusionRuntimeProfile,
     normalize: ExtractNormalizeOptions | None,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> bool:
-    if _dataset_location(runtime_profile, name) is None:
+    if (
+        _dataset_location(
+            runtime_profile,
+            name,
+            dataset_resolver=dataset_resolver,
+        )
+        is None
+    ):
         return False
     policy = normalized_schema_policy_for_dataset(
         name,
@@ -517,9 +538,14 @@ def _execute_extract_plan_bundle(
     plan: DataFusionPlanBundle,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[ExecutionResult, tuple[ScanUnit, ...], tuple[str, ...]]:
     session_runtime = runtime_profile.session_runtime()
-    scan_units, scan_keys = _plan_scan_units_for_extract(plan, runtime_profile=runtime_profile)
+    scan_units, scan_keys = _plan_scan_units_for_extract(
+        plan,
+        runtime_profile=runtime_profile,
+        dataset_resolver=dataset_resolver,
+    )
     execution = execute_plan_bundle_helper(
         session_runtime.ctx,
         plan,
@@ -542,8 +568,18 @@ def _write_and_record_extract_output(
     output: TableLike | pa.RecordBatchReader,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> None:
-    write_extract_outputs(name, output, runtime_profile=runtime_profile)
+    resolved_dataset_resolver = _resolve_dataset_resolver(
+        runtime_profile,
+        dataset_resolver=dataset_resolver,
+    )
+    write_extract_outputs(
+        name,
+        output,
+        runtime_profile=runtime_profile,
+        dataset_resolver=resolved_dataset_resolver,
+    )
     from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
 
     recorder = EngineEventRecorder(runtime_profile)
@@ -618,6 +654,7 @@ def _materialize_streaming_output(
         request.plan,
         reader_for_write,
         runtime_profile=request.runtime_profile,
+        dataset_resolver=request.dataset_resolver,
     )
     if not request.options.prefer_reader:
         return None
@@ -649,12 +686,14 @@ def materialize_extract_plan(
 
     """
     resolved = options or ExtractMaterializeOptions()
+    dataset_resolver = _resolve_dataset_resolver(runtime_profile)
     _record_extract_compile(name, plan, runtime_profile=runtime_profile)
     _record_extract_udf_parity(name, runtime_profile=runtime_profile)
     streaming_supported = _streaming_supported_for_extract(
         name,
         runtime_profile=runtime_profile,
         normalize=resolved.normalize,
+        dataset_resolver=dataset_resolver,
     )
     normalization_ctx = _build_normalization_context(
         name,
@@ -666,6 +705,7 @@ def materialize_extract_plan(
         name,
         plan,
         runtime_profile=runtime_profile,
+        dataset_resolver=dataset_resolver,
     )
     df = result.require_dataframe()
     streaming_reader = _materialize_streaming_output(
@@ -678,6 +718,7 @@ def materialize_extract_plan(
             normalization_ctx=normalization_ctx,
             options=resolved,
             streaming_supported=streaming_supported,
+            dataset_resolver=dataset_resolver,
         )
     )
     if streaming_reader is not None:
@@ -686,7 +727,13 @@ def materialize_extract_plan(
     table_result = ExecutionResult.from_table(table)
     normalized = _normalize_table(normalization_ctx, table)
     if not streaming_supported:
-        _write_and_record_extract_output(name, plan, normalized, runtime_profile=runtime_profile)
+        _write_and_record_extract_output(
+            name,
+            plan,
+            normalized,
+            runtime_profile=runtime_profile,
+            dataset_resolver=dataset_resolver,
+        )
     if resolved.prefer_reader:
         if isinstance(normalized, pa.Table):
             resolved_table = cast("pa.Table", normalized)

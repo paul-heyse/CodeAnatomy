@@ -44,9 +44,7 @@ def _dataset_location(
 ) -> DatasetLocation | None:
     if dataset_name is None:
         return None
-    from semantics.compile_context import dataset_bindings_for_profile
-
-    return dataset_bindings_for_profile(context.runtime.profile).location(dataset_name)
+    return context.dataset_resolver.location(dataset_name)
 
 
 @dataclass(frozen=True)

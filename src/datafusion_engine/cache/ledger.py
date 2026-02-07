@@ -15,13 +15,10 @@ from datafusion_engine.cache.commit_metadata import (
     CacheCommitMetadataRequest,
     cache_commit_metadata,
 )
-from datafusion_engine.dataset.registration import (
-    DatasetRegistrationOptions,
-    register_dataset_df,
-)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from obs.otel.run_context import get_run_id
 from utils.uuid_factory import uuid7_hex
 
@@ -125,11 +122,13 @@ def ensure_cache_run_summary_table(
             operation="cache_run_summary_bootstrap",
         )
     location = DatasetLocation(path=str(table_path), format="delta")
-    register_dataset_df(
-        ctx,
+    DataFusionExecutionFacade(
+        ctx=ctx,
+        runtime_profile=profile,
+    ).register_dataset(
         name=CACHE_RUN_SUMMARY_TABLE_NAME,
         location=location,
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        overwrite=True,
     )
     return location
 
@@ -181,15 +180,17 @@ def record_cache_run_summary(
     if result.delta_result is None:
         return None
     version = result.delta_result.version
-    register_dataset_df(
-        active_ctx,
+    DataFusionExecutionFacade(
+        ctx=active_ctx,
+        runtime_profile=profile,
+    ).register_dataset(
         name=CACHE_RUN_SUMMARY_TABLE_NAME,
         location=DatasetLocation(
             path=str(location.path),
             format="delta",
             delta_version=version,
         ),
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        overwrite=True,
     )
     return version
 
@@ -215,11 +216,13 @@ def ensure_cache_snapshot_registry_table(
             operation="cache_snapshot_registry_bootstrap",
         )
     location = DatasetLocation(path=str(table_path), format="delta")
-    register_dataset_df(
-        ctx,
+    DataFusionExecutionFacade(
+        ctx=ctx,
+        runtime_profile=profile,
+    ).register_dataset(
         name=CACHE_SNAPSHOT_REGISTRY_TABLE_NAME,
         location=location,
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        overwrite=True,
     )
     return location
 
@@ -272,15 +275,17 @@ def record_cache_snapshot_registry(
     if result.delta_result is None:
         return None
     version = result.delta_result.version
-    register_dataset_df(
-        active_ctx,
+    DataFusionExecutionFacade(
+        ctx=active_ctx,
+        runtime_profile=profile,
+    ).register_dataset(
         name=CACHE_SNAPSHOT_REGISTRY_TABLE_NAME,
         location=DatasetLocation(
             path=str(location.path),
             format="delta",
             delta_version=version,
         ),
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        overwrite=True,
     )
     return version
 

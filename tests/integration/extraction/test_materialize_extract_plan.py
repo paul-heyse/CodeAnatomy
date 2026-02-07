@@ -101,7 +101,7 @@ def test_materialize_basic_roundtrip(extract_session: ExtractSession) -> None:
     reader = record_batch_reader_from_rows("repo_files_v1", rows)
     plan = extract_plan_from_reader("repo_files_v1", reader, session=extract_session)
 
-    runtime_profile = DataFusionRuntimeProfile()
+    runtime_profile = extract_session.engine_session.datafusion_profile
     result = materialize_extract_plan(
         "repo_files_v1",
         plan,

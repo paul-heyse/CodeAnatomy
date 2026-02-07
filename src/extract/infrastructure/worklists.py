@@ -11,6 +11,7 @@ from datafusion import DataFrame, SessionContext, col
 
 from cache.diskcache_factory import build_deque, build_index
 from datafusion_engine.arrow.interop import TableLike
+from datafusion_engine.dataset.registry import dataset_location_from_catalog
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.schema.introspection import table_names_snapshot
 from extract.coordination.context import FileContext
@@ -191,7 +192,7 @@ def _worklist_stream(
     df_ctx = session_runtime.ctx
     repo_name = f"__repo_files_{uuid7_hex()}"
     output_exists = _table_exists(df_ctx, output_table)
-    output_location = runtime_profile.catalog_ops.dataset_location(output_table)
+    output_location = dataset_location_from_catalog(runtime_profile, output_table)
     use_output = output_exists or output_location is not None
     output_name = output_table if use_output else None
     builder = worklist_builder(

@@ -380,6 +380,34 @@ def dataset_catalog_from_profile(
     return catalog
 
 
+def dataset_location_from_catalog(
+    profile: DataFusionRuntimeProfile | None,
+    name: str,
+    *,
+    catalog: DatasetCatalog | None = None,
+) -> DatasetLocation | None:
+    """Return a dataset location from manifest/catalog bindings when available.
+
+    Parameters
+    ----------
+    profile:
+        Runtime profile used to resolve the unified dataset catalog.
+    name:
+        Dataset name to resolve.
+
+    Returns:
+    -------
+    DatasetLocation | None
+        Resolved dataset location, or ``None`` when no binding exists.
+    """
+    if profile is None or not name:
+        return None
+    resolved_catalog = catalog if catalog is not None else dataset_catalog_from_profile(profile)
+    if not resolved_catalog.has(name):
+        return None
+    return resolved_catalog.get(name)
+
+
 def _register_location(
     catalog: DatasetCatalog,
     *,
@@ -699,6 +727,7 @@ __all__ = [
     "PathLike",
     "ResolvedDatasetLocation",
     "dataset_catalog_from_profile",
+    "dataset_location_from_catalog",
     "registry_snapshot",
     "resolve_datafusion_provider",
     "resolve_dataset_location",

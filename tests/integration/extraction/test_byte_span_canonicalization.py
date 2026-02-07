@@ -8,6 +8,7 @@ against canonical byte offsets.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Protocol, cast
 
 import pyarrow as pa
 import pytest
@@ -16,6 +17,10 @@ from extract.extractors.ast_extract import AstExtractOptions, extract_ast_tables
 from extract.extractors.cst_extract import CstExtractOptions, extract_cst_tables
 from extract.extractors.tree_sitter.extract import TreeSitterExtractOptions, extract_ts_tables
 from tests.test_helpers.datafusion_runtime import df_ctx
+
+
+class _RecordBatchReaderLike(Protocol):
+    def read_all(self) -> pa.Table: ...
 
 
 @pytest.fixture
@@ -314,10 +319,10 @@ def _repo_files_table(file_path: Path, content: str) -> pa.Table:
 
 
 def _bundle_table(value: object) -> pa.Table:
-    if isinstance(value, pa.RecordBatchReader):
-        return value.read_all()
     if isinstance(value, pa.Table):
         return value
+    if hasattr(value, "read_all"):
+        return cast("_RecordBatchReaderLike", value).read_all()
     msg = f"Unsupported table type: {type(value)}"
     raise TypeError(msg)
 

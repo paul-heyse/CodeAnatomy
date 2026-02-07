@@ -13,7 +13,6 @@ _MODULE_NAMES: tuple[str, ...] = (
     "io_contracts",
     "params",
     "execution_plan",
-    "subdags",
     "task_execution",
     "outputs",
 )
@@ -26,7 +25,6 @@ if TYPE_CHECKING:
         io_contracts,
         outputs,
         params,
-        subdags,
         task_execution,
     )
 
@@ -85,6 +83,5 @@ __all__ = [
     "load_all_modules",
     "outputs",
     "params",
-    "subdags",
     "task_execution",
 ]

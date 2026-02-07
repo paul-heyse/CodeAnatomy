@@ -7,7 +7,7 @@ DataFusion type system and UDF availability, focusing on error message quality.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pytest
@@ -278,7 +278,7 @@ def test_relationship_failure_does_not_abort_pipeline() -> None:
     assert failures, "Expected at least one relationship compile failure."
     assert failures[0][0] == bad_spec.name
     assert good_spec.name in compiled
-    good_df = cast("DataFrame", compiled[good_spec.name])
+    good_df = compiled[good_spec.name]
     assert good_df.collect(), "Expected successful relationship output batches."
 
 

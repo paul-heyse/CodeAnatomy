@@ -15,18 +15,18 @@ from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.extract.registry import dataset_query, normalize_options
 from datafusion_engine.hashing import stable_id
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
-from extract.coordination.schema_ops import ExtractNormalizeOptions
-from extract.git.history import blame_hunks, diff_paths
-from extract.git.pygit2_scan import repo_status_paths
-from extract.git.remotes import remote_callbacks_from_env
-from extract.git.submodules import submodule_roots, update_submodules, worktree_roots
-from extract.helpers import (
-    ExtractExecutionContext,
+from extract.coordination.context import ExtractExecutionContext
+from extract.coordination.materialization import (
     ExtractMaterializeOptions,
     ExtractPlanOptions,
     extract_plan_from_rows,
     materialize_extract_plan,
 )
+from extract.coordination.schema_ops import ExtractNormalizeOptions
+from extract.git.history import blame_hunks, diff_paths
+from extract.git.pygit2_scan import repo_status_paths
+from extract.git.remotes import remote_callbacks_from_env
+from extract.git.submodules import submodule_roots, update_submodules, worktree_roots
 from extract.infrastructure.cache_utils import (
     cache_for_kind_optional,
     cache_ttl_seconds,

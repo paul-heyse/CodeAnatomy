@@ -16,11 +16,11 @@ import pytest
 from core_types import DeterminismTier
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DiagnosticsConfig
 from extract.coordination.evidence_plan import compile_evidence_plan
-from extract.coordination.materialization import materialize_extract_plan
-from extract.helpers import (
+from extract.coordination.materialization import (
     ExtractMaterializeOptions,
     ExtractPlanOptions,
     extract_plan_from_reader,
+    materialize_extract_plan,
     record_batch_reader_from_rows,
 )
 from extract.session import ExtractSession, build_extract_session

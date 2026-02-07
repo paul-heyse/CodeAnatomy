@@ -8,19 +8,13 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
-from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
-from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.lineage.datafusion import LineageReport
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_units
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.plan.diagnostics import record_plan_bundle_diagnostics
-from datafusion_engine.session.runtime import (
-    extract_output_locations_for_profile,
-    normalize_dataset_locations_for_profile,
-    semantic_output_locations_for_profile,
-)
-from datafusion_engine.views.registration import ensure_view_graph
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from relspec.inferred_deps import InferredDeps, infer_deps_from_view_nodes
 from utils.hashing import hash_msgpack_canonical, hash_sha256_hex
 
@@ -81,12 +75,13 @@ def plan_with_delta_pins(
     if runtime_profile is None:
         msg = "Runtime profile is required for planning with Delta pins."
         raise ValueError(msg)
-    from semantics.ir_pipeline import build_semantic_ir
+    from semantics.compile_context import CompileContext
 
     session_runtime = runtime_profile.session_runtime()
-    semantic_ir = build_semantic_ir()
+    semantic_ir = CompileContext(runtime_profile=runtime_profile).semantic_ir()
+    facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     # Baseline registration ensures UDF platform and registry views exist.
-    ensure_view_graph(ctx, runtime_profile=runtime_profile, semantic_ir=semantic_ir)
+    facade.ensure_view_graph(semantic_ir=semantic_ir)
     baseline_nodes = _plan_view_nodes(
         ctx,
         view_nodes=view_nodes,
@@ -110,9 +105,7 @@ def plan_with_delta_pins(
             scan_units=scan_planning.scan_units,
             runtime_profile=runtime_profile,
         )
-        ensure_view_graph(
-            ctx,
-            runtime_profile=runtime_profile,
+        facade.ensure_view_graph(
             scan_units=scan_planning.scan_units,
             semantic_ir=semantic_ir,
         )
@@ -152,9 +145,10 @@ def _scan_planning(
 ) -> _ScanPlanning:
     scans_by_task = {dep.task_name: dep.scans for dep in inferred if dep.scans}
     if scans_by_task:
+        catalog = dataset_catalog_from_profile(runtime_profile)
         scan_units, scan_keys_by_task = plan_scan_units(
             ctx,
-            dataset_locations=_dataset_location_map(runtime_profile),
+            dataset_locations={name: catalog.get(name) for name in catalog.names()},
             scans_by_task=scans_by_task,
             runtime_profile=runtime_profile,
         )
@@ -215,42 +209,6 @@ def _plan_view_nodes(
             )
         )
     return tuple(planned)
-
-
-def _dataset_location_map(profile: DataFusionRuntimeProfile) -> dict[str, DatasetLocation]:
-    locations: dict[str, DatasetLocation] = {}
-    for name, location in extract_output_locations_for_profile(profile).items():
-        locations.setdefault(
-            name,
-            apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),
-        )
-    for name, location in profile.data_sources.extract_output.scip_dataset_locations.items():
-        locations.setdefault(
-            name,
-            apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),
-        )
-    for name, location in normalize_dataset_locations_for_profile(profile).items():
-        locations.setdefault(
-            name,
-            apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),
-        )
-    for name, location in semantic_output_locations_for_profile(profile).items():
-        locations.setdefault(
-            name,
-            apply_delta_store_policy(location, policy=profile.policies.delta_store_policy),
-        )
-    for catalog in profile.catalog.registry_catalogs.values():
-        for name in catalog.names():
-            if name in locations:
-                continue
-            try:
-                locations[name] = apply_delta_store_policy(
-                    catalog.get(name),
-                    policy=profile.policies.delta_store_policy,
-                )
-            except KeyError:
-                continue
-    return locations
 
 
 def _scan_task_name_map(scan_units: Sequence[ScanUnit]) -> dict[str, str]:

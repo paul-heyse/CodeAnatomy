@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from datafusion_engine.arrow.coercion import coerce_table_to_storage, to_arrow_table
-from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
+from datafusion_engine.dataset.registry import (
+    DatasetLocation,
+    DatasetLocationOverrides,
+    dataset_location_from_catalog,
+)
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -82,7 +86,7 @@ def _resolve_cdf_inputs(
     if not path.exists():
         return None
     runtime = context.runtime
-    profile_location = runtime.profile.catalog_ops.dataset_location(dataset_name)
+    profile_location = dataset_location_from_catalog(runtime.profile, dataset_name)
     resolved_store = context.resolve_storage(table_uri=str(path))
     resolved_storage = resolved_store.storage_options or {}
     resolved_log_storage = resolved_store.log_storage_options or {}
@@ -244,7 +248,7 @@ def read_cdf_changes(
         ValueError: If CDF state cannot be initialized.
     """
     profile = context.runtime.profile
-    profile_location = profile.catalog_ops.dataset_location(dataset_name)
+    profile_location = dataset_location_from_catalog(profile, dataset_name)
     cdf_policy = (
         profile_location.resolved.delta_cdf_policy if profile_location is not None else None
     )

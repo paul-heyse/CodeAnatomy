@@ -8,15 +8,15 @@ Example:
 -------
 >>> # Access dataset rows with operational metadata
 >>> from semantics.catalog import dataset_row, get_semantic_dataset_rows
->>> row = dataset_row("cpg_nodes_v1", strict=True)
+>>> row = dataset_row("cpg_nodes", strict=True)
 >>> row.supports_cdf
 True
 >>> semantic_rows = get_semantic_dataset_rows()
 
 >>> # Access dataset specs and schemas
 >>> from semantics.catalog import dataset_spec, dataset_schema
->>> spec = dataset_spec("cpg_nodes_v1")
->>> schema = dataset_schema("cpg_nodes_v1")
+>>> spec = dataset_spec("cpg_nodes")
+>>> schema = dataset_schema("cpg_nodes")
 """
 
 from __future__ import annotations

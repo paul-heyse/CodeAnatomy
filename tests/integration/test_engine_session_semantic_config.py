@@ -2,27 +2,41 @@
 
 from __future__ import annotations
 
+import msgspec
 import pytest
 
+from datafusion_engine.dataset.registry import DatasetLocation
 from engine.runtime_profile import resolve_runtime_profile
-from engine.session_factory import EngineSessionOptions, build_engine_session
-from semantics.runtime import SemanticRuntimeConfig
+from engine.session_factory import build_engine_session
 
 
 @pytest.mark.integration
-def test_engine_session_applies_semantic_runtime_config() -> None:
-    """Engine session should apply semantic output locations and cache overrides."""
+def test_engine_session_uses_profile_semantic_output_config() -> None:
+    """Engine session should use semantic output settings from the runtime profile."""
     runtime_spec = resolve_runtime_profile("default")
-    semantic_config = SemanticRuntimeConfig(
-        output_locations={"cpg_nodes_v1": "/tmp/semantic_cpg_nodes"},
-        cache_policy_overrides={"cpg_nodes_v1": "delta_output"},
+    datafusion_profile = msgspec.structs.replace(
+        runtime_spec.datafusion,
+        data_sources=msgspec.structs.replace(
+            runtime_spec.datafusion.data_sources,
+            semantic_output=msgspec.structs.replace(
+                runtime_spec.datafusion.data_sources.semantic_output,
+                locations={
+                    "cpg_nodes": DatasetLocation(
+                        path="/tmp/semantic_cpg_nodes",
+                        format="delta",
+                    )
+                },
+                cache_overrides={"cpg_nodes": "delta_output"},
+            ),
+        ),
     )
-    session = build_engine_session(
-        runtime_spec=runtime_spec,
-        options=EngineSessionOptions(semantic_config=semantic_config),
+    runtime_spec = msgspec.structs.replace(
+        runtime_spec,
+        datafusion=datafusion_profile,
     )
+    session = build_engine_session(runtime_spec=runtime_spec)
     profile = session.datafusion_profile
-    location = profile.dataset_location("cpg_nodes_v1")
+    location = profile.dataset_location("cpg_nodes")
     assert location is not None
     assert str(location.path) == "/tmp/semantic_cpg_nodes"
-    assert profile.data_sources.semantic_output.cache_overrides["cpg_nodes_v1"] == "delta_output"
+    assert profile.data_sources.semantic_output.cache_overrides["cpg_nodes"] == "delta_output"

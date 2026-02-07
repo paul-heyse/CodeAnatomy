@@ -121,9 +121,9 @@ def _get_semantic_dataset_rows() -> tuple[SemanticDatasetRow, ...]:
     """
     rows = _SEMANTIC_DATASET_ROWS_CACHE.rows
     if rows is None:
-        from semantics.ir_pipeline import build_semantic_ir
+        from semantics.compile_context import semantic_ir_for_outputs
 
-        rows = build_semantic_ir().dataset_rows
+        rows = semantic_ir_for_outputs().dataset_rows
         _SEMANTIC_DATASET_ROWS_CACHE.rows = rows
     return rows
 

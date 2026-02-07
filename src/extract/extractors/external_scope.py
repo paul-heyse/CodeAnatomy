@@ -13,14 +13,14 @@ from core_types import PathLike, ensure_path
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
-from extract.coordination.schema_ops import ExtractNormalizeOptions
-from extract.helpers import (
-    ExtractExecutionContext,
+from extract.coordination.context import ExtractExecutionContext
+from extract.coordination.materialization import (
     ExtractMaterializeOptions,
     ExtractPlanOptions,
     extract_plan_from_rows,
     materialize_extract_plan,
 )
+from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.infrastructure.result_types import ExtractResult
 from extract.python.env_profile import PythonEnvProfile, resolve_python_env_profile
 from extract.session import ExtractSession

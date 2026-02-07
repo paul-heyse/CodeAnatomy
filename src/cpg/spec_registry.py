@@ -47,9 +47,9 @@ def node_plan_specs() -> tuple[NodePlanSpec, ...]:
     tuple[NodePlanSpec, ...]
         Node plan specs for configured entities.
     """
-    from semantics.ir_pipeline import build_semantic_ir
+    from semantics.compile_context import semantic_ir_for_outputs
 
-    return build_semantic_ir().cpg_node_specs
+    return semantic_ir_for_outputs().cpg_node_specs
 
 
 def build_prop_table_specs(
@@ -97,9 +97,9 @@ def prop_table_specs(
         Prop table specs for configured entities.
     """
     if source_columns_lookup is None:
-        from semantics.ir_pipeline import build_semantic_ir
+        from semantics.compile_context import semantic_ir_for_outputs
 
-        return build_semantic_ir().cpg_prop_specs
+        return semantic_ir_for_outputs().cpg_prop_specs
     from semantics.registry import SEMANTIC_MODEL
 
     return build_prop_table_specs(SEMANTIC_MODEL, source_columns_lookup=source_columns_lookup)

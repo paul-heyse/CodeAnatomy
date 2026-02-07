@@ -377,9 +377,9 @@ class SemanticModel:
         tuple[SemanticDatasetRow, ...]
             Dataset rows in dependency order.
         """
-        from semantics.ir_pipeline import build_semantic_ir
+        from semantics.compile_context import semantic_ir_for_outputs
 
-        return build_semantic_ir().dataset_rows
+        return semantic_ir_for_outputs().dataset_rows
 
     def cpg_node_specs(self) -> tuple[NodePlanSpec, ...]:
         """Return CPG node plan specs generated from the model.

@@ -9,37 +9,41 @@ import pytest
 
 from datafusion_engine.views import registry_specs
 from semantics.ir_pipeline import build_semantic_ir
-from semantics.runtime import SemanticRuntimeConfig
 from tests.test_helpers.datafusion_runtime import df_profile
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from semantics.ir import SemanticIR
 
-def test_view_graph_nodes_threads_runtime_config(monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_view_graph_nodes_threads_runtime_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     profile = df_profile()
-    runtime_config = SemanticRuntimeConfig(output_locations={"example_v1": "/tmp/example"})
-
-    def _runtime_from_profile(_: object) -> SemanticRuntimeConfig:
-        return runtime_config
+    semantic_ir = build_semantic_ir()
 
     def _noop_snapshot(_: Mapping[str, object]) -> None:
         return None
 
-    captured: dict[str, SemanticRuntimeConfig | None] = {"runtime_config": None}
+    captured: dict[str, object | None] = {
+        "runtime_profile": None,
+        "semantic_ir": None,
+    }
 
     def _capture(
         *_args: object,
         **kwargs: object,
     ) -> list[object]:
-        runtime_config_value = cast(
-            "SemanticRuntimeConfig | None",
-            kwargs.get("runtime_config"),
+        captured["runtime_profile"] = cast(
+            "DataFusionRuntimeProfile | None",
+            kwargs.get("runtime_profile"),
         )
-        captured["runtime_config"] = runtime_config_value
+        captured["semantic_ir"] = cast(
+            "SemanticIR | None",
+            kwargs.get("semantic_ir"),
+        )
         return []
 
-    monkeypatch.setattr(registry_specs, "semantic_runtime_from_profile", _runtime_from_profile)
     monkeypatch.setattr(registry_specs, "validate_rust_udf_snapshot", _noop_snapshot)
     monkeypatch.setattr(registry_specs, "_semantics_view_nodes", _capture)
 
@@ -48,8 +52,9 @@ def test_view_graph_nodes_threads_runtime_config(monkeypatch: pytest.MonkeyPatch
         ctx,
         snapshot={},
         runtime_profile=profile,
-        semantic_ir=build_semantic_ir(),
+        semantic_ir=semantic_ir,
     )
 
     assert nodes == ()
-    assert captured["runtime_config"] is runtime_config
+    assert captured["runtime_profile"] is profile
+    assert captured["semantic_ir"] is semantic_ir

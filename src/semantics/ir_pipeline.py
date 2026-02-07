@@ -14,9 +14,14 @@ from semantics.registry import SEMANTIC_MODEL, SemanticModel, SemanticOutputSpec
 from utils.hashing import hash64_from_text, hash_msgpack_canonical
 
 if TYPE_CHECKING:
+    from datafusion import SessionContext
+
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.exprs import ExprSpec
+    from semantics.program_manifest import SemanticProgramManifest
     from semantics.quality import JoinHow, QualityRelationshipSpec
     from semantics.registry import SemanticNormalizationSpec
+    from semantics.validation.policy import SemanticInputValidationPolicy
 
 _KIND_ORDER: Mapping[str, int] = {
     "normalize": 0,
@@ -870,8 +875,33 @@ def build_semantic_ir(*, outputs: Collection[str] | None = None) -> SemanticIR:
     return emit_semantics(optimized)
 
 
+def compile_semantic_program(
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    outputs: Collection[str] | None = None,
+    policy: SemanticInputValidationPolicy = "schema_only",
+    ctx: SessionContext | None = None,
+) -> SemanticProgramManifest:
+    """Compile and validate a semantic program manifest.
+
+    Returns:
+    -------
+    SemanticProgramManifest
+        Immutable compiled manifest including validation + fingerprint metadata.
+    """
+    from semantics.compile_context import compile_semantic_program as _compile_semantic_program
+
+    return _compile_semantic_program(
+        runtime_profile=runtime_profile,
+        outputs=outputs,
+        policy=policy,
+        ctx=ctx,
+    )
+
+
 __all__ = [
     "build_semantic_ir",
+    "compile_semantic_program",
     "compile_semantics",
     "emit_semantics",
     "optimize_semantics",

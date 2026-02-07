@@ -7,7 +7,6 @@ Delta commit deduplication across write/delete/merge flows.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -52,7 +51,8 @@ def test_idempotent_write_deduplication(tmp_path: Path) -> None:
         idempotent=idempotent,
     )
     transactions = getattr(props, "app_transactions", ())
-    assert transactions is not None and len(transactions) == 1
+    assert transactions is not None
+    assert len(transactions) == 1
     transaction = transactions[0]
     assert getattr(transaction, "app_id", None) == "test_run"
     assert getattr(transaction, "version", None) == 1

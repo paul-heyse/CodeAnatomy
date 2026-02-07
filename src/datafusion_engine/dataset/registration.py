@@ -69,6 +69,7 @@ from datafusion_engine.dataset.registry import (
     DatasetCatalog,
     DatasetLocation,
     DatasetLocationOverrides,
+    dataset_location_from_catalog,
     resolve_dataset_schema,
 )
 from datafusion_engine.dataset.resolution import (
@@ -2609,7 +2610,7 @@ def apply_projection_scan_overrides(
     for table_name, columns in projection_map.items():
         if not columns:
             continue
-        location = runtime_profile.catalog_ops.dataset_location(table_name)
+        location = dataset_location_from_catalog(runtime_profile, table_name)
         if location is None:
             continue
         scan = location.resolved.datafusion_scan

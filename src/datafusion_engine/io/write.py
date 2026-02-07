@@ -47,7 +47,11 @@ from datafusion.expr import SortExpr
 
 from core.config_base import config_fingerprint
 from core_types import IDENTIFIER_PATTERN
-from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
+from datafusion_engine.dataset.registry import (
+    DatasetLocation,
+    DatasetLocationOverrides,
+    dataset_catalog_from_profile,
+)
 from datafusion_engine.delta.service import (
     DeltaFeatureMutationRequest,
     delta_service_for_profile,
@@ -56,11 +60,6 @@ from datafusion_engine.delta.store_policy import apply_delta_store_policy
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.contracts import delta_constraints_for_location
-from datafusion_engine.session.runtime import (
-    extract_output_locations_for_profile,
-    normalize_dataset_locations_for_profile,
-    semantic_output_locations_for_profile,
-)
 from datafusion_engine.sql.options import sql_options_for_profile
 from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints, dataset_spec_name
 from schema_spec.system import DeltaMaintenancePolicy
@@ -861,32 +860,14 @@ class WritePipeline:
         """
         if self.runtime_profile is None:
             return None
-        location = self.runtime_profile.catalog_ops.dataset_location(destination)
-        if location is not None:
-            return destination, location
+        catalog = dataset_catalog_from_profile(self.runtime_profile)
+        if catalog.has(destination):
+            return destination, catalog.get(destination)
         normalized_destination = str(destination)
-        locations = [
-            sorted(extract_output_locations_for_profile(self.runtime_profile).items()),
-            sorted(self.runtime_profile.data_sources.extract_output.scip_dataset_locations.items()),
-            sorted(normalize_dataset_locations_for_profile(self.runtime_profile).items()),
-            sorted(semantic_output_locations_for_profile(self.runtime_profile).items()),
-        ]
-        for candidates in locations:
-            match = self._match_dataset_location(
-                candidates,
-                normalized_destination=normalized_destination,
-            )
-            if match is not None:
-                return match
-        for catalog in self.runtime_profile.catalog.registry_catalogs.values():
-            candidates = ((name, catalog.get(name)) for name in catalog.names())
-            match = self._match_dataset_location(
-                candidates,
-                normalized_destination=normalized_destination,
-            )
-            if match is not None:
-                return match
-        return None
+        return self._match_dataset_location(
+            ((name, catalog.get(name)) for name in catalog.names()),
+            normalized_destination=normalized_destination,
+        )
 
     def _match_dataset_location(
         self,

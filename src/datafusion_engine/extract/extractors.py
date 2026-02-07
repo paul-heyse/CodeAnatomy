@@ -5,31 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+from datafusion_engine.extract.adapter_registry import maybe_extract_template_adapter
 from datafusion_engine.extract.metadata import ExtractMetadata, extract_metadata_specs
-
-_REQUIRED_INPUTS: dict[str, tuple[str, ...]] = {
-    "ast": ("repo_files",),
-    "cst": ("repo_files",),
-    "tree_sitter": ("repo_files",),
-    "bytecode": ("repo_files",),
-    "symtable": ("repo_files",),
-    "scip": ("scip_index_path", "repo_root"),
-    "repo_scan": ("repo_root",),
-    "python_imports": (),
-    "python_external": ("python_imports", "repo_root"),
-}
-
-_SUPPORTS_PLAN: dict[str, bool] = {
-    "ast": True,
-    "cst": True,
-    "tree_sitter": True,
-    "bytecode": True,
-    "symtable": True,
-    "scip": True,
-    "repo_scan": False,
-    "python_imports": True,
-    "python_external": True,
-}
 
 
 @dataclass(frozen=True)
@@ -63,14 +40,15 @@ def _optional_outputs(rows: Sequence[ExtractMetadata]) -> tuple[str, ...]:
 
 _EXTRACTOR_SPECS: dict[str, ExtractorSpec] = {}
 for _template, _rows in _rows_by_template().items():
+    _adapter = maybe_extract_template_adapter(_template)
     _outputs = _outputs_for_rows(_rows)
     _EXTRACTOR_SPECS[_template] = ExtractorSpec(
         name=_template,
         template=_template,
         outputs=_outputs,
         optional_outputs=_optional_outputs(_rows),
-        required_inputs=_REQUIRED_INPUTS.get(_template, ()),
-        supports_plan=_SUPPORTS_PLAN.get(_template, False),
+        required_inputs=() if _adapter is None else _adapter.required_inputs,
+        supports_plan=False if _adapter is None else _adapter.supports_plan,
     )
 
 _OUTPUT_TO_TEMPLATE: dict[str, str] = {

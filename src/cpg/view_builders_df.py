@@ -295,7 +295,7 @@ def build_cpg_nodes_df(
         "cpg.nodes",
         stage="cpg",
         scope_name=SCOPE_CPG,
-        attributes={"codeanatomy.view_name": "cpg_nodes_v1"},
+        attributes={"codeanatomy.view_name": "cpg_nodes"},
     ):
         ctx = session_runtime.ctx
         specs = node_plan_specs()
@@ -332,7 +332,7 @@ def build_cpg_nodes_df(
         result = combined.select(*_NODE_OUTPUT_COLUMNS)
         _require_semantic_types(
             result,
-            view_name="cpg_nodes_v1",
+            view_name="cpg_nodes",
             expected={"node_id": "NodeId"},
             runtime_profile=session_runtime.profile,
             udf_snapshot=session_runtime.udf_snapshot,
@@ -429,7 +429,7 @@ def build_cpg_edges_df(session_runtime: SessionRuntime) -> DataFrame:
         "cpg.edges",
         stage="cpg",
         scope_name=SCOPE_CPG,
-        attributes={"codeanatomy.view_name": "cpg_edges_v1"},
+        attributes={"codeanatomy.view_name": "cpg_edges"},
     ):
         ctx = session_runtime.ctx
         try:
@@ -441,7 +441,7 @@ def build_cpg_edges_df(session_runtime: SessionRuntime) -> DataFrame:
         result = _emit_edges_from_relation_df(relation_df)
         _require_semantic_types(
             result,
-            view_name="cpg_edges_v1",
+            view_name="cpg_edges",
             expected={
                 "edge_id": "EdgeId",
                 "src_node_id": "NodeId",
@@ -566,7 +566,7 @@ def build_cpg_props_df(
         "cpg.props",
         stage="cpg",
         scope_name=SCOPE_CPG,
-        attributes={"codeanatomy.view_name": "cpg_props_v1"},
+        attributes={"codeanatomy.view_name": "cpg_props"},
     ):
         ctx = session_runtime.ctx
         resolved_options = options or CpgPropOptions()
@@ -621,10 +621,10 @@ def build_cpg_props_map_df(session_runtime: SessionRuntime) -> DataFrame:
         "cpg.props_map",
         stage="cpg",
         scope_name=SCOPE_CPG,
-        attributes={"codeanatomy.view_name": "cpg_props_map_v1"},
+        attributes={"codeanatomy.view_name": "cpg_props_map"},
     ):
         ctx = session_runtime.ctx
-        df = ctx.table("cpg_props_v1")
+        df = ctx.table("cpg_props")
         value_struct = f.named_struct(
             [
                 ("value_type", col("value_type")),
@@ -659,10 +659,10 @@ def build_cpg_edges_by_src_df(session_runtime: SessionRuntime) -> DataFrame:
         "cpg.edges_by_src",
         stage="cpg",
         scope_name=SCOPE_CPG,
-        attributes={"codeanatomy.view_name": "cpg_edges_by_src_v1"},
+        attributes={"codeanatomy.view_name": "cpg_edges_by_src"},
     ):
         ctx = session_runtime.ctx
-        df = ctx.table("cpg_edges_v1")
+        df = ctx.table("cpg_edges")
         names = df.schema().names
         bstart = (
             col("bstart")
@@ -713,10 +713,10 @@ def build_cpg_edges_by_dst_df(session_runtime: SessionRuntime) -> DataFrame:
         "cpg.edges_by_dst",
         stage="cpg",
         scope_name=SCOPE_CPG,
-        attributes={"codeanatomy.view_name": "cpg_edges_by_dst_v1"},
+        attributes={"codeanatomy.view_name": "cpg_edges_by_dst"},
     ):
         ctx = session_runtime.ctx
-        df = ctx.table("cpg_edges_v1")
+        df = ctx.table("cpg_edges")
         names = df.schema().names
         bstart = (
             col("bstart")

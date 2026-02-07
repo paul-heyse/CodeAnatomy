@@ -123,7 +123,7 @@ def _error(
 ) -> PolicyValidationIssue:
     """Create an error-severity validation issue.
 
-    Returns
+    Returns:
     -------
     PolicyValidationIssue
         Issue with ``"error"`` severity.
@@ -139,7 +139,7 @@ def _warn(
 ) -> PolicyValidationIssue:
     """Create a warning-severity validation issue.
 
-    Returns
+    Returns:
     -------
     PolicyValidationIssue
         Issue with ``"warn"`` severity.
@@ -172,8 +172,19 @@ def validate_policy_bundle(
     PolicyValidationResult
         Validation result with all issues found.
     """
-    _ = runtime_profile  # Reserved for future profile-aware validation gates
     issues: list[PolicyValidationIssue] = []
+
+    # Check 0: UDF feature gate
+    for node in execution_plan.view_nodes:
+        required = tuple(node.required_udfs or ())
+        if required and not runtime_profile.features.enable_udfs:
+            issues.append(
+                _error(
+                    "UDFS_DISABLED",
+                    task=node.name,
+                    detail=f"UDFs disabled but required: {sorted(required)}",
+                )
+            )
 
     # Check 1: UDF availability from view nodes
     for node in execution_plan.view_nodes:
@@ -220,9 +231,42 @@ def validate_policy_bundle(
     return PolicyValidationResult.from_issues(issues)
 
 
+def build_policy_validation_artifact(
+    result: PolicyValidationResult,
+    *,
+    validation_mode: str,
+    runtime_hash: str,
+) -> PolicyValidationArtifact:
+    """Build a machine-readable artifact from a validation result.
+
+    Parameters
+    ----------
+    result
+        Aggregated validation result from ``validate_policy_bundle()``.
+    validation_mode
+        Active validation mode (``"error"``, ``"warn"``, or ``"off"``).
+    runtime_hash
+        Runtime configuration hash for determinism verification.
+
+    Returns:
+    -------
+    PolicyValidationArtifact
+        Serializable artifact summarizing the validation outcome.
+    """
+    error_codes = tuple(sorted({i.code for i in result.issues if i.severity == "error"}))
+    return PolicyValidationArtifact(
+        validation_mode=validation_mode,
+        issue_count=len(result.issues),
+        error_codes=error_codes,
+        runtime_hash=runtime_hash,
+        is_deterministic=True,
+    )
+
+
 __all__ = [
     "PolicyValidationArtifact",
     "PolicyValidationIssue",
     "PolicyValidationResult",
+    "build_policy_validation_artifact",
     "validate_policy_bundle",
 ]

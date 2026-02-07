@@ -78,7 +78,6 @@ from datafusion_engine.lineage.diagnostics import (
     record_artifact,
     record_events,
 )
-from serde_schema_registry import ArtifactSpec
 from datafusion_engine.plan.cache import PlanCache, PlanProtoCache
 from datafusion_engine.registry_facade import RegistrationPhase, RegistrationPhaseOrchestrator
 from datafusion_engine.schema.introspection import (
@@ -137,6 +136,7 @@ if TYPE_CHECKING:
     from datafusion_engine.udf.catalog import UdfCatalog
     from obs.datafusion_runs import DataFusionRun
     from semantics.program_manifest import ManifestDatasetResolver
+    from serde_schema_registry import ArtifactSpec
     from storage.deltalake.delta import IdempotentWriteOptions
 
     class _DeltaRuntimeEnvOptions(Protocol):
@@ -2191,7 +2191,7 @@ def diagnostics_plan_artifacts_hook(
                 normalized["plan_identity_hash"] = fingerprint_value
             else:
                 normalized["plan_identity_hash"] = "unknown_plan_identity"
-        recorder_sink.record_artifact("datafusion_plan_artifacts_v9", normalized)
+        recorder_sink.record_artifact("datafusion_plan_artifacts_v10", normalized)
 
     return _hook
 
@@ -2604,9 +2604,7 @@ def _cache_profile_settings(profile: DataFusionRuntimeProfile) -> dict[str, str]
 
 
 class _RuntimeDiagnosticsMixin:
-    def record_artifact(
-        self, name: ArtifactSpec | str, payload: Mapping[str, object]
-    ) -> None:
+    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, object]) -> None:
         """Record an artifact through DiagnosticsRecorder when configured."""
         profile = cast("DataFusionRuntimeProfile", self)
         record_artifact(profile, name, payload)
@@ -4035,8 +4033,21 @@ class RuntimeProfileCatalog:
                 location = msgspec.structs.replace(location, dataset_spec=spec)
         return location
 
-    def dataset_location(self, name: str) -> DatasetLocation | None:
+    def dataset_location(
+        self,
+        name: str,
+        *,
+        dataset_resolver: ManifestDatasetResolver | None = None,
+    ) -> DatasetLocation | None:
         """Return a configured dataset location for the dataset name.
+
+        Parameters
+        ----------
+        name
+            Dataset name to resolve.
+        dataset_resolver
+            Optional pre-resolved manifest resolver. Falls back to
+            ``dataset_bindings_for_profile`` when *None*.
 
         Returns:
         -------
@@ -4079,10 +4090,11 @@ class RuntimeProfileCatalog:
                     delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
                 overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
             return msgspec.structs.replace(resolved, overrides=overrides)
-        from semantics.compile_context import dataset_bindings_for_profile
+        if dataset_resolver is None:
+            from semantics.compile_context import dataset_bindings_for_profile
 
-        bindings = dataset_bindings_for_profile(self.profile)
-        return bindings.location(name)
+            dataset_resolver = dataset_bindings_for_profile(self.profile)
+        return dataset_resolver.location(name)
 
     def dataset_location_or_raise(self, name: str) -> DatasetLocation:
         """Return a configured dataset location for the dataset name.
@@ -4118,8 +4130,21 @@ class _RuntimeProfileIOFacadeMixin:
 class _RuntimeProfileCatalogFacadeMixin:
     """Facade methods for runtime-profile catalog operations."""
 
-    def dataset_location(self, name: str) -> DatasetLocation | None:
+    def dataset_location(
+        self,
+        name: str,
+        *,
+        dataset_resolver: ManifestDatasetResolver | None = None,
+    ) -> DatasetLocation | None:
         """Return a configured dataset location for the dataset name.
+
+        Parameters
+        ----------
+        name
+            Dataset name to resolve.
+        dataset_resolver
+            Optional pre-resolved manifest resolver. Falls back to
+            ``dataset_bindings_for_profile`` when *None*.
 
         Returns:
         -------
@@ -4127,9 +4152,11 @@ class _RuntimeProfileCatalogFacadeMixin:
             Dataset location when configured.
         """
         profile = cast("DataFusionRuntimeProfile", self)
-        from semantics.compile_context import dataset_bindings_for_profile
+        if dataset_resolver is None:
+            from semantics.compile_context import dataset_bindings_for_profile
 
-        return dataset_bindings_for_profile(profile).location(name)
+            dataset_resolver = dataset_bindings_for_profile(profile)
+        return dataset_resolver.location(name)
 
 
 class _RuntimeProfileDeltaFacadeMixin:
@@ -7610,18 +7637,21 @@ def record_dataset_readiness(
     profile: DataFusionRuntimeProfile,
     *,
     dataset_names: Sequence[str],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> None:
     """Record readiness diagnostics for configured dataset locations."""
     if profile.diagnostics.diagnostics_sink is None:
         return
     from datafusion_engine.lineage.diagnostics import record_artifact
     from obs.otel.heartbeat import set_heartbeat_blockers
-    from semantics.compile_context import dataset_bindings_for_profile
 
-    bindings = dataset_bindings_for_profile(profile)
+    if dataset_resolver is None:
+        from semantics.compile_context import dataset_bindings_for_profile
+
+        dataset_resolver = dataset_bindings_for_profile(profile)
     blockers: list[str] = []
     for name in dataset_names:
-        location = bindings.location(name)
+        location = dataset_resolver.location(name)
         if location is None:
             record_artifact(
                 profile,

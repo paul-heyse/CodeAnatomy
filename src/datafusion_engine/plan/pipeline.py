@@ -20,6 +20,7 @@ from utils.hashing import hash_msgpack_canonical, hash_sha256_hex
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
+    from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
 
 _SCAN_TASK_PREFIX = "scan_unit_"
@@ -57,6 +58,7 @@ def plan_with_delta_pins(
     view_nodes: Sequence[ViewNode],
     runtime_profile: DataFusionRuntimeProfile | None,
     snapshot: Mapping[str, object] | None,
+    semantic_context: SemanticExecutionContext | None = None,
 ) -> PlanningPipelineResult:
     """Plan views, pin Delta inputs, and re-plan under pinned providers.
 
@@ -65,6 +67,7 @@ def plan_with_delta_pins(
         view_nodes: View nodes to plan.
         runtime_profile: Runtime profile for planning and pinning.
         snapshot: Optional semantic snapshot payload.
+        semantic_context: Optional pre-built semantic context to avoid recompiling.
 
     Returns:
         PlanningPipelineResult: Result.
@@ -75,12 +78,15 @@ def plan_with_delta_pins(
     if runtime_profile is None:
         msg = "Runtime profile is required for planning with Delta pins."
         raise ValueError(msg)
-    from semantics.compile_context import build_semantic_execution_context
+    if semantic_context is not None:
+        semantic_ctx = semantic_context
+    else:
+        from semantics.compile_context import build_semantic_execution_context
 
-    semantic_ctx = build_semantic_execution_context(
-        runtime_profile=runtime_profile,
-        ctx=ctx,
-    )
+        semantic_ctx = build_semantic_execution_context(
+            runtime_profile=runtime_profile,
+            ctx=ctx,
+        )
     dataset_resolver = semantic_ctx.dataset_resolver
     session_runtime = runtime_profile.session_runtime()
     semantic_manifest = semantic_ctx.manifest

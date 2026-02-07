@@ -38,6 +38,7 @@ from semantics.incremental.plan_fingerprints import PlanFingerprintSnapshot
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import SessionRuntime
     from datafusion_engine.views.graph import ViewNode as RegistryViewNode
+    from semantics.compile_context import SemanticExecutionContext
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,7 @@ def _stub_view_context(plan: ExecutionPlan) -> ViewGraphContext:
         determinism_tier=DeterminismTier.BEST_EFFORT,
         snapshot={},
         view_nodes=plan.view_nodes,
+        semantic_context=cast("SemanticExecutionContext", object()),
         runtime_profile_spec=profile_spec,
     )
 

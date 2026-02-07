@@ -172,7 +172,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
         ),
     ),
     DatasetRow(
-        name="datafusion_plan_artifacts_v9",
+        name="datafusion_plan_artifacts_v10",
         version=SCHEMA_VERSION,
         fields=(
             FieldSpec(name="event_time_unix_ms", dtype=arrow_type_from_pyarrow(interop.int64())),
@@ -239,6 +239,7 @@ DATASET_ROWS: tuple[DatasetRow, ...] = (
                 name="scan_keys", dtype=arrow_type_from_pyarrow(interop.list_(interop.string()))
             ),
             FieldSpec(name="plan_details_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
+            FieldSpec(name="plan_signals_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
             FieldSpec(name="udf_snapshot_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())),
             FieldSpec(
                 name="udf_planner_snapshot_msgpack", dtype=arrow_type_from_pyarrow(pa.binary())

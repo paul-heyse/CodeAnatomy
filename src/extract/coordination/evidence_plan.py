@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from datafusion_engine.extract.adapter_registry import adapter_executor_key
 from datafusion_engine.extract.metadata import extract_metadata_by_name, extract_metadata_specs
 from obs.scan_telemetry import ScanTelemetry
 
@@ -69,6 +70,36 @@ class EvidencePlan:
         if resolved in self.required_columns:
             return tuple(self.required_columns[resolved])
         return ()
+
+    def required_adapter_names(self) -> tuple[str, ...]:
+        """Return required extract adapter template names for this evidence plan.
+
+        Returns:
+        -------
+        tuple[str, ...]
+            Deterministically sorted adapter template names.
+        """
+        metadata = extract_metadata_by_name()
+        names: set[str] = set()
+        for source in self.sources:
+            row = metadata.get(source)
+            if row is None:
+                expanded = _expanded_dataset_name(source)
+                row = metadata.get(expanded)
+            if row is None or row.template is None:
+                continue
+            names.add(row.template)
+        return tuple(sorted(names))
+
+    def required_adapter_keys(self) -> tuple[str, ...]:
+        """Return required extract executor keys for this evidence plan.
+
+        Returns:
+        -------
+        tuple[str, ...]
+            Deterministically sorted executor keys.
+        """
+        return tuple(sorted(adapter_executor_key(name) for name in self.required_adapter_names()))
 
 
 def compile_evidence_plan(

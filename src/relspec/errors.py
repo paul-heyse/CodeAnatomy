@@ -23,10 +23,15 @@ class RelspecCapabilityError(RelspecError, RuntimeError):
     """Raised when runtime capabilities are insufficient."""
 
 
+class RelspecExecutionAuthorityError(RelspecError, RuntimeError):
+    """Raised when execution authority validation fails."""
+
+
 __all__ = [
     "RelspecCapabilityError",
     "RelspecCompilationError",
     "RelspecError",
+    "RelspecExecutionAuthorityError",
     "RelspecExecutionError",
     "RelspecValidationError",
 ]

@@ -808,11 +808,13 @@ class DataFusionExecutionFacade:
         self,
         *,
         table_names: Sequence[str],
+        dataset_resolver: ManifestDatasetResolver | None = None,
     ) -> Mapping[str, str]:
         """Register Delta CDF-backed inputs for the provided table names.
 
         Args:
             table_names: Description.
+            dataset_resolver: Description.
 
         Returns:
             Mapping[str, str]: Result.
@@ -827,14 +829,16 @@ class DataFusionExecutionFacade:
             msg = "Delta CDF registration requires enable_delta_cdf to be True."
             raise ValueError(msg)
         from datafusion_engine.delta.cdf import register_cdf_inputs
-        from semantics.compile_context import dataset_bindings_for_profile
 
-        resolver = dataset_bindings_for_profile(self.runtime_profile)
+        if dataset_resolver is None:
+            from semantics.compile_context import dataset_bindings_for_profile
+
+            dataset_resolver = dataset_bindings_for_profile(self.runtime_profile)
         return register_cdf_inputs(
             self.ctx,
             self.runtime_profile,
             table_names=table_names,
-            dataset_resolver=resolver,
+            dataset_resolver=dataset_resolver,
         )
 
     def run_zero_row_bootstrap_validation(

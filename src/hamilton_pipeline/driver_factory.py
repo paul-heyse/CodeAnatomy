@@ -42,7 +42,10 @@ from hamilton_pipeline.lifecycle import (
     set_hamilton_diagnostics_collector,
 )
 from hamilton_pipeline.materializers import build_hamilton_materializers
-from hamilton_pipeline.modules.execution_plan import build_execution_plan_module
+from hamilton_pipeline.modules.execution_plan import (
+    PlanModuleOptions,
+    build_execution_plan_module,
+)
 from hamilton_pipeline.task_module_builder import (
     TaskExecutionModuleOptions,
     build_task_execution_module,
@@ -58,6 +61,7 @@ from hamilton_pipeline.types import (
 from obs.diagnostics import DiagnosticsCollector
 from obs.otel.hamilton import OtelNodeHook, OtelPlanHook
 from obs.otel.run_context import get_run_id
+from relspec.execution_authority import ExecutionAuthorityContext
 from relspec.view_defs import RELATION_OUTPUT_NAME
 from utils.env_utils import env_bool, env_value
 from utils.hashing import CacheKeyBuilder
@@ -68,9 +72,11 @@ if TYPE_CHECKING:
 
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
+    from extract.coordination.evidence_plan import EvidencePlan
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.graph_snapshot import GraphSnapshotHook
     from relspec.execution_plan import ExecutionPlan
+    from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
 
 try:
@@ -420,9 +426,14 @@ class ViewGraphContext:
     snapshot: Mapping[str, object]
     view_nodes: tuple[ViewNode, ...]
     runtime_profile_spec: RuntimeProfileSpec
+    semantic_context: SemanticExecutionContext
 
 
-def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContext:
+def build_view_graph_context(
+    config: Mapping[str, JsonValue],
+    *,
+    execution_context: SemanticExecutionContext | None = None,
+) -> ViewGraphContext:
     """Build a view graph context from runtime configuration.
 
     **EXECUTION AUTHORITY: VIEW GRAPH REGISTRATION**
@@ -434,6 +445,14 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     The registration happens in ``ensure_view_graph()`` which delegates to
     ``registry_specs.view_graph_nodes()`` - the single source of truth for
     all view definitions including semantic views.
+
+    Parameters
+    ----------
+    config
+        Runtime configuration mapping.
+    execution_context
+        Pre-compiled semantic execution context. When provided, reuse
+        its manifest and dataset resolver instead of compiling from scratch.
 
     Returns:
     -------
@@ -459,10 +478,18 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     from datafusion_engine.session.facade import DataFusionExecutionFacade
     from datafusion_engine.session.runtime import refresh_session_runtime
     from datafusion_engine.views.registry_specs import view_graph_nodes
-    from semantics.compile_context import CompileContext
 
     session_runtime = profile.session_runtime()
-    semantic_manifest = CompileContext(runtime_profile=profile).compile(ctx=session_runtime.ctx)
+    if execution_context is not None:
+        semantic_context = execution_context
+    else:
+        from semantics.compile_context import build_semantic_execution_context
+
+        semantic_context = build_semantic_execution_context(
+            runtime_profile=profile,
+            ctx=session_runtime.ctx,
+        )
+    semantic_manifest = semantic_context.manifest
     semantic_ir = semantic_manifest.semantic_ir
     facade = DataFusionExecutionFacade(ctx=session_runtime.ctx, runtime_profile=profile)
     # Single registration point: ensure_view_graph registers ALL views including
@@ -484,6 +511,7 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
         snapshot=snapshot,
         view_nodes=tuple(nodes),
         runtime_profile_spec=runtime_profile_spec,
+        semantic_context=semantic_context,
     )
 
 
@@ -519,12 +547,82 @@ def _compile_plan(
         view_nodes=view_ctx.view_nodes,
         snapshot=view_ctx.snapshot,
         runtime_profile=view_ctx.profile,
+        semantic_context=view_ctx.semantic_context,
         requested_task_names=requested,
         impacted_task_names=impacted,
         allow_partial=allow_partial,
         enable_metric_scheduling=enable_metric_scheduling,
     )
     return compile_execution_plan(session_runtime=view_ctx.session_runtime, request=request)
+
+
+def _execution_authority_enforcement(
+    config: Mapping[str, JsonValue],
+) -> Literal["warn", "error"]:
+    plan_config = _config_section(config, "plan")
+    value = plan_config.get("execution_authority_enforcement")
+    if value == "error":
+        return "error"
+    return "warn"
+
+
+def _authority_evidence_plan(
+    plan: ExecutionPlan,
+) -> EvidencePlan | None:
+    from extract.coordination.evidence_plan import compile_evidence_plan
+    from relspec.extract_plan import extract_output_task_map
+
+    task_map = extract_output_task_map()
+    outputs = [task_map[name].output for name in sorted(plan.active_tasks) if name in task_map]
+    if not outputs:
+        return None
+    return compile_evidence_plan(rules=outputs)
+
+
+def _build_execution_authority(
+    *,
+    view_ctx: ViewGraphContext,
+    plan: ExecutionPlan,
+    config: Mapping[str, JsonValue],
+) -> ExecutionAuthorityContext:
+    from datafusion_engine.extensions.runtime_capabilities import (
+        build_runtime_capabilities_snapshot,
+    )
+    from datafusion_engine.session.runtime import session_runtime_hash
+    from hamilton_pipeline.modules.task_execution import build_extract_executor_map
+
+    evidence_plan = _authority_evidence_plan(plan)
+    capability_snapshot = build_runtime_capabilities_snapshot(
+        view_ctx.session_runtime.ctx,
+        profile_name=view_ctx.profile.policies.config_policy_name,
+        settings_hash=view_ctx.profile.settings_hash(),
+        strict_native_provider_enabled=view_ctx.profile.features.enforce_delta_ffi_provider,
+    )
+    authority = ExecutionAuthorityContext(
+        semantic_context=view_ctx.semantic_context,
+        evidence_plan=evidence_plan,
+        extract_executor_map=build_extract_executor_map(evidence_plan=evidence_plan),
+        capability_snapshot=capability_snapshot,
+        session_runtime_fingerprint=session_runtime_hash(view_ctx.session_runtime),
+        enforcement_mode=_execution_authority_enforcement(config),
+    )
+    view_ctx.profile.record_artifact(
+        "execution_authority_validation_v1",
+        {
+            "enforcement_mode": authority.enforcement_mode,
+            "issues": [
+                {
+                    "code": issue.code,
+                    "message": issue.message,
+                }
+                for issue in authority.validation_issues()
+            ],
+            "issue_count": len(authority.validation_issues()),
+            "session_runtime_fingerprint": authority.session_runtime_fingerprint,
+            "required_adapter_keys": list(authority.required_adapter_keys()),
+        },
+    )
+    return authority
 
 
 def _incremental_enabled(config: Mapping[str, JsonValue]) -> bool:
@@ -630,14 +728,18 @@ def _plan_with_incremental_pruning(
     view_ctx: ViewGraphContext,
     plan: ExecutionPlan,
     config: Mapping[str, JsonValue],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> ExecutionPlan:
-    from semantics.compile_context import dataset_bindings_for_profile
+    if dataset_resolver is None:
+        from semantics.compile_context import dataset_bindings_for_profile
+
+        dataset_resolver = dataset_bindings_for_profile(view_ctx.profile)
 
     impacted, state_dir = _cdf_impacted_tasks(
         view_ctx=view_ctx,
         plan=plan,
         config=config,
-        dataset_resolver=dataset_bindings_for_profile(view_ctx.profile),
+        dataset_resolver=dataset_resolver,
     )
     if impacted is None and state_dir is None:
         return plan
@@ -1821,10 +1923,22 @@ def build_plan_context(
             plan=resolved_plan,
             config=request.config,
         )
+    authority_context = _build_execution_authority(
+        view_ctx=resolved_view_ctx,
+        plan=resolved_plan,
+        config=request.config,
+    )
     from hamilton_pipeline.validators import set_schema_contracts
 
     set_schema_contracts(resolved_plan.output_contracts)
-    modules.append(build_execution_plan_module(resolved_plan))
+    modules.append(
+        build_execution_plan_module(
+            resolved_plan,
+            plan_module_options=PlanModuleOptions(
+                execution_authority_context=authority_context,
+            ),
+        )
+    )
     modules.append(
         build_task_execution_module(
             plan=resolved_plan,

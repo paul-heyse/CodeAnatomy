@@ -297,6 +297,7 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
     udf_planner_snapshot_msgpack: bytes | None
     udf_compatibility_ok: bool
     udf_compatibility_detail_msgpack: bytes
+    plan_signals_msgpack: bytes | None = None
     execution_duration_ms: NonNegativeFloat | None = None
     execution_status: str | None = None
     execution_error: str | None = None
@@ -342,6 +343,7 @@ class PlanArtifactRow(StructBaseCompat, frozen=True):
             "scan_units_msgpack": self.scan_units_msgpack,
             "scan_keys": list(self.scan_keys),
             "plan_details_msgpack": self.plan_details_msgpack,
+            "plan_signals_msgpack": self.plan_signals_msgpack,
             "udf_snapshot_msgpack": self.udf_snapshot_msgpack,
             "udf_planner_snapshot_msgpack": self.udf_planner_snapshot_msgpack,
             "udf_compatibility_ok": self.udf_compatibility_ok,
@@ -577,6 +579,14 @@ class PlanValidationArtifact(StructBaseCompat, frozen=True):
     task_results: tuple[dict[str, JsonValueLax], ...]
 
 
+class PlanSignalsArtifact(StructBaseCompat, frozen=True):
+    """Canonical plan-signal summary artifact."""
+
+    plan_signature: PlanSignature
+    task_count: NonNegativeInt
+    tasks: dict[str, dict[str, JsonValueLax]]
+
+
 class PlanValidationEnvelope(ArtifactEnvelopeBase, tag="plan_validation", frozen=True):
     """Envelope for plan validation artifacts."""
 
@@ -637,129 +647,39 @@ def export_artifact_schemas(output_dir: Path) -> tuple[Path, ...]:
     return export_json_schemas(artifact_schema_types(), output_dir=output_dir)
 
 
-# ---------------------------------------------------------------------------
-# Typed artifact specs linking canonical names to msgspec schemas
-# ---------------------------------------------------------------------------
-
-from serde_schema_registry import ArtifactSpec, register_artifact_spec
-
-VIEW_CACHE_ARTIFACT_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="view_cache_artifact_v1",
-        description="Cache materialization artifact for view registration.",
-        payload_type=ViewCacheArtifact,
-    )
-)
-
-DELTA_STATS_DECISION_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="delta_stats_decision_v1",
-        description="Resolved stats decision for a Delta write.",
-        payload_type=DeltaStatsDecision,
-    )
-)
-
-SEMANTIC_VALIDATION_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="semantic_validation_v1",
-        description="Semantic metadata validation artifact for a view.",
-        payload_type=SemanticValidationArtifact,
-    )
-)
-
-PLAN_SCHEDULE_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="plan_schedule_v1",
-        description="Schedule artifact for deterministic plan scheduling.",
-        payload_type=PlanScheduleArtifact,
-    )
-)
-
-PLAN_VALIDATION_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="plan_validation_v1",
-        description="Validation artifact for plan evidence edges.",
-        payload_type=PlanValidationArtifact,
-    )
-)
-
-RUN_MANIFEST_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="run_manifest_v1",
-        description="Canonical run manifest payload for deterministic outputs.",
-        payload_type=RunManifest,
-    )
-)
-
-NORMALIZE_OUTPUTS_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="normalize_outputs_v1",
-        description="Normalize outputs summary artifact.",
-        payload_type=NormalizeOutputsArtifact,
-    )
-)
-
-EXTRACT_ERRORS_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="extract_errors_v1",
-        description="Extract error summary artifact.",
-        payload_type=ExtractErrorsArtifact,
-    )
-)
-
-RUNTIME_PROFILE_SNAPSHOT_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="runtime_profile_snapshot_v1",
-        description="Unified runtime profile snapshot for reproducibility.",
-        payload_type=RuntimeProfileSnapshot,
-    )
-)
-
-INCREMENTAL_METADATA_SPEC = register_artifact_spec(
-    ArtifactSpec(
-        canonical_name="incremental_metadata_v1",
-        description="Snapshot payload for incremental runtime metadata.",
-        payload_type=IncrementalMetadataSnapshot,
-    )
-)
+# NOTE: Typed artifact specs (ArtifactSpec constants) live in the separate
+# ``serde_artifact_specs`` module to avoid a circular import between
+# ``serde_artifacts`` and ``serde_schema_registry``.  Import from
+# ``serde_artifact_specs`` when you need spec constants.
 
 __all__ = [
     "ArtifactEnvelopeBase",
-    "DELTA_STATS_DECISION_SPEC",
     "DeltaInputPin",
     "DeltaScanConfigSnapshot",
     "DeltaStatsDecision",
     "DeltaStatsDecisionEnvelope",
-    "EXTRACT_ERRORS_SPEC",
     "ExecutionPlanProtoBytes",
     "ExtractErrorsArtifact",
-    "INCREMENTAL_METADATA_SPEC",
     "IncrementalMetadataSnapshot",
     "LogicalPlanProtoBytes",
-    "NORMALIZE_OUTPUTS_SPEC",
     "NormalizeOutputsArtifact",
     "OptimizedPlanProtoBytes",
-    "PLAN_SCHEDULE_SPEC",
-    "PLAN_VALIDATION_SPEC",
     "PlanArtifactRow",
     "PlanArtifacts",
     "PlanProtoStatus",
     "PlanScheduleArtifact",
     "PlanScheduleEnvelope",
+    "PlanSignalsArtifact",
     "PlanValidationArtifact",
     "PlanValidationEnvelope",
-    "RUN_MANIFEST_SPEC",
-    "RUNTIME_PROFILE_SNAPSHOT_SPEC",
     "RunManifest",
     "RunManifestEnvelope",
     "RuntimeProfileSnapshot",
-    "SEMANTIC_VALIDATION_SPEC",
     "SemanticValidationArtifact",
     "SemanticValidationArtifactEnvelope",
     "SemanticValidationEntry",
     "SubstraitBytes",
     "SubstraitPayload",
-    "VIEW_CACHE_ARTIFACT_SPEC",
     "ViewArtifactPayload",
     "ViewCacheArtifact",
     "ViewCacheArtifactEnvelope",

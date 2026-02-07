@@ -22,6 +22,7 @@ class PlanConfigRuntime(RuntimeBase):
     enable_plan_task_submission_hook: bool | None = None
     enable_plan_task_grouping_hook: bool | None = None
     enforce_plan_task_submission: bool | None = None
+    execution_authority_enforcement: Literal["warn", "error"] | None = None
 
 
 class CacheConfigRuntime(RuntimeBase):

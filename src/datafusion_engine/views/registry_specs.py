@@ -429,6 +429,35 @@ def _build_semantic_view_node(
         name,
         dataset_specs=context.dataset_specs,
     )
+    # Schema divergence detection (10.2): compare spec vs plan output
+    if expected_schema is not None and bundle is not None:
+        from datafusion_engine.schema.contracts import compute_schema_divergence
+        from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
+
+        try:
+            plan_schema = arrow_schema_from_df(bundle.df)
+        except (TypeError, AttributeError):
+            plan_schema = None
+        if plan_schema is not None:
+            divergence = compute_schema_divergence(expected_schema, plan_schema)
+            if divergence.has_divergence:
+                from datafusion_engine.lineage.diagnostics import record_artifact
+
+                record_artifact(
+                    context.runtime_profile,
+                    "schema_divergence_v1",
+                    {
+                        "view_name": name,
+                        "spec_columns": list(expected_schema.names),
+                        "plan_columns": list(plan_schema.names),
+                        "added_columns": list(divergence.added_columns),
+                        "removed_columns": list(divergence.removed_columns),
+                        "type_mismatches": [
+                            {"column": col, "spec_type": st, "plan_type": pt}
+                            for col, st, pt in divergence.type_mismatches
+                        ],
+                    },
+                )
     annotated_contract: AnnotatedSchema | None = None
     if expected_schema is not None:
         from semantics.types import AnnotatedSchema

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from datafusion import SessionContext
 
 from datafusion_engine.delta.capabilities import is_delta_extension_compatible
 from datafusion_engine.extensions.plugin_manifest import resolve_plugin_manifest
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,28 @@ class ExtensionPluginSnapshot:
 
 
 @dataclass(frozen=True)
+class DataFusionPlanCapabilities:
+    """DataFusion plan-statistics capability detection result.
+
+    Parameters
+    ----------
+    has_execution_plan_statistics
+        Whether ExecutionPlan exposes a callable ``statistics()`` method.
+    has_execution_plan_schema
+        Whether ExecutionPlan exposes a callable ``schema()`` method.
+    datafusion_version
+        Version string of the installed datafusion package.
+    has_dataframe_execution_plan
+        Whether ``DataFrame.execution_plan()`` is available.
+    """
+
+    has_execution_plan_statistics: bool
+    has_execution_plan_schema: bool
+    datafusion_version: str
+    has_dataframe_execution_plan: bool
+
+
+@dataclass(frozen=True)
 class RuntimeCapabilitiesSnapshot:
     """Runtime capabilities payload assembled from extension diagnostics."""
 
@@ -47,6 +72,53 @@ class RuntimeCapabilitiesSnapshot:
     extension_capabilities: Mapping[str, object]
     plugin: ExtensionPluginSnapshot
     execution_metrics: Mapping[str, object] | None
+    plan_capabilities: DataFusionPlanCapabilities | None = None
+
+
+def detect_plan_capabilities(ctx: SessionContext) -> DataFusionPlanCapabilities:
+    """Detect DataFusion plan-statistics capabilities via runtime probing.
+
+    Use capability detection (not version assumptions) for any
+    stats-dependent code paths. Probe results are cached per session
+    lifetime; call once at startup and thread the result forward.
+
+    Parameters
+    ----------
+    ctx
+        Active DataFusion session context used for probing.
+
+    Returns:
+    -------
+    DataFusionPlanCapabilities
+        Frozen snapshot of detected plan-level capabilities.
+    """
+    import datafusion as _df
+
+    version = getattr(_df, "__version__", "unknown")
+
+    has_df_exec_plan = False
+    has_stats = False
+    has_schema = False
+
+    try:
+        df = ctx.sql("SELECT 1 AS probe_col")
+        exec_plan = df.execution_plan()
+        has_df_exec_plan = True
+
+        stats_fn = getattr(exec_plan, "statistics", None)
+        has_stats = callable(stats_fn)
+
+        schema_fn = getattr(exec_plan, "schema", None)
+        has_schema = callable(schema_fn)
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        _LOGGER.debug("Plan capability probe failed: %s", exc)
+
+    return DataFusionPlanCapabilities(
+        has_execution_plan_statistics=has_stats,
+        has_execution_plan_schema=has_schema,
+        datafusion_version=version,
+        has_dataframe_execution_plan=has_df_exec_plan,
+    )
 
 
 def collect_delta_compatibility(
@@ -167,6 +239,7 @@ def build_runtime_capabilities_snapshot(
         extension_capabilities=_extension_capabilities_report(),
         plugin=collect_extension_plugin_snapshot(),
         execution_metrics=collect_runtime_execution_metrics(ctx),
+        plan_capabilities=detect_plan_capabilities(ctx),
     )
 
 
@@ -178,6 +251,14 @@ def runtime_capabilities_payload(snapshot: RuntimeCapabilitiesSnapshot) -> dict[
     dict[str, object]
         Event payload emitted to diagnostics sinks.
     """
+    plan_caps: dict[str, object] | None = None
+    if snapshot.plan_capabilities is not None:
+        plan_caps = {
+            "has_execution_plan_statistics": snapshot.plan_capabilities.has_execution_plan_statistics,
+            "has_execution_plan_schema": snapshot.plan_capabilities.has_execution_plan_schema,
+            "datafusion_version": snapshot.plan_capabilities.datafusion_version,
+            "has_dataframe_execution_plan": snapshot.plan_capabilities.has_dataframe_execution_plan,
+        }
     return {
         "event_time_unix_ms": snapshot.event_time_unix_ms,
         "profile_name": snapshot.profile_name,
@@ -203,6 +284,7 @@ def runtime_capabilities_payload(snapshot: RuntimeCapabilitiesSnapshot) -> dict[
             if isinstance(snapshot.execution_metrics, Mapping)
             else None
         ),
+        "plan_capabilities": plan_caps,
     }
 
 
@@ -257,11 +339,13 @@ def _invoke_extension_with_context(
 
 
 __all__ = [
+    "DataFusionPlanCapabilities",
     "DeltaCompatibilitySnapshot",
     "ExtensionPluginSnapshot",
     "RuntimeCapabilitiesSnapshot",
     "build_runtime_capabilities_snapshot",
     "collect_delta_compatibility",
     "collect_extension_plugin_snapshot",
+    "detect_plan_capabilities",
     "runtime_capabilities_payload",
 ]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -244,20 +243,17 @@ def record_plan_phase_diagnostics(*, request: PlanPhaseDiagnostics) -> None:
 
 
 def _execution_stats_payload(bundle: DataFusionPlanBundle) -> PlanExecutionStats:
-    details = bundle.plan_details
-    stats = details.get("statistics") if isinstance(details, Mapping) else None
-    rows = None
-    bytes_scanned = None
-    if isinstance(stats, Mapping):
-        rows = _coerce_int(stats.get("num_rows") or stats.get("row_count"))
-        bytes_scanned = _coerce_int(stats.get("total_byte_size") or stats.get("total_bytes"))
+    from datafusion_engine.plan.signals import extract_plan_signals
+
+    signals = extract_plan_signals(bundle)
+    stats = signals.stats
     return PlanExecutionStats(
-        rows_produced=rows,
-        bytes_scanned=bytes_scanned,
-        partition_count=_coerce_int(details.get("partition_count")),
-        repartition_count=_coerce_int(details.get("repartition_count")),
-        explain_analyze_duration_ms=_coerce_float(details.get("explain_analyze_duration_ms")),
-        explain_analyze_output_rows=_coerce_int(details.get("explain_analyze_output_rows")),
+        rows_produced=stats.num_rows if stats is not None else None,
+        bytes_scanned=stats.total_bytes if stats is not None else None,
+        partition_count=stats.partition_count if stats is not None else None,
+        repartition_count=signals.repartition_count,
+        explain_analyze_duration_ms=signals.explain_analyze_duration_ms,
+        explain_analyze_output_rows=signals.explain_analyze_output_rows,
     )
 
 

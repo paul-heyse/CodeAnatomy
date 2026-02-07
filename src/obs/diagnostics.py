@@ -8,6 +8,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
 import datafusion_ext as _datafusion_ext
+
+if TYPE_CHECKING:
+    from serde_schema_registry import ArtifactSpec
 from datafusion_engine.lineage.diagnostics import (
     ensure_recorder_sink,
     rust_udf_snapshot_payload,
@@ -18,7 +21,6 @@ from datafusion_engine.schema.contracts import ValidationViolation
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from obs.otel.logs import emit_diagnostics_event
 from obs.otel.metrics import record_artifact_count
-from serde_schema_registry import ArtifactSpec
 from schema_spec.pandera_bridge import validation_policy_payload
 from schema_spec.system import ValidationPolicySpec
 from serde_msgspec import StructBaseCompat
@@ -52,7 +54,12 @@ class DiagnosticsCollector:
 
     def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, object]) -> None:
         """Append an artifact payload under a logical name."""
-        resolved = name.canonical_name if isinstance(name, ArtifactSpec) else name
+        canonical = getattr(name, "canonical_name", None)
+        resolved = (
+            canonical
+            if isinstance(canonical, str)
+            else (name if isinstance(name, str) else str(name))
+        )
         bucket = self.artifacts.setdefault(resolved, [])
         normalized = dict(payload)
         bucket.append(normalized)

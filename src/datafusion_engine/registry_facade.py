@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DataFusionViewRegistry
     from datafusion_engine.udf.catalog import DataFusionUdfSpec, UdfCatalogAdapter
     from datafusion_engine.views.artifacts import DataFusionViewArtifact
+    from semantics.program_manifest import ManifestDatasetResolver
 
 
 class ProviderRegistryLike(
@@ -374,6 +375,7 @@ def registry_facade_for_context(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> RegistryFacade:
     """Return a RegistryFacade bound to a session context.
 
@@ -385,12 +387,14 @@ def registry_facade_for_context(
     from datafusion_engine.catalog.provider_registry import ProviderRegistry
     from datafusion_engine.dataset.registry import DatasetCatalog
     from datafusion_engine.udf.catalog import UdfCatalogAdapter
-    from semantics.compile_context import dataset_bindings_for_profile
 
-    bindings = dataset_bindings_for_profile(runtime_profile)
+    if dataset_resolver is None:
+        from semantics.compile_context import dataset_bindings_for_profile
+
+        dataset_resolver = dataset_bindings_for_profile(runtime_profile)
     dataset_catalog = DatasetCatalog()
-    for name in bindings.names():
-        location = bindings.location(name)
+    for name in dataset_resolver.names():
+        location = dataset_resolver.location(name)
         if location is None:
             continue
         dataset_catalog.register(name, location, overwrite=True)

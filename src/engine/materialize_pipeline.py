@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import SessionRuntime
     from datafusion_engine.views.artifacts import CachePolicy as SemanticCachePolicy
+    from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
 
 
@@ -281,6 +282,7 @@ def build_view_product(
     policy: MaterializationPolicy,
     view_id: str | None = None,
     dataset_resolver: ManifestDatasetResolver | None = None,
+    execution_context: SemanticExecutionContext | None = None,
 ) -> PlanProduct:
     """Execute a registered view and return a PlanProduct wrapper.
 
@@ -290,9 +292,12 @@ def build_view_product(
         policy: Materialization policy.
         view_id: Optional explicit view identifier.
         dataset_resolver: Optional manifest-based dataset resolver.
+        execution_context: Optional semantic execution context. When provided,
+            the resolver is extracted from the context rather than creating a
+            new CompileContext.
 
     Returns:
-        PlanProduct: Result.
+        PlanProduct: Materialized plan product.
 
     Raises:
         ValueError: If the target view is not registered.
@@ -302,6 +307,8 @@ def build_view_product(
         options=OtelBootstrapOptions(resource_overrides={"codeanatomy.view_name": view_name}),
     )
     profile = session_runtime.profile
+    if dataset_resolver is None and execution_context is not None:
+        dataset_resolver = execution_context.dataset_resolver
     if dataset_resolver is None:
         from semantics.compile_context import CompileContext
 

@@ -32,6 +32,7 @@ from semantics.incremental.invalidations import (
 )
 from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
 from semantics.incremental.state_store import StateStore
+from serde_schema_registry import ArtifactSpec
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
 
@@ -48,8 +49,9 @@ class _DiagnosticsSink(DiagnosticsSink):
     def record_events(self, name: str, rows: Sequence[Mapping[str, object]]) -> None:
         self.events.setdefault(name, []).extend(dict(row) for row in rows)
 
-    def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
-        self.artifacts.setdefault(name, []).append(dict(payload))
+    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, object]) -> None:
+        key: str = name if isinstance(name, str) else name.canonical_name
+        self.artifacts.setdefault(key, []).append(dict(payload))
 
     def record_event(self, name: str, properties: Mapping[str, object]) -> None:
         self.events.setdefault(name, []).append(dict(properties))

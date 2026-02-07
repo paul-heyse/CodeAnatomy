@@ -1376,7 +1376,7 @@ DATAFUSION_RUNS_SCHEMA = _schema_with_metadata(
 )
 
 DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
-    "datafusion_plan_artifacts_v9",
+    "datafusion_plan_artifacts_v10",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
@@ -1411,6 +1411,7 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA = _schema_with_metadata(
             pa.field("scan_units_msgpack", pa.binary(), nullable=False),
             pa.field("scan_keys", pa.list_(pa.string()), nullable=False),
             pa.field("plan_details_msgpack", pa.binary(), nullable=False),
+            pa.field("plan_signals_msgpack", pa.binary(), nullable=True),
             pa.field("udf_snapshot_msgpack", pa.binary(), nullable=False),
             pa.field("udf_planner_snapshot_msgpack", pa.binary(), nullable=True),
             pa.field("udf_compatibility_ok", pa.bool_(), nullable=False),

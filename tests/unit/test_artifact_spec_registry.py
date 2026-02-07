@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
 import msgspec
 import pytest
@@ -14,7 +13,6 @@ from serde_schema_registry import (
     artifact_spec_registry,
     register_artifact_spec,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -230,13 +228,19 @@ class TestGlobalRegistry:
     """Test the global artifact spec registry and helper."""
 
     def test_global_registry_is_populated(self) -> None:
-        """Global registry should have specs from serde_artifacts module import."""
+        """Global registry should have specs after importing serde_artifact_specs."""
+        import serde_artifact_specs
+
         registry = artifact_spec_registry()
         assert len(registry) > 0
+        assert len(serde_artifact_specs.__all__) > 0
 
     def test_known_specs_registered(self) -> None:
         """Verify known spec canonical names are registered."""
+        import serde_artifact_specs
+
         registry = artifact_spec_registry()
+        assert serde_artifact_specs.VIEW_CACHE_ARTIFACT_SPEC is not None
         expected_names = [
             "view_cache_artifact_v1",
             "delta_stats_decision_v1",
@@ -273,7 +277,8 @@ class TestSerdeArtifactSpecs:
 
     def test_view_cache_artifact_spec(self) -> None:
         """VIEW_CACHE_ARTIFACT_SPEC has expected properties."""
-        from serde_artifacts import VIEW_CACHE_ARTIFACT_SPEC, ViewCacheArtifact
+        from serde_artifact_specs import VIEW_CACHE_ARTIFACT_SPEC
+        from serde_artifacts import ViewCacheArtifact
 
         assert VIEW_CACHE_ARTIFACT_SPEC.canonical_name == "view_cache_artifact_v1"
         assert VIEW_CACHE_ARTIFACT_SPEC.payload_type is ViewCacheArtifact
@@ -281,7 +286,8 @@ class TestSerdeArtifactSpecs:
 
     def test_run_manifest_spec(self) -> None:
         """RUN_MANIFEST_SPEC has expected properties."""
-        from serde_artifacts import RUN_MANIFEST_SPEC, RunManifest
+        from serde_artifact_specs import RUN_MANIFEST_SPEC
+        from serde_artifacts import RunManifest
 
         assert RUN_MANIFEST_SPEC.canonical_name == "run_manifest_v1"
         assert RUN_MANIFEST_SPEC.payload_type is RunManifest
@@ -289,7 +295,8 @@ class TestSerdeArtifactSpecs:
 
     def test_plan_schedule_spec(self) -> None:
         """PLAN_SCHEDULE_SPEC has expected properties."""
-        from serde_artifacts import PLAN_SCHEDULE_SPEC, PlanScheduleArtifact
+        from serde_artifact_specs import PLAN_SCHEDULE_SPEC
+        from serde_artifacts import PlanScheduleArtifact
 
         assert PLAN_SCHEDULE_SPEC.canonical_name == "plan_schedule_v1"
         assert PLAN_SCHEDULE_SPEC.payload_type is PlanScheduleArtifact
@@ -314,30 +321,42 @@ class TestRecordArtifactCompatibility:
         assert artifacts[0]["key"] == "value"
 
     def test_record_artifact_with_spec(self) -> None:
-        """Recording with an ArtifactSpec resolves canonical name."""
-        from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
+        """Recording with an ArtifactSpec resolves canonical name via recorder."""
+        from datafusion_engine.lineage.diagnostics import (
+            DiagnosticsContext,
+            DiagnosticsRecorder,
+            InMemoryDiagnosticsSink,
+        )
 
         sink = InMemoryDiagnosticsSink()
+        context = DiagnosticsContext(session_id="test", operation_id="op")
+        recorder = DiagnosticsRecorder(sink, context)
         spec = ArtifactSpec(
             canonical_name="typed_test_v1",
             description="Typed test artifact.",
         )
-        sink.record_artifact(spec, {"key": "value"})
+        recorder.record_artifact(spec, {"key": "value"})
         artifacts = sink.get_artifacts("typed_test_v1")
         assert len(artifacts) == 1
         assert artifacts[0]["key"] == "value"
 
     def test_record_artifact_spec_in_snapshot(self) -> None:
         """Artifacts recorded via spec appear in snapshot by canonical name."""
-        from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
+        from datafusion_engine.lineage.diagnostics import (
+            DiagnosticsContext,
+            DiagnosticsRecorder,
+            InMemoryDiagnosticsSink,
+        )
 
         sink = InMemoryDiagnosticsSink()
+        context = DiagnosticsContext(session_id="test", operation_id="op")
+        recorder = DiagnosticsRecorder(sink, context)
         spec = ArtifactSpec(
             canonical_name="snap_test_v1",
             description="Snapshot test.",
         )
-        sink.record_artifact(spec, {"a": 1})
-        sink.record_artifact("other_v1", {"b": 2})
+        recorder.record_artifact(spec, {"a": 1})
+        recorder.record_artifact("other_v1", {"b": 2})
         snapshot = sink.artifacts_snapshot()
         assert "snap_test_v1" in snapshot
         assert "other_v1" in snapshot
@@ -361,8 +380,8 @@ class TestRecordArtifactCompatibility:
         artifacts = sink.get_artifacts("recorder_test_v1")
         assert len(artifacts) == 1
 
-    def test_diagnostics_recorder_adapter_with_spec(self) -> None:
-        """DiagnosticsRecorderAdapter accepts ArtifactSpec."""
+    def test_diagnostics_recorder_adapter_with_spec_canonical_name(self) -> None:
+        """DiagnosticsRecorderAdapter works with spec canonical_name."""
         from datafusion_engine.lineage.diagnostics import (
             DiagnosticsRecorderAdapter,
             InMemoryDiagnosticsSink,
@@ -377,6 +396,6 @@ class TestRecordArtifactCompatibility:
             canonical_name="adapter_test_v1",
             description="Adapter test.",
         )
-        adapter.record_artifact(spec, {"value": 42})
+        adapter.record_artifact(spec.canonical_name, {"value": 42})
         artifacts = sink.get_artifacts("adapter_test_v1")
         assert len(artifacts) == 1

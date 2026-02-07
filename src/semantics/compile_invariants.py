@@ -1,104 +1,131 @@
-"""Compile-time invariant enforcement for semantic pipeline runs.
-
-Provide a ``CompileTracker`` that records compile invocations and
-verifies single-compile and resolver-identity invariants at pipeline end.
-"""
+"""Compile-once invariant enforcement for semantic pipeline runs."""
 
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from semantics.compile_context import SemanticExecutionContext
+    from collections.abc import Iterator
 
 
 @dataclass
 class CompileTracker:
-    """Track compile invocations and verify invariants at pipeline end.
+    """Track semantic compile invocations within a pipeline run.
 
-    Record each compile call and validate at pipeline completion that
-    exactly one compile occurred and all resolver instances share identity.
+    Use as a context manager at orchestration boundaries to enforce
+    the single-compile invariant. Increment on each compile call and
+    assert the count at context exit.
 
-    Parameters
-    ----------
-    _compile_count
-        Number of compile invocations recorded.
-    _resolver_ids
-        Object identity hashes of dataset resolvers observed.
-    _manifest_fingerprints
-        Manifest fingerprints recorded across compile calls.
+    Args:
+        max_compiles: Maximum allowed compile invocations (default 1).
+        label: Descriptive label for diagnostics on invariant violation.
     """
 
-    _compile_count: int = 0
-    _resolver_ids: list[int] = field(default_factory=list)
-    _manifest_fingerprints: list[str] = field(default_factory=list)
+    max_compiles: int = 1
+    label: str = "pipeline"
+    _count: int = field(default=0, init=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def record_compile(self) -> None:
+        """Record a semantic compile invocation.
+
+        Raises:
+            RuntimeError: When the compile count exceeds ``max_compiles``.
+        """
+        with self._lock:
+            self._count += 1
+            if self._count > self.max_compiles:
+                msg = (
+                    f"Compile invariant violation in {self.label!r}: "
+                    f"expected at most {self.max_compiles} compile(s), "
+                    f"got {self._count}"
+                )
+                raise RuntimeError(msg)
 
     @property
     def compile_count(self) -> int:
-        """Return the number of compile invocations recorded."""
-        return self._compile_count
+        """Return the current compile count."""
+        return self._count
 
-    @property
-    def resolver_identity_count(self) -> int:
-        """Return the number of distinct resolver identities recorded."""
-        return len(set(self._resolver_ids))
+    def assert_compile_count(self, expected: int | None = None) -> None:
+        """Assert the compile count matches the expected value.
 
-    def record_compile(self, ctx: SemanticExecutionContext) -> None:
-        """Record a semantic compile invocation.
-
-        Parameters
-        ----------
-        ctx
-            Semantic execution context from the compile call.
-        """
-        self._compile_count += 1
-        self._resolver_ids.append(id(ctx.dataset_resolver))
-        if ctx.manifest.fingerprint is not None:
-            self._manifest_fingerprints.append(ctx.manifest.fingerprint)
-
-    def verify_invariants(self) -> list[str]:
-        """Verify all compile-time invariants and return violations.
-
-        Returns:
-        -------
-        list[str]
-            List of invariant violation messages. Empty when all pass.
-        """
-        violations: list[str] = []
-        if self._compile_count != 1:
-            violations.append(f"Expected 1 compile call, got {self._compile_count}")
-        distinct_resolvers = len(set(self._resolver_ids))
-        if distinct_resolvers > 1:
-            violations.append(
-                f"Resolver identity violation: {distinct_resolvers} "
-                f"distinct resolvers across {len(self._resolver_ids)} calls"
-            )
-        distinct_fingerprints = len(set(self._manifest_fingerprints))
-        if distinct_fingerprints > 1:
-            violations.append(
-                f"Manifest fingerprint inconsistency: {distinct_fingerprints} distinct fingerprints"
-            )
-        return violations
-
-    def assert_invariants(self) -> None:
-        """Assert all compile-time invariants hold.
+        Args:
+            expected: Expected compile count. Defaults to ``max_compiles``.
 
         Raises:
-        ------
-        AssertionError
-            When any invariant is violated.
+            RuntimeError: When the actual compile count does not match.
         """
-        violations = self.verify_invariants()
-        if violations:
-            msg = "Compile invariant violations:\n" + "\n".join(f"  - {v}" for v in violations)
-            raise AssertionError(msg)
-
-    def reset(self) -> None:
-        """Reset the tracker for a new pipeline run."""
-        self._compile_count = 0
-        self._resolver_ids.clear()
-        self._manifest_fingerprints.clear()
+        target = expected if expected is not None else self.max_compiles
+        if self._count != target:
+            msg = f"Compile count mismatch in {self.label!r}: expected {target}, got {self._count}"
+            raise RuntimeError(msg)
 
 
-__all__ = ["CompileTracker"]
+# Module-level tracker state using mutable container to avoid global reassignment.
+# Pattern consistent with src/obs/otel/heartbeat.py (_STAGE_FALLBACK, etc.).
+_tracker_state: dict[str, CompileTracker | None] = {"active": None}
+_tracker_lock = threading.Lock()
+
+
+@contextmanager
+def compile_tracking(
+    *,
+    max_compiles: int = 1,
+    label: str = "pipeline",
+    strict: bool = False,
+) -> Iterator[CompileTracker]:
+    """Activate compile tracking for a pipeline run scope.
+
+    Args:
+        max_compiles: Maximum allowed compile invocations.
+        label: Descriptive label for diagnostics.
+        strict: When ``True``, assert exact compile count at context exit.
+            When ``False``, only enforce the ceiling via ``record_compile()``.
+
+    Yields:
+        Active tracker for the pipeline run scope.
+    """
+    tracker = CompileTracker(max_compiles=max_compiles, label=label)
+    with _tracker_lock:
+        previous = _tracker_state["active"]
+        _tracker_state["active"] = tracker
+    try:
+        yield tracker
+    finally:
+        with _tracker_lock:
+            _tracker_state["active"] = previous
+        if strict:
+            tracker.assert_compile_count()
+
+
+def get_active_tracker() -> CompileTracker | None:
+    """Return the active compile tracker, or ``None`` if not tracking.
+
+    Returns:
+        Active tracker when ``compile_tracking()`` is in scope, else ``None``.
+    """
+    return _tracker_state["active"]
+
+
+def record_compile_if_tracking() -> None:
+    """Record a compile invocation on the active tracker if one exists.
+
+    Call this from ``compile_semantic_program()`` or
+    ``build_semantic_execution_context()`` to automatically enforce
+    the single-compile invariant when tracking is active.
+    """
+    tracker = _tracker_state["active"]
+    if tracker is not None:
+        tracker.record_compile()
+
+
+__all__ = [
+    "CompileTracker",
+    "compile_tracking",
+    "get_active_tracker",
+    "record_compile_if_tracking",
+]

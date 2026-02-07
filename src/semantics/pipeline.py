@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFrameBuilder, DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
+    from semantics.compile_context import SemanticExecutionContext
     from semantics.config import SemanticConfig
     from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
     from semantics.program_manifest import ManifestDatasetResolver
@@ -1356,13 +1357,21 @@ def build_cpg(
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
     options: CpgBuildOptions | None = None,
+    execution_context: SemanticExecutionContext | None = None,
 ) -> None:
     """Build the complete CPG from extraction tables.
 
-    Args:
-        ctx: Description.
-        runtime_profile: Description.
-        options: Description.
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    runtime_profile
+        Runtime configuration for building cached view graphs.
+    options
+        Optional build settings for cache policy, schema validation, and CDF inputs.
+    execution_context
+        Pre-compiled semantic execution context. When provided, reuse
+        its manifest and dataset resolver instead of compiling from scratch.
 
     Raises:
         SemanticInputValidationError: If required semantic inputs fail validation.
@@ -1389,10 +1398,14 @@ def build_cpg(
             "codeanatomy.has_config": resolved.config is not None,
         },
     ):
-        from semantics.compile_context import CompileContext, compile_semantic_program
+        if execution_context is not None:
+            early_resolver = execution_context.dataset_resolver
+        else:
+            from semantics.compile_context import CompileContext
 
-        bindings_ctx = CompileContext(runtime_profile=runtime_profile)
-        early_resolver = bindings_ctx.dataset_bindings()
+            early_resolver = CompileContext(
+                runtime_profile=runtime_profile,
+            ).dataset_bindings()
         input_mapping, use_cdf = _resolve_semantic_input_mapping(
             ctx,
             runtime_profile=runtime_profile,
@@ -1422,13 +1435,18 @@ def build_cpg(
         )
         if incremental_outputs is not None:
             resolved_outputs = incremental_outputs
-        manifest = compile_semantic_program(
-            runtime_profile=runtime_profile,
-            outputs=resolved_outputs,
-            policy="schema_plus_optional_probe",
-            ctx=ctx,
-            input_mapping=input_mapping,
-        )
+        if execution_context is not None:
+            manifest = execution_context.manifest
+        else:
+            from semantics.compile_context import compile_semantic_program
+
+            manifest = compile_semantic_program(
+                runtime_profile=runtime_profile,
+                outputs=resolved_outputs,
+                policy="schema_plus_optional_probe",
+                ctx=ctx,
+                input_mapping=input_mapping,
+            )
         validation = manifest.validation
         if validation is None:
             msg = "Semantic manifest compile must include input validation results."
@@ -1923,10 +1941,11 @@ def build_cpg_from_inferred_deps(
     *,
     runtime_profile: DataFusionRuntimeProfile,
     options: CpgBuildOptions | None = None,
+    execution_context: SemanticExecutionContext | None = None,
 ) -> dict[str, object]:
     """Build CPG and extract dependency information for rustworkx.
 
-    Returns InferredDeps-compatible data for scheduling.
+    Return InferredDeps-compatible data for scheduling.
 
     Parameters
     ----------
@@ -1936,6 +1955,9 @@ def build_cpg_from_inferred_deps(
         Runtime configuration for building cached view graphs.
     options
         Optional build settings for cache policy, schema validation, and CDF inputs.
+    execution_context
+        Pre-compiled semantic execution context. When provided, reuse
+        its manifest and dataset resolver instead of compiling from scratch.
 
     Returns:
     -------
@@ -1943,14 +1965,10 @@ def build_cpg_from_inferred_deps(
         Mapping of view names to dependency information.
 
     Raises:
-    ------
-    SemanticInputValidationError:
-        If required semantic inputs fail validation.
-    ValueError:
-        If runtime profile or semantic configuration is invalid.
+        SemanticInputValidationError: If required semantic inputs fail validation.
+        ValueError: If runtime profile or semantic configuration is invalid.
     """
     from datafusion_engine.views.bundle_extraction import extract_lineage_from_bundle
-    from semantics.compile_context import CompileContext, compile_semantic_program
     from semantics.validation import SemanticInputValidationError
 
     resolved = options or CpgBuildOptions()
@@ -1974,10 +1992,18 @@ def build_cpg_from_inferred_deps(
             ctx,
             runtime_profile=runtime_profile,
             options=resolved,
+            execution_context=execution_context,
         )
 
         deps: dict[str, object] = {}
-        early_resolver = CompileContext(runtime_profile=runtime_profile).dataset_bindings()
+        if execution_context is not None:
+            early_resolver = execution_context.dataset_resolver
+        else:
+            from semantics.compile_context import CompileContext
+
+            early_resolver = CompileContext(
+                runtime_profile=runtime_profile,
+            ).dataset_bindings()
         input_mapping, use_cdf = _resolve_semantic_input_mapping(
             ctx,
             runtime_profile=runtime_profile,
@@ -1998,13 +2024,18 @@ def build_cpg_from_inferred_deps(
         )
         if incremental_outputs is not None:
             resolved_outputs = incremental_outputs
-        manifest = compile_semantic_program(
-            runtime_profile=runtime_profile,
-            outputs=resolved_outputs,
-            policy="schema_plus_optional_probe",
-            ctx=ctx,
-            input_mapping=input_mapping,
-        )
+        if execution_context is not None:
+            manifest = execution_context.manifest
+        else:
+            from semantics.compile_context import compile_semantic_program
+
+            manifest = compile_semantic_program(
+                runtime_profile=runtime_profile,
+                outputs=resolved_outputs,
+                policy="schema_plus_optional_probe",
+                ctx=ctx,
+                input_mapping=input_mapping,
+            )
         validation = manifest.validation
         if validation is None:
             msg = "Semantic manifest compile must include input validation results."

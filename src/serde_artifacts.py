@@ -205,6 +205,40 @@ class DeltaStatsDecision(StructBaseCompat, frozen=True):
     stats_max_columns: NonNegativeInt | None = None
 
 
+class DeltaMaintenanceDecisionArtifact(StructBaseCompat, frozen=True):
+    """Outcome-based Delta maintenance decision payload."""
+
+    dataset_name: DatasetName | None = None
+    files_created: NonNegativeInt | None = None
+    total_file_count: NonNegativeInt | None = None
+    version_delta: int | None = None
+    final_version: int | None = None
+    maintenance_triggered: bool = False
+    triggered_operations: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+    used_fallback: bool = False
+
+
+class CompileResolverInvariantArtifact(StructBaseCompat, frozen=True):
+    """Compile/resolver invariant summary for a pipeline run boundary."""
+
+    label: NonEmptyStr
+    compile_count: NonNegativeInt
+    max_compiles: NonNegativeInt
+    distinct_resolver_count: NonNegativeInt
+    strict: bool
+    violations: tuple[str, ...] = ()
+
+
+class PerformancePolicyArtifact(StructBaseCompat, frozen=True):
+    """Runtime-applied performance policy payload."""
+
+    cache: dict[str, JsonValueLax]
+    statistics: dict[str, JsonValueLax]
+    comparison: dict[str, JsonValueLax]
+    applied_knobs: dict[str, JsonValueLax] | None = None
+
+
 class ViewCacheArtifact(StructBaseHotPath, frozen=True):
     """Cache materialization artifact for view registration."""
 
@@ -680,7 +714,9 @@ def export_artifact_schemas(output_dir: Path) -> tuple[Path, ...]:
 
 __all__ = [
     "ArtifactEnvelopeBase",
+    "CompileResolverInvariantArtifact",
     "DeltaInputPin",
+    "DeltaMaintenanceDecisionArtifact",
     "DeltaProtocolArtifact",
     "DeltaScanConfigSnapshot",
     "DeltaStatsDecision",
@@ -699,6 +735,7 @@ __all__ = [
     "PlanSignalsArtifact",
     "PlanValidationArtifact",
     "PlanValidationEnvelope",
+    "PerformancePolicyArtifact",
     "RunManifest",
     "RunManifestEnvelope",
     "RuntimeProfileSnapshot",

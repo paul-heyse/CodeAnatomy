@@ -16,6 +16,9 @@ from datafusion_engine.dataset.registry import (
 )
 from datafusion_engine.delta.maintenance import (
     DeltaMaintenancePlanInput,
+    WriteOutcomeMetrics,
+    maintenance_decision_artifact_payload,
+    resolve_maintenance_from_execution,
     resolve_delta_maintenance_plan,
     run_delta_maintenance,
 )
@@ -212,25 +215,43 @@ def run_delta_maintenance_if_configured(
         dataset_location = None
     else:
         dataset_location = context.dataset_resolver.location(dataset_name)
-    plan = resolve_delta_maintenance_plan(
-        DeltaMaintenancePlanInput(
-            dataset_location=dataset_location,
-            table_uri=table_uri,
-            dataset_name=dataset_name,
-            storage_options=storage_options,
-            log_storage_options=log_storage_options,
-            delta_version=delta_service_for_profile(runtime_profile).table_version(
-                path=table_uri,
-                storage_options=storage_options,
-                log_storage_options=log_storage_options,
-            ),
-            delta_timestamp=None,
-            feature_gate=dataset_location.resolved.delta_feature_gate
-            if dataset_location is not None
-            else None,
-            policy=None,
-        )
+    delta_version = delta_service_for_profile(runtime_profile).table_version(
+        path=table_uri,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
     )
+    metrics = (
+        WriteOutcomeMetrics(final_version=delta_version) if delta_version is not None else None
+    )
+    plan_input = DeltaMaintenancePlanInput(
+        dataset_location=dataset_location,
+        table_uri=table_uri,
+        dataset_name=dataset_name,
+        storage_options=storage_options,
+        log_storage_options=log_storage_options,
+        delta_version=delta_version,
+        delta_timestamp=None,
+        feature_gate=dataset_location.resolved.delta_feature_gate
+        if dataset_location is not None
+        else None,
+        policy=None,
+    )
+    decision = resolve_maintenance_from_execution(plan_input, metrics=metrics)
+    from datafusion_engine.lineage.diagnostics import record_artifact
+    from serde_artifact_specs import DELTA_MAINTENANCE_DECISION_SPEC
+
+    record_artifact(
+        runtime_profile,
+        DELTA_MAINTENANCE_DECISION_SPEC,
+        maintenance_decision_artifact_payload(
+            decision,
+            dataset_name=dataset_name,
+        ),
+    )
+    plan = decision.plan
+    if plan is None and metrics is None:
+        # Compatibility fallback path for metric-free maintenance contexts.
+        plan = resolve_delta_maintenance_plan(plan_input)
     if plan is None:
         return
     run_delta_maintenance(

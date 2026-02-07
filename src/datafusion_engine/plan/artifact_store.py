@@ -21,7 +21,6 @@ from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.plan.signals import extract_plan_signals, plan_signals_payload
 from datafusion_engine.sql.options import planning_sql_options
-from datafusion_engine.views.graph import extract_lineage_from_bundle
 from schema_spec.system import dataset_spec_from_schema
 from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow
 from serde_msgspec import (
@@ -833,8 +832,20 @@ def build_plan_artifact_row(
     -------
     PlanArtifactRow
         Serialized plan artifact row.
+
+    Raises:
+    ------
+    ValueError
+        If lineage is unavailable from both the request and extracted plan signals.
     """
-    resolved_lineage = request.lineage or extract_lineage_from_bundle(request.bundle)
+    signals = extract_plan_signals(request.bundle, scan_units=request.scan_units)
+    resolved_lineage = request.lineage or signals.lineage
+    if resolved_lineage is None:
+        msg = (
+            "Lineage is required to persist plan artifacts but was unavailable for "
+            f"view {request.view_name!r}."
+        )
+        raise ValueError(msg)
     scan_payload = _scan_units_payload(request.scan_units, scan_keys=request.scan_keys)
     scan_keys_payload = tuple(sorted(set(request.scan_keys)))
     delta_inputs_payload = _delta_inputs_payload(request.bundle)
@@ -853,9 +864,7 @@ def build_plan_artifact_row(
         scan_payload=scan_payload,
         plan_identity_hash=plan_identity_hash,
     )
-    signals_payload = plan_signals_payload(
-        extract_plan_signals(request.bundle, scan_units=request.scan_units)
-    )
+    signals_payload = plan_signals_payload(signals)
     return PlanArtifactRow(
         event_time_unix_ms=int(time.time() * 1000),
         profile_name=_profile_name(profile),

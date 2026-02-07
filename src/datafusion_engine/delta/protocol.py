@@ -132,6 +132,64 @@ def delta_protocol_compatibility(
     )
 
 
+def combined_table_features(
+    compatibility: DeltaProtocolCompatibility,
+) -> tuple[str, ...]:
+    """Return the sorted union of required reader and writer features.
+
+    Parameters
+    ----------
+    compatibility
+        Compatibility evaluation result.
+
+    Returns:
+    -------
+    tuple[str, ...]
+        Sorted union of all required features.
+    """
+    return tuple(
+        sorted(
+            set(compatibility.required_reader_features)
+            | set(compatibility.required_writer_features)
+        )
+    )
+
+
+def delta_protocol_artifact_payload(
+    compatibility: DeltaProtocolCompatibility,
+    *,
+    table_uri: str | None = None,
+    dataset_name: str | None = None,
+) -> dict[str, object]:
+    """Build a canonical Delta protocol artifact payload from a compatibility result.
+
+    The returned dict conforms to the ``DeltaProtocolArtifact`` schema defined in
+    ``serde_artifacts``.
+
+    Parameters
+    ----------
+    compatibility
+        Compatibility evaluation result.
+    table_uri
+        Optional table URI for context.
+    dataset_name
+        Optional dataset name for context.
+
+    Returns:
+    -------
+    dict[str, object]
+        Payload matching the ``DeltaProtocolArtifact`` schema.
+    """
+    from serde_msgspec import to_builtins_mapping
+
+    result = dict(to_builtins_mapping(compatibility, str_keys=True))
+    if table_uri is not None:
+        result["table_uri"] = table_uri
+    if dataset_name is not None:
+        result["dataset_name"] = dataset_name
+    return result
+
+
 def validate_delta_gate(
     snapshot: DeltaProtocolSnapshot | Mapping[str, object],
     gate: DeltaFeatureGate,
@@ -267,7 +325,9 @@ __all__ = [
     "DeltaProtocolCompatibility",
     "DeltaProtocolSnapshot",
     "DeltaProtocolSupport",
+    "combined_table_features",
     "delta_feature_gate_rust_payload",
+    "delta_protocol_artifact_payload",
     "delta_protocol_compatibility",
     "validate_delta_gate",
 ]

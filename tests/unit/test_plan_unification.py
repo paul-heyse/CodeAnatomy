@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.views.graph import ViewNode as RegistryViewNode
+    from relspec.execution_authority import ExecutionAuthorityContext
     from relspec.execution_plan import ExecutionPlan
     from relspec.schedule_events import TaskScheduleMetadata
     from schema_spec.system import DatasetSpec
@@ -388,6 +389,7 @@ def test_task_execution_rejects_plan_signature_mismatch() -> None:
         runtime=RuntimeArtifacts(),
         engine_session=engine_session,
         evidence=EvidenceCatalog(),
+        execution_authority_context=cast("ExecutionAuthorityContext", object()),
         plan_signature="plan:a",
         active_task_names=frozenset({"out_alpha"}),
         plan_bundles_by_task={},

@@ -108,6 +108,7 @@ def _sample_plan_artifact_row() -> PlanArtifactRow:
         udf_planner_snapshot_msgpack=None,
         udf_compatibility_ok=True,
         udf_compatibility_detail_msgpack=dumps_msgpack({"status": "ok"}),
+        plan_signals_msgpack=dumps_msgpack({"stats": {"num_rows": 1}}),
         execution_duration_ms=None,
         execution_status=None,
         execution_error=None,
@@ -126,6 +127,18 @@ def test_msgpack_contract_plan_artifact_row(*, update_goldens: bool) -> None:
 
     decoded = decode_msgpack(payload, target_type=PlanArtifactRow)
     assert decoded == row
+
+
+def test_msgpack_contract_plan_artifact_row_legacy_missing_plan_signals() -> None:
+    """Legacy rows without plan_signals_msgpack should decode successfully."""
+    row = _sample_plan_artifact_row()
+    payload = encode_msgpack(row)
+    raw = msgspec.msgpack.decode(payload)
+    assert isinstance(raw, dict)
+    raw.pop("plan_signals_msgpack", None)
+    legacy_payload = msgspec.msgpack.encode(raw)
+    decoded = decode_msgpack(legacy_payload, target_type=PlanArtifactRow)
+    assert decoded.plan_signals_msgpack is None
 
 
 def _sample_plan_schedule_artifact() -> PlanScheduleArtifact:

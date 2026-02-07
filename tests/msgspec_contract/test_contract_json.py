@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+import msgspec
+
 from serde_artifacts import (
     DeltaStatsDecision,
     DeltaStatsDecisionEnvelope,
@@ -111,6 +113,7 @@ def _sample_plan_artifact_row() -> PlanArtifactRow:
         udf_planner_snapshot_msgpack=None,
         udf_compatibility_ok=True,
         udf_compatibility_detail_msgpack=dumps_msgpack({"status": "ok"}),
+        plan_signals_msgpack=dumps_msgpack({"stats": {"num_rows": 1}}),
         execution_duration_ms=None,
         execution_status=None,
         execution_error=None,
@@ -129,6 +132,18 @@ def test_json_contract_plan_artifact_row(*, update_goldens: bool) -> None:
 
     decoded = decode_json(text, target_type=PlanArtifactRow)
     assert decoded == row
+
+
+def test_json_contract_plan_artifact_row_legacy_missing_plan_signals() -> None:
+    """Legacy JSON rows without plan_signals_msgpack should decode successfully."""
+    row = _sample_plan_artifact_row()
+    text = encode_json_pretty(row, indent=2)
+    raw = msgspec.json.decode(text.encode("utf-8"))
+    assert isinstance(raw, dict)
+    raw.pop("plan_signals_msgpack", None)
+    legacy_text = msgspec.json.encode(raw).decode("utf-8")
+    decoded = decode_json(legacy_text, target_type=PlanArtifactRow)
+    assert decoded.plan_signals_msgpack is None
 
 
 def _sample_delta_write_policy() -> DeltaWritePolicy:

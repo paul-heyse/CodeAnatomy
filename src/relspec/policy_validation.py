@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from datafusion_engine.extensions.runtime_capabilities import RuntimeCapabilitiesSnapshot
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from relspec.execution_plan import ExecutionPlan
 
@@ -152,6 +153,7 @@ def validate_policy_bundle(
     *,
     runtime_profile: DataFusionRuntimeProfile,
     udf_snapshot: Mapping[str, object],
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None = None,
 ) -> PolicyValidationResult:
     """Validate policy bundle against execution plan requirements.
 
@@ -166,6 +168,8 @@ def validate_policy_bundle(
         Active runtime profile with feature gates.
     udf_snapshot
         Available UDF snapshot mapping (name -> UDF object).
+    capability_snapshot
+        Runtime capabilities payload used for strict provider and metrics checks.
 
     Returns:
     -------
@@ -173,8 +177,20 @@ def validate_policy_bundle(
         Validation result with all issues found.
     """
     issues: list[PolicyValidationIssue] = []
+    issues.extend(_udf_feature_gate_issues(execution_plan, runtime_profile=runtime_profile))
+    issues.extend(_udf_availability_issues(execution_plan, udf_snapshot=udf_snapshot))
+    issues.extend(_delta_protocol_issues(execution_plan))
+    issues.extend(_small_scan_policy_issues(execution_plan))
+    issues.extend(_capability_issues(capability_snapshot=capability_snapshot))
+    return PolicyValidationResult.from_issues(issues)
 
-    # Check 0: UDF feature gate
+
+def _udf_feature_gate_issues(
+    execution_plan: ExecutionPlan,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+) -> list[PolicyValidationIssue]:
+    issues: list[PolicyValidationIssue] = []
     for node in execution_plan.view_nodes:
         required = tuple(node.required_udfs or ())
         if required and not runtime_profile.features.enable_udfs:
@@ -185,8 +201,15 @@ def validate_policy_bundle(
                     detail=f"UDFs disabled but required: {sorted(required)}",
                 )
             )
+    return issues
 
-    # Check 1: UDF availability from view nodes
+
+def _udf_availability_issues(
+    execution_plan: ExecutionPlan,
+    *,
+    udf_snapshot: Mapping[str, object],
+) -> list[PolicyValidationIssue]:
+    issues: list[PolicyValidationIssue] = []
     for node in execution_plan.view_nodes:
         required = tuple(node.required_udfs or ())
         if not required:
@@ -200,8 +223,11 @@ def validate_policy_bundle(
                     detail=f"Missing UDFs: {missing}",
                 )
             )
+    return issues
 
-    # Check 2: Delta protocol compatibility from scan units
+
+def _delta_protocol_issues(execution_plan: ExecutionPlan) -> list[PolicyValidationIssue]:
+    issues: list[PolicyValidationIssue] = []
     for unit in execution_plan.scan_units:
         compat = unit.protocol_compatibility
         if compat is not None and compat.compatible is False:
@@ -213,8 +239,11 @@ def validate_policy_bundle(
                     detail=reason,
                 )
             )
+    return issues
 
-    # Check 3: Size/policy heuristics from task plan metrics
+
+def _small_scan_policy_issues(execution_plan: ExecutionPlan) -> list[PolicyValidationIssue]:
+    issues: list[PolicyValidationIssue] = []
     for task_name, metric in execution_plan.task_plan_metrics.items():
         if (
             metric.stats_row_count is not None
@@ -227,8 +256,85 @@ def validate_policy_bundle(
                     detail=f"Row count {metric.stats_row_count} < {_SMALL_SCAN_ROW_THRESHOLD}",
                 )
             )
+    return issues
 
-    return PolicyValidationResult.from_issues(issues)
+
+def _capability_issues(
+    *,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> list[PolicyValidationIssue]:
+    issues: list[PolicyValidationIssue] = []
+    capability_payload = _capability_payload(capability_snapshot)
+    strict_native_provider = _bool_value(capability_payload, "strict_native_provider_enabled")
+    delta_payload = _mapping_value(capability_payload, "delta") or {}
+    delta_compatible = _bool_value(delta_payload, "compatible")
+    delta_error = _string_value(delta_payload, "error")
+    if strict_native_provider is True and delta_compatible is False:
+        detail = (
+            f"Strict native provider is enabled and delta extension is incompatible: "
+            f"{delta_error or 'unknown reason'}"
+        )
+        issues.append(_error("DELTA_EXTENSION_INCOMPATIBLE", detail=detail))
+
+    execution_metrics = _mapping_value(capability_payload, "execution_metrics")
+    if execution_metrics is None:
+        issues.append(
+            _warn(
+                "RUNTIME_EXECUTION_METRICS_UNAVAILABLE",
+                detail="Runtime execution metrics snapshot is unavailable.",
+            )
+        )
+        return issues
+
+    metrics_error = _string_value(execution_metrics, "error")
+    if metrics_error is not None:
+        issues.append(
+            _warn(
+                "RUNTIME_EXECUTION_METRICS_UNAVAILABLE",
+                detail=f"Runtime execution metrics probe failed: {metrics_error}",
+            )
+        )
+    return issues
+
+
+def _capability_payload(
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    if capability_snapshot is None:
+        return {}
+    if isinstance(capability_snapshot, Mapping):
+        return capability_snapshot
+    payload: dict[str, object] = {
+        "strict_native_provider_enabled": capability_snapshot.strict_native_provider_enabled,
+        "execution_metrics": capability_snapshot.execution_metrics,
+    }
+    delta_payload: dict[str, object] = {
+        "compatible": capability_snapshot.delta.compatible,
+        "error": capability_snapshot.delta.error,
+    }
+    payload["delta"] = delta_payload
+    return payload
+
+
+def _mapping_value(payload: Mapping[str, object], key: str) -> Mapping[str, object] | None:
+    value = payload.get(key)
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _bool_value(payload: Mapping[str, object], key: str) -> bool | None:
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _string_value(payload: Mapping[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 def build_policy_validation_artifact(

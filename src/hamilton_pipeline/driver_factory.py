@@ -61,6 +61,7 @@ from hamilton_pipeline.types import (
 from obs.diagnostics import DiagnosticsCollector
 from obs.otel.hamilton import OtelNodeHook, OtelPlanHook
 from obs.otel.run_context import get_run_id
+from relspec.errors import RelspecValidationError
 from relspec.execution_authority import ExecutionAuthorityContext
 from relspec.view_defs import RELATION_OUTPUT_NAME
 from utils.env_utils import env_bool, env_value
@@ -76,6 +77,7 @@ if TYPE_CHECKING:
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.graph_snapshot import GraphSnapshotHook
     from relspec.execution_plan import ExecutionPlan
+    from relspec.policy_validation import PolicyValidationResult
     from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
 
@@ -494,7 +496,10 @@ def build_view_graph_context(
     facade = DataFusionExecutionFacade(ctx=session_runtime.ctx, runtime_profile=profile)
     # Single registration point: ensure_view_graph registers ALL views including
     # semantic views via registry_specs.view_graph_nodes(). Hamilton consumes only.
-    snapshot = facade.ensure_view_graph(semantic_manifest=semantic_manifest)
+    snapshot = facade.ensure_view_graph(
+        semantic_manifest=semantic_manifest,
+        dataset_resolver=semantic_context.dataset_resolver,
+    )
     session_runtime = refresh_session_runtime(profile, ctx=session_runtime.ctx)
     validate_edge_kind_requirements(_relation_output_schema(session_runtime))
     nodes = view_graph_nodes(
@@ -625,6 +630,71 @@ def _build_execution_authority(
     return authority
 
 
+def _policy_validation_udf_snapshot(plan: ExecutionPlan) -> dict[str, object]:
+    snapshot: dict[str, object] = {}
+    for node in sorted(plan.view_nodes, key=lambda item: item.name):
+        bundle = node.plan_bundle
+        if bundle is None:
+            continue
+        bundle_snapshot = getattr(getattr(bundle, "artifacts", None), "udf_snapshot", None)
+        if not isinstance(bundle_snapshot, Mapping):
+            continue
+        for name in sorted(bundle_snapshot):
+            if name not in snapshot:
+                snapshot[name] = bundle_snapshot[name]
+    return snapshot
+
+
+def _record_policy_validation_artifact(
+    *,
+    view_ctx: ViewGraphContext,
+    result: PolicyValidationResult,
+    mode: Literal["warn", "error"],
+    runtime_hash: str,
+) -> None:
+    from relspec.policy_validation import build_policy_validation_artifact
+
+    artifact = build_policy_validation_artifact(
+        result,
+        validation_mode=mode,
+        runtime_hash=runtime_hash,
+    )
+    payload = {
+        "validation_mode": artifact.validation_mode,
+        "issue_count": artifact.issue_count,
+        "error_codes": list(artifact.error_codes),
+        "runtime_hash": artifact.runtime_hash,
+        "is_deterministic": artifact.is_deterministic,
+        "errors": len(result.errors),
+        "warnings": len(result.warnings),
+        "issues": [
+            {
+                "code": issue.code,
+                "severity": issue.severity,
+                "task": issue.task,
+                "detail": issue.detail,
+            }
+            for issue in result.issues
+        ],
+    }
+    view_ctx.profile.record_artifact("policy_validation_v1", payload)
+
+
+def _enforce_policy_validation_result(
+    *,
+    result: PolicyValidationResult,
+    mode: Literal["warn", "error"],
+) -> None:
+    if mode != "error" or not result.errors:
+        return
+    summary = "; ".join(
+        f"{issue.code}{f'[{issue.task}]' if issue.task else ''}: {issue.detail or ''}".rstrip(": ")
+        for issue in result.errors
+    )
+    msg = f"Policy validation failed in error mode: {summary}"
+    raise RelspecValidationError(msg)
+
+
 def _incremental_enabled(config: Mapping[str, JsonValue]) -> bool:
     incremental_config = _config_section(config, "incremental")
     if bool(incremental_config.get("enabled")):
@@ -728,13 +798,8 @@ def _plan_with_incremental_pruning(
     view_ctx: ViewGraphContext,
     plan: ExecutionPlan,
     config: Mapping[str, JsonValue],
-    dataset_resolver: ManifestDatasetResolver | None = None,
+    dataset_resolver: ManifestDatasetResolver,
 ) -> ExecutionPlan:
-    if dataset_resolver is None:
-        from semantics.compile_context import dataset_bindings_for_profile
-
-        dataset_resolver = dataset_bindings_for_profile(view_ctx.profile)
-
     impacted, state_dir = _cdf_impacted_tasks(
         view_ctx=view_ctx,
         plan=plan,
@@ -1912,6 +1977,7 @@ def build_plan_context(
         record_dataset_readiness(
             resolved_view_ctx.profile,
             dataset_names=dataset_names,
+            dataset_resolver=resolved_view_ctx.semantic_context.dataset_resolver,
         )
     resolved_plan = request.plan or _compile_plan(
         resolved_view_ctx,
@@ -1922,11 +1988,30 @@ def build_plan_context(
             view_ctx=resolved_view_ctx,
             plan=resolved_plan,
             config=request.config,
+            dataset_resolver=resolved_view_ctx.semantic_context.dataset_resolver,
         )
     authority_context = _build_execution_authority(
         view_ctx=resolved_view_ctx,
         plan=resolved_plan,
         config=request.config,
+    )
+    from relspec.policy_validation import validate_policy_bundle
+
+    policy_validation_result = validate_policy_bundle(
+        resolved_plan,
+        runtime_profile=resolved_view_ctx.profile,
+        udf_snapshot=_policy_validation_udf_snapshot(resolved_plan),
+        capability_snapshot=authority_context.capability_snapshot,
+    )
+    _record_policy_validation_artifact(
+        view_ctx=resolved_view_ctx,
+        result=policy_validation_result,
+        mode=authority_context.enforcement_mode,
+        runtime_hash=authority_context.session_runtime_fingerprint or "",
+    )
+    _enforce_policy_validation_result(
+        result=policy_validation_result,
+        mode=authority_context.enforcement_mode,
     )
     from hamilton_pipeline.validators import set_schema_contracts
 
@@ -2113,6 +2198,7 @@ class DriverFactory:
             view_ctx=view_ctx,
             plan=plan,
             config=config,
+            dataset_resolver=view_ctx.semantic_context.dataset_resolver,
         )
         key = driver_cache_key(
             config,

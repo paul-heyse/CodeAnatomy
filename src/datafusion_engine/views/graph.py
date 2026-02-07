@@ -16,6 +16,7 @@ from datafusion.dataframe import DataFrame
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.lineage.diagnostics import record_artifact
+from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import SchemaContract, ValidationViolation, ViolationType
 from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.udf.runtime import (
@@ -47,6 +48,42 @@ if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.program_manifest import ManifestDatasetResolver
+
+
+# ---------------------------------------------------------------------------
+# Resolver identity guard
+# ---------------------------------------------------------------------------
+# Lightweight check that all view registrations within a single pipeline run
+# use the same dataset resolver instance.  The guard is reset at the start of
+# each ``register_view_graph`` invocation and validated on subsequent calls.
+
+_resolver_identity_guard: dict[str, int | None] = {"active_id": None}
+
+
+def _check_resolver_identity(resolver: ManifestDatasetResolver | None) -> None:
+    """Assert resolver identity consistency within a registration batch.
+
+    Args:
+        resolver: Dataset resolver instance provided for this registration.
+
+    Raises:
+        AssertionError: If a different resolver instance is used within the
+            same pipeline run.
+    """
+    if resolver is None:
+        return
+    current_id = id(resolver)
+    stored = _resolver_identity_guard["active_id"]
+    if stored is None:
+        _resolver_identity_guard["active_id"] = current_id
+    elif stored != current_id:
+        msg = "Resolver identity violation: multiple resolver instances in same pipeline run"
+        raise AssertionError(msg)
+
+
+def _reset_resolver_identity_guard() -> None:
+    """Reset the resolver identity guard for a new registration batch."""
+    _resolver_identity_guard["active_id"] = None
 
 
 @dataclass(frozen=True)
@@ -233,6 +270,8 @@ def register_view_graph(
     if runtime.require_artifacts and runtime.runtime_profile is None:
         msg = "Runtime profile is required for view artifact recording."
         raise ValueError(msg)
+    _reset_resolver_identity_guard()
+    _check_resolver_identity(runtime.dataset_resolver)
     validate_rust_udf_snapshot(snapshot)
     materialized = _materialize_nodes(nodes, snapshot=snapshot)
     ordered = _topo_sort_nodes(materialized)
@@ -467,7 +506,8 @@ def _maybe_record_explain_analyze_threshold(
     bundle = node.plan_bundle
     if threshold is None or bundle is None:
         return
-    duration_ms = _coerce_float(bundle.plan_details.get("explain_analyze_duration_ms"))
+    signals = extract_plan_signals(bundle)
+    duration_ms = signals.explain_analyze_duration_ms
     if duration_ms is None or duration_ms < threshold:
         return
     payload = {
@@ -476,20 +516,9 @@ def _maybe_record_explain_analyze_threshold(
         "plan_identity_hash": bundle.plan_identity_hash,
         "duration_ms": duration_ms,
         "threshold_ms": float(threshold),
-        "output_rows": bundle.plan_details.get("explain_analyze_output_rows"),
+        "output_rows": signals.explain_analyze_output_rows,
     }
     record_artifact(profile, "view_explain_analyze_threshold_v1", payload)
-
-
-def _coerce_float(value: object) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
 
 
 def _persist_plan_artifacts(

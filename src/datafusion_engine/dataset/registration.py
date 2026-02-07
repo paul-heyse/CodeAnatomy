@@ -78,6 +78,7 @@ from datafusion_engine.dataset.resolution import (
 )
 from datafusion_engine.delta.capabilities import is_delta_extension_compatible
 from datafusion_engine.delta.protocol import (
+    combined_table_features,
     delta_protocol_compatibility,
 )
 from datafusion_engine.delta.provider_artifacts import (
@@ -1893,11 +1894,11 @@ def _delta_log_health_payload(
     min_writer = _snapshot_int(snapshot, "min_writer_version")
     reader_features = _snapshot_features(snapshot, "reader_features")
     writer_features = _snapshot_features(snapshot, "writer_features")
-    table_features = sorted(set(reader_features) | set(writer_features))
     compatibility = delta_protocol_compatibility(
         snapshot,
         runtime_profile.policies.delta_protocol_support,
     )
+    table_features = list(combined_table_features(compatibility))
     protocol_compatible = compatibility.compatible
     severity = _delta_health_severity(
         delta_log_present=delta_log_present,

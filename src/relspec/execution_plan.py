@@ -1355,10 +1355,7 @@ def _validate_bundle_udfs(
     inferred: InferredDeps,
 ) -> None:
     from datafusion_engine.udf.runtime import udf_names_from_snapshot
-    from datafusion_engine.views.bundle_extraction import (
-        extract_lineage_from_bundle,
-        resolve_required_udfs_from_bundle,
-    )
+    from datafusion_engine.views.bundle_extraction import resolve_required_udfs_from_bundle
 
     bundle_snapshot = getattr(getattr(bundle, "artifacts", None), "udf_snapshot", None)
     snapshot = bundle_snapshot if isinstance(bundle_snapshot, Mapping) else {}
@@ -1374,8 +1371,8 @@ def _validate_bundle_udfs(
     )
     bundle_tags = tuple(sorted(getattr(bundle, "required_rewrite_tags", ())))
     if not bundle_tags:
-        lineage = extract_lineage_from_bundle(bundle)
-        bundle_tags = tuple(sorted(lineage.required_rewrite_tags))
+        lineage = extract_plan_signals(bundle).lineage
+        bundle_tags = tuple(sorted(lineage.required_rewrite_tags)) if lineage is not None else ()
     inferred_tags = tuple(sorted(inferred.required_rewrite_tags))
     if bundle_udfs != inferred_udfs:
         msg = (

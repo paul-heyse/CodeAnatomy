@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import json
 from collections.abc import Iterator, Mapping
@@ -558,6 +559,15 @@ class ArtifactSpecRegistry(Registry[str, ArtifactSpec], SnapshotRegistry[str, Ar
 
 
 _ARTIFACT_SPEC_REGISTRY = ArtifactSpecRegistry()
+_ARTIFACT_SPECS_LOADED = False
+
+
+def _ensure_artifact_specs_loaded() -> None:
+    global _ARTIFACT_SPECS_LOADED
+    if _ARTIFACT_SPECS_LOADED:
+        return
+    importlib.import_module("serde_artifact_specs")
+    _ARTIFACT_SPECS_LOADED = True
 
 
 def artifact_spec_registry() -> ArtifactSpecRegistry:
@@ -568,6 +578,7 @@ def artifact_spec_registry() -> ArtifactSpecRegistry:
     ArtifactSpecRegistry
         Global artifact spec registry instance.
     """
+    _ensure_artifact_specs_loaded()
     return _ARTIFACT_SPEC_REGISTRY
 
 
@@ -601,6 +612,7 @@ def get_artifact_spec(name: str) -> ArtifactSpec | None:
     ArtifactSpec | None
         Artifact spec when registered, otherwise ``None``.
     """
+    _ensure_artifact_specs_loaded()
     return _ARTIFACT_SPEC_REGISTRY.get(name)
 
 

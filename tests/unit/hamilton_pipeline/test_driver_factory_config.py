@@ -10,8 +10,15 @@ import pytest
 
 from core_types import JsonValue
 from engine.runtime_profile import RuntimeProfileSpec
-from hamilton_pipeline.driver_factory import ExecutionMode, _resolve_config_payload
+from hamilton_pipeline.driver_factory import (
+    ExecutionMode,
+    _enforce_policy_validation_result,
+    _policy_validation_udf_snapshot,
+    _resolve_config_payload,
+)
+from relspec.errors import RelspecValidationError
 from relspec.execution_plan import ExecutionPlan
+from relspec.policy_validation import PolicyValidationIssue, PolicyValidationResult
 
 
 @dataclass(frozen=True)
@@ -83,3 +90,57 @@ def test_resolve_config_payload_deterministic_serial_disables_dynamic_scan_units
         execution_mode=ExecutionMode.DETERMINISTIC_SERIAL,
     )
     assert payload["enable_dynamic_scan_units"] is False
+
+
+def test_enforce_policy_validation_result_warn_mode_does_not_raise() -> None:
+    """Warn mode should not raise even when errors are present."""
+    result = PolicyValidationResult(
+        issues=(PolicyValidationIssue(code="X", severity="error", detail="failure"),),
+    )
+    _enforce_policy_validation_result(result=result, mode="warn")
+
+
+def test_enforce_policy_validation_result_error_mode_raises() -> None:
+    """Error mode should raise when error-severity issues are present."""
+    result = PolicyValidationResult(
+        issues=(PolicyValidationIssue(code="X", severity="error", detail="failure"),),
+    )
+    with pytest.raises(RelspecValidationError, match="Policy validation failed"):
+        _enforce_policy_validation_result(result=result, mode="error")
+
+
+def test_policy_validation_udf_snapshot_is_deterministic() -> None:
+    """UDF snapshot extraction should merge view bundle snapshots deterministically."""
+
+    @dataclass(frozen=True)
+    class _Artifacts:
+        udf_snapshot: Mapping[str, object]
+
+    @dataclass(frozen=True)
+    class _Bundle:
+        artifacts: _Artifacts
+
+    @dataclass(frozen=True)
+    class _Node:
+        name: str
+        plan_bundle: _Bundle | None
+
+    @dataclass(frozen=True)
+    class _PlanWithViews:
+        view_nodes: tuple[_Node, ...]
+
+    plan = cast(
+        "ExecutionPlan",
+        _PlanWithViews(
+            view_nodes=(
+                _Node(
+                    name="b_view", plan_bundle=_Bundle(artifacts=_Artifacts({"udf_b": object()}))
+                ),
+                _Node(
+                    name="a_view", plan_bundle=_Bundle(artifacts=_Artifacts({"udf_a": object()}))
+                ),
+            )
+        ),
+    )
+    snapshot = _policy_validation_udf_snapshot(plan)
+    assert tuple(snapshot) == ("udf_a", "udf_b")

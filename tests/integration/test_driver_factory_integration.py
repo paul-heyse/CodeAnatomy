@@ -28,9 +28,11 @@ from hamilton_pipeline.driver_factory import (
     ExecutionMode,
     ViewGraphContext,
     build_driver,
+    build_plan_context,
 )
 from relspec.evidence import EvidenceCatalog
 from relspec.execution_plan import ExecutionPlan
+from relspec.policy_validation import PolicyValidationResult
 from relspec.rustworkx_graph import GraphDiagnostics, TaskGraph
 from relspec.rustworkx_schedule import TaskSchedule, task_schedule_metadata
 from semantics.incremental.plan_fingerprints import PlanFingerprintSnapshot
@@ -49,11 +51,31 @@ class ViewNode:
     deps: tuple[str, ...]
     builder: Callable[[object], object]
     contract_builder: Callable[[object], object] | None = None
+    required_udfs: tuple[str, ...] = ()
     plan_bundle: object | None = None
 
 
 if not TYPE_CHECKING:
     RegistryViewNode = ViewNode
+
+
+@dataclass(frozen=True)
+class _SessionRuntimeProfileStub:
+    def context_cache_key(self) -> str:
+        return "runtime_profile_context:test"
+
+    def settings_hash(self) -> str:
+        return "runtime_profile_settings:test"
+
+
+@dataclass(frozen=True)
+class _SessionRuntimeStub:
+    ctx: object
+    profile: _SessionRuntimeProfileStub
+    df_settings: dict[str, str]
+    udf_snapshot_hash: str
+    udf_rewrite_tags: tuple[str, ...]
+    domain_planner_names: tuple[str, ...]
 
 
 def _stub_view_node(name: str) -> ViewNode:
@@ -139,9 +161,17 @@ def _stub_view_context(plan: ExecutionPlan) -> ViewGraphContext:
         determinism_tier=DeterminismTier.BEST_EFFORT,
         tracker_config=None,
     )
+    session_runtime = _SessionRuntimeStub(
+        ctx=object(),
+        profile=_SessionRuntimeProfileStub(),
+        df_settings={},
+        udf_snapshot_hash="udf_snapshot:test",
+        udf_rewrite_tags=(),
+        domain_planner_names=(),
+    )
     return ViewGraphContext(
         profile=profile,
-        session_runtime=cast("SessionRuntime", object()),
+        session_runtime=cast("SessionRuntime", session_runtime),
         determinism_tier=DeterminismTier.BEST_EFFORT,
         snapshot={},
         view_nodes=plan.view_nodes,
@@ -168,10 +198,68 @@ def test_build_driver_with_stub_plan() -> None:
     plan = _stub_execution_plan()
     view_ctx = _stub_view_context(plan)
     request = DriverBuildRequest(
-        config=_base_config(),
+        config={
+            **_base_config(),
+            "enable_dataset_readiness": False,
+        },
         plan=plan,
         view_ctx=view_ctx,
         execution_mode=ExecutionMode.DETERMINISTIC_SERIAL,
     )
     driver_instance = build_driver(request=request)
     assert isinstance(driver_instance, driver.Driver)
+
+
+@pytest.mark.integration
+def test_build_plan_context_invokes_policy_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Policy validation should run during plan-context assembly."""
+    plan = _stub_execution_plan()
+    view_ctx = _stub_view_context(plan)
+    called: dict[str, object] = {}
+
+    class _Authority:
+        enforcement_mode = "warn"
+        capability_snapshot = {"strict_native_provider_enabled": False}
+        session_runtime_fingerprint = "runtime:test"
+
+    def _fake_build_execution_authority(**kwargs: object) -> _Authority:
+        called["authority_kwargs"] = kwargs
+        return _Authority()
+
+    def _fake_validate_policy_bundle(
+        execution_plan: object,
+        *,
+        runtime_profile: object,
+        udf_snapshot: object,
+        capability_snapshot: object,
+    ) -> PolicyValidationResult:
+        called["execution_plan"] = execution_plan
+        called["runtime_profile"] = runtime_profile
+        called["udf_snapshot"] = udf_snapshot
+        called["capability_snapshot"] = capability_snapshot
+        return PolicyValidationResult.empty()
+
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory._build_execution_authority",
+        _fake_build_execution_authority,
+    )
+    monkeypatch.setattr(
+        "relspec.policy_validation.validate_policy_bundle",
+        _fake_validate_policy_bundle,
+    )
+
+    request = DriverBuildRequest(
+        config={
+            **_base_config(),
+            "enable_dataset_readiness": False,
+        },
+        modules=(),
+        plan=plan,
+        view_ctx=view_ctx,
+        execution_mode=ExecutionMode.DETERMINISTIC_SERIAL,
+    )
+    plan_ctx = build_plan_context(request=request)
+    assert plan_ctx.plan is plan
+    assert called["execution_plan"] is plan
+    assert called["runtime_profile"] is view_ctx.profile
+    assert called["capability_snapshot"] == {"strict_native_provider_enabled": False}

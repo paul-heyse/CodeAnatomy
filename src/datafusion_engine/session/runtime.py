@@ -7637,7 +7637,7 @@ def record_dataset_readiness(
     profile: DataFusionRuntimeProfile,
     *,
     dataset_names: Sequence[str],
-    dataset_resolver: ManifestDatasetResolver | None = None,
+    dataset_resolver: ManifestDatasetResolver,
 ) -> None:
     """Record readiness diagnostics for configured dataset locations."""
     if profile.diagnostics.diagnostics_sink is None:
@@ -7645,10 +7645,6 @@ def record_dataset_readiness(
     from datafusion_engine.lineage.diagnostics import record_artifact
     from obs.otel.heartbeat import set_heartbeat_blockers
 
-    if dataset_resolver is None:
-        from semantics.compile_context import dataset_bindings_for_profile
-
-        dataset_resolver = dataset_bindings_for_profile(profile)
     blockers: list[str] = []
     for name in dataset_names:
         location = dataset_resolver.location(name)

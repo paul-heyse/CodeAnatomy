@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.ir import SemanticIR
+    from semantics.program_manifest import SemanticProgramManifest
 
 
 def test_view_graph_nodes_threads_runtime_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,6 +54,7 @@ def test_view_graph_nodes_threads_runtime_inputs(monkeypatch: pytest.MonkeyPatch
         snapshot={},
         runtime_profile=profile,
         semantic_ir=semantic_ir,
+        manifest=cast("SemanticProgramManifest", object()),
     )
 
     assert nodes == ()

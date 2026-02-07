@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.udf.platform import RustUdfPlatformOptions
     from datafusion_engine.views.graph import ViewNode
-    from semantics.ir import SemanticIR
+    from semantics.program_manifest import SemanticProgramManifest
 
 
 @dataclass
@@ -30,7 +30,7 @@ class _ViewGraphRegistrationContext:
     ctx: SessionContext
     runtime_profile: DataFusionRuntimeProfile
     scan_units: Sequence[ScanUnit]
-    semantic_ir: SemanticIR
+    semantic_manifest: SemanticProgramManifest
     snapshot: Mapping[str, object] | None = None
     nodes: Sequence[ViewNode] = ()
 
@@ -80,7 +80,8 @@ class _ViewGraphRegistrationContext:
             self.ctx,
             snapshot=self.snapshot,
             runtime_profile=self.runtime_profile,
-            semantic_ir=self.semantic_ir,
+            semantic_ir=self.semantic_manifest.semantic_ir,
+            manifest=self.semantic_manifest,
         )
         _ = view_graph_registry(self.nodes)
 
@@ -170,7 +171,7 @@ def ensure_view_graph(
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
     scan_units: Sequence[ScanUnit] = (),
-    semantic_ir: SemanticIR,
+    semantic_manifest: SemanticProgramManifest,
 ) -> Mapping[str, object]:
     """Install UDF platform (if needed) and register the semantic view graph.
 
@@ -178,7 +179,7 @@ def ensure_view_graph(
         ctx: DataFusion session context.
         runtime_profile: Active runtime profile.
         scan_units: Optional scan units for registration context.
-        semantic_ir: Semantic IR used to build view nodes.
+        semantic_manifest: Compiled semantic program manifest.
 
     Returns:
         Mapping[str, object]: Result.
@@ -194,7 +195,7 @@ def ensure_view_graph(
         ctx=ctx,
         runtime_profile=runtime_profile,
         scan_units=scan_units,
-        semantic_ir=semantic_ir,
+        semantic_manifest=semantic_manifest,
     )
     RegistrationPhaseOrchestrator().run(_view_graph_phases(registration))
     if registration.snapshot is None:

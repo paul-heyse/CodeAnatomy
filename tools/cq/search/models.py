@@ -21,6 +21,9 @@ class SearchConfig(CqStruct, frozen=True):
     mode: QueryMode
     limits: SearchLimits
     lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
+    mode_requested: QueryMode | None = None
+    mode_chain: tuple[QueryMode, ...] = msgspec.field(default_factory=tuple)
+    fallback_applied: bool = False
     include_globs: list[str] | None = None
     exclude_globs: list[str] | None = None
     include_strings: bool = False

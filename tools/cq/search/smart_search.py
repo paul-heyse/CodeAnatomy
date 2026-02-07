@@ -627,13 +627,14 @@ def _resolve_match_classification(
             heuristic, default_confidence=0.4, evidence_kind="rg_only"
         )
 
-    record_result = classify_from_records(file_path, root, raw.line, raw.col, lang=lang)
-    ast_result = record_result or _classify_from_node(
+    ast_result = _classify_from_node(
         file_path,
         raw,
         lang=lang,
         resolved_python=resolved_python,
     )
+    if ast_result is None:
+        ast_result = classify_from_records(file_path, root, raw.line, raw.col, lang=lang)
     if ast_result is not None:
         return _classification_from_node(ast_result)
     if heuristic.category is not None:
@@ -1267,6 +1268,9 @@ def _coerce_summary_inputs(
             "QueryLanguageScope",
             kwargs.get("lang_scope", DEFAULT_QUERY_LANGUAGE_SCOPE),
         ),
+        mode_requested=cast("QueryMode", mode),
+        mode_chain=(cast("QueryMode", mode),),
+        fallback_applied=bool(kwargs.get("fallback_applied")),
         limits=cast("SearchLimits", limits),
         include_globs=cast("list[str] | None", kwargs.get("include")),
         exclude_globs=cast("list[str] | None", kwargs.get("exclude")),
@@ -1314,6 +1318,12 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
     common = {
         "query": config.query,
         "mode": config.mode.value,
+        "mode_requested": (
+            config.mode_requested.value if isinstance(config.mode_requested, QueryMode) else "auto"
+        ),
+        "mode_effective": config.mode.value,
+        "mode_chain": [mode.value for mode in (config.mode_chain or (config.mode,))],
+        "fallback_applied": config.fallback_applied,
         "file_globs": inputs.file_globs or file_globs_for_scope(config.lang_scope),
         "include": config.include_globs or [],
         "exclude": config.exclude_globs or [],
@@ -1555,6 +1565,9 @@ def _build_search_context(request: SearchRequest) -> SmartSearchContext:
         query=request.query,
         mode=actual_mode,
         lang_scope=request.lang_scope,
+        mode_requested=request.mode,
+        mode_chain=(actual_mode,),
+        fallback_applied=False,
         limits=limits,
         include_globs=request.include_globs,
         exclude_globs=request.exclude_globs,
@@ -1622,8 +1635,9 @@ def _run_candidate_phase(
     ctx: SmartSearchContext,
     *,
     lang: QueryLanguage,
+    mode: QueryMode,
 ) -> tuple[list[RawMatch], SearchStats, str]:
-    pattern = rf"\b{re.escape(ctx.query)}\b" if ctx.mode == QueryMode.IDENTIFIER else ctx.query
+    pattern = rf"\b{re.escape(ctx.query)}\b" if mode == QueryMode.IDENTIFIER else ctx.query
     include_globs = constrain_include_globs_for_language(ctx.include_globs, lang)
     exclude_globs = list(ctx.exclude_globs or [])
     exclude_globs.extend(language_extension_exclude_globs(lang))
@@ -1631,7 +1645,7 @@ def _run_candidate_phase(
         CandidateCollectionRequest(
             root=ctx.root,
             pattern=pattern,
-            mode=ctx.mode,
+            mode=mode,
             limits=ctx.limits,
             lang=lang,
             include_globs=include_globs,
@@ -1711,7 +1725,7 @@ class _LanguageSearchResult:
 def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchResult]:
     by_lang = execute_by_language_scope(
         ctx.lang_scope,
-        lambda lang: _run_single_partition(ctx, lang),
+        lambda lang: _run_single_partition(ctx, lang, mode=ctx.mode),
     )
     return [by_lang[lang] for lang in expand_language_scope(ctx.lang_scope)]
 
@@ -1719,8 +1733,10 @@ def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchRes
 def _run_single_partition(
     ctx: SmartSearchContext,
     lang: QueryLanguage,
+    *,
+    mode: QueryMode,
 ) -> _LanguageSearchResult:
-    raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang)
+    raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang, mode=mode)
     enriched = _run_classification_phase(ctx, lang=lang, raw_matches=raw_matches)
     return _LanguageSearchResult(
         lang=lang,
@@ -1730,6 +1746,23 @@ def _run_single_partition(
         enriched_matches=enriched,
         dropped_by_scope=stats.dropped_by_scope,
     )
+
+
+def _partition_total_matches(partition_results: list[_LanguageSearchResult]) -> int:
+    return sum(result.stats.total_matches for result in partition_results)
+
+
+def _should_fallback_to_literal(
+    *,
+    request: SearchRequest,
+    initial_mode: QueryMode,
+    partition_results: list[_LanguageSearchResult],
+) -> bool:
+    if request.mode is not None:
+        return False
+    if initial_mode != QueryMode.IDENTIFIER:
+        return False
+    return _partition_total_matches(partition_results) == 0
 
 
 def _merge_language_matches(
@@ -1995,6 +2028,25 @@ def smart_search(
     request = _coerce_search_request(root=root, query=query, kwargs=kwargs)
     ctx = _build_search_context(request)
     partition_results = _run_language_partitions(ctx)
+    mode_chain = [ctx.mode]
+    if _should_fallback_to_literal(
+        request=request,
+        initial_mode=ctx.mode,
+        partition_results=partition_results,
+    ):
+        fallback_ctx = msgspec.structs.replace(
+            ctx,
+            mode=QueryMode.LITERAL,
+            fallback_applied=True,
+        )
+        fallback_partitions = _run_language_partitions(fallback_ctx)
+        mode_chain.append(QueryMode.LITERAL)
+        ctx = msgspec.structs.replace(fallback_ctx, mode_chain=tuple(mode_chain))
+        if _partition_total_matches(fallback_partitions) > 0:
+            partition_results = fallback_partitions
+    elif not ctx.mode_chain:
+        ctx = msgspec.structs.replace(ctx, mode_chain=(ctx.mode,))
+
     return _assemble_smart_search_result(ctx, partition_results)
 
 

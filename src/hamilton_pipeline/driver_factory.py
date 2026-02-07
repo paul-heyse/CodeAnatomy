@@ -461,11 +461,12 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     from semantics.compile_context import CompileContext
 
     session_runtime = profile.session_runtime()
-    semantic_ir = CompileContext(runtime_profile=profile).semantic_ir()
+    semantic_manifest = CompileContext(runtime_profile=profile).compile(ctx=session_runtime.ctx)
+    semantic_ir = semantic_manifest.semantic_ir
     facade = DataFusionExecutionFacade(ctx=session_runtime.ctx, runtime_profile=profile)
     # Single registration point: ensure_view_graph registers ALL views including
     # semantic views via registry_specs.view_graph_nodes(). Hamilton consumes only.
-    snapshot = facade.ensure_view_graph(semantic_ir=semantic_ir)
+    snapshot = facade.ensure_view_graph(semantic_manifest=semantic_manifest)
     session_runtime = refresh_session_runtime(profile, ctx=session_runtime.ctx)
     validate_edge_kind_requirements(_relation_output_schema(session_runtime))
     nodes = view_graph_nodes(
@@ -473,6 +474,7 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
         snapshot=snapshot,
         runtime_profile=profile,
         semantic_ir=semantic_ir,
+        manifest=semantic_manifest,
     )
     return ViewGraphContext(
         profile=profile,

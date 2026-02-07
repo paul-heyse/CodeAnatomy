@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.schema.introspection import SchemaIntrospector
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
-    from semantics.ir import SemanticIR
+    from semantics.program_manifest import SemanticProgramManifest
 
 
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
@@ -734,7 +734,7 @@ class DataFusionExecutionFacade:
         self,
         *,
         scan_units: Sequence[ScanUnit] = (),
-        semantic_ir: SemanticIR | None = None,
+        semantic_manifest: SemanticProgramManifest,
     ) -> Mapping[str, object]:
         """Ensure the view graph is registered for the current context.
 
@@ -742,8 +742,8 @@ class DataFusionExecutionFacade:
         ----------
         scan_units
             Optional scan-unit overrides applied during registration.
-        semantic_ir
-            Optional precompiled semantic IR for registration.
+        semantic_manifest
+            Compiled semantic program manifest for registration.
 
         Returns:
             Mapping[str, object]: Rust UDF snapshot used for view registration.
@@ -752,21 +752,16 @@ class DataFusionExecutionFacade:
             ValueError: If no runtime profile is configured.
         """
         from datafusion_engine.views.registration import ensure_view_graph
-        from semantics.compile_context import CompileContext
 
         if self.runtime_profile is None:
             msg = "Runtime profile is required for view registration."
             raise ValueError(msg)
-        resolved_semantic_ir = semantic_ir
-        if resolved_semantic_ir is None:
-            compile_context = CompileContext(runtime_profile=self.runtime_profile)
-            resolved_semantic_ir = compile_context.semantic_ir()
 
         return ensure_view_graph(
             self.ctx,
             runtime_profile=self.runtime_profile,
             scan_units=tuple(scan_units),
-            semantic_ir=resolved_semantic_ir,
+            semantic_manifest=semantic_manifest,
         )
 
     def register_dataset(

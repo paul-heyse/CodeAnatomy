@@ -9,6 +9,20 @@ from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.views.registry_specs import _semantic_cache_policy_for_row
 from semantics.catalog.dataset_rows import SemanticDatasetRow
+from semantics.ir import SemanticIR
+from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
+
+
+def _manifest_for_profile(profile: DataFusionRuntimeProfile) -> SemanticProgramManifest:
+    return SemanticProgramManifest(
+        semantic_ir=SemanticIR(views=()),
+        requested_outputs=(),
+        input_mapping={},
+        validation_policy="schema_only",
+        dataset_bindings=ManifestDatasetBindings(
+            locations=profile.data_sources.semantic_output.locations,
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -112,4 +126,11 @@ def test_semantic_cache_policy_for_row(
     profile: DataFusionRuntimeProfile,
     expected: str,
 ) -> None:
-    assert _semantic_cache_policy_for_row(row, runtime_profile=profile) == expected
+    assert (
+        _semantic_cache_policy_for_row(
+            row,
+            runtime_profile=profile,
+            manifest=_manifest_for_profile(profile),
+        )
+        == expected
+    )

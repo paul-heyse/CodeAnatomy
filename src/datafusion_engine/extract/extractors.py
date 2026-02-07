@@ -47,7 +47,7 @@ for _template, _rows in _rows_by_template().items():
         template=_template,
         outputs=_outputs,
         optional_outputs=_optional_outputs(_rows),
-        required_inputs=() if _adapter is None else _adapter.required_inputs,
+        required_inputs=() if _adapter is None else _adapter.merged_required_inputs(),
         supports_plan=False if _adapter is None else _adapter.supports_plan,
     )
 

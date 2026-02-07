@@ -19,7 +19,7 @@ from datafusion_engine.cache.inventory import (
     CACHE_INVENTORY_TABLE_NAME,
     ensure_cache_inventory_table,
 )
-from datafusion_engine.dataset.registry import DatasetLocation, dataset_catalog_from_profile
+from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.observability import (
     DELTA_MAINTENANCE_TABLE_NAME,
     DELTA_MUTATION_TABLE_NAME,
@@ -48,7 +48,6 @@ from semantics.input_registry import SEMANTIC_INPUT_SPECS
 from semantics.registry import SEMANTIC_MODEL
 from semantics.validation import (
     SemanticInputValidationError,
-    resolve_semantic_input_mapping,
     validate_semantic_inputs,
 )
 from serde_msgspec import StructBaseStrict
@@ -169,7 +168,7 @@ def build_zero_row_plan(
     profile: DataFusionRuntimeProfile,
     *,
     request: ZeroRowBootstrapRequest,
-    manifest: SemanticProgramManifest | None = None,
+    manifest: SemanticProgramManifest,
 ) -> tuple[ZeroRowDatasetPlan, ...]:
     """Build a deterministic zero-row bootstrap plan for runtime datasets.
 
@@ -178,16 +177,11 @@ def build_zero_row_plan(
     tuple[ZeroRowDatasetPlan, ...]
         Ordered bootstrap plan entries.
     """
-    if manifest is not None:
-        dataset_locations = {
-            name: _bootstrap_safe_location(location)
-            for name, location in manifest.dataset_bindings.locations.items()
-        }
-    else:
-        catalog = dataset_catalog_from_profile(profile)
-        dataset_locations = {
-            name: _bootstrap_safe_location(catalog.get(name)) for name in catalog.names()
-        }
+    _ = profile
+    dataset_locations = {
+        name: _bootstrap_safe_location(location)
+        for name, location in manifest.dataset_bindings.locations.items()
+    }
     plans: dict[str, ZeroRowDatasetPlan] = {}
 
     semantic_input_sources = sorted({spec.extraction_source for spec in SEMANTIC_INPUT_SPECS})
@@ -264,7 +258,7 @@ def run_zero_row_bootstrap_validation(  # noqa: C901, PLR0912, PLR0914, PLR0915
     *,
     request: ZeroRowBootstrapRequest,
     ctx: SessionContext,
-    manifest: SemanticProgramManifest | None = None,
+    manifest: SemanticProgramManifest,
 ) -> ZeroRowBootstrapReport:
     """Execute zero-row bootstrap materialization and post-bootstrap validation.
 
@@ -400,7 +394,6 @@ def run_zero_row_bootstrap_validation(  # noqa: C901, PLR0912, PLR0914, PLR0915
 
     validation_errors = _validation_errors(
         ctx=ctx,
-        allow_semantic_row_probe_fallback=request.allow_semantic_row_probe_fallback,
         manifest=manifest,
     )
     if request.strict and validation_errors:
@@ -426,29 +419,9 @@ def run_zero_row_bootstrap_validation(  # noqa: C901, PLR0912, PLR0914, PLR0915
 def _validation_errors(
     *,
     ctx: SessionContext,
-    allow_semantic_row_probe_fallback: bool,
-    manifest: SemanticProgramManifest | None = None,
+    manifest: SemanticProgramManifest,
 ) -> list[str]:
     errors: list[str] = []
-    from semantics.ir import SemanticIR
-    from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
-
-    if manifest is None:
-        try:
-            manifest = SemanticProgramManifest(
-                semantic_ir=SemanticIR(views=()),
-                requested_outputs=(),
-                input_mapping=resolve_semantic_input_mapping(ctx),
-                validation_policy=(
-                    "schema_plus_runtime_probe"
-                    if allow_semantic_row_probe_fallback
-                    else "schema_plus_optional_probe"
-                ),
-                dataset_bindings=ManifestDatasetBindings(locations={}),
-            )
-        except ValueError as exc:
-            errors.append(str(exc))
-            return errors
     validation = validate_semantic_inputs(
         ctx=ctx,
         manifest=manifest,

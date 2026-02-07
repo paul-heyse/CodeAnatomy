@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
+from datafusion import SessionContext
 
 from datafusion_engine.bootstrap import zero_row as zero_row_bootstrap
 from datafusion_engine.bootstrap.zero_row import (
@@ -22,10 +23,25 @@ from datafusion_engine.session.runtime import (
     ExtractOutputConfig,
     SemanticOutputConfig,
 )
+from semantics.compile_context import compile_semantic_program
+from semantics.program_manifest import SemanticProgramManifest
 from tests.test_helpers.optional_deps import require_datafusion_udfs, require_deltalake
 
 require_datafusion_udfs()
 require_deltalake()
+
+
+def _manifest_for(
+    profile: DataFusionRuntimeProfile,
+    *,
+    ctx: SessionContext | None = None,
+) -> SemanticProgramManifest:
+    resolved_ctx = ctx or profile.session_context()
+    return compile_semantic_program(
+        runtime_profile=profile,
+        policy="schema_plus_optional_probe",
+        ctx=resolved_ctx,
+    )
 
 
 def test_build_zero_row_plan_includes_semantic_inputs_and_canonical_outputs(
@@ -45,6 +61,7 @@ def test_build_zero_row_plan_includes_semantic_inputs_and_canonical_outputs(
             include_internal_tables=False,
             strict=True,
         ),
+        manifest=_manifest_for(profile),
     )
     by_name = {entry.name: entry for entry in plan}
     assert "cst_refs" in by_name
@@ -84,6 +101,7 @@ def test_zero_row_bootstrap_execution_registers_required_inputs(
             strict=True,
         ),
         ctx=ctx,
+        manifest=_manifest_for(profile, ctx=ctx),
     )
     assert report.success
     assert report.failed_count == 0
@@ -119,8 +137,10 @@ def test_zero_row_bootstrap_seeded_mode_is_opt_in(
         _profile: DataFusionRuntimeProfile,
         *,
         request: ZeroRowBootstrapRequest,
+        manifest: object,
     ) -> tuple[ZeroRowDatasetPlan, ...]:
         _ = request
+        _ = manifest
         return plan
 
     monkeypatch.setattr(
@@ -146,6 +166,7 @@ def test_zero_row_bootstrap_seeded_mode_is_opt_in(
             seeded_datasets=("seeded_ds",),
         ),
         ctx=ctx,
+        manifest=_manifest_for(profile, ctx=ctx),
     )
     assert strict_report.success
     assert strict_report.seeded_count == 0
@@ -167,6 +188,7 @@ def test_zero_row_bootstrap_seeded_mode_is_opt_in(
             seeded_datasets=("seeded_ds",),
         ),
         ctx=ctx,
+        manifest=_manifest_for(profile, ctx=ctx),
     )
     assert seeded_report.success
     assert seeded_report.seeded_count == 1

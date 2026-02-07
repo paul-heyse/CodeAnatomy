@@ -134,7 +134,7 @@ def _build_delta_reader(
             ),
         )
         table_name = f"__diagnostics_{uuid7_hex()}"
-        adapter.register_delta_table_provider(
+        adapter.register_table(
             table_name,
             TableProviderCapsule(bundle.provider),
             overwrite=True,

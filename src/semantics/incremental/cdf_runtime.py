@@ -14,7 +14,7 @@ from datafusion_engine.arrow.coercion import coerce_table_to_storage, to_arrow_t
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
-    dataset_location_from_catalog,
+    dataset_catalog_from_profile,
 )
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
@@ -76,6 +76,16 @@ class _CdfReadRecord:
     filter_policy: CdfFilterPolicy | None
 
 
+def _profile_dataset_location(
+    profile: DataFusionRuntimeProfile,
+    dataset_name: str,
+) -> DatasetLocation | None:
+    catalog = dataset_catalog_from_profile(profile)
+    if not catalog.has(dataset_name):
+        return None
+    return catalog.get(dataset_name)
+
+
 def _resolve_cdf_inputs(
     context: DeltaAccessContext,
     *,
@@ -86,7 +96,7 @@ def _resolve_cdf_inputs(
     if not path.exists():
         return None
     runtime = context.runtime
-    profile_location = dataset_location_from_catalog(runtime.profile, dataset_name)
+    profile_location = _profile_dataset_location(runtime.profile, dataset_name)
     resolved_store = context.resolve_storage(table_uri=str(path))
     resolved_storage = resolved_store.storage_options or {}
     resolved_log_storage = resolved_store.log_storage_options or {}
@@ -248,7 +258,7 @@ def read_cdf_changes(
         ValueError: If CDF state cannot be initialized.
     """
     profile = context.runtime.profile
-    profile_location = dataset_location_from_catalog(profile, dataset_name)
+    profile_location = _profile_dataset_location(profile, dataset_name)
     cdf_policy = (
         profile_location.resolved.delta_cdf_policy if profile_location is not None else None
     )

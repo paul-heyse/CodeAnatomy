@@ -188,6 +188,37 @@ def ripgrep_types_for_scope(scope: QueryLanguageScope) -> tuple[RipgrepLanguageT
     return tuple(ripgrep_type_for_language(lang) for lang in expand_language_scope(scope))
 
 
+def _has_glob_magic(value: str) -> bool:
+    return any(ch in value for ch in ("*", "?", "[", "]"))
+
+
+def _expand_directory_glob(base_glob: str, suffixes: tuple[str, ...]) -> list[str]:
+    base = base_glob if base_glob.endswith("/") else f"{base_glob}/"
+    return [f"{base}**/*{suffix}" for suffix in suffixes]
+
+
+def _constrain_single_include_glob(glob: str, suffixes: tuple[str, ...]) -> list[str]:
+    normalized = glob.strip()
+    constrained: list[str] = []
+    if normalized.startswith("!"):
+        constrained = [normalized]
+    elif not normalized:
+        constrained = []
+    elif not _has_glob_magic(normalized):
+        suffix = Path(normalized).suffix.lower()
+        if suffix:
+            constrained = [normalized] if suffix in suffixes else []
+        else:
+            constrained = _expand_directory_glob(normalized, suffixes)
+    elif normalized.endswith("/**"):
+        constrained = [f"{normalized[:-3]}**/*{suffix}" for suffix in suffixes]
+    elif normalized.endswith("**"):
+        constrained = [f"{normalized[:-2]}**/*{suffix}" for suffix in suffixes]
+    else:
+        constrained = [normalized]
+    return constrained
+
+
 def constrain_include_globs_for_language(
     include_globs: list[str] | None,
     lang: QueryLanguage,
@@ -204,21 +235,7 @@ def constrain_include_globs_for_language(
     suffixes = LANGUAGE_FILE_EXTENSIONS[lang]
     constrained: list[str] = []
     for glob in include_globs:
-        normalized = glob.strip()
-        if not normalized:
-            continue
-        if normalized.startswith("!"):
-            constrained.append(normalized)
-            continue
-        if normalized.endswith("/**"):
-            base = normalized[:-3]
-            constrained.extend(f"{base}**/*{suffix}" for suffix in suffixes)
-            continue
-        if normalized.endswith("**"):
-            base = normalized[:-2]
-            constrained.extend(f"{base}**/*{suffix}" for suffix in suffixes)
-            continue
-        constrained.append(normalized)
+        constrained.extend(_constrain_single_include_glob(glob, suffixes))
     return _dedupe_globs(constrained) if constrained else None
 
 

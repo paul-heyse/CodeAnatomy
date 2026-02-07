@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import cast
@@ -24,6 +25,7 @@ MAX_EVIDENCE_DISPLAY = 20
 MAX_SECTION_FINDINGS = 50
 MAX_RENDER_ENRICH_FILES = 9  # original anchor file + next 8 files
 MAX_RENDER_ENRICH_WORKERS = 4
+SHOW_UNRESOLVED_FACTS_ENV = "CQ_SHOW_UNRESOLVED_FACTS"
 MAX_CODE_OVERVIEW_ITEMS = 5
 RUN_QUERY_ARG_START_INDEX = 2
 SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
@@ -201,6 +203,11 @@ def _na(reason: str) -> str:
     return f"N/A — {reason.replace('_', ' ')}"
 
 
+def _show_unresolved_facts() -> bool:
+    value = os.environ.get(SHOW_UNRESOLVED_FACTS_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _format_fact_value(value: object) -> str:
     rendered = (
         value if isinstance(value, str) else dumps_json_value(to_builtins(value), indent=None)
@@ -218,9 +225,17 @@ def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
         language_payload=language_payload,
     )
     lines = ["  Code Facts:"]
+    show_unresolved = _show_unresolved_facts()
     for cluster in clusters:
+        rows = [
+            row
+            for row in cluster.rows
+            if show_unresolved or row.reason != "not_resolved"
+        ]
+        if not rows:
+            continue
         lines.append(f"  - {cluster.title}")
-        for row in cluster.rows:
+        for row in rows:
             rendered = _format_fact_value(row.value) if row.reason is None else _na(row.reason)
             lines.append(f"    - {row.label}: {rendered}")
 
@@ -545,10 +560,39 @@ def _iter_result_findings(result: CqResult) -> list[Finding]:
     return findings
 
 
+def _finding_priority_key(finding: Finding) -> tuple[float, float, str, int, int, str]:
+    score = finding.details.get("score")
+    numeric_score = float(score) if isinstance(score, (int, float)) else 0.0
+    category_weight = {
+        "definition": 6.0,
+        "callsite": 5.0,
+        "import": 4.5,
+        "from_import": 4.5,
+        "reference": 3.5,
+        "assignment": 3.0,
+        "annotation": 2.5,
+        "comment_match": 1.0,
+        "string_match": 1.0,
+        "docstring_match": 1.0,
+    }.get(finding.category, 2.0)
+    anchor = finding.anchor
+    if anchor is None:
+        return (-numeric_score, -category_weight, "~", 0, 0, finding.message)
+    return (
+        -numeric_score,
+        -category_weight,
+        anchor.file,
+        anchor.line,
+        int(anchor.col or 0),
+        finding.message,
+    )
+
+
 def _select_enrichment_target_files(result: CqResult) -> set[str]:
+    ranked_findings = sorted(_iter_result_findings(result), key=_finding_priority_key)
     files: list[str] = []
     seen: set[str] = set()
-    for finding in _iter_result_findings(result):
+    for finding in ranked_findings:
         anchor = finding.anchor
         if anchor is None or anchor.file in seen:
             continue
@@ -674,7 +718,7 @@ def _precompute_render_enrichment_cache(
     root: Path,
     cache: dict[tuple[str, int, int, str], dict[str, object]],
     allowed_files: set[str] | None,
-) -> None:
+) -> list[RenderEnrichmentTask]:
     tasks = _build_render_enrichment_tasks(
         result,
         root=root,
@@ -682,8 +726,41 @@ def _precompute_render_enrichment_cache(
         allowed_files=allowed_files,
     )
     if not tasks:
-        return
+        return []
     _populate_render_enrichment_cache(cache, tasks)
+    return tasks
+
+
+def _count_render_enrichment_tasks(
+    result: CqResult,
+    *,
+    root: Path,
+    allowed_files: set[str] | None,
+) -> int:
+    return len(
+        _build_render_enrichment_tasks(
+            result,
+            root=root,
+            cache={},
+            allowed_files=allowed_files,
+        )
+    )
+
+
+def _summary_with_render_enrichment_metrics(
+    summary: dict[str, object],
+    *,
+    attempted: int,
+    applied: int,
+    failed: int,
+    skipped: int,
+) -> dict[str, object]:
+    with_metrics = dict(summary)
+    with_metrics["render_enrichment_attempted"] = attempted
+    with_metrics["render_enrichment_applied"] = applied
+    with_metrics["render_enrichment_failed"] = failed
+    with_metrics["render_enrichment_skipped"] = skipped
+    return with_metrics
 
 
 def _compute_render_enrichment_payload(
@@ -846,12 +923,27 @@ def _render_key_findings(
     return lines
 
 
+def _finding_dedupe_key(finding: Finding) -> tuple[object, ...]:
+    anchor = finding.anchor
+    if anchor is None:
+        return (finding.category, finding.message, None, None, None, finding.severity)
+    return (
+        finding.category,
+        finding.message,
+        anchor.file,
+        anchor.line,
+        int(anchor.col or 0),
+        finding.severity,
+    )
+
+
 def _render_sections(
     sections: list[Section],
     *,
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
+    seen_keys: set[tuple[object, ...]] | None = None,
 ) -> list[str]:
     """Render section blocks.
 
@@ -862,9 +954,21 @@ def _render_sections(
     """
     lines: list[str] = []
     for section in sections:
+        findings = section.findings
+        if seen_keys is not None:
+            deduped: list[Finding] = []
+            for finding in findings:
+                key = _finding_dedupe_key(finding)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                deduped.append(finding)
+            findings = deduped
+        if not findings:
+            continue
         lines.append(
             _format_section(
-                section,
+                Section(title=section.title, findings=findings, collapsed=section.collapsed),
                 root=root,
                 enrich_cache=enrich_cache,
                 allowed_enrichment_files=allowed_enrichment_files,
@@ -880,6 +984,7 @@ def _render_evidence(
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
+    seen_keys: set[tuple[object, ...]] | None = None,
 ) -> list[str]:
     """Render evidence section lines.
 
@@ -891,6 +996,15 @@ def _render_evidence(
     if not findings:
         return []
     lines = ["## Evidence"]
+    if seen_keys is not None:
+        deduped: list[Finding] = []
+        for finding in findings:
+            key = _finding_dedupe_key(finding)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(finding)
+        findings = deduped
     displayed = findings[:MAX_EVIDENCE_DISPLAY]
     lines.extend(
         [
@@ -954,12 +1068,29 @@ def render_markdown(result: CqResult) -> str:
     root = Path(result.run.root)
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] = {}
     allowed_enrichment_files = _select_enrichment_target_files(result)
-    _precompute_render_enrichment_cache(
+    all_task_count = _count_render_enrichment_tasks(result, root=root, allowed_files=None)
+    rendered_tasks = _precompute_render_enrichment_cache(
         result,
         root=root,
         cache=enrich_cache,
         allowed_files=allowed_enrichment_files,
     )
+    applied = sum(
+        1
+        for task in rendered_tasks
+        if enrich_cache.get((task.file, task.line, task.col, task.language))
+    )
+    attempted = len(rendered_tasks)
+    failed = max(0, attempted - applied)
+    skipped = max(0, all_task_count - attempted)
+    summary_with_metrics = _summary_with_render_enrichment_metrics(
+        result.summary,
+        attempted=attempted,
+        applied=applied,
+        failed=failed,
+        skipped=skipped,
+    )
+    rendered_seen_keys = {_finding_dedupe_key(finding) for finding in result.key_findings}
 
     lines = [f"# cq {result.run.macro}", ""]
     lines.extend(_render_code_overview(result))
@@ -977,6 +1108,7 @@ def render_markdown(result: CqResult) -> str:
             root=root,
             enrich_cache=enrich_cache,
             allowed_enrichment_files=allowed_enrichment_files,
+            seen_keys=rendered_seen_keys,
         )
     )
     lines.extend(
@@ -985,10 +1117,11 @@ def render_markdown(result: CqResult) -> str:
             root=root,
             enrich_cache=enrich_cache,
             allowed_enrichment_files=allowed_enrichment_files,
+            seen_keys=rendered_seen_keys,
         )
     )
     lines.extend(_render_artifacts(result.artifacts))
-    lines.extend(_render_summary(result.summary))
+    lines.extend(_render_summary(summary_with_metrics))
     lines.extend(_render_footer(result))
     return "\n".join(lines)
 

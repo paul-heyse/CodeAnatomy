@@ -161,7 +161,7 @@ def register_listing_table(
             schema=context.options.schema,
         )
         adapter = DataFusionIOAdapter(ctx=context.ctx, profile=runtime_profile)
-        adapter.register_table_provider(context.name, provider)
+        adapter.register_table(context.name, provider)
     df = context.ctx.table(context.name)
     details: dict[str, object] = {
         "path": str(location.path),

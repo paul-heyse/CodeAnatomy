@@ -10,7 +10,6 @@ from datafusion.dataframe import DataFrame
 
 from datafusion_engine.dataset.registry import (
     dataset_catalog_from_profile,
-    dataset_location_from_catalog,
     resolve_datafusion_provider,
 )
 from datafusion_engine.io.adapter import DataFusionIOAdapter
@@ -59,7 +58,7 @@ def register_cdf_inputs(
     catalog = dataset_catalog_from_profile(runtime_profile)
     mapping: dict[str, str] = {}
     for name in table_names:
-        location = dataset_location_from_catalog(runtime_profile, name, catalog=catalog)
+        location = catalog.get(name) if catalog.has(name) else None
         cdf_name = f"{name}__cdf"
         metadata = table_provider_metadata(id(ctx), table_name=name)
         supports_cdf = bool(metadata.supports_cdf) if metadata is not None else False

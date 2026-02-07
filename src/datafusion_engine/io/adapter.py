@@ -204,7 +204,7 @@ class DataFusionIOAdapter:
         self.ctx.register_table(name, table_to_register)
         invalidate_introspection_cache(self.ctx)
 
-    def register_table_provider(
+    def register_table(
         self,
         name: str,
         provider: object,
@@ -279,34 +279,6 @@ class DataFusionIOAdapter:
                 "partition_cols": [list(item) for item in registration.table_partition_cols],
                 "file_sort_order": [list(item) for item in registration.file_sort_order],
             },
-        )
-
-    def register_delta_table_provider(
-        self,
-        name: str,
-        provider: object,
-        *,
-        overwrite: bool = False,
-    ) -> None:
-        """Register a Delta table provider with diagnostics capture."""
-        self.register_table_provider(name, provider, overwrite=overwrite)
-        self._record_artifact(
-            "delta_table_provider_registered",
-            {"name": name, "provider_type": type(provider).__name__},
-        )
-
-    def register_delta_cdf_provider(
-        self,
-        name: str,
-        provider: object,
-        *,
-        overwrite: bool = False,
-    ) -> None:
-        """Register a Delta CDF provider with diagnostics capture."""
-        self.register_table_provider(name, provider, overwrite=overwrite)
-        self._record_artifact(
-            "delta_cdf_provider_registered",
-            {"name": name, "provider_type": type(provider).__name__},
         )
 
     def register_catalog_provider(

@@ -231,6 +231,19 @@ import os
         assert result is not None
         assert result.category in {"from_import", "import"}
 
+    def test_classify_from_records_definition_requires_name_overlap(self, tmp_path: Path) -> None:
+        """Definition records should not classify body references as definitions."""
+        source = tmp_path / "sample.py"
+        source.write_text(
+            "def process_imports():\n"
+            "    import_value = 1\n"
+            "    return import_value\n",
+            encoding="utf-8",
+        )
+        clear_caches()
+        result = classify_from_records(source, tmp_path, 2, 4)
+        assert result is None or result.category != "definition"
+
 
 class TestCacheHelpers:
     """Tests for classifier cache helpers."""

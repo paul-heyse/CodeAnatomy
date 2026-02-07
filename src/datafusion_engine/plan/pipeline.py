@@ -78,10 +78,10 @@ def plan_with_delta_pins(
     from semantics.compile_context import CompileContext
 
     session_runtime = runtime_profile.session_runtime()
-    semantic_ir = CompileContext(runtime_profile=runtime_profile).semantic_ir()
+    semantic_manifest = CompileContext(runtime_profile=runtime_profile).compile(ctx=ctx)
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     # Baseline registration ensures UDF platform and registry views exist.
-    facade.ensure_view_graph(semantic_ir=semantic_ir)
+    facade.ensure_view_graph(semantic_manifest=semantic_manifest)
     baseline_nodes = _plan_view_nodes(
         ctx,
         view_nodes=view_nodes,
@@ -107,7 +107,7 @@ def plan_with_delta_pins(
         )
         facade.ensure_view_graph(
             scan_units=scan_planning.scan_units,
-            semantic_ir=semantic_ir,
+            semantic_manifest=semantic_manifest,
         )
     pinned_nodes = _plan_view_nodes(
         ctx,

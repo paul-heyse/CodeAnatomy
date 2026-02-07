@@ -1881,7 +1881,7 @@ class WritePipeline:
             )
         )
         adapter = DataFusionIOAdapter(ctx=self.ctx, profile=self.runtime_profile)
-        adapter.register_delta_table_provider(
+        adapter.register_table(
             table_name,
             TableProviderCapsule(resolution.provider),
             overwrite=True,

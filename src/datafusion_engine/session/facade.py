@@ -811,7 +811,7 @@ class DataFusionExecutionFacade:
         self,
         *,
         table_names: Sequence[str],
-        dataset_resolver: ManifestDatasetResolver | None = None,
+        dataset_resolver: ManifestDatasetResolver,
     ) -> Mapping[str, str]:
         """Register Delta CDF-backed inputs for the provided table names.
 
@@ -833,10 +833,6 @@ class DataFusionExecutionFacade:
             raise ValueError(msg)
         from datafusion_engine.delta.cdf import register_cdf_inputs
 
-        if dataset_resolver is None:
-            from semantics.compile_context import dataset_bindings_for_profile
-
-            dataset_resolver = dataset_bindings_for_profile(self.runtime_profile)
         return register_cdf_inputs(
             self.ctx,
             self.runtime_profile,

@@ -63,7 +63,10 @@ if TYPE_CHECKING:
     from semantics.compile_context import SemanticExecutionContext
     from semantics.config import SemanticConfig
     from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
-    from semantics.program_manifest import ManifestDatasetResolver
+    from semantics.program_manifest import (
+        ManifestDatasetResolver,
+        SemanticProgramManifest,
+    )
     from semantics.spec_registry import SemanticNormalizationSpec, SemanticSpecIndex
 
 
@@ -129,6 +132,85 @@ class _IncrementalOutputRequest:
     use_cdf: bool
     requested_outputs: Collection[str] | None
     dataset_resolver: ManifestDatasetResolver | None = None
+
+
+@dataclass(frozen=True)
+class _CpgCompileResolution:
+    """Resolved compile artifacts for CPG pipeline entry points."""
+
+    resolver: ManifestDatasetResolver
+    manifest: SemanticProgramManifest
+    input_mapping: Mapping[str, str]
+    use_cdf: bool
+    resolved_outputs: Collection[str] | None
+
+
+def _resolve_cpg_compile_artifacts(
+    ctx: SessionContext,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    effective_use_cdf: bool,
+    resolved: CpgBuildOptions,
+    execution_context: SemanticExecutionContext | None = None,
+) -> _CpgCompileResolution:
+    """Resolve dataset resolver and manifest from execution context or compile boundary.
+
+    Encapsulates the common resolver + manifest resolution pattern shared by
+    ``build_cpg()`` and ``build_cpg_from_inferred_deps()``, eliminating
+    redundant ``CompileContext`` construction at each call site.
+
+    Returns:
+    -------
+    _CpgCompileResolution
+        Resolved compile artifacts including resolver, manifest, and mapping.
+    """
+    if execution_context is not None:
+        early_resolver = execution_context.dataset_resolver
+    else:
+        from semantics.compile_context import CompileContext
+
+        early_resolver = CompileContext(
+            runtime_profile=runtime_profile,
+        ).dataset_bindings()
+    input_mapping, use_cdf = _resolve_semantic_input_mapping(
+        ctx,
+        runtime_profile=runtime_profile,
+        use_cdf=effective_use_cdf,
+        cdf_inputs=resolved.cdf_inputs,
+        dataset_resolver=early_resolver,
+    )
+    resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
+    incremental_outputs = _incremental_requested_outputs(
+        _IncrementalOutputRequest(
+            ctx=ctx,
+            runtime_profile=runtime_profile,
+            input_mapping=input_mapping,
+            use_cdf=use_cdf,
+            requested_outputs=resolved.requested_outputs,
+            dataset_resolver=early_resolver,
+        )
+    )
+    if incremental_outputs is not None:
+        resolved_outputs = incremental_outputs
+    if execution_context is not None:
+        manifest = execution_context.manifest
+    else:
+        from semantics.compile_context import compile_semantic_program
+
+        manifest = compile_semantic_program(
+            runtime_profile=runtime_profile,
+            outputs=resolved_outputs,
+            policy="schema_plus_optional_probe",
+            ctx=ctx,
+            input_mapping=input_mapping,
+        )
+    return _CpgCompileResolution(
+        resolver=early_resolver,
+        manifest=manifest,
+        input_mapping=input_mapping,
+        use_cdf=use_cdf,
+        resolved_outputs=resolved_outputs,
+    )
 
 
 class _CdfCursorLike(Protocol):
@@ -1406,21 +1488,18 @@ def build_cpg(
             "codeanatomy.has_config": resolved.config is not None,
         },
     ):
-        if execution_context is not None:
-            early_resolver = execution_context.dataset_resolver
-        else:
-            from semantics.compile_context import CompileContext
-
-            early_resolver = CompileContext(
-                runtime_profile=runtime_profile,
-            ).dataset_bindings()
-        input_mapping, use_cdf = _resolve_semantic_input_mapping(
+        compile_resolution = _resolve_cpg_compile_artifacts(
             ctx,
             runtime_profile=runtime_profile,
-            use_cdf=effective_use_cdf,
-            cdf_inputs=resolved.cdf_inputs,
-            dataset_resolver=early_resolver,
+            effective_use_cdf=effective_use_cdf,
+            resolved=resolved,
+            execution_context=execution_context,
         )
+        early_resolver = compile_resolution.resolver
+        manifest = compile_resolution.manifest
+        input_mapping = compile_resolution.input_mapping
+        use_cdf = compile_resolution.use_cdf
+        resolved_outputs = compile_resolution.resolved_outputs
         from datafusion_engine.udf.runtime import rust_udf_snapshot
         from datafusion_engine.views.graph import (
             ViewGraphOptions,
@@ -1430,31 +1509,6 @@ def build_cpg(
         from semantics.validation import SemanticInputValidationError
 
         snapshot = rust_udf_snapshot(ctx)
-        resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
-        incremental_outputs = _incremental_requested_outputs(
-            _IncrementalOutputRequest(
-                ctx=ctx,
-                runtime_profile=runtime_profile,
-                input_mapping=input_mapping,
-                use_cdf=use_cdf,
-                requested_outputs=resolved.requested_outputs,
-                dataset_resolver=early_resolver,
-            )
-        )
-        if incremental_outputs is not None:
-            resolved_outputs = incremental_outputs
-        if execution_context is not None:
-            manifest = execution_context.manifest
-        else:
-            from semantics.compile_context import compile_semantic_program
-
-            manifest = compile_semantic_program(
-                runtime_profile=runtime_profile,
-                outputs=resolved_outputs,
-                policy="schema_plus_optional_probe",
-                ctx=ctx,
-                input_mapping=input_mapping,
-            )
         validation = manifest.validation
         if validation is None:
             msg = "Semantic manifest compile must include input validation results."
@@ -2004,46 +2058,16 @@ def build_cpg_from_inferred_deps(
         )
 
         deps: dict[str, object] = {}
-        if execution_context is not None:
-            early_resolver = execution_context.dataset_resolver
-        else:
-            from semantics.compile_context import CompileContext
-
-            early_resolver = CompileContext(
-                runtime_profile=runtime_profile,
-            ).dataset_bindings()
-        input_mapping, use_cdf = _resolve_semantic_input_mapping(
+        # Reuse the same compile resolution helper that build_cpg uses,
+        # eliminating redundant CompileContext construction.
+        compile_resolution = _resolve_cpg_compile_artifacts(
             ctx,
             runtime_profile=runtime_profile,
-            use_cdf=effective_use_cdf,
-            cdf_inputs=resolved.cdf_inputs,
-            dataset_resolver=early_resolver,
+            effective_use_cdf=effective_use_cdf,
+            resolved=resolved,
+            execution_context=execution_context,
         )
-        resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
-        incremental_outputs = _incremental_requested_outputs(
-            _IncrementalOutputRequest(
-                ctx=ctx,
-                runtime_profile=runtime_profile,
-                input_mapping=input_mapping,
-                use_cdf=use_cdf,
-                requested_outputs=resolved.requested_outputs,
-                dataset_resolver=early_resolver,
-            )
-        )
-        if incremental_outputs is not None:
-            resolved_outputs = incremental_outputs
-        if execution_context is not None:
-            manifest = execution_context.manifest
-        else:
-            from semantics.compile_context import compile_semantic_program
-
-            manifest = compile_semantic_program(
-                runtime_profile=runtime_profile,
-                outputs=resolved_outputs,
-                policy="schema_plus_optional_probe",
-                ctx=ctx,
-                input_mapping=input_mapping,
-            )
+        manifest = compile_resolution.manifest
         validation = manifest.validation
         if validation is None:
             msg = "Semantic manifest compile must include input validation results."
@@ -2060,9 +2084,9 @@ def build_cpg_from_inferred_deps(
                 output_locations=semantic_output_locations_for_profile(runtime_profile),
                 cache_policy=resolved.cache_policy,
                 config=resolved.config,
-                input_mapping=input_mapping,
-                use_cdf=use_cdf,
-                requested_outputs=resolved_outputs,
+                input_mapping=compile_resolution.input_mapping,
+                use_cdf=compile_resolution.use_cdf,
+                requested_outputs=compile_resolution.resolved_outputs,
                 semantic_ir=semantic_ir,
             )
         )

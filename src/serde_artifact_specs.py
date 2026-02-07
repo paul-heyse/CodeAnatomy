@@ -616,6 +616,13 @@ EXTRACT_UDF_PARITY_SPEC = register_artifact_spec(
 # Delta / Write Path
 # ---------------------------------------------------------------------------
 
+ADAPTIVE_WRITE_POLICY_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="adaptive_write_policy_v1",
+        description="Adaptive write policy decision from plan-derived statistics.",
+    )
+)
+
 DATAFUSION_DELTA_FEATURES_SPEC = register_artifact_spec(
     ArtifactSpec(
         canonical_name="datafusion_delta_features_v1",
@@ -1128,6 +1135,7 @@ SUBSTRAIT_FALLBACK_SPEC = register_artifact_spec(
 )
 
 __all__ = [
+    "ADAPTIVE_WRITE_POLICY_SPEC",
     "ARTIFACT_STORE_RESET_SPEC",
     "BUILD_OUTPUT_LOCATIONS_SPEC",
     "CACHE_INVENTORY_BOOTSTRAP_COMPLETED_SPEC",

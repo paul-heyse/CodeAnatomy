@@ -172,6 +172,7 @@ class SemanticProgramManifest:
     udf_snapshot: Mapping[str, object] | None = None
     fingerprint: str | None = None
     manifest_version: int = 1
+    output_name_map: Mapping[str, str] | None = None
 
     def payload(self) -> dict[str, object]:
         """Return a JSON-serializable payload for diagnostics."""
@@ -197,11 +198,34 @@ class SemanticProgramManifest:
                 "resolved_tables": dict(self.validation.resolved_tables),
             },
             "fingerprint": self.fingerprint,
+            "output_name_map": dict(sorted(self.output_name_map.items()))
+            if self.output_name_map is not None
+            else None,
         }
 
     def to_payload(self) -> dict[str, object]:
         """Return canonical payload for compatibility callsites."""
         return self.payload()
+
+    def resolve_output_name(self, internal_name: str) -> str:
+        """Resolve an internal view name to a canonical output name.
+
+        Use the manifest's ``output_name_map`` when populated, falling back
+        to identity mapping (return the name unchanged).
+
+        Parameters
+        ----------
+        internal_name
+            The internal view name used in semantic pipeline code.
+
+        Returns:
+        -------
+        str
+            The canonical output name.
+        """
+        if self.output_name_map is not None:
+            return self.output_name_map.get(internal_name, internal_name)
+        return internal_name
 
     def with_fingerprint(self) -> SemanticProgramManifest:
         """Return manifest with deterministic fingerprint populated."""
@@ -215,6 +239,7 @@ class SemanticProgramManifest:
             validation=self.validation,
             udf_snapshot=self.udf_snapshot,
             fingerprint=digest,
+            output_name_map=self.output_name_map,
         )
 
 

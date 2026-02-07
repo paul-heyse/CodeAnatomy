@@ -196,6 +196,7 @@ class _DeltaPolicyContext:
     writer_properties: WriterProperties | None
     storage_options: dict[str, str] | None
     log_storage_options: dict[str, str] | None
+    adaptive_file_size_decision: _AdaptiveFileSizeDecision | None = None
 
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for Delta policy context.
@@ -265,6 +266,7 @@ class _DeltaWriteSpecInputs:
     dataset_location: DatasetLocation | None
     schema_columns: tuple[str, ...] | None = None
     lineage_columns: tuple[str, ...] | None = None
+    plan_bundle: DataFusionPlanBundle | None = None
 
 
 _IDENTIFIER_RE = re.compile(IDENTIFIER_PATTERN)
@@ -322,6 +324,50 @@ def compute_adaptive_file_size(
     return base_target
 
 
+@dataclass(frozen=True)
+class _AdaptiveFileSizeDecision:
+    """Decision record for adaptive file sizing from plan statistics."""
+
+    base_target_file_size: int
+    adaptive_target_file_size: int
+    estimated_rows: int
+    reason: str
+
+
+def _adaptive_file_size_from_bundle(
+    plan_bundle: DataFusionPlanBundle,
+    target_file_size: int,
+) -> tuple[int, _AdaptiveFileSizeDecision | None]:
+    """Apply plan-derived adaptive file sizing and return the decision.
+
+    Parameters
+    ----------
+    plan_bundle
+        Plan bundle providing statistics for row count estimation.
+    target_file_size
+        Base target file size from the write policy.
+
+    Returns:
+    -------
+    tuple[int, _AdaptiveFileSizeDecision | None]
+        Tuple of (resolved target file size, decision record or None).
+    """
+    signals = extract_plan_signals(plan_bundle)
+    stats = signals.stats
+    row_count = stats.num_rows if stats is not None else None
+    if row_count is None:
+        return target_file_size, None
+    adaptive = compute_adaptive_file_size(row_count, target_file_size)
+    if adaptive == target_file_size:
+        return target_file_size, None
+    return adaptive, _AdaptiveFileSizeDecision(
+        base_target_file_size=target_file_size,
+        adaptive_target_file_size=adaptive,
+        estimated_rows=row_count,
+        reason=("small_table" if row_count < _ADAPTIVE_SMALL_TABLE_THRESHOLD else "large_table"),
+    )
+
+
 def _delta_policy_context(
     *,
     options: Mapping[str, object],
@@ -366,12 +412,12 @@ def _delta_policy_context(
         fallback=write_policy.target_file_size if write_policy is not None else None,
     )
     # Plan-derived file size enrichment (10.3)
+    adaptive_decision: _AdaptiveFileSizeDecision | None = None
     if plan_bundle is not None and target_file_size is not None:
-        signals = extract_plan_signals(plan_bundle)
-        stats = signals.stats
-        row_count = stats.num_rows if stats is not None else None
-        if row_count is not None:
-            target_file_size = compute_adaptive_file_size(row_count, target_file_size)
+        target_file_size, adaptive_decision = _adaptive_file_size_from_bundle(
+            plan_bundle,
+            target_file_size,
+        )
     storage_options, log_storage_options = _delta_storage_options(
         options,
         dataset_location=dataset_location,
@@ -387,6 +433,7 @@ def _delta_policy_context(
         writer_properties=writer_properties,
         storage_options=storage_options,
         log_storage_options=log_storage_options,
+        adaptive_file_size_decision=adaptive_decision,
     )
 
 
@@ -1208,6 +1255,26 @@ class WritePipeline:
             )
         )
 
+    def _record_adaptive_write_policy(
+        self,
+        decision: _AdaptiveFileSizeDecision,
+    ) -> None:
+        if self.runtime_profile is None:
+            return
+        from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import ADAPTIVE_WRITE_POLICY_SPEC
+
+        record_artifact(
+            self.runtime_profile,
+            ADAPTIVE_WRITE_POLICY_SPEC,
+            {
+                "base_target_file_size": decision.base_target_file_size,
+                "adaptive_target_file_size": decision.adaptive_target_file_size,
+                "estimated_rows": decision.estimated_rows,
+                "reason": decision.reason,
+            },
+        )
+
     def _maybe_count_rows(self, df: DataFrame) -> int | None:
         if self.recorder is None:
             return None
@@ -1429,7 +1496,10 @@ class WritePipeline:
             request_partition_by=request.partition_by,
             schema_columns=inputs.schema_columns,
             lineage_columns=inputs.lineage_columns,
+            plan_bundle=inputs.plan_bundle,
         )
+        if policy_ctx.adaptive_file_size_decision is not None:
+            self._record_adaptive_write_policy(policy_ctx.adaptive_file_size_decision)
         feature_gate = _delta_feature_gate_override(options)
         if feature_gate is None and inputs.dataset_location is not None:
             feature_gate = inputs.dataset_location.resolved.delta_feature_gate

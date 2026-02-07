@@ -111,6 +111,7 @@ def plan_with_delta_pins(  # noqa: PLR0914
         view_nodes=view_nodes,
         session_runtime=session_runtime,
         scan_units=(),
+        dataset_resolver=dataset_resolver,
     )
     snapshot = snapshot or (session_runtime.udf_snapshot if session_runtime is not None else None)
     baseline_inferred = infer_deps_from_view_nodes(
@@ -147,6 +148,7 @@ def plan_with_delta_pins(  # noqa: PLR0914
         view_nodes=view_nodes,
         session_runtime=session_runtime,
         scan_units=scan_planning.scan_units,
+        dataset_resolver=dataset_resolver,
     )
     pinned_inferred = infer_deps_from_view_nodes(
         pinned_nodes,
@@ -250,6 +252,7 @@ def _plan_view_nodes(
     view_nodes: Sequence[ViewNode],
     session_runtime: SessionRuntime | None,
     scan_units: Sequence[ScanUnit],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[ViewNode, ...]:
     planned: list[ViewNode] = []
     for node in view_nodes:
@@ -261,6 +264,7 @@ def _plan_view_nodes(
                 compute_execution_plan=True,
                 session_runtime=session_runtime,
                 scan_units=scan_units,
+                dataset_resolver=dataset_resolver,
             ),
         )
         runtime_profile = session_runtime.profile if session_runtime is not None else None

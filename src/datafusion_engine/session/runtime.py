@@ -709,6 +709,20 @@ def semantic_output_locations_for_profile(
     return locations
 
 
+def _extract_output_config_for_profile(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> ExtractOutputConfig:
+    """Return the extract output config from the profile's data_sources."""
+    return runtime_profile.data_sources.extract_output
+
+
+def _semantic_output_config_for_profile(
+    runtime_profile: DataFusionRuntimeProfile,
+) -> SemanticOutputConfig:
+    """Return the semantic output config from the profile's data_sources."""
+    return runtime_profile.data_sources.semantic_output
+
+
 def _introspection_cache_for_ctx(
     ctx: SessionContext,
     *,
@@ -4081,7 +4095,7 @@ class RuntimeProfileCatalog:
         self,
         name: str,
         *,
-        dataset_resolver: ManifestDatasetResolver | None = None,
+        dataset_resolver: ManifestDatasetResolver,
     ) -> DatasetLocation | None:
         """Return a configured dataset location for the dataset name.
 
@@ -4090,8 +4104,7 @@ class RuntimeProfileCatalog:
         name
             Dataset name to resolve.
         dataset_resolver
-            Optional pre-resolved manifest resolver. Falls back to
-            ``dataset_bindings_for_profile`` when *None*.
+            Pre-resolved manifest resolver.
 
         Returns:
         -------
@@ -4134,13 +4147,14 @@ class RuntimeProfileCatalog:
                     delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
                 overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
             return msgspec.structs.replace(resolved, overrides=overrides)
-        if dataset_resolver is None:
-            from semantics.compile_context import dataset_bindings_for_profile
-
-            dataset_resolver = dataset_bindings_for_profile(self.profile)
         return dataset_resolver.location(name)
 
-    def dataset_location_or_raise(self, name: str) -> DatasetLocation:
+    def dataset_location_or_raise(
+        self,
+        name: str,
+        *,
+        dataset_resolver: ManifestDatasetResolver,
+    ) -> DatasetLocation:
         """Return a configured dataset location for the dataset name.
 
         Args:
@@ -4149,7 +4163,7 @@ class RuntimeProfileCatalog:
         Raises:
             KeyError: If the operation cannot be completed.
         """
-        location = self.dataset_location(name)
+        location = self.dataset_location(name, dataset_resolver=dataset_resolver)
         if location is None:
             msg = f"No dataset location configured for {name!r}."
             raise KeyError(msg)
@@ -4178,7 +4192,7 @@ class _RuntimeProfileCatalogFacadeMixin:
         self,
         name: str,
         *,
-        dataset_resolver: ManifestDatasetResolver | None = None,
+        dataset_resolver: ManifestDatasetResolver,
     ) -> DatasetLocation | None:
         """Return a configured dataset location for the dataset name.
 
@@ -4187,8 +4201,7 @@ class _RuntimeProfileCatalogFacadeMixin:
         name
             Dataset name to resolve.
         dataset_resolver
-            Optional pre-resolved manifest resolver. Falls back to
-            ``dataset_bindings_for_profile`` when *None*.
+            Pre-resolved manifest resolver.
 
         Returns:
         -------
@@ -4196,10 +4209,6 @@ class _RuntimeProfileCatalogFacadeMixin:
             Dataset location when configured.
         """
         profile = cast("DataFusionRuntimeProfile", self)
-        if dataset_resolver is None:
-            from semantics.compile_context import dataset_bindings_for_profile
-
-            dataset_resolver = dataset_bindings_for_profile(profile)
         return dataset_resolver.location(name)
 
 

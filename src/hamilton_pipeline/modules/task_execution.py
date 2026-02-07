@@ -887,56 +887,6 @@ def _extract_symtable(
     return {"symtable_files": table}
 
 
-from hamilton_pipeline.modules.extract_execution_registry import (
-    register_extract_executor,
-)
-
-_EXTRACT_EXECUTOR_REGISTRATION_STATE: dict[str, bool] = {"registered": False}
-
-
-def _ensure_extract_executors_registered() -> None:
-    """Populate extract executor registry once per process."""
-    if _EXTRACT_EXECUTOR_REGISTRATION_STATE["registered"]:
-        return
-
-    register_extract_executor("repo_scan", _extract_repo_scan)
-    register_extract_executor("scip", _extract_scip)
-    register_extract_executor("python_imports", _extract_python_imports)
-    register_extract_executor("python_external", _extract_python_external)
-    register_extract_executor("ast", _extract_ast)
-    register_extract_executor("cst", _extract_cst)
-    register_extract_executor("tree_sitter", _extract_tree_sitter)
-    register_extract_executor("bytecode", _extract_bytecode)
-    register_extract_executor("symtable", _extract_symtable)
-    _EXTRACT_EXECUTOR_REGISTRATION_STATE["registered"] = True
-
-
-def ensure_extract_executors_registered(*, force: bool = False) -> None:
-    """Populate extract executor registry for extract-template dispatch.
-
-    .. deprecated::
-        Executors are now resolved via
-        ``ExecutionAuthorityContext.extract_executor_map``.
-        This function is retained for legacy compatibility only.
-
-    Parameters
-    ----------
-    force
-        When ``True``, reset registration state before initializing.
-    """
-    import warnings
-
-    warnings.warn(
-        "ensure_extract_executors_registered() is deprecated; "
-        "executors are resolved via ExecutionAuthorityContext.extract_executor_map",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if force:
-        _EXTRACT_EXECUTOR_REGISTRATION_STATE["registered"] = False
-    _ensure_extract_executors_registered()
-
-
 def build_extract_executor_map(
     *,
     evidence_plan: EvidencePlan | None = None,
@@ -1249,11 +1199,13 @@ def _execute_and_record(
         return outputs[spec.task_output]
     else:
         plan_bundle = inputs.plan_bundles_by_task.get(spec.task_output)
+        semantic_ctx = inputs.execution_authority_context.semantic_context
         result = _execute_view(
             runtime,
             view_name=spec.task_output,
             plan_bundle=plan_bundle,
             scan_context=scan_context,
+            execution_context=semantic_ctx,
         )
     table = result.require_table()
     _record_output(
@@ -1339,7 +1291,6 @@ __all__ = [
     "TaskExecutionRuntimeConfig",
     "TaskExecutionSpec",
     "build_extract_executor_map",
-    "ensure_extract_executors_registered",
     "execute_task_from_catalog",
     "plan_scan_inputs",
     "runtime_artifacts",

@@ -21,12 +21,8 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from core_types import JsonValue
-from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
-from datafusion_engine.delta.store_policy import (
-    apply_delta_store_policy,
-    delta_store_policy_hash,
-)
+from datafusion_engine.delta.store_policy import delta_store_policy_hash
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.plan.cache import PlanProtoCacheEntry
 from datafusion_engine.plan.diagnostics import PlanPhaseDiagnostics, record_plan_phase_diagnostics
@@ -1908,12 +1904,14 @@ def _manifest_dataset_locations(
     runtime_profile = getattr(session_runtime, "profile", None)
     if runtime_profile is None:
         return locations
-    catalog = dataset_catalog_from_profile(runtime_profile)
-    for name in catalog.names():
-        locations[name] = apply_delta_store_policy(
-            catalog.get(name),
-            policy=runtime_profile.policies.delta_store_policy,
-        )
+    from semantics.compile_context import dataset_bindings_for_profile
+
+    bindings = dataset_bindings_for_profile(runtime_profile)
+    for name in bindings.names():
+        location = bindings.location(name)
+        if location is None:
+            continue
+        locations[name] = location
     return locations
 
 

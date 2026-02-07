@@ -135,6 +135,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.factory import DataFusionContextPool
     from datafusion_engine.udf.catalog import UdfCatalog
     from obs.datafusion_runs import DataFusionRun
+    from semantics.program_manifest import ManifestDatasetResolver
     from storage.deltalake.delta import IdempotentWriteOptions
 
     class _DeltaRuntimeEnvOptions(Protocol):
@@ -145,7 +146,6 @@ if TYPE_CHECKING:
 from datafusion_engine.dataset.registry import (
     DatasetCatalog,
     DatasetLocation,
-    dataset_catalog_from_profile,
 )
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
@@ -4076,12 +4076,10 @@ class RuntimeProfileCatalog:
                     delta_bundle = msgspec.structs.replace(delta_bundle, scan=delta_scan)
                 overrides = msgspec.structs.replace(overrides, delta=delta_bundle)
             return msgspec.structs.replace(resolved, overrides=overrides)
-        from datafusion_engine.dataset.registry import dataset_catalog_from_profile
+        from semantics.compile_context import dataset_bindings_for_profile
 
-        catalog = dataset_catalog_from_profile(self.profile)
-        if catalog.has(name):
-            return catalog.get(name)
-        return None
+        bindings = dataset_bindings_for_profile(self.profile)
+        return bindings.location(name)
 
     def dataset_location_or_raise(self, name: str) -> DatasetLocation:
         """Return a configured dataset location for the dataset name.
@@ -4126,10 +4124,9 @@ class _RuntimeProfileCatalogFacadeMixin:
             Dataset location when configured.
         """
         profile = cast("DataFusionRuntimeProfile", self)
-        catalog = dataset_catalog_from_profile(profile)
-        if not catalog.has(name):
-            return None
-        return catalog.get(name)
+        from semantics.compile_context import dataset_bindings_for_profile
+
+        return dataset_bindings_for_profile(profile).location(name)
 
 
 class _RuntimeProfileDeltaFacadeMixin:
@@ -4559,7 +4556,7 @@ class DataFusionRuntimeProfile(
         from datafusion_engine.bootstrap.zero_row import (
             run_zero_row_bootstrap_validation as run_bootstrap_validation,
         )
-        from semantics.compile_context import compile_semantic_program
+        from semantics.compile_context import build_semantic_execution_context
 
         resolved_request = request or BootstrapRequest(
             include_semantic_outputs=self.zero_row_bootstrap.include_semantic_outputs,
@@ -4572,15 +4569,16 @@ class DataFusionRuntimeProfile(
             seeded_datasets=self.zero_row_bootstrap.seeded_datasets,
         )
         active_ctx = ctx or self.session_context()
-        manifest = compile_semantic_program(
+        semantic_ctx = build_semantic_execution_context(
             runtime_profile=self,
+            ctx=active_ctx,
             policy=(
                 "schema_plus_runtime_probe"
                 if resolved_request.allow_semantic_row_probe_fallback
                 else "schema_plus_optional_probe"
             ),
-            ctx=active_ctx,
         )
+        manifest = semantic_ctx.manifest
         self.record_artifact("semantic_program_manifest_v1", manifest.payload())
         report = run_bootstrap_validation(
             self,
@@ -6979,6 +6977,7 @@ def register_cdf_inputs_for_profile(
     ctx: SessionContext,
     *,
     table_names: Sequence[str],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> Mapping[str, str]:
     """Register Delta CDF inputs for the requested tables.
 
@@ -6989,7 +6988,9 @@ def register_cdf_inputs_for_profile(
     """
     from datafusion_engine.delta.cdf import register_cdf_inputs
 
-    return register_cdf_inputs(ctx, profile, table_names=table_names)
+    return register_cdf_inputs(
+        ctx, profile, table_names=table_names, dataset_resolver=dataset_resolver
+    )
 
 
 def collect_datafusion_traces(
@@ -7612,11 +7613,12 @@ def record_dataset_readiness(
         return
     from datafusion_engine.lineage.diagnostics import record_artifact
     from obs.otel.heartbeat import set_heartbeat_blockers
+    from semantics.compile_context import dataset_bindings_for_profile
 
-    catalog = dataset_catalog_from_profile(profile)
+    bindings = dataset_bindings_for_profile(profile)
     blockers: list[str] = []
     for name in dataset_names:
-        location = catalog.get(name) if catalog.has(name) else None
+        location = bindings.location(name)
         if location is None:
             record_artifact(
                 profile,

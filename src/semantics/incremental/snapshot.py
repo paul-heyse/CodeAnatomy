@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 
 from datafusion_engine.arrow.build import column_or_null, table_from_columns
-from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 from datafusion_engine.delta.service import DeltaFeatureMutationRequest
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.write import WriteMode
@@ -183,8 +182,11 @@ def _merge_repo_snapshot(
         "source.mtime_ns <> target.mtime_ns"
     )
     ctx = context.runtime.session_runtime().ctx
-    catalog = dataset_catalog_from_profile(context.runtime.profile)
-    dataset_location = catalog.get("repo_snapshot") if catalog.has("repo_snapshot") else None
+    from semantics.compile_context import dataset_bindings_for_profile
+
+    dataset_location = dataset_bindings_for_profile(context.runtime.profile).location(
+        "repo_snapshot"
+    )
     extra_constraints = delta_constraints_for_location(dataset_location)
     from datafusion_engine.delta.service import DeltaMutationRequest
     from storage.deltalake import DeltaMergeArrowRequest

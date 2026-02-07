@@ -69,7 +69,6 @@ from datafusion_engine.dataset.registry import (
     DatasetCatalog,
     DatasetLocation,
     DatasetLocationOverrides,
-    dataset_catalog_from_profile,
     resolve_dataset_schema,
 )
 from datafusion_engine.dataset.resolution import (
@@ -136,6 +135,7 @@ from utils.value_coercion import coerce_int
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from semantics.program_manifest import ManifestDatasetResolver
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
 _CACHED_DATASETS: dict[int, set[str]] = {}
@@ -1139,11 +1139,26 @@ def register_dataset_df(
 ) -> DataFrame:
     """Register a dataset location with DataFusion and return a DataFrame.
 
+    .. deprecated::
+        For new code, prefer ``RegistryFacade.register_dataset_df()`` for
+        unified registration with rollback semantics. Import via
+        ``from datafusion_engine.registry_facade import registry_facade_for_context``.
+
+    Parameters
+    ----------
+    ctx
+        DataFusion session context.
+    name
+        Dataset name to register.
+    location
+        Dataset location descriptor.
+    options
+        Registration options including runtime profile and cache policy.
+
     Returns:
     -------
     datafusion.dataframe.DataFrame
         DataFusion DataFrame for the registered dataset.
-
     """
     from datafusion_engine.session.helpers import deregister_table
     from datafusion_engine.tables.registration import (
@@ -1415,163 +1430,43 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
     return df
 
 
-@dataclass(frozen=True)
-class _ListingRegistrationState:
-    provider: object | None
-    registration_mode: str
-    ddl: str | None
-
-
-@dataclass(frozen=True)
-class _ListingMetadataUpdate:
-    partition_cols: tuple[str, ...]
-    constraints: tuple[str, ...]
-    defaults: dict[str, str]
-    ddl: str | None
-    scan: DataFusionScanOptions | None
-
-
-def _record_listing_metadata(
-    *,
-    context: DataFusionRegistrationContext,
-    update: _ListingMetadataUpdate,
-) -> None:
-    metadata = table_provider_metadata(id(context.ctx), table_name=context.name)
-    if metadata is None:
-        return
-    updated = replace(
-        metadata,
-        ddl=update.ddl if update.ddl is not None else metadata.ddl,
-        constraints=update.constraints,
-        default_values=dict(update.defaults),
-        partition_columns=update.partition_cols,
-        unbounded=update.scan.unbounded if update.scan is not None else metadata.unbounded,
-    )
-    record_table_provider_metadata(id(context.ctx), metadata=updated)
-
-
-def _register_listing_from_files(
-    context: DataFusionRegistrationContext,
-    *,
-    scan: DataFusionScanOptions | None,
-) -> _ListingRegistrationState:
-    provider = _build_pyarrow_dataset(context.location, schema=context.options.schema)
-    adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
-    adapter.register_table(context.name, provider)
-    merged_schema, partition_cols, _required_non_null, key_fields, defaults = (
-        _ddl_schema_components(
-            schema=cast("pa.Schema | None", context.options.schema),
-            scan=scan,
-        )
-    )
-    constraints = _ddl_constraints(key_fields, merged_schema)
-    _record_listing_metadata(
-        context=context,
-        update=_ListingMetadataUpdate(
-            partition_cols=partition_cols,
-            constraints=constraints,
-            defaults=defaults,
-            ddl=None,
-            scan=scan,
-        ),
-    )
-    return _ListingRegistrationState(
-        provider=provider,
-        registration_mode="pyarrow_dataset",
-        ddl=None,
-    )
-
-
-def _execute_external_ddl(
-    ctx: SessionContext,
-    *,
-    ddl: str,
-    sql_options: SQLOptions,
-) -> None:
-    # Internal dataset registration requires DDL even when service SQL
-    # surfaces are configured read-only for user-facing execution paths.
-    resolved_options = sql_options.with_allow_ddl(allow=True).with_allow_statements(allow=True)
-    try:
-        ddl_df = ctx.sql_with_options(ddl, resolved_options)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        msg = f"External table DDL failed: {exc}"
-        raise ValueError(msg) from exc
-    if ddl_df is None:
-        msg = "External table DDL did not return a DataFusion DataFrame."
-        raise ValueError(msg)
-    ddl_df.collect()
-
-
-def _register_listing_from_ddl(
-    context: DataFusionRegistrationContext,
-    *,
-    sql_options: SQLOptions,
-) -> _ListingRegistrationState:
-    scan = context.options.scan
-    ddl, partition_cols, constraints, _required_non_null, defaults = _external_table_ddl(
-        name=context.name,
-        location=context.location,
-        schema=cast("pa.Schema | None", context.options.schema),
-        scan=scan,
-    )
-    _record_listing_metadata(
-        context=context,
-        update=_ListingMetadataUpdate(
-            partition_cols=partition_cols,
-            constraints=constraints,
-            defaults=defaults,
-            ddl=ddl,
-            scan=scan,
-        ),
-    )
-    _execute_external_ddl(context.ctx, ddl=ddl, sql_options=sql_options)
-    return _ListingRegistrationState(
-        provider=None,
-        registration_mode="external_table_ddl",
-        ddl=ddl,
-    )
-
-
 def _register_listing_table(context: DataFusionRegistrationContext) -> DataFrame:
-    runtime_profile = context.runtime_profile
-    scan = context.options.scan
-    sql_options = _sql_options.sql_options_for_profile(runtime_profile)
-    _apply_scan_settings(context.ctx, scan=scan, sql_options=sql_options)
-    state = (
-        _register_listing_from_files(context, scan=scan)
-        if context.location.files
-        else _register_listing_from_ddl(context, sql_options=sql_options)
+    """Register a listing table by delegating to the tables authority.
+
+    Delegate core registration to
+    ``datafusion_engine.tables.registration.register_listing_table`` and then
+    layer on fingerprint updates, provider artifact recording, and optional
+    caching that are specific to the dataset registration path.
+
+    Returns:
+    -------
+    DataFrame
+        Registered (and optionally cached) DataFusion DataFrame.
+    """
+    from datafusion_engine.tables.registration import (
+        register_listing_table as _register_listing_authority,
     )
-    df = context.ctx.table(context.name)
+
+    result = _register_listing_authority(context)
     _, _, fingerprint_details = _update_table_provider_fingerprints(
         context.ctx,
         name=context.name,
-        schema=df.schema(),
+        schema=result.df.schema(),
     )
-    details: dict[str, object] = {
-        "path": str(context.location.path),
-        "format": context.location.format,
-        "partitioning": context.location.partitioning,
-        "read_options": dict(context.options.read_options),
-        "registration_mode": state.registration_mode,
-    }
-    if state.ddl is not None:
-        details["ddl"] = state.ddl
-    if scan is not None:
-        details.update(_scan_details(scan))
+    details = dict(result.details)
     if fingerprint_details:
         details.update(fingerprint_details)
     _record_table_provider_artifact(
-        runtime_profile,
+        context.runtime_profile,
         artifact=_TableProviderArtifact(
             name=context.name,
-            provider=state.provider,
-            provider_kind=state.registration_mode,
+            provider=result.provider,
+            provider_kind=str(details.get("registration_mode", "listing_table")),
             source=None,
             details=details,
         ),
     )
-    return _maybe_cache(context, df)
+    return _maybe_cache(context, result.df)
 
 
 @dataclass(frozen=True)
@@ -2600,15 +2495,23 @@ def apply_projection_scan_overrides(
     *,
     projection_map: Mapping[str, Sequence[str]],
     runtime_profile: DataFusionRuntimeProfile | None,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> None:
-    """Re-register datasets with projection scan overrides when possible."""
+    """Re-register datasets with projection scan overrides when possible.
+
+    Raises:
+    ------
+    ValueError
+        If ``dataset_resolver`` is None.
+    """
     if runtime_profile is None:
         return
-    catalog = dataset_catalog_from_profile(runtime_profile)
+    if dataset_resolver is None:
+        return
     for table_name, columns in projection_map.items():
         if not columns:
             continue
-        location = catalog.get(table_name) if catalog.has(table_name) else None
+        location = dataset_resolver.location(table_name)
         if location is None:
             continue
         scan = location.resolved.datafusion_scan

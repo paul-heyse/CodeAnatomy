@@ -11,7 +11,6 @@ from datafusion import SessionContext
 from datafusion_engine.catalog.introspection import invalidate_introspection_cache
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
-    dataset_catalog_from_profile,
     resolve_datafusion_provider,
 )
 from datafusion_engine.delta.contracts import (
@@ -37,6 +36,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.system import DeltaScanOptions
+    from semantics.program_manifest import ManifestDatasetResolver
 
 DatasetProviderKind = Literal["delta", "delta_cdf"]
 
@@ -185,6 +185,7 @@ def apply_scan_unit_overrides(
     *,
     scan_units: Sequence[ScanUnit],
     runtime_profile: DataFusionRuntimeProfile | None,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> None:
     """Apply scan-unit derived overrides to registered Delta datasets."""
     if runtime_profile is None or not scan_units:
@@ -192,7 +193,7 @@ def apply_scan_unit_overrides(
     units_by_dataset = _scan_units_by_dataset(scan_units)
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     for dataset_name in sorted(units_by_dataset):
-        location = _resolve_dataset_location(runtime_profile, dataset_name)
+        location = _resolve_dataset_location(dataset_name, dataset_resolver=dataset_resolver)
         if location is None or location.format != "delta":
             continue
         if location.datafusion_provider == "delta_cdf" or location.delta_cdf_options is not None:
@@ -248,12 +249,15 @@ def _scan_units_by_dataset(scan_units: Sequence[ScanUnit]) -> dict[str, list[Sca
 
 
 def _resolve_dataset_location(
-    runtime_profile: DataFusionRuntimeProfile,
     dataset_name: str,
+    *,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> DatasetLocation | None:
-    catalog = dataset_catalog_from_profile(runtime_profile)
-    if catalog.has(dataset_name):
-        return catalog.get(dataset_name)
+    if dataset_resolver is None:
+        return None
+    loc = dataset_resolver.location(dataset_name)
+    if loc is not None:
+        return loc
     parts = dataset_name.split(".")
     candidates = [dataset_name]
     if parts:
@@ -261,8 +265,9 @@ def _resolve_dataset_location(
     if len(parts) >= _MIN_QUALIFIED_PARTS:
         candidates.append(".".join(parts[-2:]))
     for candidate in candidates:
-        if catalog.has(candidate):
-            return catalog.get(candidate)
+        loc = dataset_resolver.location(candidate)
+        if loc is not None:
+            return loc
     return None
 
 

@@ -235,9 +235,7 @@ import os
         """Definition records should not classify body references as definitions."""
         source = tmp_path / "sample.py"
         source.write_text(
-            "def process_imports():\n"
-            "    import_value = 1\n"
-            "    return import_value\n",
+            "def process_imports():\n    import_value = 1\n    return import_value\n",
             encoding="utf-8",
         )
         clear_caches()

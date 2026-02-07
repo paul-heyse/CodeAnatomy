@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -19,7 +19,7 @@ from datafusion_engine.arrow.interop import (
 from datafusion_engine.arrow.interop import (
     TableLike as ArrowTableLike,
 )
-from datafusion_engine.dataset.registry import DatasetLocation, dataset_catalog_from_profile
+from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.lineage.scan import ScanUnit
 from datafusion_engine.plan.execution import (
@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from extract.session import ExtractSession
     from hamilton_pipeline.types import RepoScanConfig
     from semantics.incremental.config import SemanticIncrementalConfig
+    from semantics.program_manifest import ManifestDatasetResolver
 else:
     DataFrame = object
     DataFusionPlanBundle = object
@@ -55,6 +56,7 @@ else:
     ScipExtractOptions = object
     RepoScanConfig = object
     SemanticIncrementalConfig = object
+    ManifestDatasetResolver = object
     try:
         from engine.session import EngineSession
     except ImportError:
@@ -492,10 +494,12 @@ def _ensure_scan_overrides(
     if refresh_requested:
         from semantics.compile_context import CompileContext
 
-        semantic_manifest = CompileContext(runtime_profile=profile).compile(ctx=session)
+        compile_ctx = CompileContext(runtime_profile=profile)
+        semantic_manifest = compile_ctx.compile(ctx=session)
         DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
             semantic_manifest=semantic_manifest,
+            dataset_resolver=compile_ctx.dataset_bindings(),
         )
         runtime.scan_override_hash = scan_context.scan_units_hash
     return profile
@@ -516,10 +520,12 @@ def _execute_view(
     if not session.table_exist(view_name):
         from semantics.compile_context import CompileContext
 
-        semantic_manifest = CompileContext(runtime_profile=profile).compile(ctx=session)
+        compile_ctx = CompileContext(runtime_profile=profile)
+        semantic_manifest = compile_ctx.compile(ctx=session)
         DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
             semantic_manifest=semantic_manifest,
+            dataset_resolver=compile_ctx.dataset_bindings(),
         )
         if not session.table_exist(view_name):
             msg = f"View {view_name!r} is not registered; call ensure_view_graph first."
@@ -593,13 +599,34 @@ def _resolve_extract_input_table(
 def _resolve_dataframe_from_session(
     session_runtime: SessionRuntime,
     name: str,
+    *,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> DataFrame | None:
+    """Resolve a named DataFrame from the session context.
+
+    Resolve dataset locations through the manifest-based *dataset_resolver*
+    when the table is not already registered. Return ``None`` when the
+    resolver is unavailable or the dataset cannot be located.
+
+    Parameters
+    ----------
+    session_runtime
+        Active session runtime with a DataFusion context.
+    name
+        Dataset name to resolve.
+    dataset_resolver
+        Manifest-based resolver for dataset locations.
+
+    Returns:
+        Resolved DataFrame or ``None`` when the dataset cannot be located.
+    """
     ctx = session_runtime.ctx
     try:
         return ctx.table(name)
     except (KeyError, RuntimeError, TypeError, ValueError):
-        catalog = dataset_catalog_from_profile(session_runtime.profile)
-        location = catalog.get(name) if catalog.has(name) else None
+        if dataset_resolver is None:
+            return None
+        location = dataset_resolver.location(name)
         if location is None:
             return None
         from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -836,36 +863,55 @@ def _extract_symtable(
     return {"symtable_files": table}
 
 
-_EXTRACT_ADAPTER_EXECUTORS: Mapping[
-    str,
-    Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]],
-] = {
-    "repo_scan": _extract_repo_scan,
-    "scip": _extract_scip,
-    "python_imports": _extract_python_imports,
-    "python_external": _extract_python_external,
-    "ast": _extract_ast,
-    "cst": _extract_cst,
-    "tree_sitter": _extract_tree_sitter,
-    "bytecode": _extract_bytecode,
-    "symtable": _extract_symtable,
-}
+from hamilton_pipeline.modules.extract_execution_registry import (
+    get_extract_executor,
+    register_extract_executor,
+)
+
+_EXTRACT_EXECUTORS_REGISTERED = False
+
+
+def _ensure_extract_executors_registered() -> None:
+    """Populate extract executor registry once per process."""
+    global _EXTRACT_EXECUTORS_REGISTERED
+    if _EXTRACT_EXECUTORS_REGISTERED:
+        return
+
+    register_extract_executor("repo_scan", _extract_repo_scan)
+    register_extract_executor("scip", _extract_scip)
+    register_extract_executor("python_imports", _extract_python_imports)
+    register_extract_executor("python_external", _extract_python_external)
+    register_extract_executor("ast", _extract_ast)
+    register_extract_executor("cst", _extract_cst)
+    register_extract_executor("tree_sitter", _extract_tree_sitter)
+    register_extract_executor("bytecode", _extract_bytecode)
+    register_extract_executor("symtable", _extract_symtable)
+    _EXTRACT_EXECUTORS_REGISTERED = True
 
 
 def _dataset_location_for_output(
-    inputs: TaskExecutionInputs,
     *,
     dataset_name: str,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> DatasetLocation | None:
-    catalog = dataset_catalog_from_profile(inputs.engine_session.datafusion_profile)
-    if not catalog.has(dataset_name):
+    """Return the dataset location for an extract output.
+
+    Resolve the location through the manifest-based *dataset_resolver*
+    when available. Return ``None`` when the resolver is unavailable.
+
+    Parameters
+    ----------
+    dataset_name
+        Dataset name to look up.
+    dataset_resolver
+        Manifest-based resolver for dataset locations.
+
+    Returns:
+        Location if found, ``None`` otherwise.
+    """
+    if dataset_resolver is None:
         return None
-    return catalog.get(dataset_name)
-
-
-def _missing_extract_handler_error(adapter_name: str) -> ValueError:
-    msg = f"Missing extract execution handler for template {adapter_name!r}."
-    return ValueError(msg)
+    return dataset_resolver.location(dataset_name)
 
 
 def _ensure_extract_output(
@@ -890,7 +936,7 @@ def _ensure_extract_output(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized[spec.task_output] = empty_table(schema)
-        location = _dataset_location_for_output(inputs, dataset_name=spec.task_output)
+        location = _dataset_location_for_output(dataset_name=spec.task_output)
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [
@@ -919,7 +965,10 @@ def _execute_extract_task(
     if session_runtime is None:
         msg = "RuntimeArtifacts.execution must be configured for extract execution."
         raise ValueError(msg)
-    from datafusion_engine.extract.adapter_registry import extract_template_adapter
+    from datafusion_engine.extract.adapter_registry import (
+        adapter_executor_key,
+        extract_template_adapter,
+    )
     from extract.session import ExtractSession
     from relspec.extract_plan import extract_output_task_map
 
@@ -936,9 +985,9 @@ def _execute_extract_task(
         except KeyError as exc:
             msg = f"Unsupported extract template {task_spec.extractor!r}."
             raise ValueError(msg) from exc
-        handler = _EXTRACT_ADAPTER_EXECUTORS.get(adapter.name)
-        if handler is None:
-            raise _missing_extract_handler_error(adapter.name)
+        _ensure_extract_executors_registered()
+        adapter_key = adapter_executor_key(adapter.name)
+        handler = get_extract_executor(adapter_key)
         outputs = handler(inputs, extract_session, profile_name)
         normalized = _normalize_extract_outputs(outputs)
     except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -952,7 +1001,7 @@ def _execute_extract_task(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized = {spec.task_output: empty_table(schema)}
-        location = _dataset_location_for_output(inputs, dataset_name=spec.task_output)
+        location = _dataset_location_for_output(dataset_name=spec.task_output)
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [
@@ -1128,7 +1177,7 @@ def _record_extract_outputs(
         rows = None
         if hasattr(table, "num_rows"):
             rows = int(table.num_rows)
-        location = _dataset_location_for_output(inputs, dataset_name=name)
+        location = _dataset_location_for_output(dataset_name=name)
         status = "ok"
         issue = None
         if location is None:

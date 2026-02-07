@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
-from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
 from datafusion_engine.lineage.datafusion import LineageReport
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_units
@@ -21,6 +20,7 @@ from utils.hashing import hash_msgpack_canonical, hash_sha256_hex
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
+    from semantics.program_manifest import ManifestDatasetResolver
 
 _SCAN_TASK_PREFIX = "scan_unit_"
 _HASH_SLICE = 16
@@ -75,10 +75,15 @@ def plan_with_delta_pins(
     if runtime_profile is None:
         msg = "Runtime profile is required for planning with Delta pins."
         raise ValueError(msg)
-    from semantics.compile_context import CompileContext
+    from semantics.compile_context import build_semantic_execution_context
 
+    semantic_ctx = build_semantic_execution_context(
+        runtime_profile=runtime_profile,
+        ctx=ctx,
+    )
+    dataset_resolver = semantic_ctx.dataset_resolver
     session_runtime = runtime_profile.session_runtime()
-    semantic_manifest = CompileContext(runtime_profile=runtime_profile).compile(ctx=ctx)
+    semantic_manifest = semantic_ctx.manifest
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     # Baseline registration ensures UDF platform and registry views exist.
     facade.ensure_view_graph(semantic_manifest=semantic_manifest)
@@ -98,16 +103,19 @@ def plan_with_delta_pins(
         ctx,
         runtime_profile=runtime_profile,
         inferred=baseline_inferred,
+        dataset_resolver=dataset_resolver,
     )
     if scan_planning.scan_units:
         apply_scan_unit_overrides(
             ctx,
             scan_units=scan_planning.scan_units,
             runtime_profile=runtime_profile,
+            dataset_resolver=dataset_resolver,
         )
         facade.ensure_view_graph(
             scan_units=scan_planning.scan_units,
             semantic_manifest=semantic_manifest,
+            dataset_resolver=dataset_resolver,
         )
     pinned_nodes = _plan_view_nodes(
         ctx,
@@ -142,13 +150,21 @@ def _scan_planning(
     *,
     runtime_profile: DataFusionRuntimeProfile,
     inferred: Sequence[InferredDeps],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> _ScanPlanning:
     scans_by_task = {dep.task_name: dep.scans for dep in inferred if dep.scans}
     if scans_by_task:
-        catalog = dataset_catalog_from_profile(runtime_profile)
+        if dataset_resolver is None:
+            msg = "dataset_resolver is required for scan planning."
+            raise ValueError(msg)
+        dataset_locations = {
+            name: loc
+            for name in dataset_resolver.names()
+            if (loc := dataset_resolver.location(name)) is not None
+        }
         scan_units, scan_keys_by_task = plan_scan_units(
             ctx,
-            dataset_locations={name: catalog.get(name) for name in catalog.names()},
+            dataset_locations=dataset_locations,
             scans_by_task=scans_by_task,
             runtime_profile=runtime_profile,
         )

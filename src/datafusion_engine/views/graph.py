@@ -13,9 +13,6 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.dataset.registry import (
-    dataset_catalog_from_profile,
-)
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.lineage.diagnostics import record_artifact
@@ -49,6 +46,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from semantics.program_manifest import ManifestDatasetResolver
 
 
 @dataclass(frozen=True)
@@ -139,6 +137,7 @@ class ViewGraphRuntimeOptions:
 
     runtime_profile: DataFusionRuntimeProfile | None = None
     require_artifacts: bool = False
+    dataset_resolver: ManifestDatasetResolver | None = None
 
 
 @dataclass(frozen=True)
@@ -320,7 +319,7 @@ def _maybe_capture_scan_units(
     scan_units = _plan_scan_units_for_bundle(
         context.ctx,
         bundle=node.plan_bundle,
-        runtime_profile=runtime_profile,
+        dataset_resolver=context.runtime.dataset_resolver,
     )
     if not scan_units:
         return
@@ -330,6 +329,7 @@ def _maybe_capture_scan_units(
         context.ctx,
         scan_units=scan_units,
         runtime_profile=runtime_profile,
+        dataset_resolver=context.runtime.dataset_resolver,
     )
     scan_state.scan_keys_by_view[node.name] = tuple(unit.key for unit in scan_units)
     for unit in scan_units:
@@ -647,7 +647,9 @@ def _register_view_with_cache(
     if node.cache_policy == "delta_staging":
         return _register_delta_staging_cache(registration)
     if node.cache_policy == "delta_output":
-        return _register_delta_output_cache(registration)
+        return _register_delta_output_cache(
+            registration, dataset_resolver=cache.runtime.dataset_resolver
+        )
     if node.cache_policy != "none":
         msg = f"Unsupported cache policy: {node.cache_policy!r}."
         raise ValueError(msg)
@@ -841,15 +843,19 @@ def _register_delta_staging_cache(registration: CacheRegistrationContext) -> Dat
     return registration.ctx.table(registration.node.name)
 
 
-def _register_delta_output_cache(registration: CacheRegistrationContext) -> DataFrame:
+def _register_delta_output_cache(
+    registration: CacheRegistrationContext,
+    *,
+    dataset_resolver: ManifestDatasetResolver | None = None,
+) -> DataFrame:
     runtime_profile = _require_runtime_profile(
         registration.cache,
         policy_label="Delta output cache",
     )
-    catalog = dataset_catalog_from_profile(runtime_profile)
-    location = (
-        catalog.get(registration.node.name) if catalog.has(registration.node.name) else None
-    )
+    if dataset_resolver is None:
+        msg = f"dataset_resolver is required for Delta output cache of {registration.node.name!r}."
+        raise ValueError(msg)
+    location = dataset_resolver.location(registration.node.name)
     if location is None:
         msg = f"Delta output cache missing dataset location for {registration.node.name!r}."
         raise ValueError(msg)
@@ -960,7 +966,11 @@ def _register_delta_output_cache(registration: CacheRegistrationContext) -> Data
             plan_hash=plan_identity_hash,
         )
     )
-    pipeline = WritePipeline(registration.ctx, runtime_profile=runtime_profile)
+    pipeline = WritePipeline(
+        registration.ctx,
+        runtime_profile=runtime_profile,
+        dataset_resolver=dataset_resolver,
+    )
     with cache_span(
         "cache.view.delta_output.write",
         cache_policy=registration.node.cache_policy,
@@ -1197,15 +1207,17 @@ def _plan_scan_units_for_bundle(
     ctx: SessionContext,
     *,
     bundle: DataFusionPlanBundle,
-    runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[ScanUnit, ...]:
     from datafusion_engine.lineage.scan import plan_scan_unit
 
     lineage = extract_lineage_from_bundle(bundle)
-    catalog = dataset_catalog_from_profile(runtime_profile)
+    if dataset_resolver is None:
+        msg = "dataset_resolver is required for scan unit planning from bundle."
+        raise ValueError(msg)
     scan_units: dict[str, ScanUnit] = {}
     for scan in lineage.scans:
-        location = catalog.get(scan.dataset_name) if catalog.has(scan.dataset_name) else None
+        location = dataset_resolver.location(scan.dataset_name)
         if location is None:
             continue
         unit = plan_scan_unit(

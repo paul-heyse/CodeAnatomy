@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from semantics.program_manifest import ManifestDatasetResolver
     from serde_artifacts import PlanArtifacts
 
 
@@ -205,6 +206,7 @@ class PlanExecutionOptions:
     view_name: str | None = None
     scan: PlanScanOverrides = field(default_factory=PlanScanOverrides)
     emit: PlanEmissionOptions = field(default_factory=PlanEmissionOptions)
+    dataset_resolver: ManifestDatasetResolver | None = None
 
 
 @dataclass(frozen=True)

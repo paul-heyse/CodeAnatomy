@@ -14,7 +14,6 @@ from datafusion_engine.arrow.coercion import coerce_table_to_storage, to_arrow_t
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
-    dataset_catalog_from_profile,
 )
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
@@ -80,10 +79,9 @@ def _profile_dataset_location(
     profile: DataFusionRuntimeProfile,
     dataset_name: str,
 ) -> DatasetLocation | None:
-    catalog = dataset_catalog_from_profile(profile)
-    if not catalog.has(dataset_name):
-        return None
-    return catalog.get(dataset_name)
+    from semantics.compile_context import dataset_bindings_for_profile
+
+    return dataset_bindings_for_profile(profile).location(dataset_name)
 
 
 def _resolve_cdf_inputs(

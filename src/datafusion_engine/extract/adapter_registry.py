@@ -84,8 +84,28 @@ def extract_template_adapters() -> tuple[ExtractTemplateAdapter, ...]:
     return tuple(_ADAPTERS[name] for name in sorted(_ADAPTERS))
 
 
+def adapter_executor_key(adapter_name: str) -> str:
+    """Return the canonical executor key for an adapter template name.
+
+    Use this function as the single source of truth for the mapping
+    between adapter metadata names and execution dispatch keys.
+
+    Parameters
+    ----------
+    adapter_name
+        Adapter template name from the adapter registry.
+
+    Returns:
+    -------
+    str
+        Executor dispatch key (same as adapter_name by convention).
+    """
+    return adapter_name
+
+
 __all__ = [
     "ExtractTemplateAdapter",
+    "adapter_executor_key",
     "extract_template_adapter",
     "extract_template_adapters",
     "maybe_extract_template_adapter",

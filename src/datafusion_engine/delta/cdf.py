@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.dataset.registry import (
-    dataset_catalog_from_profile,
     resolve_datafusion_provider,
 )
 from datafusion_engine.io.adapter import DataFusionIOAdapter
@@ -18,6 +17,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from semantics.program_manifest import ManifestDatasetResolver
 
 
 CDF_METADATA_COLUMNS: tuple[str, ...] = (
@@ -40,6 +40,7 @@ def register_cdf_inputs(
     runtime_profile: DataFusionRuntimeProfile,
     *,
     table_names: Sequence[str],
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> dict[str, str]:
     """Register CDF-backed inputs and return base-to-CDF name mapping.
 
@@ -47,6 +48,11 @@ def register_cdf_inputs(
     -------
     dict[str, str]
         Mapping from base table names to CDF view names.
+
+    Raises:
+    -------
+    ValueError
+        If ``dataset_resolver`` is None.
     """
     from datafusion_engine.dataset.registration import (
         DatasetRegistrationOptions,
@@ -54,11 +60,13 @@ def register_cdf_inputs(
     )
     from datafusion_engine.tables.metadata import table_provider_metadata
 
+    if dataset_resolver is None:
+        msg = "dataset_resolver is required for CDF input registration."
+        raise ValueError(msg)
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
-    catalog = dataset_catalog_from_profile(runtime_profile)
     mapping: dict[str, str] = {}
     for name in table_names:
-        location = catalog.get(name) if catalog.has(name) else None
+        location = dataset_resolver.location(name)
         cdf_name = f"{name}__cdf"
         metadata = table_provider_metadata(id(ctx), table_name=name)
         supports_cdf = bool(metadata.supports_cdf) if metadata is not None else False

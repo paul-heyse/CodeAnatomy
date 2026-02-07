@@ -383,10 +383,17 @@ def registry_facade_for_context(
         Registry facade bound to the provided context.
     """
     from datafusion_engine.catalog.provider_registry import ProviderRegistry
-    from datafusion_engine.dataset.registry import dataset_catalog_from_profile
+    from datafusion_engine.dataset.registry import DatasetCatalog
     from datafusion_engine.udf.catalog import UdfCatalogAdapter
+    from semantics.compile_context import dataset_bindings_for_profile
 
-    dataset_catalog = dataset_catalog_from_profile(runtime_profile)
+    bindings = dataset_bindings_for_profile(runtime_profile)
+    dataset_catalog = DatasetCatalog()
+    for name in bindings.names():
+        location = bindings.location(name)
+        if location is None:
+            continue
+        dataset_catalog.register(name, location, overwrite=True)
     provider_registry = ProviderRegistry(ctx=ctx, runtime_profile=runtime_profile)
     try:
         udf_catalog = runtime_profile.udf_catalog(ctx)

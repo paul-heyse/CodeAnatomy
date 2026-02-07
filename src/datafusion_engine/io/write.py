@@ -50,7 +50,6 @@ from core_types import IDENTIFIER_PATTERN
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
-    dataset_catalog_from_profile,
 )
 from datafusion_engine.delta.service import (
     DeltaFeatureMutationRequest,
@@ -93,6 +92,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.streaming import StreamingExecutionResult
     from obs.datafusion_runs import DataFusionRun
     from schema_spec.system import DatasetSpec, ValidationPolicySpec
+    from semantics.program_manifest import ManifestDatasetResolver
 from datafusion_engine.tables.metadata import table_provider_metadata
 
 
@@ -761,6 +761,7 @@ class WritePipeline:
         sql_options: SQLOptions | None = None,
         recorder: DiagnosticsRecorder | None = None,
         runtime_profile: DataFusionRuntimeProfile | None = None,
+        dataset_resolver: ManifestDatasetResolver | None = None,
     ) -> None:
         """Initialize write pipeline.
 
@@ -774,11 +775,14 @@ class WritePipeline:
             Optional diagnostics recorder for write operations.
         runtime_profile
             Optional DataFusion runtime profile for Delta writes.
+        dataset_resolver
+            Optional manifest-based dataset resolver.
         """
         self.ctx = ctx
         self.sql_options = sql_options
         self.recorder = recorder
         self.runtime_profile = runtime_profile
+        self.dataset_resolver = dataset_resolver
 
     def _resolved_sql_options(self) -> SQLOptions:
         if self.sql_options is not None:
@@ -856,16 +860,24 @@ class WritePipeline:
         Returns:
         -------
         tuple[str, DatasetLocation] | None
-            Dataset name and location when resolved.
+            Dataset name and location when resolved, or ``None`` when the
+            resolver is not available.
         """
         if self.runtime_profile is None:
             return None
-        catalog = dataset_catalog_from_profile(self.runtime_profile)
-        if catalog.has(destination):
-            return destination, catalog.get(destination)
+        if self.dataset_resolver is None:
+            return None
+        loc = self.dataset_resolver.location(destination)
+        if loc is not None:
+            return destination, loc
         normalized_destination = str(destination)
+        resolver = self.dataset_resolver
         return self._match_dataset_location(
-            ((name, catalog.get(name)) for name in catalog.names()),
+            (
+                (name, resolved)
+                for name in resolver.names()
+                if (resolved := resolver.location(name)) is not None
+            ),
             normalized_destination=normalized_destination,
         )
 

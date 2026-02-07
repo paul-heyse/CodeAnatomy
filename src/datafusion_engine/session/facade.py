@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.schema.introspection import SchemaIntrospector
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
-    from semantics.program_manifest import SemanticProgramManifest
+    from semantics.program_manifest import ManifestDatasetResolver, SemanticProgramManifest
 
 
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
@@ -735,6 +735,7 @@ class DataFusionExecutionFacade:
         *,
         scan_units: Sequence[ScanUnit] = (),
         semantic_manifest: SemanticProgramManifest,
+        dataset_resolver: ManifestDatasetResolver | None = None,
     ) -> Mapping[str, object]:
         """Ensure the view graph is registered for the current context.
 
@@ -762,6 +763,7 @@ class DataFusionExecutionFacade:
             runtime_profile=self.runtime_profile,
             scan_units=tuple(scan_units),
             semantic_manifest=semantic_manifest,
+            dataset_resolver=dataset_resolver,
         )
 
     def register_dataset(
@@ -822,11 +824,14 @@ class DataFusionExecutionFacade:
             msg = "Delta CDF registration requires enable_delta_cdf to be True."
             raise ValueError(msg)
         from datafusion_engine.delta.cdf import register_cdf_inputs
+        from semantics.compile_context import dataset_bindings_for_profile
 
+        resolver = dataset_bindings_for_profile(self.runtime_profile)
         return register_cdf_inputs(
             self.ctx,
             self.runtime_profile,
             table_names=table_names,
+            dataset_resolver=resolver,
         )
 
     def run_zero_row_bootstrap_validation(

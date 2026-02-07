@@ -227,11 +227,7 @@ def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
     lines = ["  Code Facts:"]
     show_unresolved = _show_unresolved_facts()
     for cluster in clusters:
-        rows = [
-            row
-            for row in cluster.rows
-            if show_unresolved or row.reason != "not_resolved"
-        ]
+        rows = [row for row in cluster.rows if show_unresolved or row.reason != "not_resolved"]
         if not rows:
             continue
         lines.append(f"  - {cluster.title}")

@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import msgspec
 from datafusion import SessionContext
 
 from datafusion_engine.dataset.registry import DatasetLocation
@@ -127,6 +128,29 @@ class WriteOutcomeMetrics:
     final_version: int | None = None
 
 
+@dataclass(frozen=True)
+class DeltaMaintenanceDecision:
+    """Outcome-driven Delta maintenance decision.
+
+    Parameters
+    ----------
+    plan
+        Resolved maintenance plan when maintenance should run.
+    metrics
+        Write outcome metrics used for threshold evaluation.
+    reasons
+        Deterministic reason labels describing the decision.
+    used_fallback
+        ``True`` when decision fell back to compatibility behavior because
+        write metrics were unavailable.
+    """
+
+    plan: DeltaMaintenancePlan | None
+    metrics: WriteOutcomeMetrics
+    reasons: tuple[str, ...]
+    used_fallback: bool = False
+
+
 def _safe_int(val: object) -> int | None:
     """Coerce a value to int if possible.
 
@@ -192,20 +216,131 @@ def build_write_outcome_metrics(
     )
 
 
-def maintenance_decision_artifact_payload(
-    metrics: WriteOutcomeMetrics,
+def _checkpoint_interval_reached(final_version: int | None, interval: int | None) -> bool:
+    """Return True when final version is aligned to checkpoint interval."""
+    if final_version is None or interval is None or interval <= 0:
+        return False
+    return final_version % interval == 0
+
+
+def _has_executable_operations(policy: DeltaMaintenancePolicy) -> bool:
+    """Return True when policy enables at least one executable operation."""
+    return any(
+        (
+            policy.optimize_on_write,
+            policy.vacuum_on_write,
+            policy.enable_deletion_vectors,
+            policy.enable_v2_checkpoints,
+            policy.enable_log_compaction,
+            bool(getattr(policy, "checkpoint_on_write", False)),
+        )
+    )
+
+
+def _apply_execution_thresholds(
+    policy: DeltaMaintenancePolicy,
     *,
-    plan: DeltaMaintenancePlan | None,
+    metrics: WriteOutcomeMetrics,
+) -> tuple[DeltaMaintenancePolicy, tuple[str, ...]]:
+    """Apply outcome thresholds and return effective policy plus reasons."""
+    effective = policy
+    reasons: list[str] = []
+    if _threshold_exceeded(metrics.files_created, policy.optimize_file_threshold):
+        reasons.append("optimize_file_threshold_exceeded")
+        if not effective.optimize_on_write:
+            effective = msgspec.structs.replace(effective, optimize_on_write=True)
+    if _threshold_exceeded(metrics.total_file_count, policy.total_file_threshold):
+        reasons.append("total_file_threshold_exceeded")
+        if not effective.optimize_on_write:
+            effective = msgspec.structs.replace(effective, optimize_on_write=True)
+    if _threshold_exceeded(metrics.version_delta, policy.vacuum_version_threshold):
+        reasons.append("vacuum_version_threshold_exceeded")
+        if not effective.vacuum_on_write:
+            effective = msgspec.structs.replace(effective, vacuum_on_write=True)
+    if _checkpoint_interval_reached(metrics.final_version, policy.checkpoint_version_interval):
+        reasons.append("checkpoint_interval_reached")
+        if not effective.checkpoint_on_write:
+            effective = msgspec.structs.replace(effective, checkpoint_on_write=True)
+    if effective.optimize_on_write and not reasons:
+        reasons.append("optimize_on_write")
+    if effective.vacuum_on_write and "vacuum_on_write" not in reasons:
+        reasons.append("vacuum_on_write")
+    if effective.checkpoint_on_write and "checkpoint_on_write" not in reasons:
+        reasons.append("checkpoint_on_write")
+    if effective.enable_deletion_vectors:
+        reasons.append("enable_deletion_vectors")
+    if effective.enable_v2_checkpoints:
+        reasons.append("enable_v2_checkpoints")
+    if effective.enable_log_compaction:
+        reasons.append("enable_log_compaction")
+    return effective, tuple(dict.fromkeys(reasons))
+
+
+def resolve_maintenance_from_execution(
+    request: DeltaMaintenancePlanInput,
+    *,
+    metrics: WriteOutcomeMetrics | None,
+) -> DeltaMaintenanceDecision:
+    """Resolve maintenance plan from write outcomes with compatibility fallback.
+
+    Returns:
+    -------
+    DeltaMaintenanceDecision
+        Decision bundle containing optional plan, metrics, and reasons.
+    """
+    base_plan = resolve_delta_maintenance_plan(request)
+    resolved_metrics = metrics or WriteOutcomeMetrics()
+    if base_plan is None:
+        return DeltaMaintenanceDecision(
+            plan=None,
+            metrics=resolved_metrics,
+            reasons=("maintenance_not_configured",),
+            used_fallback=metrics is None,
+        )
+    if metrics is None:
+        return DeltaMaintenanceDecision(
+            plan=base_plan,
+            metrics=resolved_metrics,
+            reasons=("metrics_unavailable_compatibility_fallback",),
+            used_fallback=True,
+        )
+    effective_policy, reasons = _apply_execution_thresholds(base_plan.policy, metrics=metrics)
+    if not _has_executable_operations(effective_policy):
+        return DeltaMaintenanceDecision(
+            plan=None,
+            metrics=metrics,
+            reasons=reasons or ("thresholds_not_met",),
+            used_fallback=False,
+        )
+    effective_plan = DeltaMaintenancePlan(
+        table_uri=base_plan.table_uri,
+        dataset_name=base_plan.dataset_name,
+        storage_options=base_plan.storage_options,
+        log_storage_options=base_plan.log_storage_options,
+        delta_version=base_plan.delta_version,
+        delta_timestamp=base_plan.delta_timestamp,
+        feature_gate=base_plan.feature_gate,
+        policy=effective_policy,
+    )
+    return DeltaMaintenanceDecision(
+        plan=effective_plan,
+        metrics=metrics,
+        reasons=reasons,
+        used_fallback=False,
+    )
+
+
+def maintenance_decision_artifact_payload(
+    decision: DeltaMaintenanceDecision,
+    *,
     dataset_name: str | None = None,
 ) -> dict[str, object]:
     """Build artifact payload for a maintenance decision.
 
     Parameters
     ----------
-    metrics
-        Write outcome metrics that triggered (or didn't trigger) maintenance.
-    plan
-        Resolved maintenance plan, or ``None`` if no maintenance needed.
+    decision
+        Outcome decision bundle containing metrics, reasons, and optional plan.
     dataset_name
         Logical name of the dataset.
 
@@ -214,6 +349,8 @@ def maintenance_decision_artifact_payload(
     dict[str, object]
         Payload suitable for ``profile.record_artifact()``.
     """
+    metrics = decision.metrics
+    plan = decision.plan
     triggered_operations: list[str] = []
     if plan is not None:
         policy = plan.policy
@@ -238,6 +375,8 @@ def maintenance_decision_artifact_payload(
         "final_version": metrics.final_version,
         "maintenance_triggered": plan is not None,
         "triggered_operations": triggered_operations,
+        "reasons": list(decision.reasons),
+        "used_fallback": decision.used_fallback,
     }
 
 
@@ -508,12 +647,14 @@ def maintenance_z_order_cols(
 
 
 __all__ = [
+    "DeltaMaintenanceDecision",
     "DeltaMaintenancePlan",
     "DeltaMaintenancePlanInput",
     "WriteOutcomeMetrics",
     "build_write_outcome_metrics",
     "maintenance_decision_artifact_payload",
     "maintenance_z_order_cols",
+    "resolve_maintenance_from_execution",
     "resolve_delta_maintenance_plan",
     "run_delta_maintenance",
 ]

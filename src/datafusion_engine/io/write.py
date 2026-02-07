@@ -1735,28 +1735,66 @@ class WritePipeline:
         *,
         spec: DeltaWriteSpec,
         delta_version: int,
+        initial_version: int | None,
+        write_report: Mapping[str, object] | None,
     ) -> None:
         if self.runtime_profile is None:
             return
         from datafusion_engine.delta.maintenance import (
+            WriteOutcomeMetrics,
             DeltaMaintenancePlanInput,
+            build_write_outcome_metrics,
+            maintenance_decision_artifact_payload,
+            resolve_maintenance_from_execution,
             resolve_delta_maintenance_plan,
             run_delta_maintenance,
         )
+        from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import DELTA_MAINTENANCE_DECISION_SPEC
 
-        plan = resolve_delta_maintenance_plan(
-            DeltaMaintenancePlanInput(
-                dataset_location=spec.dataset_location,
-                table_uri=spec.table_uri,
-                dataset_name=spec.commit_key,
-                storage_options=spec.storage_options,
-                log_storage_options=spec.log_storage_options,
-                delta_version=delta_version,
-                delta_timestamp=None,
-                feature_gate=spec.feature_gate,
-                policy=spec.maintenance_policy,
+        metrics: WriteOutcomeMetrics | None = None
+        if write_report is not None:
+            metrics = build_write_outcome_metrics(
+                write_report,
+                initial_version=initial_version,
             )
+            if metrics.final_version is None:
+                metrics = WriteOutcomeMetrics(
+                    files_created=metrics.files_created,
+                    total_file_count=metrics.total_file_count,
+                    version_delta=metrics.version_delta,
+                    final_version=delta_version,
+                )
+        elif delta_version >= 0:
+            metrics = WriteOutcomeMetrics(final_version=delta_version)
+
+        plan_input = DeltaMaintenancePlanInput(
+            dataset_location=spec.dataset_location,
+            table_uri=spec.table_uri,
+            dataset_name=spec.commit_key,
+            storage_options=spec.storage_options,
+            log_storage_options=spec.log_storage_options,
+            delta_version=delta_version,
+            delta_timestamp=None,
+            feature_gate=spec.feature_gate,
+            policy=spec.maintenance_policy,
         )
+        decision = resolve_maintenance_from_execution(
+            plan_input,
+            metrics=metrics,
+        )
+        record_artifact(
+            self.runtime_profile,
+            DELTA_MAINTENANCE_DECISION_SPEC,
+            maintenance_decision_artifact_payload(
+                decision,
+                dataset_name=spec.commit_key,
+            ),
+        )
+        plan = decision.plan
+        if plan is None and metrics is None:
+            # Compatibility fallback path for scenarios where no metrics are available.
+            plan = resolve_delta_maintenance_plan(plan_input)
         if plan is None:
             return
         run_delta_maintenance(self.ctx, plan=plan, runtime_profile=self.runtime_profile)
@@ -1882,7 +1920,12 @@ class WritePipeline:
                 delta_version=final_version,
             )
         )
-        self._run_post_write_maintenance(spec=spec, delta_version=final_version)
+        self._run_post_write_maintenance(
+            spec=spec,
+            delta_version=final_version,
+            initial_version=existing_version,
+            write_report=delta_result.report,
+        )
         canonical_uri = canonical_table_uri(spec.table_uri)
         return DeltaWriteOutcome(
             delta_result=DeltaWriteResult(

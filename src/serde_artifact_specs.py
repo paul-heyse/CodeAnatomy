@@ -14,6 +14,8 @@ the registry.
 from __future__ import annotations
 
 from serde_artifacts import (
+    CompileResolverInvariantArtifact,
+    DeltaMaintenanceDecisionArtifact,
     DeltaProtocolArtifact,
     DeltaStatsDecision,
     ExtractErrorsArtifact,
@@ -22,6 +24,7 @@ from serde_artifacts import (
     PlanScheduleArtifact,
     PlanSignalsArtifact,
     PlanValidationArtifact,
+    PerformancePolicyArtifact,
     RunManifest,
     RuntimeProfileSnapshot,
     SemanticValidationArtifact,
@@ -48,6 +51,14 @@ DELTA_STATS_DECISION_SPEC = register_artifact_spec(
         canonical_name="delta_stats_decision_v1",
         description="Resolved stats decision for a Delta write.",
         payload_type=DeltaStatsDecision,
+    )
+)
+
+DELTA_MAINTENANCE_DECISION_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="delta_maintenance_decision_v1",
+        description="Outcome-based Delta maintenance decision diagnostics.",
+        payload_type=DeltaMaintenanceDecisionArtifact,
     )
 )
 
@@ -120,6 +131,22 @@ RUNTIME_PROFILE_SNAPSHOT_SPEC = register_artifact_spec(
         canonical_name="runtime_profile_snapshot_v1",
         description="Unified runtime profile snapshot for reproducibility.",
         payload_type=RuntimeProfileSnapshot,
+    )
+)
+
+COMPILE_RESOLVER_INVARIANTS_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="compile_resolver_invariants_v1",
+        description="Compile/resolver invariant summary for orchestration boundaries.",
+        payload_type=CompileResolverInvariantArtifact,
+    )
+)
+
+PERFORMANCE_POLICY_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="performance_policy_v1",
+        description="Runtime-applied performance policy configuration and knobs.",
+        payload_type=PerformancePolicyArtifact,
     )
 )
 
@@ -1232,6 +1259,7 @@ __all__ = [
     "DATASET_READINESS_SPEC",
     "DELTA_LOG_HEALTH_SPEC",
     "DELTA_MAINTENANCE_SPEC",
+    "DELTA_MAINTENANCE_DECISION_SPEC",
     "DELTA_OBSERVABILITY_APPEND_FAILED_SPEC",
     "DELTA_OBSERVABILITY_BOOTSTRAP_COMPLETED_SPEC",
     "DELTA_OBSERVABILITY_BOOTSTRAP_FAILED_SPEC",

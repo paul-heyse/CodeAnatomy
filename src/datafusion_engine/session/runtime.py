@@ -4189,8 +4189,8 @@ class _RuntimeProfileIOFacadeMixin:
 class _RuntimeProfileCatalogFacadeMixin:
     """Facade methods for runtime-profile catalog operations."""
 
+    @staticmethod
     def dataset_location(
-        self,
         name: str,
         *,
         dataset_resolver: ManifestDatasetResolver,

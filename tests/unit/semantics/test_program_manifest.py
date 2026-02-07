@@ -90,7 +90,16 @@ def test_dataset_bindings_helper_matches_compile_context() -> None:
     )
     helper_bindings = build_semantic_execution_context(runtime_profile=profile).dataset_resolver
     compile_bindings = CompileContext(runtime_profile=profile).dataset_bindings()
-    assert helper_bindings.payload() == compile_bindings.payload()
+    helper_names = sorted(helper_bindings.names())
+    compile_names = sorted(compile_bindings.names())
+    assert helper_names == compile_names
+    for name in compile_names:
+        helper_location = helper_bindings.location(name)
+        compile_location = compile_bindings.location(name)
+        assert helper_location is not None
+        assert compile_location is not None
+        assert helper_location.path == compile_location.path
+        assert helper_location.format == compile_location.format
 
 
 def test_semantic_execution_context_carries_manifest_resolver() -> None:

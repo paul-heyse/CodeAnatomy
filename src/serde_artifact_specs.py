@@ -823,6 +823,34 @@ TABLE_PROVIDER_REGISTERED_SPEC = register_artifact_spec(
     )
 )
 
+OBJECT_STORE_REGISTERED_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="object_store_registered_v1",
+        description="Object store successful registration event.",
+    )
+)
+
+LISTING_TABLE_REGISTERED_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="listing_table_registered_v1",
+        description="Listing table successful registration event.",
+    )
+)
+
+CATALOG_PROVIDER_REGISTERED_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="catalog_provider_registered_v1",
+        description="Catalog provider successful registration event.",
+    )
+)
+
+VIEW_REGISTERED_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="view_registered_v1",
+        description="View successful registration event.",
+    )
+)
+
 PROJECTION_VIEW_ARTIFACT_SKIPPED_SPEC = register_artifact_spec(
     ArtifactSpec(
         canonical_name="projection_view_artifact_skipped_v1",
@@ -912,6 +940,13 @@ HAMILTON_EVENTS_STORE_FAILED_SPEC = register_artifact_spec(
     ArtifactSpec(
         canonical_name="hamilton_events_store_failed_v2",
         description="Hamilton pipeline event store write failure diagnostic.",
+    )
+)
+
+DATAFUSION_HAMILTON_EVENTS_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="datafusion_hamilton_events_v2",
+        description="DataFusion Hamilton event row diagnostics.",
     )
 )
 
@@ -1143,6 +1178,7 @@ __all__ = [
     "CACHE_INVENTORY_BOOTSTRAP_STARTED_SPEC",
     "CACHE_INVENTORY_REGISTER_FAILED_SPEC",
     "CACHE_POLICY_SPEC",
+    "CATALOG_PROVIDER_REGISTERED_SPEC",
     "DATAFRAME_VALIDATION_ERRORS_SPEC",
     "DATAFUSION_ARROW_INGEST_SPEC",
     "DATAFUSION_AST_DATASET_SPEC",
@@ -1167,6 +1203,7 @@ __all__ = [
     "DATAFUSION_EXTENSION_PARITY_SPEC",
     "DATAFUSION_EXTRACT_OUTPUT_WRITES_SPEC",
     "DATAFUSION_FUNCTION_FACTORY_SPEC",
+    "DATAFUSION_HAMILTON_EVENTS_SPEC",
     "DATAFUSION_INPUT_PLUGINS_SPEC",
     "DATAFUSION_LISTING_REFRESH_SPEC",
     "DATAFUSION_PLAN_ARTIFACTS_SPEC",
@@ -1230,8 +1267,10 @@ __all__ = [
     "INCREMENTAL_METADATA_SPEC",
     "INCREMENTAL_STREAMING_WRITES_SPEC",
     "INFORMATION_SCHEMA_CONTRACT_VIOLATIONS_SPEC",
+    "LISTING_TABLE_REGISTERED_SPEC",
     "MISSING_DATASET_LOCATION_SPEC",
     "NORMALIZE_OUTPUTS_SPEC",
+    "OBJECT_STORE_REGISTERED_SPEC",
     "PLAN_ARTIFACTS_EXECUTION_FAILED_SPEC",
     "PLAN_ARTIFACTS_STORE_FAILED_SPEC",
     "PLAN_ARTIFACTS_STORE_SPEC",
@@ -1279,6 +1318,7 @@ __all__ = [
     "VIEW_CONTRACT_VIOLATIONS_SPEC",
     "VIEW_EXPLAIN_ANALYZE_THRESHOLD_SPEC",
     "VIEW_FINGERPRINTS_SPEC",
+    "VIEW_REGISTERED_SPEC",
     "VIEW_UDF_PARITY_SPEC",
     "WRITE_ARTIFACT_SPEC",
     "ZERO_ROW_BOOTSTRAP_VALIDATION_SPEC",

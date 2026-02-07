@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 if TYPE_CHECKING:
+    from datafusion_engine.extensions.runtime_capabilities import RuntimeCapabilitiesSnapshot
     from datafusion_engine.lineage.datafusion import ScanLineage
     from datafusion_engine.plan.signals import NormalizedPlanStats, PlanSignals
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -42,6 +43,7 @@ def derive_scan_policy_overrides(
     signals: PlanSignals,
     *,
     base_policy: ScanPolicyConfig | None = None,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None = None,
 ) -> tuple[ScanPolicyOverride, ...]:
     """Derive per-dataset scan policy overrides from plan signals.
 
@@ -55,6 +57,9 @@ def derive_scan_policy_overrides(
         Typed plan signals containing lineage and stats.
     base_policy
         Baseline scan policy to derive overrides from.
+    capability_snapshot
+        Optional runtime capability payload used to gate stats-dependent
+        heuristics when stats signals are unavailable.
 
     Returns:
     -------
@@ -73,6 +78,7 @@ def derive_scan_policy_overrides(
             scan,
             base_policy=effective_base,
             stats=signals.stats,
+            capability_snapshot=capability_snapshot,
         )
         if override is not None:
             overrides.append(override)
@@ -84,6 +90,7 @@ def _infer_override_for_scan(
     *,
     base_policy: ScanPolicyConfig,
     stats: NormalizedPlanStats | None,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
 ) -> ScanPolicyOverride | None:
     """Infer scan policy override for a single scan lineage entry.
 
@@ -95,6 +102,9 @@ def _infer_override_for_scan(
         Baseline scan policy config.
     stats
         Normalized plan statistics.
+    capability_snapshot
+        Optional runtime capability payload used to gate stats-dependent
+        heuristics when stats signals are unavailable.
 
     Returns:
     -------
@@ -106,7 +116,7 @@ def _infer_override_for_scan(
     listing_overrides: dict[str, object] = {}
 
     # Small tables: disable statistics collection (overhead not worthwhile)
-    if _is_small_table(stats):
+    if _is_small_table(stats, capability_snapshot=capability_snapshot):
         listing_overrides["collect_statistics"] = False
         reasons.append("small_table")
 
@@ -147,13 +157,20 @@ def _infer_override_for_scan(
     )
 
 
-def _is_small_table(stats: NormalizedPlanStats | None) -> bool:
+def _is_small_table(
+    stats: NormalizedPlanStats | None,
+    *,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> bool:
     """Return True when plan statistics indicate a small table.
 
     Parameters
     ----------
     stats
         Normalized plan statistics.
+    capability_snapshot
+        Optional runtime capability payload used to gate stats-dependent
+        heuristics when stats signals are unavailable.
 
     Returns:
     -------
@@ -161,8 +178,81 @@ def _is_small_table(stats: NormalizedPlanStats | None) -> bool:
         ``True`` when the table has fewer rows than the threshold.
     """
     if stats is None or stats.num_rows is None:
+        if not _stats_heuristics_capable(capability_snapshot):
+            return False
+        # Conservative default: do not escalate without concrete row statistics.
         return False
     return stats.num_rows < _SMALL_TABLE_ROW_THRESHOLD
+
+
+def _stats_heuristics_capable(
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> bool:
+    payload = _capability_payload(capability_snapshot)
+    if not payload:
+        return False
+    execution_metrics = _mapping_value(payload, "execution_metrics")
+    if execution_metrics is None:
+        return False
+    if _string_value(execution_metrics, "error") is not None:
+        return False
+    plan_capabilities = _mapping_value(payload, "plan_capabilities")
+    if plan_capabilities is None:
+        return False
+    has_statistics = _bool_value(plan_capabilities, "has_execution_plan_statistics")
+    return has_statistics is not False
+
+
+def _capability_payload(
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> Mapping[str, object]:
+    if capability_snapshot is None:
+        return {}
+    if isinstance(capability_snapshot, Mapping):
+        return capability_snapshot
+    plan_capabilities_payload: dict[str, object] | None = None
+    if capability_snapshot.plan_capabilities is not None:
+        plan_capabilities_payload = {
+            "has_execution_plan_statistics": (
+                capability_snapshot.plan_capabilities.has_execution_plan_statistics
+            ),
+            "has_execution_plan_schema": (
+                capability_snapshot.plan_capabilities.has_execution_plan_schema
+            ),
+            "datafusion_version": capability_snapshot.plan_capabilities.datafusion_version,
+            "has_dataframe_execution_plan": (
+                capability_snapshot.plan_capabilities.has_dataframe_execution_plan
+            ),
+        }
+    return {
+        "execution_metrics": (
+            dict(capability_snapshot.execution_metrics)
+            if isinstance(capability_snapshot.execution_metrics, Mapping)
+            else None
+        ),
+        "plan_capabilities": plan_capabilities_payload,
+    }
+
+
+def _mapping_value(payload: Mapping[str, object], key: str) -> Mapping[str, object] | None:
+    value = payload.get(key)
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _bool_value(payload: Mapping[str, object], key: str) -> bool | None:
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _string_value(payload: Mapping[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    if isinstance(value, str) and value:
+        return value
+    return None
 
 
 def scan_policy_overrides_by_dataset(
@@ -221,9 +311,11 @@ def record_scan_policy_decisions(
     """
     if profile is None:
         return
+    from serde_artifact_specs import SCAN_POLICY_OVERRIDE_SPEC
+
     for override in overrides:
         payload = scan_policy_override_artifact_payload(override)
-        profile.record_artifact("scan_policy_override_v1", payload)
+        profile.record_artifact(SCAN_POLICY_OVERRIDE_SPEC, payload)
 
 
 __all__ = [

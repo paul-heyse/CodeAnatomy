@@ -645,8 +645,10 @@ def _record_build_output_locations(result: GraphProductBuildResult) -> None:
     collector = get_hamilton_diagnostics_collector()
     if collector is None:
         return
+    from serde_artifact_specs import BUILD_OUTPUT_LOCATIONS_SPEC
+
     collector.record_artifact(
-        "build_output_locations_v1",
+        BUILD_OUTPUT_LOCATIONS_SPEC,
         {
             "run_id": result.run_id,
             "output_dir": str(result.output_dir),

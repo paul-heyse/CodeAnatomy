@@ -1204,10 +1204,11 @@ def register_dataset_df(
         and resolved.runtime_profile is not None
     ):
         from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import DATAFUSION_LISTING_REFRESH_SPEC
 
         record_artifact(
             resolved.runtime_profile,
-            "datafusion_listing_refresh_v1",
+            DATAFUSION_LISTING_REFRESH_SPEC,
             {
                 "name": name,
                 "path": str(location.path),
@@ -1878,7 +1879,9 @@ def _record_delta_log_health(
         resolution=resolution,
         runtime_profile=runtime_profile,
     )
-    record_artifact(runtime_profile, "delta_log_health_v1", payload)
+    from serde_artifact_specs import DELTA_LOG_HEALTH_SPEC
+
+    record_artifact(runtime_profile, DELTA_LOG_HEALTH_SPEC, payload)
 
 
 def _delta_log_health_payload(
@@ -2133,7 +2136,9 @@ def _record_table_provider_artifact(
         payload.update(_provider_pushdown_hints(artifact.provider))
     if artifact.details:
         payload.update(artifact.details)
-    record_artifact(runtime_profile, "datafusion_table_providers_v1", payload)
+    from serde_artifact_specs import DATAFUSION_TABLE_PROVIDERS_SPEC
+
+    record_artifact(runtime_profile, DATAFUSION_TABLE_PROVIDERS_SPEC, payload)
 
 
 def _record_provider_mode_diagnostics(
@@ -2174,7 +2179,9 @@ def _record_provider_mode_diagnostics(
         "diagnostic.severity": severity,
         "diagnostic.category": "datafusion_provider",
     }
-    record_artifact(runtime_profile, "dataset_provider_mode_v1", payload)
+    from serde_artifact_specs import DATASET_PROVIDER_MODE_SPEC
+
+    record_artifact(runtime_profile, DATASET_PROVIDER_MODE_SPEC, payload)
 
 
 def _provider_mode_severity(
@@ -2272,8 +2279,10 @@ def _apply_projection_exprs(
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
     adapter.register_view(table_name, projected, overwrite=True, temporary=False)
     if runtime_profile is not None:
+        from serde_artifact_specs import PROJECTION_VIEW_ARTIFACT_SKIPPED_SPEC
+
         runtime_profile.record_artifact(
-            "projection_view_artifact_skipped_v1",
+            PROJECTION_VIEW_ARTIFACT_SKIPPED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table_name": table_name,
@@ -3100,7 +3109,9 @@ def _record_delta_cdf_artifact(
         ),
         "delta_snapshot": artifact.snapshot,
     }
-    record_artifact(runtime_profile, "datafusion_delta_cdf_v1", payload)
+    from serde_artifact_specs import DATAFUSION_DELTA_CDF_SPEC
+
+    record_artifact(runtime_profile, DATAFUSION_DELTA_CDF_SPEC, payload)
 
 
 def _cdf_options_payload(options: DeltaCdfOptions | None) -> dict[str, object] | None:

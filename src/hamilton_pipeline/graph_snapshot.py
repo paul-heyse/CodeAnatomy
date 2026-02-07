@@ -11,6 +11,7 @@ from hamilton import driver as hamilton_driver
 from hamilton.lifecycle import api as lifecycle_api
 
 from core_types import JsonValue
+from serde_artifact_specs import HAMILTON_GRAPH_SNAPSHOT_SPEC
 
 _GRAPH_SNAPSHOT_DIRNAME = "graph_snapshots"
 
@@ -82,7 +83,7 @@ class GraphSnapshotHook(lifecycle_api.GraphExecutionHook):
 
         record_artifact(
             self.profile,
-            "hamilton_graph_snapshot_v1",
+            HAMILTON_GRAPH_SNAPSHOT_SPEC,
             {
                 "run_id": run_id,
                 "plan_signature": self.plan_signature,

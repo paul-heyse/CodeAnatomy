@@ -820,7 +820,9 @@ def _record_extract_execution(
         "result_kind": result.kind.value,
         "rows": row_count,
     }
-    record_artifact(runtime_profile, "extract_plan_execute_v1", payload)
+    from serde_artifact_specs import EXTRACT_PLAN_EXECUTE_SPEC
+
+    record_artifact(runtime_profile, EXTRACT_PLAN_EXECUTE_SPEC, payload)
 
 
 def _record_extract_compile(
@@ -836,7 +838,9 @@ def _record_extract_compile(
         "dataset": name,
         "plan_fingerprint": plan.plan_fingerprint,
     }
-    record_artifact(runtime_profile, "extract_plan_compile_v1", payload)
+    from serde_artifact_specs import EXTRACT_PLAN_COMPILE_SPEC
+
+    record_artifact(runtime_profile, EXTRACT_PLAN_COMPILE_SPEC, payload)
 
 
 def _register_extract_view(name: str, *, runtime_profile: DataFusionRuntimeProfile) -> None:
@@ -951,7 +955,9 @@ def _record_extract_udf_parity(
     report = udf_parity_report(session_runtime.ctx, snapshot=session_runtime.udf_snapshot)
     payload = report.payload()
     payload["dataset"] = name
-    record_artifact(profile, "extract_udf_parity_v1", payload)
+    from serde_artifact_specs import EXTRACT_UDF_PARITY_SPEC
+
+    record_artifact(profile, EXTRACT_UDF_PARITY_SPEC, payload)
 
 
 __all__ = [

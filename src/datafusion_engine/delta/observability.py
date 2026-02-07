@@ -344,7 +344,9 @@ def record_delta_feature_state(
         "commit_version": artifact.commit_version,
         "commit_run_id": artifact.commit_run_id,
     }
-    profile.record_artifact("datafusion_delta_features_v1", payload)
+    from serde_artifact_specs import DATAFUSION_DELTA_FEATURES_SPEC
+
+    profile.record_artifact(DATAFUSION_DELTA_FEATURES_SPEC, payload)
 
 
 def record_delta_scan_plan(
@@ -479,9 +481,16 @@ def _ensure_observability_table(
     table_path = _observability_root(profile) / name
     delta_log_path = table_path / "_delta_log"
     has_delta_log = delta_log_path.exists() and any(delta_log_path.glob("*.json"))
+    from serde_artifact_specs import (
+        DELTA_OBSERVABILITY_BOOTSTRAP_COMPLETED_SPEC,
+        DELTA_OBSERVABILITY_BOOTSTRAP_FAILED_SPEC,
+        DELTA_OBSERVABILITY_BOOTSTRAP_STARTED_SPEC,
+        DELTA_OBSERVABILITY_REGISTER_FAILED_SPEC,
+    )
+
     if not has_delta_log:
         profile.record_artifact(
-            "delta_observability_bootstrap_started_v1",
+            DELTA_OBSERVABILITY_BOOTSTRAP_STARTED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": name,
@@ -505,7 +514,7 @@ def _ensure_observability_table(
             ImportError,
         ) as exc:
             profile.record_artifact(
-                "delta_observability_bootstrap_failed_v1",
+                DELTA_OBSERVABILITY_BOOTSTRAP_FAILED_SPEC,
                 {
                     "event_time_unix_ms": int(time.time() * 1000),
                     "table": name,
@@ -516,7 +525,7 @@ def _ensure_observability_table(
             )
             return None
         profile.record_artifact(
-            "delta_observability_bootstrap_completed_v1",
+            DELTA_OBSERVABILITY_BOOTSTRAP_COMPLETED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": name,
@@ -559,7 +568,7 @@ def _ensure_observability_table(
         ):
             return location
         profile.record_artifact(
-            "delta_observability_register_failed_v1",
+            DELTA_OBSERVABILITY_REGISTER_FAILED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": name,
@@ -607,13 +616,18 @@ def _register_observability_fallback(
     table_path: Path,
     exc: Exception,
 ) -> bool:
+    from serde_artifact_specs import (
+        DELTA_OBSERVABILITY_REGISTER_FALLBACK_FAILED_SPEC,
+        DELTA_OBSERVABILITY_REGISTER_FALLBACK_USED_SPEC,
+    )
+
     if not _is_control_plane_registration_error(exc):
         return False
     try:
         dataset = ds.dataset(str(table_path), format="parquet")
     except (RuntimeError, TypeError, ValueError, OSError) as dataset_exc:
         profile.record_artifact(
-            "delta_observability_register_fallback_failed_v1",
+            DELTA_OBSERVABILITY_REGISTER_FALLBACK_FAILED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": name,
@@ -632,7 +646,7 @@ def _register_observability_fallback(
         adapter.register_dataset(name, dataset)
     except (RuntimeError, TypeError, ValueError, OSError, KeyError) as register_exc:
         profile.record_artifact(
-            "delta_observability_register_fallback_failed_v1",
+            DELTA_OBSERVABILITY_REGISTER_FALLBACK_FAILED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": name,
@@ -644,7 +658,7 @@ def _register_observability_fallback(
         )
         return False
     profile.record_artifact(
-        "delta_observability_register_fallback_used_v1",
+        DELTA_OBSERVABILITY_REGISTER_FALLBACK_USED_SPEC,
         {
             "event_time_unix_ms": int(time.time() * 1000),
             "table": name,
@@ -670,6 +684,12 @@ def _ensure_observability_schema(
     schema: pa.Schema,
     operation: str,
 ) -> bool:
+    from serde_artifact_specs import (
+        DELTA_OBSERVABILITY_SCHEMA_CHECK_FAILED_SPEC,
+        DELTA_OBSERVABILITY_SCHEMA_DRIFT_SPEC,
+        DELTA_OBSERVABILITY_SCHEMA_RESET_FAILED_SPEC,
+    )
+
     table_name = table_path.name
     try:
         from arro3.core import Schema as Arro3Schema
@@ -686,7 +706,7 @@ def _ensure_observability_schema(
         AttributeError,
     ) as exc:
         profile.record_artifact(
-            "delta_observability_schema_check_failed_v1",
+            DELTA_OBSERVABILITY_SCHEMA_CHECK_FAILED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": table_name,
@@ -699,7 +719,7 @@ def _ensure_observability_schema(
     if current_schema.equals(expected_schema):
         return True
     profile.record_artifact(
-        "delta_observability_schema_drift_v1",
+        DELTA_OBSERVABILITY_SCHEMA_DRIFT_SPEC,
         {
             "event_time_unix_ms": int(time.time() * 1000),
             "table": table_name,
@@ -725,7 +745,7 @@ def _ensure_observability_schema(
         ImportError,
     ) as exc:
         profile.record_artifact(
-            "delta_observability_schema_reset_failed_v1",
+            DELTA_OBSERVABILITY_SCHEMA_RESET_FAILED_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table": table_name,
@@ -912,8 +932,10 @@ def _is_observability_target(
 def _record_append_failure(request: _AppendObservabilityRequest, exc: Exception) -> None:
     if request.runtime_profile is None:
         return
+    from serde_artifact_specs import DELTA_OBSERVABILITY_APPEND_FAILED_SPEC
+
     request.runtime_profile.record_artifact(
-        "delta_observability_append_failed_v1",
+        DELTA_OBSERVABILITY_APPEND_FAILED_SPEC,
         {
             "event_time_unix_ms": int(time.time() * 1000),
             "table": request.location.path,

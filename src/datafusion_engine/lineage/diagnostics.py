@@ -75,13 +75,13 @@ class DiagnosticsSink(Protocol):
     artifacts and events from DataFusion operations.
     """
 
-    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
+    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, Any]) -> None:
         """Record a named artifact.
 
         Parameters
         ----------
-        name : str
-            Artifact type identifier (e.g., "sql_compilation", "write_operation").
+        name : ArtifactSpec | str
+            Artifact spec or string type identifier (e.g., "sql_compilation").
         payload : Mapping[str, Any]
             Artifact payload with type-specific fields.
         """
@@ -183,17 +183,17 @@ class InMemoryDiagnosticsSink:
     artifacts: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
-    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
+    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, Any]) -> None:
         """Record a named artifact.
 
         Parameters
         ----------
-        name : str
-            Artifact type identifier.
+        name : ArtifactSpec | str
+            Artifact spec or string type identifier.
         payload : dict[str, Any]
             Artifact payload.
         """
-        self.artifacts.append((name, dict(payload)))
+        self.artifacts.append((_resolve_artifact_name(name), dict(payload)))
 
     def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
         """Record an event.
@@ -558,9 +558,10 @@ class DiagnosticsRecorderAdapter:
         )
         return DiagnosticsRecorder(self.sink, context)
 
-    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
+    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, Any]) -> None:
         """Record a named artifact via DiagnosticsRecorder."""
-        self._recorder(name).record_artifact(name, payload)
+        resolved = _resolve_artifact_name(name)
+        self._recorder(resolved).record_artifact(name, payload)
 
     def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
         """Record a single event via DiagnosticsRecorder."""

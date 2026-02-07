@@ -392,7 +392,10 @@ def _register_location(
     from datafusion_engine.delta.store_policy import apply_delta_store_policy
 
     resolved = apply_delta_store_policy(location, policy=profile.policies.delta_store_policy)
-    resolved = _apply_scan_policy_overrides(resolved, policy=profile.policies.scan_policy)
+    resolved = apply_scan_policy_overrides_to_location(
+        resolved,
+        policy=profile.policies.scan_policy,
+    )
     catalog.register(name, resolved)
 
 
@@ -561,11 +564,18 @@ def resolve_dataset_policies(
     return _resolve_dataset_policies(request)
 
 
-def _apply_scan_policy_overrides(
+def apply_scan_policy_overrides_to_location(
     location: DatasetLocation,
     *,
     policy: ScanPolicyConfig | None,
 ) -> DatasetLocation:
+    """Apply a scan policy to a dataset location and return the updated location.
+
+    Returns:
+    -------
+    DatasetLocation
+        Location with scan-related overrides applied when relevant.
+    """
     if policy is None:
         return location
     policies = resolve_dataset_policies(location, overrides=location.overrides)
@@ -698,6 +708,7 @@ __all__ = [
     "DatasetLocationOverrides",
     "PathLike",
     "ResolvedDatasetLocation",
+    "apply_scan_policy_overrides_to_location",
     "dataset_catalog_from_profile",
     "registry_snapshot",
     "resolve_datafusion_provider",

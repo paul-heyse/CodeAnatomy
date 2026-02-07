@@ -4,21 +4,27 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from types import ModuleType, SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from core_types import JsonValue
 from engine.runtime_profile import RuntimeProfileSpec
 from hamilton_pipeline.driver_factory import (
+    DriverBuildRequest,
     ExecutionMode,
     _enforce_policy_validation_result,
     _policy_validation_udf_snapshot,
     _resolve_config_payload,
+    build_plan_context,
 )
 from relspec.errors import RelspecValidationError
 from relspec.execution_plan import ExecutionPlan
 from relspec.policy_validation import PolicyValidationIssue, PolicyValidationResult
+
+if TYPE_CHECKING:
+    from hamilton_pipeline.driver_factory import ViewGraphContext
 
 
 @dataclass(frozen=True)
@@ -144,3 +150,99 @@ def test_policy_validation_udf_snapshot_is_deterministic() -> None:
     )
     snapshot = _policy_validation_udf_snapshot(plan)
     assert tuple(snapshot) == ("udf_a", "udf_b")
+
+
+def test_build_plan_context_passes_semantic_manifest_to_policy_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Policy validation should receive semantic manifest from authority context."""
+    called: dict[str, object] = {}
+    artifact_called: dict[str, object] = {}
+    manifest = object()
+    semantic_context = SimpleNamespace(
+        manifest=manifest,
+        dataset_resolver=object(),
+    )
+    view_ctx = SimpleNamespace(
+        profile=SimpleNamespace(),
+        semantic_context=semantic_context,
+        runtime_profile_spec=_stub_profile_spec(),
+        session_runtime=object(),
+    )
+    plan = cast("ExecutionPlan", SimpleNamespace(output_contracts={}, view_nodes=()))
+
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory.default_modules",
+        lambda: (),
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory._build_execution_authority",
+        lambda **_kwargs: SimpleNamespace(
+            enforcement_mode="warn",
+            capability_snapshot={"strict_native_provider_enabled": False},
+            session_runtime_fingerprint="runtime-hash",
+            semantic_context=semantic_context,
+        ),
+    )
+
+    def _fake_validate_policy_bundle(
+        _execution_plan: object,
+        *,
+        runtime_profile: object,
+        udf_snapshot: object,
+        capability_snapshot: object,
+        semantic_manifest: object | None = None,
+    ) -> PolicyValidationResult:
+        _ = runtime_profile, udf_snapshot, capability_snapshot
+        called["semantic_manifest"] = semantic_manifest
+        return PolicyValidationResult.empty()
+
+    monkeypatch.setattr(
+        "relspec.policy_validation.validate_policy_bundle",
+        _fake_validate_policy_bundle,
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory._record_policy_validation_artifact",
+        lambda **kwargs: artifact_called.update(kwargs),
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory._enforce_policy_validation_result",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.validators.set_schema_contracts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory.build_execution_plan_module",
+        lambda *_args, **_kwargs: ModuleType("test_plan_module"),
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory.build_task_execution_module",
+        lambda *_args, **_kwargs: ModuleType("test_task_module"),
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory._resolve_config_payload",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory._configure_hamilton_sdk_capture",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "hamilton_pipeline.driver_factory.set_hamilton_diagnostics_collector",
+        lambda *_args, **_kwargs: None,
+    )
+
+    build_plan_context(
+        request=DriverBuildRequest(
+            config={"enable_dataset_readiness": False},
+            modules=(),
+            view_ctx=cast("ViewGraphContext", view_ctx),
+            plan=plan,
+            execution_mode=ExecutionMode.DETERMINISTIC_SERIAL,
+        )
+    )
+
+    assert called["semantic_manifest"] is manifest
+    assert artifact_called["semantic_manifest_present"] is True

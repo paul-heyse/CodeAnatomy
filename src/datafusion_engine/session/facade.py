@@ -468,10 +468,11 @@ class DataFusionExecutionFacade:
             )
         except (RuntimeError, ValueError, OSError, KeyError, ImportError, TypeError) as exc:
             from datafusion_engine.lineage.diagnostics import record_artifact
+            from serde_artifact_specs import PLAN_ARTIFACTS_EXECUTION_FAILED_SPEC
 
             record_artifact(
                 self.runtime_profile,
-                "plan_artifacts_execution_failed_v1",
+                PLAN_ARTIFACTS_EXECUTION_FAILED_SPEC,
                 {
                     "view_name": request.view_name,
                     "plan_fingerprint": request.bundle.plan_fingerprint,
@@ -573,10 +574,11 @@ class DataFusionExecutionFacade:
         if bundle.plan_identity_hash is None:
             return
         from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import PLAN_CACHE_EVENTS_SPEC
 
         record_artifact(
             self.runtime_profile,
-            "plan_cache_events_v1",
+            PLAN_CACHE_EVENTS_SPEC,
             {
                 "plan_identity_hash": bundle.plan_identity_hash,
                 "plan_fingerprint": bundle.plan_fingerprint,
@@ -606,11 +608,12 @@ class DataFusionExecutionFacade:
         if self.runtime_profile is None:
             return
         from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import SUBSTRAIT_FALLBACK_SPEC
 
         substrait_bytes = bundle.substrait_bytes
         record_artifact(
             self.runtime_profile,
-            "substrait_fallback_v1",
+            SUBSTRAIT_FALLBACK_SPEC,
             {
                 "view_name": view_name,
                 "plan_fingerprint": bundle.plan_fingerprint,

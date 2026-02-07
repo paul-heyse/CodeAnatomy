@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from storage.deltalake.delta import IdempotentWriteOptions
 
 from datafusion_engine.lineage.diagnostics import DiagnosticsSink, ensure_recorder_sink
+from serde_artifact_specs import DATAFUSION_RUN_FINISHED_SPEC, DATAFUSION_RUN_STARTED_SPEC
 
 
 @dataclass
@@ -157,7 +158,7 @@ def start_run(
     )
     if sink is not None:
         recorder_sink = ensure_recorder_sink(sink, session_id=run_id)
-        recorder_sink.record_artifact("datafusion_run_started_v1", run.payload())
+        recorder_sink.record_artifact(DATAFUSION_RUN_STARTED_SPEC, run.payload())
     return run
 
 
@@ -193,7 +194,7 @@ def finish_run(
         run.metadata.update(metadata)
     if sink is not None:
         recorder_sink = ensure_recorder_sink(sink, session_id=run.run_id)
-        recorder_sink.record_artifact("datafusion_run_finished_v1", run.payload())
+        recorder_sink.record_artifact(DATAFUSION_RUN_FINISHED_SPEC, run.payload())
     return run
 
 

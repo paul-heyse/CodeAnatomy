@@ -183,9 +183,11 @@ def _require_semantic_types(
         strict=True,
     )
     payload = to_builtins(validated, str_keys=True)
+    from serde_artifact_specs import SEMANTIC_VALIDATION_SPEC
+
     record_artifact(
         runtime_profile,
-        "semantic_validation_v1",
+        SEMANTIC_VALIDATION_SPEC,
         cast("Mapping[str, object]", payload),
     )
     if artifact.status == "ok":

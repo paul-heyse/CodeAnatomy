@@ -11,6 +11,14 @@ from hamilton.lifecycle import api as lifecycle_api
 
 from obs.diagnostics import DiagnosticsCollector
 from obs.otel.heartbeat import set_active_task_count, set_total_task_count
+from serde_artifact_specs import (
+    HAMILTON_EVENTS_STORE_FAILED_SPEC,
+    HAMILTON_PLAN_DRIFT_SPEC,
+    HAMILTON_PLAN_EVENTS_SPEC,
+    PLAN_EXPECTED_TASKS_SPEC,
+    PLAN_SCHEDULE_SPEC,
+    PLAN_VALIDATION_SPEC,
+)
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -132,7 +140,7 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
         self.plan_artifact_bundle = bundle
         record_artifact(
             self.profile,
-            "plan_expected_tasks_v1",
+            PLAN_EXPECTED_TASKS_SPEC,
             {
                 "run_id": run_id,
                 "plan_signature": self.plan.plan_signature,
@@ -142,12 +150,12 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
         )
         record_artifact(
             self.profile,
-            "plan_schedule_v1",
+            PLAN_SCHEDULE_SPEC,
             _artifact_payload(to_builtins(bundle.schedule_envelope, str_keys=True)),
         )
         record_artifact(
             self.profile,
-            "plan_validation_v1",
+            PLAN_VALIDATION_SPEC,
             _artifact_payload(to_builtins(bundle.validation_envelope, str_keys=True)),
         )
 
@@ -207,7 +215,7 @@ def _flush_plan_events(
     )
     record_artifact(
         profile,
-        "hamilton_plan_drift_v1",
+        HAMILTON_PLAN_DRIFT_SPEC,
         plan_drift,
     )
     events_for_persistence: dict[str, Sequence[object]] = dict(events_snapshot)
@@ -245,7 +253,7 @@ def _flush_plan_events(
     except (RuntimeError, ValueError, TypeError, OSError, KeyError, ImportError) as exc:
         record_artifact(
             profile,
-            "hamilton_events_store_failed_v2",
+            HAMILTON_EVENTS_STORE_FAILED_SPEC,
             {
                 "run_id": run_id,
                 "plan_signature": plan.plan_signature,
@@ -257,7 +265,7 @@ def _flush_plan_events(
         )
     record_artifact(
         profile,
-        "hamilton_plan_events_v1",
+        HAMILTON_PLAN_EVENTS_SPEC,
         {
             "run_id": run_id,
             "plan_signature": plan.plan_signature,

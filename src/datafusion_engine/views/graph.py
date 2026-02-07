@@ -405,10 +405,11 @@ def _maybe_validate_schema_contract(
         if runtime_profile is None:
             return
         from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import SCHEMA_CONTRACT_VIOLATIONS_SPEC
 
         record_artifact(
             runtime_profile,
-            "schema_contract_violations_v1",
+            SCHEMA_CONTRACT_VIOLATIONS_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table_name": exc.table_name,
@@ -448,10 +449,11 @@ def _maybe_validate_information_schema(
         if runtime_profile is None:
             return
         from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import INFORMATION_SCHEMA_CONTRACT_VIOLATIONS_SPEC
 
         record_artifact(
             runtime_profile,
-            "information_schema_contract_violations_v1",
+            INFORMATION_SCHEMA_CONTRACT_VIOLATIONS_SPEC,
             {
                 "event_time_unix_ms": int(time.time() * 1000),
                 "table_name": node.name,
@@ -518,7 +520,9 @@ def _maybe_record_explain_analyze_threshold(
         "threshold_ms": float(threshold),
         "output_rows": signals.explain_analyze_output_rows,
     }
-    record_artifact(profile, "view_explain_analyze_threshold_v1", payload)
+    from serde_artifact_specs import VIEW_EXPLAIN_ANALYZE_THRESHOLD_SPEC
+
+    record_artifact(profile, VIEW_EXPLAIN_ANALYZE_THRESHOLD_SPEC, payload)
 
 
 def _persist_plan_artifacts(
@@ -565,7 +569,9 @@ def _record_view_udf_parity(
         view_nodes=nodes,
         ctx=context.ctx,
     )
-    record_artifact(profile, "view_udf_parity_v1", payload)
+    from serde_artifact_specs import VIEW_UDF_PARITY_SPEC
+
+    record_artifact(profile, VIEW_UDF_PARITY_SPEC, payload)
 
 
 def _record_udf_audit(context: ViewGraphContext) -> None:
@@ -573,28 +579,31 @@ def _record_udf_audit(context: ViewGraphContext) -> None:
     if profile is None:
         return
     from datafusion_engine.udf.runtime import udf_audit_payload
+    from serde_artifact_specs import UDF_AUDIT_SPEC
 
     payload = udf_audit_payload(context.snapshot)
-    record_artifact(profile, "udf_audit_v1", payload)
+    record_artifact(profile, UDF_AUDIT_SPEC, payload)
 
 
 def _record_udf_catalog(context: ViewGraphContext) -> None:
     runtime_profile = context.runtime.runtime_profile
     if runtime_profile is None:
         return
+    from serde_artifact_specs import UDF_CATALOG_SPEC
+
     introspector = SchemaIntrospector(context.ctx)
     try:
         catalog = introspector.function_catalog_snapshot(include_parameters=True)
     except (RuntimeError, TypeError, ValueError) as exc:
         record_artifact(
             runtime_profile,
-            "udf_catalog_v1",
+            UDF_CATALOG_SPEC,
             {"error": str(exc)},
         )
         return
     record_artifact(
         runtime_profile,
-        "udf_catalog_v1",
+        UDF_CATALOG_SPEC,
         {"functions": catalog},
     )
 
@@ -610,6 +619,8 @@ def _record_cache_artifact(
     profile = cache.runtime.runtime_profile
     if profile is None:
         return
+    from serde_artifact_specs import VIEW_CACHE_ARTIFACTS_SPEC
+
     artifact = ViewCacheArtifact(
         view_name=node.name,
         cache_policy=node.cache_policy,
@@ -627,7 +638,7 @@ def _record_cache_artifact(
     payload = to_builtins(validated, str_keys=True)
     record_artifact(
         profile,
-        "view_cache_artifacts_v1",
+        VIEW_CACHE_ARTIFACTS_SPEC,
         cast("Mapping[str, object]", payload),
     )
 
@@ -643,6 +654,8 @@ def _record_cache_error(
     profile = cache.runtime.runtime_profile
     if profile is None:
         return
+    from serde_artifact_specs import VIEW_CACHE_ERRORS_SPEC
+
     payload = {
         "event_time_unix_ms": int(time.time() * 1000),
         "view_name": node.name,
@@ -651,7 +664,7 @@ def _record_cache_error(
         "expected_schema_hash": expected_schema_hash,
         "error": error,
     }
-    record_artifact(profile, "view_cache_errors_v1", payload)
+    record_artifact(profile, VIEW_CACHE_ERRORS_SPEC, payload)
 
 
 def _register_view_with_cache(

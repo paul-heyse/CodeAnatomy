@@ -192,9 +192,11 @@ def write_overwrite_dataset(
         msg = f"Overwrite delta write did not resolve committed version for {spec.name!r}."
         raise RuntimeError(msg)
     if data.row_count is not None and data.row_count > _STREAMING_ROW_THRESHOLD:
+        from serde_artifact_specs import INCREMENTAL_STREAMING_WRITES_SPEC
+
         record_artifact(
             context.runtime.profile,
-            "incremental_streaming_writes_v1",
+            INCREMENTAL_STREAMING_WRITES_SPEC,
             {"dataset_name": spec.name, "row_count": data.row_count},
         )
     return {spec.name: write_result.delta_result.path}

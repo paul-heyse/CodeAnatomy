@@ -18,6 +18,7 @@ from relspec.evidence import EvidenceCatalog
 from relspec.execution_authority import ExecutionAuthorityContext
 from relspec.execution_plan import ExecutionPlan
 from relspec.graph_edge_validation import validate_graph_edges
+from serde_artifact_specs import EVIDENCE_CONTRACT_VIOLATIONS_SPEC, UDF_PARITY_SPEC
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
@@ -476,7 +477,7 @@ def _record_evidence_contract_violations(
     ]
     record_artifact(
         profile,
-        "evidence_contract_violations_v1",
+        EVIDENCE_CONTRACT_VIOLATIONS_SPEC,
         {"violations": payload},
     )
 
@@ -489,7 +490,7 @@ def _record_udf_parity(profile: DataFusionRuntimeProfile) -> None:
     session = profile.session_context()
     registry_snapshot = rust_udf_snapshot(session)
     report = udf_parity_report(session, snapshot=registry_snapshot)
-    record_artifact(profile, "udf_parity_v1", report.payload())
+    record_artifact(profile, UDF_PARITY_SPEC, report.payload())
 
 
 __all__ = ["PlanModuleOptions", "build_execution_plan_module"]

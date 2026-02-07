@@ -582,7 +582,9 @@ def _enforce_protocol_compatibility(
         "mode": mode,
     }
     if mode == "warn":
-        runtime_profile.record_artifact("delta_protocol_incompatible_v1", payload)
+        from serde_artifact_specs import DELTA_PROTOCOL_INCOMPATIBLE_SPEC
+
+        runtime_profile.record_artifact(DELTA_PROTOCOL_INCOMPATIBLE_SPEC, payload)
         return
     msg = f"Delta protocol compatibility failed for dataset {dataset_name!r}."
     raise ValueError(msg)
@@ -621,9 +623,11 @@ def _record_scan_plan_artifact(request: _ScanPlanArtifactRequest) -> None:
     )
     protocol_compatible = compatibility.compatible
     severity = "info" if protocol_compatible is not False else "warn"
+    from serde_artifact_specs import SCAN_UNIT_PRUNING_SPEC
+
     record_artifact(
         request.runtime_profile,
-        "scan_unit_pruning_v1",
+        SCAN_UNIT_PRUNING_SPEC,
         {
             "dataset": request.dataset_name,
             "total_files": int(total_files),

@@ -1607,6 +1607,7 @@ class WritePipeline:
         if spec.stats_decision is None:
             return
         from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import DELTA_STATS_DECISION_SPEC
         from serde_msgspec import to_builtins
 
         envelope = DeltaStatsDecisionEnvelope(payload=spec.stats_decision)
@@ -1617,7 +1618,7 @@ class WritePipeline:
         )
         record_artifact(
             self.runtime_profile,
-            "delta_stats_decision_v1",
+            DELTA_STATS_DECISION_SPEC,
             cast("dict[str, object]", to_builtins(validated, str_keys=True)),
         )
 
@@ -1769,10 +1770,11 @@ class WritePipeline:
         if final_version is None:
             if self.runtime_profile is not None:
                 from datafusion_engine.lineage.diagnostics import record_artifact
+                from serde_artifact_specs import DELTA_WRITE_VERSION_MISSING_SPEC
 
                 record_artifact(
                     self.runtime_profile,
-                    "delta_write_version_missing_v1",
+                    DELTA_WRITE_VERSION_MISSING_SPEC,
                     {
                         "event_time_unix_ms": int(time.time() * 1000),
                         "table_uri": spec.table_uri,
@@ -1833,6 +1835,7 @@ class WritePipeline:
         from deltalake.writer import write_deltalake
 
         from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import DELTA_WRITE_BOOTSTRAP_SPEC
         from utils.storage_options import merged_storage_options
 
         stream = result.to_arrow_stream()
@@ -1880,7 +1883,7 @@ class WritePipeline:
             row_count = None
             record_artifact(
                 self.runtime_profile,
-                "delta_write_bootstrap_v1",
+                DELTA_WRITE_BOOTSTRAP_SPEC,
                 {
                     "event_time_unix_ms": int(time.time() * 1000),
                     "table_uri": spec.table_uri,
@@ -2099,10 +2102,11 @@ def _validate_delta_protocol_support(
         return
     if runtime_profile.policies.delta_protocol_mode == "warn":
         from datafusion_engine.lineage.diagnostics import record_artifact
+        from serde_artifact_specs import DELTA_PROTOCOL_ARTIFACT_SPEC
 
         record_artifact(
             runtime_profile,
-            "delta_protocol_compatibility_v1",
+            DELTA_PROTOCOL_ARTIFACT_SPEC,
             compatibility_payload,
         )
         return

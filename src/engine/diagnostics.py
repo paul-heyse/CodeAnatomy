@@ -192,7 +192,9 @@ class EngineEventRecorder:
             rows=rows,
             plan_fingerprint=view_artifact.plan_fingerprint if view_artifact else None,
         )
-        self.record_artifact("plan_execute_v1", event.to_payload())
+        from serde_artifact_specs import PLAN_EXECUTE_SPEC
+
+        self.record_artifact(PLAN_EXECUTE_SPEC, event.to_payload())
 
     def record_extract_write(
         self,
@@ -205,7 +207,9 @@ class EngineEventRecorder:
         event
             Extract write event payload.
         """
-        self.record_artifact("datafusion_extract_output_writes_v1", event.to_payload())
+        from serde_artifact_specs import DATAFUSION_EXTRACT_OUTPUT_WRITES_SPEC
+
+        self.record_artifact(DATAFUSION_EXTRACT_OUTPUT_WRITES_SPEC, event.to_payload())
 
     def record_extract_quality_events(self, events: Sequence[ExtractQualityEvent]) -> None:
         """Record extract quality event rows.
@@ -283,7 +287,9 @@ class EngineEventRecorder:
         }
         if extra:
             payload.update(extra)
-        self.record_artifact("delta_maintenance_v1", payload)
+        from serde_artifact_specs import DELTA_MAINTENANCE_SPEC
+
+        self.record_artifact(DELTA_MAINTENANCE_SPEC, payload)
 
     def record_delta_query(
         self,
@@ -313,7 +319,9 @@ class EngineEventRecorder:
             "table_name": table_name,
             "engine": engine,
         }
-        self.record_artifact("delta_query_v1", payload)
+        from serde_artifact_specs import DELTA_QUERY_SPEC
+
+        self.record_artifact(DELTA_QUERY_SPEC, payload)
 
 
 __all__ = ["EngineEventRecorder", "ExtractQualityEvent", "PlanExecutionEvent"]

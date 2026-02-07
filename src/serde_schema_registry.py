@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import threading
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -559,15 +560,14 @@ class ArtifactSpecRegistry(Registry[str, ArtifactSpec], SnapshotRegistry[str, Ar
 
 
 _ARTIFACT_SPEC_REGISTRY = ArtifactSpecRegistry()
-_ARTIFACT_SPECS_LOADED = False
+_ARTIFACT_SPECS_LOADED = threading.Event()
 
 
 def _ensure_artifact_specs_loaded() -> None:
-    global _ARTIFACT_SPECS_LOADED
-    if _ARTIFACT_SPECS_LOADED:
+    if _ARTIFACT_SPECS_LOADED.is_set():
         return
     importlib.import_module("serde_artifact_specs")
-    _ARTIFACT_SPECS_LOADED = True
+    _ARTIFACT_SPECS_LOADED.set()
 
 
 def artifact_spec_registry() -> ArtifactSpecRegistry:

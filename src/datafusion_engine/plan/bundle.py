@@ -83,6 +83,7 @@ class PlanBundleOptions:
     delta_inputs: Sequence[DeltaInputPin] = ()
     session_runtime: SessionRuntime | None = None
     scan_units: Sequence[ScanUnit] = ()
+    dataset_resolver: ManifestDatasetResolver | None = None
 
 
 @dataclass(frozen=True)
@@ -621,6 +622,7 @@ def _environment_artifacts(
     ctx: SessionContext,
     *,
     session_runtime: SessionRuntime | None,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> _EnvironmentArtifacts:
     """Capture planning environment snapshots.
 
@@ -636,7 +638,7 @@ def _environment_artifacts(
     rulepack_hash = _rulepack_hash(rulepack_snapshot)
     info_schema_snapshot = _information_schema_snapshot(ctx, session_runtime=session_runtime)
     info_schema_hash = _information_schema_hash(info_schema_snapshot)
-    cdf_windows = _cdf_window_snapshot(session_runtime)
+    cdf_windows = _cdf_window_snapshot(session_runtime, dataset_resolver=dataset_resolver)
     store_policy_hash = None
     if session_runtime is not None:
         store_policy_hash = delta_store_policy_hash(
@@ -861,6 +863,7 @@ def _merged_delta_inputs_for_bundle(
             ctx,
             plan=plan,
             session_runtime=options.session_runtime,
+            dataset_resolver=options.dataset_resolver,
         )
     scan_unit_pins = _delta_inputs_from_scan_units(scan_units)
     return _merge_delta_inputs(options.delta_inputs, scan_unit_pins)
@@ -1130,7 +1133,9 @@ def _collect_bundle_assembly_state(
         ctx,
         session_runtime=options.session_runtime,
     )
-    environment = _environment_artifacts(ctx, session_runtime=options.session_runtime)
+    environment = _environment_artifacts(
+        ctx, session_runtime=options.session_runtime, dataset_resolver=options.dataset_resolver
+    )
     required = _required_udf_artifacts(
         plan_core.optimized or plan_core.logical,
         snapshot=udf_artifacts.snapshot,
@@ -1152,6 +1157,7 @@ def _collect_bundle_assembly_state(
     snapshot_keys = _snapshot_keys_for_manifest(
         delta_inputs=merged_delta_inputs,
         session_runtime=options.session_runtime,
+        dataset_resolver=options.dataset_resolver,
     )
     fingerprint = _hash_plan(
         PlanFingerprintInputs(
@@ -1873,6 +1879,7 @@ def _scan_units_for_bundle(
     *,
     plan: object,
     session_runtime: SessionRuntime | None,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[ScanUnit, ...]:
     scan_units: tuple[ScanUnit, ...] = ()
     if session_runtime is not None and plan is not None:
@@ -1884,7 +1891,9 @@ def _scan_units_for_bundle(
         else:
             lineage = extract_lineage(plan)
             if lineage.scans:
-                locations = _manifest_dataset_locations(session_runtime)
+                locations = _manifest_dataset_locations(
+                    session_runtime, dataset_resolver=dataset_resolver
+                )
                 if locations:
                     try:
                         scan_units, _ = plan_scan_units(
@@ -1921,10 +1930,12 @@ def _manifest_dataset_locations(
 
 def _cdf_window_snapshot(
     session_runtime: SessionRuntime | None,
+    *,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[dict[str, object], ...]:
     if session_runtime is None:
         return ()
-    locations = _manifest_dataset_locations(session_runtime)
+    locations = _manifest_dataset_locations(session_runtime, dataset_resolver=dataset_resolver)
     payloads: list[dict[str, object]] = []
     for name, location in sorted(locations.items(), key=lambda item: item[0]):
         options = location.delta_cdf_options
@@ -1965,10 +1976,11 @@ def _snapshot_keys_for_manifest(
     *,
     delta_inputs: Sequence[DeltaInputPin],
     session_runtime: SessionRuntime | None,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[dict[str, object], ...]:
     if session_runtime is None:
         return ()
-    locations = _manifest_dataset_locations(session_runtime)
+    locations = _manifest_dataset_locations(session_runtime, dataset_resolver=dataset_resolver)
     payloads: list[dict[str, object]] = []
     seen: set[tuple[str, str, int]] = set()
     for pin in delta_inputs:

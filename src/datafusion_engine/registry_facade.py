@@ -375,7 +375,7 @@ def registry_facade_for_context(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
-    dataset_resolver: ManifestDatasetResolver | None = None,
+    dataset_resolver: ManifestDatasetResolver,
 ) -> RegistryFacade:
     """Return a RegistryFacade bound to a session context.
 
@@ -388,10 +388,6 @@ def registry_facade_for_context(
     from datafusion_engine.dataset.registry import DatasetCatalog
     from datafusion_engine.udf.catalog import UdfCatalogAdapter
 
-    if dataset_resolver is None:
-        from semantics.compile_context import dataset_bindings_for_profile
-
-        dataset_resolver = dataset_bindings_for_profile(runtime_profile)
     dataset_catalog = DatasetCatalog()
     for name in dataset_resolver.names():
         location = dataset_resolver.location(name)

@@ -241,86 +241,6 @@ def maintenance_decision_artifact_payload(
     }
 
 
-def resolve_maintenance_from_execution(
-    metrics: WriteOutcomeMetrics,
-    *,
-    plan_input: DeltaMaintenancePlanInput,
-) -> DeltaMaintenancePlan | None:
-    """Resolve a maintenance plan from write outcome metrics and thresholds.
-
-    Fall back to the standard policy-presence-based resolver when outcome
-    thresholds are not configured on the policy.
-
-    Parameters
-    ----------
-    metrics
-        Write outcome metrics captured after Delta write.
-    plan_input
-        Standard maintenance plan input with policy and location.
-
-    Returns:
-    -------
-    DeltaMaintenancePlan | None
-        Maintenance plan when thresholds are exceeded, otherwise ``None``.
-    """
-    policy = plan_input.policy
-    if policy is None and plan_input.dataset_location is not None:
-        policy = plan_input.dataset_location.resolved.delta_maintenance_policy
-    if policy is None:
-        return None
-
-    # Check if any outcome thresholds are configured
-    has_thresholds = any(
-        v is not None
-        for v in (
-            policy.optimize_file_threshold,
-            policy.total_file_threshold,
-            policy.vacuum_version_threshold,
-            policy.checkpoint_version_interval,
-        )
-    )
-
-    if not has_thresholds:
-        # No outcome thresholds configured; use standard policy-presence resolver
-        return resolve_delta_maintenance_plan(plan_input)
-
-    # Evaluate outcome-based thresholds
-    needs_optimize = _threshold_exceeded(
-        metrics.files_created, policy.optimize_file_threshold
-    ) or _threshold_exceeded(metrics.total_file_count, policy.total_file_threshold)
-    needs_vacuum = _threshold_exceeded(metrics.version_delta, policy.vacuum_version_threshold)
-    needs_checkpoint = _threshold_exceeded(
-        metrics.version_delta, policy.checkpoint_version_interval
-    )
-
-    if not (needs_optimize or needs_vacuum or needs_checkpoint):
-        return None
-
-    # Build a policy with only the triggered operations enabled
-    import msgspec
-
-    triggered_policy = msgspec.structs.replace(
-        policy,
-        optimize_on_write=needs_optimize or policy.optimize_on_write,
-        vacuum_on_write=needs_vacuum or policy.vacuum_on_write,
-        checkpoint_on_write=needs_checkpoint or policy.checkpoint_on_write,
-    )
-    resolved_storage = dict(plan_input.storage_options) if plan_input.storage_options else None
-    resolved_log_storage = (
-        dict(plan_input.log_storage_options) if plan_input.log_storage_options else None
-    )
-    return DeltaMaintenancePlan(
-        table_uri=plan_input.table_uri,
-        dataset_name=plan_input.dataset_name,
-        storage_options=resolved_storage,
-        log_storage_options=resolved_log_storage,
-        delta_version=plan_input.delta_version,
-        delta_timestamp=plan_input.delta_timestamp,
-        feature_gate=plan_input.feature_gate,
-        policy=triggered_policy,
-    )
-
-
 def run_delta_maintenance(
     ctx: SessionContext,
     *,
@@ -595,6 +515,5 @@ __all__ = [
     "maintenance_decision_artifact_payload",
     "maintenance_z_order_cols",
     "resolve_delta_maintenance_plan",
-    "resolve_maintenance_from_execution",
     "run_delta_maintenance",
 ]

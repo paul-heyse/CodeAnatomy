@@ -161,8 +161,9 @@ def _stub_plan_with_delta_pins(monkeypatch: pytest.MonkeyPatch) -> None:
         view_nodes: list[ViewNode] | tuple[ViewNode, ...],
         runtime_profile: DataFusionRuntimeProfile | None,
         snapshot: dict[str, object] | None,
+        semantic_context: Any | None = None,
     ) -> PlanningPipelineResult:
-        _ = (runtime_profile, snapshot)
+        _ = (runtime_profile, snapshot, semantic_context)
         inferred = tuple(
             InferredDeps(
                 task_name=node.name,

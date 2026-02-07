@@ -6,7 +6,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from semantics.naming import canonical_output_name
+from semantics.naming import canonical_output_name, output_name_map_from_views
 from semantics.program_manifest import (
     ManifestDatasetBindings,
     ManifestDatasetResolver,
@@ -89,12 +89,14 @@ class CompileContext:
             if self.input_mapping is not None
             else resolve_semantic_input_mapping(active_ctx)
         )
+        ir = self.semantic_ir()
         manifest = SemanticProgramManifest(
-            semantic_ir=self.semantic_ir(),
+            semantic_ir=ir,
             requested_outputs=resolved_outputs,
             input_mapping=resolved_input_mapping,
             validation_policy=self.policy,
             dataset_bindings=self.dataset_bindings(),
+            output_name_map=output_name_map_from_views(ir.views),
         )
         validation = validate_semantic_inputs(
             ctx=active_ctx,
@@ -166,6 +168,9 @@ def compile_semantic_program(
     SemanticProgramManifest
         Manifest enriched with validation status and fingerprint.
     """
+    from semantics.compile_invariants import record_compile_if_tracking
+
+    record_compile_if_tracking()
     return CompileContext(
         runtime_profile=runtime_profile,
         outputs=outputs,
@@ -188,6 +193,9 @@ def build_semantic_execution_context(
     Returns:
         SemanticExecutionContext: Compiled manifest, resolver, and execution context.
     """
+    from semantics.compile_invariants import record_compile_if_tracking
+
+    record_compile_if_tracking()
     compile_ctx = CompileContext(
         runtime_profile=runtime_profile,
         outputs=outputs,

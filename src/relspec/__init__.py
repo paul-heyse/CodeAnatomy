@@ -9,6 +9,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "EdgeValidationResult": ("relspec.graph_edge_validation", "EdgeValidationResult"),
     "EvidenceCatalog": ("relspec.evidence", "EvidenceCatalog"),
     "EvidenceNode": ("relspec.rustworkx_graph", "EvidenceNode"),
+    "ExecutionAuthorityContext": ("relspec.execution_authority", "ExecutionAuthorityContext"),
     "ExecutionPlan": ("relspec.execution_plan", "ExecutionPlan"),
     "GraphDiagnostics": ("relspec.rustworkx_graph", "GraphDiagnostics"),
     "GraphEdge": ("relspec.rustworkx_graph", "GraphEdge"),
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
     EdgeValidationResult: Any
     EvidenceCatalog: Any
     EvidenceNode: Any
+    ExecutionAuthorityContext: Any
     ExecutionPlan: Any
     GraphDiagnostics: Any
     GraphEdge: Any
@@ -109,6 +111,7 @@ __all__ = (
     "EdgeValidationResult",
     "EvidenceCatalog",
     "EvidenceNode",
+    "ExecutionAuthorityContext",
     "ExecutionPlan",
     "GraphDiagnostics",
     "GraphEdge",

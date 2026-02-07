@@ -78,6 +78,7 @@ from datafusion_engine.lineage.diagnostics import (
     record_artifact,
     record_events,
 )
+from serde_schema_registry import ArtifactSpec
 from datafusion_engine.plan.cache import PlanCache, PlanProtoCache
 from datafusion_engine.registry_facade import RegistrationPhase, RegistrationPhaseOrchestrator
 from datafusion_engine.schema.introspection import (
@@ -2603,7 +2604,9 @@ def _cache_profile_settings(profile: DataFusionRuntimeProfile) -> dict[str, str]
 
 
 class _RuntimeDiagnosticsMixin:
-    def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
+    def record_artifact(
+        self, name: ArtifactSpec | str, payload: Mapping[str, object]
+    ) -> None:
         """Record an artifact through DiagnosticsRecorder when configured."""
         profile = cast("DataFusionRuntimeProfile", self)
         record_artifact(profile, name, payload)

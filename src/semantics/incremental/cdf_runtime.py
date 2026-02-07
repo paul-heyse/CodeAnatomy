@@ -6,7 +6,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 import pyarrow as pa
 
@@ -17,7 +17,6 @@ from datafusion_engine.dataset.registry import (
 )
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
-from datafusion_engine.session.facade import DataFusionExecutionFacade
 from schema_spec.system import DeltaScanOptions
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_types import CdfFilterPolicy
@@ -230,6 +229,103 @@ def _prepare_cdf_read_state(
     )
 
 
+def _record_unavailable_cdf_read(
+    profile: DataFusionRuntimeProfile | None,
+    *,
+    dataset_name: str,
+    dataset_path: str,
+    required: bool,
+    filter_policy: CdfFilterPolicy | None,
+) -> None:
+    error = (
+        f"Delta CDF is required for dataset {dataset_name!r} but is unavailable."
+        if required
+        else None
+    )
+    _record_cdf_read(
+        profile,
+        record=_CdfReadRecord(
+            dataset_name=dataset_name,
+            dataset_path=dataset_path,
+            status="unavailable",
+            inputs=None,
+            state=None,
+            table=None,
+            error=error,
+            filter_policy=filter_policy,
+        ),
+    )
+    if error is not None:
+        raise ValueError(error)
+
+
+def _register_cdf_dataset(
+    state: _CdfReadState,
+    *,
+    registry: TempTableRegistry,
+) -> str:
+    cdf_name = f"__cdf_{uuid7_hex()}"
+    overrides = None
+    if state.inputs.scan_options is not None:
+        from schema_spec.system import DeltaPolicyBundle
+
+        overrides = DatasetLocationOverrides(
+            delta=DeltaPolicyBundle(scan=state.inputs.scan_options)
+        )
+    location = DatasetLocation(
+        path=str(state.inputs.path),
+        format="delta",
+        storage_options=state.inputs.storage_options,
+        delta_log_storage_options=state.inputs.log_storage_options,
+        delta_cdf_options=state.cdf_options,
+        overrides=overrides,
+        datafusion_provider="delta_cdf",
+    )
+    result = state.runtime.registry_facade.register_dataset(
+        name=cdf_name,
+        location=location,
+    )
+    if not result.success:
+        msg = result.error or f"Failed to register CDF dataset {cdf_name!r}."
+        raise ValueError(msg)
+    registry.track(cdf_name)
+    return cdf_name
+
+
+def _raise_non_cdf_start_error(exc: Exception) -> NoReturn:
+    raise exc
+
+
+def _load_cdf_table(
+    state: _CdfReadState,
+    *,
+    registry: TempTableRegistry,
+    filter_policy: CdfFilterPolicy | None,
+) -> pa.Table:
+    cdf_name = _register_cdf_dataset(state, registry=registry)
+    try:
+        table = _read_cdf_table(
+            state.runtime,
+            table_name=cdf_name,
+            filter_policy=filter_policy,
+        )
+        if "_change_type" not in table.column_names:
+            # Degraded provider registration can return a base Delta dataset
+            # without CDF virtual columns. Fall back to direct load_cdf().
+            table = _read_cdf_table_fallback(
+                state,
+                filter_policy=filter_policy,
+            )
+    except (RuntimeError, ValueError) as exc:
+        if not _is_cdf_start_version_error(exc):
+            _raise_non_cdf_start_error(exc)
+        table = _read_cdf_table_fallback(
+            state,
+            filter_policy=filter_policy,
+        )
+    return table
+
+
 def read_cdf_changes(
     context: DeltaAccessContext,
     *,
@@ -260,34 +356,12 @@ def read_cdf_changes(
     )
     inputs = _resolve_cdf_inputs(context, dataset_path=dataset_path, dataset_name=dataset_name)
     if inputs is None:
-        if cdf_policy is not None and cdf_policy.required:
-            msg = f"Delta CDF is required for dataset {dataset_name!r} but is unavailable."
-            _record_cdf_read(
-                profile,
-                record=_CdfReadRecord(
-                    dataset_name=dataset_name,
-                    dataset_path=dataset_path,
-                    status="unavailable",
-                    inputs=None,
-                    state=None,
-                    table=None,
-                    error=msg,
-                    filter_policy=filter_policy,
-                ),
-            )
-            raise ValueError(msg)
-        _record_cdf_read(
+        _record_unavailable_cdf_read(
             profile,
-            record=_CdfReadRecord(
-                dataset_name=dataset_name,
-                dataset_path=dataset_path,
-                status="unavailable",
-                inputs=None,
-                state=None,
-                table=None,
-                error=None,
-                filter_policy=filter_policy,
-            ),
+            dataset_name=dataset_name,
+            dataset_path=dataset_path,
+            required=bool(cdf_policy is not None and cdf_policy.required),
+            filter_policy=filter_policy,
         )
         return None
     state = _prepare_cdf_read_state(
@@ -312,28 +386,12 @@ def read_cdf_changes(
         )
         return None
     with TempTableRegistry(state.runtime) as registry:
-        cdf_name = f"__cdf_{uuid7_hex()}"
         try:
-            overrides = None
-            if state.inputs.scan_options is not None:
-                from schema_spec.system import DeltaPolicyBundle
-
-                overrides = DatasetLocationOverrides(
-                    delta=DeltaPolicyBundle(scan=state.inputs.scan_options)
-                )
-            location = DatasetLocation(
-                path=str(state.inputs.path),
-                format="delta",
-                storage_options=state.inputs.storage_options,
-                delta_log_storage_options=state.inputs.log_storage_options,
-                delta_cdf_options=state.cdf_options,
-                overrides=overrides,
-                datafusion_provider="delta_cdf",
+            table = _load_cdf_table(
+                state,
+                registry=registry,
+                filter_policy=filter_policy,
             )
-            runtime_profile = state.runtime.profile
-            ctx = runtime_profile.session_runtime().ctx
-            facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-            _ = facade.register_dataset(name=cdf_name, location=location)
         except ValueError as exc:
             if state.inputs.cdf_policy is not None and state.inputs.cdf_policy.required:
                 msg = (
@@ -367,27 +425,6 @@ def read_cdf_changes(
                 ),
             )
             return None
-        registry.track(cdf_name)
-        try:
-            table = _read_cdf_table(
-                state.runtime,
-                table_name=cdf_name,
-                filter_policy=filter_policy,
-            )
-            if "_change_type" not in table.column_names:
-                # Degraded provider registration can return a base Delta dataset
-                # without CDF virtual columns. Fall back to direct load_cdf().
-                table = _read_cdf_table_fallback(
-                    state,
-                    filter_policy=filter_policy,
-                )
-        except Exception as exc:
-            if not _is_cdf_start_version_error(exc):
-                raise
-            table = _read_cdf_table_fallback(
-                state,
-                filter_policy=filter_policy,
-            )
     cursor_store.save_cursor(
         CdfCursor(dataset_name=dataset_name, last_version=state.current_version)
     )

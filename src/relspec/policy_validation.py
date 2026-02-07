@@ -1,0 +1,228 @@
+"""Structured policy validation for execution plan compilation.
+
+Validate runtime policy bundles against plan requirements at the
+execution-plan boundary. Run after ``compile_execution_plan()``,
+NOT inside ``compile_semantic_program()`` which returns only
+``SemanticProgramManifest`` and has no execution plan.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from relspec.execution_plan import ExecutionPlan
+
+_SMALL_SCAN_ROW_THRESHOLD: int = 1000
+
+
+@dataclass(frozen=True)
+class PolicyValidationIssue:
+    """Single policy validation issue.
+
+    Parameters
+    ----------
+    code
+        Machine-readable error code.
+    severity
+        Issue severity level.
+    task
+        Task or view name associated with the issue.
+    detail
+        Human-readable detail about the issue.
+    """
+
+    code: str
+    severity: Literal["error", "warn"]
+    task: str | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True)
+class PolicyValidationResult:
+    """Aggregated policy validation result.
+
+    Parameters
+    ----------
+    issues
+        All validation issues found.
+    """
+
+    issues: tuple[PolicyValidationIssue, ...]
+
+    @property
+    def is_valid(self) -> bool:
+        """Return True when no error-severity issues exist."""
+        return not any(i.severity == "error" for i in self.issues)
+
+    @property
+    def warnings(self) -> tuple[PolicyValidationIssue, ...]:
+        """Return warning-severity issues only."""
+        return tuple(i for i in self.issues if i.severity == "warn")
+
+    @property
+    def errors(self) -> tuple[PolicyValidationIssue, ...]:
+        """Return error-severity issues only."""
+        return tuple(i for i in self.issues if i.severity == "error")
+
+    @classmethod
+    def from_issues(cls, issues: list[PolicyValidationIssue]) -> PolicyValidationResult:
+        """Create a result from a mutable issue list.
+
+        Parameters
+        ----------
+        issues
+            Mutable list of validation issues.
+
+        Returns:
+        -------
+        PolicyValidationResult
+            Immutable validation result.
+        """
+        return cls(issues=tuple(issues))
+
+    @classmethod
+    def empty(cls) -> PolicyValidationResult:
+        """Return an empty (passing) validation result."""
+        return cls(issues=())
+
+
+@dataclass(frozen=True)
+class PolicyValidationArtifact:
+    """Machine-readable policy validation artifact.
+
+    Parameters
+    ----------
+    validation_mode
+        Active validation mode (``"error"``, ``"warn"``, or ``"off"``).
+    issue_count
+        Total number of issues found.
+    error_codes
+        Distinct error codes encountered.
+    runtime_hash
+        Runtime configuration hash for determinism verification.
+    is_deterministic
+        True when the result is deterministic under the same runtime hash.
+    """
+
+    validation_mode: str
+    issue_count: int
+    error_codes: tuple[str, ...]
+    runtime_hash: str
+    is_deterministic: bool
+
+
+def _error(
+    code: str,
+    *,
+    task: str | None = None,
+    detail: str | None = None,
+) -> PolicyValidationIssue:
+    """Create an error-severity validation issue.
+
+    Returns
+    -------
+    PolicyValidationIssue
+        Issue with ``"error"`` severity.
+    """
+    return PolicyValidationIssue(code=code, severity="error", task=task, detail=detail)
+
+
+def _warn(
+    code: str,
+    *,
+    task: str | None = None,
+    detail: str | None = None,
+) -> PolicyValidationIssue:
+    """Create a warning-severity validation issue.
+
+    Returns
+    -------
+    PolicyValidationIssue
+        Issue with ``"warn"`` severity.
+    """
+    return PolicyValidationIssue(code=code, severity="warn", task=task, detail=detail)
+
+
+def validate_policy_bundle(
+    execution_plan: ExecutionPlan,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    udf_snapshot: Mapping[str, object],
+) -> PolicyValidationResult:
+    """Validate policy bundle against execution plan requirements.
+
+    Run at the execution-plan boundary after ``compile_execution_plan()``,
+    NOT inside ``compile_semantic_program()``.
+
+    Parameters
+    ----------
+    execution_plan
+        Compiled execution plan with view nodes, scan units, and metrics.
+    runtime_profile
+        Active runtime profile with feature gates.
+    udf_snapshot
+        Available UDF snapshot mapping (name -> UDF object).
+
+    Returns:
+    -------
+    PolicyValidationResult
+        Validation result with all issues found.
+    """
+    _ = runtime_profile  # Reserved for future profile-aware validation gates
+    issues: list[PolicyValidationIssue] = []
+
+    # Check 1: UDF availability from view nodes
+    for node in execution_plan.view_nodes:
+        required = tuple(node.required_udfs or ())
+        if not required:
+            continue
+        missing = sorted(name for name in required if name not in udf_snapshot)
+        if missing:
+            issues.append(
+                _error(
+                    "UDF_MISSING",
+                    task=node.name,
+                    detail=f"Missing UDFs: {missing}",
+                )
+            )
+
+    # Check 2: Delta protocol compatibility from scan units
+    for unit in execution_plan.scan_units:
+        compat = unit.protocol_compatibility
+        if compat is not None and compat.compatible is False:
+            reason = compat.reason if hasattr(compat, "reason") else None
+            issues.append(
+                _error(
+                    "DELTA_PROTOCOL_INCOMPATIBLE",
+                    task=unit.dataset_name,
+                    detail=reason,
+                )
+            )
+
+    # Check 3: Size/policy heuristics from task plan metrics
+    for task_name, metric in execution_plan.task_plan_metrics.items():
+        if (
+            metric.stats_row_count is not None
+            and metric.stats_row_count < _SMALL_SCAN_ROW_THRESHOLD
+        ):
+            issues.append(
+                _warn(
+                    "SMALL_INPUT_SCAN_POLICY",
+                    task=task_name,
+                    detail=f"Row count {metric.stats_row_count} < {_SMALL_SCAN_ROW_THRESHOLD}",
+                )
+            )
+
+    return PolicyValidationResult.from_issues(issues)
+
+
+__all__ = [
+    "PolicyValidationArtifact",
+    "PolicyValidationIssue",
+    "PolicyValidationResult",
+    "validate_policy_bundle",
+]

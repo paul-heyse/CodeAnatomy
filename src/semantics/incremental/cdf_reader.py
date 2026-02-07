@@ -218,6 +218,24 @@ def _safe_read_cdf(
     read_delta_fn: CdfTableReader,
     cdf_options: DeltaCdfOptions,
 ) -> TableLike | None:
+    def _fallback_load_cdf() -> TableLike | None:
+        from deltalake import DeltaTable
+
+        from datafusion_engine.arrow.coercion import coerce_table_to_storage, to_arrow_table
+
+        storage_options = dict(opts.storage_options) if opts.storage_options else None
+        table = DeltaTable(path, storage_options=storage_options)
+        reader = table.load_cdf(
+            starting_version=cdf_options.starting_version,
+            ending_version=cdf_options.ending_version,
+            starting_timestamp=cdf_options.starting_timestamp,
+            ending_timestamp=cdf_options.ending_timestamp,
+            columns=cdf_options.columns,
+            predicate=cdf_options.predicate,
+            allow_out_of_range=cdf_options.allow_out_of_range,
+        )
+        return coerce_table_to_storage(to_arrow_table(reader.read_all()))
+
     try:
         return read_delta_fn(
             path,
@@ -226,7 +244,10 @@ def _safe_read_cdf(
             cdf_options=cdf_options,
         )
     except ValueError:
-        return None
+        try:
+            return _fallback_load_cdf()
+        except (RuntimeError, TypeError, ValueError):
+            return None
 
 
 def read_cdf_changes(

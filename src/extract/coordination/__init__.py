@@ -3,7 +3,6 @@
 This subpackage provides:
 - context.py: FileContext, RepoFileRow, SpanSpec and file context utilities
 - materialization.py: Extract plan building and materialization functions
-- helpers.py: Remaining utilities and re-exports for backward compatibility
 - evidence_plan.py: Evidence requirement planning
 - spec_helpers.py: Extractor option handling
 - schema_ops.py: Schema normalization and policy
@@ -16,18 +15,13 @@ from extract.coordination.context import (
     FileContext,
     RepoFileRow,
     SpanSpec,
+    attrs_map,
+    span_dict,
 )
 from extract.coordination.evidence_plan import (
     EvidencePlan,
     EvidenceRequirement,
     compile_evidence_plan,
-)
-from extract.coordination.helpers import (
-    ast_def_nodes,
-    attrs_map,
-    required_extractors,
-    requires_evidence,
-    span_dict,
 )
 from extract.coordination.materialization import (
     ExtractMaterializeOptions,
@@ -71,8 +65,6 @@ __all__ = [
     "SpanSpec",
     # schema_ops
     "apply_pipeline_kernels",
-    # helpers
-    "ast_def_nodes",
     "attrs_map",
     "compile_evidence_plan",
     "extract_plan_from_row_batches",
@@ -85,8 +77,6 @@ __all__ = [
     "normalized_schema_policy_for_dataset",
     "plan_feature_flags",
     "plan_requires_row",
-    "required_extractors",
-    "requires_evidence",
     "rule_execution_options",
     "schema_policy_for_dataset",
     "span_dict",

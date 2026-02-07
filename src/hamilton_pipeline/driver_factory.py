@@ -561,24 +561,27 @@ def _cdf_impacted_tasks(
     state_dir = _resolve_incremental_state_dir(config)
     if state_dir is None:
         return None, None
+    if dataset_resolver is None:
+        return None, str(state_dir)
     from relspec.incremental import CdfImpactRequest, impacted_tasks_for_cdf
     from semantics.incremental.cdf_cursors import CdfCursorStore
     from semantics.incremental.delta_context import DeltaAccessContext
-    from semantics.incremental.runtime import IncrementalRuntime
+    from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
     from semantics.incremental.state_store import StateStore
 
     try:
         runtime = IncrementalRuntime.build(
-            profile=view_ctx.profile,
-            determinism_tier=view_ctx.determinism_tier,
+            IncrementalRuntimeBuildRequest(
+                profile=view_ctx.profile,
+                determinism_tier=view_ctx.determinism_tier,
+                dataset_resolver=dataset_resolver,
+            )
         )
     except ValueError:
         return None, str(state_dir)
     context = DeltaAccessContext(runtime=runtime)
     state_store = StateStore(root=state_dir)
     cursor_store = CdfCursorStore(cursors_path=state_store.cdf_cursors_path())
-    if dataset_resolver is None:
-        return None, str(state_dir)
     from datafusion_engine.dataset.registry import DatasetCatalog
 
     catalog = DatasetCatalog()
@@ -628,10 +631,13 @@ def _plan_with_incremental_pruning(
     plan: ExecutionPlan,
     config: Mapping[str, JsonValue],
 ) -> ExecutionPlan:
+    from semantics.compile_context import dataset_bindings_for_profile
+
     impacted, state_dir = _cdf_impacted_tasks(
         view_ctx=view_ctx,
         plan=plan,
         config=config,
+        dataset_resolver=dataset_bindings_for_profile(view_ctx.profile),
     )
     if impacted is None and state_dir is None:
         return plan

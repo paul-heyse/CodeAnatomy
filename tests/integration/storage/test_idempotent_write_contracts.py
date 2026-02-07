@@ -15,9 +15,10 @@ from deltalake import DeltaTable, write_deltalake
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DiagnosticsConfig
+from semantics.compile_context import dataset_bindings_for_profile
 from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.delta_updates import PartitionedDatasetSpec, upsert_partitioned_dataset
-from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
 from semantics.incremental.types import IncrementalFileChanges
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import (
@@ -230,7 +231,12 @@ def test_incremental_delete_propagates_idempotent(tmp_path: Path) -> None:
     profile = DataFusionRuntimeProfile(
         diagnostics=DiagnosticsConfig(diagnostics_sink=sink),
     )
-    runtime = IncrementalRuntime.build(profile=profile)
+    runtime = IncrementalRuntime.build(
+        IncrementalRuntimeBuildRequest(
+            profile=profile,
+            dataset_resolver=dataset_bindings_for_profile(profile),
+        )
+    )
     context = DeltaAccessContext(runtime=runtime)
 
     _ = upsert_partitioned_dataset(

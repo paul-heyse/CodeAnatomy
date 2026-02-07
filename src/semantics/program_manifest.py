@@ -89,9 +89,7 @@ class ManifestDatasetBindings:
             Location for the dataset.
 
         Raises:
-        -------
-        KeyError
-            If dataset location is not found.
+            KeyError: If dataset location is not found.
         """
         location = self.locations.get(name)
         if location is None:

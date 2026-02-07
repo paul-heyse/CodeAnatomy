@@ -118,7 +118,11 @@ class SemanticExecutionContext:
 def dataset_bindings_for_profile(
     runtime_profile: DataFusionRuntimeProfile,
 ) -> ManifestDatasetBindings:
-    """Resolve manifest dataset bindings from the compile boundary."""
+    """Resolve manifest dataset bindings from the compile boundary.
+
+    Returns:
+        ManifestDatasetBindings: Manifest-backed dataset bindings for the profile.
+    """
     return CompileContext(runtime_profile=runtime_profile).dataset_bindings()
 
 
@@ -154,7 +158,11 @@ def build_semantic_execution_context(
     input_mapping: Mapping[str, str] | None = None,
     facade: DataFusionExecutionFacade | None = None,
 ) -> SemanticExecutionContext:
-    """Compile semantic artifacts and return a shared execution context."""
+    """Compile semantic artifacts and return a shared execution context.
+
+    Returns:
+        SemanticExecutionContext: Compiled manifest, resolver, and execution context.
+    """
     compile_ctx = CompileContext(
         runtime_profile=runtime_profile,
         outputs=outputs,

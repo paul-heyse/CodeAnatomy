@@ -23,13 +23,14 @@ from datafusion_engine.views.artifacts import (
     ViewArtifactRequest,
     build_view_artifact_from_bundle,
 )
+from semantics.compile_context import dataset_bindings_for_profile
 from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.invalidations import (
     build_invalidation_snapshot,
     read_invalidation_snapshot,
     write_invalidation_snapshot,
 )
-from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
 from semantics.incremental.state_store import StateStore
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
@@ -69,7 +70,12 @@ def _runtime_with_sink() -> tuple[IncrementalRuntime, _DiagnosticsSink]:
         features=FeatureGatesConfig(enforce_delta_ffi_provider=False),
         diagnostics=DiagnosticsConfig(diagnostics_sink=sink),
     )
-    runtime = IncrementalRuntime.build(profile=df_profile)
+    runtime = IncrementalRuntime.build(
+        IncrementalRuntimeBuildRequest(
+            profile=df_profile,
+            dataset_resolver=dataset_bindings_for_profile(df_profile),
+        )
+    )
     return runtime, sink
 
 

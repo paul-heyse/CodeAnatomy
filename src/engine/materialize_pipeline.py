@@ -372,14 +372,14 @@ def build_view_product(
     EngineEventRecorder(profile).record_plan_execution(
         plan_id=view_id or view_name,
         result=result,
-        view_artifact=view_artifact,
+        view_artifact=None,
     )
     return PlanProduct(
         plan_id=view_id or view_name,
         schema=schema,
         determinism_tier=policy.determinism_tier,
         writer_strategy=policy.writer_strategy,
-        view_artifact=view_artifact,
+        view_artifact=None,
         cache_decision=cache_decision,
         stream=stream,
         table=table,
@@ -436,9 +436,7 @@ def write_extract_outputs(
     Emits diagnostics for extract output quality and write behavior.
 
     Raises:
-    ------
-    ValueError
-        If *dataset_resolver* is ``None``.
+        ValueError: If *dataset_resolver* is ``None``.
     """
     if dataset_resolver is None:
         msg = "dataset_resolver is required for write_extract_outputs; the dataset_catalog_from_profile fallback has been removed"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self
 
 import pyarrow as pa
@@ -21,7 +21,18 @@ from utils.uuid_factory import uuid7_hex
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from datafusion_engine.registry_facade import RegistryFacade
     from semantics.program_manifest import ManifestDatasetResolver
+
+
+@dataclass(frozen=True)
+class IncrementalRuntimeBuildRequest:
+    """Typed request for constructing an IncrementalRuntime."""
+
+    dataset_resolver: ManifestDatasetResolver
+    profile: DataFusionRuntimeProfile | None = None
+    profile_name: str = "default"
+    determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
 
 
 @dataclass
@@ -30,17 +41,14 @@ class IncrementalRuntime:
 
     profile: DataFusionRuntimeProfile
     _session_runtime: SessionRuntime
-    _dataset_resolver: ManifestDatasetResolver | None = None
+    _dataset_resolver: ManifestDatasetResolver
     determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
+    _registry_facade_cache: RegistryFacade | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def build(
         cls,
-        *,
-        profile: DataFusionRuntimeProfile | None = None,
-        profile_name: str = "default",
-        determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT,
-        dataset_resolver: ManifestDatasetResolver | None = None,
+        request: IncrementalRuntimeBuildRequest,
     ) -> IncrementalRuntime:
         """Create a runtime with default DataFusion profile.
 
@@ -49,30 +57,65 @@ class IncrementalRuntime:
         IncrementalRuntime
             Newly constructed runtime instance.
         """
-        runtime_profile = profile or DataFusionRuntimeProfile(
-            policies=PolicyBundleConfig(config_policy_name=profile_name),
+        runtime_profile = request.profile or DataFusionRuntimeProfile(
+            policies=PolicyBundleConfig(config_policy_name=request.profile_name),
         )
         return cls(
             profile=runtime_profile,
             _session_runtime=runtime_profile.session_runtime(),
-            _dataset_resolver=dataset_resolver,
-            determinism_tier=determinism_tier,
+            _dataset_resolver=request.dataset_resolver,
+            determinism_tier=request.determinism_tier,
         )
 
     @property
     def dataset_resolver(self) -> ManifestDatasetResolver:
-        """Return the dataset resolver, falling back to compile-boundary lookup.
+        """Return the manifest-backed dataset resolver.
 
         Returns:
         -------
         ManifestDatasetResolver
             Dataset resolver from manifest bindings.
         """
-        if self._dataset_resolver is not None:
-            return self._dataset_resolver
-        from semantics.compile_context import dataset_bindings_for_profile
+        return self._dataset_resolver
 
-        return dataset_bindings_for_profile(self.profile)
+    @property
+    def registry_facade(self) -> RegistryFacade:
+        """Return a RegistryFacade bound to this runtime and resolver."""
+        if self._registry_facade_cache is not None:
+            return self._registry_facade_cache
+        from datafusion_engine.catalog.provider_registry import ProviderRegistry
+        from datafusion_engine.dataset.registry import DatasetCatalog
+        from datafusion_engine.registry_facade import RegistryFacade
+        from datafusion_engine.udf.catalog import UdfCatalogAdapter
+
+        dataset_catalog = DatasetCatalog()
+        for name in self._dataset_resolver.names():
+            location = self._dataset_resolver.location(name)
+            if location is None:
+                continue
+            dataset_catalog.register(name, location, overwrite=True)
+        provider_registry = ProviderRegistry(
+            ctx=self._session_runtime.ctx,
+            runtime_profile=self.profile,
+        )
+        try:
+            udf_catalog = self.profile.udf_catalog(self._session_runtime.ctx)
+        except (ValueError, RuntimeError, TypeError):
+            udf_registry = None
+        else:
+            udf_registry = UdfCatalogAdapter(
+                udf_catalog,
+                function_factory_hash=self.profile.function_factory_policy_hash(
+                    self._session_runtime.ctx
+                ),
+            )
+        self._registry_facade_cache = RegistryFacade(
+            dataset_catalog=dataset_catalog,
+            provider_registry=provider_registry,
+            udf_registry=udf_registry,
+            view_registry=self.profile.view_registry,
+        )
+        return self._registry_facade_cache
 
     def session_runtime(self) -> SessionRuntime:
         """Return the cached DataFusion SessionRuntime.
@@ -169,4 +212,4 @@ class TempTableRegistry:
         self.close()
 
 
-__all__ = ["IncrementalRuntime", "TempTableRegistry"]
+__all__ = ["IncrementalRuntime", "IncrementalRuntimeBuildRequest", "TempTableRegistry"]

@@ -46,14 +46,10 @@ def register_cdf_inputs(
     """Register CDF-backed inputs and return base-to-CDF name mapping.
 
     Returns:
-    -------
-    dict[str, str]
-        Mapping from base table names to CDF view names.
+        dict[str, str]: Mapping from base table names to CDF view names.
 
     Raises:
-    -------
-    ValueError
-        If ``dataset_resolver`` is None.
+        ValueError: If ``dataset_resolver`` is None.
     """
     from datafusion_engine.tables.metadata import table_provider_metadata
 

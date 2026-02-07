@@ -15,7 +15,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from datafusion_engine.identity import schema_identity_hash
@@ -42,7 +42,7 @@ from semantics.incremental.metadata import (
     SemanticDiagnosticsSnapshot,
     write_semantic_diagnostics_snapshots,
 )
-from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
 from semantics.incremental.state_store import StateStore
 from semantics.naming import canonical_output_name
 from semantics.quality import QualityRelationshipSpec
@@ -128,6 +128,32 @@ class _IncrementalOutputRequest:
     use_cdf: bool
     requested_outputs: Collection[str] | None
     dataset_resolver: ManifestDatasetResolver | None = None
+
+
+class _CdfCursorLike(Protocol):
+    last_version: int
+
+
+class _CdfCursorStoreLike(Protocol):
+    def load_cursor(self, name: str) -> _CdfCursorLike | None: ...
+
+
+class _DeltaServiceLike(Protocol):
+    def cdf_enabled(
+        self,
+        path: str,
+        *,
+        storage_options: Mapping[str, str],
+        log_storage_options: Mapping[str, str],
+    ) -> bool: ...
+
+    def table_version(
+        self,
+        *,
+        path: str,
+        storage_options: Mapping[str, str],
+        log_storage_options: Mapping[str, str],
+    ) -> int | None: ...
 
 
 @dataclass(frozen=True)
@@ -566,36 +592,68 @@ def _cdf_changed_inputs(
         return None
     if not isinstance(cursor_store, CdfCursorStore):
         return None
-    delta_service = runtime_profile.delta_ops.delta_service()
-    changed: set[str] = set()
-    for canonical, source in input_mapping.items():
-        if canonical == "file_line_index_v1":
-            continue
-        location = dataset_resolver.location(canonical)
-        if location is None:
-            location = dataset_resolver.location(source)
-        if location is None:
-            continue
-        storage_options = dict(location.storage_options)
-        log_options = dict(location.delta_log_storage_options)
-        if not _cdf_enabled_for_location(
-            location,
-            storage_options=storage_options,
-            log_storage_options=log_options,
-            cdf_enabled_fn=delta_service.cdf_enabled,
-        ):
-            continue
-        latest_version = delta_service.table_version(
-            path=str(location.path),
-            storage_options=storage_options,
-            log_storage_options=log_options,
+    typed_cursor_store = cast("_CdfCursorStoreLike", cursor_store)
+    delta_service = cast("_DeltaServiceLike", runtime_profile.delta_ops.delta_service())
+    return {
+        canonical
+        for canonical, source in input_mapping.items()
+        if _input_has_cdf_changes(
+            canonical=canonical,
+            source=source,
+            dataset_resolver=dataset_resolver,
+            cursor_store=typed_cursor_store,
+            delta_service=delta_service,
         )
-        if latest_version is None:
-            continue
-        cursor = cursor_store.load_cursor(canonical)
-        if cursor is None or latest_version > cursor.last_version:
-            changed.add(canonical)
-    return changed
+    }
+
+
+def _resolve_cdf_location(
+    *,
+    canonical: str,
+    source: str,
+    dataset_resolver: ManifestDatasetResolver,
+) -> DatasetLocation | None:
+    if canonical == "file_line_index_v1":
+        return None
+    location = dataset_resolver.location(canonical)
+    if location is not None:
+        return location
+    return dataset_resolver.location(source)
+
+
+def _input_has_cdf_changes(
+    *,
+    canonical: str,
+    source: str,
+    dataset_resolver: ManifestDatasetResolver,
+    cursor_store: _CdfCursorStoreLike,
+    delta_service: _DeltaServiceLike,
+) -> bool:
+    location = _resolve_cdf_location(
+        canonical=canonical,
+        source=source,
+        dataset_resolver=dataset_resolver,
+    )
+    if location is None:
+        return False
+    storage_options = dict(location.storage_options)
+    log_options = dict(location.delta_log_storage_options)
+    if not _cdf_enabled_for_location(
+        location,
+        storage_options=storage_options,
+        log_storage_options=log_options,
+        cdf_enabled_fn=delta_service.cdf_enabled,
+    ):
+        return False
+    latest_version = delta_service.table_version(
+        path=str(location.path),
+        storage_options=storage_options,
+        log_storage_options=log_options,
+    )
+    if latest_version is None:
+        return False
+    cursor = cursor_store.load_cursor(canonical)
+    return cursor is None or latest_version > cursor.last_version
 
 
 def _cdf_enabled_for_location(
@@ -1427,6 +1485,7 @@ def build_cpg(
         _emit_semantic_quality_diagnostics(
             ctx,
             runtime_profile=runtime_profile,
+            dataset_resolver=early_resolver,
             schema_policy=resolved.schema_policy,
             requested_outputs=resolved_outputs,
         )
@@ -1668,6 +1727,7 @@ def _materialize_semantic_outputs(
 class _SemanticDiagnosticsContext:
     ctx: SessionContext
     runtime_profile: DataFusionRuntimeProfile
+    dataset_resolver: ManifestDatasetResolver
     schema_policy: SchemaEvolutionPolicy
     diagnostics_sink: DiagnosticsSink | None
     output_locations: dict[str, DatasetLocation]
@@ -1679,10 +1739,12 @@ class _SemanticDiagnosticsContext:
     def ensure_incremental_runtime(self) -> IncrementalRuntime | None:
         if self.incremental_runtime is not None:
             return self.incremental_runtime
-        try:
-            self.incremental_runtime = IncrementalRuntime.build(profile=self.runtime_profile)
-        except ValueError:
-            self.incremental_runtime = None
+        self.incremental_runtime = IncrementalRuntime.build(
+            IncrementalRuntimeBuildRequest(
+                profile=self.runtime_profile,
+                dataset_resolver=self.dataset_resolver,
+            )
+        )
         return self.incremental_runtime
 
     def write_snapshot(self, view_name: str, df: DataFrame) -> str | None:
@@ -1736,6 +1798,7 @@ def _build_semantic_diagnostics_context(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver,
     schema_policy: SchemaEvolutionPolicy,
 ) -> _SemanticDiagnosticsContext | None:
     diagnostics_sink = runtime_profile.diagnostics.diagnostics_sink
@@ -1764,6 +1827,7 @@ def _build_semantic_diagnostics_context(
     return _SemanticDiagnosticsContext(
         ctx=ctx,
         runtime_profile=runtime_profile,
+        dataset_resolver=dataset_resolver,
         schema_policy=schema_policy,
         diagnostics_sink=diagnostics_sink,
         output_locations=output_locations,
@@ -1836,6 +1900,7 @@ def _emit_semantic_quality_diagnostics(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
+    dataset_resolver: ManifestDatasetResolver,
     schema_policy: SchemaEvolutionPolicy,
     requested_outputs: Collection[str] | None,
 ) -> None:
@@ -1844,6 +1909,7 @@ def _emit_semantic_quality_diagnostics(
     context = _build_semantic_diagnostics_context(
         ctx,
         runtime_profile=runtime_profile,
+        dataset_resolver=dataset_resolver,
         schema_policy=schema_policy,
     )
     if context is None:

@@ -15,7 +15,7 @@ import pyarrow as pa
 import pytest
 
 from semantics.joins import JoinStrategyType, infer_join_strategy
-from semantics.naming import SEMANTIC_OUTPUT_NAMES, canonical_output_name
+from semantics.naming import canonical_output_name, output_name_map_from_views
 from semantics.types import AnnotatedSchema
 from semantics.validation import (
     resolve_semantic_input_mapping,
@@ -237,11 +237,11 @@ class TestSemanticPipelineIntegration:
 
     def test_canonical_naming_consistency(self) -> None:
         """Verify naming module exports expected canonical names."""
-        # Check expected mappings exist
-        assert "scip_occurrences_norm" in SEMANTIC_OUTPUT_NAMES
-        assert "rel_name_symbol" in SEMANTIC_OUTPUT_NAMES
-        assert "cpg_nodes" in SEMANTIC_OUTPUT_NAMES
-        assert "cpg_edges" in SEMANTIC_OUTPUT_NAMES
+        from semantics.ir_pipeline import build_semantic_ir
+
+        output_name_map = output_name_map_from_views(build_semantic_ir().views)
+        assert "scip_occurrences_norm" in output_name_map
+        assert "rel_name_symbol" in output_name_map
 
         # Verify canonical names are identity-mapped
         assert canonical_output_name("scip_occurrences_norm") == "scip_occurrences_norm"

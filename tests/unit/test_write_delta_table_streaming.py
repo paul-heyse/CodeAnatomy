@@ -8,7 +8,7 @@ import pyarrow as pa
 from datafusion_engine.arrow.interop import RecordBatchReaderLike
 from datafusion_engine.io.write import WriteMethod, WriteMode, WriteRequest, WriteResult
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from semantics.compile_context import dataset_bindings_for_profile
+from semantics.compile_context import build_semantic_execution_context
 from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
 from semantics.incremental.write_helpers import (
     IncrementalDeltaWriteRequest,
@@ -21,7 +21,9 @@ def test_write_delta_table_streaming_reader(monkeypatch: Any, tmp_path: Path) ->
     runtime = IncrementalRuntime.build(
         IncrementalRuntimeBuildRequest(
             profile=profile,
-            dataset_resolver=dataset_bindings_for_profile(profile),
+            dataset_resolver=build_semantic_execution_context(
+                runtime_profile=profile
+            ).dataset_resolver,
         )
     )
     schema = pa.schema([("value", pa.int64())])

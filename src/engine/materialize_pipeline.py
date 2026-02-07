@@ -310,9 +310,11 @@ def build_view_product(
     if dataset_resolver is None and execution_context is not None:
         dataset_resolver = execution_context.dataset_resolver
     if dataset_resolver is None:
-        from semantics.compile_context import CompileContext
-
-        dataset_resolver = CompileContext(runtime_profile=profile).dataset_bindings()
+        msg = (
+            "dataset_resolver is required for execute_plan_product; "
+            "provide execution_context.dataset_resolver or an explicit resolver."
+        )
+        raise ValueError(msg)
     if is_semantic_view(view_name):
         ensure_semantic_views_registered(session_runtime.ctx, view_names=[view_name])
     if not session_runtime.ctx.table_exist(view_name):

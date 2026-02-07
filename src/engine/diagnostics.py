@@ -135,13 +135,13 @@ class EngineEventRecorder:
             return None
         return self.runtime_profile.diagnostics.diagnostics_sink
 
-    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, object]) -> None:
+    def record_artifact(self, name: ArtifactSpec, payload: Mapping[str, object]) -> None:
         """Record a diagnostics artifact.
 
         Parameters
         ----------
         name
-            Artifact spec or string name for the diagnostics sink.
+            Artifact spec name for the diagnostics sink.
         payload
             Artifact payload to record.
         """

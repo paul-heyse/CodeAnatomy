@@ -495,22 +495,12 @@ class TestNewArtifactSpecs:
 
 
 # ---------------------------------------------------------------------------
-# record_artifact backward compatibility
+# Typed record_artifact contract
 # ---------------------------------------------------------------------------
 
 
-class TestRecordArtifactCompatibility:
-    """Test that record_artifact accepts both ArtifactSpec and str."""
-
-    def test_record_artifact_with_string(self) -> None:
-        """Recording with a string name preserves existing behavior."""
-        from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
-
-        sink = InMemoryDiagnosticsSink()
-        sink.record_artifact("test_string_v1", {"key": "value"})
-        artifacts = sink.get_artifacts("test_string_v1")
-        assert len(artifacts) == 1
-        assert artifacts[0]["key"] == "value"
+class TestRecordArtifactTypedContract:
+    """Test that record_artifact requires typed ArtifactSpec inputs."""
 
     def test_record_artifact_with_spec(self) -> None:
         """Recording with an ArtifactSpec resolves canonical name via recorder."""
@@ -548,10 +538,8 @@ class TestRecordArtifactCompatibility:
             description="Snapshot test.",
         )
         recorder.record_artifact(spec, {"a": 1})
-        recorder.record_artifact("other_v1", {"b": 2})
         snapshot = sink.artifacts_snapshot()
         assert "snap_test_v1" in snapshot
-        assert "other_v1" in snapshot
 
     def test_diagnostics_recorder_with_spec(self) -> None:
         """DiagnosticsRecorder accepts ArtifactSpec for record_artifact."""
@@ -572,8 +560,8 @@ class TestRecordArtifactCompatibility:
         artifacts = sink.get_artifacts("recorder_test_v1")
         assert len(artifacts) == 1
 
-    def test_diagnostics_recorder_adapter_with_spec_canonical_name(self) -> None:
-        """DiagnosticsRecorderAdapter works with spec canonical_name."""
+    def test_diagnostics_recorder_adapter_with_spec(self) -> None:
+        """DiagnosticsRecorderAdapter works with typed ArtifactSpec values."""
         from datafusion_engine.lineage.diagnostics import (
             DiagnosticsRecorderAdapter,
             InMemoryDiagnosticsSink,
@@ -588,6 +576,6 @@ class TestRecordArtifactCompatibility:
             canonical_name="adapter_test_v1",
             description="Adapter test.",
         )
-        adapter.record_artifact(spec.canonical_name, {"value": 42})
+        adapter.record_artifact(spec, {"value": 42})
         artifacts = sink.get_artifacts("adapter_test_v1")
         assert len(artifacts) == 1

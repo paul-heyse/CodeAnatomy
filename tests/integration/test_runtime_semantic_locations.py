@@ -14,7 +14,7 @@ from datafusion_engine.session.runtime import (
 )
 from schema_spec.dataset_spec_ops import dataset_spec_name, dataset_spec_schema
 from semantics.catalog.dataset_specs import dataset_spec
-from semantics.compile_context import dataset_bindings_for_profile
+from semantics.compile_context import build_semantic_execution_context
 from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
 from semantics.ir_pipeline import build_semantic_ir
 
@@ -65,7 +65,7 @@ def test_incremental_resolver_matches_compile_bindings(tmp_path: Path) -> None:
             semantic_output=SemanticOutputConfig(normalize_output_root=str(tmp_path))
         ),
     )
-    compile_bindings = dataset_bindings_for_profile(profile)
+    compile_bindings = build_semantic_execution_context(runtime_profile=profile).dataset_resolver
     runtime = IncrementalRuntime.build(
         IncrementalRuntimeBuildRequest(
             profile=profile,

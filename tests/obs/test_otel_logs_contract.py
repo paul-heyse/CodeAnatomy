@@ -7,6 +7,7 @@ import importlib
 import pytest
 
 from obs.otel.logs import OtelDiagnosticsSink, emit_diagnostics_event
+from serde_schema_registry import ArtifactSpec
 from tests.obs._support.otel_harness import get_otel_harness
 
 
@@ -47,7 +48,10 @@ def test_otel_diagnostics_sink_emits() -> None:
     harness = get_otel_harness()
     harness.reset()
     sink = OtelDiagnosticsSink()
-    sink.record_artifact("cache.test", {"status": "ok"})
+    sink.record_artifact(
+        ArtifactSpec(canonical_name="cache.test", description="OTel diagnostics sink test."),
+        {"status": "ok"},
+    )
     logs = harness.log_exporter.get_finished_logs()
     assert logs
     log_record = logs[-1].log_record

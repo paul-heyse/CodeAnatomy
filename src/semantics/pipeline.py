@@ -151,7 +151,7 @@ def _resolve_cpg_compile_artifacts(
     runtime_profile: DataFusionRuntimeProfile,
     effective_use_cdf: bool,
     resolved: CpgBuildOptions,
-    execution_context: SemanticExecutionContext | None = None,
+    execution_context: SemanticExecutionContext,
 ) -> _CpgCompileResolution:
     """Resolve dataset resolver and manifest from execution context or compile boundary.
 
@@ -164,14 +164,7 @@ def _resolve_cpg_compile_artifacts(
     _CpgCompileResolution
         Resolved compile artifacts including resolver, manifest, and mapping.
     """
-    if execution_context is not None:
-        early_resolver = execution_context.dataset_resolver
-    else:
-        from semantics.compile_context import CompileContext
-
-        early_resolver = CompileContext(
-            runtime_profile=runtime_profile,
-        ).dataset_bindings()
+    early_resolver = execution_context.dataset_resolver
     input_mapping, use_cdf = _resolve_semantic_input_mapping(
         ctx,
         runtime_profile=runtime_profile,
@@ -192,18 +185,7 @@ def _resolve_cpg_compile_artifacts(
     )
     if incremental_outputs is not None:
         resolved_outputs = incremental_outputs
-    if execution_context is not None:
-        manifest = execution_context.manifest
-    else:
-        from semantics.compile_context import compile_semantic_program
-
-        manifest = compile_semantic_program(
-            runtime_profile=runtime_profile,
-            outputs=resolved_outputs,
-            policy="schema_plus_optional_probe",
-            ctx=ctx,
-            input_mapping=input_mapping,
-        )
+    manifest = execution_context.manifest
     return _CpgCompileResolution(
         resolver=early_resolver,
         manifest=manifest,
@@ -1447,7 +1429,7 @@ def build_cpg(
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
     options: CpgBuildOptions | None = None,
-    execution_context: SemanticExecutionContext | None = None,
+    execution_context: SemanticExecutionContext,
 ) -> None:
     """Build the complete CPG from extraction tables.
 
@@ -1460,8 +1442,8 @@ def build_cpg(
     options
         Optional build settings for cache policy, schema validation, and CDF inputs.
     execution_context
-        Pre-compiled semantic execution context. When provided, reuse
-        its manifest and dataset resolver instead of compiling from scratch.
+        Pre-compiled semantic execution context used for manifest and
+        dataset resolver authority.
 
     Raises:
         SemanticInputValidationError: If required semantic inputs fail validation.
@@ -2003,7 +1985,7 @@ def build_cpg_from_inferred_deps(
     *,
     runtime_profile: DataFusionRuntimeProfile,
     options: CpgBuildOptions | None = None,
-    execution_context: SemanticExecutionContext | None = None,
+    execution_context: SemanticExecutionContext,
 ) -> dict[str, object]:
     """Build CPG and extract dependency information for rustworkx.
 
@@ -2018,8 +2000,8 @@ def build_cpg_from_inferred_deps(
     options
         Optional build settings for cache policy, schema validation, and CDF inputs.
     execution_context
-        Pre-compiled semantic execution context. When provided, reuse
-        its manifest and dataset resolver instead of compiling from scratch.
+        Pre-compiled semantic execution context used for manifest and
+        dataset resolver authority.
 
     Returns:
     -------
@@ -2113,7 +2095,7 @@ def _resolve_semantic_input_mapping(
     runtime_profile: DataFusionRuntimeProfile | None,
     use_cdf: bool | None,
     cdf_inputs: Mapping[str, str] | None,
-    dataset_resolver: ManifestDatasetResolver | None = None,
+    dataset_resolver: ManifestDatasetResolver,
 ) -> tuple[dict[str, str], bool]:
     from semantics.validation import resolve_semantic_input_mapping
 
@@ -2150,7 +2132,7 @@ def _resolve_cdf_inputs(
     use_cdf: bool | None,
     cdf_inputs: Mapping[str, str] | None,
     inputs: Sequence[str],
-    dataset_resolver: ManifestDatasetResolver | None = None,
+    dataset_resolver: ManifestDatasetResolver,
 ) -> Mapping[str, str] | None:
     if use_cdf is False:
         return None
@@ -2177,14 +2159,11 @@ def _has_cdf_inputs(
     runtime_profile: DataFusionRuntimeProfile,
     *,
     inputs: Sequence[str],
-    dataset_resolver: ManifestDatasetResolver | None = None,
+    dataset_resolver: ManifestDatasetResolver,
 ) -> bool:
     from datafusion_engine.dataset.registry import resolve_datafusion_provider
 
     _ = runtime_profile
-    if dataset_resolver is None:
-        msg = "dataset_resolver is required for _has_cdf_inputs."
-        raise ValueError(msg)
     for name in inputs:
         location = dataset_resolver.location(name)
         if location is None:

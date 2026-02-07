@@ -7,7 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
-from semantics.compile_context import dataset_bindings_for_profile
+from semantics.compile_context import build_semantic_execution_context
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_runtime import read_cdf_changes
 from semantics.incremental.changes import file_changes_from_cdf
@@ -92,7 +92,9 @@ def _runtime_or_skip() -> IncrementalRuntime:
     runtime = IncrementalRuntime.build(
         IncrementalRuntimeBuildRequest(
             profile=profile,
-            dataset_resolver=dataset_bindings_for_profile(profile),
+            dataset_resolver=build_semantic_execution_context(
+                runtime_profile=profile
+            ).dataset_resolver,
         )
     )
     _ = runtime.session_context()

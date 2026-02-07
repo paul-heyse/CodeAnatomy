@@ -87,6 +87,7 @@ def test_delta_cdf_facade_registration(tmp_path: Path) -> None:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.session.facade import DataFusionExecutionFacade
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
+    from semantics.compile_context import build_semantic_execution_context
     from storage.deltalake import DeltaCdfOptions
 
     table_path = tmp_path / "cdf_table"
@@ -106,7 +107,13 @@ def test_delta_cdf_facade_registration(tmp_path: Path) -> None:
         options=DatasetRegistrationOptions(runtime_profile=profile),
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
-    mapping = facade.register_cdf_inputs(table_names=("cdf_table",))
+    mapping = facade.register_cdf_inputs(
+        table_names=("cdf_table",),
+        dataset_resolver=build_semantic_execution_context(
+            runtime_profile=profile,
+            ctx=ctx,
+        ).dataset_resolver,
+    )
     assert mapping["cdf_table"] == "cdf_table__cdf"
     df = ctx.table(mapping["cdf_table"])
     assert "id" in df.schema().names

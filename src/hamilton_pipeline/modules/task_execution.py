@@ -500,16 +500,12 @@ def _ensure_scan_overrides(
         scan_context.scan_units_hash is not None
         and runtime.scan_override_hash != scan_context.scan_units_hash
     )
+    if execution_context is None:
+        msg = "SemanticExecutionContext is required for scan override resolution in task execution."
+        raise ValueError(msg)
     if refresh_requested:
-        if execution_context is not None:
-            semantic_manifest = execution_context.manifest
-            resolver = execution_context.dataset_resolver
-        else:
-            from semantics.compile_context import CompileContext
-
-            compile_ctx = CompileContext(runtime_profile=profile)
-            semantic_manifest = compile_ctx.compile(ctx=session)
-            resolver = compile_ctx.dataset_bindings()
+        semantic_manifest = execution_context.manifest
+        resolver = execution_context.dataset_resolver
         DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
             semantic_manifest=semantic_manifest,
@@ -530,6 +526,9 @@ def _execute_view(
     if plan_bundle is None:
         msg = f"Plan bundle is required for view execution: {view_name!r}."
         raise ValueError(msg)
+    if execution_context is None:
+        msg = "SemanticExecutionContext is required for view execution."
+        raise ValueError(msg)
     profile = _ensure_scan_overrides(
         runtime,
         scan_context=scan_context,
@@ -537,15 +536,8 @@ def _execute_view(
     )
     session = profile.session_context()
     if not session.table_exist(view_name):
-        if execution_context is not None:
-            semantic_manifest = execution_context.manifest
-            resolver = execution_context.dataset_resolver
-        else:
-            from semantics.compile_context import CompileContext
-
-            compile_ctx = CompileContext(runtime_profile=profile)
-            semantic_manifest = compile_ctx.compile(ctx=session)
-            resolver = compile_ctx.dataset_bindings()
+        semantic_manifest = execution_context.manifest
+        resolver = execution_context.dataset_resolver
         DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
             semantic_manifest=semantic_manifest,

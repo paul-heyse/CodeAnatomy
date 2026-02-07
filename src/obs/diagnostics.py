@@ -63,14 +63,9 @@ class DiagnosticsCollector:
             emit_diagnostics_event(name, payload=row, event_kind="event")
         record_artifact_count(name, status="ok", attributes={"artifact.type": "event"})
 
-    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, object]) -> None:
+    def record_artifact(self, name: ArtifactSpec, payload: Mapping[str, object]) -> None:
         """Append an artifact payload under a logical name."""
-        canonical = getattr(name, "canonical_name", None)
-        resolved = (
-            canonical
-            if isinstance(canonical, str)
-            else (name if isinstance(name, str) else str(name))
-        )
+        resolved = name.canonical_name
         bucket = self.artifacts.setdefault(resolved, [])
         normalized = dict(payload)
         bucket.append(normalized)

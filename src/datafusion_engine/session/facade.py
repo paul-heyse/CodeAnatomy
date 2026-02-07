@@ -795,10 +795,12 @@ class DataFusionExecutionFacade:
             msg = "Runtime profile is required for dataset registration."
             raise ValueError(msg)
         from datafusion_engine.registry_facade import registry_facade_for_context
+        from semantics.program_manifest import ManifestDatasetBindings
 
         registry_facade = registry_facade_for_context(
             self.ctx,
             runtime_profile=self.runtime_profile,
+            dataset_resolver=ManifestDatasetBindings(locations={}),
         )
         return registry_facade.register_dataset_df(
             name=name,

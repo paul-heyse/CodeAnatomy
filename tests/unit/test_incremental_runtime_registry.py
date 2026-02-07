@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from semantics.compile_context import dataset_bindings_for_profile
+from semantics.compile_context import build_semantic_execution_context
 from semantics.incremental.runtime import (
     IncrementalRuntime,
     IncrementalRuntimeBuildRequest,
@@ -38,7 +38,9 @@ def _runtime_or_skip() -> IncrementalRuntime:
     runtime = IncrementalRuntime.build(
         IncrementalRuntimeBuildRequest(
             profile=profile,
-            dataset_resolver=dataset_bindings_for_profile(profile),
+            dataset_resolver=build_semantic_execution_context(
+                runtime_profile=profile
+            ).dataset_resolver,
         )
     )
     _ = runtime.session_context()

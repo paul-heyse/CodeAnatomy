@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, read_delta_as_reader
-from semantics.compile_context import dataset_bindings_for_profile
+from semantics.compile_context import build_semantic_execution_context
 from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.delta_updates import PartitionedDatasetSpec, upsert_partitioned_dataset
 from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
@@ -102,7 +102,9 @@ def _runtime_or_skip() -> IncrementalRuntime:
     runtime = IncrementalRuntime.build(
         IncrementalRuntimeBuildRequest(
             profile=profile,
-            dataset_resolver=dataset_bindings_for_profile(profile),
+            dataset_resolver=build_semantic_execution_context(
+                runtime_profile=profile
+            ).dataset_resolver,
         )
     )
     _ = runtime.session_context()

@@ -37,9 +37,9 @@ def _node_id(name: str) -> str:
 
 
 def _explain_payload_from_ir(outputs: Sequence[str] | None) -> dict[str, object]:
-    from semantics.ir_pipeline import build_semantic_ir
+    from semantics.compile_context import semantic_ir_for_outputs
 
-    semantic_ir = build_semantic_ir(outputs=set(outputs) if outputs else None)
+    semantic_ir = semantic_ir_for_outputs(outputs=set(outputs) if outputs else None)
     return {
         "semantic_model_hash": semantic_ir.model_hash,
         "semantic_ir_hash": semantic_ir.ir_hash,

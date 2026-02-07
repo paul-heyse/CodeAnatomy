@@ -12,7 +12,6 @@ from hamilton.function_modifiers import cache
 
 from core_types import DeterminismTier, JsonDict, parse_determinism_tier
 from datafusion_engine.materialize_policy import MaterializationPolicy, WriterStrategy
-from datafusion_engine.semantics_runtime import semantic_runtime_from_profile
 from datafusion_engine.session.runtime import AdapterExecutionPolicy
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from engine.session import EngineSession
@@ -36,7 +35,6 @@ from hamilton_pipeline.types import (
 from obs.diagnostics import DiagnosticsCollector
 from relspec.pipeline_policy import PipelinePolicy
 from semantics.incremental import SemanticIncrementalConfig
-from semantics.runtime import SemanticRuntimeConfig
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 from storage.ipc_utils import IpcWriteConfig
 from utils.env_utils import env_bool, env_value
@@ -325,7 +323,6 @@ def diagnostics_collector() -> DiagnosticsCollector:
 def engine_session_runtime_inputs(
     runtime_profile_spec: RuntimeProfileSpec,
     execution_surface_policy: MaterializationPolicy,
-    semantic_runtime_config: SemanticRuntimeConfig,
 ) -> EngineSessionRuntimeInputs:
     """Build runtime-focused inputs for the engine session.
 
@@ -337,7 +334,6 @@ def engine_session_runtime_inputs(
     return EngineSessionRuntimeInputs(
         runtime_profile_spec=runtime_profile_spec,
         execution_surface_policy=execution_surface_policy,
-        semantic_runtime_config=semantic_runtime_config,
     )
 
 
@@ -368,7 +364,6 @@ class EngineSessionRuntimeInputs:
 
     runtime_profile_spec: RuntimeProfileSpec
     execution_surface_policy: MaterializationPolicy
-    semantic_runtime_config: SemanticRuntimeConfig
 
 
 @dataclass(frozen=True)
@@ -399,25 +394,9 @@ def engine_session(
             diagnostics=engine_session_observability_inputs.diagnostics_collector,
             surface_policy=engine_session_runtime_inputs.execution_surface_policy,
             diagnostics_policy=engine_session_observability_inputs.pipeline_policy.diagnostics,
-            semantic_config=engine_session_runtime_inputs.semantic_runtime_config,
             otel_options=engine_session_observability_inputs.otel_options,
         ),
     )
-
-
-@cache(behavior="ignore")
-@apply_tag(TagPolicy(layer="inputs", kind="runtime"))
-def semantic_runtime_config(
-    runtime_profile_spec: RuntimeProfileSpec,
-) -> SemanticRuntimeConfig:
-    """Return semantic runtime configuration derived from the runtime profile.
-
-    Returns:
-    -------
-    SemanticRuntimeConfig
-        Semantic runtime configuration derived from the profile.
-    """
-    return semantic_runtime_from_profile(runtime_profile_spec.datafusion)
 
 
 @cache(behavior="ignore")

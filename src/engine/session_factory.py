@@ -11,10 +11,6 @@ import msgspec
 from datafusion_engine.dataset.registration import dataset_input_plugin, input_plugin_prefixes
 from datafusion_engine.dataset.registry import DatasetCatalog, registry_snapshot
 from datafusion_engine.materialize_policy import MaterializationPolicy
-from datafusion_engine.semantics_runtime import (
-    apply_semantic_runtime_config,
-    semantic_runtime_from_profile,
-)
 from datafusion_engine.session.runtime import feature_state_snapshot
 from engine.runtime import build_engine_runtime
 from engine.runtime_profile import (
@@ -28,7 +24,7 @@ from obs.otel import OtelBootstrapOptions, configure_otel
 from relspec.pipeline_policy import DiagnosticsPolicy
 
 if TYPE_CHECKING:
-    from semantics.runtime import SemanticBuildOptions, SemanticRuntimeConfig
+    from semantics.runtime import SemanticBuildOptions
 
 
 @dataclass(frozen=True)
@@ -38,7 +34,6 @@ class EngineSessionOptions:
     diagnostics: DiagnosticsCollector | None = None
     surface_policy: MaterializationPolicy | None = None
     diagnostics_policy: DiagnosticsPolicy | None = None
-    semantic_config: SemanticRuntimeConfig | None = None
     build_options: SemanticBuildOptions | None = None
     otel_options: OtelBootstrapOptions | None = None
 
@@ -55,7 +50,7 @@ def build_engine_session(
     runtime_spec
         Resolved runtime profile specification.
     options
-        Optional engine session options for diagnostics, semantic config, and tracing.
+        Optional engine session options for diagnostics and tracing.
 
     Returns:
     -------
@@ -78,11 +73,6 @@ def build_engine_session(
     )
     df_profile = engine_runtime.datafusion_profile
     profile_name = runtime_spec.name
-
-    # Resolve and apply semantic config via the datafusion_engine bridge
-    resolved_semantic = resolved.semantic_config or semantic_runtime_from_profile(df_profile)
-    df_profile = apply_semantic_runtime_config(df_profile, resolved_semantic)
-    engine_runtime = engine_runtime.with_datafusion_profile(df_profile)
     if resolved.diagnostics is not None:
         snapshot = feature_state_snapshot(
             profile_name=profile_name,

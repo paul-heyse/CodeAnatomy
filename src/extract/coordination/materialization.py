@@ -22,6 +22,10 @@ from datafusion_engine.arrow.build import (
     record_batch_reader_from_rows as schema_record_batch_reader_from_rows,
 )
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
+from datafusion_engine.dataset.registry import (
+    dataset_catalog_from_profile,
+    dataset_location_from_catalog,
+)
 from datafusion_engine.expr.query_spec import apply_query_spec
 from datafusion_engine.extract.registry import dataset_query, dataset_schema, extract_metadata
 from datafusion_engine.io.ingest import datafusion_from_arrow
@@ -56,7 +60,6 @@ from extract.coordination.spec_helpers import (
     plan_requires_row,
     rule_execution_options,
 )
-from extract.helpers import ExtractMaterializeOptions, ExtractPlanOptions
 from extract.session import ExtractSession
 from serde_msgspec import to_builtins
 
@@ -73,6 +76,32 @@ class _NormalizationContext:
     determinism_tier: DeterminismTier
     finalize_ctx: FinalizeContext
     apply_post_kernels: bool
+
+
+@dataclass(frozen=True)
+class ExtractPlanOptions:
+    """Options for building extract plans."""
+
+    normalize: ExtractNormalizeOptions | None = None
+    evidence_plan: EvidencePlan | None = None
+    repo_id: str | None = None
+
+    def resolved_repo_id(self) -> str | None:
+        """Return the effective repo id for query construction."""
+        if self.repo_id is not None:
+            return self.repo_id
+        if self.normalize is None:
+            return None
+        return self.normalize.repo_id
+
+
+@dataclass(frozen=True)
+class ExtractMaterializeOptions:
+    """Options for materializing extract plans."""
+
+    normalize: ExtractNormalizeOptions | None = None
+    prefer_reader: bool = False
+    apply_post_kernels: bool = False
 
 
 @dataclass(frozen=True)
@@ -400,7 +429,7 @@ def extract_dataset_location_or_raise(
     Raises:
         ValueError: If the operation cannot be completed.
     """
-    location = runtime_profile.catalog_ops.dataset_location(name)
+    location = dataset_location_from_catalog(runtime_profile, name)
     if location is None:
         msg = f"No extract dataset location configured for {name!r}."
         raise ValueError(msg)
@@ -413,7 +442,7 @@ def _streaming_supported_for_extract(
     runtime_profile: DataFusionRuntimeProfile,
     normalize: ExtractNormalizeOptions | None,
 ) -> bool:
-    if runtime_profile.catalog_ops.dataset_location(name) is None:
+    if dataset_location_from_catalog(runtime_profile, name) is None:
         return False
     policy = normalized_schema_policy_for_dataset(
         name,
@@ -453,12 +482,17 @@ def _plan_scan_units_for_extract(
     from datafusion_engine.lineage.scan import plan_scan_unit
 
     session_runtime = runtime_profile.session_runtime()
+    catalog = dataset_catalog_from_profile(runtime_profile)
     scan_units: dict[str, ScanUnit] = {}
     for scan in extract_lineage(
         plan.optimized_logical_plan,
         udf_snapshot=plan.artifacts.udf_snapshot,
     ).scans:
-        location = runtime_profile.catalog_ops.dataset_location(scan.dataset_name)
+        location = dataset_location_from_catalog(
+            runtime_profile,
+            scan.dataset_name,
+            catalog=catalog,
+        )
         if location is None:
             continue
         unit = plan_scan_unit(
@@ -739,7 +773,7 @@ def _record_extract_compile(
 
 def _register_extract_view(name: str, *, runtime_profile: DataFusionRuntimeProfile) -> None:
     """Register a view for a materialized extract dataset."""
-    location = runtime_profile.catalog_ops.dataset_location(name)
+    location = dataset_location_from_catalog(runtime_profile, name)
     if location is None:
         return
     session_runtime = runtime_profile.session_runtime()
@@ -805,7 +839,7 @@ def _validate_extract_schema_contract(
     Raises:
         TypeError: If the operation cannot be completed.
     """
-    if runtime_profile.catalog_ops.dataset_location(name) is None:
+    if dataset_location_from_catalog(runtime_profile, name) is None:
         return
     expected = dataset_schema(name)
     if not isinstance(expected, pa.Schema):

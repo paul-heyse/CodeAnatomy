@@ -165,7 +165,7 @@ def _edge_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
 
 
 def _props_map_field_specs(row: SemanticDatasetRow) -> list[FieldSpec] | None:
-    if row.name != "cpg_props_map_v1":
+    if row.name != "cpg_props_map":
         return None
     value_struct = pa.struct(
         [

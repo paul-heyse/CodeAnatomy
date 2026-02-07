@@ -8,19 +8,37 @@ Tests end-to-end behavior of the semantic pipeline components including:
 
 from __future__ import annotations
 
+import ast
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pytest
 
-from semantics.input_registry import require_semantic_inputs, validate_semantic_inputs
 from semantics.joins import JoinStrategyType, infer_join_strategy
 from semantics.naming import SEMANTIC_OUTPUT_NAMES, canonical_output_name
 from semantics.types import AnnotatedSchema
-from semantics.validation import validate_semantic_input_columns
+from semantics.validation import (
+    resolve_semantic_input_mapping,
+    validate_semantic_input_columns,
+    validate_semantic_inputs,
+)
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
+
+
+def _missing_required_from_error(exc: ValueError) -> tuple[str, ...]:
+    prefix = "Missing required semantic inputs: "
+    message = str(exc)
+    if not message.startswith(prefix):
+        return ()
+    try:
+        payload = ast.literal_eval(message[len(prefix) :])
+    except (SyntaxError, ValueError):
+        return ()
+    if isinstance(payload, tuple):
+        return tuple(str(name) for name in payload)
+    return ()
 
 
 @pytest.fixture
@@ -46,14 +64,15 @@ class TestSemanticPipelineIntegration:
         datafusion_session: SessionContext,
     ) -> None:
         """Verify input validation detects missing tables."""
-        result = validate_semantic_inputs(datafusion_session)
+        with pytest.raises(ValueError, match="Missing required semantic inputs:") as exc_info:
+            resolve_semantic_input_mapping(datafusion_session)
+        missing_required = _missing_required_from_error(exc_info.value)
 
-        # Without extraction tables, validation should fail
-        assert not result.valid
-        assert len(result.missing_required) > 0
+        # Without extraction tables, mapping resolution should fail.
+        assert len(missing_required) > 0
         # Verify expected required tables are reported missing
-        assert "cst_refs" in result.missing_required
-        assert "scip_occurrences" in result.missing_required
+        assert "cst_refs" in missing_required
+        assert "scip_occurrences" in missing_required
 
     def test_semantic_input_validation_resolves_present_tables(
         self,
@@ -68,13 +87,12 @@ class TestSemanticPipelineIntegration:
         )
         register_arrow_table(datafusion_session, name="cst_refs", value=test_data)
 
-        result = validate_semantic_inputs(datafusion_session)
+        with pytest.raises(ValueError, match="Missing required semantic inputs:") as exc_info:
+            resolve_semantic_input_mapping(datafusion_session)
+        missing_required = _missing_required_from_error(exc_info.value)
 
         # cst_refs should be resolved now
-        assert "cst_refs" not in result.missing_required
-        assert result.resolved_names.get("cst_refs") == "cst_refs"
-        # But still invalid because other required tables are missing
-        assert not result.valid
+        assert "cst_refs" not in missing_required
 
     def test_semantic_input_validation_uses_fallback_dataset_names(
         self,
@@ -86,17 +104,18 @@ class TestSemanticPipelineIntegration:
         test_data = pa.table({"path": ["test.py"]})
         register_arrow_table(datafusion_session, name="cst_refs_v1", value=test_data)
 
-        result = validate_semantic_inputs(datafusion_session)
-        assert result.resolved_names.get("cst_refs") is None
-        assert "cst_refs" in result.missing_required
+        with pytest.raises(ValueError, match="Missing required semantic inputs:") as exc_info:
+            resolve_semantic_input_mapping(datafusion_session)
+        missing_required = _missing_required_from_error(exc_info.value)
+        assert "cst_refs" in missing_required
 
-    def test_require_semantic_inputs_raises_when_missing(
+    def test_semantic_input_mapping_raises_when_missing(
         self,
         datafusion_session: SessionContext,
     ) -> None:
-        """Verify require_semantic_inputs raises when required inputs are missing."""
+        """Verify mapping resolution raises when required inputs are missing."""
         with pytest.raises(ValueError, match="Missing required semantic inputs"):
-            require_semantic_inputs(datafusion_session)
+            resolve_semantic_input_mapping(datafusion_session)
 
     def test_semantic_inputs_validate_when_tables_present(
         self,
@@ -194,7 +213,22 @@ class TestSemanticPipelineIntegration:
             value=empty_table_for_schema(dataset_schema("repo_files_v1")),
         )
 
-        resolved = require_semantic_inputs(datafusion_session)
+        from semantics.ir import SemanticIR
+        from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
+
+        resolved = resolve_semantic_input_mapping(datafusion_session)
+        validation = validate_semantic_inputs(
+            ctx=datafusion_session,
+            manifest=SemanticProgramManifest(
+                semantic_ir=SemanticIR(views=()),
+                requested_outputs=(),
+                input_mapping=resolved,
+                validation_policy="schema_only",
+                dataset_bindings=ManifestDatasetBindings(locations={}),
+            ),
+            policy="schema_only",
+        )
+        assert validation.valid
         validation = validate_semantic_input_columns(
             datafusion_session,
             input_mapping=resolved,

@@ -442,7 +442,7 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
     See Also:
     --------
     datafusion_engine.views.registry_specs._semantics_view_nodes : Semantic view registration.
-    hamilton_pipeline.modules.subdags : Hamilton consumer of semantic outputs.
+    hamilton_pipeline.task_module_builder.build_task_execution_module : Dynamic task module.
     """
     runtime_profile_spec = resolve_runtime_profile(
         _runtime_profile_name(config),
@@ -455,20 +455,17 @@ def build_view_graph_context(config: Mapping[str, JsonValue]) -> ViewGraphContex
             datafusion=profile,
         )
     from cpg.kind_catalog import validate_edge_kind_requirements
+    from datafusion_engine.session.facade import DataFusionExecutionFacade
     from datafusion_engine.session.runtime import refresh_session_runtime
-    from datafusion_engine.views.registration import ensure_view_graph
     from datafusion_engine.views.registry_specs import view_graph_nodes
-    from semantics.ir_pipeline import build_semantic_ir
+    from semantics.compile_context import CompileContext
 
     session_runtime = profile.session_runtime()
-    semantic_ir = build_semantic_ir()
+    semantic_ir = CompileContext(runtime_profile=profile).semantic_ir()
+    facade = DataFusionExecutionFacade(ctx=session_runtime.ctx, runtime_profile=profile)
     # Single registration point: ensure_view_graph registers ALL views including
     # semantic views via registry_specs.view_graph_nodes(). Hamilton consumes only.
-    snapshot = ensure_view_graph(
-        session_runtime.ctx,
-        runtime_profile=profile,
-        semantic_ir=semantic_ir,
-    )
+    snapshot = facade.ensure_view_graph(semantic_ir=semantic_ir)
     session_runtime = refresh_session_runtime(profile, ctx=session_runtime.ctx)
     validate_edge_kind_requirements(_relation_output_schema(session_runtime))
     nodes = view_graph_nodes(
@@ -1621,20 +1618,20 @@ def _cache_default_nodes(
     explicit = _task_name_list_from_config(cache_config, key="default_nodes")
     if explicit is not None:
         return explicit
-    from datafusion_engine.semantics_runtime import semantic_runtime_from_profile
     from hamilton_pipeline.io_contracts import delta_output_specs
     from semantics.naming import internal_name
 
     defaults: set[str] = {spec.table_node for spec in delta_output_specs()}
-    runtime_config = semantic_runtime_from_profile(profile_spec.datafusion)
-    for dataset_name, policy in runtime_config.cache_policy_overrides.items():
+    semantic_output = profile_spec.datafusion.data_sources.semantic_output
+    cache_overrides = dict(semantic_output.cache_overrides or {})
+    for dataset_name, policy in cache_overrides.items():
         node_name = internal_name(dataset_name)
         if policy in {"delta_output", "delta_staging"}:
             defaults.add(node_name)
         if policy == "none" and node_name in defaults:
             defaults.remove(node_name)
-    if not runtime_config.cache_policy_overrides and runtime_config.output_locations:
-        for dataset_name in runtime_config.output_locations:
+    if not cache_overrides and semantic_output.locations:
+        for dataset_name in semantic_output.locations:
             defaults.add(internal_name(dataset_name))
     return tuple(sorted(defaults))
 

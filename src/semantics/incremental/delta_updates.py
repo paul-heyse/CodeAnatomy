@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.arrow.metadata import encoding_policy_from_schema
+from datafusion_engine.dataset.registry import dataset_location_from_catalog
 from datafusion_engine.delta import DeltaMutationRequest
 from datafusion_engine.extract.bundles import dataset_name_for_output
 from datafusion_engine.io.write import WriteMode
@@ -102,7 +103,7 @@ def upsert_partitioned_dataset(
         context=context,
         dataset_name=spec.name,
     )
-    dataset_location = context.runtime.profile.catalog_ops.dataset_location(spec.name)
+    dataset_location = dataset_location_from_catalog(context.runtime.profile, spec.name)
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=base_dir)
     write_result = write_delta_table_via_pipeline(
@@ -158,7 +159,7 @@ def write_overwrite_dataset(
         prefer_reader=True,
     )
     target = str(state_store.dataset_dir(spec.name))
-    dataset_location = context.runtime.profile.catalog_ops.dataset_location(spec.name)
+    dataset_location = dataset_location_from_catalog(context.runtime.profile, spec.name)
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=target)
     write_result = write_delta_table_via_pipeline(
@@ -205,7 +206,7 @@ def upsert_cpg_nodes(
         Mapping of dataset name to dataset path.
     """
     spec = PartitionedDatasetSpec(
-        name="cpg_nodes_v1",
+        name="cpg_nodes",
         partition_column="file_id",
         schema=None,
     )
@@ -234,7 +235,7 @@ def upsert_cpg_edges(
         Mapping of dataset name to dataset path.
     """
     spec = PartitionedDatasetSpec(
-        name="cpg_edges_v1",
+        name="cpg_edges",
         partition_column="edge_owner_file_id",
         schema=None,
     )
@@ -430,7 +431,9 @@ def _delete_delta_partitions(
     )
     ctx = context.runtime.session_runtime().ctx
     dataset_location = (
-        context.runtime.profile.catalog_ops.dataset_location(dataset_name) if dataset_name else None
+        dataset_location_from_catalog(context.runtime.profile, dataset_name)
+        if dataset_name is not None
+        else None
     )
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=base_dir)

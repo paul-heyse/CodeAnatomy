@@ -67,9 +67,9 @@ def _build_semantic_spec_index() -> tuple[SemanticSpecIndex, ...]:
     tuple[SemanticSpecIndex, ...]
         Spec index in dependency-safe order.
     """
-    from semantics.ir_pipeline import build_semantic_ir
+    from semantics.compile_context import semantic_ir_for_outputs
 
-    ir = build_semantic_ir()
+    ir = semantic_ir_for_outputs()
     return tuple(
         SemanticSpecIndex(
             name=view.name,

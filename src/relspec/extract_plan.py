@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from datafusion_engine.extract.adapter_registry import additional_required_inputs_for_template
 from datafusion_engine.extract.bundles import dataset_name_for_output
 from datafusion_engine.extract.extractors import ExtractorSpec, extractor_specs
 from datafusion_engine.extract.metadata import ExtractMetadata, extract_metadata_specs
@@ -12,10 +13,6 @@ from serde_msgspec import StructBaseStrict
 from utils.hashing import hash_msgpack_canonical
 
 _EXTRACT_PLAN_FINGERPRINT_VERSION = 1
-_EXTRACTOR_EXTRA_INPUTS: Mapping[str, tuple[str, ...]] = {
-    "python_imports": ("ast_imports", "cst_imports", "ts_imports"),
-    "python_external": ("python_imports",),
-}
 
 
 class ExtractTaskSpec(StructBaseStrict, frozen=True):
@@ -160,7 +157,12 @@ def _metadata_by_template() -> Mapping[str, tuple[ExtractMetadata, ...]]:
 
 def _resolve_required_inputs(spec: ExtractorSpec) -> tuple[str, ...]:
     merged = tuple(
-        dict.fromkeys((*spec.required_inputs, *_EXTRACTOR_EXTRA_INPUTS.get(spec.name, ())))
+        dict.fromkeys(
+            (
+                *spec.required_inputs,
+                *additional_required_inputs_for_template(spec.name),
+            )
+        )
     )
     return tuple(_resolve_input_name(name) for name in merged)
 

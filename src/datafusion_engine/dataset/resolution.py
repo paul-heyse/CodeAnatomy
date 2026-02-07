@@ -11,6 +11,7 @@ from datafusion import SessionContext
 from datafusion_engine.catalog.introspection import invalidate_introspection_cache
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
+    dataset_catalog_from_profile,
     resolve_datafusion_provider,
 )
 from datafusion_engine.delta.contracts import (
@@ -250,9 +251,9 @@ def _resolve_dataset_location(
     runtime_profile: DataFusionRuntimeProfile,
     dataset_name: str,
 ) -> DatasetLocation | None:
-    location = runtime_profile.catalog_ops.dataset_location(dataset_name)
-    if location is not None:
-        return location
+    catalog = dataset_catalog_from_profile(runtime_profile)
+    if catalog.has(dataset_name):
+        return catalog.get(dataset_name)
     parts = dataset_name.split(".")
     candidates = [dataset_name]
     if parts:
@@ -260,9 +261,8 @@ def _resolve_dataset_location(
     if len(parts) >= _MIN_QUALIFIED_PARTS:
         candidates.append(".".join(parts[-2:]))
     for candidate in candidates:
-        resolved = runtime_profile.catalog_ops.dataset_location(candidate)
-        if resolved is not None:
-            return resolved
+        if catalog.has(candidate):
+            return catalog.get(candidate)
     return None
 
 

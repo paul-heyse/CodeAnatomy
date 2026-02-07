@@ -19,7 +19,7 @@ from datafusion_engine.cache.inventory import (
     CACHE_INVENTORY_TABLE_NAME,
     ensure_cache_inventory_table,
 )
-from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.dataset.registry import DatasetLocation, dataset_catalog_from_profile
 from datafusion_engine.delta.observability import (
     DELTA_MAINTENANCE_TABLE_NAME,
     DELTA_MUTATION_TABLE_NAME,
@@ -37,7 +37,6 @@ from datafusion_engine.schema.registry import (
     extract_nested_schema_for,
     relationship_schema_for,
     relationship_schema_names,
-    validate_semantic_types,
 )
 from semantics.catalog.dataset_specs import (
     dataset_schema as semantic_dataset_schema,
@@ -45,14 +44,20 @@ from semantics.catalog.dataset_specs import (
 from semantics.catalog.dataset_specs import (
     maybe_dataset_spec as maybe_semantic_dataset_spec,
 )
-from semantics.input_registry import SEMANTIC_INPUT_SPECS, require_semantic_inputs
+from semantics.input_registry import SEMANTIC_INPUT_SPECS
 from semantics.registry import SEMANTIC_MODEL
+from semantics.validation import (
+    SemanticInputValidationError,
+    resolve_semantic_input_mapping,
+    validate_semantic_inputs,
+)
 from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from semantics.program_manifest import SemanticProgramManifest
 
 
 ZeroRowRole = Literal[
@@ -164,6 +169,7 @@ def build_zero_row_plan(
     profile: DataFusionRuntimeProfile,
     *,
     request: ZeroRowBootstrapRequest,
+    manifest: SemanticProgramManifest | None = None,
 ) -> tuple[ZeroRowDatasetPlan, ...]:
     """Build a deterministic zero-row bootstrap plan for runtime datasets.
 
@@ -172,7 +178,16 @@ def build_zero_row_plan(
     tuple[ZeroRowDatasetPlan, ...]
         Ordered bootstrap plan entries.
     """
-    semantic_output_locations = _semantic_output_locations(profile)
+    if manifest is not None:
+        dataset_locations = {
+            name: _bootstrap_safe_location(location)
+            for name, location in manifest.dataset_bindings.locations.items()
+        }
+    else:
+        catalog = dataset_catalog_from_profile(profile)
+        dataset_locations = {
+            name: _bootstrap_safe_location(catalog.get(name)) for name in catalog.names()
+        }
     plans: dict[str, ZeroRowDatasetPlan] = {}
 
     semantic_input_sources = sorted({spec.extraction_source for spec in SEMANTIC_INPUT_SPECS})
@@ -184,7 +199,7 @@ def build_zero_row_plan(
                 name=name,
                 role="semantic_input",
                 schema=pa.schema(extract_dataset_schema(name)),
-                location=_semantic_input_location(profile, name),
+                location=dataset_locations.get(name),
                 required=name in required_inputs,
             ),
         )
@@ -196,7 +211,7 @@ def build_zero_row_plan(
                 name=name,
                 role="extract_nested",
                 schema=pa.schema(extract_nested_schema_for(name)),
-                location=profile.catalog_ops.dataset_location(name),
+                location=dataset_locations.get(name),
                 required=False,
             ),
         )
@@ -224,7 +239,7 @@ def build_zero_row_plan(
                         name=name,
                         role="semantic_output",
                         schema=pa.schema([]),
-                        location=semantic_output_locations.get(name),
+                        location=dataset_locations.get(name),
                         required=False,
                         materialize=False,
                     ),
@@ -236,7 +251,7 @@ def build_zero_row_plan(
                     name=name,
                     role="semantic_output",
                     schema=apply_semantic_types(pa.schema(semantic_dataset_schema(name))),
-                    location=semantic_output_locations.get(name),
+                    location=dataset_locations.get(name),
                     required=False,
                 ),
             )
@@ -249,6 +264,7 @@ def run_zero_row_bootstrap_validation(  # noqa: C901, PLR0912, PLR0914, PLR0915
     *,
     request: ZeroRowBootstrapRequest,
     ctx: SessionContext,
+    manifest: SemanticProgramManifest | None = None,
 ) -> ZeroRowBootstrapReport:
     """Execute zero-row bootstrap materialization and post-bootstrap validation.
 
@@ -257,7 +273,7 @@ def run_zero_row_bootstrap_validation(  # noqa: C901, PLR0912, PLR0914, PLR0915
     ZeroRowBootstrapReport
         Deterministic bootstrap execution report.
     """
-    plan = build_zero_row_plan(profile, request=request)
+    plan = build_zero_row_plan(profile, request=request, manifest=manifest)
     events: list[ZeroRowBootstrapEvent] = []
     bootstrapped_count = 0
     registered_count = 0
@@ -385,6 +401,7 @@ def run_zero_row_bootstrap_validation(  # noqa: C901, PLR0912, PLR0914, PLR0915
     validation_errors = _validation_errors(
         ctx=ctx,
         allow_semantic_row_probe_fallback=request.allow_semantic_row_probe_fallback,
+        manifest=manifest,
     )
     if request.strict and validation_errors:
         failed_count += len(validation_errors)
@@ -410,57 +427,36 @@ def _validation_errors(
     *,
     ctx: SessionContext,
     allow_semantic_row_probe_fallback: bool,
+    manifest: SemanticProgramManifest | None = None,
 ) -> list[str]:
     errors: list[str] = []
-    try:
-        require_semantic_inputs(ctx)
-    except ValueError as exc:
-        errors.append(str(exc))
-    try:
-        validate_semantic_types(
-            ctx,
-            allow_row_probe_fallback=allow_semantic_row_probe_fallback,
-        )
-    except (RuntimeError, TypeError, ValueError) as exc:
-        errors.append(str(exc))
-    return errors
+    from semantics.ir import SemanticIR
+    from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
 
-
-def _semantic_output_locations(
-    profile: DataFusionRuntimeProfile,
-) -> Mapping[str, DatasetLocation]:
-    semantic_output = profile.data_sources.semantic_output
-    if semantic_output.locations:
-        return semantic_output.locations
-    if semantic_output.output_catalog_name is not None:
-        catalog = profile.catalog.registry_catalogs.get(semantic_output.output_catalog_name)
-        if catalog is None:
-            return {}
-        names = {spec.name for spec in SEMANTIC_MODEL.outputs}
-        return {name: catalog.get(name) for name in names if catalog.has(name)}
-    if semantic_output.output_root is None:
-        return {}
-    root = Path(semantic_output.output_root)
-    return {
-        spec.name: DatasetLocation(path=str(root / spec.name), format="delta")
-        for spec in SEMANTIC_MODEL.outputs
-    }
-
-
-def _semantic_input_location(
-    profile: DataFusionRuntimeProfile,
-    name: str,
-) -> DatasetLocation | None:
-    location = profile.catalog_ops.dataset_location(name)
-    if location is not None:
-        return _bootstrap_safe_location(location)
-    extract_root = profile.data_sources.extract_output.output_root
-    if extract_root is None:
-        return None
-    return DatasetLocation(
-        path=str(Path(extract_root) / name),
-        format="delta",
+    if manifest is None:
+        try:
+            manifest = SemanticProgramManifest(
+                semantic_ir=SemanticIR(views=()),
+                requested_outputs=(),
+                input_mapping=resolve_semantic_input_mapping(ctx),
+                validation_policy=(
+                    "schema_plus_runtime_probe"
+                    if allow_semantic_row_probe_fallback
+                    else "schema_plus_optional_probe"
+                ),
+                dataset_bindings=ManifestDatasetBindings(locations={}),
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            return errors
+    validation = validate_semantic_inputs(
+        ctx=ctx,
+        manifest=manifest,
+        policy=manifest.validation_policy,
     )
+    if not validation.valid:
+        errors.append(str(SemanticInputValidationError(validation)))
+    return errors
 
 
 def _bootstrap_safe_location(location: DatasetLocation) -> DatasetLocation:

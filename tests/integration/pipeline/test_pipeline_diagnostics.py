@@ -7,7 +7,7 @@ plan_execution_diff_v1 artifact.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
@@ -337,7 +337,7 @@ def test_pipeline_partial_output_handling(
         repo_root=minimal_python_repo,
         options=PipelineExecutionOptions(
             outputs=("output_a", "output_b"),
-            pipeline_driver=_StubDriver(),
+            pipeline_driver=cast("Any", _StubDriver()),
         ),
     )
 

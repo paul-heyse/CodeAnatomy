@@ -142,7 +142,11 @@ if TYPE_CHECKING:
         max_temp_directory_size: int | None
 
 
-from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
+from datafusion_engine.dataset.registry import (
+    DatasetCatalog,
+    DatasetLocation,
+    dataset_location_from_catalog,
+)
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
     DatasetSpec,
@@ -4122,7 +4126,7 @@ class _RuntimeProfileCatalogFacadeMixin:
             Dataset location when configured.
         """
         profile = cast("DataFusionRuntimeProfile", self)
-        return profile.catalog_ops.dataset_location(name)
+        return dataset_location_from_catalog(profile, name)
 
 
 class _RuntimeProfileDeltaFacadeMixin:
@@ -4552,6 +4556,7 @@ class DataFusionRuntimeProfile(
         from datafusion_engine.bootstrap.zero_row import (
             run_zero_row_bootstrap_validation as run_bootstrap_validation,
         )
+        from semantics.compile_context import compile_semantic_program
 
         resolved_request = request or BootstrapRequest(
             include_semantic_outputs=self.zero_row_bootstrap.include_semantic_outputs,
@@ -4564,10 +4569,21 @@ class DataFusionRuntimeProfile(
             seeded_datasets=self.zero_row_bootstrap.seeded_datasets,
         )
         active_ctx = ctx or self.session_context()
+        manifest = compile_semantic_program(
+            runtime_profile=self,
+            policy=(
+                "schema_plus_runtime_probe"
+                if resolved_request.allow_semantic_row_probe_fallback
+                else "schema_plus_optional_probe"
+            ),
+            ctx=active_ctx,
+        )
+        self.record_artifact("semantic_program_manifest_v1", manifest.payload())
         report = run_bootstrap_validation(
             self,
             request=resolved_request,
             ctx=active_ctx,
+            manifest=manifest,
         )
         self.record_artifact("zero_row_bootstrap_validation_v1", report.payload())
         if report.events:
@@ -7596,7 +7612,7 @@ def record_dataset_readiness(
 
     blockers: list[str] = []
     for name in dataset_names:
-        location = profile.catalog_ops.dataset_location(name)
+        location = dataset_location_from_catalog(profile, name)
         if location is None:
             record_artifact(
                 profile,

@@ -13,6 +13,10 @@ import pyarrow as pa
 from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
+from datafusion_engine.dataset.registry import (
+    dataset_catalog_from_profile,
+    dataset_location_from_catalog,
+)
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.lineage.diagnostics import record_artifact
@@ -843,7 +847,7 @@ def _register_delta_output_cache(registration: CacheRegistrationContext) -> Data
         registration.cache,
         policy_label="Delta output cache",
     )
-    location = runtime_profile.catalog_ops.dataset_location(registration.node.name)
+    location = dataset_location_from_catalog(runtime_profile, registration.node.name)
     if location is None:
         msg = f"Delta output cache missing dataset location for {registration.node.name!r}."
         raise ValueError(msg)
@@ -1196,9 +1200,14 @@ def _plan_scan_units_for_bundle(
     from datafusion_engine.lineage.scan import plan_scan_unit
 
     lineage = extract_lineage_from_bundle(bundle)
+    catalog = dataset_catalog_from_profile(runtime_profile)
     scan_units: dict[str, ScanUnit] = {}
     for scan in lineage.scans:
-        location = runtime_profile.catalog_ops.dataset_location(scan.dataset_name)
+        location = dataset_location_from_catalog(
+            runtime_profile,
+            scan.dataset_name,
+            catalog=catalog,
+        )
         if location is None:
             continue
         unit = plan_scan_unit(

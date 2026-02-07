@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.dataset.registry import resolve_datafusion_provider
+from datafusion_engine.dataset.registry import (
+    dataset_catalog_from_profile,
+    dataset_location_from_catalog,
+    resolve_datafusion_provider,
+)
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 
 if TYPE_CHECKING:
@@ -52,9 +56,10 @@ def register_cdf_inputs(
     from datafusion_engine.tables.metadata import table_provider_metadata
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=runtime_profile)
+    catalog = dataset_catalog_from_profile(runtime_profile)
     mapping: dict[str, str] = {}
     for name in table_names:
-        location = runtime_profile.catalog_ops.dataset_location(name)
+        location = dataset_location_from_catalog(runtime_profile, name, catalog=catalog)
         cdf_name = f"{name}__cdf"
         metadata = table_provider_metadata(id(ctx), table_name=name)
         supports_cdf = bool(metadata.supports_cdf) if metadata is not None else False

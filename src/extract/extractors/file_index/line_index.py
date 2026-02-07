@@ -25,13 +25,13 @@ from extract.coordination.context import (
     ExtractExecutionContext,
     FileContext,
 )
-from extract.coordination.schema_ops import ExtractNormalizeOptions
-from extract.helpers import (
+from extract.coordination.materialization import (
     ExtractMaterializeOptions,
     ExtractPlanOptions,
     extract_plan_from_rows,
     materialize_extract_plan,
 )
+from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.infrastructure.cache_utils import (
     CacheSetOptions,
     cache_for_extract,

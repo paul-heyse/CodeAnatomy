@@ -79,6 +79,6 @@ def test_semantic_ir_snapshot(request: pytest.FixtureRequest) -> None:
 
 def test_semantic_ir_pruning_excludes_diagnostics() -> None:
     """Output slicing should drop diagnostics by default."""
-    semantic_ir = build_semantic_ir(outputs={"cpg_nodes_v1"})
+    semantic_ir = build_semantic_ir(outputs={"cpg_nodes"})
     names = {view.name for view in semantic_ir.views}
     assert "relationship_quality_metrics_v1" not in names

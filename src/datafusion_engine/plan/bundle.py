@@ -21,6 +21,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from core_types import JsonValue
+from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
 from datafusion_engine.delta.store_policy import (
     apply_delta_store_policy,
@@ -32,11 +33,6 @@ from datafusion_engine.plan.diagnostics import PlanPhaseDiagnostics, record_plan
 from datafusion_engine.plan.normalization import normalize_substrait_plan
 from datafusion_engine.plan.profiler import ExplainCapture, capture_explain
 from datafusion_engine.schema.introspection import SchemaIntrospector
-from datafusion_engine.session.runtime import (
-    extract_output_locations_for_profile,
-    normalize_dataset_locations_for_profile,
-    semantic_output_locations_for_profile,
-)
 from obs.otel.scopes import SCOPE_PLANNING
 from obs.otel.tracing import stage_span
 from serde_artifacts import DeltaInputPin, PlanArtifacts, PlanProtoStatus
@@ -1891,7 +1887,7 @@ def _scan_units_for_bundle(
         else:
             lineage = extract_lineage(plan)
             if lineage.scans:
-                locations = _dataset_location_map(session_runtime)
+                locations = _manifest_dataset_locations(session_runtime)
                 if locations:
                     try:
                         scan_units, _ = plan_scan_units(
@@ -1905,57 +1901,19 @@ def _scan_units_for_bundle(
     return scan_units
 
 
-def _dataset_location_map(session_runtime: SessionRuntime | object) -> dict[str, DatasetLocation]:
+def _manifest_dataset_locations(
+    session_runtime: SessionRuntime | object,
+) -> dict[str, DatasetLocation]:
     locations: dict[str, DatasetLocation] = {}
     runtime_profile = getattr(session_runtime, "profile", None)
     if runtime_profile is None:
         return locations
-    for name, location in extract_output_locations_for_profile(runtime_profile).items():
-        locations.setdefault(
-            name,
-            apply_delta_store_policy(
-                location,
-                policy=runtime_profile.policies.delta_store_policy,
-            ),
+    catalog = dataset_catalog_from_profile(runtime_profile)
+    for name in catalog.names():
+        locations[name] = apply_delta_store_policy(
+            catalog.get(name),
+            policy=runtime_profile.policies.delta_store_policy,
         )
-    for (
-        name,
-        location,
-    ) in runtime_profile.data_sources.extract_output.scip_dataset_locations.items():
-        locations.setdefault(
-            name,
-            apply_delta_store_policy(
-                location,
-                policy=runtime_profile.policies.delta_store_policy,
-            ),
-        )
-    for name, location in normalize_dataset_locations_for_profile(runtime_profile).items():
-        locations.setdefault(
-            name,
-            apply_delta_store_policy(
-                location,
-                policy=runtime_profile.policies.delta_store_policy,
-            ),
-        )
-    for name, location in semantic_output_locations_for_profile(runtime_profile).items():
-        locations.setdefault(
-            name,
-            apply_delta_store_policy(
-                location,
-                policy=runtime_profile.policies.delta_store_policy,
-            ),
-        )
-    for catalog in runtime_profile.catalog.registry_catalogs.values():
-        for name in catalog.names():
-            if name in locations:
-                continue
-            try:
-                locations[name] = apply_delta_store_policy(
-                    cast("DatasetLocation", catalog.get(name)),
-                    policy=runtime_profile.policies.delta_store_policy,
-                )
-            except KeyError:
-                continue
     return locations
 
 
@@ -1964,7 +1922,7 @@ def _cdf_window_snapshot(
 ) -> tuple[dict[str, object], ...]:
     if session_runtime is None:
         return ()
-    locations = _dataset_location_map(session_runtime)
+    locations = _manifest_dataset_locations(session_runtime)
     payloads: list[dict[str, object]] = []
     for name, location in sorted(locations.items(), key=lambda item: item[0]):
         options = location.delta_cdf_options
@@ -2008,7 +1966,7 @@ def _snapshot_keys_for_manifest(
 ) -> tuple[dict[str, object], ...]:
     if session_runtime is None:
         return ()
-    locations = _dataset_location_map(session_runtime)
+    locations = _manifest_dataset_locations(session_runtime)
     payloads: list[dict[str, object]] = []
     seen: set[tuple[str, str, int]] = set()
     for pin in delta_inputs:

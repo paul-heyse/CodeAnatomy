@@ -19,6 +19,7 @@ from datafusion_engine.arrow.interop import (
 from datafusion_engine.arrow.interop import (
     TableLike as ArrowTableLike,
 )
+from datafusion_engine.dataset.registry import dataset_location_from_catalog
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.lineage.scan import ScanUnit
 from datafusion_engine.plan.execution import (
@@ -28,8 +29,7 @@ from datafusion_engine.plan.execution import (
 from datafusion_engine.plan.execution import (
     execute_plan_bundle as execute_plan_bundle_helper,
 )
-from datafusion_engine.session.facade import ExecutionResult
-from datafusion_engine.views.registration import ensure_view_graph
+from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
@@ -490,13 +490,11 @@ def _ensure_scan_overrides(
         and runtime.scan_override_hash != scan_context.scan_units_hash
     )
     if refresh_requested:
-        from semantics.ir_pipeline import build_semantic_ir
+        from semantics.compile_context import CompileContext
 
-        ensure_view_graph(
-            session,
-            runtime_profile=profile,
+        DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
-            semantic_ir=build_semantic_ir(),
+            semantic_ir=CompileContext(runtime_profile=profile).semantic_ir(),
         )
         runtime.scan_override_hash = scan_context.scan_units_hash
     return profile
@@ -515,13 +513,11 @@ def _execute_view(
     profile = _ensure_scan_overrides(runtime, scan_context=scan_context)
     session = profile.session_context()
     if not session.table_exist(view_name):
-        from semantics.ir_pipeline import build_semantic_ir
+        from semantics.compile_context import CompileContext
 
-        ensure_view_graph(
-            session,
-            runtime_profile=profile,
+        DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
-            semantic_ir=build_semantic_ir(),
+            semantic_ir=CompileContext(runtime_profile=profile).semantic_ir(),
         )
         if not session.table_exist(view_name):
             msg = f"View {view_name!r} is not registered; call ensure_view_graph first."
@@ -600,7 +596,7 @@ def _resolve_dataframe_from_session(
     try:
         return ctx.table(name)
     except (KeyError, RuntimeError, TypeError, ValueError):
-        location = session_runtime.profile.catalog_ops.dataset_location(name)
+        location = dataset_location_from_catalog(session_runtime.profile, name)
         if location is None:
             return None
         from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -673,7 +669,7 @@ def _extract_repo_scan(
     extract_session: ExtractSession,
     profile_name: str,
 ) -> Mapping[str, object]:
-    from extract.helpers import ExtractExecutionContext
+    from extract.coordination.context import ExtractExecutionContext
     from extract.scanning.repo_scan import scan_repo_tables
     from hamilton_pipeline.io_contracts import _repo_scan_options
 
@@ -837,31 +833,24 @@ def _extract_symtable(
     return {"symtable_files": table}
 
 
-def _extract_outputs_for_template(
-    inputs: TaskExecutionInputs,
+def _run_extract_adapter(
+    adapter_name: str,
     *,
-    template: str,
+    inputs: TaskExecutionInputs,
     extract_session: ExtractSession,
     profile_name: str,
 ) -> Mapping[str, object]:
-    handlers: dict[
-        str, Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]
-    ] = {
-        "repo_scan": _extract_repo_scan,
-        "scip": _extract_scip,
-        "python_imports": _extract_python_imports,
-        "python_external": _extract_python_external,
-        "ast": _extract_ast,
-        "cst": _extract_cst,
-        "tree_sitter": _extract_tree_sitter,
-        "bytecode": _extract_bytecode,
-        "symtable": _extract_symtable,
-    }
-    handler = handlers.get(template)
-    if handler is None:
-        msg = f"Unsupported extract template {template!r}."
-        raise ValueError(msg)
-    return handler(inputs, extract_session, profile_name)
+    """Dispatch extract execution via adapter naming conventions."""
+    handler_name = f"_extract_{adapter_name}"
+    handler = globals().get(handler_name)
+    if callable(handler):
+        typed = cast(
+            "Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]",
+            handler,
+        )
+        return typed(inputs, extract_session, profile_name)
+    msg = f"Missing extract execution handler for template {adapter_name!r}."
+    raise ValueError(msg)
 
 
 def _ensure_extract_output(
@@ -886,8 +875,9 @@ def _ensure_extract_output(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized[spec.task_output] = empty_table(schema)
-        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(
-            spec.task_output
+        location = dataset_location_from_catalog(
+            inputs.engine_session.datafusion_profile,
+            spec.task_output,
         )
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
@@ -917,6 +907,7 @@ def _execute_extract_task(
     if session_runtime is None:
         msg = "RuntimeArtifacts.execution must be configured for extract execution."
         raise ValueError(msg)
+    from datafusion_engine.extract.adapter_registry import extract_template_adapter
     from extract.session import ExtractSession
     from relspec.extract_plan import extract_output_task_map
 
@@ -928,9 +919,14 @@ def _execute_extract_task(
     extract_session = ExtractSession(engine_session=inputs.engine_session)
     profile_name = inputs.engine_session.datafusion_profile.policies.config_policy_name or "default"
     try:
-        outputs = _extract_outputs_for_template(
-            inputs,
-            template=task_spec.extractor,
+        try:
+            adapter = extract_template_adapter(task_spec.extractor)
+        except KeyError as exc:
+            msg = f"Unsupported extract template {task_spec.extractor!r}."
+            raise ValueError(msg) from exc
+        outputs = _run_extract_adapter(
+            adapter.name,
+            inputs=inputs,
             extract_session=extract_session,
             profile_name=profile_name,
         )
@@ -946,8 +942,9 @@ def _execute_extract_task(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized = {spec.task_output: empty_table(schema)}
-        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(
-            spec.task_output
+        location = dataset_location_from_catalog(
+            inputs.engine_session.datafusion_profile,
+            spec.task_output,
         )
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
@@ -1124,7 +1121,7 @@ def _record_extract_outputs(
         rows = None
         if hasattr(table, "num_rows"):
             rows = int(table.num_rows)
-        location = inputs.engine_session.datafusion_profile.catalog_ops.dataset_location(name)
+        location = dataset_location_from_catalog(inputs.engine_session.datafusion_profile, name)
         status = "ok"
         issue = None
         if location is None:

@@ -16,9 +16,9 @@ from datafusion_engine.arrow.metadata import (
     merge_metadata_specs,
     ordering_metadata_spec,
 )
+from datafusion_engine.dataset.registry import dataset_location_from_catalog
 from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
 from datafusion_engine.schema.contracts import SchemaContract
-from datafusion_engine.semantics_runtime import semantic_runtime_from_profile
 from datafusion_engine.udf.runtime import validate_rust_udf_snapshot
 from datafusion_engine.views.bundle_extraction import (
     extract_lineage_from_bundle,
@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from schema_spec.system import DatasetSpec
     from semantics.catalog.dataset_rows import SemanticDatasetRow
     from semantics.ir import SemanticIR
-    from semantics.runtime import SemanticRuntimeConfig
     from semantics.types import AnnotatedSchema
 
 
@@ -61,7 +60,6 @@ class SemanticViewNodeContext:
     ctx: SessionContext
     snapshot: Mapping[str, object]
     runtime_profile: DataFusionRuntimeProfile
-    runtime_config: SemanticRuntimeConfig
     adapter: DataFusionIOAdapter
     dataset_specs: Mapping[str, DatasetSpec]
 
@@ -143,7 +141,7 @@ def _metadata_from_dataset_spec(spec: DatasetSpec) -> SchemaMetadataSpec:
 def _semantic_cache_policy_for_row(
     row: SemanticDatasetRow,
     *,
-    runtime_config: SemanticRuntimeConfig,
+    runtime_profile: DataFusionRuntimeProfile,
 ) -> Literal["none", "delta_staging", "delta_output"]:
     """Determine cache policy for a semantic dataset row.
 
@@ -155,12 +153,14 @@ def _semantic_cache_policy_for_row(
     Literal["none", "delta_staging", "delta_output"]
         Cache policy for the semantic dataset row.
     """
-    override = runtime_config.cache_policy_overrides.get(row.name)
+    override = runtime_profile.data_sources.semantic_output.cache_overrides.get(row.name)
     if override is not None:
-        return override
-    if runtime_config.output_path(row.name) is not None:
+        if override in {"none", "delta_staging", "delta_output"}:
+            return override
+        return "none"
+    if dataset_location_from_catalog(runtime_profile, row.name) is not None:
         return "delta_output"
-    if runtime_config.cdf_enabled and row.supports_cdf and row.merge_keys:
+    if runtime_profile.features.enable_delta_cdf and row.supports_cdf and row.merge_keys:
         return "delta_staging"
     return "none"
 
@@ -251,7 +251,6 @@ def view_graph_nodes(
     if runtime_profile is None:
         msg = "Runtime profile is required for semantic view planning."
         raise ValueError(msg)
-    runtime_config = semantic_runtime_from_profile(runtime_profile)
     nested_nodes = _nested_view_nodes(
         ctx,
         snapshot=snapshot,
@@ -261,7 +260,6 @@ def view_graph_nodes(
         ctx,
         snapshot=snapshot,
         runtime_profile=runtime_profile,
-        runtime_config=runtime_config,
         semantic_ir=semantic_ir,
     )
     return (*nested_nodes, *semantic_nodes)
@@ -345,25 +343,39 @@ def _validated_semantic_inputs(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
-    runtime_config: SemanticRuntimeConfig,
+    semantic_ir: SemanticIR,
 ) -> tuple[dict[str, str], bool]:
+    from datafusion_engine.dataset.registry import dataset_catalog_from_profile
     from datafusion_engine.lineage.diagnostics import record_artifact
     from semantics.pipeline import _resolve_semantic_input_mapping
+    from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
     from semantics.validation import (
         SemanticInputValidationError,
-        require_semantic_inputs,
+        validate_semantic_inputs,
     )
 
     input_mapping, use_cdf = _resolve_semantic_input_mapping(
         ctx,
         runtime_profile=runtime_profile,
-        use_cdf=runtime_config.cdf_enabled,
+        use_cdf=runtime_profile.features.enable_delta_cdf,
         cdf_inputs=None,
     )
-    try:
-        validation = require_semantic_inputs(ctx, input_mapping=input_mapping)
-    except SemanticInputValidationError as exc:
-        validation = exc.validation
+    catalog = dataset_catalog_from_profile(runtime_profile)
+    manifest = SemanticProgramManifest(
+        semantic_ir=semantic_ir,
+        requested_outputs=(),
+        input_mapping=input_mapping,
+        validation_policy="schema_plus_optional_probe",
+        dataset_bindings=ManifestDatasetBindings(
+            locations={name: catalog.get(name) for name in catalog.names()}
+        ),
+    )
+    validation = validate_semantic_inputs(
+        ctx=ctx,
+        manifest=manifest,
+        policy="schema_plus_optional_probe",
+    )
+    if not validation.valid:
         record_artifact(
             runtime_profile,
             "semantic_input_schema_validation_v1",
@@ -375,7 +387,7 @@ def _validated_semantic_inputs(
                 "resolved_tables": dict(validation.resolved_tables),
             },
         )
-        raise
+        raise SemanticInputValidationError(validation)
     return input_mapping, use_cdf
 
 
@@ -383,7 +395,6 @@ def _semantic_view_specs_for_registration(
     ctx: SessionContext,
     *,
     runtime_profile: DataFusionRuntimeProfile,
-    runtime_config: SemanticRuntimeConfig,
     semantic_ir: SemanticIR,
 ) -> list[tuple[str, DataFrameBuilder]]:
     from semantics.pipeline import CpgViewSpecsRequest, _cpg_view_specs
@@ -391,7 +402,7 @@ def _semantic_view_specs_for_registration(
     input_mapping, use_cdf = _validated_semantic_inputs(
         ctx,
         runtime_profile=runtime_profile,
-        runtime_config=runtime_config,
+        semantic_ir=semantic_ir,
     )
     return _cpg_view_specs(
         CpgViewSpecsRequest(
@@ -435,11 +446,16 @@ def _build_semantic_view_node(
 
     row = dataset_row(name, strict=False)
     if row is None:
-        cache_policy = context.runtime_config.cache_policy_overrides.get(name, "none")
+        override = context.runtime_profile.data_sources.semantic_output.cache_overrides.get(name)
+        cache_policy = (
+            override
+            if override in {"none", "delta_staging", "delta_output"}
+            else "none"
+        )
     else:
         cache_policy = _semantic_cache_policy_for_row(
             row,
-            runtime_config=context.runtime_config,
+            runtime_profile=context.runtime_profile,
         )
 
     context.adapter.register_view(name, bundle.df, overwrite=True, temporary=True)
@@ -469,7 +485,6 @@ def _semantics_view_nodes(
     *,
     snapshot: Mapping[str, object],
     runtime_profile: DataFusionRuntimeProfile | None = None,
-    runtime_config: SemanticRuntimeConfig | None = None,
     semantic_ir: SemanticIR,
 ) -> list[ViewNode]:
     """Build semantic pipeline view nodes with inferred dependencies.
@@ -478,25 +493,23 @@ def _semantics_view_nodes(
         ctx: DataFusion session context.
         snapshot: UDF snapshot payload.
         runtime_profile: Optional runtime profile.
-        runtime_config: Optional semantic runtime config.
         semantic_ir: Semantic IR for view planning.
 
     Returns:
         list[ViewNode]: Result.
 
     Raises:
-        ValueError: If runtime profile or runtime config is missing.
+        ValueError: If runtime profile is missing.
     """
     from datafusion_engine.io.adapter import DataFusionIOAdapter
 
-    if runtime_profile is None or runtime_config is None:
+    if runtime_profile is None:
         msg = "Runtime profile is required for semantic view planning."
         raise ValueError(msg)
 
     view_specs = _semantic_view_specs_for_registration(
         ctx,
         runtime_profile=runtime_profile,
-        runtime_config=runtime_config,
         semantic_ir=semantic_ir,
     )
     dataset_specs = _semantic_dataset_specs()
@@ -505,7 +518,6 @@ def _semantics_view_nodes(
         ctx=ctx,
         snapshot=snapshot,
         runtime_profile=runtime_profile,
-        runtime_config=runtime_config,
         adapter=adapter,
         dataset_specs=dataset_specs,
     )

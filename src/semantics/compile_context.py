@@ -1,0 +1,118 @@
+"""Compile-context orchestration for semantic program manifests."""
+
+from __future__ import annotations
+
+from collections.abc import Collection
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
+
+from semantics.naming import canonical_output_name
+from semantics.naming_compat import canonicalize_output_alias
+from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from semantics.ir import SemanticIR
+    from semantics.validation.policy import SemanticInputValidationPolicy
+
+
+def _resolved_outputs(outputs: Collection[str] | None) -> tuple[str, ...] | None:
+    if outputs is None:
+        return None
+    return tuple(canonical_output_name(canonicalize_output_alias(name)) for name in outputs)
+
+
+def semantic_ir_for_outputs(outputs: Collection[str] | None = None) -> SemanticIR:
+    """Return semantic IR for canonicalized output names."""
+    from semantics.ir_pipeline import build_semantic_ir
+
+    return build_semantic_ir(outputs=_resolved_outputs(outputs))
+
+
+@dataclass
+class CompileContext:
+    """Memoized compile context for semantic program orchestration."""
+
+    runtime_profile: DataFusionRuntimeProfile
+    outputs: Collection[str] | None = None
+    policy: SemanticInputValidationPolicy = "schema_only"
+    _semantic_ir_cache: SemanticIR | None = field(default=None, init=False, repr=False)
+    _dataset_bindings_cache: ManifestDatasetBindings | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+
+    def semantic_ir(self) -> SemanticIR:
+        """Return cached semantic IR for this compile context."""
+        if self._semantic_ir_cache is not None:
+            return self._semantic_ir_cache
+        self._semantic_ir_cache = semantic_ir_for_outputs(self.outputs)
+        return self._semantic_ir_cache
+
+    def dataset_bindings(self) -> ManifestDatasetBindings:
+        """Return cached dataset bindings from runtime catalog resolution."""
+        if self._dataset_bindings_cache is not None:
+            return self._dataset_bindings_cache
+        from datafusion_engine.dataset.registry import dataset_catalog_from_profile
+
+        catalog = dataset_catalog_from_profile(self.runtime_profile)
+        self._dataset_bindings_cache = ManifestDatasetBindings(
+            locations={name: catalog.get(name) for name in catalog.names()}
+        )
+        return self._dataset_bindings_cache
+
+    def compile(self, *, ctx: SessionContext | None = None) -> SemanticProgramManifest:
+        """Compile and validate a semantic program manifest.
+
+        Returns:
+        -------
+        SemanticProgramManifest
+            Manifest enriched with validation status and fingerprint.
+        """
+        from semantics.validation.policy import (
+            resolve_semantic_input_mapping,
+            validate_semantic_inputs,
+        )
+
+        active_ctx = ctx or self.runtime_profile.session_context()
+        resolved_outputs = _resolved_outputs(self.outputs) or ()
+        manifest = SemanticProgramManifest(
+            semantic_ir=self.semantic_ir(),
+            requested_outputs=resolved_outputs,
+            input_mapping=resolve_semantic_input_mapping(active_ctx),
+            validation_policy=self.policy,
+            dataset_bindings=self.dataset_bindings(),
+        )
+        validation = validate_semantic_inputs(
+            ctx=active_ctx,
+            manifest=manifest,
+            policy=self.policy,
+        )
+        return replace(manifest, validation=validation).with_fingerprint()
+
+
+def compile_semantic_program(
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    outputs: Collection[str] | None = None,
+    policy: SemanticInputValidationPolicy = "schema_only",
+    ctx: SessionContext | None = None,
+) -> SemanticProgramManifest:
+    """Compile and validate a semantic program manifest.
+
+    Returns:
+    -------
+    SemanticProgramManifest
+        Manifest enriched with validation status and fingerprint.
+    """
+    return CompileContext(
+        runtime_profile=runtime_profile,
+        outputs=outputs,
+        policy=policy,
+    ).compile(ctx=ctx)
+
+
+__all__ = ["CompileContext", "compile_semantic_program", "semantic_ir_for_outputs"]

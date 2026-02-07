@@ -24,12 +24,12 @@ from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.lineage.diagnostics import record_artifact, recorder_for_profile
 from engine.runtime_profile import RuntimeProfileSpec
+from extract.coordination.context import ExtractExecutionContext
 from extract.extractors.scip.extract import (
     ScipExtractContext,
     ScipExtractOptions,
     extract_scip_tables,
 )
-from extract.helpers import ExtractExecutionContext
 from extract.python.scope import PythonScopePolicy
 from extract.scanning.repo_scan import RepoScanOptions, scan_repo_tables
 from extract.scanning.repo_scope import RepoScopeOptions
@@ -106,32 +106,32 @@ _DELTA_OUTPUT_SPECS: tuple[OutputMaterializationSpec, ...] = (
     OutputMaterializationSpec(
         table_node="cpg_nodes",
         dataset_name="cpg_nodes",
-        materialized_name="semantic.cpg_nodes_v1",
+        materialized_name="semantic.cpg_nodes",
     ),
     OutputMaterializationSpec(
         table_node="cpg_edges",
         dataset_name="cpg_edges",
-        materialized_name="semantic.cpg_edges_v1",
+        materialized_name="semantic.cpg_edges",
     ),
     OutputMaterializationSpec(
         table_node="cpg_props",
         dataset_name="cpg_props",
-        materialized_name="semantic.cpg_props_v1",
+        materialized_name="semantic.cpg_props",
     ),
     OutputMaterializationSpec(
         table_node="cpg_props_map",
         dataset_name="cpg_props_map",
-        materialized_name="semantic.cpg_props_map_v1",
+        materialized_name="semantic.cpg_props_map",
     ),
     OutputMaterializationSpec(
         table_node="cpg_edges_by_src",
         dataset_name="cpg_edges_by_src",
-        materialized_name="semantic.cpg_edges_by_src_v1",
+        materialized_name="semantic.cpg_edges_by_src",
     ),
     OutputMaterializationSpec(
         table_node="cpg_edges_by_dst",
         dataset_name="cpg_edges_by_dst",
-        materialized_name="semantic.cpg_edges_by_dst_v1",
+        materialized_name="semantic.cpg_edges_by_dst",
     ),
 )
 _DELTA_OUTPUT_SPECS_BY_DATASET: dict[str, OutputMaterializationSpec] = {

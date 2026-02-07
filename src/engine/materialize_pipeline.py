@@ -11,6 +11,10 @@ import pyarrow as pa
 from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import DeterminismTier
 from datafusion_engine.arrow.interop import RecordBatchReader, RecordBatchReaderLike, TableLike
+from datafusion_engine.dataset.registry import (
+    dataset_catalog_from_profile,
+    dataset_location_from_catalog,
+)
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.lineage.diagnostics import recorder_for_profile
@@ -250,12 +254,17 @@ def _plan_view_scan_units(
     from datafusion_engine.lineage.scan import plan_scan_unit
 
     session_runtime = runtime_profile.session_runtime()
+    catalog = dataset_catalog_from_profile(runtime_profile)
     scan_units: dict[str, ScanUnit] = {}
     for scan in extract_lineage(
         bundle.optimized_logical_plan,
         udf_snapshot=bundle.artifacts.udf_snapshot,
     ).scans:
-        location = runtime_profile.catalog_ops.dataset_location(scan.dataset_name)
+        location = dataset_location_from_catalog(
+            runtime_profile,
+            scan.dataset_name,
+            catalog=catalog,
+        )
         if location is None:
             continue
         unit = plan_scan_unit(
@@ -423,7 +432,7 @@ def write_extract_outputs(
     """
     record_schema_snapshots_for_profile(runtime_profile)
     recorder = EngineEventRecorder(runtime_profile)
-    location = runtime_profile.catalog_ops.dataset_location(name)
+    location = dataset_location_from_catalog(runtime_profile, name)
     if location is None:
         recorder.record_extract_quality_events(
             [

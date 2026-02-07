@@ -26,14 +26,14 @@ from extract.coordination.context import (
     FileContext,
     bytes_from_file_ctx,
 )
-from extract.coordination.schema_ops import ExtractNormalizeOptions
-from extract.git.context import open_git_context
-from extract.helpers import (
+from extract.coordination.materialization import (
     ExtractMaterializeOptions,
     ExtractPlanOptions,
     extract_plan_from_rows,
     materialize_extract_plan,
 )
+from extract.coordination.schema_ops import ExtractNormalizeOptions
+from extract.git.context import open_git_context
 from extract.infrastructure.cache_utils import (
     CacheSetOptions,
     cache_for_extract,

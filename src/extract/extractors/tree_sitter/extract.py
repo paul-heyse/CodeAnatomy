@@ -31,22 +31,24 @@ from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.hashing import span_id
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from extract.coordination.line_offsets import LineOffsets
-from extract.coordination.schema_ops import ExtractNormalizeOptions
-from extract.extractors.tree_sitter.cache import TreeSitterCache, TreeSitterParseResult
-from extract.extractors.tree_sitter.queries import TreeSitterQueryPack, compile_query_pack
-from extract.helpers import (
+from extract.coordination.context import (
     ExtractExecutionContext,
-    ExtractMaterializeOptions,
-    ExtractPlanOptions,
     FileContext,
     SpanSpec,
     attrs_map,
+    span_dict,
+)
+from extract.coordination.line_offsets import LineOffsets
+from extract.coordination.materialization import (
+    ExtractMaterializeOptions,
+    ExtractPlanOptions,
     extract_plan_from_row_batches,
     extract_plan_from_rows,
     materialize_extract_plan,
-    span_dict,
 )
+from extract.coordination.schema_ops import ExtractNormalizeOptions
+from extract.extractors.tree_sitter.cache import TreeSitterCache, TreeSitterParseResult
+from extract.extractors.tree_sitter.queries import TreeSitterQueryPack, compile_query_pack
 from extract.infrastructure.options import ParallelOptions, RepoOptions, WorklistQueueOptions
 from extract.infrastructure.parallel import parallel_map, resolve_max_workers
 from extract.infrastructure.result_types import ExtractResult

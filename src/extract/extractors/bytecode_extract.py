@@ -22,22 +22,24 @@ from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from extract.coordination.line_offsets import LineOffsets
-from extract.coordination.schema_ops import ExtractNormalizeOptions
-from extract.helpers import (
+from extract.coordination.context import (
     ExtractExecutionContext,
-    ExtractMaterializeOptions,
-    ExtractPlanOptions,
     FileContext,
     SpanSpec,
     attrs_map,
     bytes_from_file_ctx,
-    extract_plan_from_rows,
     file_identity_row,
-    materialize_extract_plan,
     span_dict,
     text_from_file_ctx,
 )
+from extract.coordination.line_offsets import LineOffsets
+from extract.coordination.materialization import (
+    ExtractMaterializeOptions,
+    ExtractPlanOptions,
+    extract_plan_from_rows,
+    materialize_extract_plan,
+)
+from extract.coordination.schema_ops import ExtractNormalizeOptions
 from extract.infrastructure.cache_utils import (
     CacheSetOptions,
     cache_for_extract,

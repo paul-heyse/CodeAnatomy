@@ -10,7 +10,6 @@ import msgspec
 import pyarrow as pa
 import rustworkx as rx
 
-from datafusion_engine.dataset.registry import dataset_catalog_from_profile
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
 from datafusion_engine.plan.pipeline import plan_with_delta_pins
 from relspec.evidence import (
@@ -59,7 +58,6 @@ from utils.hashing import hash_msgpack_canonical, hash_settings
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
     from datafusion_engine.lineage.datafusion import LineageReport
     from datafusion_engine.lineage.scan import ScanUnit
@@ -752,33 +750,6 @@ def _semantic_output_names() -> set[str]:
     except (ImportError, RuntimeError, TypeError, ValueError):
         return set()
     return {spec.name for spec in SEMANTIC_MODEL.outputs}
-
-
-def _dataset_location_map(
-    profile: DataFusionRuntimeProfile | None,
-) -> dict[str, DatasetLocation]:
-    catalog = dataset_catalog_from_profile(profile)
-    return {name: catalog.get(name) for name in catalog.names()}
-
-
-def _scan_units_for_inferred(
-    session: SessionContext,
-    inferred: Sequence[InferredDeps],
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None,
-) -> tuple[tuple[ScanUnit, ...], dict[str, tuple[str, ...]]]:
-    scans_by_task = {dep.task_name: dep.scans for dep in inferred if dep.scans}
-    if not scans_by_task:
-        return (), {}
-    dataset_locations = _dataset_location_map(runtime_profile)
-    from datafusion_engine.lineage.scan import plan_scan_units
-
-    return plan_scan_units(
-        session,
-        dataset_locations=dataset_locations,
-        scans_by_task=scans_by_task,
-        runtime_profile=runtime_profile,
-    )
 
 
 def _prune_scan_units(

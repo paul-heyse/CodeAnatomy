@@ -44,6 +44,7 @@ from semantics.incremental.metadata import (
 from semantics.incremental.runtime import IncrementalRuntime
 from semantics.incremental.state_store import StateStore
 from semantics.naming import canonical_output_name
+from semantics.naming_compat import canonicalize_output_alias
 from semantics.quality import QualityRelationshipSpec
 from semantics.registry import SEMANTIC_MODEL
 from semantics.runtime import CachePolicy, SemanticRuntimeConfig
@@ -528,7 +529,7 @@ def _resolve_requested_outputs(
 ) -> set[str] | None:
     if requested_outputs is None:
         return {spec.name for spec in SEMANTIC_MODEL.outputs if spec.kind == "table"}
-    return {canonical_output_name(name) for name in requested_outputs}
+    return {canonical_output_name(canonicalize_output_alias(name)) for name in requested_outputs}
 
 
 def _incremental_requested_outputs(
@@ -556,6 +557,10 @@ def _cdf_changed_inputs(
     runtime_config: SemanticRuntimeConfig,
     input_mapping: Mapping[str, str],
 ) -> set[str] | None:
+    from datafusion_engine.dataset.registry import (
+        dataset_catalog_from_profile,
+        dataset_location_from_catalog,
+    )
     from semantics.incremental.cdf_cursors import CdfCursorStore
 
     _ = ctx
@@ -565,13 +570,14 @@ def _cdf_changed_inputs(
     if not isinstance(cursor_store, CdfCursorStore):
         return None
     delta_service = runtime_profile.delta_ops.delta_service()
+    catalog = dataset_catalog_from_profile(runtime_profile)
     changed: set[str] = set()
     for canonical, source in input_mapping.items():
         if canonical == "file_line_index_v1":
             continue
-        location = runtime_profile.catalog_ops.dataset_location(canonical)
+        location = dataset_location_from_catalog(runtime_profile, canonical, catalog=catalog)
         if location is None:
-            location = runtime_profile.catalog_ops.dataset_location(source)
+            location = dataset_location_from_catalog(runtime_profile, source, catalog=catalog)
         if location is None:
             continue
         storage_options = dict(location.storage_options)
@@ -1332,17 +1338,15 @@ def build_cpg(
             use_cdf=effective_use_cdf,
             cdf_inputs=resolved.cdf_inputs,
         )
-        from semantics.validation import require_semantic_inputs
-
-        require_semantic_inputs(ctx, input_mapping=input_mapping)
-
         from datafusion_engine.udf.runtime import rust_udf_snapshot
         from datafusion_engine.views.graph import (
             ViewGraphOptions,
             ViewGraphRuntimeOptions,
             register_view_graph,
         )
-        from semantics.ir_pipeline import build_semantic_ir
+        from semantics.compile_context import CompileContext
+        from semantics.program_manifest import SemanticProgramManifest
+        from semantics.validation import SemanticInputValidationError, validate_semantic_inputs
 
         snapshot = rust_udf_snapshot(ctx)
         resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
@@ -1358,9 +1362,25 @@ def build_cpg(
         )
         if incremental_outputs is not None:
             resolved_outputs = incremental_outputs
-        semantic_ir = build_semantic_ir(
+        compile_context = CompileContext(
+            runtime_profile=runtime_profile,
             outputs=resolved_outputs,
         )
+        semantic_ir = compile_context.semantic_ir()
+        validation_manifest = SemanticProgramManifest(
+            semantic_ir=semantic_ir,
+            requested_outputs=tuple(sorted(resolved_outputs or ())),
+            input_mapping=input_mapping,
+            validation_policy="schema_plus_optional_probe",
+            dataset_bindings=compile_context.dataset_bindings(),
+        )
+        validation = validate_semantic_inputs(
+            ctx=ctx,
+            manifest=validation_manifest,
+            policy="schema_plus_optional_probe",
+        )
+        if not validation.valid:
+            raise SemanticInputValidationError(validation)
         nodes = _view_nodes_for_cpg(
             CpgViewNodesRequest(
                 ctx=ctx,
@@ -1431,7 +1451,9 @@ def _semantic_output_view_names(
             view_names.append(RELATION_OUTPUT_NAME)
         return view_names
 
-    resolved = {canonical_output_name(name) for name in requested_outputs}
+    resolved = {
+        canonical_output_name(canonicalize_output_alias(name)) for name in requested_outputs
+    }
     return [spec.name for spec in SEMANTIC_MODEL.outputs if spec.name in resolved]
 
 
@@ -1798,7 +1820,9 @@ def _emit_semantic_quality_views(
     builders = semantic_diagnostic_view_builders()
     view_names = SEMANTIC_DIAGNOSTIC_VIEW_NAMES
     if requested_outputs is not None:
-        resolved = {canonical_output_name(name) for name in requested_outputs}
+        resolved = {
+            canonical_output_name(canonicalize_output_alias(name)) for name in requested_outputs
+        }
         view_names = tuple(name for name in view_names if name in resolved)
     for view_name in view_names:
         builder = builders.get(view_name)
@@ -1858,7 +1882,7 @@ def build_cpg_from_inferred_deps(
         Mapping of view names to dependency information.
     """
     from datafusion_engine.views.bundle_extraction import extract_lineage_from_bundle
-    from semantics.ir_pipeline import build_semantic_ir
+    from semantics.compile_context import CompileContext
 
     resolved = options or CpgBuildOptions()
     effective_use_cdf = (
@@ -1902,7 +1926,10 @@ def build_cpg_from_inferred_deps(
         )
         if incremental_outputs is not None:
             resolved_outputs = incremental_outputs
-        semantic_ir = build_semantic_ir(outputs=resolved_outputs)
+        semantic_ir = CompileContext(
+            runtime_profile=runtime_profile,
+            outputs=resolved_outputs,
+        ).semantic_ir()
         nodes = _view_nodes_for_cpg(
             CpgViewNodesRequest(
                 ctx=ctx,
@@ -1940,9 +1967,9 @@ def _resolve_semantic_input_mapping(
     use_cdf: bool | None,
     cdf_inputs: Mapping[str, str] | None,
 ) -> tuple[dict[str, str], bool]:
-    from semantics.input_registry import require_semantic_inputs
+    from semantics.validation import resolve_semantic_input_mapping
 
-    resolved_inputs = require_semantic_inputs(ctx)
+    resolved_inputs = resolve_semantic_input_mapping(ctx)
     if use_cdf is False:
         return dict(resolved_inputs), False
 
@@ -1997,10 +2024,15 @@ def _has_cdf_inputs(
     *,
     inputs: Sequence[str],
 ) -> bool:
-    from datafusion_engine.dataset.registry import resolve_datafusion_provider
+    from datafusion_engine.dataset.registry import (
+        dataset_catalog_from_profile,
+        dataset_location_from_catalog,
+        resolve_datafusion_provider,
+    )
 
+    catalog = dataset_catalog_from_profile(runtime_profile)
     for name in inputs:
-        location = runtime_profile.catalog_ops.dataset_location(name)
+        location = dataset_location_from_catalog(runtime_profile, name, catalog=catalog)
         if location is None:
             continue
         if location.delta_cdf_options is not None:

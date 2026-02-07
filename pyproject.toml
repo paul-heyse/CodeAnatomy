@@ -74,6 +74,7 @@ dependencies = [
 
 [project.scripts]
 codeanatomy = "cli:main"
+codeanatomy-cutover-check = "scripts.check_semantic_compiled_cutover:main"
 
 [tool.uv]
 package = true

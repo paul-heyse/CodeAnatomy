@@ -44,7 +44,6 @@ from semantics.incremental.metadata import (
 from semantics.incremental.runtime import IncrementalRuntime
 from semantics.incremental.state_store import StateStore
 from semantics.naming import canonical_output_name
-from semantics.naming_compat import canonicalize_output_alias
 from semantics.quality import QualityRelationshipSpec
 from semantics.registry import SEMANTIC_MODEL
 from semantics.runtime import CachePolicy, SemanticRuntimeConfig
@@ -529,7 +528,7 @@ def _resolve_requested_outputs(
 ) -> set[str] | None:
     if requested_outputs is None:
         return {spec.name for spec in SEMANTIC_MODEL.outputs if spec.kind == "table"}
-    return {canonical_output_name(canonicalize_output_alias(name)) for name in requested_outputs}
+    return {canonical_output_name(name) for name in requested_outputs}
 
 
 def _incremental_requested_outputs(
@@ -557,10 +556,7 @@ def _cdf_changed_inputs(
     runtime_config: SemanticRuntimeConfig,
     input_mapping: Mapping[str, str],
 ) -> set[str] | None:
-    from datafusion_engine.dataset.registry import (
-        dataset_catalog_from_profile,
-        dataset_location_from_catalog,
-    )
+    from datafusion_engine.dataset.registry import dataset_catalog_from_profile
     from semantics.incremental.cdf_cursors import CdfCursorStore
 
     _ = ctx
@@ -575,9 +571,9 @@ def _cdf_changed_inputs(
     for canonical, source in input_mapping.items():
         if canonical == "file_line_index_v1":
             continue
-        location = dataset_location_from_catalog(runtime_profile, canonical, catalog=catalog)
+        location = catalog.get(canonical) if catalog.has(canonical) else None
         if location is None:
-            location = dataset_location_from_catalog(runtime_profile, source, catalog=catalog)
+            location = catalog.get(source) if catalog.has(source) else None
         if location is None:
             continue
         storage_options = dict(location.storage_options)
@@ -661,7 +657,8 @@ def _cpg_view_specs(
         list[tuple[str, DataFrameBuilder]]: Result.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        ValueError: If no semantic normalization spec exists for a requested output.
+
     """
     from semantics.spec_registry import (
         RELATIONSHIP_SPECS,
@@ -1311,7 +1308,8 @@ def build_cpg(
         options: Description.
 
     Raises:
-        ValueError: If the operation cannot be completed.
+        SemanticInputValidationError: If required semantic inputs fail validation.
+        ValueError: If runtime profile is missing.
     """
     resolved = options or CpgBuildOptions()
     if runtime_profile is None:
@@ -1344,9 +1342,8 @@ def build_cpg(
             ViewGraphRuntimeOptions,
             register_view_graph,
         )
-        from semantics.compile_context import CompileContext
-        from semantics.program_manifest import SemanticProgramManifest
-        from semantics.validation import SemanticInputValidationError, validate_semantic_inputs
+        from semantics.compile_context import compile_semantic_program
+        from semantics.validation import SemanticInputValidationError
 
         snapshot = rust_udf_snapshot(ctx)
         resolved_outputs = _resolve_requested_outputs(resolved.requested_outputs)
@@ -1362,25 +1359,20 @@ def build_cpg(
         )
         if incremental_outputs is not None:
             resolved_outputs = incremental_outputs
-        compile_context = CompileContext(
+        manifest = compile_semantic_program(
             runtime_profile=runtime_profile,
             outputs=resolved_outputs,
-        )
-        semantic_ir = compile_context.semantic_ir()
-        validation_manifest = SemanticProgramManifest(
-            semantic_ir=semantic_ir,
-            requested_outputs=tuple(sorted(resolved_outputs or ())),
-            input_mapping=input_mapping,
-            validation_policy="schema_plus_optional_probe",
-            dataset_bindings=compile_context.dataset_bindings(),
-        )
-        validation = validate_semantic_inputs(
-            ctx=ctx,
-            manifest=validation_manifest,
             policy="schema_plus_optional_probe",
+            ctx=ctx,
+            input_mapping=input_mapping,
         )
+        validation = manifest.validation
+        if validation is None:
+            msg = "Semantic manifest compile must include input validation results."
+            raise ValueError(msg)
         if not validation.valid:
             raise SemanticInputValidationError(validation)
+        semantic_ir = manifest.semantic_ir
         nodes = _view_nodes_for_cpg(
             CpgViewNodesRequest(
                 ctx=ctx,
@@ -1451,9 +1443,7 @@ def _semantic_output_view_names(
             view_names.append(RELATION_OUTPUT_NAME)
         return view_names
 
-    resolved = {
-        canonical_output_name(canonicalize_output_alias(name)) for name in requested_outputs
-    }
+    resolved = {canonical_output_name(name) for name in requested_outputs}
     return [spec.name for spec in SEMANTIC_MODEL.outputs if spec.name in resolved]
 
 
@@ -1820,9 +1810,7 @@ def _emit_semantic_quality_views(
     builders = semantic_diagnostic_view_builders()
     view_names = SEMANTIC_DIAGNOSTIC_VIEW_NAMES
     if requested_outputs is not None:
-        resolved = {
-            canonical_output_name(canonicalize_output_alias(name)) for name in requested_outputs
-        }
+        resolved = {canonical_output_name(name) for name in requested_outputs}
         view_names = tuple(name for name in view_names if name in resolved)
     for view_name in view_names:
         builder = builders.get(view_name)
@@ -1880,9 +1868,17 @@ def build_cpg_from_inferred_deps(
     -------
     dict[str, object]
         Mapping of view names to dependency information.
+
+    Raises:
+    ------
+    SemanticInputValidationError:
+        If required semantic inputs fail validation.
+    ValueError:
+        If runtime profile or semantic configuration is invalid.
     """
     from datafusion_engine.views.bundle_extraction import extract_lineage_from_bundle
-    from semantics.compile_context import CompileContext
+    from semantics.compile_context import compile_semantic_program
+    from semantics.validation import SemanticInputValidationError
 
     resolved = options or CpgBuildOptions()
     effective_use_cdf = (
@@ -1926,10 +1922,20 @@ def build_cpg_from_inferred_deps(
         )
         if incremental_outputs is not None:
             resolved_outputs = incremental_outputs
-        semantic_ir = CompileContext(
+        manifest = compile_semantic_program(
             runtime_profile=runtime_profile,
             outputs=resolved_outputs,
-        ).semantic_ir()
+            policy="schema_plus_optional_probe",
+            ctx=ctx,
+            input_mapping=input_mapping,
+        )
+        validation = manifest.validation
+        if validation is None:
+            msg = "Semantic manifest compile must include input validation results."
+            raise ValueError(msg)
+        if not validation.valid:
+            raise SemanticInputValidationError(validation)
+        semantic_ir = manifest.semantic_ir
         nodes = _view_nodes_for_cpg(
             CpgViewNodesRequest(
                 ctx=ctx,
@@ -2026,13 +2032,12 @@ def _has_cdf_inputs(
 ) -> bool:
     from datafusion_engine.dataset.registry import (
         dataset_catalog_from_profile,
-        dataset_location_from_catalog,
         resolve_datafusion_provider,
     )
 
     catalog = dataset_catalog_from_profile(runtime_profile)
     for name in inputs:
-        location = dataset_location_from_catalog(runtime_profile, name, catalog=catalog)
+        location = catalog.get(name) if catalog.has(name) else None
         if location is None:
             continue
         if location.delta_cdf_options is not None:

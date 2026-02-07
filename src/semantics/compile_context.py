@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from semantics.naming import canonical_output_name
-from semantics.naming_compat import canonicalize_output_alias
 from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
 
 if TYPE_CHECKING:
@@ -21,7 +20,7 @@ if TYPE_CHECKING:
 def _resolved_outputs(outputs: Collection[str] | None) -> tuple[str, ...] | None:
     if outputs is None:
         return None
-    return tuple(canonical_output_name(canonicalize_output_alias(name)) for name in outputs)
+    return tuple(canonical_output_name(name) for name in outputs)
 
 
 def semantic_ir_for_outputs(outputs: Collection[str] | None = None) -> SemanticIR:
@@ -38,6 +37,7 @@ class CompileContext:
     runtime_profile: DataFusionRuntimeProfile
     outputs: Collection[str] | None = None
     policy: SemanticInputValidationPolicy = "schema_only"
+    input_mapping: Mapping[str, str] | None = None
     _semantic_ir_cache: SemanticIR | None = field(default=None, init=False, repr=False)
     _dataset_bindings_cache: ManifestDatasetBindings | None = field(
         default=None,
@@ -79,10 +79,15 @@ class CompileContext:
 
         active_ctx = ctx or self.runtime_profile.session_context()
         resolved_outputs = _resolved_outputs(self.outputs) or ()
+        resolved_input_mapping = (
+            dict(self.input_mapping)
+            if self.input_mapping is not None
+            else resolve_semantic_input_mapping(active_ctx)
+        )
         manifest = SemanticProgramManifest(
             semantic_ir=self.semantic_ir(),
             requested_outputs=resolved_outputs,
-            input_mapping=resolve_semantic_input_mapping(active_ctx),
+            input_mapping=resolved_input_mapping,
             validation_policy=self.policy,
             dataset_bindings=self.dataset_bindings(),
         )
@@ -100,6 +105,7 @@ def compile_semantic_program(
     outputs: Collection[str] | None = None,
     policy: SemanticInputValidationPolicy = "schema_only",
     ctx: SessionContext | None = None,
+    input_mapping: Mapping[str, str] | None = None,
 ) -> SemanticProgramManifest:
     """Compile and validate a semantic program manifest.
 
@@ -112,6 +118,7 @@ def compile_semantic_program(
         runtime_profile=runtime_profile,
         outputs=outputs,
         policy=policy,
+        input_mapping=input_mapping,
     ).compile(ctx=ctx)
 
 

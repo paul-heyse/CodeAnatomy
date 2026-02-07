@@ -308,7 +308,7 @@ def _register_delta_override(
             scan_files=spec.scan_files,
         )
     )
-    adapter.register_delta_table_provider(
+    adapter.register_table(
         spec.name,
         TableProviderCapsule(resolution.provider),
         overwrite=True,

@@ -183,6 +183,53 @@ def test_render_enrichment_parameters_uses_params_alias() -> None:
     assert "Language: python" in output
 
 
+def test_render_hides_unresolved_facts_by_default() -> None:
+    finding = Finding(
+        category="definition",
+        message="function: target",
+        anchor=Anchor(file="src/module.py", line=10, col=4),
+        details=DetailPayload.from_legacy(
+            {
+                "language": "python",
+                "enrichment": {
+                    "language": "python",
+                    "python": {
+                        "meta": {"language": "python"},
+                        "structural": {"node_kind": "function_definition"},
+                    },
+                },
+            }
+        ),
+    )
+    output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
+    assert "N/A — not resolved" not in output
+
+
+def test_render_can_show_unresolved_facts_with_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CQ_SHOW_UNRESOLVED_FACTS", "1")
+    finding = Finding(
+        category="definition",
+        message="function: target",
+        anchor=Anchor(file="src/module.py", line=10, col=4),
+        details=DetailPayload.from_legacy(
+            {
+                "language": "python",
+                "enrichment": {
+                    "language": "python",
+                    "python": {
+                        "meta": {"language": "python"},
+                        "structural": {"node_kind": "function_definition"},
+                    },
+                },
+            }
+        ),
+    )
+    output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
+    assert "N/A — not resolved" in output
+
+
 def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     src = repo / "src"

@@ -800,6 +800,52 @@ class TestSmartSearch:
             assert dropped_by_scope.get("rust", 0) == 0
         assert not result.evidence
 
+    def test_auto_identifier_falls_back_to_literal_when_no_hits(self, tmp_path: Path) -> None:
+        """Auto-identifier mode should fallback to literal search when identifier is empty."""
+        (tmp_path / "module.py").write_text("build_graph_v2 = 1\n", encoding="utf-8")
+        clear_caches()
+        result = smart_search(tmp_path, "build_graph")
+        assert result.evidence
+        assert result.summary.get("mode_requested") == "auto"
+        assert result.summary.get("mode_effective") == "literal"
+        assert result.summary.get("mode_chain") == ["identifier", "literal"]
+        assert result.summary.get("fallback_applied") is True
+
+    def test_forced_identifier_does_not_fallback_to_literal(self, tmp_path: Path) -> None:
+        """Forced mode should never auto-fallback."""
+        (tmp_path / "module.py").write_text("build_graph_v2 = 1\n", encoding="utf-8")
+        clear_caches()
+        result = smart_search(tmp_path, "build_graph", mode=QueryMode.IDENTIFIER)
+        assert not result.evidence
+        assert result.summary.get("mode_requested") == "identifier"
+        assert result.summary.get("mode_effective") == "identifier"
+        assert result.summary.get("mode_chain") == ["identifier"]
+        assert result.summary.get("fallback_applied") is False
+
+    def test_file_include_scope_accepts_exact_file_path(self, tmp_path: Path) -> None:
+        """Single-file include globs should constrain search to that exact file."""
+        target = tmp_path / "tools" / "cq" / "search"
+        target.mkdir(parents=True)
+        wanted = target / "classifier.py"
+        wanted.write_text("def classify_match():\n    return 1\n", encoding="utf-8")
+        (target / "other.py").write_text("def classify_match():\n    return 2\n", encoding="utf-8")
+
+        clear_caches()
+        result = smart_search(
+            tmp_path,
+            "classify_match",
+            lang_scope="python",
+            include_globs=["tools/cq/search/classifier.py"],
+        )
+        assert result.evidence
+        anchored_files = [
+            finding.anchor.file
+            for finding in result.evidence
+            if finding.anchor is not None
+        ]
+        assert anchored_files
+        assert all(file.endswith("tools/cq/search/classifier.py") for file in anchored_files)
+
     def test_context_snippet_keeps_header_and_anchor_block(self, tmp_path: Path) -> None:
         """Context snippets should preserve function top and the match anchor block."""
         filler = "\n".join(f"    filler_{i} = {i}" for i in range(40))
@@ -869,11 +915,15 @@ class TestSmartSearch:
         clear_caches()
         result = smart_search(sample_repo, "build_graph", lang_scope="python")
         assert result.evidence
-        detail_data = result.evidence[0].details.data
-        enrichment = detail_data.get("enrichment")
-        assert isinstance(enrichment, dict)
-        assert enrichment.get("language") == "python"
-        assert isinstance(enrichment.get("python"), dict)
+        payloads = [
+            finding.details.data.get("enrichment")
+            for finding in result.evidence
+            if isinstance(finding.details.data.get("enrichment"), dict)
+        ]
+        assert payloads
+        first = cast("dict[str, object]", payloads[0])
+        assert first.get("language") == "python"
+        assert isinstance(first.get("python"), dict)
 
     def test_rust_tree_sitter_fail_open(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

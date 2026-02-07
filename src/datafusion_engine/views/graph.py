@@ -15,7 +15,6 @@ from datafusion.dataframe import DataFrame
 
 from datafusion_engine.dataset.registry import (
     dataset_catalog_from_profile,
-    dataset_location_from_catalog,
 )
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
@@ -847,7 +846,10 @@ def _register_delta_output_cache(registration: CacheRegistrationContext) -> Data
         registration.cache,
         policy_label="Delta output cache",
     )
-    location = dataset_location_from_catalog(runtime_profile, registration.node.name)
+    catalog = dataset_catalog_from_profile(runtime_profile)
+    location = (
+        catalog.get(registration.node.name) if catalog.has(registration.node.name) else None
+    )
     if location is None:
         msg = f"Delta output cache missing dataset location for {registration.node.name!r}."
         raise ValueError(msg)
@@ -1203,11 +1205,7 @@ def _plan_scan_units_for_bundle(
     catalog = dataset_catalog_from_profile(runtime_profile)
     scan_units: dict[str, ScanUnit] = {}
     for scan in lineage.scans:
-        location = dataset_location_from_catalog(
-            runtime_profile,
-            scan.dataset_name,
-            catalog=catalog,
-        )
+        location = catalog.get(scan.dataset_name) if catalog.has(scan.dataset_name) else None
         if location is None:
             continue
         unit = plan_scan_unit(

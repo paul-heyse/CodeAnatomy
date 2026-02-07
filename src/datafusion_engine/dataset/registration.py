@@ -69,7 +69,7 @@ from datafusion_engine.dataset.registry import (
     DatasetCatalog,
     DatasetLocation,
     DatasetLocationOverrides,
-    dataset_location_from_catalog,
+    dataset_catalog_from_profile,
     resolve_dataset_schema,
 )
 from datafusion_engine.dataset.resolution import (
@@ -1457,7 +1457,7 @@ def _register_listing_from_files(
 ) -> _ListingRegistrationState:
     provider = _build_pyarrow_dataset(context.location, schema=context.options.schema)
     adapter = DataFusionIOAdapter(ctx=context.ctx, profile=context.runtime_profile)
-    adapter.register_table_provider(context.name, provider)
+    adapter.register_table(context.name, provider)
     merged_schema, partition_cols, _required_non_null, key_fields, defaults = (
         _ddl_schema_components(
             schema=cast("pa.Schema | None", context.options.schema),
@@ -1779,10 +1779,7 @@ def _register_delta_provider_with_adapter(
     state: _DeltaRegistrationState,
     context: DataFusionRegistrationContext,
 ) -> _DeltaRegistrationResult:
-    if state.resolution.provider_kind == "delta_cdf":
-        state.adapter.register_delta_cdf_provider(context.name, state.provider_to_register)
-    else:
-        state.adapter.register_delta_table_provider(context.name, state.provider_to_register)
+    state.adapter.register_table(context.name, state.provider_to_register)
     return _DeltaRegistrationResult(
         df=context.ctx.table(context.name),
         cache_prefix=state.cache_prefix,
@@ -2607,10 +2604,11 @@ def apply_projection_scan_overrides(
     """Re-register datasets with projection scan overrides when possible."""
     if runtime_profile is None:
         return
+    catalog = dataset_catalog_from_profile(runtime_profile)
     for table_name, columns in projection_map.items():
         if not columns:
             continue
-        location = dataset_location_from_catalog(runtime_profile, table_name)
+        location = catalog.get(table_name) if catalog.has(table_name) else None
         if location is None:
             continue
         scan = location.resolved.datafusion_scan

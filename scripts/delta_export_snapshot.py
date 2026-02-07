@@ -157,7 +157,7 @@ def clone_delta_snapshot(
     )
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
     table_name = f"__delta_snapshot_{uuid7_hex()}"
-    adapter.register_delta_table_provider(
+    adapter.register_table(
         table_name,
         TableProviderCapsule(bundle.provider),
         overwrite=True,

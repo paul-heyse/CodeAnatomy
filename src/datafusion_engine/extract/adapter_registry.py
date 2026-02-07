@@ -84,34 +84,9 @@ def extract_template_adapters() -> tuple[ExtractTemplateAdapter, ...]:
     return tuple(_ADAPTERS[name] for name in sorted(_ADAPTERS))
 
 
-def required_inputs_for_template(name: str, *, include_extra: bool = True) -> tuple[str, ...]:
-    """Return required inputs for an extractor template."""
-    adapter = extract_template_adapter(name)
-    if include_extra:
-        return adapter.merged_required_inputs()
-    return adapter.required_inputs
-
-
-def additional_required_inputs_for_template(name: str) -> tuple[str, ...]:
-    """Return template-specific extra dependency inputs."""
-    adapter = maybe_extract_template_adapter(name)
-    if adapter is None:
-        return ()
-    return adapter.extra_required_inputs
-
-
-def supports_plan_for_template(name: str) -> bool:
-    """Return whether a template supports compile-time plan generation."""
-    adapter = maybe_extract_template_adapter(name)
-    return False if adapter is None else adapter.supports_plan
-
-
 __all__ = [
     "ExtractTemplateAdapter",
-    "additional_required_inputs_for_template",
     "extract_template_adapter",
     "extract_template_adapters",
     "maybe_extract_template_adapter",
-    "required_inputs_for_template",
-    "supports_plan_for_template",
 ]

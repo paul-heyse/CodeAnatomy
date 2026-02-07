@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.arrow.metadata import encoding_policy_from_schema
-from datafusion_engine.dataset.registry import dataset_location_from_catalog
+from datafusion_engine.dataset.registry import DatasetLocation, dataset_catalog_from_profile
 from datafusion_engine.delta import DeltaMutationRequest
 from datafusion_engine.extract.bundles import dataset_name_for_output
 from datafusion_engine.io.write import WriteMode
@@ -36,6 +36,18 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 _STREAMING_ROW_THRESHOLD: int = 100_000
+
+
+def _dataset_location(
+    context: DeltaAccessContext,
+    dataset_name: str | None,
+) -> DatasetLocation | None:
+    if dataset_name is None:
+        return None
+    catalog = dataset_catalog_from_profile(context.runtime.profile)
+    if not catalog.has(dataset_name):
+        return None
+    return catalog.get(dataset_name)
 
 
 @dataclass(frozen=True)
@@ -103,7 +115,7 @@ def upsert_partitioned_dataset(
         context=context,
         dataset_name=spec.name,
     )
-    dataset_location = dataset_location_from_catalog(context.runtime.profile, spec.name)
+    dataset_location = _dataset_location(context, spec.name)
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=base_dir)
     write_result = write_delta_table_via_pipeline(
@@ -159,7 +171,7 @@ def write_overwrite_dataset(
         prefer_reader=True,
     )
     target = str(state_store.dataset_dir(spec.name))
-    dataset_location = dataset_location_from_catalog(context.runtime.profile, spec.name)
+    dataset_location = _dataset_location(context, spec.name)
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=target)
     write_result = write_delta_table_via_pipeline(
@@ -430,11 +442,7 @@ def _delete_delta_partitions(
         extra_metadata=commit_metadata,
     )
     ctx = context.runtime.session_runtime().ctx
-    dataset_location = (
-        dataset_location_from_catalog(context.runtime.profile, dataset_name)
-        if dataset_name is not None
-        else None
-    )
+    dataset_location = _dataset_location(context, dataset_name)
     extra_constraints = delta_constraints_for_location(dataset_location)
     resolved_storage = context.resolve_storage(table_uri=base_dir)
     delta_service = context.runtime.profile.delta_ops.delta_service()

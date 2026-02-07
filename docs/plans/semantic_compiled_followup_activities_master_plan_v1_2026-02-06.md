@@ -334,3 +334,198 @@ Given architecture-first priority, run narrow smoke checks per wave (not full-su
 3. Runtime API remains authoritative; CLI work is optional and later.
 4. Canonical names remain immediate default behavior.
 5. Full-suite stabilization is intentionally deferred until architecture cutover reaches the defined end state.
+
+## 11. Implementation Status Audit (2026-02-07)
+
+This section supersedes the baseline snapshot in Section 2 and reflects the
+current codebase state after in-flight implementation work.
+
+### 11.1 Evidence snapshot
+
+1. `uv run scripts/check_semantic_compiled_cutover.py --strict` -> `no findings`.
+2. CQ callsite inventory:
+   - `compile_semantic_program`: 4 callsites / 3 files.
+   - `build_semantic_ir`: 8 callsites / 7 files (production path mostly through compile context; remainder mostly tests).
+   - `ensure_view_graph`: 4 callsites / 3 files.
+   - `dataset_location_from_catalog`: 0 callsites.
+   - `dataset_catalog_from_profile`: 30 callsites / 22 files.
+   - `materialize_extract_plan`: 25 callsites / 13 files.
+   - `register_dataset_df`: 31 callsites / 21 files.
+   - `register_dataset`: 15 callsites / 12 files.
+3. Removed legacy seams (CQ verified 0 callsites):
+   - `require_semantic_inputs`
+   - `semantic_runtime_from_profile`
+   - `apply_semantic_runtime_config`
+   - `_extract_outputs_for_template`
+   - `_REQUIRED_INPUTS`, `_SUPPORTS_PLAN`, `_EXTRACTOR_EXTRA_INPUTS`
+4. Removed legacy provider wrappers (CQ verified 0 callsites in `src`):
+   - `register_table_provider`
+   - `register_delta_table_provider`
+   - `register_delta_cdf_provider`
+5. Canonical naming hard-cut in `src`:
+   - no `cpg_nodes_v1`, `cpg_edges_v1`, or `naming_compat` references in `src`.
+   - `src/semantics/naming_compat.py` is deleted.
+
+### 11.2 Wave-by-wave status
+
+#### Wave F1 - Compile/Validation Authority Collapse
+Status: `partial (major progress)`
+
+Implemented:
+1. `build_cpg(...)` now compiles via `compile_semantic_program(...)`; no manual `SemanticProgramManifest(...)` construction remains in `src/semantics/pipeline.py`.
+2. `view_graph_nodes(...)` requires a manifest and no longer builds ad hoc validation manifests in `src/datafusion_engine/views/registry_specs.py`.
+3. Bootstrap validation requires manifest input; fallback manifest synthesis path has been removed in `src/datafusion_engine/bootstrap/zero_row.py`.
+4. `src/semantics/ir_pipeline.py` no longer exports a `compile_semantic_program` shim.
+
+Remaining:
+1. `src/semantics/pipeline.py` still maintains a parallel local view-node build path (`_view_nodes_for_cpg`) and local cache-policy/runtime wiring instead of consuming the same registration path used by `ensure_view_graph(...)`.
+2. `build_cpg_from_inferred_deps(...)` recompiles semantic manifests independently, so compile/registration authority is still split across two orchestration paths.
+
+#### Wave F2 - Dataset Binding Authority Cutover
+Status: `partial`
+
+Implemented:
+1. `dataset_location_from_catalog(...)` is fully removed from callsites.
+2. `ManifestDatasetBindings` exists and is consumed in zero-row bootstrap and view-registry cache policy decisions.
+
+Remaining:
+1. `dataset_catalog_from_profile(...)` remains heavily distributed (30 callsites across 22 files).
+2. High-priority orchestration layers still directly pull catalogs:
+   - `src/semantics/pipeline.py`
+   - `src/datafusion_engine/plan/pipeline.py`
+   - `src/hamilton_pipeline/modules/task_execution.py`
+   - `src/extract/infrastructure/worklists.py`
+   - `src/engine/materialize_pipeline.py`
+   - incremental modules under `src/semantics/incremental/`
+3. Manifest bindings are not yet the singular dataset-binding authority across planning/scheduling/execution.
+
+#### Wave F3 - Registration API Consolidation (Provider-First)
+Status: `partial`
+
+Implemented:
+1. Legacy provider wrapper APIs are removed from active Python callpaths.
+2. Core registration paths use `register_table(...)` internally through registration facades.
+
+Remaining:
+1. Registration surface is still broad (`register_dataset_df` and `register_dataset` call fan-out remains high).
+2. Listing registration logic remains duplicated:
+   - `src/datafusion_engine/dataset/registration.py` (`_register_listing_table`)
+   - `src/datafusion_engine/tables/registration.py` (`register_listing_table`)
+3. One authority module for listing registration is not yet enforced.
+
+#### Wave F4 - Extract Execution Contract Finalization
+Status: `partial`
+
+Implemented:
+1. Legacy template dispatch helper `_run_extract_adapter` is removed.
+2. Legacy hardcoded extractor maps are removed.
+3. Duplicate `materialize_extract_plan` implementation is removed (`src/extract/helpers.py` deleted; single definition in `src/extract/coordination/materialization.py`).
+4. Adapter metadata is centralized in `src/datafusion_engine/extract/adapter_registry.py`.
+
+Remaining:
+1. Execution callable mapping still lives in `src/hamilton_pipeline/modules/task_execution.py` (`_EXTRACT_ADAPTER_EXECUTORS`) instead of being defined/owned by adapter registry metadata.
+2. `materialize_extract_plan(...)` still has broad fan-out (25 callsites), so high-level orchestration entrypoint consolidation is not complete.
+
+#### Wave F5 - Semantic Runtime Type Surface Cleanup
+Status: `largely unimplemented`
+
+Evidence:
+1. `src/semantics/runtime.py` still exists and exports `SemanticRuntimeConfig` and `CachePolicy`.
+2. Runtime-bridge types remain widely imported/used in:
+   - `src/semantics/pipeline.py`
+   - `src/datafusion_engine/session/runtime.py`
+   - `src/engine/materialize_pipeline.py`
+   - `src/datafusion_engine/views/graph.py`
+
+Remaining:
+1. Move required runtime options to manifest/runtime policy structures.
+2. Remove orchestration dependency on `SemanticRuntimeConfig`/`CachePolicy`.
+3. Delete `src/semantics/runtime.py` after migration.
+
+#### Wave F6 - Incremental/CDF Path Convergence
+Status: `largely unimplemented`
+
+Evidence:
+1. Incremental modules still perform direct catalog lookup/registration:
+   - `src/semantics/incremental/cdf_runtime.py`
+   - `src/semantics/incremental/delta_context.py`
+   - `src/semantics/incremental/delta_updates.py`
+   - `src/semantics/incremental/snapshot.py`
+   - `src/semantics/incremental/plan_bundle_exec.py`
+2. These paths are not yet aligned to manifest-bound dataset bindings and unified registration authority.
+
+#### Wave F7 - Compatibility Boundary Reduction to Zero
+Status: `implemented (hard cut in src)`
+
+Implemented:
+1. `src/semantics/naming_compat.py` deleted.
+2. Core `src` runtime/semantic paths have no `_v1` CPG naming leaks.
+
+Notes:
+1. Legacy `_v1` references still exist in tests/docs artifacts and historical plan docs; this is expected and separate from core runtime cutover.
+
+## 12. Remaining Scope to Implement (Decision-Complete Backlog)
+
+### 12.1 Immediate architectural closures
+
+1. Complete F1 authority collapse by removing parallel view-node build path in `src/semantics/pipeline.py`:
+   - decommission `CpgViewNodesRequest` + `_view_nodes_for_cpg(...)` local assembly path.
+   - route semantic registration through the same manifest-driven graph path used by `ensure_view_graph(...)`.
+2. Eliminate duplicate compile orchestration in `build_cpg_from_inferred_deps(...)`:
+   - compile once per operation boundary and share manifest/context for planning/dependency extraction.
+
+### 12.2 Manifest binding hard cut
+
+1. Introduce a manifest-bound dataset resolver interface and thread it through:
+   - planning (`src/datafusion_engine/plan/pipeline.py`)
+   - task execution (`src/hamilton_pipeline/modules/task_execution.py`)
+   - relspec orchestration seams
+   - incremental runtime seams.
+2. Reduce `dataset_catalog_from_profile(...)` usage to compile/binding boundaries only.
+3. Enforce with cutover checker rules that block new direct orchestration lookups.
+
+### 12.3 Registration consolidation and deletion
+
+1. Choose one listing registration authority:
+   - keep `src/datafusion_engine/tables/registration.py::register_listing_table(...)` and remove dataset-side duplicate, or invert ownership; do not keep both.
+2. Collapse façade usage to one pipeline-facing method (single semantic for register/update).
+3. Remove remaining compatibility-only registration indirection once callsites are migrated.
+
+### 12.4 Extract execution contract completion
+
+1. Move execution callables into adapter registry contract (metadata + callable binding in one place).
+2. Keep task execution orchestration free of template-name branching beyond adapter lookup.
+3. Add a higher-level orchestration entrypoint to reduce direct `materialize_extract_plan(...)` fan-out across extractors.
+
+### 12.5 Semantic runtime bridge removal
+
+1. Design manifest/runtime policy replacements for fields now in `SemanticRuntimeConfig`:
+   - output locations
+   - cache policy overrides
+   - CDF enablement/cursor store
+   - storage options
+   - schema evolution flags.
+2. Migrate callers; then delete:
+   - `src/semantics/runtime.py`
+   - stale imports in `src/semantics/__init__.py`.
+
+### 12.6 Incremental convergence
+
+1. Make incremental modules consume manifest dataset bindings and registration facade contracts.
+2. Remove incremental-specific catalog lookup and ad hoc registration paths.
+3. Align incremental write/read policy handling with the same provider-first runtime contracts as non-incremental flows.
+
+### 12.7 Additional aggressive decommission targets
+
+1. `src/semantics/pipeline.py` local orchestration helpers that duplicate view registration/build policy.
+2. One duplicate listing registration stack (`dataset/registration.py` or `tables/registration.py`).
+3. Compatibility allowances in `scripts/check_semantic_compiled_cutover.py` that reference deleted paths (for example stale allowlist entries) once migration rules are finalized.
+
+### 12.8 Completion definition for this follow-up plan
+
+1. One manifest compile authority.
+2. One dataset binding authority.
+3. One registration authority.
+4. One extract adapter execution authority.
+5. Zero orchestration-level direct catalog lookups outside compile/binding boundaries.
+6. Zero semantic runtime bridge types in core orchestration paths.

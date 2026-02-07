@@ -19,7 +19,7 @@ from datafusion_engine.arrow.interop import (
 from datafusion_engine.arrow.interop import (
     TableLike as ArrowTableLike,
 )
-from datafusion_engine.dataset.registry import dataset_location_from_catalog
+from datafusion_engine.dataset.registry import DatasetLocation, dataset_catalog_from_profile
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.lineage.scan import ScanUnit
 from datafusion_engine.plan.execution import (
@@ -492,9 +492,10 @@ def _ensure_scan_overrides(
     if refresh_requested:
         from semantics.compile_context import CompileContext
 
+        semantic_manifest = CompileContext(runtime_profile=profile).compile(ctx=session)
         DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
-            semantic_ir=CompileContext(runtime_profile=profile).semantic_ir(),
+            semantic_manifest=semantic_manifest,
         )
         runtime.scan_override_hash = scan_context.scan_units_hash
     return profile
@@ -515,9 +516,10 @@ def _execute_view(
     if not session.table_exist(view_name):
         from semantics.compile_context import CompileContext
 
+        semantic_manifest = CompileContext(runtime_profile=profile).compile(ctx=session)
         DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
-            semantic_ir=CompileContext(runtime_profile=profile).semantic_ir(),
+            semantic_manifest=semantic_manifest,
         )
         if not session.table_exist(view_name):
             msg = f"View {view_name!r} is not registered; call ensure_view_graph first."
@@ -596,7 +598,8 @@ def _resolve_dataframe_from_session(
     try:
         return ctx.table(name)
     except (KeyError, RuntimeError, TypeError, ValueError):
-        location = dataset_location_from_catalog(session_runtime.profile, name)
+        catalog = dataset_catalog_from_profile(session_runtime.profile)
+        location = catalog.get(name) if catalog.has(name) else None
         if location is None:
             return None
         from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -833,24 +836,36 @@ def _extract_symtable(
     return {"symtable_files": table}
 
 
-def _run_extract_adapter(
-    adapter_name: str,
-    *,
+_EXTRACT_ADAPTER_EXECUTORS: Mapping[
+    str,
+    Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]],
+] = {
+    "repo_scan": _extract_repo_scan,
+    "scip": _extract_scip,
+    "python_imports": _extract_python_imports,
+    "python_external": _extract_python_external,
+    "ast": _extract_ast,
+    "cst": _extract_cst,
+    "tree_sitter": _extract_tree_sitter,
+    "bytecode": _extract_bytecode,
+    "symtable": _extract_symtable,
+}
+
+
+def _dataset_location_for_output(
     inputs: TaskExecutionInputs,
-    extract_session: ExtractSession,
-    profile_name: str,
-) -> Mapping[str, object]:
-    """Dispatch extract execution via adapter naming conventions."""
-    handler_name = f"_extract_{adapter_name}"
-    handler = globals().get(handler_name)
-    if callable(handler):
-        typed = cast(
-            "Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]",
-            handler,
-        )
-        return typed(inputs, extract_session, profile_name)
+    *,
+    dataset_name: str,
+) -> DatasetLocation | None:
+    catalog = dataset_catalog_from_profile(inputs.engine_session.datafusion_profile)
+    if not catalog.has(dataset_name):
+        return None
+    return catalog.get(dataset_name)
+
+
+def _missing_extract_handler_error(adapter_name: str) -> ValueError:
     msg = f"Missing extract execution handler for template {adapter_name!r}."
-    raise ValueError(msg)
+    return ValueError(msg)
 
 
 def _ensure_extract_output(
@@ -875,10 +890,7 @@ def _ensure_extract_output(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized[spec.task_output] = empty_table(schema)
-        location = dataset_location_from_catalog(
-            inputs.engine_session.datafusion_profile,
-            spec.task_output,
-        )
+        location = _dataset_location_for_output(inputs, dataset_name=spec.task_output)
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [
@@ -924,12 +936,10 @@ def _execute_extract_task(
         except KeyError as exc:
             msg = f"Unsupported extract template {task_spec.extractor!r}."
             raise ValueError(msg) from exc
-        outputs = _run_extract_adapter(
-            adapter.name,
-            inputs=inputs,
-            extract_session=extract_session,
-            profile_name=profile_name,
-        )
+        handler = _EXTRACT_ADAPTER_EXECUTORS.get(adapter.name)
+        if handler is None:
+            raise _missing_extract_handler_error(adapter.name)
+        outputs = handler(inputs, extract_session, profile_name)
         normalized = _normalize_extract_outputs(outputs)
     except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
         from datafusion_engine.extract.registry import dataset_schema
@@ -942,10 +952,7 @@ def _execute_extract_task(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized = {spec.task_output: empty_table(schema)}
-        location = dataset_location_from_catalog(
-            inputs.engine_session.datafusion_profile,
-            spec.task_output,
-        )
+        location = _dataset_location_for_output(inputs, dataset_name=spec.task_output)
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [
@@ -1121,7 +1128,7 @@ def _record_extract_outputs(
         rows = None
         if hasattr(table, "num_rows"):
             rows = int(table.num_rows)
-        location = dataset_location_from_catalog(inputs.engine_session.datafusion_profile, name)
+        location = _dataset_location_for_output(inputs, dataset_name=name)
         status = "ok"
         issue = None
         if location is None:

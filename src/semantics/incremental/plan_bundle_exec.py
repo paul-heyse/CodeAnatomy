@@ -8,7 +8,6 @@ import pyarrow as pa
 
 from datafusion_engine.dataset.registry import (
     dataset_catalog_from_profile,
-    dataset_location_from_catalog,
 )
 from datafusion_engine.lineage.datafusion import extract_lineage
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_unit
@@ -114,11 +113,7 @@ def _plan_scan_units(
         bundle.optimized_logical_plan,
         udf_snapshot=bundle.artifacts.udf_snapshot,
     ).scans:
-        location = dataset_location_from_catalog(
-            runtime.profile,
-            scan.dataset_name,
-            catalog=catalog,
-        )
+        location = catalog.get(scan.dataset_name) if catalog.has(scan.dataset_name) else None
         if location is None:
             continue
         unit = plan_scan_unit(

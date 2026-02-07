@@ -279,6 +279,40 @@ def _extract_def_name_from_record(record: SgRecord) -> str | None:
     return None
 
 
+def _definition_name_span(record: SgRecord) -> tuple[int, int] | None:
+    """Return absolute column span for a definition name.
+
+    Returns:
+    -------
+    tuple[int, int] | None
+        Start/end columns (0-indexed, end-exclusive) on ``record.start_line``.
+    """
+    if record.record != "def":
+        return None
+    first_line = record.text.splitlines()[0] if record.text else ""
+    patterns = (
+        r"(?:async\s+)?(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)",
+        r"fn\s+([A-Za-z_][A-Za-z0-9_]*)",
+        r"(?:struct|enum|trait|mod)\s+([A-Za-z_][A-Za-z0-9_]*)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, first_line)
+        if match:
+            start = record.start_col + match.start(1)
+            end = record.start_col + match.end(1)
+            return start, end
+    return None
+
+
+def _definition_name_contains(record: SgRecord, line: int, col: int) -> bool:
+    """Return whether ``(line, col)`` overlaps the definition identifier token."""
+    span = _definition_name_span(record)
+    if span is None or line != record.start_line:
+        return False
+    start, end = span
+    return start <= col < end
+
+
 # Per-file caches to avoid re-parsing
 _sg_cache: dict[tuple[str, QueryLanguage], SgRoot] = {}
 _source_cache: dict[str, str] = {}
@@ -738,6 +772,8 @@ def classify_from_records(
     record = min(candidates, key=lambda r: r.end_line - r.start_line)
     category = _record_to_category(record)
     if category is None:
+        return None
+    if category == "definition" and not _definition_name_contains(record, line, col):
         return None
 
     containing_scope: str | None = None

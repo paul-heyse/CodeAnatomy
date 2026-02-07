@@ -24,7 +24,6 @@ from datafusion_engine.arrow.build import (
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.dataset.registry import (
     dataset_catalog_from_profile,
-    dataset_location_from_catalog,
 )
 from datafusion_engine.expr.query_spec import apply_query_spec
 from datafusion_engine.extract.registry import dataset_query, dataset_schema, extract_metadata
@@ -429,11 +428,21 @@ def extract_dataset_location_or_raise(
     Raises:
         ValueError: If the operation cannot be completed.
     """
-    location = dataset_location_from_catalog(runtime_profile, name)
+    location = _dataset_location(runtime_profile, name)
     if location is None:
         msg = f"No extract dataset location configured for {name!r}."
         raise ValueError(msg)
     return location
+
+
+def _dataset_location(
+    runtime_profile: DataFusionRuntimeProfile,
+    name: str,
+) -> DatasetLocation | None:
+    catalog = dataset_catalog_from_profile(runtime_profile)
+    if not catalog.has(name):
+        return None
+    return catalog.get(name)
 
 
 def _streaming_supported_for_extract(
@@ -442,7 +451,7 @@ def _streaming_supported_for_extract(
     runtime_profile: DataFusionRuntimeProfile,
     normalize: ExtractNormalizeOptions | None,
 ) -> bool:
-    if dataset_location_from_catalog(runtime_profile, name) is None:
+    if _dataset_location(runtime_profile, name) is None:
         return False
     policy = normalized_schema_policy_for_dataset(
         name,
@@ -488,11 +497,7 @@ def _plan_scan_units_for_extract(
         plan.optimized_logical_plan,
         udf_snapshot=plan.artifacts.udf_snapshot,
     ).scans:
-        location = dataset_location_from_catalog(
-            runtime_profile,
-            scan.dataset_name,
-            catalog=catalog,
-        )
+        location = catalog.get(scan.dataset_name) if catalog.has(scan.dataset_name) else None
         if location is None:
             continue
         unit = plan_scan_unit(
@@ -773,7 +778,7 @@ def _record_extract_compile(
 
 def _register_extract_view(name: str, *, runtime_profile: DataFusionRuntimeProfile) -> None:
     """Register a view for a materialized extract dataset."""
-    location = dataset_location_from_catalog(runtime_profile, name)
+    location = _dataset_location(runtime_profile, name)
     if location is None:
         return
     session_runtime = runtime_profile.session_runtime()
@@ -839,7 +844,7 @@ def _validate_extract_schema_contract(
     Raises:
         TypeError: If the operation cannot be completed.
     """
-    if dataset_location_from_catalog(runtime_profile, name) is None:
+    if _dataset_location(runtime_profile, name) is None:
         return
     expected = dataset_schema(name)
     if not isinstance(expected, pa.Schema):

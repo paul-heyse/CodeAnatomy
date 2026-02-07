@@ -145,7 +145,7 @@ if TYPE_CHECKING:
 from datafusion_engine.dataset.registry import (
     DatasetCatalog,
     DatasetLocation,
-    dataset_location_from_catalog,
+    dataset_catalog_from_profile,
 )
 from schema_spec.policies import DataFusionWritePolicy
 from schema_spec.system import (
@@ -4126,7 +4126,10 @@ class _RuntimeProfileCatalogFacadeMixin:
             Dataset location when configured.
         """
         profile = cast("DataFusionRuntimeProfile", self)
-        return dataset_location_from_catalog(profile, name)
+        catalog = dataset_catalog_from_profile(profile)
+        if not catalog.has(name):
+            return None
+        return catalog.get(name)
 
 
 class _RuntimeProfileDeltaFacadeMixin:
@@ -7279,7 +7282,7 @@ def _datafusion_type_name(dtype: pa.DataType) -> str:
     from datafusion_engine.io.adapter import DataFusionIOAdapter
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=None)
-    adapter.register_table_provider("t", ctx.from_arrow(table))
+    adapter.register_table("t", ctx.from_arrow(table))
     result = _sql_with_options(
         ctx,
         "SELECT arrow_typeof(value) AS dtype FROM t LIMIT 1",
@@ -7610,9 +7613,10 @@ def record_dataset_readiness(
     from datafusion_engine.lineage.diagnostics import record_artifact
     from obs.otel.heartbeat import set_heartbeat_blockers
 
+    catalog = dataset_catalog_from_profile(profile)
     blockers: list[str] = []
     for name in dataset_names:
-        location = dataset_location_from_catalog(profile, name)
+        location = catalog.get(name) if catalog.has(name) else None
         if location is None:
             record_artifact(
                 profile,

@@ -27,17 +27,18 @@ class OtelDiagnosticsSink:
     """Diagnostics sink that emits artifacts/events to OpenTelemetry logs."""
 
     @staticmethod
-    def record_artifact(name: str, payload: Mapping[str, object]) -> None:
+    def record_artifact(name: object, payload: Mapping[str, object]) -> None:
         """Record an artifact payload as a diagnostics event.
 
         Parameters
         ----------
         name
-            Artifact name.
+            Artifact spec or string name.
         payload
             Artifact payload to log.
         """
-        emit_diagnostics_event(name, payload=payload, event_kind="artifact")
+        resolved = _resolve_artifact_name(name)
+        emit_diagnostics_event(resolved, payload=payload, event_kind="artifact")
 
     @staticmethod
     def record_event(name: str, properties: Mapping[str, object]) -> None:
@@ -215,6 +216,29 @@ def _severity_from_level(level: int) -> SeverityNumber:
     if level >= logging.INFO:
         return SeverityNumber.INFO
     return SeverityNumber.DEBUG
+
+
+def _resolve_artifact_name(name: object) -> str:
+    """Resolve an artifact name from an ArtifactSpec or string.
+
+    Use duck typing to avoid circular imports with serde_schema_registry.
+
+    Parameters
+    ----------
+    name
+        ArtifactSpec instance or string name.
+
+    Returns:
+    -------
+    str
+        Resolved canonical artifact name.
+    """
+    canonical = getattr(name, "canonical_name", None)
+    if isinstance(canonical, str):
+        return canonical
+    if isinstance(name, str):
+        return name
+    return str(name)
 
 
 __all__ = ["OtelDiagnosticsSink", "emit_diagnostics_event"]

@@ -7,11 +7,12 @@ from pathlib import Path
 import pyarrow as pa
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
+from semantics.compile_context import dataset_bindings_for_profile
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_runtime import read_cdf_changes
 from semantics.incremental.changes import file_changes_from_cdf
 from semantics.incremental.delta_context import DeltaAccessContext
-from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
 from semantics.incremental.snapshot import write_repo_snapshot
 from semantics.incremental.state_store import StateStore
 from storage.deltalake import canonical_table_uri
@@ -85,9 +86,13 @@ def test_repo_snapshot_cdf_diff(tmp_path: Path) -> None:
 
 
 def _runtime_or_skip() -> IncrementalRuntime:
+    profile = DataFusionRuntimeProfile(
+        features=FeatureGatesConfig(enforce_delta_ffi_provider=False),
+    )
     runtime = IncrementalRuntime.build(
-        profile=DataFusionRuntimeProfile(
-            features=FeatureGatesConfig(enforce_delta_ffi_provider=False),
+        IncrementalRuntimeBuildRequest(
+            profile=profile,
+            dataset_resolver=dataset_bindings_for_profile(profile),
         )
     )
     _ = runtime.session_context()

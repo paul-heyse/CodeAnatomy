@@ -1,0 +1,382 @@
+"""Tests for ArtifactSpec and ArtifactSpecRegistry governance infrastructure."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+import msgspec
+import pytest
+
+from serde_schema_registry import (
+    ArtifactSpec,
+    ArtifactSpecRegistry,
+    artifact_spec_registry,
+    register_artifact_spec,
+)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+class _SamplePayload(msgspec.Struct, frozen=True):
+    """Sample payload for testing spec validation."""
+
+    name: str
+    value: int
+    optional_field: str | None = None
+
+
+class _OtherPayload(msgspec.Struct, frozen=True):
+    """Another sample payload to test fingerprint differences."""
+
+    key: str
+
+
+# ---------------------------------------------------------------------------
+# ArtifactSpec creation and properties
+# ---------------------------------------------------------------------------
+
+
+class TestArtifactSpecCreation:
+    """Test ArtifactSpec construction and schema fingerprinting."""
+
+    def test_create_spec_with_payload_type(self) -> None:
+        """Create spec with a payload type and verify fingerprint is computed."""
+        spec = ArtifactSpec(
+            canonical_name="test_artifact_v1",
+            description="A test artifact.",
+            payload_type=_SamplePayload,
+        )
+        assert spec.canonical_name == "test_artifact_v1"
+        assert spec.description == "A test artifact."
+        assert spec.payload_type is _SamplePayload
+        assert spec.version == 1
+        assert len(spec.schema_fingerprint) == 32
+
+    def test_create_spec_without_payload_type(self) -> None:
+        """Create spec without a payload type (untyped artifact)."""
+        spec = ArtifactSpec(
+            canonical_name="untyped_v1",
+            description="Untyped artifact.",
+        )
+        assert spec.payload_type is None
+        assert spec.schema_fingerprint == ""
+        assert spec.version == 1
+
+    def test_fingerprint_deterministic(self) -> None:
+        """Schema fingerprint is deterministic across instances."""
+        spec_a = ArtifactSpec(
+            canonical_name="a_v1",
+            description="First.",
+            payload_type=_SamplePayload,
+        )
+        spec_b = ArtifactSpec(
+            canonical_name="b_v1",
+            description="Second.",
+            payload_type=_SamplePayload,
+        )
+        assert spec_a.schema_fingerprint == spec_b.schema_fingerprint
+
+    def test_fingerprint_differs_for_different_types(self) -> None:
+        """Different payload types produce different fingerprints."""
+        spec_a = ArtifactSpec(
+            canonical_name="a_v1",
+            description="First.",
+            payload_type=_SamplePayload,
+        )
+        spec_b = ArtifactSpec(
+            canonical_name="b_v1",
+            description="Second.",
+            payload_type=_OtherPayload,
+        )
+        assert spec_a.schema_fingerprint != spec_b.schema_fingerprint
+
+    def test_custom_version(self) -> None:
+        """Spec version defaults to 1 but can be overridden."""
+        spec = ArtifactSpec(
+            canonical_name="versioned_v2",
+            description="Version 2.",
+            version=2,
+        )
+        assert spec.version == 2
+
+
+# ---------------------------------------------------------------------------
+# ArtifactSpec.validate
+# ---------------------------------------------------------------------------
+
+
+class TestArtifactSpecValidation:
+    """Test ArtifactSpec payload validation."""
+
+    def test_validate_valid_payload(self) -> None:
+        """Valid payload passes validation without error."""
+        spec = ArtifactSpec(
+            canonical_name="test_v1",
+            description="Test.",
+            payload_type=_SamplePayload,
+        )
+        spec.validate({"name": "hello", "value": 42})
+
+    def test_validate_valid_payload_with_optional(self) -> None:
+        """Valid payload with optional fields passes validation."""
+        spec = ArtifactSpec(
+            canonical_name="test_v1",
+            description="Test.",
+            payload_type=_SamplePayload,
+        )
+        spec.validate({"name": "hello", "value": 42, "optional_field": "extra"})
+
+    def test_validate_invalid_payload_raises(self) -> None:
+        """Invalid payload raises ValidationError."""
+        spec = ArtifactSpec(
+            canonical_name="test_v1",
+            description="Test.",
+            payload_type=_SamplePayload,
+        )
+        with pytest.raises(msgspec.ValidationError):
+            spec.validate({"name": "hello", "value": "not_an_int"})
+
+    def test_validate_untyped_is_noop(self) -> None:
+        """Untyped spec validation is a no-op (accepts anything)."""
+        spec = ArtifactSpec(
+            canonical_name="untyped_v1",
+            description="Untyped.",
+        )
+        spec.validate({"anything": "goes"})
+        spec.validate({})
+
+
+# ---------------------------------------------------------------------------
+# ArtifactSpecRegistry
+# ---------------------------------------------------------------------------
+
+
+class TestArtifactSpecRegistry:
+    """Test ArtifactSpecRegistry operations."""
+
+    def test_register_and_get(self) -> None:
+        """Register and retrieve an artifact spec."""
+        registry = ArtifactSpecRegistry()
+        spec = ArtifactSpec(
+            canonical_name="my_artifact_v1",
+            description="Test artifact.",
+        )
+        registry.register("my_artifact_v1", spec)
+        assert registry.get("my_artifact_v1") is spec
+
+    def test_get_missing_returns_none(self) -> None:
+        """Get on missing key returns None."""
+        registry = ArtifactSpecRegistry()
+        assert registry.get("nonexistent") is None
+
+    def test_contains(self) -> None:
+        """Check __contains__ works."""
+        registry = ArtifactSpecRegistry()
+        spec = ArtifactSpec(canonical_name="x_v1", description="X.")
+        registry.register("x_v1", spec)
+        assert "x_v1" in registry
+        assert "y_v1" not in registry
+
+    def test_len(self) -> None:
+        """Check __len__ reflects registered count."""
+        registry = ArtifactSpecRegistry()
+        assert len(registry) == 0
+        registry.register("a_v1", ArtifactSpec(canonical_name="a_v1", description="A."))
+        assert len(registry) == 1
+        registry.register("b_v1", ArtifactSpec(canonical_name="b_v1", description="B."))
+        assert len(registry) == 2
+
+    def test_iter(self) -> None:
+        """Check __iter__ yields registered keys."""
+        registry = ArtifactSpecRegistry()
+        registry.register("a_v1", ArtifactSpec(canonical_name="a_v1", description="A."))
+        registry.register("b_v1", ArtifactSpec(canonical_name="b_v1", description="B."))
+        assert sorted(registry) == ["a_v1", "b_v1"]
+
+    def test_snapshot(self) -> None:
+        """Snapshot returns a copy of registry state."""
+        registry = ArtifactSpecRegistry()
+        spec = ArtifactSpec(canonical_name="s_v1", description="S.")
+        registry.register("s_v1", spec)
+        snap = registry.snapshot()
+        assert isinstance(snap, Mapping)
+        assert "s_v1" in snap
+        assert snap["s_v1"] is spec
+
+    def test_restore(self) -> None:
+        """Restore replaces registry state from a snapshot."""
+        registry = ArtifactSpecRegistry()
+        spec = ArtifactSpec(canonical_name="r_v1", description="R.")
+        registry.register("r_v1", spec)
+        snap = registry.snapshot()
+        registry.register("extra_v1", ArtifactSpec(canonical_name="extra_v1", description="E."))
+        assert len(registry) == 2
+        registry.restore(snap)
+        assert len(registry) == 1
+        assert "r_v1" in registry
+        assert "extra_v1" not in registry
+
+
+# ---------------------------------------------------------------------------
+# Global registry and register helper
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalRegistry:
+    """Test the global artifact spec registry and helper."""
+
+    def test_global_registry_is_populated(self) -> None:
+        """Global registry should have specs from serde_artifacts module import."""
+        registry = artifact_spec_registry()
+        assert len(registry) > 0
+
+    def test_known_specs_registered(self) -> None:
+        """Verify known spec canonical names are registered."""
+        registry = artifact_spec_registry()
+        expected_names = [
+            "view_cache_artifact_v1",
+            "delta_stats_decision_v1",
+            "semantic_validation_v1",
+            "plan_schedule_v1",
+            "plan_validation_v1",
+            "run_manifest_v1",
+            "normalize_outputs_v1",
+            "extract_errors_v1",
+            "runtime_profile_snapshot_v1",
+            "incremental_metadata_v1",
+        ]
+        for name in expected_names:
+            assert name in registry, f"Expected {name!r} in artifact spec registry"
+
+    def test_register_artifact_spec_returns_spec(self) -> None:
+        """register_artifact_spec returns the registered spec."""
+        spec = ArtifactSpec(
+            canonical_name="test_global_v1",
+            description="Test global registration.",
+        )
+        result = register_artifact_spec(spec)
+        assert result is spec
+        assert artifact_spec_registry().get("test_global_v1") is spec
+
+
+# ---------------------------------------------------------------------------
+# Spec constants from serde_artifacts
+# ---------------------------------------------------------------------------
+
+
+class TestSerdeArtifactSpecs:
+    """Test that the spec constants from serde_artifacts are well-formed."""
+
+    def test_view_cache_artifact_spec(self) -> None:
+        """VIEW_CACHE_ARTIFACT_SPEC has expected properties."""
+        from serde_artifacts import VIEW_CACHE_ARTIFACT_SPEC, ViewCacheArtifact
+
+        assert VIEW_CACHE_ARTIFACT_SPEC.canonical_name == "view_cache_artifact_v1"
+        assert VIEW_CACHE_ARTIFACT_SPEC.payload_type is ViewCacheArtifact
+        assert len(VIEW_CACHE_ARTIFACT_SPEC.schema_fingerprint) == 32
+
+    def test_run_manifest_spec(self) -> None:
+        """RUN_MANIFEST_SPEC has expected properties."""
+        from serde_artifacts import RUN_MANIFEST_SPEC, RunManifest
+
+        assert RUN_MANIFEST_SPEC.canonical_name == "run_manifest_v1"
+        assert RUN_MANIFEST_SPEC.payload_type is RunManifest
+        assert len(RUN_MANIFEST_SPEC.schema_fingerprint) == 32
+
+    def test_plan_schedule_spec(self) -> None:
+        """PLAN_SCHEDULE_SPEC has expected properties."""
+        from serde_artifacts import PLAN_SCHEDULE_SPEC, PlanScheduleArtifact
+
+        assert PLAN_SCHEDULE_SPEC.canonical_name == "plan_schedule_v1"
+        assert PLAN_SCHEDULE_SPEC.payload_type is PlanScheduleArtifact
+
+
+# ---------------------------------------------------------------------------
+# record_artifact backward compatibility
+# ---------------------------------------------------------------------------
+
+
+class TestRecordArtifactCompatibility:
+    """Test that record_artifact accepts both ArtifactSpec and str."""
+
+    def test_record_artifact_with_string(self) -> None:
+        """Recording with a string name preserves existing behavior."""
+        from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
+
+        sink = InMemoryDiagnosticsSink()
+        sink.record_artifact("test_string_v1", {"key": "value"})
+        artifacts = sink.get_artifacts("test_string_v1")
+        assert len(artifacts) == 1
+        assert artifacts[0]["key"] == "value"
+
+    def test_record_artifact_with_spec(self) -> None:
+        """Recording with an ArtifactSpec resolves canonical name."""
+        from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
+
+        sink = InMemoryDiagnosticsSink()
+        spec = ArtifactSpec(
+            canonical_name="typed_test_v1",
+            description="Typed test artifact.",
+        )
+        sink.record_artifact(spec, {"key": "value"})
+        artifacts = sink.get_artifacts("typed_test_v1")
+        assert len(artifacts) == 1
+        assert artifacts[0]["key"] == "value"
+
+    def test_record_artifact_spec_in_snapshot(self) -> None:
+        """Artifacts recorded via spec appear in snapshot by canonical name."""
+        from datafusion_engine.lineage.diagnostics import InMemoryDiagnosticsSink
+
+        sink = InMemoryDiagnosticsSink()
+        spec = ArtifactSpec(
+            canonical_name="snap_test_v1",
+            description="Snapshot test.",
+        )
+        sink.record_artifact(spec, {"a": 1})
+        sink.record_artifact("other_v1", {"b": 2})
+        snapshot = sink.artifacts_snapshot()
+        assert "snap_test_v1" in snapshot
+        assert "other_v1" in snapshot
+
+    def test_diagnostics_recorder_with_spec(self) -> None:
+        """DiagnosticsRecorder accepts ArtifactSpec for record_artifact."""
+        from datafusion_engine.lineage.diagnostics import (
+            DiagnosticsContext,
+            DiagnosticsRecorder,
+            InMemoryDiagnosticsSink,
+        )
+
+        sink = InMemoryDiagnosticsSink()
+        context = DiagnosticsContext(session_id="test", operation_id="op")
+        recorder = DiagnosticsRecorder(sink, context)
+        spec = ArtifactSpec(
+            canonical_name="recorder_test_v1",
+            description="Recorder test.",
+        )
+        recorder.record_artifact(spec, {"data": True})
+        artifacts = sink.get_artifacts("recorder_test_v1")
+        assert len(artifacts) == 1
+
+    def test_diagnostics_recorder_adapter_with_spec(self) -> None:
+        """DiagnosticsRecorderAdapter accepts ArtifactSpec."""
+        from datafusion_engine.lineage.diagnostics import (
+            DiagnosticsRecorderAdapter,
+            InMemoryDiagnosticsSink,
+        )
+
+        sink = InMemoryDiagnosticsSink()
+        adapter = DiagnosticsRecorderAdapter(
+            sink=sink,
+            session_id="test-session",
+        )
+        spec = ArtifactSpec(
+            canonical_name="adapter_test_v1",
+            description="Adapter test.",
+        )
+        adapter.record_artifact(spec, {"value": 42})
+        artifacts = sink.get_artifacts("adapter_test_v1")
+        assert len(artifacts) == 1

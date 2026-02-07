@@ -46,6 +46,54 @@ _CHECKS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("from extract.helpers import",),
     ),
     (
+        "legacy extract.repo_scan shim import usage",
+        ("from extract.repo_scan import",),
+    ),
+    (
+        "legacy extract.repo_scan shim module import usage",
+        ("import extract.repo_scan",),
+    ),
+    (
+        "legacy extract.repo_blobs shim import usage",
+        ("from extract.repo_blobs import",),
+    ),
+    (
+        "legacy extract.repo_blobs shim module import usage",
+        ("import extract.repo_blobs",),
+    ),
+    (
+        "legacy extract.repo_scope shim import usage",
+        ("from extract.repo_scope import",),
+    ),
+    (
+        "legacy extract.repo_scope shim module import usage",
+        ("import extract.repo_scope",),
+    ),
+    (
+        "legacy extract.cache_utils shim import usage",
+        ("from extract.cache_utils import",),
+    ),
+    (
+        "legacy extract.cache_utils shim module import usage",
+        ("import extract.cache_utils",),
+    ),
+    (
+        "legacy extract.coordination.helpers import usage",
+        ("from extract.coordination.helpers import",),
+    ),
+    (
+        "legacy extract.coordination.helpers module import usage",
+        ("import extract.coordination.helpers",),
+    ),
+    (
+        "legacy semantics.adapters import usage",
+        ("from semantics.adapters import",),
+    ),
+    (
+        "legacy semantics.adapters module import usage",
+        ("import semantics.adapters",),
+    ),
+    (
         "duplicate dataset-location map helper usage",
         ("_dataset_location_map(",),
     ),
@@ -72,6 +120,18 @@ _CHECKS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "non-boundary register_dataset_df usage",
         ("register_dataset_df(",),
+    ),
+    (
+        "SemanticRuntimeConfig symbol usage",
+        ("SemanticRuntimeConfig",),
+    ),
+    (
+        "semantics.runtime import usage",
+        ("from semantics.runtime import",),
+    ),
+    (
+        "incremental DataFusionExecutionFacade registration usage",
+        ("DataFusionExecutionFacade(", ".register_dataset("),
     ),
 )
 
@@ -110,7 +170,11 @@ def _is_allowlisted(path: Path) -> bool:
 
 
 def _is_catalog_from_profile_allowlisted(path: Path) -> bool:
-    """Check if a file is in the compile-boundary allowlist for dataset_catalog_from_profile."""
+    """Check whether a file is allowlisted for ``dataset_catalog_from_profile``.
+
+    Returns:
+        bool: ``True`` when the path matches the compile-boundary allowlist.
+    """
     normalized = str(path).replace("\\", "/")
     return any(
         normalized.endswith(suffix) if not suffix.endswith("/") else suffix in normalized
@@ -137,6 +201,7 @@ def _is_register_dataset_df_allowlisted(path: Path) -> bool:
 def _find_violations(root: Path) -> list[str]:
     findings: list[str] = []
     for path in _iter_python_files(root / "src"):
+        normalized = str(path).replace("\\", "/")
         text = path.read_text(encoding="utf-8")
         for label, patterns in _CHECKS:
             if all(pattern in text for pattern in patterns):
@@ -156,6 +221,12 @@ def _find_violations(root: Path) -> list[str]:
                 ):
                     continue
                 if "register_dataset_df(" in patterns and _is_register_dataset_df_allowlisted(path):
+                    continue
+                if (
+                    "DataFusionExecutionFacade(" in patterns
+                    and ".register_dataset(" in patterns
+                    and "src/semantics/incremental/" not in normalized
+                ):
                     continue
                 findings.append(f"{label}: {path}")
     return findings

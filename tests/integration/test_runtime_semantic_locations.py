@@ -14,6 +14,8 @@ from datafusion_engine.session.runtime import (
 )
 from schema_spec.dataset_spec_ops import dataset_spec_name, dataset_spec_schema
 from semantics.catalog.dataset_specs import dataset_spec
+from semantics.compile_context import dataset_bindings_for_profile
+from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
 from semantics.ir_pipeline import build_semantic_ir
 
 
@@ -54,3 +56,40 @@ def test_normalize_locations_use_semantic_ir(tmp_path: Path) -> None:
     expected_schema = _as_schema(dataset_spec_schema(spec))
     resolved_schema = _as_schema(dataset_spec_schema(sample_location.dataset_spec))
     assert expected_schema.equals(resolved_schema, check_metadata=True)
+
+
+def test_incremental_resolver_matches_compile_bindings(tmp_path: Path) -> None:
+    """Incremental runtime must resolve dataset locations from injected bindings."""
+    profile = DataFusionRuntimeProfile(
+        data_sources=DataSourceConfig(
+            semantic_output=SemanticOutputConfig(normalize_output_root=str(tmp_path))
+        ),
+    )
+    compile_bindings = dataset_bindings_for_profile(profile)
+    runtime = IncrementalRuntime.build(
+        IncrementalRuntimeBuildRequest(
+            profile=profile,
+            dataset_resolver=compile_bindings,
+        )
+    )
+
+    incremental_bindings = runtime.dataset_resolver
+    assert set(incremental_bindings.names()) == set(compile_bindings.names())
+
+    checked = 0
+    for dataset_name in ("repo_snapshot", "cpg_nodes", "cpg_edges"):
+        expected = compile_bindings.location(dataset_name)
+        if expected is None:
+            continue
+        resolved = incremental_bindings.location(dataset_name)
+        assert resolved is not None
+        assert str(resolved.path) == str(expected.path)
+        assert resolved.format == expected.format
+        checked += 1
+
+    if checked == 0:
+        first_name = next(iter(compile_bindings.names()))
+        expected = compile_bindings.require_location(first_name)
+        resolved = incremental_bindings.location(first_name)
+        assert resolved is not None
+        assert str(resolved.path) == str(expected.path)

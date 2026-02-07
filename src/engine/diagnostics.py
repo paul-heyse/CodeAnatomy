@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from serde_schema_registry import ArtifactSpec
+
 if TYPE_CHECKING:
     from datafusion_engine.session.facade import ExecutionResult
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -134,13 +136,15 @@ class EngineEventRecorder:
             return None
         return self.runtime_profile.diagnostics.diagnostics_sink
 
-    def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
+    def record_artifact(
+        self, name: ArtifactSpec | str, payload: Mapping[str, object]
+    ) -> None:
         """Record a diagnostics artifact.
 
         Parameters
         ----------
         name
-            Artifact name for the diagnostics sink.
+            Artifact spec or string name for the diagnostics sink.
         payload
             Artifact payload to record.
         """

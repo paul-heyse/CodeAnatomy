@@ -445,6 +445,149 @@ class SchemaTypeRegistry(Registry[str, SchemaTypeSpec], SnapshotRegistry[str, Sc
         self._entries.restore(snapshot)
 
 
+@dataclass(frozen=True)
+class ArtifactSpec:
+    """Typed artifact specification for record_artifact governance.
+
+    Link a canonical artifact name to its msgspec schema type for
+    validation and schema fingerprinting.
+    """
+
+    canonical_name: str
+    description: str
+    payload_type: type[msgspec.Struct] | None = None
+    version: int = 1
+    schema_fingerprint: str = ""
+
+    def __post_init__(self) -> None:
+        """Compute schema fingerprint when a payload type is present."""
+        if self.payload_type is not None and not self.schema_fingerprint:
+            schema_bytes = msgspec.json.encode(msgspec.json.schema(self.payload_type))
+            fingerprint = hash_sha256_hex(schema_bytes, length=32)
+            object.__setattr__(self, "schema_fingerprint", fingerprint)
+
+    def validate(self, payload: Mapping[str, object]) -> None:
+        """Validate a payload against the spec schema.
+
+        Parameters
+        ----------
+        payload
+            Artifact payload mapping to validate.
+
+        Raises
+        ------
+        msgspec.ValidationError
+            When the payload does not conform to the schema.
+        """
+        if self.payload_type is None:
+            return
+        msgspec.convert(payload, type=self.payload_type, strict=False)
+
+
+@dataclass
+class ArtifactSpecRegistry(Registry[str, ArtifactSpec], SnapshotRegistry[str, ArtifactSpec]):
+    """Registry for typed artifact specifications."""
+
+    _entries: MutableRegistry[str, ArtifactSpec] = field(default_factory=MutableRegistry)
+
+    def register(self, key: str, value: ArtifactSpec) -> None:
+        """Register an artifact spec by canonical name.
+
+        Parameters
+        ----------
+        key
+            Canonical artifact name.
+        value
+            Artifact specification.
+        """
+        self._entries.register(key, value, overwrite=True)
+
+    def get(self, key: str) -> ArtifactSpec | None:
+        """Return an artifact spec by canonical name.
+
+        Returns:
+        -------
+        ArtifactSpec | None
+            Artifact spec when registered.
+        """
+        return self._entries.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Return True when an artifact spec is registered.
+
+        Returns:
+        -------
+        bool
+            ``True`` when the artifact spec is registered.
+        """
+        return key in self._entries
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over registered artifact spec names.
+
+        Returns:
+        -------
+        Iterator[str]
+            Iterator of registered artifact spec names.
+        """
+        return iter(self._entries)
+
+    def __len__(self) -> int:
+        """Return the count of registered artifact specs.
+
+        Returns:
+        -------
+        int
+            Number of registered artifact specs.
+        """
+        return len(self._entries)
+
+    def snapshot(self) -> Mapping[str, ArtifactSpec]:
+        """Return a snapshot of registered artifact specs.
+
+        Returns:
+        -------
+        Mapping[str, ArtifactSpec]
+            Snapshot of artifact spec entries.
+        """
+        return self._entries.snapshot()
+
+    def restore(self, snapshot: Mapping[str, ArtifactSpec]) -> None:
+        """Restore artifact spec entries from a snapshot."""
+        self._entries.restore(snapshot)
+
+
+_ARTIFACT_SPEC_REGISTRY = ArtifactSpecRegistry()
+
+
+def artifact_spec_registry() -> ArtifactSpecRegistry:
+    """Return the artifact spec registry.
+
+    Returns:
+    -------
+    ArtifactSpecRegistry
+        Global artifact spec registry instance.
+    """
+    return _ARTIFACT_SPEC_REGISTRY
+
+
+def register_artifact_spec(spec: ArtifactSpec) -> ArtifactSpec:
+    """Register an artifact spec in the global registry.
+
+    Parameters
+    ----------
+    spec
+        Artifact specification to register.
+
+    Returns:
+    -------
+    ArtifactSpec
+        The registered artifact spec.
+    """
+    _ARTIFACT_SPEC_REGISTRY.register(spec.canonical_name, spec)
+    return spec
+
+
 _SCHEMA_REGISTRY = SchemaTypeRegistry()
 for _schema_type in _SCHEMA_TYPES:
     _SCHEMA_REGISTRY.register(
@@ -622,9 +765,13 @@ def write_openapi_docs(path: Path) -> None:
 
 __all__ = [
     "SCHEMA_TYPES",
+    "ArtifactSpec",
+    "ArtifactSpecRegistry",
     "SchemaTypeRegistry",
     "SchemaTypeSpec",
+    "artifact_spec_registry",
     "openapi_contract_payload",
+    "register_artifact_spec",
     "schema_components",
     "schema_contract_hash",
     "schema_contract_index",

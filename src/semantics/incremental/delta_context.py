@@ -21,7 +21,6 @@ from datafusion_engine.delta.maintenance import (
 )
 from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.delta.store_policy import resolve_delta_store_policy
-from datafusion_engine.session.facade import DataFusionExecutionFacade
 from semantics.incremental.plan_bundle_exec import execute_df_to_table
 from semantics.incremental.runtime import IncrementalRuntime, TempTableRegistry
 from storage.deltalake import StorageOptions
@@ -103,9 +102,7 @@ def read_delta_table_via_facade(
     """Read a Delta table via the DataFusion execution facade.
 
     Returns:
-    -------
-    pyarrow.Table
-        Materialized table from the Delta provider.
+        pyarrow.Table: Materialized table from the Delta provider.
     """
     with TempTableRegistry(context.runtime) as registry:
         df = register_delta_df(
@@ -134,9 +131,10 @@ def register_delta_df(
     """Register a Delta table in DataFusion and return a DataFrame.
 
     Returns:
-    -------
-    DataFrame
-        DataFusion DataFrame for the registered Delta table.
+        DataFrame: DataFusion DataFrame for the registered Delta table.
+
+    Raises:
+        ValueError: Raised when Delta registration fails for the requested table.
     """
     profile_location = context.dataset_resolver.location(name)
     resolved_store = context.resolve_storage(table_uri=str(path))
@@ -175,14 +173,15 @@ def register_delta_df(
         dataset_spec=dataset_spec,
         overrides=overrides,
     )
-    return DataFusionExecutionFacade(
-        ctx=context.runtime.session_runtime().ctx,
-        runtime_profile=context.runtime.profile,
-    ).register_dataset(
+    result = context.runtime.registry_facade.register_dataset(
         name=name,
         location=location,
         overwrite=True,
     )
+    if not result.success:
+        msg = result.error or f"Failed to register Delta dataset {name!r}."
+        raise ValueError(msg)
+    return context.runtime.session_runtime().ctx.table(name)
 
 
 def run_delta_maintenance_if_configured(

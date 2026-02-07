@@ -18,6 +18,7 @@ from datafusion_engine.schema.contracts import ValidationViolation
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from obs.otel.logs import emit_diagnostics_event
 from obs.otel.metrics import record_artifact_count
+from serde_schema_registry import ArtifactSpec
 from schema_spec.pandera_bridge import validation_policy_payload
 from schema_spec.system import ValidationPolicySpec
 from serde_msgspec import StructBaseCompat
@@ -49,13 +50,14 @@ class DiagnosticsCollector:
             emit_diagnostics_event(name, payload=row, event_kind="event")
         record_artifact_count(name, status="ok", attributes={"artifact.type": "event"})
 
-    def record_artifact(self, name: str, payload: Mapping[str, object]) -> None:
+    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, object]) -> None:
         """Append an artifact payload under a logical name."""
-        bucket = self.artifacts.setdefault(name, [])
+        resolved = name.canonical_name if isinstance(name, ArtifactSpec) else name
+        bucket = self.artifacts.setdefault(resolved, [])
         normalized = dict(payload)
         bucket.append(normalized)
-        emit_diagnostics_event(name, payload=normalized, event_kind="artifact")
-        record_artifact_count(name, status="ok", attributes={"artifact.type": "artifact"})
+        emit_diagnostics_event(resolved, payload=normalized, event_kind="artifact")
+        record_artifact_count(resolved, status="ok", attributes={"artifact.type": "artifact"})
 
     def record_event(self, name: str, properties: Mapping[str, object]) -> None:
         """Append an event payload under a logical name."""

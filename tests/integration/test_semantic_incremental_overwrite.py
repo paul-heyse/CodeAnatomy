@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from datafusion_engine.session.runtime import read_delta_as_reader
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, read_delta_as_reader
+from semantics.compile_context import dataset_bindings_for_profile
 from semantics.incremental.delta_context import DeltaAccessContext
 from semantics.incremental.delta_updates import OverwriteDatasetSpec, write_overwrite_dataset
-from semantics.incremental.runtime import IncrementalRuntime
+from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest
 from semantics.incremental.state_store import StateStore
 from tests.test_helpers.optional_deps import require_delta_extension, require_deltalake
 
@@ -18,7 +19,13 @@ require_delta_extension()
 
 
 def _runtime_or_skip() -> IncrementalRuntime:
-    runtime = IncrementalRuntime.build()
+    profile = DataFusionRuntimeProfile()
+    runtime = IncrementalRuntime.build(
+        IncrementalRuntimeBuildRequest(
+            profile=profile,
+            dataset_resolver=dataset_bindings_for_profile(profile),
+        )
+    )
     _ = runtime.session_context()
     return runtime
 

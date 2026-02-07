@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -10,6 +9,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.lineage.scan import ScanUnit
+from datafusion_engine.plan.bundle import DataFusionPlanBundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
 from datafusion_engine.views.graph import ViewNode
 from relspec.execution_plan import (
@@ -18,41 +18,36 @@ from relspec.execution_plan import (
     compile_execution_plan,
 )
 from relspec.inferred_deps import InferredDeps
+from serde_artifacts import PlanArtifacts
+
+_EMPTY_HASH = "0" * 64
 
 
-@dataclass(frozen=True)
-class _MockPlanArtifacts:
-    """Minimal plan artifacts payload for compatibility checks."""
-
-    @staticmethod
-    def _default_udf_snapshot() -> dict[str, object]:
-        return {
-            "scalar": [],
-            "aggregate": [],
-            "window": [],
-            "table": [],
-            "aliases": {},
-            "parameter_names": {},
-            "volatility": {},
-            "simplify": {},
-            "coerce_types": {},
-            "short_circuits": {},
-            "signature_inputs": {},
-            "return_types": {},
-        }
-
-    udf_snapshot: dict[str, object] = field(default_factory=_default_udf_snapshot)
-
-
-@dataclass(frozen=True)
-class _MockPlanBundle:
-    """Mock plan bundle for testing."""
-
-    plan_signature: str
-    lineage: tuple[str, ...] = ()
-    required_udfs: tuple[str, ...] = ("stable_id",)
-    required_rewrite_tags: tuple[str, ...] = ("test_tag",)
-    artifacts: _MockPlanArtifacts = field(default_factory=_MockPlanArtifacts)
+def _minimal_plan_artifacts() -> PlanArtifacts:
+    """Return a minimally valid plan-artifacts payload for tests."""
+    return PlanArtifacts(
+        explain_tree_rows=None,
+        explain_verbose_rows=None,
+        explain_analyze_duration_ms=None,
+        explain_analyze_output_rows=None,
+        df_settings={},
+        planning_env_snapshot={},
+        planning_env_hash=_EMPTY_HASH,
+        rulepack_snapshot=None,
+        rulepack_hash=None,
+        information_schema_snapshot={},
+        information_schema_hash=_EMPTY_HASH,
+        substrait_validation=None,
+        logical_plan_proto=None,
+        optimized_plan_proto=None,
+        execution_plan_proto=None,
+        udf_snapshot_hash=_EMPTY_HASH,
+        function_registry_hash=_EMPTY_HASH,
+        rewrite_tags=(),
+        domain_planner_names=(),
+        udf_snapshot={},
+        udf_planner_snapshot=None,
+    )
 
 
 def _minimal_view_node(name: str, deps: tuple[str, ...] = ()) -> ViewNode:
@@ -91,7 +86,7 @@ def _view_node_with_plan_bundle(
     deps: tuple[str, ...] = (),
     lineage: tuple[str, ...] = (),
 ) -> ViewNode:
-    """Create a ViewNode with a mock plan bundle.
+    """Create a ViewNode with a typed DataFusion plan bundle.
 
     Parameters
     ----------
@@ -107,17 +102,28 @@ def _view_node_with_plan_bundle(
     Returns:
     -------
     ViewNode
-        View node with mock plan bundle attached.
+        View node with plan bundle attached.
     """
     node = _minimal_view_node(name, deps)
-    bundle = _MockPlanBundle(plan_signature=plan_signature, lineage=lineage)
+    bundle = DataFusionPlanBundle(
+        df=node.builder(SessionContext()),
+        logical_plan=object(),
+        optimized_logical_plan=object(),
+        execution_plan=None,
+        substrait_bytes=b"",
+        plan_fingerprint=plan_signature,
+        artifacts=_minimal_plan_artifacts(),
+        required_udfs=("stable_id",),
+        required_rewrite_tags=("test_tag",),
+        plan_details={"lineage": list(lineage)},
+    )
     return ViewNode(
         name=node.name,
         deps=node.deps,
         builder=node.builder,
         contract_builder=node.contract_builder,
         required_udfs=node.required_udfs,
-        plan_bundle=bundle,  # type: ignore[arg-type]
+        plan_bundle=bundle,
         cache_policy=node.cache_policy,
     )
 
@@ -162,7 +168,7 @@ def _stub_plan_with_delta_pins(monkeypatch: pytest.MonkeyPatch) -> None:
                 task_name=node.name,
                 output=node.name,
                 inputs=tuple(node.deps),
-                plan_fingerprint=getattr(node.plan_bundle, "plan_signature", ""),
+                plan_fingerprint=getattr(node.plan_bundle, "plan_fingerprint", ""),
                 required_udfs=tuple(getattr(node.plan_bundle, "required_udfs", ())),
                 required_rewrite_tags=tuple(getattr(node.plan_bundle, "required_rewrite_tags", ())),
             )
@@ -208,7 +214,7 @@ def _stub_plan_with_delta_pins(monkeypatch: pytest.MonkeyPatch) -> None:
                 task_name=node.name,
                 output=node.name,
                 inputs=tuple(node.deps),
-                plan_fingerprint=getattr(node.plan_bundle, "plan_signature", ""),
+                plan_fingerprint=getattr(node.plan_bundle, "plan_fingerprint", ""),
                 required_udfs=tuple(getattr(node.plan_bundle, "required_udfs", ())),
                 required_rewrite_tags=tuple(getattr(node.plan_bundle, "required_rewrite_tags", ())),
             )

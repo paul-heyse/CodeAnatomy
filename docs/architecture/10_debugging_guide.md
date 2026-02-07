@@ -669,18 +669,20 @@ print(f"Orphan files: {len(orphans)}")
 
 ```python
 # 1. Run extraction in isolation
-from extract.repo_scan import scan_repository
+from pathlib import Path
 
-scan_result = scan_repository(
-    repo_root=Path("."),
-    include_patterns=["**/*.py"],
-    debug=True,
+from extract.scanning.repo_scan import RepoScanOptions, scan_repo
+
+repo_files = scan_repo(
+    Path("."),
+    options=RepoScanOptions(include_globs=("**/*.py",)),
 )
 
 # 2. Check file discovery
-print(f"Files found: {len(scan_result.files)}")
-for f in scan_result.files[:10]:
-    print(f"  {f.path}: {f.size} bytes")
+repo_table = repo_files.to_arrow_table() if hasattr(repo_files, "to_arrow_table") else repo_files
+print(f"Files found: {repo_table.num_rows}")
+for path in repo_table.column("path").to_pylist()[:10]:
+    print(f"  {path}")
 
 # 3. Run single-file extraction
 from extract.libcst import extract_cst_nodes

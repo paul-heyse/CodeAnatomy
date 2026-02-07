@@ -868,13 +868,12 @@ from hamilton_pipeline.modules.extract_execution_registry import (
     register_extract_executor,
 )
 
-_EXTRACT_EXECUTORS_REGISTERED = False
+_EXTRACT_EXECUTOR_REGISTRATION_STATE: dict[str, bool] = {"registered": False}
 
 
 def _ensure_extract_executors_registered() -> None:
     """Populate extract executor registry once per process."""
-    global _EXTRACT_EXECUTORS_REGISTERED
-    if _EXTRACT_EXECUTORS_REGISTERED:
+    if _EXTRACT_EXECUTOR_REGISTRATION_STATE["registered"]:
         return
 
     register_extract_executor("repo_scan", _extract_repo_scan)
@@ -886,7 +885,18 @@ def _ensure_extract_executors_registered() -> None:
     register_extract_executor("tree_sitter", _extract_tree_sitter)
     register_extract_executor("bytecode", _extract_bytecode)
     register_extract_executor("symtable", _extract_symtable)
-    _EXTRACT_EXECUTORS_REGISTERED = True
+    _EXTRACT_EXECUTOR_REGISTRATION_STATE["registered"] = True
+
+
+def ensure_extract_executors_registered(*, force: bool = False) -> None:
+    """Populate extract executor registry for extract-template dispatch.
+
+    Args:
+        force: When ``True``, reset registration state before initializing.
+    """
+    if force:
+        _EXTRACT_EXECUTOR_REGISTRATION_STATE["registered"] = False
+    _ensure_extract_executors_registered()
 
 
 def _dataset_location_for_output(
@@ -983,7 +993,7 @@ def _execute_extract_task(
         except KeyError as exc:
             msg = f"Unsupported extract template {task_spec.extractor!r}."
             raise ValueError(msg) from exc
-        _ensure_extract_executors_registered()
+        ensure_extract_executors_registered()
         adapter_key = adapter_executor_key(adapter.name)
         handler = get_extract_executor(adapter_key)
         outputs = handler(inputs, extract_session, profile_name)

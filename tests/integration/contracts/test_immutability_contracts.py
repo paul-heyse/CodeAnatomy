@@ -13,6 +13,11 @@ from dataclasses import FrozenInstanceError, dataclass
 
 import pytest
 
+from datafusion_engine.session.runtime import (
+    DataSourceConfig,
+    FeatureGatesConfig,
+    SemanticOutputConfig,
+)
 from tests.test_helpers.immutability import assert_immutable_assignment
 
 
@@ -38,17 +43,22 @@ def _cdf_cursor_create() -> object:
 
 
 def _semantic_runtime_config_default() -> object:
-    from semantics.runtime import SemanticRuntimeConfig
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
-    return SemanticRuntimeConfig(output_locations={})
+    return DataFusionRuntimeProfile()
 
 
 def _semantic_runtime_config_custom() -> object:
-    from semantics.runtime import SemanticRuntimeConfig
+    from datafusion_engine.session.runtime import (
+        DataFusionRuntimeProfile,
+        DataSourceConfig,
+        SemanticOutputConfig,
+    )
 
-    return SemanticRuntimeConfig(
-        output_locations={"view_a": "/tmp/a"},
-        schema_evolution_enabled=True,
+    return DataFusionRuntimeProfile(
+        data_sources=DataSourceConfig(
+            semantic_output=SemanticOutputConfig(output_root="/tmp/a"),
+        ),
     )
 
 
@@ -129,23 +139,25 @@ _CASES: tuple[tuple[str, _MutationCase], ...] = (
         ),
     ),
     (
-        "semantic_runtime_config.cdf_enabled",
+        "runtime_profile.features",
         _MutationCase(
             factory=_semantic_runtime_config_default,
-            attribute="cdf_enabled",
-            attempted_value=True,
-            expected_exception=FrozenInstanceError,
-            expected_value=False,
+            attribute="features",
+            attempted_value=None,
+            expected_exception=AttributeError,
+            expected_value=FeatureGatesConfig(),
         ),
     ),
     (
-        "semantic_runtime_config.schema_evolution_enabled",
+        "runtime_profile.data_sources",
         _MutationCase(
             factory=_semantic_runtime_config_custom,
-            attribute="schema_evolution_enabled",
-            attempted_value=False,
-            expected_exception=FrozenInstanceError,
-            expected_value=True,
+            attribute="data_sources",
+            attempted_value=None,
+            expected_exception=AttributeError,
+            expected_value=DataSourceConfig(
+                semantic_output=SemanticOutputConfig(output_root="/tmp/a"),
+            ),
         ),
     ),
     (

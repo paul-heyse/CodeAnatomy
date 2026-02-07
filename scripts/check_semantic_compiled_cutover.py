@@ -65,6 +65,14 @@ _CHECKS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "task_execution-local extract adapter executor mapping",
         ("_EXTRACT_ADAPTER_EXECUTORS",),
     ),
+    (
+        "duplicate listing registration (_register_listing_table)",
+        ("def _register_listing_table(",),
+    ),
+    (
+        "non-boundary register_dataset_df usage",
+        ("register_dataset_df(",),
+    ),
 )
 
 _ALLOWLIST_SUFFIXES: tuple[str, ...] = (
@@ -83,6 +91,12 @@ _CATALOG_FROM_PROFILE_ALLOWLIST: tuple[str, ...] = (
 
 _EXTRACT_EXECUTOR_ALLOWLIST: tuple[str, ...] = (
     "src/hamilton_pipeline/modules/extract_execution_registry.py",
+)
+
+_REGISTER_DATASET_DF_ALLOWLIST: tuple[str, ...] = (
+    "src/datafusion_engine/dataset/registration.py",
+    "src/datafusion_engine/registry_facade.py",
+    "src/datafusion_engine/session/facade.py",
 )
 
 
@@ -112,6 +126,14 @@ def _is_extract_executor_allowlisted(path: Path) -> bool:
     )
 
 
+def _is_register_dataset_df_allowlisted(path: Path) -> bool:
+    normalized = str(path).replace("\\", "/")
+    return any(
+        normalized.endswith(suffix) if not suffix.endswith("/") else suffix in normalized
+        for suffix in _REGISTER_DATASET_DF_ALLOWLIST
+    )
+
+
 def _find_violations(root: Path) -> list[str]:
     findings: list[str] = []
     for path in _iter_python_files(root / "src"):
@@ -129,10 +151,11 @@ def _find_violations(root: Path) -> list[str]:
                     and _is_catalog_from_profile_allowlisted(path)
                 ):
                     continue
-                if (
-                    "_EXTRACT_ADAPTER_EXECUTORS" in patterns
-                    and _is_extract_executor_allowlisted(path)
+                if "_EXTRACT_ADAPTER_EXECUTORS" in patterns and _is_extract_executor_allowlisted(
+                    path
                 ):
+                    continue
+                if "register_dataset_df(" in patterns and _is_register_dataset_df_allowlisted(path):
                     continue
                 findings.append(f"{label}: {path}")
     return findings

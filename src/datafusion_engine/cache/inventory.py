@@ -15,13 +15,10 @@ from datafusion_engine.arrow.field_builders import (
     list_field,
     string_field,
 )
-from datafusion_engine.dataset.registration import (
-    DatasetRegistrationOptions,
-    register_dataset_df,
-)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from obs.otel.run_context import get_run_id
 
 if TYPE_CHECKING:
@@ -135,11 +132,13 @@ def ensure_cache_inventory_table(
         )
     location = DatasetLocation(path=str(table_path), format="delta")
     try:
-        register_dataset_df(
-            ctx,
+        DataFusionExecutionFacade(
+            ctx=ctx,
+            runtime_profile=profile,
+        ).register_dataset(
             name=CACHE_INVENTORY_TABLE_NAME,
             location=location,
-            options=DatasetRegistrationOptions(runtime_profile=profile),
+            overwrite=True,
         )
     except (RuntimeError, ValueError, TypeError, OSError, KeyError) as exc:
         profile.record_artifact(

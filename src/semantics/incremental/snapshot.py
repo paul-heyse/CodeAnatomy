@@ -182,11 +182,7 @@ def _merge_repo_snapshot(
         "source.mtime_ns <> target.mtime_ns"
     )
     ctx = context.runtime.session_runtime().ctx
-    from semantics.compile_context import dataset_bindings_for_profile
-
-    dataset_location = dataset_bindings_for_profile(context.runtime.profile).location(
-        "repo_snapshot"
-    )
+    dataset_location = context.dataset_resolver.location("repo_snapshot")
     extra_constraints = delta_constraints_for_location(dataset_location)
     from datafusion_engine.delta.service import DeltaMutationRequest
     from storage.deltalake import DeltaMergeArrowRequest

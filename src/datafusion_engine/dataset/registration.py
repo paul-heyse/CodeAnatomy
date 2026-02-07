@@ -1402,7 +1402,30 @@ def _invalidate_information_schema_cache(
 
 def _register_dataset_with_context(context: DataFusionRegistrationContext) -> DataFrame:
     if context.options.provider == "listing":
-        df = _register_listing_table(context)
+        from datafusion_engine.tables.registration import (
+            register_listing_table as _register_listing_authority,
+        )
+
+        result = _register_listing_authority(context)
+        _, _, fingerprint_details = _update_table_provider_fingerprints(
+            context.ctx,
+            name=context.name,
+            schema=result.df.schema(),
+        )
+        details = dict(result.details)
+        if fingerprint_details:
+            details.update(fingerprint_details)
+        _record_table_provider_artifact(
+            context.runtime_profile,
+            artifact=_TableProviderArtifact(
+                name=context.name,
+                provider=result.provider,
+                provider_kind=str(details.get("registration_mode", "listing_table")),
+                source=None,
+                details=details,
+            ),
+        )
+        df = _maybe_cache(context, result.df)
         cache_prefix = None
     else:
         df, cache_prefix = _register_delta_provider(context)
@@ -1428,45 +1451,6 @@ def _register_dataset_with_context(context: DataFusionRegistrationContext) -> Da
     )
     _validate_schema_contracts(context)
     return df
-
-
-def _register_listing_table(context: DataFusionRegistrationContext) -> DataFrame:
-    """Register a listing table by delegating to the tables authority.
-
-    Delegate core registration to
-    ``datafusion_engine.tables.registration.register_listing_table`` and then
-    layer on fingerprint updates, provider artifact recording, and optional
-    caching that are specific to the dataset registration path.
-
-    Returns:
-    -------
-    DataFrame
-        Registered (and optionally cached) DataFusion DataFrame.
-    """
-    from datafusion_engine.tables.registration import (
-        register_listing_table as _register_listing_authority,
-    )
-
-    result = _register_listing_authority(context)
-    _, _, fingerprint_details = _update_table_provider_fingerprints(
-        context.ctx,
-        name=context.name,
-        schema=result.df.schema(),
-    )
-    details = dict(result.details)
-    if fingerprint_details:
-        details.update(fingerprint_details)
-    _record_table_provider_artifact(
-        context.runtime_profile,
-        artifact=_TableProviderArtifact(
-            name=context.name,
-            provider=result.provider,
-            provider_kind=str(details.get("registration_mode", "listing_table")),
-            source=None,
-            details=details,
-        ),
-    )
-    return _maybe_cache(context, result.df)
 
 
 @dataclass(frozen=True)

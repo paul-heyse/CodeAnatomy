@@ -38,6 +38,7 @@ from datafusion_engine.schema.registry import (
     relationship_schema_for,
     relationship_schema_names,
 )
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from semantics.catalog.dataset_specs import (
     dataset_schema as semantic_dataset_schema,
 )
@@ -561,10 +562,10 @@ def _register_dataset(
     if ctx.table_exist(name):
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
             adapter.deregister_table(name)
-    from datafusion_engine.registry_facade import registry_facade_for_context
-
-    registry_facade = registry_facade_for_context(ctx, runtime_profile=profile)
-    _ = registry_facade.register_dataset_df(
+    _ = DataFusionExecutionFacade(
+        ctx=ctx,
+        runtime_profile=profile,
+    ).register_dataset(
         name=name,
         location=location,
         overwrite=True,

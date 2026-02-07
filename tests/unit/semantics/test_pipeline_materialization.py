@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+import msgspec
 import pyarrow as pa
 import pytest
 
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from datafusion_engine.io.write import WriteViewRequest
-from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
 from schema_spec.dataset_spec_ops import (
     dataset_spec_delta_constraints,
     dataset_spec_delta_feature_gate,
@@ -22,7 +23,6 @@ from schema_spec.dataset_spec_ops import (
 from schema_spec.system import DeltaPolicyBundle
 from semantics.catalog.dataset_specs import dataset_spec
 from semantics.pipeline import SemanticOutputWriteContext, _write_semantic_output
-from semantics.runtime import SemanticRuntimeConfig
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -84,7 +84,6 @@ def test_write_semantic_output_applies_write_policy_and_schema_policy(
     pipeline = _FakePipeline(captured)
     ctx = _FakeContext(view_name)
     profile = DataFusionRuntimeProfile()
-    runtime_config = SemanticRuntimeConfig(schema_evolution_enabled=True)
 
     def _apply_delta_store_policy(
         loc: DatasetLocation, *, policy: object | None
@@ -119,7 +118,6 @@ def test_write_semantic_output_applies_write_policy_and_schema_policy(
         ctx=cast("SessionContext", ctx),
         pipeline=cast("WritePipeline", pipeline),
         runtime_profile=profile,
-        runtime_config=runtime_config,
         schema_policy=SchemaEvolutionPolicy(),
     )
 
@@ -153,8 +151,8 @@ def test_write_semantic_output_disables_schema_evolution(
     captured = _CapturedWrite()
     pipeline = _FakePipeline(captured)
     ctx = _FakeContext(view_name)
-    profile = DataFusionRuntimeProfile()
-    runtime_config = SemanticRuntimeConfig(schema_evolution_enabled=False)
+    features = FeatureGatesConfig(enable_schema_evolution_adapter=False)
+    profile = msgspec.structs.replace(DataFusionRuntimeProfile(), features=features)
 
     def _apply_delta_store_policy(
         loc: DatasetLocation, *, policy: object | None
@@ -189,7 +187,6 @@ def test_write_semantic_output_disables_schema_evolution(
         ctx=cast("SessionContext", ctx),
         pipeline=cast("WritePipeline", pipeline),
         runtime_profile=profile,
-        runtime_config=runtime_config,
         schema_policy=SchemaEvolutionPolicy(),
     )
 

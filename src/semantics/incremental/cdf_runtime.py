@@ -76,12 +76,10 @@ class _CdfReadRecord:
 
 
 def _profile_dataset_location(
-    profile: DataFusionRuntimeProfile,
+    context: DeltaAccessContext,
     dataset_name: str,
 ) -> DatasetLocation | None:
-    from semantics.compile_context import dataset_bindings_for_profile
-
-    return dataset_bindings_for_profile(profile).location(dataset_name)
+    return context.dataset_resolver.location(dataset_name)
 
 
 def _resolve_cdf_inputs(
@@ -94,7 +92,7 @@ def _resolve_cdf_inputs(
     if not path.exists():
         return None
     runtime = context.runtime
-    profile_location = _profile_dataset_location(runtime.profile, dataset_name)
+    profile_location = _profile_dataset_location(context, dataset_name)
     resolved_store = context.resolve_storage(table_uri=str(path))
     resolved_storage = resolved_store.storage_options or {}
     resolved_log_storage = resolved_store.log_storage_options or {}
@@ -256,7 +254,7 @@ def read_cdf_changes(
         ValueError: If CDF state cannot be initialized.
     """
     profile = context.runtime.profile
-    profile_location = _profile_dataset_location(profile, dataset_name)
+    profile_location = _profile_dataset_location(context, dataset_name)
     cdf_policy = (
         profile_location.resolved.delta_cdf_policy if profile_location is not None else None
     )

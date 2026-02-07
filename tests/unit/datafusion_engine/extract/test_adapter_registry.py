@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import datafusion_engine.extract.adapter_registry as adapter_registry
+from datafusion_engine.extract import adapter_registry
 from datafusion_engine.extract.adapter_registry import (
     adapter_executor_key,
     extract_template_adapters,

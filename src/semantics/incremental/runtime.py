@@ -21,6 +21,8 @@ from utils.uuid_factory import uuid7_hex
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
+    from semantics.program_manifest import ManifestDatasetResolver
+
 
 @dataclass
 class IncrementalRuntime:
@@ -28,6 +30,7 @@ class IncrementalRuntime:
 
     profile: DataFusionRuntimeProfile
     _session_runtime: SessionRuntime
+    _dataset_resolver: ManifestDatasetResolver | None = None
     determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
 
     @classmethod
@@ -37,6 +40,7 @@ class IncrementalRuntime:
         profile: DataFusionRuntimeProfile | None = None,
         profile_name: str = "default",
         determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT,
+        dataset_resolver: ManifestDatasetResolver | None = None,
     ) -> IncrementalRuntime:
         """Create a runtime with default DataFusion profile.
 
@@ -51,8 +55,24 @@ class IncrementalRuntime:
         return cls(
             profile=runtime_profile,
             _session_runtime=runtime_profile.session_runtime(),
+            _dataset_resolver=dataset_resolver,
             determinism_tier=determinism_tier,
         )
+
+    @property
+    def dataset_resolver(self) -> ManifestDatasetResolver:
+        """Return the dataset resolver, falling back to compile-boundary lookup.
+
+        Returns:
+        -------
+        ManifestDatasetResolver
+            Dataset resolver from manifest bindings.
+        """
+        if self._dataset_resolver is not None:
+            return self._dataset_resolver
+        from semantics.compile_context import dataset_bindings_for_profile
+
+        return dataset_bindings_for_profile(self.profile)
 
     def session_runtime(self) -> SessionRuntime:
         """Return the cached DataFusion SessionRuntime.

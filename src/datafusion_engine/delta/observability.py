@@ -24,10 +24,6 @@ from datafusion_engine.arrow.field_builders import (
     list_field,
     string_field,
 )
-from datafusion_engine.dataset.registration import (
-    DatasetRegistrationOptions,
-    register_dataset_df,
-)
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.delta.payload import (
     msgpack_or_none,
@@ -44,6 +40,7 @@ from datafusion_engine.io.write import (
     WritePipeline,
     WriteRequest,
 )
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from obs.otel.run_context import get_run_id
 from serde_msgspec import StructBaseStrict
 from utils.value_coercion import coerce_int
@@ -537,11 +534,13 @@ def _ensure_observability_table(
         return None
     location = DatasetLocation(path=str(table_path), format="delta")
     try:
-        register_dataset_df(
-            ctx,
+        DataFusionExecutionFacade(
+            ctx=ctx,
+            runtime_profile=profile,
+        ).register_dataset(
             name=name,
             location=location,
-            options=DatasetRegistrationOptions(runtime_profile=profile),
+            overwrite=True,
         )
     except (
         DataFusionEngineError,

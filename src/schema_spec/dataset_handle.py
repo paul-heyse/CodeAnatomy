@@ -99,16 +99,15 @@ class DatasetHandle:
         datafusion.dataframe.DataFrame
             Registered DataFrame for the dataset location.
         """
-        from datafusion_engine.dataset.registration import (
-            DatasetRegistrationOptions,
-            register_dataset_df,
-        )
+        from datafusion_engine.session.facade import DataFusionExecutionFacade
 
-        return register_dataset_df(
-            session_runtime.ctx,
+        return DataFusionExecutionFacade(
+            ctx=session_runtime.ctx,
+            runtime_profile=session_runtime.profile,
+        ).register_dataset(
             name=dataset_spec_name(self.spec),
             location=location,
-            options=DatasetRegistrationOptions(runtime_profile=session_runtime.profile),
+            overwrite=True,
         )
 
     @staticmethod

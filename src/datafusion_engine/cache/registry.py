@@ -16,6 +16,7 @@ from datafusion_engine.cache.inventory import (
     record_cache_inventory_entry,
 )
 from datafusion_engine.delta.contracts import enforce_schema_evolution
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from storage.deltalake import DeltaSchemaRequest
 from utils.registry_protocol import MutableRegistry, Registry, SnapshotRegistry
 
@@ -216,11 +217,6 @@ def register_cached_delta_table(
     snapshot_version: int | None,
 ) -> None:
     """Register a Delta cache table with optional snapshot pinning."""
-    from datafusion_engine.dataset.registration import (
-        DatasetRegistrationOptions,
-        register_dataset_df,
-    )
-
     pinned = location
     if snapshot_version is not None:
         pinned = msgspec.structs.replace(
@@ -228,11 +224,13 @@ def register_cached_delta_table(
             delta_version=snapshot_version,
             delta_timestamp=None,
         )
-    register_dataset_df(
-        ctx,
+    DataFusionExecutionFacade(
+        ctx=ctx,
+        runtime_profile=profile,
+    ).register_dataset(
         name=name,
         location=pinned,
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        overwrite=True,
     )
 
 

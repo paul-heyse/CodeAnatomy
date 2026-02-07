@@ -960,9 +960,7 @@ def _execute_extract_task(
     *,
     spec: TaskExecutionSpec,
 ) -> dict[str, TableLike]:
-    runtime = inputs.runtime
-    session_runtime = runtime.execution
-    if session_runtime is None:
+    if inputs.runtime.execution is None:
         msg = "RuntimeArtifacts.execution must be configured for extract execution."
         raise ValueError(msg)
     from datafusion_engine.extract.adapter_registry import (

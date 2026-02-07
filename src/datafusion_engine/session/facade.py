@@ -772,6 +772,7 @@ class DataFusionExecutionFacade:
         name: str,
         location: DatasetLocation,
         cache_policy: DataFusionCachePolicy | None = None,
+        overwrite: bool = False,
     ) -> DataFrame:
         """Register a dataset location via the registry bridge.
 
@@ -779,6 +780,7 @@ class DataFusionExecutionFacade:
             name: Dataset name to register.
             location: Dataset location descriptor.
             cache_policy: Optional cache policy override.
+            overwrite: Whether to overwrite an existing registration.
 
         Returns:
             DataFrame: Result.
@@ -799,6 +801,7 @@ class DataFusionExecutionFacade:
             name=name,
             location=location,
             cache_policy=cache_policy,
+            overwrite=overwrite,
         )
 
     def register_cdf_inputs(

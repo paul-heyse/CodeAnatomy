@@ -104,9 +104,7 @@ def _plan_scan_units(
     runtime: IncrementalRuntime,
 ) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
     session_runtime = runtime.session_runtime()
-    from semantics.compile_context import dataset_bindings_for_profile
-
-    dataset_resolver = dataset_bindings_for_profile(runtime.profile)
+    dataset_resolver = runtime.dataset_resolver
     scan_units: dict[str, ScanUnit] = {}
     for scan in extract_lineage(
         bundle.optimized_logical_plan,

@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pyarrow as pa
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.dataset.registration import (
-    DatasetRegistrationOptions,
-    register_dataset_df,
-)
 from datafusion_engine.dataset.registry import (
     DatasetLocation,
     DatasetLocationOverrides,
@@ -24,9 +21,13 @@ from datafusion_engine.delta.maintenance import (
 )
 from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.delta.store_policy import resolve_delta_store_policy
+from datafusion_engine.session.facade import DataFusionExecutionFacade
 from semantics.incremental.plan_bundle_exec import execute_df_to_table
 from semantics.incremental.runtime import IncrementalRuntime, TempTableRegistry
 from storage.deltalake import StorageOptions
+
+if TYPE_CHECKING:
+    from semantics.program_manifest import ManifestDatasetResolver
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,17 @@ class DeltaAccessContext:
 
     runtime: IncrementalRuntime
     storage: DeltaStorageOptions = field(default_factory=DeltaStorageOptions)
+
+    @property
+    def dataset_resolver(self) -> ManifestDatasetResolver:
+        """Return the dataset resolver from the incremental runtime.
+
+        Returns:
+        -------
+        ManifestDatasetResolver
+            Dataset resolver from manifest bindings.
+        """
+        return self.runtime.dataset_resolver
 
     def storage_kwargs(self) -> dict[str, StorageOptions | None]:
         """Return storage option kwargs for Delta helpers.
@@ -126,9 +138,7 @@ def register_delta_df(
     DataFrame
         DataFusion DataFrame for the registered Delta table.
     """
-    from semantics.compile_context import dataset_bindings_for_profile
-
-    profile_location = dataset_bindings_for_profile(context.runtime.profile).location(name)
+    profile_location = context.dataset_resolver.location(name)
     resolved_store = context.resolve_storage(table_uri=str(path))
     resolved_storage = resolved_store.storage_options or {}
     resolved_log_storage = resolved_store.log_storage_options or {}
@@ -165,11 +175,13 @@ def register_delta_df(
         dataset_spec=dataset_spec,
         overrides=overrides,
     )
-    return register_dataset_df(
-        context.runtime.session_runtime().ctx,
+    return DataFusionExecutionFacade(
+        ctx=context.runtime.session_runtime().ctx,
+        runtime_profile=context.runtime.profile,
+    ).register_dataset(
         name=name,
         location=location,
-        options=DatasetRegistrationOptions(runtime_profile=context.runtime.profile),
+        overwrite=True,
     )
 
 
@@ -200,9 +212,7 @@ def run_delta_maintenance_if_configured(
     if dataset_name is None:
         dataset_location = None
     else:
-        from semantics.compile_context import dataset_bindings_for_profile
-
-        dataset_location = dataset_bindings_for_profile(runtime_profile).location(dataset_name)
+        dataset_location = context.dataset_resolver.location(dataset_name)
     plan = resolve_delta_maintenance_plan(
         DeltaMaintenancePlanInput(
             dataset_location=dataset_location,

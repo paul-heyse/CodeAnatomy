@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
-from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -23,8 +22,27 @@ from obs.diagnostics import DiagnosticsCollector
 from obs.otel import OtelBootstrapOptions, configure_otel
 from relspec.pipeline_policy import DiagnosticsPolicy
 
-if TYPE_CHECKING:
-    from semantics.runtime import SemanticBuildOptions
+
+@dataclass(frozen=True)
+class SemanticBuildOptions:
+    """Options for semantic build operations.
+
+    Attributes:
+    ----------
+    use_cdf
+        Whether to enable CDF-aware incremental joins.
+    validate_inputs
+        Whether to validate input schemas.
+    collect_metrics
+        Whether to collect operation metrics.
+    trace_fingerprints
+        Whether to trace plan fingerprints.
+    """
+
+    use_cdf: bool = False
+    validate_inputs: bool = True
+    collect_metrics: bool = True
+    trace_fingerprints: bool = True
 
 
 @dataclass(frozen=True)
@@ -133,4 +151,4 @@ def build_engine_session(
     )
 
 
-__all__ = ["EngineSessionOptions", "build_engine_session"]
+__all__ = ["EngineSessionOptions", "SemanticBuildOptions", "build_engine_session"]

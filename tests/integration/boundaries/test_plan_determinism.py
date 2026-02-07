@@ -134,20 +134,18 @@ class TestPlanDeterminism:
         This validates the principle that semantic config changes should be
         detectable, supporting fingerprint invalidation.
         """
-        from semantics.runtime import SemanticRuntimeConfig
+        from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
 
-        config_a = SemanticRuntimeConfig(
-            cdf_enabled=False,
-            schema_evolution_enabled=True,
+        profile_a = DataFusionRuntimeProfile(
+            features=FeatureGatesConfig(enable_delta_cdf=False),
         )
-        config_b = SemanticRuntimeConfig(
-            cdf_enabled=True,
-            schema_evolution_enabled=True,
+        profile_b = DataFusionRuntimeProfile(
+            features=FeatureGatesConfig(enable_delta_cdf=True),
         )
 
         # Different configs should be distinguishable
-        assert config_a.cdf_enabled != config_b.cdf_enabled
-        assert config_a != config_b
+        assert profile_a.features.enable_delta_cdf != profile_b.features.enable_delta_cdf
+        assert profile_a != profile_b
 
     def test_irrelevant_config_change_does_not_affect_structure(self) -> None:
         """Verify non-semantic config changes don't affect graph structure.

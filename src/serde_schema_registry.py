@@ -474,7 +474,7 @@ class ArtifactSpec:
         payload
             Artifact payload mapping to validate.
 
-        Raises
+        Raises:
         ------
         msgspec.ValidationError
             When the payload does not conform to the schema.
@@ -586,6 +586,22 @@ def register_artifact_spec(spec: ArtifactSpec) -> ArtifactSpec:
     """
     _ARTIFACT_SPEC_REGISTRY.register(spec.canonical_name, spec)
     return spec
+
+
+def get_artifact_spec(name: str) -> ArtifactSpec | None:
+    """Return an artifact spec by canonical name.
+
+    Parameters
+    ----------
+    name
+        Canonical artifact name to look up.
+
+    Returns:
+    -------
+    ArtifactSpec | None
+        Artifact spec when registered, otherwise ``None``.
+    """
+    return _ARTIFACT_SPEC_REGISTRY.get(name)
 
 
 _SCHEMA_REGISTRY = SchemaTypeRegistry()
@@ -770,6 +786,7 @@ __all__ = [
     "SchemaTypeRegistry",
     "SchemaTypeSpec",
     "artifact_spec_registry",
+    "get_artifact_spec",
     "openapi_contract_payload",
     "register_artifact_spec",
     "schema_components",

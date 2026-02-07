@@ -45,6 +45,29 @@ if TYPE_CHECKING:
     from serde_schema_registry import ArtifactSpec
 
 
+def _resolve_artifact_name(name: ArtifactSpec | str) -> str:
+    """Resolve an artifact name from an ArtifactSpec or string.
+
+    Use duck typing to avoid circular imports with serde_schema_registry.
+
+    Parameters
+    ----------
+    name
+        ArtifactSpec instance or string name.
+
+    Returns:
+    -------
+    str
+        Resolved canonical artifact name.
+    """
+    canonical = getattr(name, "canonical_name", None)
+    if isinstance(canonical, str):
+        return canonical
+    if isinstance(name, str):
+        return name
+    return str(name)
+
+
 class DiagnosticsSink(Protocol):
     """Protocol for diagnostics sinks.
 
@@ -52,13 +75,13 @@ class DiagnosticsSink(Protocol):
     artifacts and events from DataFusion operations.
     """
 
-    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, Any]) -> None:
+    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
         """Record a named artifact.
 
         Parameters
         ----------
-        name : ArtifactSpec | str
-            Artifact spec or string type identifier (e.g., "sql_compilation").
+        name : str
+            Artifact type identifier (e.g., "sql_compilation", "write_operation").
         payload : Mapping[str, Any]
             Artifact payload with type-specific fields.
         """
@@ -160,18 +183,17 @@ class InMemoryDiagnosticsSink:
     artifacts: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
-    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, Any]) -> None:
+    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
         """Record a named artifact.
 
         Parameters
         ----------
-        name : ArtifactSpec | str
-            Artifact spec or string type identifier.
+        name : str
+            Artifact type identifier.
         payload : dict[str, Any]
             Artifact payload.
         """
-        resolved = name.canonical_name if isinstance(name, ArtifactSpec) else name
-        self.artifacts.append((resolved, dict(payload)))
+        self.artifacts.append((name, dict(payload)))
 
     def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
         """Record an event.
@@ -326,7 +348,7 @@ class DiagnosticsRecorder:
         """
         if not self.enabled or self._sink is None:
             return
-        resolved = name.canonical_name if isinstance(name, ArtifactSpec) else name
+        resolved = _resolve_artifact_name(name)
         self._sink.record_artifact(resolved, payload)
 
     def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
@@ -536,10 +558,9 @@ class DiagnosticsRecorderAdapter:
         )
         return DiagnosticsRecorder(self.sink, context)
 
-    def record_artifact(self, name: ArtifactSpec | str, payload: Mapping[str, Any]) -> None:
+    def record_artifact(self, name: str, payload: Mapping[str, Any]) -> None:
         """Record a named artifact via DiagnosticsRecorder."""
-        resolved = name.canonical_name if isinstance(name, ArtifactSpec) else name
-        self._recorder(resolved).record_artifact(resolved, payload)
+        self._recorder(name).record_artifact(name, payload)
 
     def record_event(self, name: str, properties: Mapping[str, Any]) -> None:
         """Record a single event via DiagnosticsRecorder."""
@@ -608,7 +629,7 @@ def record_artifact(
     """
     if profile is None or profile.diagnostics.diagnostics_sink is None:
         return
-    resolved = name.canonical_name if isinstance(name, ArtifactSpec) else name
+    resolved = _resolve_artifact_name(name)
     recorder = recorder_for_profile(profile, operation_id=resolved)
     if recorder is None:
         return

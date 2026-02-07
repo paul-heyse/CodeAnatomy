@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -82,6 +82,9 @@ class PlanSignals:
     stats: NormalizedPlanStats | None = None
     scan_compat: tuple[ScanUnitCompatSummary, ...] = ()
     plan_fingerprint: str | None = None
+    explain_analyze_duration_ms: float | None = None
+    explain_analyze_output_rows: int | None = None
+    repartition_count: int | None = None
 
 
 def _extract_stats(plan_details: object) -> NormalizedPlanStats:
@@ -97,21 +100,25 @@ def _extract_stats(plan_details: object) -> NormalizedPlanStats:
     NormalizedPlanStats
         Normalized statistics with source provenance.
     """
-    if not isinstance(plan_details, dict):
+    if not isinstance(plan_details, Mapping):
         return NormalizedPlanStats()
     raw_stats = plan_details.get("statistics")
-    if isinstance(raw_stats, dict):
+    if isinstance(raw_stats, Mapping):
         num_rows_raw = raw_stats.get("num_rows")
         if num_rows_raw is None:
             num_rows_raw = raw_stats.get("row_count")
-        num_rows = int(num_rows_raw) if num_rows_raw is not None else None
+        num_rows = _int_or_none(num_rows_raw)
         total_bytes_raw = raw_stats.get("total_bytes")
-        total_bytes = int(total_bytes_raw) if total_bytes_raw is not None else None
+        if total_bytes_raw is None:
+            total_bytes_raw = raw_stats.get("total_byte_size")
+        total_bytes = _int_or_none(total_bytes_raw)
+        source = raw_stats.get("source")
+        stats_source = source if isinstance(source, str) and source else "plan_details"
         return NormalizedPlanStats(
             num_rows=num_rows,
             total_bytes=total_bytes,
             partition_count=_int_or_none(plan_details.get("partition_count")),
-            stats_source="plan_details",
+            stats_source=stats_source,
         )
     return NormalizedPlanStats(
         partition_count=_int_or_none(plan_details.get("partition_count")),
@@ -139,6 +146,33 @@ def _int_or_none(value: object) -> int | None:
     if isinstance(value, (float, str)):
         try:
             return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _float_or_none(value: object) -> float | None:
+    """Coerce a value to float or return None.
+
+    Parameters
+    ----------
+    value
+        Value to coerce.
+
+    Returns:
+    -------
+    float | None
+        Float value or ``None`` if not coercible.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
         except (TypeError, ValueError):
             return None
     return None
@@ -218,8 +252,12 @@ def extract_plan_signals(
     except (ValueError, AttributeError):
         lineage = None
 
+    details: Mapping[str, object] = (
+        bundle.plan_details if isinstance(bundle.plan_details, Mapping) else {}
+    )
+
     # Stats normalization
-    stats = _extract_stats(bundle.plan_details)
+    stats = _extract_stats(details)
 
     # Scan unit compatibility
     resolved_units = scan_units if scan_units is not None else bundle.scan_units
@@ -231,7 +269,41 @@ def extract_plan_signals(
         stats=stats,
         scan_compat=scan_compat,
         plan_fingerprint=bundle.plan_fingerprint,
+        explain_analyze_duration_ms=_float_or_none(details.get("explain_analyze_duration_ms")),
+        explain_analyze_output_rows=_int_or_none(details.get("explain_analyze_output_rows")),
+        repartition_count=_int_or_none(details.get("repartition_count")),
     )
+
+
+def plan_signals_payload(signals: PlanSignals) -> dict[str, object]:
+    """Return a JSON/msgpack-friendly payload for plan signals."""
+    stats = signals.stats
+    return {
+        "plan_fingerprint": signals.plan_fingerprint,
+        "stats": (
+            {
+                "num_rows": stats.num_rows,
+                "total_bytes": stats.total_bytes,
+                "partition_count": stats.partition_count,
+                "stats_source": stats.stats_source,
+            }
+            if stats is not None
+            else None
+        ),
+        "scan_compat": [
+            {
+                "dataset_name": item.dataset_name,
+                "compatible": item.compatible,
+                "reason": item.reason,
+            }
+            for item in signals.scan_compat
+        ],
+        "lineage_present": signals.lineage is not None,
+        "schema_present": signals.schema is not None,
+        "explain_analyze_duration_ms": signals.explain_analyze_duration_ms,
+        "explain_analyze_output_rows": signals.explain_analyze_output_rows,
+        "repartition_count": signals.repartition_count,
+    }
 
 
 __all__ = [
@@ -239,4 +311,5 @@ __all__ = [
     "PlanSignals",
     "ScanUnitCompatSummary",
     "extract_plan_signals",
+    "plan_signals_payload",
 ]

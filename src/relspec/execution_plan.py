@@ -12,6 +12,7 @@ import rustworkx as rx
 
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
 from datafusion_engine.plan.pipeline import plan_with_delta_pins
+from datafusion_engine.plan.signals import PlanSignals, extract_plan_signals
 from relspec.evidence import (
     EvidenceCatalog,
     initial_evidence_from_views,
@@ -66,6 +67,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
     from schema_spec.system import ContractSpec, DatasetSpec
+    from semantics.compile_context import SemanticExecutionContext
 
     OutputContract = ContractSpec | DatasetSpec | object
 else:
@@ -110,6 +112,7 @@ class ExecutionPlan:
     dependency_map: Mapping[str, tuple[str, ...]]
     dataset_specs: Mapping[str, DatasetSpec]
     active_tasks: frozenset[str]
+    plan_signals_by_task: Mapping[str, PlanSignals] = field(default_factory=dict)
     runtime_profile: DataFusionRuntimeProfile | None = None
     session_runtime_hash: str | None = None
     scan_units: tuple[ScanUnit, ...] = ()
@@ -131,6 +134,7 @@ class ExecutionPlanRequest:
     view_nodes: Sequence[ViewNode]
     snapshot: Mapping[str, object] | None = None
     runtime_profile: DataFusionRuntimeProfile | None = None
+    semantic_context: SemanticExecutionContext | None = None
     requested_task_names: Iterable[str] | None = None
     impacted_task_names: Iterable[str] | None = None
     allow_partial: bool = False
@@ -218,6 +222,7 @@ class _PlanAssembly:
     schedule: TaskSchedule
     schedule_metadata: Mapping[str, TaskScheduleMetadata]
     plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
+    plan_signals_by_task: Mapping[str, PlanSignals]
     task_plan_metrics: Mapping[str, TaskPlanMetrics]
     task_costs: Mapping[str, float]
     signature: str
@@ -249,6 +254,7 @@ class _PrunedPlanMaps:
     plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
     output_contracts: Mapping[str, OutputContract]
     dependency_map: Mapping[str, tuple[str, ...]]
+    plan_signals_by_task: Mapping[str, PlanSignals]
     task_plan_metrics: Mapping[str, TaskPlanMetrics]
     task_costs: Mapping[str, float]
     lineage_by_view: Mapping[str, LineageReport]
@@ -265,6 +271,7 @@ class _PrunedPlanComponents:
     plan_snapshots: Mapping[str, PlanFingerprintSnapshot]
     output_contracts: Mapping[str, OutputContract]
     dependency_map: Mapping[str, tuple[str, ...]]
+    plan_signals_by_task: Mapping[str, PlanSignals]
     task_plan_metrics: Mapping[str, TaskPlanMetrics]
     task_costs: Mapping[str, float]
     scan_units: tuple[ScanUnit, ...]
@@ -345,8 +352,13 @@ def _assemble_plan_components(
         plan_fingerprints,
         plan_task_signatures,
     )
-    cost_context, plan_metrics, task_costs = _plan_cost_context(
+    signals_by_task = _plan_signals_by_task(
         view_nodes=context.view_nodes,
+        scan_units=context.scan_units,
+        scan_keys_by_task=context.scan_keys_by_task,
+    )
+    cost_context, plan_metrics, task_costs = _plan_cost_context(
+        plan_signals_by_task=signals_by_task,
         scan_units_by_task=context.scan_task_units_by_name,
         reduction=reduction,
         enable_metric_scheduling=request.enable_metric_scheduling,
@@ -381,6 +393,7 @@ def _assemble_plan_components(
         schedule=schedule,
         schedule_metadata=schedule_meta,
         plan_snapshots=plan_snapshots,
+        plan_signals_by_task=signals_by_task,
         task_plan_metrics=plan_metrics,
         task_costs=task_costs,
         signature=signature,
@@ -395,7 +408,7 @@ def _assemble_plan_components(
 
 def _plan_cost_context(
     *,
-    view_nodes: Sequence[ViewNode],
+    plan_signals_by_task: Mapping[str, PlanSignals],
     scan_units_by_task: Mapping[str, ScanUnit],
     reduction: TaskDependencyReduction,
     enable_metric_scheduling: bool,
@@ -404,8 +417,8 @@ def _plan_cost_context(
 
     Parameters
     ----------
-    view_nodes
-        View nodes used to derive task metrics.
+    plan_signals_by_task
+        Canonical plan signals used to derive task metrics.
     scan_units_by_task
         Mapping of task names to scan units for cost derivation.
     reduction
@@ -419,7 +432,7 @@ def _plan_cost_context(
         Cost context, plan metrics, and task cost mapping.
     """
     if enable_metric_scheduling:
-        plan_metrics = _task_plan_metrics(view_nodes)
+        plan_metrics = _task_plan_metrics(plan_signals_by_task)
         task_costs = _task_costs_from_metrics(
             plan_metrics,
             scan_units_by_task=scan_units_by_task,
@@ -481,7 +494,7 @@ def compile_execution_plan(
         plan_task_signatures=plan_task_signatures,
         reduction=reduction,
     )
-    return ExecutionPlan(
+    plan = ExecutionPlan(
         view_nodes=context.view_nodes,
         task_graph=context.task_graph,
         task_dependency_graph=reduction.full_graph,
@@ -504,6 +517,7 @@ def compile_execution_plan(
         critical_path_length_weighted=assembly.diagnostics.critical_path_length_weighted,
         bottom_level_costs=assembly.bottom_costs,
         slack_by_task=assembly.slack_by_task,
+        plan_signals_by_task=assembly.plan_signals_by_task,
         task_plan_metrics=assembly.task_plan_metrics,
         task_costs=assembly.task_costs,
         dependency_map=assembly.dependency_map,
@@ -521,6 +535,35 @@ def compile_execution_plan(
         requested_task_names=context.requested_task_names,
         impacted_task_names=context.impacted_task_names,
         allow_partial=context.allow_partial,
+    )
+    _record_plan_signals_artifact(
+        runtime_profile=context.runtime_profile,
+        plan_signature=plan.plan_signature,
+        signals_by_task=plan.plan_signals_by_task,
+    )
+    return plan
+
+
+def _record_plan_signals_artifact(
+    *,
+    runtime_profile: DataFusionRuntimeProfile | None,
+    plan_signature: str,
+    signals_by_task: Mapping[str, PlanSignals],
+) -> None:
+    if runtime_profile is None:
+        return
+    from datafusion_engine.plan.signals import plan_signals_payload
+
+    runtime_profile.record_artifact(
+        "plan_signals_v1",
+        {
+            "plan_signature": plan_signature,
+            "task_count": len(signals_by_task),
+            "tasks": {
+                name: plan_signals_payload(signals)
+                for name, signals in sorted(signals_by_task.items())
+            },
+        },
     )
 
 
@@ -639,6 +682,7 @@ def _prepare_plan_context(
         view_nodes=nodes_with_ast,
         runtime_profile=runtime_profile,
         snapshot=request.snapshot,
+        semantic_context=request.semantic_context,
     )
     _validate_plan_bundle_compatibility(
         view_nodes=planned.view_nodes,
@@ -1458,29 +1502,40 @@ def _plan_snapshot_map(
     return snapshots
 
 
-def _task_plan_metrics(view_nodes: Sequence[ViewNode]) -> dict[str, TaskPlanMetrics]:
-    metrics: dict[str, TaskPlanMetrics] = {}
+def _plan_signals_by_task(
+    *,
+    view_nodes: Sequence[ViewNode],
+    scan_units: Sequence[ScanUnit],
+    scan_keys_by_task: Mapping[str, tuple[str, ...]],
+) -> dict[str, PlanSignals]:
+    signals: dict[str, PlanSignals] = {}
+    scan_by_key = {unit.key: unit for unit in scan_units}
     for node in view_nodes:
         bundle = node.plan_bundle
         if bundle is None:
             continue
-        details = getattr(bundle, "plan_details", {})
-        if not isinstance(details, Mapping):
-            continue
-        duration_ms = _float_from_value(details.get("explain_analyze_duration_ms"))
-        output_rows = _int_from_value(details.get("explain_analyze_output_rows"))
-        partition_count = _int_from_value(details.get("partition_count"))
-        repartition_count = _int_from_value(details.get("repartition_count"))
-        stats_row_count, stats_total_bytes, stats_available = _stats_from_payload(
-            details.get("statistics")
+        keys = scan_keys_by_task.get(node.name, ())
+        scoped_units = tuple(scan_by_key[key] for key in keys if key in scan_by_key)
+        signals[node.name] = extract_plan_signals(bundle, scan_units=scoped_units)
+    return signals
+
+
+def _task_plan_metrics(
+    plan_signals_by_task: Mapping[str, PlanSignals],
+) -> dict[str, TaskPlanMetrics]:
+    metrics: dict[str, TaskPlanMetrics] = {}
+    for task_name, signals in plan_signals_by_task.items():
+        stats = signals.stats
+        stats_available = stats is not None and (
+            stats.num_rows is not None or stats.total_bytes is not None
         )
-        metrics[node.name] = TaskPlanMetrics(
-            duration_ms=duration_ms,
-            output_rows=output_rows,
-            partition_count=partition_count,
-            repartition_count=repartition_count,
-            stats_row_count=stats_row_count,
-            stats_total_bytes=stats_total_bytes,
+        metrics[task_name] = TaskPlanMetrics(
+            duration_ms=signals.explain_analyze_duration_ms,
+            output_rows=signals.explain_analyze_output_rows,
+            partition_count=stats.partition_count if stats is not None else None,
+            repartition_count=signals.repartition_count,
+            stats_row_count=stats.num_rows if stats is not None else None,
+            stats_total_bytes=stats.total_bytes if stats is not None else None,
             stats_available=stats_available,
         )
     return metrics
@@ -1740,6 +1795,11 @@ def _pruned_plan_maps(
         for name, deps in plan.dependency_map.items()
         if name in active_tasks
     }
+    pruned_plan_signals = {
+        name: plan.plan_signals_by_task[name]
+        for name in sorted(active_tasks)
+        if name in plan.plan_signals_by_task
+    }
     pruned_task_metrics = {
         name: plan.task_plan_metrics[name]
         for name in sorted(active_tasks)
@@ -1754,6 +1814,7 @@ def _pruned_plan_maps(
         plan_snapshots=pruned_snapshots,
         output_contracts=pruned_contracts,
         dependency_map=pruned_dependency_map,
+        plan_signals_by_task=pruned_plan_signals,
         task_plan_metrics=pruned_task_metrics,
         task_costs=pruned_task_costs,
         lineage_by_view=pruned_lineage_by_view,
@@ -1781,6 +1842,7 @@ def _pruned_plan_components(
         plan_snapshots=pruned_maps.plan_snapshots,
         output_contracts=pruned_maps.output_contracts,
         dependency_map=pruned_maps.dependency_map,
+        plan_signals_by_task=pruned_maps.plan_signals_by_task,
         task_plan_metrics=pruned_maps.task_plan_metrics,
         task_costs=pruned_maps.task_costs,
         scan_units=pruned_scan.scan_units,
@@ -1877,6 +1939,7 @@ def prune_execution_plan(
         critical_path_length_weighted=diagnostics.critical_path_length_weighted,
         bottom_level_costs=bottom_costs,
         slack_by_task=slack_by_task,
+        plan_signals_by_task=components.plan_signals_by_task,
         task_plan_metrics=components.task_plan_metrics,
         task_costs=components.task_costs,
         dependency_map=components.dependency_map,

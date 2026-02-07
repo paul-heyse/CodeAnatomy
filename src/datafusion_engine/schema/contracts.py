@@ -1158,15 +1158,85 @@ def schema_contract_from_contract_spec(
     )
 
 
+@dataclass(frozen=True)
+class SchemaDivergence:
+    """Result of comparing a spec schema against a plan-derived schema.
+
+    Parameters
+    ----------
+    has_divergence
+        True when any structural difference exists between the schemas.
+    added_columns
+        Column names present in the plan schema but absent from the spec.
+    removed_columns
+        Column names present in the spec schema but absent from the plan.
+    type_mismatches
+        Columns with type differences: ``(column_name, spec_type, plan_type)``.
+    """
+
+    has_divergence: bool
+    added_columns: tuple[str, ...]
+    removed_columns: tuple[str, ...]
+    type_mismatches: tuple[tuple[str, str, str], ...]
+
+
+def compute_schema_divergence(
+    spec_schema: pa.Schema,
+    plan_schema: pa.Schema,
+) -> SchemaDivergence:
+    """Compare a spec-declared schema against a plan-derived schema.
+
+    Identify added columns, removed columns, and type mismatches to
+    detect schema drift between the dataset specification and the
+    actual DataFusion plan output.
+
+    Parameters
+    ----------
+    spec_schema
+        Expected schema from the dataset specification.
+    plan_schema
+        Actual schema derived from the DataFusion plan.
+
+    Returns:
+    -------
+    SchemaDivergence
+        Divergence result with structural differences.
+    """
+    spec_names = {field.name for field in spec_schema}
+    plan_names = {field.name for field in plan_schema}
+
+    added = tuple(sorted(plan_names - spec_names))
+    removed = tuple(sorted(spec_names - plan_names))
+
+    type_mismatches: list[tuple[str, str, str]] = []
+    for name in sorted(spec_names & plan_names):
+        spec_field = spec_schema.field(name)
+        plan_field = plan_schema.field(name)
+        spec_type = str(spec_field.type)
+        plan_type = str(plan_field.type)
+        if spec_type != plan_type:
+            type_mismatches.append((name, spec_type, plan_type))
+
+    has_divergence = bool(added or removed or type_mismatches)
+    return SchemaDivergence(
+        has_divergence=has_divergence,
+        added_columns=added,
+        removed_columns=removed,
+        type_mismatches=tuple(type_mismatches),
+    )
+
+
 __all__ = [
     "ConstraintSpec",
     "ConstraintType",
     "ContractRegistry",
     "EvolutionPolicy",
     "SchemaContract",
+    "SchemaDivergence",
     "TableConstraints",
     "ValidationViolation",
     "ViolationType",
+    "compute_schema_divergence",
     "constraint_key_fields",
     "delta_check_constraints",
     "delta_constraints_for_location",

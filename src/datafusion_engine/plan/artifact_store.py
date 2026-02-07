@@ -19,6 +19,7 @@ from datafusion_engine.dataset.registry import (
 )
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
+from datafusion_engine.plan.signals import extract_plan_signals, plan_signals_payload
 from datafusion_engine.sql.options import planning_sql_options
 from datafusion_engine.views.graph import extract_lineage_from_bundle
 from schema_spec.system import dataset_spec_from_schema
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
     from datafusion_engine.views.graph import ViewNode
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 
-PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v9"
+PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v10"
 WRITE_ARTIFACTS_TABLE_NAME = "datafusion_write_artifacts_v2"
 HAMILTON_EVENTS_TABLE_NAME = "datafusion_hamilton_events_v2"
 _ARTIFACTS_DIRNAME = PLAN_ARTIFACTS_TABLE_NAME
@@ -852,6 +853,9 @@ def build_plan_artifact_row(
         scan_payload=scan_payload,
         plan_identity_hash=plan_identity_hash,
     )
+    signals_payload = plan_signals_payload(
+        extract_plan_signals(request.bundle, scan_units=request.scan_units)
+    )
     return PlanArtifactRow(
         event_time_unix_ms=int(time.time() * 1000),
         profile_name=_profile_name(profile),
@@ -891,6 +895,7 @@ def build_plan_artifact_row(
         scan_units_msgpack=_msgpack_payload(scan_payload),
         scan_keys=scan_keys_payload,
         plan_details_msgpack=_msgpack_payload(plan_details_payload),
+        plan_signals_msgpack=_msgpack_payload(signals_payload),
         udf_snapshot_msgpack=_msgpack_payload(request.bundle.artifacts.udf_snapshot),
         udf_planner_snapshot_msgpack=_msgpack_or_none(
             request.bundle.artifacts.udf_planner_snapshot

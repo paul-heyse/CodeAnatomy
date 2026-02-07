@@ -88,6 +88,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.lineage.diagnostics import DiagnosticsRecorder
+    from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.streaming import StreamingExecutionResult
     from obs.datafusion_runs import DataFusionRun
@@ -285,6 +286,68 @@ def _normalize_stats_dataset_name(name: str) -> str:
     return normalized
 
 
+_ADAPTIVE_SMALL_TABLE_THRESHOLD = 10_000
+_ADAPTIVE_LARGE_TABLE_THRESHOLD = 1_000_000
+_ADAPTIVE_SMALL_FILE_CAP = 32 * 1024 * 1024  # 32 MB
+_ADAPTIVE_LARGE_FILE_FLOOR = 128 * 1024 * 1024  # 128 MB
+
+
+def compute_adaptive_file_size(
+    estimated_rows: int,
+    base_target: int,
+) -> int:
+    """Compute adaptive target file size from plan statistics.
+
+    Scale the base target file size up or down based on estimated
+    row count. Small tables use smaller files to avoid overhead;
+    large tables use larger files for efficiency.
+
+    Parameters
+    ----------
+    estimated_rows
+        Estimated row count from plan statistics.
+    base_target
+        Base target file size in bytes from write policy.
+
+    Returns:
+    -------
+    int
+        Adaptive target file size in bytes.
+    """
+    if estimated_rows < _ADAPTIVE_SMALL_TABLE_THRESHOLD:
+        return min(base_target, _ADAPTIVE_SMALL_FILE_CAP)
+    if estimated_rows > _ADAPTIVE_LARGE_TABLE_THRESHOLD:
+        return max(base_target, _ADAPTIVE_LARGE_FILE_FLOOR)
+    return base_target
+
+
+def plan_stats_from_bundle(
+    bundle: DataFusionPlanBundle,
+) -> dict[str, object] | None:
+    """Extract statistics from a plan bundle's plan details.
+
+    Read raw statistics from the existing ``plan_details`` structure.
+    Do NOT add new properties or methods to ``DataFusionPlanBundle``.
+
+    Parameters
+    ----------
+    bundle
+        DataFusion plan bundle with plan details.
+
+    Returns:
+    -------
+    dict[str, object] | None
+        Raw statistics dict, or None when unavailable.
+    """
+    details = bundle.plan_details
+    if not isinstance(details, dict):
+        return None
+    stats = details.get("statistics")
+    if isinstance(stats, dict):
+        return stats
+    return None
+
+
 def _delta_policy_context(
     *,
     options: Mapping[str, object],
@@ -292,6 +355,7 @@ def _delta_policy_context(
     request_partition_by: tuple[str, ...] | None,
     schema_columns: tuple[str, ...] | None = None,
     lineage_columns: tuple[str, ...] | None = None,
+    plan_bundle: DataFusionPlanBundle | None = None,
 ) -> _DeltaPolicyContext:
     write_policy = _delta_write_policy_override(options)
     if write_policy is None:
@@ -327,6 +391,18 @@ def _delta_policy_context(
         options,
         fallback=write_policy.target_file_size if write_policy is not None else None,
     )
+    # Plan-derived file size enrichment (10.3)
+    if plan_bundle is not None and target_file_size is not None:
+        stats = plan_stats_from_bundle(plan_bundle)
+        if stats is not None:
+            row_count_raw = stats.get("num_rows") or stats.get("row_count")
+            if isinstance(row_count_raw, (int, float, str)):
+                try:
+                    row_count = int(row_count_raw)
+                except (TypeError, ValueError):
+                    row_count = None
+                if row_count is not None:
+                    target_file_size = compute_adaptive_file_size(row_count, target_file_size)
     storage_options, log_storage_options = _delta_storage_options(
         options,
         dataset_location=dataset_location,

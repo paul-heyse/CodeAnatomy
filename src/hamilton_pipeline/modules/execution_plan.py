@@ -15,6 +15,7 @@ from hamilton_pipeline.modules import task_execution
 from hamilton_pipeline.plan_artifacts import build_plan_artifact_bundle
 from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from relspec.evidence import EvidenceCatalog
+from relspec.execution_authority import ExecutionAuthorityContext
 from relspec.execution_plan import ExecutionPlan
 from relspec.graph_edge_validation import validate_graph_edges
 
@@ -46,6 +47,7 @@ class PlanModuleOptions:
 
     module_name: str = "hamilton_pipeline.generated_plan"
     record_evidence_artifacts: bool = True
+    execution_authority_context: ExecutionAuthorityContext | None = None
 
 
 def build_execution_plan_module(
@@ -118,6 +120,7 @@ def _plan_node_functions(
         ("plan_scan_units", _plan_scan_units_node()),
         ("plan_scan_keys_by_task", _plan_scan_keys_by_task_node()),
         ("plan_scan_units_by_task_name", _plan_scan_units_by_task_name_node()),
+        ("execution_authority_context", _execution_authority_context_node(options)),
         ("plan_context", _plan_context_node()),
         ("task_graph", _task_graph_node()),
         ("evidence_catalog", _evidence_catalog_node(options)),
@@ -206,6 +209,20 @@ def _plan_scan_units_by_task_name_node() -> object:
     return plan_scan_units_by_task_name
 
 
+def _execution_authority_context_node(options: PlanModuleOptions) -> object:
+    @apply_tag(
+        TagPolicy(
+            layer="plan",
+            kind="context",
+            artifact="execution_authority_context",
+        )
+    )
+    def execution_authority_context() -> ExecutionAuthorityContext | None:
+        return options.execution_authority_context
+
+    return execution_authority_context
+
+
 def _plan_context_node() -> object:
     @apply_tag(TagPolicy(layer="plan", kind="context", artifact="plan_context"))
     def plan_context(
@@ -213,12 +230,14 @@ def _plan_context_node() -> object:
         active_task_names: frozenset[str],
         plan_bundles_by_task: Mapping[str, DataFusionPlanBundle],
         plan_scan_inputs: task_execution.PlanScanInputs,
+        execution_authority_context: ExecutionAuthorityContext | None = None,
     ) -> task_execution.PlanExecutionContext:
         return task_execution.PlanExecutionContext(
             plan_signature=plan_signature,
             active_task_names=active_task_names,
             plan_bundles_by_task=dict(plan_bundles_by_task),
             plan_scan_inputs=plan_scan_inputs,
+            execution_authority_context=execution_authority_context,
         )
 
     return plan_context

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, NoReturn, cast
 
 import pyarrow as pa
 from hamilton.function_modifiers import inject, resolve_from_config, source
@@ -34,6 +34,7 @@ from hamilton_pipeline.tag_policy import TagPolicy, apply_tag
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
 from relspec.evidence import EvidenceCatalog
+from relspec.execution_authority import ExecutionAuthorityContext
 from relspec.runtime_artifacts import ExecutionArtifactSpec, RuntimeArtifacts, TableLike
 
 if TYPE_CHECKING:
@@ -42,9 +43,11 @@ if TYPE_CHECKING:
     from datafusion_engine.plan.bundle import DataFusionPlanBundle
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from engine.session import EngineSession
+    from extract.coordination.evidence_plan import EvidencePlan
     from extract.extractors.scip.extract import ScipExtractOptions
     from extract.session import ExtractSession
     from hamilton_pipeline.types import RepoScanConfig
+    from semantics.compile_context import SemanticExecutionContext
     from semantics.incremental.config import SemanticIncrementalConfig
     from semantics.program_manifest import ManifestDatasetResolver
 else:
@@ -55,6 +58,7 @@ else:
     ExtractSession = object
     ScipExtractOptions = object
     RepoScanConfig = object
+    SemanticExecutionContext = object
     SemanticIncrementalConfig = object
     ManifestDatasetResolver = object
     try:
@@ -84,6 +88,7 @@ class TaskExecutionInputs:
     cache_salt: str
     scip_index_path: str | None
     scip_extract_options: ScipExtractOptions
+    execution_authority_context: ExecutionAuthorityContext | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +129,7 @@ class PlanExecutionContext:
     active_task_names: frozenset[str]
     plan_bundles_by_task: Mapping[str, DataFusionPlanBundle]
     plan_scan_inputs: PlanScanInputs
+    execution_authority_context: ExecutionAuthorityContext | None = None
 
 
 @dataclass(frozen=True)
@@ -385,6 +391,7 @@ def task_execution_inputs(
         runtime=runtime_artifacts,
         engine_session=task_execution_runtime_config.engine_session,
         evidence=evidence_catalog,
+        execution_authority_context=plan_context.execution_authority_context,
         plan_signature=plan_context.plan_signature,
         active_task_names=plan_context.active_task_names,
         plan_bundles_by_task=plan_context.plan_bundles_by_task,
@@ -480,6 +487,7 @@ def _ensure_scan_overrides(
     runtime: RuntimeArtifacts,
     *,
     scan_context: PlanScanInputs,
+    execution_context: SemanticExecutionContext | None = None,
 ) -> DataFusionRuntimeProfile:
     session_runtime = runtime.execution
     if session_runtime is None:
@@ -492,14 +500,19 @@ def _ensure_scan_overrides(
         and runtime.scan_override_hash != scan_context.scan_units_hash
     )
     if refresh_requested:
-        from semantics.compile_context import CompileContext
+        if execution_context is not None:
+            semantic_manifest = execution_context.manifest
+            resolver = execution_context.dataset_resolver
+        else:
+            from semantics.compile_context import CompileContext
 
-        compile_ctx = CompileContext(runtime_profile=profile)
-        semantic_manifest = compile_ctx.compile(ctx=session)
+            compile_ctx = CompileContext(runtime_profile=profile)
+            semantic_manifest = compile_ctx.compile(ctx=session)
+            resolver = compile_ctx.dataset_bindings()
         DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
             semantic_manifest=semantic_manifest,
-            dataset_resolver=compile_ctx.dataset_bindings(),
+            dataset_resolver=resolver,
         )
         runtime.scan_override_hash = scan_context.scan_units_hash
     return profile
@@ -511,21 +524,31 @@ def _execute_view(
     view_name: str,
     plan_bundle: DataFusionPlanBundle | None,
     scan_context: PlanScanInputs,
+    execution_context: SemanticExecutionContext | None = None,
 ) -> ExecutionResult:
     if plan_bundle is None:
         msg = f"Plan bundle is required for view execution: {view_name!r}."
         raise ValueError(msg)
-    profile = _ensure_scan_overrides(runtime, scan_context=scan_context)
+    profile = _ensure_scan_overrides(
+        runtime,
+        scan_context=scan_context,
+        execution_context=execution_context,
+    )
     session = profile.session_context()
     if not session.table_exist(view_name):
-        from semantics.compile_context import CompileContext
+        if execution_context is not None:
+            semantic_manifest = execution_context.manifest
+            resolver = execution_context.dataset_resolver
+        else:
+            from semantics.compile_context import CompileContext
 
-        compile_ctx = CompileContext(runtime_profile=profile)
-        semantic_manifest = compile_ctx.compile(ctx=session)
+            compile_ctx = CompileContext(runtime_profile=profile)
+            semantic_manifest = compile_ctx.compile(ctx=session)
+            resolver = compile_ctx.dataset_bindings()
         DataFusionExecutionFacade(ctx=session, runtime_profile=profile).ensure_view_graph(
             scan_units=scan_context.scan_units,
             semantic_manifest=semantic_manifest,
-            dataset_resolver=compile_ctx.dataset_bindings(),
+            dataset_resolver=resolver,
         )
         if not session.table_exist(view_name):
             msg = f"View {view_name!r} is not registered; call ensure_view_graph first."
@@ -864,7 +887,6 @@ def _extract_symtable(
 
 
 from hamilton_pipeline.modules.extract_execution_registry import (
-    get_extract_executor,
     register_extract_executor,
 )
 
@@ -899,10 +921,47 @@ def ensure_extract_executors_registered(*, force: bool = False) -> None:
     _ensure_extract_executors_registered()
 
 
+def build_extract_executor_map(
+    *,
+    evidence_plan: EvidencePlan | None = None,
+) -> Mapping[str, object]:
+    """Return an extract executor map keyed by adapter executor key.
+
+    Parameters
+    ----------
+    evidence_plan
+        Optional evidence plan used to restrict the executor set.
+
+    Returns:
+    -------
+    Mapping[str, object]
+        Executor map keyed by canonical adapter executor keys.
+    """
+    from datafusion_engine.extract.adapter_registry import adapter_executor_key
+
+    executors: dict[str, object] = {
+        adapter_executor_key("repo_scan"): _extract_repo_scan,
+        adapter_executor_key("scip"): _extract_scip,
+        adapter_executor_key("python_imports"): _extract_python_imports,
+        adapter_executor_key("python_external"): _extract_python_external,
+        adapter_executor_key("ast"): _extract_ast,
+        adapter_executor_key("cst"): _extract_cst,
+        adapter_executor_key("tree_sitter"): _extract_tree_sitter,
+        adapter_executor_key("bytecode"): _extract_bytecode,
+        adapter_executor_key("symtable"): _extract_symtable,
+    }
+    if evidence_plan is None:
+        return executors
+    required = set(evidence_plan.required_adapter_keys())
+    if not required:
+        return executors
+    return {key: value for key, value in executors.items() if key in required}
+
+
 def _dataset_location_for_output(
     *,
     dataset_name: str,
-    dataset_resolver: ManifestDatasetResolver | None = None,
+    authority_context: ExecutionAuthorityContext | None = None,
 ) -> DatasetLocation | None:
     """Return the dataset location for an extract output.
 
@@ -913,15 +972,18 @@ def _dataset_location_for_output(
     ----------
     dataset_name
         Dataset name to look up.
-    dataset_resolver
-        Manifest-based resolver for dataset locations.
+    authority_context
+        Optional execution authority context carrying the manifest resolver.
 
     Returns:
         Location if found, ``None`` otherwise.
     """
-    if dataset_resolver is None:
+    if authority_context is None:
         return None
-    return dataset_resolver.location(dataset_name)
+    location = authority_context.resolve_dataset_location(dataset_name)
+    if isinstance(location, DatasetLocation):
+        return location
+    return None
 
 
 def _ensure_extract_output(
@@ -946,7 +1008,10 @@ def _ensure_extract_output(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized[spec.task_output] = empty_table(schema)
-        location = _dataset_location_for_output(dataset_name=spec.task_output)
+        location = _dataset_location_for_output(
+            dataset_name=spec.task_output,
+            authority_context=inputs.execution_authority_context,
+        )
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [
@@ -987,15 +1052,32 @@ def _execute_extract_task(
         raise ValueError(msg)
     extract_session = ExtractSession(engine_session=inputs.engine_session)
     profile_name = inputs.engine_session.datafusion_profile.policies.config_policy_name or "default"
+
+    def _missing_extract_executor(adapter_name: str) -> NoReturn:
+        msg = f"Missing extract executor for adapter {adapter_name!r}."
+        raise ValueError(msg)
+
     try:
         try:
             adapter = extract_template_adapter(task_spec.extractor)
         except KeyError as exc:
             msg = f"Unsupported extract template {task_spec.extractor!r}."
             raise ValueError(msg) from exc
-        ensure_extract_executors_registered()
-        adapter_key = adapter_executor_key(adapter.name)
-        handler = get_extract_executor(adapter_key)
+        authority_context = inputs.execution_authority_context
+        handler: Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]
+        if authority_context is None:
+            raw_handler = build_extract_executor_map().get(adapter_executor_key(adapter.name))
+            if not callable(raw_handler):
+                _missing_extract_executor(adapter.name)
+            handler = cast(
+                "Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]",
+                raw_handler,
+            )
+        else:
+            handler = cast(
+                "Callable[[TaskExecutionInputs, ExtractSession, str], Mapping[str, object]]",
+                authority_context.executor_for_adapter(adapter.name),
+            )
         outputs = handler(inputs, extract_session, profile_name)
         normalized = _normalize_extract_outputs(outputs)
     except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -1009,7 +1091,10 @@ def _execute_extract_task(
         except (KeyError, TypeError, ValueError):
             schema = pa.schema([])
         normalized = {spec.task_output: empty_table(schema)}
-        location = _dataset_location_for_output(dataset_name=spec.task_output)
+        location = _dataset_location_for_output(
+            dataset_name=spec.task_output,
+            authority_context=inputs.execution_authority_context,
+        )
         recorder = EngineEventRecorder(inputs.engine_session.datafusion_profile)
         recorder.record_extract_quality_events(
             [
@@ -1185,7 +1270,10 @@ def _record_extract_outputs(
         rows = None
         if hasattr(table, "num_rows"):
             rows = int(table.num_rows)
-        location = _dataset_location_for_output(dataset_name=name)
+        location = _dataset_location_for_output(
+            dataset_name=name,
+            authority_context=inputs.execution_authority_context,
+        )
         status = "ok"
         issue = None
         if location is None:
@@ -1223,6 +1311,8 @@ __all__ = [
     "TaskExecutionInputs",
     "TaskExecutionRuntimeConfig",
     "TaskExecutionSpec",
+    "build_extract_executor_map",
+    "ensure_extract_executors_registered",
     "execute_task_from_catalog",
     "plan_scan_inputs",
     "runtime_artifacts",

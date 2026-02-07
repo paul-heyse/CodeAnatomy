@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.sql.options import SQLOptions
+    from semantics.program_manifest import ManifestDatasetResolver
 
 
 _datafusion_internal = getattr(_datafusion, "_internal", None)
@@ -1899,16 +1900,19 @@ def _scan_units_for_bundle(
 
 def _manifest_dataset_locations(
     session_runtime: SessionRuntime | object,
+    *,
+    dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> dict[str, DatasetLocation]:
     locations: dict[str, DatasetLocation] = {}
-    runtime_profile = getattr(session_runtime, "profile", None)
-    if runtime_profile is None:
-        return locations
-    from semantics.compile_context import dataset_bindings_for_profile
+    if dataset_resolver is None:
+        runtime_profile = getattr(session_runtime, "profile", None)
+        if runtime_profile is None:
+            return locations
+        from semantics.compile_context import dataset_bindings_for_profile
 
-    bindings = dataset_bindings_for_profile(runtime_profile)
-    for name in bindings.names():
-        location = bindings.location(name)
+        dataset_resolver = dataset_bindings_for_profile(runtime_profile)
+    for name in dataset_resolver.names():
+        location = dataset_resolver.location(name)
         if location is None:
             continue
         locations[name] = location

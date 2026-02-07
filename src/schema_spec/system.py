@@ -658,6 +658,12 @@ class DeltaMaintenancePolicy(StructBaseStrict, frozen=True):
     enable_v2_checkpoints: bool = False
     enable_log_compaction: bool = False
 
+    # Outcome-based maintenance thresholds (Wave 4A)
+    optimize_file_threshold: int | None = None
+    total_file_threshold: int | None = None
+    vacuum_version_threshold: int | None = None
+    checkpoint_version_interval: int | None = None
+
     def fingerprint_payload(self) -> Mapping[str, object]:
         """Return fingerprint payload for the Delta maintenance policy.
 
@@ -679,6 +685,10 @@ class DeltaMaintenancePolicy(StructBaseStrict, frozen=True):
             "enable_deletion_vectors": self.enable_deletion_vectors,
             "enable_v2_checkpoints": self.enable_v2_checkpoints,
             "enable_log_compaction": self.enable_log_compaction,
+            "optimize_file_threshold": self.optimize_file_threshold,
+            "total_file_threshold": self.total_file_threshold,
+            "vacuum_version_threshold": self.vacuum_version_threshold,
+            "checkpoint_version_interval": self.checkpoint_version_interval,
         }
 
     def fingerprint(self) -> str:

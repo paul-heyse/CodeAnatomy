@@ -344,7 +344,7 @@ def _nested_view_nodes(
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> list[ViewNode]:
     from datafusion_engine.io.adapter import DataFusionIOAdapter
-    from datafusion_engine.schema.registry import extract_nested_schema_for, nested_view_specs
+    from datafusion_engine.schema.registry import extract_schema_for, nested_view_specs
 
     if runtime_profile is None:
         msg = "Runtime profile is required for nested view planning."
@@ -367,7 +367,7 @@ def _nested_view_nodes(
             label=spec.name,
             runtime_profile=runtime_profile,
         )
-        expected_schema = extract_nested_schema_for(spec.name)
+        expected_schema = extract_schema_for(spec.name)
         metadata = _metadata_with_required_udfs(None, required)
         adapter.register_view(spec.name, bundle.df, overwrite=True, temporary=True)
         nodes.append(

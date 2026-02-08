@@ -1736,18 +1736,6 @@ PARAM_FILE_IDS_SCHEMA = _schema_with_metadata(
     ),
 )
 
-_BASE_EXTRACT_SCHEMA_BY_NAME: ImmutableRegistry[str, pa.Schema] = ImmutableRegistry.from_dict(
-    {
-        "repo_files_v1": REPO_FILES_SCHEMA,
-        "libcst_files_v1": LIBCST_FILES_SCHEMA,
-        "ast_files_v1": AST_FILES_SCHEMA,
-        "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
-        "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
-        "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
-        "scip_index_v1": SCIP_INDEX_SCHEMA,
-    }
-)
-
 NESTED_DATASET_INDEX: ImmutableRegistry[str, NestedDatasetSpec] = ImmutableRegistry.from_dict(
     {
         "cst_nodes": {
@@ -2151,15 +2139,21 @@ def relationship_schema_registry() -> MappingRegistryAdapter[str, pa.Schema]:
 
 
 def base_extract_schema_registry() -> MappingRegistryAdapter[str, pa.Schema]:
-    """Return a registry adapter for base extract schemas.
+    """Return a registry adapter for derived base extract schemas.
 
     Returns:
     -------
     MappingRegistryAdapter[str, pa.Schema]
-        Read-only registry adapter for base extract schemas.
+        Read-only registry adapter for derived base extract schemas.
     """
+    mapping: dict[str, pa.Schema] = {}
+    for name in extract_base_schema_names():
+        try:
+            mapping[name] = extract_schema_for(name)
+        except KeyError:
+            continue
     return MappingRegistryAdapter.from_mapping(
-        _mapping_from_registry(_BASE_EXTRACT_SCHEMA_BY_NAME),
+        mapping,
         read_only=True,
     )
 
@@ -2365,18 +2359,24 @@ CST_VIEW_NAMES: tuple[str, ...] = (
 
 
 def extract_base_schema_names() -> tuple[str, ...]:
-    """Return extract base schema names in sorted order.
+    """Return derived extract base schema names in sorted order.
 
     Returns:
     -------
     tuple[str, ...]
-        Sorted extract base schema name tuple.
+        Sorted derived extract base schema name tuple.
     """
-    return tuple(sorted(_BASE_EXTRACT_SCHEMA_BY_NAME))
+    from datafusion_engine.extract.metadata import extract_metadata_by_name
+
+    names: list[str] = []
+    for name in extract_metadata_by_name():
+        if _derived_extract_base_schema_for(name) is not None:
+            names.append(name)
+    return tuple(sorted(names))
 
 
 def extract_base_schema_for(name: str) -> pa.Schema:
-    """Return the static extract base schema for a dataset name.
+    """Return schema for an extract base dataset from derived authority.
 
     Args:
         name: Description.
@@ -2384,11 +2384,10 @@ def extract_base_schema_for(name: str) -> pa.Schema:
     Raises:
         KeyError: If the operation cannot be completed.
     """
-    schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(name)
-    if schema is None:
-        msg = f"Unknown extract base schema: {name!r}."
+    if name in NESTED_DATASET_INDEX:
+        msg = f"{name!r} is a nested dataset, not a base extract dataset."
         raise KeyError(msg)
-    return schema
+    return extract_schema_for(name)
 
 
 def relationship_schema_names() -> tuple[str, ...]:
@@ -2715,17 +2714,95 @@ def _append_schema_field(
     selected_names.add(field.name)
 
 
+def _schema_signature(schema: pa.Schema) -> tuple[tuple[str, str, bool], ...]:
+    return tuple((field.name, str(field.type), bool(field.nullable)) for field in schema)
+
+
+def _resolve_nested_row_schema_authority(
+    *,
+    dataset_name: str,
+    nested_path: str,
+    derived_schema: pa.Schema | None,
+    struct_schema: pa.Schema,
+) -> pa.Schema:
+    """Resolve nested row schema authority with deterministic conflict handling."""
+    if derived_schema is None:
+        return struct_schema
+    if _schema_signature(derived_schema) == _schema_signature(struct_schema):
+        return derived_schema
+    _LOGGER.warning(
+        "extract_schema_authority_conflict",
+        extra={
+            "dataset_name": dataset_name,
+            "nested_path": nested_path,
+            "authority": "derived",
+            "fallback_authority": "struct",
+            "derived_fields": list(derived_schema.names),
+            "struct_fields": list(struct_schema.names),
+        },
+    )
+    return derived_schema
+
+
 def extract_nested_schema_for(name: str) -> pa.Schema:
-    """Return the static schema for an extract nested dataset.
+    """Return schema for an extract nested dataset from derived authority.
 
     Returns:
     -------
     pyarrow.Schema
-        Arrow schema derived from the extract base schema.
+        Arrow schema derived from extract metadata.
     """
-    root, path = extract_nested_path_for(name)
-    root_schema = extract_base_schema_for(root)
-    row_struct = struct_for_path(root_schema, path)
+    if name not in NESTED_DATASET_INDEX:
+        msg = f"{name!r} is not a registered extract nested dataset."
+        raise KeyError(msg)
+    return extract_schema_for(name)
+
+
+def _derived_extract_base_schema_for(name: str) -> pa.Schema | None:
+    from datafusion_engine.extract.metadata import extract_metadata_by_name
+    from datafusion_engine.schema.derivation import derive_extract_schema
+
+    metadata = extract_metadata_by_name().get(name)
+    if metadata is None:
+        return None
+    try:
+        return derive_extract_schema(metadata)
+    except (TypeError, ValueError):
+        return None
+
+
+def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:
+    from datafusion_engine.extract.metadata import extract_metadata_by_name
+    from datafusion_engine.schema.derivation import (
+        derive_extract_schema,
+        derive_nested_dataset_schema,
+    )
+    from utils.schema_from_struct import schema_from_struct
+
+    spec = NESTED_DATASET_INDEX.get(name)
+    if spec is None:
+        return None
+    root_name = spec["root"]
+    nested_path = spec["path"]
+
+    metadata = extract_metadata_by_name().get(root_name)
+    if metadata is None:
+        return None
+    try:
+        root_schema = derive_extract_schema(metadata)
+        row_struct = struct_for_path(root_schema, nested_path)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    row_schema = _resolve_nested_row_schema_authority(
+        dataset_name=name,
+        nested_path=nested_path,
+        derived_schema=derive_nested_dataset_schema(
+            metadata,
+            nested_path,
+        ),
+        struct_schema=schema_from_struct(row_struct),
+    )
     selections: list[pa.Field] = []
     selected_names: set[str] = set()
     for field_name in identity_fields_for(name, root_schema, row_struct):
@@ -2734,26 +2811,41 @@ def extract_nested_schema_for(name: str) -> pa.Schema:
     for alias, ctx_path in extract_nested_context_for(name).items():
         field = _field_for_path(root_schema, ctx_path)
         _append_schema_field(selections, selected_names, field=_clone_field(field, name=alias))
-    for field in row_struct:
+    for field in row_schema:
         _append_schema_field(selections, selected_names, field=field)
     return pa.schema(selections)
 
 
+def _derived_extract_schema_for(name: str) -> pa.Schema | None:
+    if name in NESTED_DATASET_INDEX:
+        return _derived_extract_nested_schema_for(name)
+    return _derived_extract_base_schema_for(name)
+
+
 def extract_schema_for(name: str) -> pa.Schema:
-    """Return the static schema for an extract base or nested dataset.
+    """Resolve schema for an extract base or nested dataset from metadata.
 
     Args:
-        name: Description.
+        name
+            Extract dataset name (base or nested).
 
     Raises:
-        KeyError: If the operation cannot be completed.
+        KeyError
+            If no derived schema is available for the dataset name.
     """
-    if name in _BASE_EXTRACT_SCHEMA_BY_NAME:
-        return extract_base_schema_for(name)
-    if name in NESTED_DATASET_INDEX:
-        return extract_nested_schema_for(name)
-    msg = f"Unknown extract schema name: {name!r}."
-    raise KeyError(msg)
+    derived_schema = _derived_extract_schema_for(name)
+    if derived_schema is None:
+        _LOGGER.debug(
+            "extract_schema_authority",
+            extra={"dataset_name": name, "authority": "missing"},
+        )
+        msg = f"No derived extract schema available for {name!r}."
+        raise KeyError(msg)
+    _LOGGER.debug(
+        "extract_schema_authority",
+        extra={"dataset_name": name, "authority": "derived"},
+    )
+    return derived_schema
 
 
 def extract_schema_contract_for(name: str) -> SchemaContract:
@@ -2762,7 +2854,7 @@ def extract_schema_contract_for(name: str) -> SchemaContract:
     Returns:
     -------
     SchemaContract
-        Schema contract derived from the static extract schema.
+        Schema contract derived from metadata-backed schema authority.
     """
     from datafusion_engine.schema.contracts import SchemaContract
 
@@ -2824,14 +2916,10 @@ def identity_fields_for(
 
 
 def _resolve_root_schema(ctx: SessionContext, root: str) -> pa.Schema:
-    static_schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(root)
     try:
         df = ctx.table(root)
     except (KeyError, RuntimeError, TypeError, ValueError):
-        if static_schema is not None:
-            return static_schema
-        msg = f"Missing root schema for {root!r} and table lookup failed."
-        raise KeyError(msg) from None
+        return extract_schema_for(root)
     resolved = df.schema()
     if isinstance(resolved, pa.Schema):
         return resolved
@@ -3061,10 +3149,7 @@ def validate_nested_types(ctx: SessionContext, name: str) -> None:
         _LOGGER.warning("Nested type validation skipped for %s: %s", name, exc)
         return
     expected: pa.Schema
-    try:
-        expected = extract_nested_schema_for(name)
-    except KeyError:
-        return
+    expected = extract_schema_for(name)
     from datafusion_engine.arrow.coercion import storage_type
 
     actual = df.schema()

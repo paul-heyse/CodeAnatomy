@@ -38,6 +38,12 @@ from storage.deltalake.file_pruning import (
     StatsFilter,
     evaluate_and_select_files,
 )
+from storage.external_index import (
+    ExternalIndexProvider,
+    ExternalIndexRequest,
+    ExternalIndexSelection,
+    select_candidates_with_external_indexes,
+)
 from utils.hashing import hash_msgpack_canonical
 from utils.storage_options import merged_storage_options
 from utils.value_coercion import coerce_int, coerce_mapping_list, coerce_str_list
@@ -325,6 +331,65 @@ def plan_scan_units(
     return units_sorted, scan_keys_by_task
 
 
+class _DeltaAddActionsIndexProvider:
+    provider_name = "delta_add_actions"
+
+    def supports(self, request: ExternalIndexRequest) -> bool:
+        return request.location.format == "delta"
+
+    def select_candidates(
+        self,
+        ctx: SessionContext,
+        *,
+        request: ExternalIndexRequest,
+    ) -> ExternalIndexSelection | None:
+        payload = _delta_add_actions_payload(request=_delta_snapshot_request(request.location))
+        if not payload.add_actions:
+            return ExternalIndexSelection(
+                candidate_files=(),
+                total_files=0,
+                candidate_file_count=0,
+                pruned_file_count=0,
+                metadata={
+                    "delta_version": payload.delta_version,
+                    "snapshot_timestamp": payload.snapshot_timestamp,
+                    "delta_protocol": payload.delta_protocol,
+                },
+            )
+        index = build_delta_file_index_from_add_actions(payload.add_actions)
+        policy = _policy_from_lineage(location=request.location, lineage=request.lineage)
+        pruning = evaluate_and_select_files(index, policy, ctx=ctx)
+        candidate_files = tuple(
+            Path(str(request.location.path)) / Path(path) for path in pruning.candidate_paths
+        )
+        _record_scan_plan_artifact(
+            _ScanPlanArtifactRequest(
+                runtime_profile=request.runtime_profile,
+                dataset_name=request.dataset_name,
+                location=request.location,
+                payload=payload,
+                pruning=pruning,
+                lineage=request.lineage,
+            )
+        )
+        return ExternalIndexSelection(
+            candidate_files=candidate_files,
+            total_files=pruning.total_files,
+            candidate_file_count=pruning.candidate_count,
+            pruned_file_count=pruning.pruned_count,
+            metadata={
+                "delta_version": payload.delta_version,
+                "snapshot_timestamp": payload.snapshot_timestamp,
+                "delta_protocol": payload.delta_protocol,
+            },
+        )
+
+
+_DELTA_EXTERNAL_INDEX_PROVIDERS: tuple[ExternalIndexProvider, ...] = (
+    _DeltaAddActionsIndexProvider(),
+)
+
+
 def _delta_scan_candidates(
     ctx: SessionContext,
     *,
@@ -341,44 +406,48 @@ def _delta_scan_candidates(
     int,
     int,
 ]:
-    request = _delta_snapshot_request(location)
-    payload = _delta_add_actions_payload(request=request)
     empty_candidates: tuple[Path, ...] = ()
-    if not payload.add_actions:
-        return (
-            empty_candidates,
-            payload.delta_version,
-            payload.snapshot_timestamp,
-            payload.delta_protocol,
-            0,
-            0,
-            0,
-        )
-    index = build_delta_file_index_from_add_actions(payload.add_actions)
-    policy = _policy_from_lineage(location=location, lineage=lineage)
-    pruning = evaluate_and_select_files(index, policy, ctx=ctx)
-    candidate_files = tuple(
-        Path(str(location.path)) / Path(path) for path in pruning.candidate_paths
-    )
-    _record_scan_plan_artifact(
-        _ScanPlanArtifactRequest(
-            runtime_profile=runtime_profile,
+    selection = select_candidates_with_external_indexes(
+        ctx,
+        request=ExternalIndexRequest(
             dataset_name=dataset_name,
             location=location,
-            payload=payload,
-            pruning=pruning,
             lineage=lineage,
+            runtime_profile=runtime_profile,
+        ),
+        providers=_DELTA_EXTERNAL_INDEX_PROVIDERS,
+    )[0]
+    if selection is None:
+        return (
+            empty_candidates,
+            None,
+            None,
+            None,
+            0,
+            0,
+            0,
         )
+    delta_version = _metadata_int(selection.metadata.get("delta_version"))
+    snapshot_timestamp = _metadata_int(selection.metadata.get("snapshot_timestamp"))
+    delta_protocol = cast(
+        "DeltaProtocolSnapshot | None",
+        selection.metadata.get("delta_protocol"),
     )
     return (
-        candidate_files,
-        payload.delta_version,
-        payload.snapshot_timestamp,
-        payload.delta_protocol,
-        pruning.total_files,
-        pruning.candidate_count,
-        pruning.pruned_count,
+        selection.candidate_files,
+        delta_version,
+        snapshot_timestamp,
+        delta_protocol,
+        selection.total_files,
+        selection.candidate_file_count,
+        selection.pruned_file_count,
     )
+
+
+def _metadata_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return coerce_int(value)
 
 
 @dataclass(frozen=True)

@@ -19,8 +19,11 @@ class TestCompiledExecutionPolicyConstruction:
         assert policy.scan_policy_overrides == {}
         assert policy.maintenance_policy_by_dataset == {}
         assert policy.udf_requirements_by_view == {}
+        assert policy.join_strategy_by_view == {}
+        assert policy.inference_confidence_by_view == {}
         assert policy.materialization_strategy is None
         assert policy.diagnostics_flags == {}
+        assert policy.workload_class is None
         assert policy.validation_mode == "warn"
         assert policy.policy_fingerprint is None
 
@@ -38,13 +41,25 @@ class TestCompiledExecutionPolicyConstruction:
             scan_policy_overrides={"ds1": {"policy": "full"}},
             maintenance_policy_by_dataset={"ds1": {"optimize": True}},
             udf_requirements_by_view={"v1": ("udf_a", "udf_b")},
+            join_strategy_by_view={"v1": "foreign_key"},
+            inference_confidence_by_view={
+                "v1": {
+                    "confidence_score": 0.85,
+                    "decision_type": "join_strategy",
+                    "decision_value": "foreign_key",
+                    "evidence_sources": ("schema",),
+                }
+            },
             materialization_strategy="delta",
             diagnostics_flags={"capture_datafusion_metrics": True},
+            workload_class="batch_ingest",
             validation_mode="error",
             policy_fingerprint="abc123",
         )
         assert policy.cache_policy_by_view == {"v1": "delta_output"}
+        assert policy.join_strategy_by_view == {"v1": "foreign_key"}
         assert policy.materialization_strategy == "delta"
+        assert policy.workload_class == "batch_ingest"
         assert policy.validation_mode == "error"
         assert policy.policy_fingerprint == "abc123"
 

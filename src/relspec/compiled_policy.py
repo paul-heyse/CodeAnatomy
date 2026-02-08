@@ -41,10 +41,17 @@ class CompiledExecutionPolicy(StructBaseStrict, frozen=True):
         Per-dataset maintenance policy configuration.
     udf_requirements_by_view
         Per-view UDF requirement names extracted from plan expressions.
+    join_strategy_by_view
+        Per-view inferred join strategy names from semantic inference.
+    inference_confidence_by_view
+        Structured inference-confidence payloads keyed by view name.
     materialization_strategy
         High-level materialization strategy identifier, if resolved.
     diagnostics_flags
         Boolean diagnostic capture flags propagated from pipeline policy.
+    workload_class
+        Workload class used when compiling this policy (for example
+        ``interactive_query`` or ``batch_ingest``).
     validation_mode
         How policy violations are handled at runtime.
     policy_fingerprint
@@ -56,8 +63,11 @@ class CompiledExecutionPolicy(StructBaseStrict, frozen=True):
     scan_policy_overrides: Mapping[str, object] = {}
     maintenance_policy_by_dataset: Mapping[str, object] = {}
     udf_requirements_by_view: Mapping[str, tuple[str, ...]] = {}
+    join_strategy_by_view: Mapping[str, str] = {}
+    inference_confidence_by_view: Mapping[str, object] = {}
     materialization_strategy: str | None = None
     diagnostics_flags: Mapping[str, bool] = {}
+    workload_class: str | None = None
     validation_mode: str = "warn"
     policy_fingerprint: str | None = None
 

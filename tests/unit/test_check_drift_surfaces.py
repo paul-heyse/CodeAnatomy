@@ -77,6 +77,29 @@ def record_dataset_readiness(dataset_resolver: object | None = None) -> None:
 """.strip()
         + "\n",
     )
+    _write(
+        repo_root / "src/semantics/pipeline.py",
+        """
+_CONSOLIDATED_BUILDER_HANDLERS = {
+    "normalize": object(),
+    "derive": object(),
+    "relate": object(),
+    "union": object(),
+    "project": object(),
+    "diagnostic": object(),
+}
+""".strip()
+        + "\n",
+    )
+    _write(
+        repo_root / "src/semantics/registry.py",
+        """
+from semantics.entity_registry import ENTITY_DECLARATIONS, generate_table_specs
+
+SEMANTIC_TABLE_SPECS = generate_table_specs(ENTITY_DECLARATIONS)
+""".strip()
+        + "\n",
+    )
 
 
 def test_drift_audit_is_deterministic(tmp_path: Path) -> None:

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from hamilton.lifecycle import api as lifecycle_api
 
@@ -18,12 +19,15 @@ from serde_artifact_specs import (
     PLAN_EXPECTED_TASKS_SPEC,
     PLAN_SCHEDULE_SPEC,
     PLAN_VALIDATION_SPEC,
+    POLICY_CALIBRATION_RESULT_SPEC,
+    PRUNING_METRICS_SPEC,
 )
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from hamilton_pipeline.plan_artifacts import PlanArtifactBundle
     from relspec.execution_plan import ExecutionPlan
+    from relspec.policy_calibrator import ExecutionMetricsSummary
 
 _DIAGNOSTICS_STATE: dict[str, DiagnosticsCollector | None] = {"collector": None}
 
@@ -169,6 +173,15 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
         _ = kwargs
         set_active_task_count(None)
         set_total_task_count(None)
+        _record_pruning_metrics_artifact(
+            plan=self.plan,
+            profile=self.profile,
+        )
+        _record_policy_calibration_artifact(
+            plan=self.plan,
+            profile=self.profile,
+            collector=self.collector,
+        )
         _flush_plan_events(
             self.plan,
             profile=self.profile,
@@ -176,6 +189,134 @@ class PlanDiagnosticsHook(lifecycle_api.GraphExecutionHook):
             run_id=run_id,
             plan_artifact_bundle=self.plan_artifact_bundle,
         )
+
+
+def _record_pruning_metrics_artifact(
+    *,
+    plan: ExecutionPlan,
+    profile: DataFusionRuntimeProfile,
+) -> None:
+    from datafusion_engine.lineage.diagnostics import record_artifact
+    from serde_artifacts import PruningMetricsArtifact
+    from serde_msgspec import to_builtins_mapping
+
+    if not plan.scan_units:
+        return
+    total_files = sum(max(int(unit.total_files), 0) for unit in plan.scan_units)
+    pruned_files = sum(max(int(unit.pruned_file_count), 0) for unit in plan.scan_units)
+    candidate_files = sum(max(int(unit.candidate_file_count), 0) for unit in plan.scan_units)
+    filters_pushed = sum(len(unit.pushed_filters) for unit in plan.scan_units)
+    pruning_effectiveness = (float(pruned_files) / float(total_files)) if total_files > 0 else 0.0
+
+    payload = PruningMetricsArtifact(
+        view_name="__plan__",
+        row_groups_total=total_files,
+        row_groups_pruned=pruned_files,
+        pages_total=total_files,
+        pages_pruned=max(total_files - candidate_files, 0),
+        filters_pushed=filters_pushed,
+        statistics_available=total_files > 0,
+        pruning_effectiveness=pruning_effectiveness,
+    )
+    record_artifact(
+        profile,
+        PRUNING_METRICS_SPEC,
+        to_builtins_mapping(payload, str_keys=True),
+    )
+
+
+def _record_policy_calibration_artifact(
+    *,
+    plan: ExecutionPlan,
+    profile: DataFusionRuntimeProfile,
+    collector: DiagnosticsCollector | None,
+) -> None:
+    from datafusion_engine.lineage.diagnostics import record_artifact
+    from relspec.calibration_bounds import DEFAULT_CALIBRATION_BOUNDS
+    from relspec.policy_calibrator import (
+        CalibrationThresholds,
+        calibrate_from_execution_metrics,
+    )
+    from serde_msgspec import to_builtins_mapping
+
+    metrics = _execution_metrics_summary(
+        plan=plan,
+        collector=collector,
+    )
+    if metrics is None:
+        return
+    result = calibrate_from_execution_metrics(
+        metrics=metrics,
+        current_thresholds=CalibrationThresholds(),
+        bounds=DEFAULT_CALIBRATION_BOUNDS,
+        mode=_policy_calibration_mode(),
+    )
+    record_artifact(
+        profile,
+        POLICY_CALIBRATION_RESULT_SPEC,
+        to_builtins_mapping(result, str_keys=True),
+    )
+
+
+def _policy_calibration_mode() -> Literal["off", "warn", "enforce", "observe", "apply"]:
+    raw = os.environ.get("CODEANATOMY_POLICY_CALIBRATION_MODE", "warn").strip().lower()
+    if raw in {"off", "warn", "enforce"}:
+        return cast('Literal["off", "warn", "enforce"]', raw)
+    if raw == "observe":
+        return "warn"
+    if raw == "apply":
+        return "enforce"
+    return "warn"
+
+
+def _execution_metrics_summary(
+    *,
+    plan: ExecutionPlan,
+    collector: DiagnosticsCollector | None,
+) -> ExecutionMetricsSummary | None:
+    from relspec.policy_calibrator import ExecutionMetricsSummary
+
+    finish_rows = (
+        () if collector is None else collector.events_snapshot().get("hamilton_node_finish_v1", ())
+    )
+    duration_samples: list[float] = [
+        float(duration_ms)
+        for row in finish_rows
+        if row.get("success", True)
+        and isinstance((duration_ms := row.get("duration_ms")), (int, float))
+    ]
+    if not duration_samples:
+        duration_samples = [
+            float(metric.duration_ms)
+            for metric in plan.task_plan_metrics.values()
+            if metric.duration_ms is not None and metric.duration_ms >= 0.0
+        ]
+
+    row_count_samples = [
+        float(metric.output_rows)
+        for metric in plan.task_plan_metrics.values()
+        if metric.output_rows is not None and metric.output_rows >= 0
+    ]
+    predicted_cost = sum(float(cost) for cost in plan.task_costs.values())
+    if predicted_cost <= 0.0:
+        predicted_cost = float(len(plan.task_costs) or 1)
+    actual_cost = sum(duration_samples) if duration_samples else predicted_cost
+    observation_count = len(duration_samples) if duration_samples else len(plan.task_costs)
+    if observation_count <= 0:
+        return None
+    mean_duration = (
+        (sum(duration_samples) / float(len(duration_samples))) if duration_samples else None
+    )
+    mean_rows = (
+        (sum(row_count_samples) / float(len(row_count_samples))) if row_count_samples else None
+    )
+    return ExecutionMetricsSummary(
+        predicted_cost=predicted_cost,
+        actual_cost=actual_cost,
+        observation_count=observation_count,
+        mean_duration_ms=mean_duration,
+        mean_row_count=mean_rows,
+    )
 
 
 def _flush_plan_events(

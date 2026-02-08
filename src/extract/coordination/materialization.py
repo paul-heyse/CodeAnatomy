@@ -711,7 +711,7 @@ def materialize_extract_plan(
         options: Optional materialization options.
         execution_context: Optional semantic execution context. When provided,
             the dataset resolver is extracted from the context instead of
-            creating a new CompileContext.
+            building another semantic execution context.
 
     Returns:
         Materialized and normalized extract output.

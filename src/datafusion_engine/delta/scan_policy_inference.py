@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from relspec.inference_confidence import InferenceConfidence, high_confidence, low_confidence
-from relspec.table_size_tiers import _DEFAULT_THRESHOLDS
+from relspec.table_size_tiers import TableSizeTier, classify_table_size
 
 if TYPE_CHECKING:
     from datafusion_engine.extensions.runtime_capabilities import RuntimeCapabilitiesSnapshot
@@ -18,10 +18,6 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.system import ScanPolicyConfig
 
-
-# Threshold below which file pruning overhead is not worthwhile.
-# Sourced from the canonical table size tiers to prevent drift.
-_SMALL_TABLE_ROW_THRESHOLD = _DEFAULT_THRESHOLDS.small_threshold
 
 # Projection ratio below which column pruning is considered highly beneficial.
 # When only a small fraction of columns are projected, enabling parquet
@@ -348,7 +344,7 @@ def _is_small_table(
             return False
         # Conservative default: do not escalate without concrete row statistics.
         return False
-    return stats.num_rows < _SMALL_TABLE_ROW_THRESHOLD
+    return classify_table_size(int(stats.num_rows)) is TableSizeTier.SMALL
 
 
 def _stats_heuristics_capable(

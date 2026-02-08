@@ -17,32 +17,53 @@ if TYPE_CHECKING:
         delta_vacuum,
     )
     from engine.diagnostics import EngineEventRecorder
+    from engine.facade import execute_cpg_build
     from engine.materialize_pipeline import (
         build_view_product,
         resolve_materialization_cache_decision,
         resolve_prefer_reader,
     )
     from engine.plan_product import PlanProduct
+    from engine.profile import detect_environment_class, environment_class_from_env
     from engine.runtime import EngineRuntime, build_engine_runtime
     from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
     from engine.session import EngineSession
     from engine.session_factory import build_engine_session
+    from engine.spec_builder import (
+        InputRelation,
+        OutputTarget,
+        RuleIntent,
+        SemanticExecutionSpec,
+        ViewDefinition,
+        ViewTransform,
+        build_spec_from_ir,
+    )
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaHistorySnapshot": ("engine.delta_tools", "DeltaHistorySnapshot"),
     "DeltaVacuumResult": ("engine.delta_tools", "DeltaVacuumResult"),
     "EngineSession": ("engine.session", "EngineSession"),
     "EngineEventRecorder": ("engine.diagnostics", "EngineEventRecorder"),
+    "InputRelation": ("engine.spec_builder", "InputRelation"),
     "MaterializationPolicy": ("datafusion_engine.materialize_policy", "MaterializationPolicy"),
+    "OutputTarget": ("engine.spec_builder", "OutputTarget"),
     "PlanProduct": ("engine.plan_product", "PlanProduct"),
     "EngineRuntime": ("engine.runtime", "EngineRuntime"),
-    "build_engine_runtime": ("engine.runtime", "build_engine_runtime"),
+    "RuleIntent": ("engine.spec_builder", "RuleIntent"),
     "RuntimeProfileSpec": ("engine.runtime_profile", "RuntimeProfileSpec"),
+    "SemanticExecutionSpec": ("engine.spec_builder", "SemanticExecutionSpec"),
+    "ViewDefinition": ("engine.spec_builder", "ViewDefinition"),
+    "ViewTransform": ("engine.spec_builder", "ViewTransform"),
     "WriterStrategy": ("datafusion_engine.materialize_policy", "WriterStrategy"),
+    "build_engine_runtime": ("engine.runtime", "build_engine_runtime"),
     "build_engine_session": ("engine.session_factory", "build_engine_session"),
+    "build_spec_from_ir": ("engine.spec_builder", "build_spec_from_ir"),
     "build_view_product": ("engine.materialize_pipeline", "build_view_product"),
     "delta_history": ("engine.delta_tools", "delta_history"),
     "delta_vacuum": ("engine.delta_tools", "delta_vacuum"),
+    "detect_environment_class": ("engine.profile", "detect_environment_class"),
+    "environment_class_from_env": ("engine.profile", "environment_class_from_env"),
+    "execute_cpg_build": ("engine.facade", "execute_cpg_build"),
     "resolve_materialization_cache_decision": (
         "engine.materialize_pipeline",
         "resolve_materialization_cache_decision",
@@ -72,15 +93,25 @@ __all__ = [
     "EngineEventRecorder",
     "EngineRuntime",
     "EngineSession",
+    "InputRelation",
     "MaterializationPolicy",
+    "OutputTarget",
     "PlanProduct",
+    "RuleIntent",
     "RuntimeProfileSpec",
+    "SemanticExecutionSpec",
+    "ViewDefinition",
+    "ViewTransform",
     "WriterStrategy",
     "build_engine_runtime",
     "build_engine_session",
+    "build_spec_from_ir",
     "build_view_product",
     "delta_history",
     "delta_vacuum",
+    "detect_environment_class",
+    "environment_class_from_env",
+    "execute_cpg_build",
     "resolve_materialization_cache_decision",
     "resolve_prefer_reader",
     "resolve_runtime_profile",

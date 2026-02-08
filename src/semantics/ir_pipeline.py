@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from typing import TYPE_CHECKING
 
+import pyarrow as pa
+
 from relspec.inference_confidence import (
     InferenceConfidence,
     high_confidence,
@@ -12,6 +14,7 @@ from relspec.inference_confidence import (
 )
 from semantics.catalog.dataset_registry import DatasetRegistrySpec
 from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
+from semantics.catalog.dataset_specs import dataset_schema
 from semantics.ir import (
     GraphPosition,
     InferredViewProperties,
@@ -20,8 +23,11 @@ from semantics.ir import (
     SemanticIRView,
 )
 from semantics.ir_optimize import IRCost, order_join_groups, prune_ir
+from semantics.joins.inference import infer_join_strategy_with_confidence
 from semantics.naming import canonical_output_name
 from semantics.registry import SEMANTIC_MODEL, SemanticModel, SemanticOutputSpec
+from semantics.types.annotated_schema import AnnotatedSchema
+from semantics.types.core import CompatibilityGroup
 from semantics.view_kinds import VIEW_KIND_ORDER
 from utils.hashing import hash64_from_text, hash_msgpack_canonical
 
@@ -30,8 +36,6 @@ if TYPE_CHECKING:
     from semantics.quality import JoinHow, QualityRelationshipSpec
     from semantics.registry import SemanticNormalizationSpec
 
-# Backward-compatible alias.
-_KIND_ORDER = VIEW_KIND_ORDER
 _MIN_JOIN_GROUP_SIZE = 2
 
 
@@ -859,7 +863,7 @@ def optimize_semantics(
     ordered = sorted(
         (*base_views, *ordered_join_group_views),
         key=lambda view: (
-            _KIND_ORDER.get(view.kind, 99),
+            VIEW_KIND_ORDER.get(view.kind, 99),
             view.inputs if view.kind in {"relate", "join_group"} else (),
             view.name,
         ),
@@ -896,9 +900,7 @@ def emit_semantics(ir: SemanticIR) -> SemanticIR:
     )
 
 
-_SPAN_FIELD_NAMES: frozenset[str] = frozenset({"bstart", "bend"})
 _FILE_IDENTITY_NAMES: frozenset[str] = frozenset({"file_id", "path"})
-_SYMBOL_NAMES: frozenset[str] = frozenset({"symbol", "qname"})
 _MIN_BINARY_INPUTS = 2
 _HIGH_FAN_OUT_THRESHOLD = 3
 
@@ -931,53 +933,75 @@ def _classify_graph_position(
     return "intermediate"
 
 
+def _infer_join_strategy_from_schemas(
+    left_schema: AnnotatedSchema,
+    right_schema: AnnotatedSchema,
+) -> str | None:
+    inferred = infer_join_strategy_with_confidence(left_schema, right_schema)
+    if inferred is None:
+        return None
+    return str(inferred.strategy.strategy_type)
+
+
 def _infer_join_strategy_from_fields(
     left_fields: frozenset[str],
     right_fields: frozenset[str],
 ) -> str | None:
-    left_has_spans = _SPAN_FIELD_NAMES.issubset(left_fields)
-    right_has_spans = _SPAN_FIELD_NAMES.issubset(right_fields)
-    left_has_file = bool(left_fields & _FILE_IDENTITY_NAMES)
-    right_has_file = bool(right_fields & _FILE_IDENTITY_NAMES)
+    """Backward-compatible field-name inference helper."""
+    left_schema = _annotated_schema_from_field_names(left_fields)
+    right_schema = _annotated_schema_from_field_names(right_fields)
+    return _infer_join_strategy_from_schemas(left_schema, right_schema)
 
-    if left_has_spans and right_has_spans and left_has_file and right_has_file:
-        return "span_overlap"
 
-    left_fk = {f for f in left_fields if f.endswith("_id") and f != "entity_id"}
-    right_has_entity = "entity_id" in right_fields
-    right_fk = {f for f in right_fields if f.endswith("_id") and f != "entity_id"}
-    left_has_entity = "entity_id" in left_fields
-    if (left_fk and right_has_entity) or (right_fk and left_has_entity):
-        return "foreign_key"
+def _infer_join_keys_from_schemas(
+    left_schema: AnnotatedSchema,
+    right_schema: AnnotatedSchema,
+) -> tuple[tuple[str, str], ...] | None:
+    join_pairs = left_schema.infer_join_keys(right_schema)
+    if not join_pairs:
+        return None
 
-    left_has_symbol = bool(left_fields & _SYMBOL_NAMES)
-    right_has_symbol = bool(right_fields & _SYMBOL_NAMES)
-    if left_has_symbol and right_has_symbol:
-        return "symbol_match"
+    priority = (
+        CompatibilityGroup.FILE_IDENTITY,
+        CompatibilityGroup.ENTITY_IDENTITY,
+        CompatibilityGroup.SPAN_POSITION,
+        CompatibilityGroup.SYMBOL_IDENTITY,
+    )
+    unique_pairs: list[tuple[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for pair in join_pairs:
+        if pair not in seen_pairs:
+            seen_pairs.add(pair)
+            unique_pairs.append(pair)
 
-    if left_has_file and right_has_file:
-        return "equi_join"
+    def _pair_priority(pair: tuple[str, str]) -> tuple[int, str, str]:
+        left_col = left_schema.get(pair[0])
+        right_col = right_schema.get(pair[1])
+        if left_col is None or right_col is None:
+            return (len(priority), pair[0], pair[1])
+        common_groups = set(left_col.compatibility_groups) & set(right_col.compatibility_groups)
+        for index, group in enumerate(priority):
+            if group in common_groups:
+                return (index, pair[0], pair[1])
+        return (len(priority), pair[0], pair[1])
 
-    return None
+    ordered_pairs = sorted(unique_pairs, key=_pair_priority)
+    return tuple(ordered_pairs) if ordered_pairs else None
 
 
 def _infer_join_keys_from_fields(
     left_fields: frozenset[str],
     right_fields: frozenset[str],
 ) -> tuple[tuple[str, str], ...] | None:
-    common = sorted(left_fields & right_fields)
-    if not common:
-        return None
-    priority_groups = [_FILE_IDENTITY_NAMES, _SPAN_FIELD_NAMES, _SYMBOL_NAMES]
-    result: list[tuple[str, str]] = []
-    for group in priority_groups:
-        for name in sorted(group):
-            if name in left_fields and name in right_fields and (name, name) not in result:
-                result.append((name, name))
-    for name in common:
-        if (name, name) not in result:
-            result.append((name, name))
-    return tuple(result) if result else None
+    """Backward-compatible field-name join-key inference helper."""
+    left_schema = _annotated_schema_from_field_names(left_fields)
+    right_schema = _annotated_schema_from_field_names(right_fields)
+    return _infer_join_keys_from_schemas(left_schema, right_schema)
+
+
+def _annotated_schema_from_field_names(field_names: frozenset[str]) -> AnnotatedSchema:
+    arrow_schema = pa.schema([pa.field(name, pa.string()) for name in sorted(field_names)])
+    return AnnotatedSchema.from_arrow_schema(arrow_schema)
 
 
 def _cache_policy_for_position(position: GraphPosition) -> str | None:
@@ -1060,7 +1084,7 @@ def _infer_view_properties(
     *,
     view_names: frozenset[str],
     consumer_map: Mapping[str, list[str]],
-    field_index: Mapping[str, frozenset[str]],
+    schema_index: Mapping[str, AnnotatedSchema],
     relationship_specs: Mapping[str, QualityRelationshipSpec],
 ) -> InferredViewProperties | None:
     position = _classify_graph_position(view, view_names, consumer_map)
@@ -1095,10 +1119,9 @@ def _infer_view_properties(
             inference_confidence=confidence,
         )
 
-    left_fields = field_index.get(left_name, frozenset())
-    right_fields = field_index.get(right_name, frozenset())
-
-    if not left_fields or not right_fields:
+    left_schema = schema_index.get(left_name)
+    right_schema = schema_index.get(right_name)
+    if left_schema is None or right_schema is None:
         confidence = _build_view_inference_confidence(
             strategy=None,
             cache_hint=cache_hint,
@@ -1109,8 +1132,8 @@ def _infer_view_properties(
             inference_confidence=confidence,
         )
 
-    strategy = _infer_join_strategy_from_fields(left_fields, right_fields)
-    keys = _infer_join_keys_from_fields(left_fields, right_fields)
+    strategy = _infer_join_strategy_from_schemas(left_schema, right_schema)
+    keys = _infer_join_keys_from_schemas(left_schema, right_schema)
 
     confidence = _build_view_inference_confidence(
         strategy=strategy,
@@ -1131,19 +1154,39 @@ _BUNDLE_IMPLIED_FIELDS: Mapping[str, frozenset[str]] = {
 }
 
 
-def _build_field_index(
+def _build_schema_index(
     model: SemanticModel,
-) -> dict[str, frozenset[str]]:
+) -> dict[str, AnnotatedSchema]:
     rows = _dataset_rows_for_model(model)
-    index: dict[str, frozenset[str]] = {}
+    index: dict[str, AnnotatedSchema] = {}
     for row in rows:
         explicit = frozenset(row.fields) if row.fields else frozenset()
         implied: frozenset[str] = frozenset()
         for bundle_name in row.bundles:
             implied |= _BUNDLE_IMPLIED_FIELDS.get(bundle_name, frozenset())
-        combined = explicit | implied
-        if combined:
-            index[row.name] = combined
+        field_names = explicit | implied
+
+        declared_schema: pa.Schema | None = None
+        try:
+            candidate_schema = dataset_schema(row.name)
+        except KeyError:
+            candidate_schema = None
+        if isinstance(candidate_schema, pa.Schema):
+            declared_schema = candidate_schema
+            field_names |= frozenset(candidate_schema.names)
+        if not field_names:
+            continue
+
+        declared_fields = (
+            {field.name: field for field in declared_schema}
+            if declared_schema is not None
+            else {}
+        )
+        merged_fields = [
+            declared_fields.get(name, pa.field(name, pa.string()))
+            for name in sorted(field_names)
+        ]
+        index[row.name] = AnnotatedSchema.from_arrow_schema(pa.schema(merged_fields))
     return index
 
 
@@ -1174,7 +1217,7 @@ def infer_semantics(ir: SemanticIR) -> SemanticIR:
 
     view_names = frozenset(view.name for view in ir.views)
     consumer_map = _build_consumer_map(ir.views)
-    field_index = _build_field_index(SEMANTIC_MODEL)
+    schema_index = _build_schema_index(SEMANTIC_MODEL)
     relationship_specs = {spec.name: spec for spec in SEMANTIC_MODEL.relationship_specs}
 
     enriched: list[SemanticIRView] = []
@@ -1184,7 +1227,7 @@ def infer_semantics(ir: SemanticIR) -> SemanticIR:
                 view,
                 view_names=view_names,
                 consumer_map=consumer_map,
-                field_index=field_index,
+                schema_index=schema_index,
                 relationship_specs=relationship_specs,
             )
         except (AttributeError, KeyError, TypeError, ValueError):

@@ -14,11 +14,6 @@ if TYPE_CHECKING:
     from semantics.catalog.dataset_rows import SemanticDatasetRow
     from semantics.quality import JoinHow
 
-# Backward-compatible alias.  ``SemanticIRKind`` is the canonical Literal
-# type for view kind annotations; ``ViewKindStr`` is the single source of
-# truth defined in ``semantics.view_kinds``.
-SemanticIRKind = ViewKindStr
-
 GraphPosition = Literal[
     "source",
     "intermediate",
@@ -114,7 +109,7 @@ class SemanticIRView:
     """Single IR node representing a semantic view definition."""
 
     name: str
-    kind: SemanticIRKind
+    kind: ViewKindStr
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
     inferred_properties: InferredViewProperties | None = None
@@ -151,7 +146,6 @@ __all__ = [
     "InferredViewProperties",
     "SemanticIR",
     "SemanticIRJoinGroup",
-    "SemanticIRKind",
     "SemanticIRView",
     "ir_cache_hint_to_execution_policy",
 ]

@@ -294,7 +294,7 @@ def build_view_product(
         dataset_resolver: Optional manifest-based dataset resolver.
         execution_context: Optional semantic execution context. When provided,
             the resolver is extracted from the context rather than creating a
-            new CompileContext.
+            separate execution context.
 
     Returns:
         PlanProduct: Materialized plan product.

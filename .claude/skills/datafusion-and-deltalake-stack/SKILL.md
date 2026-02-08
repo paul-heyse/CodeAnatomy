@@ -21,4 +21,5 @@ When uncertain:
 - DeltaLake ↔ DataFusion integration details: reference/deltalake_datafusion_integration.md
 - Advanced Rust integration (PyO3 packaging, wheels, CI, native module distribution): reference/datafusion_deltalake_advanced_rust_integration.md
 - DataFusionMixins trait (Delta snapshot schema + predicate parsing helpers): reference/deltalake_datafusionmixins.md
+- Plan combination (composing DataFusion plans via joins/unions/CTEs, Delta integration, parameterized queries, plan serialization): reference/datafusion_plan_combination.md
 - DeltaLake core (format/protocol, client APIs, 3-layer model): reference/deltalake.md

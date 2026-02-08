@@ -74,6 +74,17 @@ def derive_extract_schema(metadata: ExtractMetadata) -> pa.Schema:
             )
             raise ValueError(msg)
         pa_type = resolve_field_type(field_name, type_hint)
+        nested_child_names = metadata.nested_shapes.get(field_name)
+        if nested_child_names:
+            nested_struct = pa.struct(
+                [pa.field(child_name, pa.string()) for child_name in nested_child_names]
+            )
+            if pa.types.is_large_list(pa_type):
+                pa_type = pa.large_list(nested_struct)
+            elif pa.types.is_list(pa_type):
+                pa_type = pa.list_(nested_struct)
+            elif pa.types.is_struct(pa_type):
+                pa_type = nested_struct
         fields.append(pa.field(field_name, pa_type))
 
     return pa.schema(fields)

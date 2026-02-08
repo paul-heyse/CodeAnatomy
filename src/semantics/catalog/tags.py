@@ -7,10 +7,10 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from relspec.view_defs import RELATION_OUTPUT_NAME
 from semantics.catalog.dataset_rows import SemanticDatasetRow, dataset_row
 from semantics.catalog.dataset_specs import dataset_alias, dataset_name_from_alias, dataset_schema
-from semantics.column_types import TableType, infer_column_type, infer_table_type
+from semantics.column_types import ColumnType, TableType, infer_column_type, infer_table_type
+from semantics.types.core import CompatibilityGroup, get_compatibility_groups
 
 
 @dataclass(frozen=True)
@@ -178,19 +178,41 @@ def _infer_entity_from_schema(name: str) -> tuple[str, str] | None:
 
 
 def _infer_entity_grain_from_metadata(row: SemanticDatasetRow) -> tuple[str, str] | None:
-    name = row.name
-    join_keys = set(row.join_keys)
-    rules: tuple[tuple[bool, tuple[str, str]], ...] = (
-        (name == RELATION_OUTPUT_NAME or name.startswith("rel_"), ("edge", "per_edge")),
-        ("node_id" in join_keys or name.startswith("cpg_nodes"), ("node", "per_node")),
-        ("edge_id" in join_keys or name.startswith("cpg_edges"), ("edge", "per_edge")),
-        ("prop_key" in join_keys or name.startswith("cpg_props"), ("prop", "per_prop")),
-        ("file_id" in join_keys or "file" in name, ("file", "per_file")),
-        ("symbol" in join_keys or "symbol" in name, ("symbol", "per_symbol")),
-    )
-    for condition, value in rules:
-        if condition:
-            return value
+    join_keys = tuple(row.join_keys)
+    join_key_types = {infer_column_type(name) for name in join_keys}
+    join_key_groups = {group for name in join_keys for group in get_compatibility_groups(name)}
+    all_columns = {*join_keys, *row.fields, *row.partition_cols}
+    table_type = infer_table_type({infer_column_type(name) for name in all_columns})
+
+    if (
+        CompatibilityGroup.ENTITY_IDENTITY in join_key_groups
+        and CompatibilityGroup.SYMBOL_IDENTITY in join_key_groups
+    ):
+        return ("edge", "per_edge")
+    if ColumnType.FILE_ID in join_key_types or ColumnType.PATH in join_key_types:
+        return ("file", "per_file")
+    if CompatibilityGroup.SYMBOL_IDENTITY in join_key_groups or ColumnType.SYMBOL in join_key_types:
+        return ("symbol", "per_symbol")
+    table_type_mapping = {
+        TableType.RELATION: ("edge", "per_edge"),
+        TableType.ENTITY: ("entity", "per_entity"),
+        TableType.EVIDENCE: ("evidence", "per_evidence"),
+        TableType.SYMBOL_SOURCE: ("symbol", "per_symbol"),
+    }
+    inferred = table_type_mapping.get(table_type)
+    if inferred is not None:
+        return inferred
+    if (
+        CompatibilityGroup.ENTITY_IDENTITY in join_key_groups
+        or ColumnType.ENTITY_ID in join_key_types
+    ):
+        return ("entity", "per_entity")
+    if ColumnType.EVIDENCE in join_key_types:
+        return ("evidence", "per_evidence")
+    if ColumnType.TEXT in join_key_types:
+        return ("text", "per_record")
+    if ColumnType.NESTED in join_key_types:
+        return ("nested", "per_record")
     return None
 
 

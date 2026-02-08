@@ -304,6 +304,8 @@ class TestGlobalRegistry:
             "workload_classification_v1",
             "pruning_metrics_v1",
             "decision_provenance_graph_v1",
+            "policy_counterfactual_replay_v1",
+            "fallback_quarantine_v1",
             "policy_calibration_result_v1",
         ]
         for name in expected_names:

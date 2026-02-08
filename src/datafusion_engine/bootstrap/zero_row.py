@@ -34,7 +34,7 @@ from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.registry import (
     extract_nested_dataset_names,
-    extract_nested_schema_for,
+    extract_schema_for,
     relationship_schema_for,
     relationship_schema_names,
 )
@@ -205,7 +205,7 @@ def build_zero_row_plan(
             ZeroRowDatasetPlan(
                 name=name,
                 role="extract_nested",
-                schema=pa.schema(extract_nested_schema_for(name)),
+                schema=pa.schema(extract_schema_for(name)),
                 location=dataset_locations.get(name),
                 required=False,
             ),

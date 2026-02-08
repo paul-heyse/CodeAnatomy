@@ -13,7 +13,8 @@ Design target:
 
 - Maximally deterministic behavior.
 - Robust autonomous optimization with minimal custom control-plane overhead.
-- Near-zero dependence on bespoke policy/protocol/artifact subsystems.
+- Policy represented as planner-visible Rust rulepacks, not external services.
+- Near-zero dependence on bespoke protocol/artifact subsystems.
 - Optional observability/compliance overlays that can be switched on without changing core execution.
 
 ---
@@ -31,7 +32,9 @@ we can replace heavy custom orchestration/governance services with:
 
 - A deterministic session contract,
 - A semantic-to-relational compiler,
+- A semantic-intent to rulepack compiler,
 - A single combined LogicalPlan DAG execution strategy,
+- Analyzer/logical/physical optimizer rulepacks registered in deterministic order,
 - Delta-native providers and commit semantics,
 - Built-in optimizer/metrics/metadata capabilities.
 
@@ -41,16 +44,17 @@ we can replace heavy custom orchestration/governance services with:
 
 The default platform does not require:
 
-- A bespoke policy engine.
+- A bespoke policy engine service.
 - A bespoke protocol validator service.
 - A large persistent run-artifact subsystem.
 
 These are replaced by engine-native contracts:
 
 - SessionContext contract,
-- analyzer/optimizer/physical planning invariants,
+- analyzer/optimizer/physical planning invariants with explicit custom rules,
 - Delta snapshot + commit consistency,
-- deterministic schema/registration contracts.
+- deterministic schema/registration contracts,
+- rule-by-rule explainability through `EXPLAIN VERBOSE`.
 
 Optional governance and artifact packs are layered later and are non-blocking.
 
@@ -65,13 +69,16 @@ Optional governance and artifact packs are layered later and are non-blocking.
    - No planning logic.
 2. Semantic Compiler:
    - Converts semantic view definitions to a normalized relational intent graph.
-3. Plan Combiner:
+3. Rulepack Compiler:
+   - Compiles semantic constraints into analyzer/logical/physical rulepacks.
+   - Emits deterministic rule registration order and activation conditions.
+4. Plan Combiner:
    - Produces one global LogicalPlan DAG (or minimal DAG partition set) using joins/unions/subqueries/CTEs.
-4. Delta-Aware Physical Planner:
+5. Delta-Aware Physical Planner:
    - Uses Delta providers, scan config, pruning, and partitioning controls.
-5. Execution Core:
+6. Execution Core:
    - Executes physical plans and writes CPG outputs to Delta.
-6. Optional Compliance Overlay:
+7. Optional Compliance Overlay:
    - Can collect explain/metrics snapshots if required.
 
 ## 4.2 Language Split
@@ -95,6 +102,7 @@ Every run is defined by a deterministic envelope:
 - Catalog/schema/table registrations.
 - UDF/UDAF/UDWF/UDTF registrations.
 - Semantic spec hash.
+- Rulepack hash (analyzer/logical/physical rule IDs + versions + order).
 
 No plan execution is allowed outside this envelope.
 
@@ -112,6 +120,13 @@ Rationale:
 - Canonical unquoted lowercase naming for internal relations.
 - Explicit quoting policy for externally mixed-case schemas.
 - Canonical Arrow schema mapping and explicit casts with `arrow_cast` where needed.
+
+## 5.4 Rulepack Determinism Contract
+
+- Register rules once at session construction; no mid-query mutation.
+- Rule ordering is explicit and stable across runs.
+- Rule activation is driven by deterministic predicates over spec/session/workload class.
+- The effective rule graph is fingerprinted and returned with run outputs.
 
 ---
 
@@ -132,6 +147,8 @@ A `SemanticExecutionSpec` object with:
 - Required derived views.
 - Materialization endpoints.
 - Parameter template definitions (where needed).
+- Rule intents (semantic constraints, optimization intents, allowed rewrites).
+- Rulepack activation profile (default, low-latency, replay, strict).
 
 ## 6.3 Compiler Rules
 
@@ -140,6 +157,8 @@ A `SemanticExecutionSpec` object with:
 3. Prefer single-DAG execution unless memory or latency profile mandates partition.
 4. Use CTE/subquery structure for reusable subplans.
 5. Use union-by-name semantics in Rust for schema drift-safe unions.
+6. Compile semantic constraints into planning-visible rule intents.
+7. Map intents to concrete analyzer/logical/physical rule instances.
 
 ---
 
@@ -165,12 +184,41 @@ Use stable plan shapes with runtime values:
 ## 7.3 Plan Stages
 
 1. Parse/bind/analyze.
-2. Logical optimization.
-3. Physical plan generation.
-4. Physical optimization.
-5. Execution.
+2. Analyzer rules.
+3. Logical optimization (built-in + custom `OptimizerRule`s).
+4. Physical plan generation.
+5. Physical optimization (built-in + custom `PhysicalOptimizerRule`s).
+6. Execution.
 
 System design uses this pipeline directly rather than re-implementing planning logic in application code.
+
+## 7.4 Rules-as-Policy Architecture (Rust-First)
+
+Policy is encoded as rewrite rules and planner hooks, not external runtime checks.
+
+Registration and control surfaces:
+
+- `SessionContext.add_analyzer_rule(...)` for semantic and contract normalization.
+- `SessionContext.add_optimizer_rule(...)` and `remove_optimizer_rule(...)` for logical rewrites.
+- `SessionStateBuilder.with_physical_optimizer_rule(...)` for physical topology control.
+- `SessionState.add_physical_optimizer_rule(...)` for controlled runtime augmentation when needed.
+
+Rule classes:
+
+1. Semantic integrity rules:
+   - Enforce join-key completeness, required columns, cardinality-safe rewrites.
+2. Delta-aware scan rules:
+   - Ensure scans remain on native Delta providers and preserve pushdown opportunities.
+3. Cost-shape rules:
+   - Normalize repartition/sort/limit shapes for workload-specific latency targets.
+4. Safety rules:
+   - Reject or rewrite non-deterministic constructs outside approved envelopes.
+
+Traceability model:
+
+- `EXPLAIN VERBOSE` is the canonical per-rule trace surface.
+- Capture the ordered `plan_type` transitions (`initial_*`, `after <rule>`, final).
+- Persist only compact rule-impact digests by default; full explain capture remains optional.
 
 ---
 
@@ -267,9 +315,10 @@ Outputs (bounded):
 - `target_partitions`,
 - repartition toggles,
 - parquet pushdown toggles (only if regressions detected),
+- rulepack activation profile (`default`, `low_latency`, `replay`, `strict`),
 - batch-size bounds.
 
-The tuner updates a small set of session knobs; no broad policy language.
+The tuner updates a bounded set of session knobs and active rule profiles; policy remains embedded in planner-visible rules.
 
 ## 9.4 Stability Guardrails
 
@@ -315,12 +364,13 @@ Default control plane contains only:
 
 - Session factory,
 - semantic-spec compiler,
+- rulepack compiler/registrar,
 - planner/executor invocation,
 - commit coordinator.
 
 No dedicated:
 
-- policy compiler service,
+- policy compiler microservice,
 - protocol governance microservice,
 - artifact warehouse.
 
@@ -336,6 +386,8 @@ Default off. Enable only when needed.
 
 - Explain rows (`EXPLAIN`, `EXPLAIN VERBOSE`, optionally `ANALYZE`).
 - Effective SessionConfig snapshot.
+- Effective rulepack snapshot (rule IDs, order, activation profile).
+- Rule-impact digest (`before`/`after` plan fingerprints per applied rule).
 - Commit summary (table/version/rows/files).
 
 ## 12.2 Optional Retention
@@ -359,9 +411,10 @@ Deliverables:
 
 Tasks:
 
-1. Define relation, join, output, parameter, and materialization sections.
+1. Define relation, join, output, parameter, materialization, and rule-intent sections.
 2. Add schema for versioned backward-compatible parsing.
 3. Add strict unknown-field rejection in Rust.
+4. Add rulepack activation profile and deterministic hashing fields.
 
 ## WS2: Rust Session Factory
 
@@ -373,7 +426,8 @@ Tasks:
 
 1. Implement config/runtime builder in Rust.
 2. Register all required functions/providers in deterministic order.
-3. Add environment fingerprint function.
+3. Register analyzer/logical/physical rules in deterministic order.
+4. Add environment + effective-rulepack fingerprint function.
 
 ## WS3: Delta Provider Manager
 
@@ -392,7 +446,7 @@ Tasks:
 
 Deliverables:
 
-- Rust planner that builds combined DAG from semantic spec.
+- Rust planner that builds combined DAG from semantic spec and emits rule-intent anchors.
 
 Tasks:
 
@@ -400,18 +454,21 @@ Tasks:
 2. Emit CTE/subquery/join/union blocks.
 3. Normalize unions using by-name semantics.
 4. Validate logical plan completeness before optimization.
+5. Emit deterministic rule attachment points for downstream rulepack compiler.
 
-## WS5: Parameterized Plan Templates
+## WS5: Parameterized Plan Templates and Rulepack Activation
 
 Deliverables:
 
-- Prepared-template execution module.
+- Prepared-template execution module + rulepack activation runtime.
 
 Tasks:
 
 1. Support prepared SQL plans and parameter execution.
 2. Support Rust `with_param_values` for plan reuse.
 3. Ensure parameter binding preserves plan shape identity.
+4. Compile rule-intents into concrete rule instances for analyzer/logical/physical stages.
+5. Activate/deactivate rule profiles deterministically by workload class.
 
 ## WS6: Execution Engine
 
@@ -423,7 +480,7 @@ Tasks:
 
 1. Execute physical plans via Rust runtime.
 2. Materialize CPG outputs to Delta with deterministic naming.
-3. Return compact run result object (success, output locations, commit versions).
+3. Return compact run result object (success, output locations, commit versions, rulepack fingerprint).
 
 ## WS7: Adaptive Tuner
 
@@ -435,7 +492,8 @@ Tasks:
 
 1. Capture minimal runtime metrics needed for tuning.
 2. Implement bounded knob adjustment policy.
-3. Add rollback-on-regression logic.
+3. Add bounded rule-profile adaptation policy.
+4. Add rollback-on-regression logic.
 
 ## WS8: Schema Runtime Utilities
 
@@ -471,8 +529,9 @@ Deliverables:
 Tasks:
 
 1. Add explain capture toggles.
-2. Add compact run envelope serialization.
-3. Add retention controls.
+2. Add per-rule impact digest capture from `EXPLAIN VERBOSE`.
+3. Add compact run envelope serialization.
+4. Add retention controls.
 
 ---
 
@@ -480,15 +539,15 @@ Tasks:
 
 ## Phase 1: Deterministic Core
 
-Implement WS1-WS4.
+Implement WS1-WS5.
 
 Exit:
 
-- Combined logical plans execute deterministically for target workloads.
+- Combined logical plans and deterministic rulepacks execute reproducibly for target workloads.
 
 ## Phase 2: Native Delta Execution
 
-Implement WS5-WS6.
+Implement WS6.
 
 Exit:
 
@@ -524,9 +583,11 @@ Exit:
 
 1. Same semantic spec + same snapshot versions + same session envelope => same CPG outputs.
 2. All production runs use native Delta providers; no dataset fallback path.
-3. Global plan combination is stable and reproducible.
-4. Auto-tuning never violates bounded knobs and self-recovers from regressions.
-5. Core runtime succeeds without requiring custom policy/protocol/artifact services.
+3. Same semantic spec + same profile => same effective rulepack fingerprint and order.
+4. Global plan combination is stable and reproducible.
+5. Auto-tuning never violates bounded knobs/rule-profile limits and self-recovers from regressions.
+6. Rule effects are attributable via `EXPLAIN VERBOSE` stage transitions.
+7. Core runtime succeeds without requiring custom policy/protocol/artifact services.
 
 ---
 
@@ -540,22 +601,26 @@ Use directly:
 - Rust `LogicalPlanBuilder` for explicit structural composition.
 - Prepared statements and parameter binding for stable plan shapes.
 - Optional Substrait for portable logical plan interchange.
+- Rule-intent anchors attached to plan nodes for deterministic downstream rewrites.
 
 Implementation usage:
 
-- WS4 (Global Plan Combiner) and WS5 (Parameterized Plan Templates).
+- WS4 (Global Plan Combiner) and WS5 (Parameterized Plan Templates and Rulepack Activation).
 
 ## 16.2 Planning Pipeline Features
 
 Use directly:
 
 - Analyzer/optimizer/physical-planner pipeline.
-- Optional rule injection through Rust session hooks.
-- `EXPLAIN` and `EXPLAIN VERBOSE` only as optional operational introspection.
+- Rule registration through Rust hooks:
+  - `add_analyzer_rule`,
+  - `add_optimizer_rule` / `remove_optimizer_rule`,
+  - `with_physical_optimizer_rule` / `add_physical_optimizer_rule`.
+- `EXPLAIN VERBOSE` as canonical rule-by-rule trace.
 
 Implementation usage:
 
-- WS2 (Session Factory), WS4 (Combiner), WS10 (Compliance Pack).
+- WS2 (Session Factory), WS4 (Combiner), WS5 (Rulepack Activation), WS10 (Compliance Pack).
 
 ## 16.3 Schema and Catalog Features
 
@@ -623,6 +688,13 @@ Implementation usage:
 2. After stability window, bounded adaptation is enabled.
 3. Any detected regression reverts to last stable configuration.
 
+## 17.4 Rulepack Defaults
+
+1. Rulepack registration is static per run and fingerprinted.
+2. Default profile is `default`; `strict` is used for replay/regulatory runs.
+3. `low_latency` profile may relax non-correctness rewrites only.
+4. Safety/integrity rules are always-on and non-disableable.
+
 ---
 
 ## 18) Concrete Interface and Module Blueprint (Blank-Page)
@@ -637,11 +709,15 @@ Implementation usage:
    - Provider build/registration, snapshot mode, CDF path.
 4. `semantic_plan_compiler`:
    - Semantic spec -> combined logical plan builder.
-5. `plan_executor`:
+5. `rulepack_compiler`:
+   - Rule-intent lowering to analyzer/logical/physical rule objects.
+6. `rulepack_registry`:
+   - Deterministic registration/order/fingerprint of active rules.
+7. `plan_executor`:
    - Physical plan execution + CPG output writes.
-6. `adaptive_tuner`:
+8. `adaptive_tuner`:
    - Bounded tuning logic.
-7. `compliance_overlay`:
+9. `compliance_overlay`:
    - Optional explain/config/commit capture.
 
 ## 18.2 Python Modules
@@ -662,23 +738,25 @@ Implementation usage:
 3. Create deterministic SessionContext via Rust session factory.
 4. Register all Delta inputs as native providers in deterministic order.
 5. Compile semantic spec to combined LogicalPlan DAG.
-6. Bind parameters and finalize plan.
-7. Run analyzer/optimizer/physical planning.
-8. Execute physical plan and materialize CPG outputs to Delta.
-9. Return compact result envelope:
+6. Lower rule intents to analyzer/logical/physical rulepacks and register deterministically.
+7. Bind parameters and finalize plan.
+8. Run analyzer/optimizer/physical planning with active rule profile.
+9. Execute physical plan and materialize CPG outputs to Delta.
+10. Return compact result envelope:
    - output tables,
    - commit versions,
    - spec hash,
-   - session fingerprint.
-10. Optionally run compliance capture if enabled.
+   - session fingerprint,
+   - rulepack fingerprint.
+11. Optionally run compliance capture if enabled.
 
 ---
 
 ## 20) Immediate Next Actions
 
-1. Approve `SemanticExecutionSpec` field schema.
-2. Build Rust session/provider/planner skeleton (WS1-WS4).
+1. Approve `SemanticExecutionSpec` field schema including rule-intent payloads.
+2. Build Rust session/provider/planner/rulepack skeleton (WS1-WS5).
 3. Create one vertical slice:
-   - extraction Delta inputs -> semantic spec -> combined plan -> CPG Delta outputs.
-4. Add bounded auto-tuner skeleton with no-op defaults.
+   - extraction Delta inputs -> semantic spec -> combined plan -> rulepack execution -> CPG Delta outputs.
+4. Add bounded auto-tuner skeleton with profile switching but no-op thresholds.
 5. Keep compliance overlay out-of-path until explicitly requested.

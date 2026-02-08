@@ -284,7 +284,10 @@ class CompiledExecutionPolicyArtifact(StructBaseCompat, frozen=True):
     cache_policy_count: NonNegativeInt
     scan_override_count: NonNegativeInt
     udf_requirement_count: NonNegativeInt
+    join_strategy_count: NonNegativeInt = 0
+    inference_confidence_count: NonNegativeInt = 0
     validation_mode: str = "warn"
+    workload_class: str | None = None
     policy_fingerprint: str | None = None
     cache_policy_distribution: dict[str, NonNegativeInt] | None = None
 
@@ -709,6 +712,29 @@ class RunManifestEnvelope(ArtifactEnvelopeBase, tag="run_manifest", frozen=True)
     payload: RunManifest
 
 
+class PolicyValidationIssueArtifact(StructBaseCompat, frozen=True):
+    """Single issue entry within the policy validation artifact payload."""
+
+    code: str
+    severity: Literal["error", "warn"]
+    task: str | None = None
+    detail: str | None = None
+
+
+class PolicyValidationArtifact(StructBaseCompat, frozen=True):
+    """Policy validation artifact payload emitted at plan-context assembly."""
+
+    validation_mode: str
+    issue_count: NonNegativeInt
+    error_codes: tuple[str, ...]
+    runtime_hash: str
+    is_deterministic: bool
+    semantic_manifest_present: bool = True
+    errors: NonNegativeInt = 0
+    warnings: NonNegativeInt = 0
+    issues: tuple[PolicyValidationIssueArtifact, ...] = ()
+
+
 class WorkloadClassificationArtifact(StructBaseCompat, frozen=True):
     """Workload classification artifact payload.
 
@@ -796,6 +822,40 @@ class DecisionProvenanceGraphArtifact(StructBaseCompat, frozen=True):
     mean_confidence: NonNegativeFloat | None = None
 
 
+class CounterfactualScenarioOutcome(StructBaseCompat, frozen=True):
+    """Single counterfactual replay outcome."""
+
+    scenario_name: str
+    policy_fingerprint: str | None = None
+    changed_cache_views: NonNegativeInt = 0
+    changed_scan_overrides: NonNegativeInt = 0
+    estimated_cost_delta: float | None = None
+    notes: str = ""
+
+
+class PolicyCounterfactualReplayArtifact(StructBaseCompat, frozen=True):
+    """Counterfactual replay summary artifact."""
+
+    baseline_policy_fingerprint: str | None = None
+    baseline_workload_class: str | None = None
+    scenario_count: NonNegativeInt = 0
+    best_scenario: str | None = None
+    scenarios: tuple[CounterfactualScenarioOutcome, ...] = ()
+
+
+class FallbackQuarantineArtifact(StructBaseCompat, frozen=True):
+    """Fallback quarantine diagnostics summary artifact."""
+
+    run_id: str = ""
+    decision_count: NonNegativeInt = 0
+    fallback_count: NonNegativeInt = 0
+    quarantined_count: NonNegativeInt = 0
+    quarantined_contexts: tuple[str, ...] = ()
+    reason_counts: dict[str, NonNegativeInt] | None = None
+    threshold_confidence: NonNegativeFloat = 0.0
+    max_fallback_ratio: NonNegativeFloat = 0.0
+
+
 def artifact_envelope_id(envelope: ArtifactEnvelopeBase) -> str:
     """Return a deterministic hash identifier for an artifact envelope.
 
@@ -852,6 +912,7 @@ def export_artifact_schemas(output_dir: Path) -> tuple[Path, ...]:
 __all__ = [
     "ArtifactEnvelopeBase",
     "CompileResolverInvariantArtifact",
+    "CounterfactualScenarioOutcome",
     "DecisionProvenanceGraphArtifact",
     "DeltaInputPin",
     "DeltaMaintenanceDecisionArtifact",
@@ -861,6 +922,7 @@ __all__ = [
     "DeltaStatsDecisionEnvelope",
     "ExecutionPlanProtoBytes",
     "ExtractErrorsArtifact",
+    "FallbackQuarantineArtifact",
     "IncrementalMetadataSnapshot",
     "LogicalPlanProtoBytes",
     "NormalizeOutputsArtifact",
@@ -874,6 +936,9 @@ __all__ = [
     "PlanSignalsArtifact",
     "PlanValidationArtifact",
     "PlanValidationEnvelope",
+    "PolicyCounterfactualReplayArtifact",
+    "PolicyValidationArtifact",
+    "PolicyValidationIssueArtifact",
     "PruningMetricsArtifact",
     "RunManifest",
     "RunManifestEnvelope",

@@ -31,18 +31,13 @@ relationship_names = _registry.relationship_names
 spec_for_relationship = _registry.spec_for_relationship
 spec_for_table = _registry.spec_for_table
 
-# Backward-compatible alias.  ``SpecKind`` is the canonical Literal type
-# for spec kind annotations; ``ViewKindStr`` is the single source of truth
-# defined in ``semantics.view_kinds``.
-SpecKind = ViewKindStr
-
 
 @dataclass(frozen=True)
 class SemanticSpecIndex:
     """Index entry for spec-driven semantic pipeline generation."""
 
     name: str
-    kind: SpecKind
+    kind: ViewKindStr
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
     output_policy: Literal["raw", "v1"] = "v1"

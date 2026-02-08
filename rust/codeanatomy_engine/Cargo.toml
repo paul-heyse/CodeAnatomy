@@ -1,0 +1,44 @@
+[package]
+name = "codeanatomy-engine"
+version = "0.1.0"
+edition = "2021"
+description.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "codeanatomy_engine"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Workspace dependencies (pinned versions)
+datafusion = { workspace = true, features = ["parquet"] }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-functions-aggregate = { workspace = true }
+arrow = { workspace = true }
+pyo3 = { workspace = true, features = ["extension-module"], optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+
+# Local workspace crate — existing UDFs, Delta control plane, rules
+datafusion_ext = { path = "../datafusion_ext" }
+
+# Engine-specific dependencies
+deltalake = { version = "0.30.1", features = ["datafusion"] }
+blake3 = "1"
+uuid = { version = "1", features = ["v4"] }
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = []
+compliance = []
+pyo3 = ["dep:pyo3"]

@@ -77,19 +77,24 @@ def _resolve_edge_owner(
     """
     from datafusion import col
 
-    file_id_cols = {
+    file_id_cols = tuple(
         c.name for c in annotated.columns_by_compatibility_group(CompatibilityGroup.FILE_IDENTITY)
-    }
-    has_edge_owner = "edge_owner_file_id" in file_id_cols
-    has_file_id = "file_id" in file_id_cols
-
-    if has_edge_owner and has_file_id:
-        return coalesce(col("edge_owner_file_id"), col("file_id"))
-    if has_edge_owner:
-        return col("edge_owner_file_id")
-    if has_file_id:
-        return col("file_id")
-    return null_expr
+    )
+    if not file_id_cols:
+        return null_expr
+    semantic_type_by_name = {c.name: c.semantic_type for c in annotated}
+    ordered_names = sorted(
+        file_id_cols,
+        key=lambda name: (
+            semantic_type_by_name.get(name) != SemanticType.FILE_ID,
+            semantic_type_by_name.get(name) == SemanticType.PATH,
+            name,
+        ),
+    )
+    expressions = [col(name) for name in ordered_names]
+    if len(expressions) == 1:
+        return expressions[0]
+    return coalesce(*expressions)
 
 
 def relation_output_projection(
@@ -130,12 +135,17 @@ def relation_output_projection(
 
     edge_owner = _resolve_edge_owner(annotated, null_str, coalesce=f.coalesce)
 
-    if "resolution_method" in names:
-        resolution_method = col("resolution_method").cast(pa.string())
-    elif annotated.has_semantic_type(SemanticType.ORIGIN):
-        resolution_method = col("origin").cast(pa.string())
-    else:
-        resolution_method = null_str
+    resolution_col = "resolution_method" if "resolution_method" in names else None
+    if resolution_col is None:
+        origin_candidates = (
+            c.name
+            for c in annotated.columns_by_semantic_type(SemanticType.ORIGIN)
+            if c.name in names
+        )
+        resolution_col = next(iter(origin_candidates), None)
+    resolution_method = (
+        col(resolution_col).cast(pa.string()) if resolution_col is not None else null_str
+    )
 
     qname_source = (
         col(spec.qname_source_col).cast(pa.string())

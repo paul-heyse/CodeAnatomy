@@ -99,7 +99,7 @@ from datafusion_engine.schema.registry import (
     TREE_SITTER_CHECK_VIEWS,
     TREE_SITTER_VIEW_NAMES,
     extract_nested_dataset_names,
-    extract_nested_schema_for,
+    extract_schema_for,
     missing_schema_names,
     relationship_schema_for,
     relationship_schema_names,
@@ -6331,7 +6331,7 @@ class DataFusionRuntimeProfile(
         self._register_schema_tables(
             ctx,
             names=extract_nested_dataset_names(),
-            resolver=extract_nested_schema_for,
+            resolver=extract_schema_for,
         )
         from datafusion_engine.extract.registry import dataset_schema as extract_dataset_schema
         from semantics.input_registry import SEMANTIC_INPUT_SPECS

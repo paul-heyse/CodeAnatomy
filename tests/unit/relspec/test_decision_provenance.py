@@ -606,6 +606,17 @@ class TestBuildProvenanceGraph:
         assert graph.decisions[0].domain == "scan_policy"
         assert graph.decisions[0].context_label == "dataset_x"
 
+    def test_join_strategies_become_decisions(self) -> None:
+        """Join strategy entries become join_strategy domain decisions."""
+        policy = CompiledExecutionPolicy(
+            join_strategy_by_view={"rel_calls": "foreign_key"},
+        )
+        graph = build_provenance_graph(policy, {}, run_id="run-2b")
+        assert len(graph.decisions) == 1
+        assert graph.decisions[0].domain == "join_strategy"
+        assert graph.decisions[0].context_label == "rel_calls"
+        assert graph.decisions[0].decision_value == "foreign_key"
+
     def test_confidence_attached_to_cache_policy(self) -> None:
         """InferenceConfidence records are attached to matching cache decisions."""
         policy = CompiledExecutionPolicy(
@@ -676,20 +687,22 @@ class TestBuildProvenanceGraph:
         policy = CompiledExecutionPolicy(
             cache_policy_by_view={"view_a": "delta_staging"},
             scan_policy_overrides={"dataset_x": {"pushdown": True}},
+            join_strategy_by_view={"rel_a": "span_overlap"},
         )
         graph = build_provenance_graph(policy, {}, run_id="run-6")
-        assert len(graph.decisions) == 2
+        assert len(graph.decisions) == 3
         domains = {d.domain for d in graph.decisions}
-        assert domains == {"cache_policy", "scan_policy"}
+        assert domains == {"cache_policy", "scan_policy", "join_strategy"}
 
     def test_all_decisions_are_roots(self) -> None:
         """All compiled policy decisions are root nodes (no parent chain)."""
         policy = CompiledExecutionPolicy(
             cache_policy_by_view={"v1": "a", "v2": "b"},
             scan_policy_overrides={"d1": {"x": 1}},
+            join_strategy_by_view={"rel": "equi_join"},
         )
         graph = build_provenance_graph(policy, {}, run_id="run-7")
-        assert len(graph.root_ids) == 3
+        assert len(graph.root_ids) == 4
         assert set(graph.root_ids) == {d.decision_id for d in graph.decisions}
 
     def test_decision_type_is_compiled(self) -> None:

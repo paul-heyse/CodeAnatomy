@@ -61,7 +61,7 @@ from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import delta_constraints_for_location
 from datafusion_engine.sql.options import sql_options_for_profile
-from relspec.table_size_tiers import _DEFAULT_THRESHOLDS
+from relspec.table_size_tiers import TableSizeTier, classify_table_size
 from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints, dataset_spec_name
 from schema_spec.system import DeltaMaintenancePolicy
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
@@ -290,8 +290,6 @@ def _normalize_stats_dataset_name(name: str) -> str:
     return normalized
 
 
-_ADAPTIVE_SMALL_TABLE_THRESHOLD = _DEFAULT_THRESHOLDS.small_threshold
-_ADAPTIVE_LARGE_TABLE_THRESHOLD = _DEFAULT_THRESHOLDS.large_threshold
 _ADAPTIVE_SMALL_FILE_CAP = 32 * 1024 * 1024  # 32 MB
 _ADAPTIVE_LARGE_FILE_FLOOR = 128 * 1024 * 1024  # 128 MB
 
@@ -318,9 +316,10 @@ def compute_adaptive_file_size(
     int
         Adaptive target file size in bytes.
     """
-    if estimated_rows < _ADAPTIVE_SMALL_TABLE_THRESHOLD:
+    size_tier = classify_table_size(estimated_rows)
+    if size_tier is TableSizeTier.SMALL:
         return min(base_target, _ADAPTIVE_SMALL_FILE_CAP)
-    if estimated_rows > _ADAPTIVE_LARGE_TABLE_THRESHOLD:
+    if size_tier is TableSizeTier.LARGE:
         return max(base_target, _ADAPTIVE_LARGE_FILE_FLOOR)
     return base_target
 
@@ -361,11 +360,12 @@ def _adaptive_file_size_from_bundle(
     adaptive = compute_adaptive_file_size(row_count, target_file_size)
     if adaptive == target_file_size:
         return target_file_size, None
+    size_tier = classify_table_size(row_count)
     return adaptive, _AdaptiveFileSizeDecision(
         base_target_file_size=target_file_size,
         adaptive_target_file_size=adaptive,
         estimated_rows=row_count,
-        reason=("small_table" if row_count < _ADAPTIVE_SMALL_TABLE_THRESHOLD else "large_table"),
+        reason=("small_table" if size_tier is TableSizeTier.SMALL else "large_table"),
     )
 
 

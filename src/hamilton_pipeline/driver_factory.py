@@ -67,7 +67,10 @@ from relspec.execution_authority import ExecutionAuthorityContext
 from relspec.view_defs import RELATION_OUTPUT_NAME
 from serde_artifact_specs import (
     COMPILED_EXECUTION_POLICY_SPEC,
+    DECISION_PROVENANCE_GRAPH_SPEC,
     EXECUTION_AUTHORITY_VALIDATION_SPEC,
+    FALLBACK_QUARANTINE_SPEC,
+    POLICY_COUNTERFACTUAL_REPLAY_SPEC,
     POLICY_VALIDATION_SPEC,
 )
 from utils.env_utils import env_bool, env_value
@@ -77,15 +80,23 @@ if TYPE_CHECKING:
     from hamilton.base import HamiltonGraphAdapter
     from hamilton.io.materialization import MaterializerFactory
 
+    from datafusion_engine.delta.scan_policy_inference import ScanPolicyOverride
+    from datafusion_engine.extensions.runtime_capabilities import RuntimeCapabilitiesSnapshot
+    from datafusion_engine.plan.signals import PlanSignals
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
     from extract.coordination.evidence_plan import EvidencePlan
     from hamilton_pipeline.cache_lineage import CacheLineageHook
     from hamilton_pipeline.graph_snapshot import GraphSnapshotHook
     from relspec.compiled_policy import CompiledExecutionPolicy
+    from relspec.counterfactual_replay import CounterfactualScenario
+    from relspec.decision_provenance import DecisionProvenanceGraph
     from relspec.execution_plan import ExecutionPlan
+    from relspec.inference_confidence import InferenceConfidence
+    from relspec.pipeline_policy import DiagnosticsPolicy
     from relspec.policy_validation import PolicyValidationResult
     from semantics.compile_context import SemanticExecutionContext
+    from semantics.ir import SemanticIR
     from semantics.program_manifest import ManifestDatasetResolver
 
 try:
@@ -652,18 +663,87 @@ def _compile_authority_policy(
     *,
     plan: ExecutionPlan,
     profile: DataFusionRuntimeProfile,
+    semantic_ir: SemanticIR | None = None,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None = None,
 ) -> CompiledExecutionPolicy | None:
     from relspec.policy_compiler import compile_execution_policy
 
     try:
         output_locations = profile.data_sources.semantic_output.locations
+        scan_overrides = _scan_overrides_from_plan(
+            plan=plan,
+            profile=profile,
+            capability_snapshot=capability_snapshot,
+        )
+        diagnostics_policy = _diagnostics_policy_from_profile(profile)
+        workload_class = _workload_class_from_plan(plan)
         return compile_execution_policy(
             task_graph=plan.task_graph,
             output_locations=output_locations,
             runtime_profile=profile,
+            view_nodes=plan.view_nodes,
+            semantic_ir=semantic_ir,
+            scan_overrides=scan_overrides,
+            diagnostics_policy=diagnostics_policy,
+            workload_class=workload_class,
         )
     except Exception:  # noqa: BLE001
         return None
+
+
+def _workload_class_from_plan(plan: ExecutionPlan) -> str | None:
+    representative = _representative_plan_signals(plan)
+    if representative is None:
+        return None
+    _task_name, signals = representative
+    from datafusion_engine.workload.classifier import classify_workload
+
+    return classify_workload(signals).value
+
+
+def _scan_overrides_from_plan(
+    *,
+    plan: ExecutionPlan,
+    profile: DataFusionRuntimeProfile,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> tuple[ScanPolicyOverride, ...]:
+    from datafusion_engine.delta.scan_policy_inference import derive_scan_policy_overrides
+    from datafusion_engine.plan.pipeline import _merge_scan_policy_overrides
+    from datafusion_engine.plan.signals import extract_plan_signals
+
+    overrides: list[ScanPolicyOverride] = []
+    base_policy = profile.policies.scan_policy
+    for node in sorted(plan.view_nodes, key=lambda item: item.name):
+        bundle = node.plan_bundle
+        if bundle is None:
+            continue
+        signals = extract_plan_signals(bundle)
+        overrides.extend(
+            derive_scan_policy_overrides(
+                signals,
+                base_policy=base_policy,
+                capability_snapshot=capability_snapshot,
+            )
+        )
+    return _merge_scan_policy_overrides(overrides)
+
+
+def _diagnostics_policy_from_profile(
+    profile: DataFusionRuntimeProfile,
+) -> DiagnosticsPolicy:
+    from relspec.pipeline_policy import DiagnosticsPolicy
+
+    return DiagnosticsPolicy(
+        capture_datafusion_metrics=bool(profile.features.enable_metrics),
+        capture_datafusion_traces=bool(profile.features.enable_tracing),
+        capture_datafusion_explains=bool(profile.diagnostics.capture_explain),
+        explain_analyze=bool(profile.diagnostics.explain_analyze),
+        explain_analyze_level=profile.diagnostics.explain_analyze_level,
+        emit_kernel_lane_diagnostics=bool(profile.diagnostics.capture_plan_artifacts),
+        emit_semantic_quality_diagnostics=bool(
+            profile.diagnostics.emit_semantic_quality_diagnostics
+        ),
+    )
 
 
 def _record_compiled_policy_artifact(
@@ -682,7 +762,10 @@ def _record_compiled_policy_artifact(
             "cache_policy_count": len(compiled_policy.cache_policy_by_view),
             "scan_override_count": len(compiled_policy.scan_policy_overrides),
             "udf_requirement_count": len(compiled_policy.udf_requirements_by_view),
+            "join_strategy_count": len(compiled_policy.join_strategy_by_view),
+            "inference_confidence_count": len(compiled_policy.inference_confidence_by_view),
             "validation_mode": compiled_policy.validation_mode,
+            "workload_class": compiled_policy.workload_class,
             "policy_fingerprint": compiled_policy.policy_fingerprint,
             "cache_policy_distribution": cache_dist or None,
         },
@@ -714,6 +797,300 @@ def _record_execution_package(
     )
 
 
+def _representative_plan_signals(
+    plan: ExecutionPlan,
+) -> tuple[str, PlanSignals] | None:
+    if not plan.plan_signals_by_task:
+        return None
+
+    def _signal_sort_key(item: tuple[str, PlanSignals]) -> tuple[int, int, int, int, int]:
+        _task_name, signals = item
+        stats = signals.stats
+        lineage = signals.lineage
+        num_rows = int(stats.num_rows) if stats is not None and stats.num_rows is not None else 0
+        total_bytes = (
+            int(stats.total_bytes) if stats is not None and stats.total_bytes is not None else 0
+        )
+        scan_count = len(lineage.scans) if lineage is not None else 0
+        return (
+            1 if stats is not None else 0,
+            1 if lineage is not None else 0,
+            num_rows,
+            total_bytes,
+            scan_count,
+        )
+
+    ranked = sorted(
+        plan.plan_signals_by_task.items(),
+        key=_signal_sort_key,
+        reverse=True,
+    )
+    return ranked[0] if ranked else None
+
+
+def _apply_workload_session_profile(
+    *,
+    view_ctx: ViewGraphContext,
+    plan: ExecutionPlan,
+) -> ViewGraphContext:
+    from datafusion_engine.session.runtime import refresh_session_runtime
+    from datafusion_engine.workload.classifier import classify_workload, session_config_for_workload
+    from serde_artifact_specs import WORKLOAD_CLASSIFICATION_SPEC
+    from serde_artifacts import WorkloadClassificationArtifact
+    from serde_msgspec import to_builtins_mapping
+
+    representative = _representative_plan_signals(plan)
+    if representative is None:
+        return view_ctx
+    task_name, signals = representative
+    workload_class = classify_workload(signals)
+    overrides = session_config_for_workload(workload_class)
+
+    updated_ctx = view_ctx
+    if overrides:
+        normalized_overrides = {str(key): str(value) for key, value in overrides.items()}
+        merged_overrides = {
+            str(key): str(value)
+            for key, value in view_ctx.profile.policies.settings_overrides.items()
+        }
+        merged_overrides.update(normalized_overrides)
+        updated_profile = msgspec.structs.replace(
+            view_ctx.profile,
+            policies=msgspec.structs.replace(
+                view_ctx.profile.policies,
+                settings_overrides=merged_overrides,
+            ),
+        )
+        updated_runtime_profile_spec = msgspec.structs.replace(
+            view_ctx.runtime_profile_spec,
+            datafusion=updated_profile,
+        )
+        updated_semantic_context = replace(
+            view_ctx.semantic_context,
+            runtime_profile=updated_profile,
+        )
+        updated_ctx = replace(
+            view_ctx,
+            profile=updated_profile,
+            session_runtime=refresh_session_runtime(
+                updated_profile,
+                ctx=view_ctx.session_runtime.ctx,
+            ),
+            runtime_profile_spec=updated_runtime_profile_spec,
+            semantic_context=updated_semantic_context,
+        )
+
+    stats = signals.stats
+    lineage = signals.lineage
+    artifact = WorkloadClassificationArtifact(
+        workload_class=workload_class.value,
+        plan_fingerprint=signals.plan_fingerprint,
+        num_rows_signal=stats.num_rows if stats is not None else None,
+        total_bytes_signal=stats.total_bytes if stats is not None else None,
+        scan_count=len(lineage.scans) if lineage is not None else 0,
+        classification_reason=f"representative_task={task_name}",
+    )
+    updated_ctx.profile.record_artifact(
+        WORKLOAD_CLASSIFICATION_SPEC,
+        to_builtins_mapping(artifact, str_keys=True),
+    )
+    return updated_ctx
+
+
+def _inference_confidence_records_for_policy(
+    compiled_policy: CompiledExecutionPolicy,
+) -> dict[str, InferenceConfidence]:
+    from relspec.inference_confidence import InferenceConfidence
+
+    confidence_records: dict[str, InferenceConfidence] = {}
+    for dataset_name, override_value in compiled_policy.scan_policy_overrides.items():
+        if not isinstance(override_value, Mapping):
+            continue
+        raw_confidence = override_value.get("inference_confidence")
+        if not isinstance(raw_confidence, Mapping):
+            continue
+        try:
+            confidence_records[dataset_name] = msgspec.convert(
+                raw_confidence,
+                type=InferenceConfidence,
+                strict=False,
+            )
+        except (msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError):
+            continue
+    for view_name, raw_confidence in compiled_policy.inference_confidence_by_view.items():
+        if not isinstance(raw_confidence, Mapping):
+            continue
+        try:
+            confidence_records[view_name] = msgspec.convert(
+                raw_confidence,
+                type=InferenceConfidence,
+                strict=False,
+            )
+        except (msgspec.DecodeError, msgspec.ValidationError, TypeError, ValueError):
+            continue
+    return confidence_records
+
+
+def _record_decision_provenance_artifact(
+    *,
+    profile: DataFusionRuntimeProfile,
+    compiled_policy: CompiledExecutionPolicy | None,
+    run_id: str,
+) -> DecisionProvenanceGraph | None:
+    if compiled_policy is None:
+        return None
+    from relspec.decision_provenance import build_provenance_graph
+    from serde_artifacts import DecisionProvenanceGraphArtifact
+    from serde_msgspec import to_builtins_mapping
+
+    confidence_records = _inference_confidence_records_for_policy(compiled_policy)
+    graph = build_provenance_graph(
+        compiled_policy,
+        confidence_records,
+        run_id=run_id,
+    )
+    if not graph.decisions:
+        return None
+
+    domain_counts: dict[str, int] = {}
+    fallback_count = 0
+    confidence_sum = 0.0
+    for decision in graph.decisions:
+        domain_counts[decision.domain] = domain_counts.get(decision.domain, 0) + 1
+        if decision.fallback_reason is not None:
+            fallback_count += 1
+        confidence_sum += float(decision.confidence_score)
+    mean_confidence = confidence_sum / float(len(graph.decisions))
+
+    payload = DecisionProvenanceGraphArtifact(
+        run_id=run_id,
+        decision_count=len(graph.decisions),
+        root_count=len(graph.root_ids),
+        domain_counts=domain_counts or None,
+        fallback_count=fallback_count,
+        mean_confidence=mean_confidence,
+    )
+    profile.record_artifact(
+        DECISION_PROVENANCE_GRAPH_SPEC,
+        to_builtins_mapping(payload, str_keys=True),
+    )
+    return graph
+
+
+def _record_policy_counterfactual_artifact(
+    *,
+    profile: DataFusionRuntimeProfile,
+    compiled_policy: CompiledExecutionPolicy | None,
+    plan: ExecutionPlan,
+) -> None:
+    if compiled_policy is None:
+        return
+    from relspec.counterfactual_replay import replay_compiled_policy_counterfactuals
+    from serde_artifacts import (
+        CounterfactualScenarioOutcome,
+        PolicyCounterfactualReplayArtifact,
+    )
+    from serde_msgspec import to_builtins_mapping
+
+    scenarios = _counterfactual_scenarios_for_policy(compiled_policy)
+    results = replay_compiled_policy_counterfactuals(
+        compiled_policy,
+        scenarios=scenarios,
+        task_costs=plan.task_costs,
+    )
+    best = min(
+        (result for result in results if result.estimated_cost_delta is not None),
+        key=lambda result: float(result.estimated_cost_delta or 0.0),
+        default=None,
+    )
+    payload = PolicyCounterfactualReplayArtifact(
+        baseline_policy_fingerprint=compiled_policy.policy_fingerprint,
+        baseline_workload_class=compiled_policy.workload_class,
+        scenario_count=len(results),
+        best_scenario=best.scenario_name if best is not None else None,
+        scenarios=tuple(
+            CounterfactualScenarioOutcome(
+                scenario_name=result.scenario_name,
+                policy_fingerprint=result.policy_fingerprint,
+                changed_cache_views=result.changed_cache_views,
+                changed_scan_overrides=result.changed_scan_overrides,
+                estimated_cost_delta=result.estimated_cost_delta,
+                notes=result.notes,
+            )
+            for result in results
+        ),
+    )
+    profile.record_artifact(
+        POLICY_COUNTERFACTUAL_REPLAY_SPEC,
+        to_builtins_mapping(payload, str_keys=True),
+    )
+
+
+def _counterfactual_scenarios_for_policy(
+    compiled_policy: CompiledExecutionPolicy,
+) -> tuple[CounterfactualScenario, ...]:
+    from relspec.counterfactual_replay import CounterfactualScenario
+
+    scenarios: list[CounterfactualScenario] = []
+    for workload in (
+        "batch_ingest",
+        "interactive_query",
+        "compile_replay",
+        "incremental_update",
+    ):
+        if workload == compiled_policy.workload_class:
+            continue
+        scenarios.append(
+            CounterfactualScenario(
+                name=f"workload::{workload}",
+                workload_class=workload,
+            )
+        )
+    no_staging_overrides = {
+        view_name: "none"
+        for view_name, cache_policy in compiled_policy.cache_policy_by_view.items()
+        if cache_policy == "delta_staging"
+    }
+    if no_staging_overrides:
+        scenarios.append(
+            CounterfactualScenario(
+                name="cache::no_staging",
+                workload_class=compiled_policy.workload_class,
+                cache_policy_overrides=no_staging_overrides,
+            )
+        )
+    return tuple(scenarios)
+
+
+def _record_fallback_quarantine_artifact(
+    *,
+    profile: DataFusionRuntimeProfile,
+    run_id: str,
+    graph: DecisionProvenanceGraph | None,
+) -> None:
+    if graph is None:
+        return
+    from relspec.fallback_quarantine import evaluate_fallback_quarantine
+    from serde_artifacts import FallbackQuarantineArtifact
+    from serde_msgspec import to_builtins_mapping
+
+    report = evaluate_fallback_quarantine(graph)
+    payload = FallbackQuarantineArtifact(
+        run_id=run_id,
+        decision_count=report.decision_count,
+        fallback_count=report.fallback_count,
+        quarantined_count=len(report.quarantined_contexts),
+        quarantined_contexts=report.quarantined_contexts,
+        reason_counts=dict(report.reason_counts) or None,
+        threshold_confidence=report.thresholds.min_confidence,
+        max_fallback_ratio=report.thresholds.max_fallback_ratio,
+    )
+    profile.record_artifact(
+        FALLBACK_QUARANTINE_SPEC,
+        to_builtins_mapping(payload, str_keys=True),
+    )
+
+
 def _build_execution_authority(
     *,
     view_ctx: ViewGraphContext,
@@ -736,6 +1113,8 @@ def _build_execution_authority(
     compiled_policy = _compile_authority_policy(
         plan=plan,
         profile=view_ctx.profile,
+        semantic_ir=view_ctx.semantic_context.manifest.semantic_ir,
+        capability_snapshot=capability_snapshot,
     )
     authority = ExecutionAuthorityContext(
         semantic_context=view_ctx.semantic_context,
@@ -790,32 +1169,74 @@ def _record_policy_validation_artifact(
     semantic_manifest_present: bool,
 ) -> None:
     from relspec.policy_validation import build_policy_validation_artifact
+    from serde_artifacts import (
+        PolicyValidationArtifact as PolicyValidationArtifactPayload,
+    )
+    from serde_artifacts import (
+        PolicyValidationIssueArtifact,
+    )
+    from serde_msgspec import to_builtins_mapping
 
     artifact = build_policy_validation_artifact(
         result,
         validation_mode=mode,
         runtime_hash=runtime_hash,
     )
-    payload = {
-        "validation_mode": artifact.validation_mode,
-        "issue_count": artifact.issue_count,
-        "error_codes": list(artifact.error_codes),
-        "runtime_hash": artifact.runtime_hash,
-        "is_deterministic": artifact.is_deterministic,
-        "semantic_manifest_present": semantic_manifest_present,
-        "errors": len(result.errors),
-        "warnings": len(result.warnings),
-        "issues": [
-            {
-                "code": issue.code,
-                "severity": issue.severity,
-                "task": issue.task,
-                "detail": issue.detail,
-            }
+    payload = PolicyValidationArtifactPayload(
+        validation_mode=artifact.validation_mode,
+        issue_count=artifact.issue_count,
+        error_codes=tuple(artifact.error_codes),
+        runtime_hash=artifact.runtime_hash,
+        is_deterministic=artifact.is_deterministic,
+        semantic_manifest_present=semantic_manifest_present,
+        errors=len(result.errors),
+        warnings=len(result.warnings),
+        issues=tuple(
+            PolicyValidationIssueArtifact(
+                code=issue.code,
+                severity=issue.severity,
+                task=issue.task,
+                detail=issue.detail,
+            )
             for issue in result.issues
-        ],
-    }
-    view_ctx.profile.record_artifact(POLICY_VALIDATION_SPEC, payload)
+        ),
+    )
+    view_ctx.profile.record_artifact(
+        POLICY_VALIDATION_SPEC,
+        to_builtins_mapping(payload, str_keys=True),
+    )
+
+
+def _normalized_compiled_cache_policy(
+    policy: str | None,
+) -> Literal["none", "delta_staging", "delta_output"] | None:
+    if policy in {"none", "delta_staging", "delta_output"}:
+        return cast('Literal["none", "delta_staging", "delta_output"]', policy)
+    return None
+
+
+def _plan_with_compiled_cache_policy(
+    *,
+    plan: ExecutionPlan,
+    compiled_policy: CompiledExecutionPolicy | None,
+) -> ExecutionPlan:
+    if compiled_policy is None or not compiled_policy.cache_policy_by_view:
+        return plan
+
+    updated_nodes: list[ViewNode] = []
+    changed = False
+    for node in plan.view_nodes:
+        compiled_value = _normalized_compiled_cache_policy(
+            compiled_policy.cache_policy_by_view.get(node.name)
+        )
+        if compiled_value is None or node.cache_policy == compiled_value:
+            updated_nodes.append(node)
+            continue
+        updated_nodes.append(replace(node, cache_policy=compiled_value))
+        changed = True
+    if not changed:
+        return plan
+    return replace(plan, view_nodes=tuple(updated_nodes))
 
 
 def _enforce_policy_validation_result(
@@ -2128,10 +2549,18 @@ def build_plan_context(
             config=request.config,
             dataset_resolver=resolved_view_ctx.semantic_context.dataset_resolver,
         )
+    resolved_view_ctx = _apply_workload_session_profile(
+        view_ctx=resolved_view_ctx,
+        plan=resolved_plan,
+    )
     authority_context = _build_execution_authority(
         view_ctx=resolved_view_ctx,
         plan=resolved_plan,
         config=request.config,
+    )
+    resolved_plan = _plan_with_compiled_cache_policy(
+        plan=resolved_plan,
+        compiled_policy=authority_context.compiled_policy,
     )
     from relspec.policy_validation import validate_policy_bundle
 
@@ -2160,6 +2589,22 @@ def build_plan_context(
         compiled_policy=authority_context.compiled_policy,
         capability_snapshot=authority_context.capability_snapshot,
         plan_fingerprints=resolved_plan.plan_fingerprints,
+    )
+    _record_policy_counterfactual_artifact(
+        profile=resolved_view_ctx.profile,
+        compiled_policy=authority_context.compiled_policy,
+        plan=resolved_plan,
+    )
+    run_id = get_run_id() or authority_context.session_runtime_fingerprint or "unknown"
+    provenance_graph = _record_decision_provenance_artifact(
+        profile=resolved_view_ctx.profile,
+        compiled_policy=authority_context.compiled_policy,
+        run_id=run_id,
+    )
+    _record_fallback_quarantine_artifact(
+        profile=resolved_view_ctx.profile,
+        run_id=run_id,
+        graph=provenance_graph,
     )
     from hamilton_pipeline.validators import set_schema_contracts
 

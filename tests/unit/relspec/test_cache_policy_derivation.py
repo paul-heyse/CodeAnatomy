@@ -7,13 +7,19 @@ from typing import TYPE_CHECKING
 
 import rustworkx as rx
 
-from relspec.policy_compiler import _derive_cache_policies
+from relspec.policy_compiler import (
+    _cache_overrides_from_semantic_ir,
+    _derive_cache_policies,
+    _merge_cache_overrides,
+)
 from relspec.rustworkx_graph import (
     GraphEdge,
     GraphNode,
     TaskGraph,
     TaskNode,
 )
+from semantics.ir import InferredViewProperties, SemanticIR, SemanticIRView
+from semantics.view_kinds import ViewKind
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -205,3 +211,137 @@ class TestDeriveCachePolicies:
         assert result["cpg_nodes"] == "delta_output"
         assert result["rel_calls"] == "delta_staging"  # out_degree=2
         assert result["temp"] == "none"  # leaf
+
+    def test_cache_overrides_from_view_nodes_are_applied(self) -> None:
+        """Explicit cache overrides take precedence over topology derivation."""
+        graph = _build_test_task_graph(
+            tasks=[
+                ("parent", "parent_v1"),
+                ("child", "child_v1"),
+            ],
+            edges=[(0, 1)],
+        )
+        result = _derive_cache_policies(
+            graph,
+            {},
+            cache_overrides={"parent": "none"},
+        )
+        assert result["parent"] == "none"
+        assert result["child"] == "none"
+
+    def test_interactive_workload_demotes_low_fanout_staging(self) -> None:
+        """Interactive workload demotes low fan-out staging cache policies."""
+        graph = _build_test_task_graph(
+            tasks=[
+                ("parent", "parent_v1"),
+                ("child", "child_v1"),
+            ],
+            edges=[(0, 1)],
+        )
+        result = _derive_cache_policies(
+            graph,
+            {},
+            workload_class="interactive_query",
+        )
+        assert result["parent"] == "none"
+        assert result["child"] == "none"
+
+    def test_compile_replay_demotes_staging(self) -> None:
+        """Compile-replay workload demotes staging cache policies."""
+        graph = _build_test_task_graph(
+            tasks=[
+                ("hub", "hub_v1"),
+                ("child_a", "child_a_v1"),
+                ("child_b", "child_b_v1"),
+                ("child_c", "child_c_v1"),
+            ],
+            edges=[(0, 1), (0, 2), (0, 3)],
+        )
+        result = _derive_cache_policies(
+            graph,
+            {},
+            workload_class="compile_replay",
+        )
+        assert result["hub"] == "none"
+
+    def test_semantic_ir_cache_hints_override_topology_policy(self) -> None:
+        """Semantic IR cache hints should override pure topology defaults."""
+        graph = _build_test_task_graph(
+            tasks=[
+                ("parent", "parent_v1"),
+                ("child", "child_v1"),
+            ],
+            edges=[(0, 1)],
+        )
+        semantic_ir = SemanticIR(
+            views=(
+                SemanticIRView(
+                    name="parent",
+                    kind=ViewKind.RELATE,
+                    inputs=(),
+                    outputs=("parent_v1",),
+                    inferred_properties=InferredViewProperties(inferred_cache_policy="lazy"),
+                ),
+                SemanticIRView(
+                    name="child",
+                    kind=ViewKind.RELATE,
+                    inputs=("parent",),
+                    outputs=("child_v1",),
+                    inferred_properties=InferredViewProperties(inferred_cache_policy="eager"),
+                ),
+            )
+        )
+        cache_overrides = _cache_overrides_from_semantic_ir(semantic_ir)
+        result = _derive_cache_policies(
+            graph,
+            {},
+            cache_overrides=cache_overrides,
+        )
+        assert result["parent"] == "none"
+        assert result["child"] == "delta_staging"
+
+    def test_view_override_takes_precedence_over_semantic_ir_hint(self) -> None:
+        """View-node cache overrides should take precedence over IR hints."""
+        graph = _build_test_task_graph(
+            tasks=[
+                ("parent", "parent_v1"),
+                ("child", "child_v1"),
+            ],
+            edges=[(0, 1)],
+        )
+        semantic_ir = SemanticIR(
+            views=(
+                SemanticIRView(
+                    name="parent",
+                    kind=ViewKind.RELATE,
+                    inputs=(),
+                    outputs=("parent_v1",),
+                    inferred_properties=InferredViewProperties(inferred_cache_policy="lazy"),
+                ),
+            )
+        )
+        merged_overrides = _merge_cache_overrides(
+            _cache_overrides_from_semantic_ir(semantic_ir),
+            {"parent": "delta_staging"},
+        )
+        result = _derive_cache_policies(
+            graph,
+            {},
+            cache_overrides=merged_overrides,
+        )
+        assert result["parent"] == "delta_staging"
+
+    def test_unknown_semantic_ir_cache_hint_is_ignored(self) -> None:
+        """Unknown cache hints should not produce override entries."""
+        semantic_ir = SemanticIR(
+            views=(
+                SemanticIRView(
+                    name="parent",
+                    kind=ViewKind.RELATE,
+                    inputs=(),
+                    outputs=("parent_v1",),
+                    inferred_properties=InferredViewProperties(inferred_cache_policy="unknown_hint"),
+                ),
+            )
+        )
+        assert _cache_overrides_from_semantic_ir(semantic_ir) == {}

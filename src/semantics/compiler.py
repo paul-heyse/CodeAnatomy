@@ -879,7 +879,7 @@ class SemanticCompiler:
         ):
             from datafusion import lit
 
-            from semantics.joins import require_join_strategy
+            from semantics.joins import infer_join_strategy_with_confidence, require_join_strategy
 
             left_info = self.get(left_table)
             right_info = self.get(right_table)
@@ -892,13 +892,34 @@ class SemanticCompiler:
                     if options.join_type == "contains"
                     else JoinStrategyType.SPAN_OVERLAP
                 )
-            strategy = require_join_strategy(
+            strategy_result = infer_join_strategy_with_confidence(
                 left_info.annotated,
                 right_info.annotated,
                 hint=hint,
-                left_name=left_table,
-                right_name=right_table,
             )
+            if strategy_result is None:
+                strategy = require_join_strategy(
+                    left_info.annotated,
+                    right_info.annotated,
+                    hint=hint,
+                    left_name=left_table,
+                    right_name=right_table,
+                )
+                join_confidence = None
+            else:
+                strategy = strategy_result.strategy
+                join_confidence = strategy_result.confidence
+            if join_confidence is not None:
+                logger.debug(
+                    "join_strategy_inference_confidence",
+                    extra={
+                        "left_table": left_table,
+                        "right_table": right_table,
+                        "decision_type": join_confidence.decision_type,
+                        "decision_value": join_confidence.decision_value,
+                        "confidence_score": join_confidence.confidence_score,
+                    },
+                )
 
             if strategy.strategy_type in {
                 JoinStrategyType.SPAN_OVERLAP,

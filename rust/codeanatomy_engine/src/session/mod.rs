@@ -1,0 +1,8 @@
+//! WS2: Session Factory — deterministic SessionContext construction.
+//!
+//! Uses `SessionStateBuilder` for builder-first, deterministic session creation.
+//! No ad-hoc post-build mutation.
+
+pub mod envelope;
+pub mod factory;
+pub mod profiles;

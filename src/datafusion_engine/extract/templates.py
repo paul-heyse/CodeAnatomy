@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
 from arrow_utils.core.ordering import OrderingLevel
 from datafusion_engine.arrow.metadata import EvidenceMetadataSpec, evidence_metadata
@@ -24,17 +25,18 @@ class DatasetTemplateSpec:
     params: Mapping[str, object] = field(default_factory=dict)
 
 
-_TEMPLATE_NAMES: tuple[str, ...] = (
-    "repo_scan",
-    "ast",
-    "cst",
-    "bytecode",
-    "symtable",
-    "scip",
-    "tree_sitter",
-    "python_imports",
-    "python_external",
-)
+def _discovered_template_names() -> tuple[str, ...]:
+    return tuple(
+        descriptor.extractor_name
+        for descriptor in sorted(
+            (
+                value
+                for symbol, value in globals().items()
+                if symbol.endswith("_TEMPLATE") and isinstance(value, ExtractorTemplate)
+            ),
+            key=lambda descriptor: descriptor.extractor_name,
+        )
+    )
 
 
 def dataset_template_specs() -> tuple[DatasetTemplateSpec, ...]:
@@ -45,7 +47,9 @@ def dataset_template_specs() -> tuple[DatasetTemplateSpec, ...]:
     tuple[DatasetTemplateSpec, ...]
         Dataset template specs for metadata expansion.
     """
-    return tuple(DatasetTemplateSpec(name=name, template=name) for name in _TEMPLATE_NAMES)
+    return tuple(
+        DatasetTemplateSpec(name=name, template=name) for name in _discovered_template_names()
+    )
 
 
 @dataclass(frozen=True)
@@ -233,16 +237,13 @@ def _discover_templates() -> dict[str, ExtractorTemplate]:
     Returns:
         dict[str, ExtractorTemplate]: Templates keyed by extractor name.
     """
-    descriptors: tuple[ExtractorTemplate, ...] = (
-        _AST_TEMPLATE,
-        _CST_TEMPLATE,
-        _TREE_SITTER_TEMPLATE,
-        _BYTECODE_TEMPLATE,
-        _SYMTABLE_TEMPLATE,
-        _REPO_SCAN_TEMPLATE,
-        _PYTHON_IMPORTS_TEMPLATE,
-        _PYTHON_EXTERNAL_TEMPLATE,
-        _SCIP_TEMPLATE,
+    descriptors = sorted(
+        (
+            value
+            for symbol, value in globals().items()
+            if symbol.endswith("_TEMPLATE") and isinstance(value, ExtractorTemplate)
+        ),
+        key=lambda descriptor: descriptor.extractor_name,
     )
     return {t.extractor_name: t for t in descriptors}
 
@@ -446,18 +447,13 @@ def _discover_configs() -> dict[str, ExtractorConfigSpec]:
     Returns:
         dict[str, ExtractorConfigSpec]: Config specs keyed by extractor name.
     """
-    descriptors: tuple[ExtractorConfigSpec, ...] = (
-        _AST_CONFIG,
-        _CST_CONFIG,
-        _TREE_SITTER_CONFIG,
-        _BYTECODE_CONFIG,
-        _SYMTABLE_CONFIG,
-        _REPO_SCAN_CONFIG,
-        _PYTHON_IMPORTS_CONFIG,
-        _PYTHON_EXTERNAL_CONFIG,
-        _REPO_BLOBS_CONFIG,
-        _SCIP_CONFIG,
-        _FILE_LINE_INDEX_CONFIG,
+    descriptors = sorted(
+        (
+            value
+            for symbol, value in globals().items()
+            if symbol.endswith("_CONFIG") and isinstance(value, ExtractorConfigSpec)
+        ),
+        key=lambda descriptor: descriptor.extractor_name,
     )
     return {c.extractor_name: c for c in descriptors}
 
@@ -1365,19 +1361,29 @@ def _tree_sitter_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, .
 
 _DATASET_TEMPLATE_REGISTRY: ImmutableRegistry[
     str, Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]
-] = ImmutableRegistry.from_dict(
-    {
-        "repo_scan": _repo_scan_records,
-        "ast": _ast_records,
-        "cst": _cst_records,
-        "bytecode": _bytecode_records,
-        "symtable": _symtable_records,
-        "scip": _scip_records,
-        "python_imports": _python_imports_records,
-        "python_external": _python_external_records,
-        "tree_sitter": _tree_sitter_records,
-    }
-)
+] = ImmutableRegistry.from_dict({})
+
+
+def _discover_dataset_template_registry() -> ImmutableRegistry[
+    str, Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]
+]:
+    handlers: dict[str, Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]] = {}
+    for symbol, value in globals().items():
+        if not callable(value):
+            continue
+        if not (symbol.startswith("_") and symbol.endswith("_records")):
+            continue
+        template_name = symbol[1:-8]
+        if not template_name:
+            continue
+        handlers[template_name] = cast(
+            "Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]",
+            value,
+        )
+    return ImmutableRegistry.from_dict(dict(sorted(handlers.items())))
+
+
+_DATASET_TEMPLATE_REGISTRY = _discover_dataset_template_registry()
 
 
 def expand_dataset_templates(

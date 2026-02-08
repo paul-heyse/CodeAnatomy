@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.views.artifacts import CachePolicy
 from relspec.calibration_bounds import (
     DEFAULT_CALIBRATION_BOUNDS,
@@ -40,7 +39,6 @@ from semantics.ir import (
 )
 from semantics.ir_pipeline import _infer_join_keys_from_fields
 from semantics.pipeline import (
-    _default_semantic_cache_policy,
     _resolve_cache_policy_hierarchy,
 )
 from semantics.registry import SEMANTIC_TABLE_SPECS
@@ -48,15 +46,12 @@ from semantics.registry import SEMANTIC_TABLE_SPECS
 
 @pytest.mark.integration
 class TestCachePolicyHierarchy:
-    """Verify the three-tier cache policy resolution hierarchy.
+    """Verify explicit -> compiled cache policy resolution.
 
     Resolution order (highest priority first):
     1. explicit_policy -- caller-provided per-view overrides
     2. compiled_policy -- topology-derived from CompiledExecutionPolicy
-    3. _default_semantic_cache_policy -- naming-convention heuristic
     """
-
-    _VIEW_NAMES = ("cpg_nodes_v1", "cst_refs_norm_v1", "rel_def_symbol")
 
     def test_explicit_policy_takes_precedence_over_compiled(self) -> None:
         """Verify explicit_policy wins over compiled_policy."""
@@ -66,67 +61,38 @@ class TestCachePolicyHierarchy:
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=explicit,
             compiled_policy=compiled,
-            view_names=list(self._VIEW_NAMES),
-            output_locations={},
         )
 
         assert result is explicit
 
-    def test_compiled_policy_takes_precedence_over_heuristic(self) -> None:
+    def test_compiled_policy_takes_precedence_over_inferred(self) -> None:
         """Verify compiled_policy wins when explicit_policy is None."""
         compiled = {"cpg_nodes_v1": "delta_output", "cst_refs_norm_v1": "none"}
 
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=None,
             compiled_policy=compiled,
-            view_names=list(self._VIEW_NAMES),
-            output_locations={},
         )
 
         assert result is compiled
 
-    def test_heuristic_fallback_when_both_none(self) -> None:
-        """Verify heuristic fallback when both explicit and compiled are None."""
+    def test_empty_mapping_when_both_none(self) -> None:
+        """Verify empty mapping when both explicit and compiled are None."""
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=None,
             compiled_policy=None,
-            view_names=list(self._VIEW_NAMES),
-            output_locations={},
         )
 
-        # Heuristic produces a new dict, not None.
-        assert isinstance(result, dict)
-        # cpg_ prefix views get delta_staging when not in output_locations.
-        assert result["cpg_nodes_v1"] == "delta_staging"
+        assert result == {}
 
-    def test_heuristic_matches_default_semantic_cache_policy(self) -> None:
-        """Verify heuristic fallback is identical to _default_semantic_cache_policy."""
-        view_names = list(self._VIEW_NAMES)
-        output_locations: dict[str, DatasetLocation] = {}
-
-        hierarchy_result = _resolve_cache_policy_hierarchy(
-            explicit_policy=None,
-            compiled_policy=None,
-            view_names=view_names,
-            output_locations=output_locations,
-        )
-        direct_result = _default_semantic_cache_policy(
-            view_names=view_names,
-            output_locations=output_locations,
-        )
-
-        assert hierarchy_result == direct_result
-
-    def test_explicit_overrides_both_compiled_and_heuristic(self) -> None:
-        """Verify explicit_policy overrides compiled_policy and heuristic."""
+    def test_explicit_overrides_both_compiled_and_inferred(self) -> None:
+        """Verify explicit_policy overrides compiled_policy and inferred policy."""
         explicit: dict[str, CachePolicy] = {"cpg_nodes_v1": "delta_output"}
         compiled = {"cpg_nodes_v1": "none"}
 
         result = _resolve_cache_policy_hierarchy(
             explicit_policy=explicit,
             compiled_policy=compiled,
-            view_names=["cpg_nodes_v1"],
-            output_locations={},
         )
 
         # explicit_policy is returned as-is (identity check).

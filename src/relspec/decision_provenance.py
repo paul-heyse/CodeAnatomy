@@ -293,6 +293,7 @@ def decision_chain(
 # ---------------------------------------------------------------------------
 
 _CACHE_POLICY_DOMAIN = "cache_policy"
+_JOIN_STRATEGY_DOMAIN = "join_strategy"
 _SCAN_POLICY_DOMAIN = "scan_policy"
 
 
@@ -346,6 +347,31 @@ def build_provenance_graph(
                 domain=_CACHE_POLICY_DOMAIN,
                 decision_type="compiled",
                 decision_value=str(policy_value),
+                confidence_score=score,
+                evidence=evidence,
+                context_label=view_name,
+                fallback_reason=fallback,
+            ),
+        )
+
+    # --- scan_policy_overrides decisions ---
+    for view_name, strategy_value in compiled_policy.join_strategy_by_view.items():
+        counter += 1
+        decision_id = f"join_{counter}"
+        confidence = confidence_records.get(view_name)
+        evidence = _evidence_from_confidence(confidence)
+        score = confidence.confidence_score if confidence is not None else 1.0
+        fallback = (
+            confidence.fallback_reason
+            if confidence is not None and confidence.fallback_reason
+            else None
+        )
+        decisions.append(
+            DecisionRecord(
+                decision_id=decision_id,
+                domain=_JOIN_STRATEGY_DOMAIN,
+                decision_type="compiled",
+                decision_value=str(strategy_value),
                 confidence_score=score,
                 evidence=evidence,
                 context_label=view_name,

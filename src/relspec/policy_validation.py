@@ -703,9 +703,9 @@ def _infer_override_reasons_for_scan(
     """
     reasons: list[str] = []
     if signals.stats is not None and signals.stats.num_rows is not None:
-        from relspec.table_size_tiers import _DEFAULT_THRESHOLDS
+        from relspec.table_size_tiers import TableSizeTier, classify_table_size
 
-        if signals.stats.num_rows < _DEFAULT_THRESHOLDS.small_threshold:
+        if classify_table_size(int(signals.stats.num_rows)) is TableSizeTier.SMALL:
             reasons.append("small_table")
     if signals.lineage is not None:
         for scan in signals.lineage.scans:

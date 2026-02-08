@@ -8,8 +8,11 @@ smooth adjustments, clamped within ``CalibrationBounds``.
 Three modes control rollout:
 
 - ``"off"``     -- return current thresholds unchanged
-- ``"observe"`` -- compute recommendations without applying
-- ``"apply"``   -- produce adjusted thresholds for next cycle
+- ``"warn"``    -- compute recommendations without applying
+- ``"enforce"`` -- produce adjusted thresholds for next cycle
+
+Legacy aliases are accepted for compatibility:
+``"observe" -> "warn"`` and ``"apply" -> "enforce"``.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from relspec.calibration_bounds import CalibrationBounds, validate_calibration_b
 from relspec.inference_confidence import InferenceConfidence, high_confidence, low_confidence
 from serde_msgspec import StructBaseStrict
 
-CalibrationMode = Literal["off", "observe", "apply"]
+CalibrationMode = Literal["off", "warn", "enforce", "observe", "apply"]
 
 # EMA smoothing factor.  A value of 0.3 gives recent observations 30%
 # weight while retaining 70% of the prior estimate.
@@ -156,29 +159,31 @@ def calibrate_from_execution_metrics(
         cost_ratio=cost_ratio,
     )
 
-    if mode == "observe":
+    if mode in {"observe", "warn"}:
+        resolved_mode = "warn" if mode == "warn" else "observe"
         confidence = _build_calibration_confidence(
             metrics=metrics,
-            decision_value="observe",
+            decision_value=resolved_mode,
         )
         return PolicyCalibrationResult(
             adjusted_thresholds=adjusted,
             evidence_summary="; ".join(evidence_parts),
             calibration_confidence=confidence,
-            mode="observe",
+            mode=resolved_mode,
             cost_ratio=cost_ratio,
             bounded=was_bounded,
         )
 
+    resolved_mode = "enforce" if mode == "enforce" else "apply"
     confidence = _build_calibration_confidence(
         metrics=metrics,
-        decision_value="apply",
+        decision_value=resolved_mode,
     )
     return PolicyCalibrationResult(
         adjusted_thresholds=adjusted,
         evidence_summary="; ".join(evidence_parts),
         calibration_confidence=confidence,
-        mode="apply",
+        mode=resolved_mode,
         cost_ratio=cost_ratio,
         bounded=was_bounded,
     )

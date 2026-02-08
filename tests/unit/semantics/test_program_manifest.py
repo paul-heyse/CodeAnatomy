@@ -8,7 +8,6 @@ import pytest
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from semantics.compile_context import (
-    CompileContext,
     SemanticExecutionContext,
     build_semantic_execution_context,
 )
@@ -71,7 +70,7 @@ def test_semantic_program_manifest_payload_and_fingerprint_stability() -> None:
     assert with_fingerprint.manifest_version == 1
 
 
-def test_dataset_bindings_helper_matches_compile_context() -> None:
+def test_dataset_bindings_helper_returns_profile_catalog_bindings() -> None:
     profile = DataFusionRuntimeProfile(
         data_sources=msgspec.structs.replace(
             DataFusionRuntimeProfile().data_sources,
@@ -87,17 +86,12 @@ def test_dataset_bindings_helper_matches_compile_context() -> None:
         )
     )
     helper_bindings = build_semantic_execution_context(runtime_profile=profile).dataset_resolver
-    compile_bindings = CompileContext(runtime_profile=profile).dataset_bindings()
     helper_names = sorted(helper_bindings.names())
-    compile_names = sorted(compile_bindings.names())
-    assert helper_names == compile_names
-    for name in compile_names:
-        helper_location = helper_bindings.location(name)
-        compile_location = compile_bindings.location(name)
-        assert helper_location is not None
-        assert compile_location is not None
-        assert helper_location.path == compile_location.path
-        assert helper_location.format == compile_location.format
+    assert helper_names
+    semantic_nodes_location = helper_bindings.location("semantic_nodes_union")
+    assert semantic_nodes_location is not None
+    assert semantic_nodes_location.path == "/tmp/semantic_nodes_union"
+    assert semantic_nodes_location.format == "delta"
 
 
 def test_semantic_execution_context_carries_manifest_resolver() -> None:

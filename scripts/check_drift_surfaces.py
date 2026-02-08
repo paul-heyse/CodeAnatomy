@@ -83,9 +83,20 @@ _VIEW_KIND_VALUES: frozenset[str] = frozenset(
         "union_edges",
     }
 )
+_CONSOLIDATED_KIND_VALUES: frozenset[str] = frozenset(
+    {
+        "normalize",
+        "derive",
+        "relate",
+        "union",
+        "project",
+        "diagnostic",
+    }
+)
 
 _BUILDER_DISPATCH_PATH = "src/semantics/pipeline.py"
-_BUILDER_DISPATCH_VAR = "_BUILDER_HANDLERS"
+_LEGACY_BUILDER_DISPATCH_VAR = "_BUILDER_HANDLERS"
+_CONSOLIDATED_BUILDER_DISPATCH_VAR = "_CONSOLIDATED_BUILDER_HANDLERS"
 
 _ENTITY_REGISTRY_PATH = "src/semantics/registry.py"
 
@@ -372,7 +383,7 @@ def _check_viewkind_sole_authority(
 ) -> tuple[Violation, ...]:
     """Verify ViewKind is the sole StrEnum defining view kind values.
 
-    Scan all Python files in ``src/`` for StrEnum class definitions that
+    Scan Python files in ``src/semantics`` for StrEnum class definitions that
     contain member values overlapping with the canonical ViewKind values.
     The canonical definition in ``view_kinds.py`` is excluded.
 
@@ -380,7 +391,9 @@ def _check_viewkind_sole_authority(
         Violations for any file with overlapping StrEnum values.
     """
     violations: list[Violation] = []
-    for path in sorted(src_root.rglob("*.py")):
+    semantics_root = src_root / "semantics"
+    search_root = semantics_root if semantics_root.exists() else src_root
+    for path in sorted(search_root.rglob("*.py")):
         rel_path = path.relative_to(repo_root).as_posix()
         if rel_path == _VIEW_KIND_AUTHORITY_PATH:
             continue
@@ -414,12 +427,22 @@ def _extract_dict_string_keys(tree: ast.Module, var_name: str) -> set[str]:
     """
     keys: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
+        dict_value: ast.Dict | None = None
+        if isinstance(node, ast.Assign):
+            targets_match = any(isinstance(t, ast.Name) and t.id == var_name for t in node.targets)
+            if targets_match and isinstance(node.value, ast.Dict):
+                dict_value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+            if (
+                isinstance(target, ast.Name)
+                and target.id == var_name
+                and isinstance(node.value, ast.Dict)
+            ):
+                dict_value = node.value
+        if dict_value is None:
             continue
-        targets_match = any(isinstance(t, ast.Name) and t.id == var_name for t in node.targets)
-        if not targets_match or not isinstance(node.value, ast.Dict):
-            continue
-        for key in node.value.keys:
+        for key in dict_value.keys:
             if isinstance(key, ast.Constant) and isinstance(key.value, str):
                 keys.add(key.value)
     return keys
@@ -428,13 +451,14 @@ def _extract_dict_string_keys(tree: ast.Module, var_name: str) -> set[str]:
 def _check_builder_dispatch_coverage(
     repo_root: Path,
 ) -> tuple[Violation, ...]:
-    """Verify _BUILDER_HANDLERS covers all ViewKind values.
+    """Verify semantic builder dispatch covers expected kind values.
 
-    Parse the builder dispatch dict in ``pipeline.py`` and check that
-    every ViewKind value has a corresponding handler entry.
+    Supports both the legacy per-kind map (``_BUILDER_HANDLERS`` with 14 keys)
+    and the consolidated dispatch map (``_CONSOLIDATED_BUILDER_HANDLERS`` with
+    6 keys).
 
     Returns:
-        Violations for any missing ViewKind handler.
+        Violations for missing dispatch coverage or absent dispatch map.
     """
     pipeline_path = repo_root / _BUILDER_DISPATCH_PATH
     if not pipeline_path.exists():
@@ -448,19 +472,47 @@ def _check_builder_dispatch_coverage(
         )
 
     tree = ast.parse(pipeline_path.read_text(encoding="utf-8"))
-    handler_keys = _extract_dict_string_keys(tree, _BUILDER_DISPATCH_VAR)
+    consolidated_keys = _extract_dict_string_keys(tree, _CONSOLIDATED_BUILDER_DISPATCH_VAR)
+    if consolidated_keys:
+        missing = sorted(_CONSOLIDATED_KIND_VALUES - consolidated_keys)
+        violations = [
+            Violation(
+                path=_BUILDER_DISPATCH_PATH,
+                line=0,
+                scope=_CONSOLIDATED_BUILDER_DISPATCH_VAR,
+                detail=(
+                    f"Consolidated kind {kind!r} missing from {_CONSOLIDATED_BUILDER_DISPATCH_VAR}"
+                ),
+            )
+            for kind in missing
+        ]
+        return _sorted_violations(violations)
 
-    missing = sorted(_VIEW_KIND_VALUES - handler_keys)
-    violations = [
+    legacy_keys = _extract_dict_string_keys(tree, _LEGACY_BUILDER_DISPATCH_VAR)
+    if legacy_keys:
+        missing = sorted(_VIEW_KIND_VALUES - legacy_keys)
+        violations = [
+            Violation(
+                path=_BUILDER_DISPATCH_PATH,
+                line=0,
+                scope=_LEGACY_BUILDER_DISPATCH_VAR,
+                detail=f"ViewKind {kind!r} missing from {_LEGACY_BUILDER_DISPATCH_VAR}",
+            )
+            for kind in missing
+        ]
+        return _sorted_violations(violations)
+
+    return (
         Violation(
             path=_BUILDER_DISPATCH_PATH,
             line=0,
-            scope=_BUILDER_DISPATCH_VAR,
-            detail=f"ViewKind {kind!r} missing from {_BUILDER_DISPATCH_VAR}",
-        )
-        for kind in missing
-    ]
-    return _sorted_violations(violations)
+            scope="<module>",
+            detail=(
+                f"Neither {_CONSOLIDATED_BUILDER_DISPATCH_VAR} nor "
+                f"{_LEGACY_BUILDER_DISPATCH_VAR} found"
+            ),
+        ),
+    )
 
 
 def _check_entity_registry_derivation(

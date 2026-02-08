@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from semantics.naming import canonical_output_name, output_name_map_from_views
@@ -36,94 +35,6 @@ def semantic_ir_for_outputs(outputs: Collection[str] | None = None) -> SemanticI
     return build_semantic_ir(outputs=_resolved_outputs(outputs))
 
 
-@dataclass
-class CompileContext:
-    """Memoized compile context for semantic program orchestration."""
-
-    runtime_profile: DataFusionRuntimeProfile
-    outputs: Collection[str] | None = None
-    policy: SemanticInputValidationPolicy = "schema_only"
-    input_mapping: Mapping[str, str] | None = None
-    _internal: bool = field(default=False, repr=False)
-    _semantic_ir_cache: SemanticIR | None = field(default=None, init=False, repr=False)
-    _dataset_bindings_cache: ManifestDatasetBindings | None = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
-
-    def __post_init__(self) -> None:
-        """Emit deprecation warning for direct external construction."""
-        if not self._internal:
-            warnings.warn(
-                "CompileContext is deprecated. Use build_semantic_execution_context() instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-    def semantic_ir(self) -> SemanticIR:
-        """Return cached semantic IR for this compile context."""
-        if self._semantic_ir_cache is not None:
-            return self._semantic_ir_cache
-        self._semantic_ir_cache = semantic_ir_for_outputs(self.outputs)
-        return self._semantic_ir_cache
-
-    def dataset_bindings(self) -> ManifestDatasetBindings:
-        """Return cached dataset bindings from runtime catalog resolution."""
-        if not self._internal:
-            warnings.warn(
-                "CompileContext.dataset_bindings() is deprecated. Access the "
-                "dataset_resolver from SemanticExecutionContext instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        if self._dataset_bindings_cache is not None:
-            return self._dataset_bindings_cache
-        from datafusion_engine.dataset.registry import dataset_catalog_from_profile
-
-        catalog = dataset_catalog_from_profile(self.runtime_profile)
-        self._dataset_bindings_cache = ManifestDatasetBindings(
-            locations={name: catalog.get(name) for name in catalog.names()}
-        )
-        return self._dataset_bindings_cache
-
-    def compile(self, *, ctx: SessionContext | None = None) -> SemanticProgramManifest:
-        """Compile and validate a semantic program manifest.
-
-        Returns:
-        -------
-        SemanticProgramManifest
-            Manifest enriched with validation status and fingerprint.
-        """
-        from semantics.validation.policy import (
-            resolve_semantic_input_mapping,
-            validate_semantic_inputs,
-        )
-
-        active_ctx = ctx or self.runtime_profile.session_context()
-        resolved_outputs = _resolved_outputs(self.outputs) or ()
-        resolved_input_mapping = (
-            dict(self.input_mapping)
-            if self.input_mapping is not None
-            else resolve_semantic_input_mapping(active_ctx)
-        )
-        ir = self.semantic_ir()
-        manifest = SemanticProgramManifest(
-            semantic_ir=ir,
-            requested_outputs=resolved_outputs,
-            input_mapping=resolved_input_mapping,
-            validation_policy=self.policy,
-            dataset_bindings=self.dataset_bindings(),
-            output_name_map=output_name_map_from_views(ir.views),
-        )
-        validation = validate_semantic_inputs(
-            ctx=active_ctx,
-            manifest=manifest,
-            policy=self.policy,
-        )
-        return replace(manifest, validation=validation).with_fingerprint()
-
-
 @dataclass(frozen=True)
 class SemanticExecutionContext:
     """Shared execution context carrying compiled semantic authorities."""
@@ -149,21 +60,43 @@ def build_semantic_execution_context(
     Returns:
         SemanticExecutionContext: Compiled manifest, resolver, and execution context.
     """
+    from datafusion_engine.dataset.registry import dataset_catalog_from_profile
     from semantics.compile_invariants import record_compile_if_tracking
+    from semantics.validation.policy import (
+        resolve_semantic_input_mapping,
+        validate_semantic_inputs,
+    )
 
     record_compile_if_tracking()
-    compile_ctx = CompileContext(
-        runtime_profile=runtime_profile,
-        outputs=outputs,
-        policy=policy,
-        input_mapping=input_mapping,
-        _internal=True,
-    )
     active_ctx = ctx or runtime_profile.session_context()
-    manifest = compile_ctx.compile(ctx=active_ctx)
-    return SemanticExecutionContext(
+    resolved_outputs = _resolved_outputs(outputs) or ()
+    resolved_input_mapping = (
+        dict(input_mapping)
+        if input_mapping is not None
+        else resolve_semantic_input_mapping(active_ctx)
+    )
+    semantic_ir = semantic_ir_for_outputs(outputs)
+    catalog = dataset_catalog_from_profile(runtime_profile)
+    dataset_bindings = ManifestDatasetBindings(
+        locations={name: catalog.get(name) for name in catalog.names()}
+    )
+    manifest = SemanticProgramManifest(
+        semantic_ir=semantic_ir,
+        requested_outputs=resolved_outputs,
+        input_mapping=resolved_input_mapping,
+        validation_policy=policy,
+        dataset_bindings=dataset_bindings,
+        output_name_map=output_name_map_from_views(semantic_ir.views),
+    )
+    validation = validate_semantic_inputs(
+        ctx=active_ctx,
         manifest=manifest,
-        dataset_resolver=manifest.dataset_bindings,
+        policy=policy,
+    )
+    compiled_manifest = replace(manifest, validation=validation).with_fingerprint()
+    return SemanticExecutionContext(
+        manifest=compiled_manifest,
+        dataset_resolver=compiled_manifest.dataset_bindings,
         runtime_profile=runtime_profile,
         ctx=active_ctx,
         facade=facade,
@@ -171,7 +104,6 @@ def build_semantic_execution_context(
 
 
 __all__ = [
-    "CompileContext",
     "SemanticExecutionContext",
     "build_semantic_execution_context",
     "semantic_ir_for_outputs",

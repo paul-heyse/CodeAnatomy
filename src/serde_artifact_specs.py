@@ -23,12 +23,15 @@ from serde_artifacts import (
     DeltaProtocolArtifact,
     DeltaStatsDecision,
     ExtractErrorsArtifact,
+    FallbackQuarantineArtifact,
     IncrementalMetadataSnapshot,
     NormalizeOutputsArtifact,
     PerformancePolicyArtifact,
     PlanScheduleArtifact,
     PlanSignalsArtifact,
     PlanValidationArtifact,
+    PolicyCounterfactualReplayArtifact,
+    PolicyValidationArtifact,
     PruningMetricsArtifact,
     RunManifest,
     RuntimeCapabilitiesSnapshotArtifact,
@@ -334,6 +337,7 @@ POLICY_VALIDATION_SPEC = register_artifact_spec(
     ArtifactSpec(
         canonical_name="policy_validation_v1",
         description="Policy validation results for runtime configuration.",
+        payload_type=PolicyValidationArtifact,
     )
 )
 
@@ -1288,6 +1292,26 @@ DECISION_PROVENANCE_GRAPH_SPEC = register_artifact_spec(
 )
 
 # ---------------------------------------------------------------------------
+# Counterfactual & Quarantine (Phase G.4-G.6)
+# ---------------------------------------------------------------------------
+
+POLICY_COUNTERFACTUAL_REPLAY_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="policy_counterfactual_replay_v1",
+        description="Counterfactual policy replay outcomes for alternative policy scenarios.",
+        payload_type=PolicyCounterfactualReplayArtifact,
+    )
+)
+
+FALLBACK_QUARANTINE_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="fallback_quarantine_v1",
+        description="Fallback quarantine diagnostics and rollout guardrails.",
+        payload_type=FallbackQuarantineArtifact,
+    )
+)
+
+# ---------------------------------------------------------------------------
 # Calibration (Phase C.2)
 # ---------------------------------------------------------------------------
 
@@ -1391,6 +1415,7 @@ __all__ = [
     "EXTRACT_PLAN_COMPILE_SPEC",
     "EXTRACT_PLAN_EXECUTE_SPEC",
     "EXTRACT_UDF_PARITY_SPEC",
+    "FALLBACK_QUARANTINE_SPEC",
     "HAMILTON_CACHE_LINEAGE_SPEC",
     "HAMILTON_EVENTS_STORE_FAILED_SPEC",
     "HAMILTON_EVENTS_STORE_SPEC",
@@ -1417,6 +1442,7 @@ __all__ = [
     "PLAN_SIGNALS_SPEC",
     "PLAN_VALIDATION_SPEC",
     "POLICY_CALIBRATION_RESULT_SPEC",
+    "POLICY_COUNTERFACTUAL_REPLAY_SPEC",
     "POLICY_VALIDATION_SPEC",
     "PROJECTION_VIEW_ARTIFACT_SKIPPED_SPEC",
     "PRUNING_METRICS_SPEC",

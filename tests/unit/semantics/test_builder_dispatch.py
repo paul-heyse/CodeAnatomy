@@ -2,7 +2,7 @@
 
 Verify that ``_dispatch_from_registry`` creates handlers that resolve
 builders from name-keyed registries, and that the master dispatcher
-``_builder_for_semantic_spec`` routes all 14 spec kinds.
+``_builder_for_semantic_spec`` routes all consolidated kind classes.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from semantics.pipeline import (
-    _BUILDER_HANDLERS,
+    _CONSOLIDATED_BUILDER_HANDLERS,
     _dispatch_from_registry,
 )
 from semantics.spec_registry import SemanticSpecIndex
@@ -182,35 +182,27 @@ class TestDispatchFromRegistry:
 
 
 class TestBuilderHandlersTable:
-    """Verify the ``_BUILDER_HANDLERS`` table covers all spec kinds."""
+    """Verify consolidated dispatcher coverage."""
 
     def test_all_spec_kinds_have_handlers(self) -> None:
-        """Every ``SpecKind`` literal must appear as a key in ``_BUILDER_HANDLERS``."""
+        """Every consolidated kind has a dedicated dispatch handler."""
         expected_kinds = {
             "normalize",
-            "scip_normalize",
-            "bytecode_line_index",
-            "span_unnest",
-            "symtable",
-            "diagnostic",
-            "export",
-            "projection",
-            "finalize",
-            "artifact",
-            "join_group",
+            "derive",
             "relate",
-            "union_nodes",
-            "union_edges",
+            "union",
+            "project",
+            "diagnostic",
         }
-        assert set(_BUILDER_HANDLERS.keys()) == expected_kinds
+        assert set(_CONSOLIDATED_BUILDER_HANDLERS.keys()) == expected_kinds
 
     def test_handler_count_matches_spec_kinds(self) -> None:
-        """Handler table has exactly 14 entries (one per SpecKind)."""
-        assert len(_BUILDER_HANDLERS) == 14
+        """Handler table has exactly 6 entries (one per consolidated kind)."""
+        assert len(_CONSOLIDATED_BUILDER_HANDLERS) == 6
 
     def test_all_handlers_are_callable(self) -> None:
         """Every handler in the table must be callable."""
-        for kind, handler in _BUILDER_HANDLERS.items():
+        for kind, handler in _CONSOLIDATED_BUILDER_HANDLERS.items():
             assert callable(handler), f"Handler for {kind!r} is not callable"
 
 

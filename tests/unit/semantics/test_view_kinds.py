@@ -1,8 +1,8 @@
 """Tests for the ``semantics.view_kinds`` single-authority module.
 
 Verify that ``ViewKind``, ``VIEW_KIND_ORDER``, ``CONSOLIDATED_KIND``,
-and ``ViewKindParams`` are correct, complete, and backward-compatible
-with the former ``SemanticIRKind``, ``SpecKind``, and ``_KIND_ORDER``.
+and ``ViewKindParams`` are correct and that downstream consumers
+use ``ViewKindStr`` from the single-authority module.
 """
 
 from __future__ import annotations
@@ -160,30 +160,28 @@ class TestConsolidatedKind:
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatible aliases
+# Single-authority consumer wiring
 # ---------------------------------------------------------------------------
 
 
-class TestBackwardCompatAliases:
-    """Verify that the old type aliases still resolve to ViewKindStr."""
+class TestSingleAuthorityConsumers:
+    """Verify downstream modules consume ``ViewKindStr`` directly."""
 
-    def test_semantic_ir_kind_alias(self) -> None:
-        """``SemanticIRKind`` must be the same object as ``ViewKindStr``."""
-        from semantics.ir import SemanticIRKind
+    def test_semantic_ir_view_kind_annotation_uses_view_kind_str(self) -> None:
+        """``SemanticIRView.kind`` should resolve to ``ViewKindStr``."""
+        from typing import get_type_hints
 
-        assert SemanticIRKind is ViewKindStr
+        from semantics.ir import SemanticIRView
 
-    def test_spec_kind_alias(self) -> None:
-        """``SpecKind`` must be the same object as ``ViewKindStr``."""
-        from semantics.spec_registry import SpecKind
+        assert get_type_hints(SemanticIRView)["kind"] == ViewKindStr
 
-        assert SpecKind is ViewKindStr
+    def test_semantic_spec_index_kind_annotation_uses_view_kind_str(self) -> None:
+        """``SemanticSpecIndex.kind`` should resolve to ``ViewKindStr``."""
+        from typing import get_type_hints
 
-    def test_kind_order_alias(self) -> None:
-        """``_KIND_ORDER`` must be the same object as ``VIEW_KIND_ORDER``."""
-        from semantics.ir_pipeline import _KIND_ORDER
+        from semantics.spec_registry import SemanticSpecIndex
 
-        assert _KIND_ORDER is VIEW_KIND_ORDER
+        assert get_type_hints(SemanticSpecIndex)["kind"] == ViewKindStr
 
     def test_semantic_ir_view_accepts_string_kind(self) -> None:
         """``SemanticIRView`` must accept string literals for ``kind``."""

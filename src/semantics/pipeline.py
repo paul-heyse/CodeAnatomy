@@ -48,6 +48,7 @@ from semantics.naming import canonical_output_name
 from semantics.quality import QualityRelationshipSpec
 from semantics.registry import SEMANTIC_MODEL
 from semantics.specs import RelationshipSpec
+from semantics.view_kinds import CONSOLIDATED_KIND, ViewKind
 from utils.env_utils import env_value
 from utils.hashing import hash_msgpack_canonical
 from utils.uuid_factory import uuid7_str
@@ -91,13 +92,11 @@ class CpgBuildOptions:
     ----------
     cache_policy
         Explicit per-view cache policy override.  When provided this takes
-        precedence over both ``compiled_cache_policy`` and the naming
-        heuristic fallback.
+        precedence over ``compiled_cache_policy``.
     compiled_cache_policy
         Topology-derived cache policy mapping produced by the policy
-        compiler.  Used as an intermediate fallback between the explicit
-        ``cache_policy`` and the ``_default_semantic_cache_policy()``
-        naming heuristic.  Typically populated from
+        compiler.  Used as the fallback when explicit ``cache_policy`` is not
+        provided. Typically populated from
         ``CompiledExecutionPolicy.cache_policy_by_view``.
     validate_schema
         Whether to validate output schemas.
@@ -189,7 +188,7 @@ def _resolve_cpg_compile_artifacts(
 
     Encapsulates the common resolver + manifest resolution pattern shared by
     ``build_cpg()`` and ``build_cpg_from_inferred_deps()``, eliminating
-    redundant ``CompileContext`` construction at each call site.
+    redundant semantic-context reconstruction at each call site.
 
     Returns:
     -------
@@ -287,35 +286,6 @@ def _normalize_cache_policy_mapping(
     policy: Mapping[str, str],
 ) -> dict[str, CachePolicy]:
     return {name: _normalize_cache_policy(value) for name, value in policy.items()}
-
-
-def _default_semantic_cache_policy(
-    *,
-    view_names: Sequence[str],
-    output_locations: Mapping[str, DatasetLocation],
-) -> dict[str, CachePolicy]:
-    resolved: dict[str, CachePolicy] = {}
-    for name in view_names:
-        if name.startswith("cpg_"):
-            if name in output_locations:
-                resolved[name] = "delta_output"
-            else:
-                resolved[name] = "delta_staging"
-            continue
-        if name in {"relation_output", "dim_exported_defs"}:
-            resolved[name] = "delta_staging"
-            continue
-        if name in {"semantic_nodes_union", "semantic_edges_union"}:
-            resolved[name] = "delta_staging"
-            continue
-        if name.startswith("rel_") or name.endswith("_norm"):
-            resolved[name] = "delta_staging"
-            continue
-        if name.startswith("join_"):
-            resolved[name] = "delta_staging"
-            continue
-        resolved[name] = "none"
-    return resolved
 
 
 def _bundle_for_builder(
@@ -1117,23 +1087,94 @@ def _builder_for_artifact_spec(
     raise ValueError(msg)
 
 
-_BUILDER_HANDLERS: dict[
+def _builder_for_normalize_kind(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    if spec.kind == ViewKind.NORMALIZE:
+        return _builder_for_normalize_spec(spec, context)
+    if spec.kind == ViewKind.SCIP_NORMALIZE:
+        return _builder_for_scip_normalize_spec(spec, context)
+    if spec.kind == ViewKind.BYTECODE_LINE_INDEX:
+        return _builder_for_bytecode_line_index_spec(spec, context)
+    if spec.kind == ViewKind.SPAN_UNNEST:
+        return _dispatch_from_registry(_span_unnest_registry, "span-unnest")(spec, context)
+    msg = f"Unsupported normalize-kind spec kind: {spec.kind!r}."
+    raise ValueError(msg)
+
+
+def _builder_for_derive_kind(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    if spec.kind == ViewKind.SYMTABLE:
+        return _dispatch_from_registry(_symtable_registry, "symtable")(spec, context)
+    msg = f"Unsupported derive-kind spec kind: {spec.kind!r}."
+    raise ValueError(msg)
+
+
+def _builder_for_relate_kind(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    if spec.kind == ViewKind.JOIN_GROUP:
+        return _builder_for_join_group_spec(spec, context)
+    if spec.kind == ViewKind.RELATE:
+        return _builder_for_relate_spec(spec, context)
+    msg = f"Unsupported relate-kind spec kind: {spec.kind!r}."
+    raise ValueError(msg)
+
+
+def _builder_for_union_kind(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    if spec.kind == ViewKind.UNION_EDGES:
+        return _builder_for_union_edges_spec(spec, context)
+    if spec.kind == ViewKind.UNION_NODES:
+        return _builder_for_union_nodes_spec(spec, context)
+    msg = f"Unsupported union-kind spec kind: {spec.kind!r}."
+    raise ValueError(msg)
+
+
+def _builder_for_project_kind(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    if spec.kind == ViewKind.PROJECTION:
+        return _builder_for_projection_spec(spec, context)
+    if spec.kind == ViewKind.EXPORT:
+        return _builder_for_export_spec(spec, context)
+    if spec.kind == ViewKind.FINALIZE:
+        return _dispatch_from_registry(_finalize_registry, "finalize", finalize=True)(spec, context)
+    if spec.kind == ViewKind.ARTIFACT:
+        return _builder_for_artifact_spec(spec, context)
+    msg = f"Unsupported project-kind spec kind: {spec.kind!r}."
+    raise ValueError(msg)
+
+
+def _builder_for_diagnostic_kind(
+    spec: SemanticSpecIndex,
+    context: _SemanticSpecContext,
+) -> DataFrameBuilder:
+    if spec.kind == ViewKind.DIAGNOSTIC:
+        return _dispatch_from_registry(_diagnostic_registry, "diagnostic", finalize=True)(
+            spec,
+            context,
+        )
+    msg = f"Unsupported diagnostic-kind spec kind: {spec.kind!r}."
+    raise ValueError(msg)
+
+
+_CONSOLIDATED_BUILDER_HANDLERS: dict[
     str, Callable[[SemanticSpecIndex, _SemanticSpecContext], DataFrameBuilder]
 ] = {
-    "normalize": _builder_for_normalize_spec,
-    "scip_normalize": _builder_for_scip_normalize_spec,
-    "bytecode_line_index": _builder_for_bytecode_line_index_spec,
-    "span_unnest": _dispatch_from_registry(_span_unnest_registry, "span-unnest"),
-    "symtable": _dispatch_from_registry(_symtable_registry, "symtable"),
-    "join_group": _builder_for_join_group_spec,
-    "relate": _builder_for_relate_spec,
-    "union_edges": _builder_for_union_edges_spec,
-    "union_nodes": _builder_for_union_nodes_spec,
-    "projection": _builder_for_projection_spec,
-    "diagnostic": _dispatch_from_registry(_diagnostic_registry, "diagnostic", finalize=True),
-    "export": _builder_for_export_spec,
-    "finalize": _dispatch_from_registry(_finalize_registry, "finalize", finalize=True),
-    "artifact": _builder_for_artifact_spec,
+    "normalize": _builder_for_normalize_kind,
+    "derive": _builder_for_derive_kind,
+    "relate": _builder_for_relate_kind,
+    "union": _builder_for_union_kind,
+    "project": _builder_for_project_kind,
+    "diagnostic": _builder_for_diagnostic_kind,
 }
 
 
@@ -1142,9 +1183,13 @@ def _builder_for_semantic_spec(
     *,
     context: _SemanticSpecContext,
 ) -> DataFrameBuilder:
-    handler = _BUILDER_HANDLERS.get(spec.kind)
-    if handler is None:
+    consolidated_kind = CONSOLIDATED_KIND.get(spec.kind)
+    if consolidated_kind is None:
         msg = f"Unsupported semantic spec kind: {spec.kind!r}."
+        raise ValueError(msg)
+    handler = _CONSOLIDATED_BUILDER_HANDLERS.get(consolidated_kind)
+    if handler is None:
+        msg = f"Unsupported consolidated semantic spec kind: {consolidated_kind!r}."
         raise ValueError(msg)
     return handler(spec, context)
 
@@ -1270,17 +1315,14 @@ def _resolve_cache_policy_hierarchy(
     *,
     explicit_policy: Mapping[str, CachePolicy] | None,
     compiled_policy: Mapping[str, str] | None,
-    view_names: Sequence[str],
-    output_locations: Mapping[str, DatasetLocation],
 ) -> Mapping[str, str]:
-    """Resolve cache policy through a three-tier fallback hierarchy.
+    """Resolve cache policy through explicit and compiled layers.
 
     Resolution order (highest priority first):
 
     1. ``explicit_policy`` -- caller-provided per-view overrides.
     2. ``compiled_policy`` -- topology-derived policy from the policy
        compiler (``CompiledExecutionPolicy.cache_policy_by_view``).
-    3. ``_default_semantic_cache_policy()`` -- naming-convention heuristic.
 
     Parameters
     ----------
@@ -1288,25 +1330,18 @@ def _resolve_cache_policy_hierarchy(
         Direct cache policy override, typically from ``CpgBuildOptions.cache_policy``.
     compiled_policy
         Topology-derived policy mapping from the compiled execution policy.
-    view_names
-        Ordered view names in the current build.
-    output_locations
-        Mapping of output view names to dataset locations, used by the
-        naming heuristic fallback.
 
     Returns:
     -------
     Mapping[str, str]
-        Resolved cache policy mapping covering all views.
+        Resolved cache policy mapping. Returns an empty mapping when no
+        explicit or compiled mapping is available.
     """
     if explicit_policy is not None:
         return explicit_policy
     if compiled_policy is not None:
         return compiled_policy
-    return _default_semantic_cache_policy(
-        view_names=view_names,
-        output_locations=output_locations,
-    )
+    return {}
 
 
 def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
@@ -1326,8 +1361,6 @@ def _view_nodes_for_cpg(request: CpgViewNodesRequest) -> list[ViewNode]:
     resolved_cache = _resolve_cache_policy_hierarchy(
         explicit_policy=request.cache_policy,
         compiled_policy=request.compiled_cache_policy,
-        view_names=[name for name, _builder in view_specs],
-        output_locations=request.output_locations,
     )
     cache_overrides = request.runtime_profile.data_sources.semantic_output.cache_overrides
     if cache_overrides:
@@ -2198,7 +2231,7 @@ def build_cpg_from_inferred_deps(
 
         deps: dict[str, object] = {}
         # Reuse the same compile resolution helper that build_cpg uses,
-        # eliminating redundant CompileContext construction.
+        # eliminating redundant semantic-context reconstruction.
         compile_resolution = _resolve_cpg_compile_artifacts(
             ctx,
             runtime_profile=runtime_profile,

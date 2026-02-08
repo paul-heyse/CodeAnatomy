@@ -44,23 +44,6 @@ def resolve_mailmap(repo: pygit2.Repository) -> pygit2.Mailmap | None:
         return None
 
 
-def resolve_signature(
-    repo: pygit2.Repository,
-    signature: pygit2.Signature,
-) -> pygit2.Signature:
-    """Resolve a signature using the repository mailmap.
-
-    Returns:
-    -------
-    pygit2.Signature
-        Resolved signature.
-    """
-    mailmap = resolve_mailmap(repo)
-    if mailmap is None:
-        return signature
-    return mailmap.resolve_signature(signature)
-
-
 def blame_hunks(
     repo: pygit2.Repository,
     *,
@@ -170,5 +153,4 @@ __all__ = [
     "blame_hunks",
     "diff_paths",
     "resolve_mailmap",
-    "resolve_signature",
 ]

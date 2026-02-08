@@ -1,15 +1,25 @@
-"""Schema management and validation.
-
-This module exposes schema inference utilities for DataFusion plans.
-To avoid circular imports, use direct imports from the inference submodule:
-
-    from datafusion_engine.schema.inference import infer_schema_from_dataframe
-"""
+"""Schema management and validation package."""
 
 from __future__ import annotations
 
-# Re-export inference types and functions directly
-# Note: imports are at module scope to support proper __all__ semantics
-# but are deferred in the module load order via Python's normal import mechanism.
+from datafusion_engine.schema import registry
+from datafusion_engine.schema.registry import (
+    extract_base_schema_for,
+    extract_base_schema_names,
+    extract_nested_schema_for,
+    extract_nested_schema_names,
+    extract_schema_contract_for,
+    extract_schema_for,
+    schema_contract_for_table,
+)
 
-__all__: list[str] = []
+__all__ = [
+    "extract_base_schema_for",
+    "extract_base_schema_names",
+    "extract_nested_schema_for",
+    "extract_nested_schema_names",
+    "extract_schema_contract_for",
+    "extract_schema_for",
+    "registry",
+    "schema_contract_for_table",
+]

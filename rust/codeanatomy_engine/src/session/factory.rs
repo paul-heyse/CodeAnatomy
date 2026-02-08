@@ -39,6 +39,11 @@ impl SessionFactory {
         Self { profile }
     }
 
+    /// Returns the immutable environment profile used by this factory.
+    pub fn profile(&self) -> &EnvironmentProfile {
+        &self.profile
+    }
+
     /// Builds a deterministic SessionContext with the given ruleset.
     ///
     /// Construction order:

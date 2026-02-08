@@ -122,11 +122,6 @@ impl AdaptiveTuner {
 
         // Check for regression first
         if self.is_regression(metrics) {
-            eprintln!(
-                "AdaptiveTuner: Regression detected (elapsed {}ms > 2x previous {}ms), rolling back",
-                metrics.elapsed_ms,
-                self.last_metrics.as_ref().map(|m| m.elapsed_ms).unwrap_or(0)
-            );
             self.current_config = self.stable_config.clone();
             self.last_metrics = Some(metrics.clone());
             return Some(self.stable_config.clone());

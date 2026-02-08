@@ -123,9 +123,8 @@ fn validate_semantic_integrity(plan: &LogicalPlan) -> Result<()> {
 
 /// Validates column references in an expression.
 ///
-/// Placeholder for column validation logic. In production, this would
-/// recursively walk expression trees and verify that all Column references
-/// exist in the provided schema.
+/// Recursively walk expression trees and verify that all `Expr::Column`
+/// references exist in the provided schema (qualified or unqualified).
 ///
 /// # Arguments
 ///
@@ -136,11 +135,33 @@ fn validate_semantic_integrity(plan: &LogicalPlan) -> Result<()> {
 ///
 /// Ok(()) if all columns exist, Err otherwise
 fn validate_expression_columns(
-    _expr: &Expr,
-    _schema: &datafusion_common::DFSchemaRef,
+    expr: &Expr,
+    schema: &datafusion_common::DFSchemaRef,
 ) -> Result<()> {
-    // TODO: Implement full expression tree walking and column validation
-    // For now, this is a placeholder that always succeeds
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+
+    expr.apply(|candidate| {
+        if let Expr::Column(column) = candidate {
+            if schema.has_column(column) {
+                return Ok(TreeNodeRecursion::Continue);
+            }
+            let unqualified = datafusion_common::Column::new_unqualified(column.name.clone());
+            if schema.has_column(&unqualified) {
+                return Ok(TreeNodeRecursion::Continue);
+            }
+            let available = schema
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(DataFusionError::Plan(format!(
+                "Unknown column reference '{}' (available: [{}])",
+                column, available
+            )));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
     Ok(())
 }
 
@@ -189,9 +210,8 @@ fn validate_safety(plan: &LogicalPlan, strict: bool) -> Result<()> {
 
 /// Validates safety constraints on an expression.
 ///
-/// Placeholder for safety validation logic. In production, this would
-/// recursively walk expression trees and check for non-deterministic
-/// functions like RANDOM(), NOW(), etc.
+/// Recursively walk expression trees and check for disallowed
+/// non-deterministic functions.
 ///
 /// # Arguments
 ///
@@ -204,30 +224,22 @@ fn validate_safety(plan: &LogicalPlan, strict: bool) -> Result<()> {
 fn validate_expression_safety(expr: &Expr, strict: bool) -> Result<()> {
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 
-    // Check for non-deterministic scalar functions
-    if let Expr::ScalarFunction(func) = expr {
-        let func_name = func.name().to_lowercase();
-
-        // Reject always-non-deterministic functions
-        if func_name == "random" || func_name == "uuid" {
-            return Err(DataFusionError::Plan(format!(
-                "Non-deterministic function '{}' is not allowed in CPG builds",
-                func_name
-            )));
-        }
-
-        // In strict mode, reject additional functions
-        if strict && (func_name == "now" || func_name == "current_timestamp") {
-            return Err(DataFusionError::Plan(format!(
-                "Time-dependent function '{}' is not allowed in strict mode",
-                func_name
-            )));
-        }
-    }
-
-    // Recursively validate child expressions using TreeNode API
     expr.apply(|child_expr| {
-        validate_expression_safety(child_expr, strict)?;
+        if let Expr::ScalarFunction(func) = child_expr {
+            let func_name = func.name().to_lowercase();
+            if func_name == "random" || func_name == "uuid" {
+                return Err(DataFusionError::Plan(format!(
+                    "Non-deterministic function '{}' is not allowed in CPG builds",
+                    func_name
+                )));
+            }
+            if strict && (func_name == "now" || func_name == "current_timestamp") {
+                return Err(DataFusionError::Plan(format!(
+                    "Time-dependent function '{}' is not allowed in strict mode",
+                    func_name
+                )));
+            }
+        }
         Ok(TreeNodeRecursion::Continue)
     })?;
 

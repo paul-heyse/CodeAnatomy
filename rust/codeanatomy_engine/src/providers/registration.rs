@@ -1,17 +1,19 @@
 //! Table registration for extraction inputs.
 //!
 //! All inputs are registered as native Delta providers. No Arrow Dataset fallback.
-//! Reuses DeltaLake's DeltaTableProvider for registration.
+//! Reuses `datafusion_ext::delta_control_plane` for registration.
 
 use std::sync::Arc;
 
-use datafusion::catalog::TableProvider;
+use datafusion::datasource::TableProvider;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result as DFResult;
-use deltalake::delta_datafusion::{DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider};
-use deltalake::{ensure_table_uri, DeltaTableBuilder};
+use datafusion_ext::delta_control_plane::{delta_provider_from_session, DeltaScanOverrides};
+use datafusion_ext::DeltaFeatureGate;
+use deltalake::delta_datafusion::DeltaScanConfig;
 use serde::{Deserialize, Serialize};
 
+use crate::providers::scan_config::{standard_scan_config, validate_scan_config};
 use crate::schema::introspection::hash_arrow_schema;
 use crate::spec::relations::InputRelation;
 
@@ -21,6 +23,32 @@ pub struct TableRegistration {
     pub name: String,
     pub delta_version: i64,
     pub schema_hash: [u8; 32],
+    pub provider_identity: [u8; 32],
+}
+
+fn provider_identity_key(
+    logical_name: &str,
+    delta_location: &str,
+    delta_version: i64,
+    scan_config: &DeltaScanConfig,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(logical_name.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(delta_location.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(delta_version.to_string().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(scan_config.enable_parquet_pushdown.to_string().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(scan_config.schema_force_view_types.to_string().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(scan_config.wrap_partition_values.to_string().as_bytes());
+    hasher.update(b"\0");
+    if let Some(file_col) = scan_config.file_column_name.as_deref() {
+        hasher.update(file_col.as_bytes());
+    }
+    *hasher.finalize().as_bytes()
 }
 
 /// Register all extraction inputs as native Delta providers.
@@ -54,86 +82,59 @@ pub async fn register_extraction_inputs(
     sorted.sort_by(|a, b| a.logical_name.cmp(&b.logical_name));
 
     for input in &sorted {
-        // Load Delta table with optional version pin
-        let table_url = ensure_table_uri(&input.delta_location).map_err(|e| {
-            datafusion_common::DataFusionError::External(Box::new(e))
-        })?;
-
-        let mut builder = DeltaTableBuilder::from_url(table_url).map_err(|e| {
-            datafusion_common::DataFusionError::External(Box::new(e))
-        })?;
-
-        if let Some(version) = input.version_pin {
-            builder = builder.with_version(version);
+        let requested_scan_config = standard_scan_config(input.requires_lineage);
+        validate_scan_config(&requested_scan_config)
+            .map_err(datafusion_common::DataFusionError::Plan)?;
+        let overrides = DeltaScanOverrides {
+            file_column_name: requested_scan_config.file_column_name.clone(),
+            enable_parquet_pushdown: Some(requested_scan_config.enable_parquet_pushdown),
+            schema_force_view_types: Some(requested_scan_config.schema_force_view_types),
+            wrap_partition_values: Some(requested_scan_config.wrap_partition_values),
+            schema: requested_scan_config.schema.clone(),
+        };
+        let (provider, snapshot, resolved_scan_config, _pruned_files, predicate_error) =
+            delta_provider_from_session(
+                ctx,
+                &input.delta_location,
+                None,
+                input.version_pin,
+                None,
+                None,
+                overrides,
+                Some(DeltaFeatureGate::default()),
+            )
+            .await
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+        if let Some(error) = predicate_error {
+            return Err(datafusion_common::DataFusionError::Plan(format!(
+                "Delta predicate parsing failed for '{}': {error}",
+                input.logical_name
+            )));
         }
-
-        let table = builder.load().await.map_err(|e| {
-            datafusion_common::DataFusionError::External(Box::new(e))
-        })?;
-
-        // Get snapshot metadata
-        let snapshot = table.snapshot().map_err(|e| {
-            datafusion_common::DataFusionError::External(Box::new(e))
-        })?;
-        let version = snapshot.version();
-        let eager_snapshot = snapshot.snapshot().clone();
-        let log_store = table.log_store();
-
-        // Build scan config with lineage tracking if needed
-        let scan_config = build_scan_config(&eager_snapshot, input.requires_lineage)?;
-
-        // Create native Delta provider
-        let provider = DeltaTableProvider::try_new(eager_snapshot, log_store, scan_config)
-            .map_err(|e| {
-            datafusion_common::DataFusionError::External(Box::new(e))
-        })?;
+        validate_scan_config(&resolved_scan_config)
+            .map_err(datafusion_common::DataFusionError::Plan)?;
 
         // Hash the schema for envelope tracking
-        let schema_hash = hash_arrow_schema(Arc::as_ref(&provider.schema()));
+        let provider_schema = provider.schema();
+        let schema_hash = hash_arrow_schema(provider_schema.as_ref());
 
         // Register as table in the session context
         ctx.register_table(&input.logical_name, Arc::new(provider))?;
 
         registrations.push(TableRegistration {
             name: input.logical_name.clone(),
-            delta_version: version,
+            delta_version: snapshot.version,
             schema_hash,
+            provider_identity: provider_identity_key(
+                &input.logical_name,
+                &input.delta_location,
+                snapshot.version,
+                &resolved_scan_config,
+            ),
         });
     }
 
     Ok(registrations)
-}
-
-/// Build a standardized scan config for an extraction input.
-///
-/// If lineage tracking is required, adds `__source_file` column via
-/// DeltaScanConfigBuilder.
-///
-/// # Arguments
-/// * `snapshot` - Delta table eager snapshot (for builder validation)
-/// * `requires_lineage` - Whether to track source file lineage
-///
-/// # Returns
-/// Configured DeltaScanConfig instance.
-///
-/// # Errors
-/// Returns error if DeltaScanConfigBuilder fails (e.g., schema incompatibility).
-fn build_scan_config(
-    snapshot: &deltalake::kernel::EagerSnapshot,
-    requires_lineage: bool,
-) -> DFResult<DeltaScanConfig> {
-    if requires_lineage {
-        // Use builder to add file column for lineage tracking
-        DeltaScanConfigBuilder::new()
-            .with_file_column_name(&"__source_file".to_string())
-            .build(snapshot)
-            .map_err(|e| {
-                datafusion_common::DataFusionError::External(Box::new(e))
-            })
-    } else {
-        // Default config without file column
-        Ok(DeltaScanConfig::default())
-    }
 }
 
 #[cfg(test)]
@@ -146,6 +147,7 @@ mod tests {
             name: "test_table".to_string(),
             delta_version: 42,
             schema_hash: [0u8; 32],
+            provider_identity: [1u8; 32],
         };
 
         // Test serde round-trip
@@ -154,6 +156,7 @@ mod tests {
         assert_eq!(record.name, deserialized.name);
         assert_eq!(record.delta_version, deserialized.delta_version);
         assert_eq!(record.schema_hash, deserialized.schema_hash);
+        assert_eq!(record.provider_identity, deserialized.provider_identity);
     }
 
     #[test]

@@ -9,15 +9,13 @@ The row building utilities delegate to the canonical implementations in
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import msgspec
 
-from arrow_utils.core.array_iter import iter_table_rows
-from datafusion_engine.arrow.interop import TableLike
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.coordination.evidence_plan import EvidencePlan
@@ -180,25 +178,6 @@ class SpanSpec:
     byte_len: int | None = None
 
 
-def iter_file_contexts(repo_files: TableLike) -> Iterator[FileContext]:
-    """Yield FileContext objects from a repo_files table.
-
-    Parameters
-    ----------
-    repo_files:
-        Repo files table.
-
-    Yields:
-    ------
-    FileContext
-        Parsed file context rows with required identity fields.
-    """
-    for row in iter_table_rows(repo_files):
-        ctx = FileContext.from_repo_row(row)
-        if ctx.file_id and ctx.path:
-            yield ctx
-
-
 def file_identity_row(file_ctx: FileContext) -> dict[str, str | None]:
     """Return the standard file identity columns for extractor rows.
 
@@ -230,32 +209,6 @@ def attrs_map(values: Mapping[str, object] | None) -> list[tuple[str, str]]:
     from extract.row_builder import make_attrs_list as _make_attrs_list
 
     return _make_attrs_list(values)
-
-
-def pos_dict(line0: int | None, col: int | None) -> dict[str, int | None] | None:
-    """Return a position dict for nested span structs.
-
-    Returns:
-    -------
-    dict[str, int | None] | None
-        Position mapping or ``None`` when empty.
-    """
-    if line0 is None and col is None:
-        return None
-    return {"line0": line0, "col": col}
-
-
-def byte_span_dict(byte_start: int | None, byte_len: int | None) -> dict[str, int | None] | None:
-    """Return a byte-span dict for nested span structs.
-
-    Returns:
-    -------
-    dict[str, int | None] | None
-        Byte-span mapping or ``None`` when empty.
-    """
-    if byte_start is None and byte_len is None:
-        return None
-    return {"byte_start": byte_start, "byte_len": byte_len}
 
 
 def span_dict(spec: SpanSpec) -> dict[str, object] | None:
@@ -323,35 +276,14 @@ def bytes_from_file_ctx(file_ctx: FileContext) -> bytes | None:
     return None
 
 
-def iter_contexts(
-    repo_files: TableLike,
-    file_contexts: Iterable[FileContext] | None = None,
-) -> Iterator[FileContext]:
-    """Iterate file contexts from provided contexts or a repo_files table.
-
-    Yields:
-    ------
-    FileContext
-        File contexts for extraction.
-    """
-    if file_contexts is None:
-        yield from iter_file_contexts(repo_files)
-        return
-    yield from file_contexts
-
-
 __all__ = [
     "ExtractExecutionContext",
     "FileContext",
     "RepoFileRow",
     "SpanSpec",
     "attrs_map",
-    "byte_span_dict",
     "bytes_from_file_ctx",
     "file_identity_row",
-    "iter_contexts",
-    "iter_file_contexts",
-    "pos_dict",
     "span_dict",
     "text_from_file_ctx",
 ]

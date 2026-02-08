@@ -41,9 +41,18 @@ impl SemanticPlanCompiler {
     /// Raises:
     ///     ValueError: If JSON is malformed or spec is invalid
     fn compile(&self, spec_json: &str) -> PyResult<CompiledPlan> {
-        // Parse and validate spec structure
-        let mut spec: SemanticExecutionSpec = serde_json::from_str(spec_json)
-            .map_err(|e| PyValueError::new_err(format!("Invalid spec JSON: {e}")))?;
+        // Parse and validate spec structure with field-path diagnostics.
+        let mut deserializer = serde_json::Deserializer::from_str(spec_json);
+        let mut spec: SemanticExecutionSpec = serde_path_to_error::deserialize(&mut deserializer)
+            .map_err(|err| {
+                let path = err.path().to_string();
+                let inner = err.into_inner();
+                if path.is_empty() {
+                    PyValueError::new_err(format!("Invalid spec JSON: {inner}"))
+                } else {
+                    PyValueError::new_err(format!("Invalid spec JSON at '{path}': {inner}"))
+                }
+            })?;
 
         // Compute canonical hash
         spec.spec_hash = crate::spec::hashing::hash_spec(&spec);

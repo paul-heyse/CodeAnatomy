@@ -8,6 +8,7 @@ use crate::rules::intent_compiler::{
 use crate::rules::registry::CpgRuleSet;
 use crate::session::profiles::EnvironmentProfile;
 use crate::spec::rule_intents::{RuleIntent, RulepackProfile};
+use std::collections::HashSet;
 
 /// Factory for building CpgRuleSet from rulepack profile and rule intents.
 ///
@@ -49,6 +50,9 @@ impl RulepackFactory {
         let mut analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = Vec::new();
         let mut optimizer_rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> = Vec::new();
         let mut physical_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = Vec::new();
+        analyzer_rules.push(Arc::new(
+            datafusion_ext::planner_rules::CodeAnatomyPolicyRule::default(),
+        ));
 
         // Process each intent using the intent compiler
         for intent in intents {
@@ -95,6 +99,13 @@ impl RulepackFactory {
             }
         }
 
+        let mut seen = HashSet::new();
+        analyzer_rules.retain(|rule| seen.insert(rule.name().to_string()));
+        seen.clear();
+        optimizer_rules.retain(|rule| seen.insert(rule.name().to_string()));
+        seen.clear();
+        physical_rules.retain(|rule| seen.insert(rule.name().to_string()));
+
         CpgRuleSet::new(analyzer_rules, optimizer_rules, physical_rules)
     }
 }
@@ -112,11 +123,11 @@ impl RulepackFactory {
 ///
 /// true if the rule is essential for correctness
 fn is_correctness_rule(rule_name: &str) -> bool {
-    // TODO: Implement actual correctness classification when rules are defined
-    // For now, use conservative heuristic based on rule name patterns
-    rule_name.contains("integrity")
+    rule_name == "codeanatomy_policy_rule"
+        || rule_name.contains("integrity")
         || rule_name.contains("validation")
         || rule_name.contains("type_check")
+        || rule_name.contains("safety")
 }
 
 #[cfg(test)]
@@ -129,7 +140,8 @@ mod tests {
         let profile = RulepackProfile::Default;
         let env_profile = EnvironmentProfile::from_class(EnvironmentClass::Small);
         let ruleset = RulepackFactory::build_ruleset(&profile, &[], &env_profile);
-        assert_eq!(ruleset.total_count(), 0);
+        assert_eq!(ruleset.total_count(), 1);
+        assert_eq!(ruleset.analyzer_rules[0].name(), "codeanatomy_policy_rule");
     }
 
     #[test]
@@ -140,20 +152,22 @@ mod tests {
         let env_profile = EnvironmentProfile::from_class(EnvironmentClass::Small);
         let intents = vec![
             RuleIntent {
-                name: "test_integrity".to_string(),
+                name: "semantic_integrity".to_string(),
                 class: RuleClass::SemanticIntegrity,
                 params: serde_json::Value::Null,
             },
             RuleIntent {
-                name: "test_safety".to_string(),
+                name: "strict_safety".to_string(),
                 class: RuleClass::Safety,
                 params: serde_json::Value::Null,
             },
         ];
         let ruleset = RulepackFactory::build_ruleset(&profile, &intents, &env_profile);
-        // Low latency should filter out non-correctness rules
-        // Actual filtering depends on concrete rule implementations
-        assert_eq!(ruleset.total_count(), 0); // Currently returns 0 since rules are placeholders
+        assert!(ruleset.total_count() >= 1);
+        assert!(ruleset
+            .analyzer_rules
+            .iter()
+            .any(|rule| rule.name() == "codeanatomy_policy_rule"));
     }
 
     #[test]
@@ -163,14 +177,15 @@ mod tests {
         let profile = RulepackProfile::Strict;
         let env_profile = EnvironmentProfile::from_class(EnvironmentClass::Small);
         let intents = vec![RuleIntent {
-            name: "test_safety".to_string(),
+            name: "strict_safety".to_string(),
             class: RuleClass::Safety,
             params: serde_json::Value::Null,
         }];
         let ruleset = RulepackFactory::build_ruleset(&profile, &intents, &env_profile);
-        // Strict profile should process safety rules
-        // Actual count depends on concrete rule implementations
-        assert_eq!(ruleset.total_count(), 0); // Currently returns 0 since rules are placeholders
+        assert!(ruleset
+            .analyzer_rules
+            .iter()
+            .any(|rule| rule.name() == "strict_safety_rule"));
     }
 
     #[test]
@@ -180,13 +195,16 @@ mod tests {
         let profile = RulepackProfile::Default;
         let env_profile = EnvironmentProfile::from_class(EnvironmentClass::Small);
         let intents = vec![RuleIntent {
-            name: "test_safety".to_string(),
+            name: "strict_safety".to_string(),
             class: RuleClass::Safety,
             params: serde_json::Value::Null,
         }];
         let ruleset = RulepackFactory::build_ruleset(&profile, &intents, &env_profile);
         // Default profile should not include safety rules
-        assert_eq!(ruleset.total_count(), 0);
+        assert!(!ruleset
+            .analyzer_rules
+            .iter()
+            .any(|rule| rule.name() == "strict_safety_rule"));
     }
 
     #[test]
@@ -195,8 +213,8 @@ mod tests {
 
         let env_profile = EnvironmentProfile::from_class(EnvironmentClass::Small);
         let intents = vec![RuleIntent {
-            name: "test_integrity".to_string(),
-            class: RuleClass::SemanticIntegrity,
+            name: "strict_safety".to_string(),
+            class: RuleClass::Safety,
             params: serde_json::Value::Null,
         }];
 
@@ -211,8 +229,7 @@ mod tests {
             &env_profile,
         );
 
-        // Fingerprints should be same for same rule set (currently both empty)
-        assert_eq!(default_ruleset.fingerprint, strict_ruleset.fingerprint);
+        assert_ne!(default_ruleset.fingerprint, strict_ruleset.fingerprint);
     }
 
     #[test]

@@ -89,6 +89,7 @@ mod tests {
     use crate::spec::execution_spec::SemanticExecutionSpec;
     use crate::spec::relations::{InputRelation, ViewDefinition, ViewTransform, SchemaContract};
     use crate::spec::join_graph::JoinGraph;
+    use crate::spec::runtime::RuntimeConfig;
     use crate::spec::rule_intents::RulepackProfile;
     use std::collections::BTreeMap;
 
@@ -168,6 +169,7 @@ mod tests {
             rule_intents: vec![],
             rulepack_profile: RulepackProfile::Default,
             parameter_templates: vec![],
+            runtime: RuntimeConfig::default(),
             spec_hash: [0u8; 32],
         }
     }

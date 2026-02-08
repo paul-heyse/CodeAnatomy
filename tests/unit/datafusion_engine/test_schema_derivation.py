@@ -1,8 +1,8 @@
-"""Parity tests: derived schemas vs. static registry schemas.
+"""Parity tests: derived schemas vs. canonical registry schemas.
 
 Gate 2 of Phase H (Schema Derivation) -- verify that schemas derived from
-``ExtractMetadata`` field descriptors match the static schemas registered
-in ``datafusion_engine.schema.registry._BASE_EXTRACT_SCHEMA_BY_NAME``.
+``ExtractMetadata`` field descriptors match the schemas resolved by
+``datafusion_engine.schema.registry.extract_schema_for``.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import pytest
 
 from datafusion_engine.extract.metadata import extract_metadata_by_name
 from datafusion_engine.schema.derivation import derive_extract_schema
-from datafusion_engine.schema.registry import _BASE_EXTRACT_SCHEMA_BY_NAME
+from datafusion_engine.schema.registry import extract_schema_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -104,14 +104,13 @@ class TestMetadataEnrichment:
 
 
 class TestSchemaDerivationParity:
-    """Compare derived schemas against static registry schemas."""
+    """Compare derived schemas against canonical registry schemas."""
 
     @pytest.mark.parametrize("dataset_name", _BASE_DATASET_NAMES)
     def test_field_names_match(self, dataset_name: str) -> None:
-        """Verify derived schema field names match static schema field names."""
+        """Verify derived schema field names match canonical schema field names."""
         metadata = extract_metadata_by_name()[dataset_name]
-        static_schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(dataset_name)
-        assert static_schema is not None, f"No static schema for {dataset_name}"
+        static_schema = extract_schema_for(dataset_name)
 
         derived_schema = derive_extract_schema(metadata)
 
@@ -123,10 +122,9 @@ class TestSchemaDerivationParity:
 
     @pytest.mark.parametrize("dataset_name", _BASE_DATASET_NAMES)
     def test_field_count_match(self, dataset_name: str) -> None:
-        """Verify derived schema has same number of fields as static schema."""
+        """Verify derived schema has same number of fields as canonical schema."""
         metadata = extract_metadata_by_name()[dataset_name]
-        static_schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(dataset_name)
-        assert static_schema is not None
+        static_schema = extract_schema_for(dataset_name)
 
         derived_schema = derive_extract_schema(metadata)
 
@@ -139,8 +137,7 @@ class TestSchemaDerivationParity:
     def test_type_categories_match(self, dataset_name: str) -> None:
         """Verify each field's top-level type category matches."""
         metadata = extract_metadata_by_name()[dataset_name]
-        static_schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(dataset_name)
-        assert static_schema is not None
+        static_schema = extract_schema_for(dataset_name)
 
         derived_schema = derive_extract_schema(metadata)
 
@@ -171,8 +168,7 @@ class TestNestedShapesParity:
     def test_nested_shapes_field_names(self, dataset_name: str) -> None:
         """Verify nested shape child names match struct field names in schema."""
         metadata = extract_metadata_by_name()[dataset_name]
-        static_schema = _BASE_EXTRACT_SCHEMA_BY_NAME.get(dataset_name)
-        assert static_schema is not None
+        static_schema = extract_schema_for(dataset_name)
 
         for col_name, child_names in metadata.nested_shapes.items():
             if col_name not in static_schema.names:

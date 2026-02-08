@@ -71,6 +71,42 @@ pub fn validate_graph(spec: &SemanticExecutionSpec) -> Result<()> {
         }
     }
 
+    // Validate output targets
+    let mut output_table_names: HashSet<&str> = HashSet::new();
+    for target in &spec.output_targets {
+        if !output_table_names.insert(target.table_name.as_str()) {
+            return Err(DataFusionError::Plan(format!(
+                "Duplicate output target table_name: '{}'",
+                target.table_name
+            )));
+        }
+        if !view_names.contains(target.source_view.as_str()) {
+            return Err(DataFusionError::Plan(format!(
+                "Output target '{}' references unknown source_view '{}'",
+                target.table_name, target.source_view
+            )));
+        }
+    }
+
+    // Validate parameter templates
+    let mut template_names: HashSet<&str> = HashSet::new();
+    for template in &spec.parameter_templates {
+        if !template_names.insert(template.name.as_str()) {
+            return Err(DataFusionError::Plan(format!(
+                "Duplicate parameter template name: '{}'",
+                template.name
+            )));
+        }
+        if !view_names.contains(template.base_table.as_str())
+            && !input_names.contains(template.base_table.as_str())
+        {
+            return Err(DataFusionError::Plan(format!(
+                "Parameter template '{}' references unknown base_table '{}'",
+                template.name, template.base_table
+            )));
+        }
+    }
+
     Ok(())
 }
 

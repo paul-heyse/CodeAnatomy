@@ -422,20 +422,6 @@ def _normalize_dataset_spec(name: str, ctx: SessionContext | None) -> DatasetSpe
         return None
 
 
-def _incremental_dataset_spec(name: str, _ctx: SessionContext | None) -> DatasetSpec | None:
-    incremental_dataset_spec = _optional_module_attr(
-        "semantics.incremental.registry_specs",
-        "dataset_spec",
-    )
-    if not callable(incremental_dataset_spec):
-        return None
-    incremental_dataset_spec = cast("Callable[[str], DatasetSpec]", incremental_dataset_spec)
-    try:
-        return incremental_dataset_spec(name)
-    except KeyError:
-        return None
-
-
 def _relationship_dataset_spec(name: str, ctx: SessionContext | None) -> DatasetSpec | None:
     relationship_dataset_specs = _optional_module_attr(
         "schema_spec.relationship_specs",
@@ -462,7 +448,6 @@ def _dataset_spec_from_known_registries(
     resolvers = (
         _extract_dataset_spec,
         _normalize_dataset_spec,
-        _incremental_dataset_spec,
         _relationship_dataset_spec,
     )
     for resolver in resolvers:

@@ -34,7 +34,6 @@ from extract.git.history import (
     blame_hunks,
     diff_paths,
     resolve_mailmap,
-    resolve_signature,
 )
 from extract.git.pygit2_scan import (
     iter_repo_candidate_paths,
@@ -99,7 +98,6 @@ __all__ = [
     "repo_file_blobs_query",
     "repo_status_paths",
     "resolve_mailmap",
-    "resolve_signature",
     "scan_repo_blobs",
     "scan_repo_blobs_plan",
     "submodule_roots",

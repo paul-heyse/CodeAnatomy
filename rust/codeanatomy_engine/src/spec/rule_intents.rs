@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Rule intent specification with classification and parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuleIntent {
     pub name: String,
     pub class: RuleClass,
@@ -30,6 +31,7 @@ pub enum RulepackProfile {
 
 /// Parameter template for dynamic query parameterization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ParameterTemplate {
     pub name: String,
     pub base_table: String,

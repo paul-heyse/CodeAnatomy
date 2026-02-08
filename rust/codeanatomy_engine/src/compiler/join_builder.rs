@@ -76,7 +76,7 @@ pub async fn build_join(
     // Check for span containment pattern
     if is_span_containment_keys(join_keys) && matches!(join_type, JoinType::Inner | JoinType::Left)
     {
-        build_span_containment_join(ctx, left_source, right_source, join_type).await
+        build_span_containment_join(ctx, left_source, right_source, join_type, join_keys).await
     } else {
         build_equality_join(ctx, left_source, right_source, join_type, join_keys).await
     }
@@ -110,17 +110,39 @@ async fn build_span_containment_join(
     left_source: &str,
     right_source: &str,
     join_type: &JoinType,
+    join_keys: &[JoinKeyPair],
 ) -> Result<DataFrame> {
-    let left = ctx.table(left_source).await?;
-    let right = ctx.table(right_source).await?;
+    let left_alias = "__left";
+    let right_alias = "__right";
+    let left = ctx.table(left_source).await?.alias(left_alias)?;
+    let right = ctx.table(right_source).await?.alias(right_alias)?;
 
     let df_join_type = map_join_type(join_type);
 
+    let start_keys = join_keys.iter().find(|key| {
+        (key.left_key == "bstart" && key.right_key == "bstart")
+            || (key.left_key.ends_with("_bstart") && key.right_key.ends_with("_bstart"))
+    });
+    let end_keys = join_keys.iter().find(|key| {
+        (key.left_key == "bend" && key.right_key == "bend")
+            || (key.left_key.ends_with("_bend") && key.right_key.ends_with("_bend"))
+    });
+    let (left_start, right_start) = start_keys
+        .map(|key| (key.left_key.as_str(), key.right_key.as_str()))
+        .unwrap_or(("bstart", "bstart"));
+    let (left_end, right_end) = end_keys
+        .map(|key| (key.left_key.as_str(), key.right_key.as_str()))
+        .unwrap_or(("bend", "bend"));
+    let left_start_col = format!("{left_alias}.{left_start}");
+    let right_start_col = format!("{right_alias}.{right_start}");
+    let right_end_col = format!("{right_alias}.{right_end}");
+    let left_end_col = format!("{left_alias}.{left_end}");
+
     // Build span containment predicate:
-    // left.bstart <= right.bstart AND right.bend <= left.bend
+    // left.start <= right.start AND right.end <= left.end
     let predicates = vec![
-        col("left.bstart").lt_eq(col("right.bstart")),
-        col("right.bend").lt_eq(col("left.bend")),
+        col(&left_start_col).lt_eq(col(&right_start_col)),
+        col(&right_end_col).lt_eq(col(&left_end_col)),
     ];
 
     left.join_on(right, df_join_type, predicates)

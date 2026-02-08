@@ -6,9 +6,11 @@
 use std::sync::Arc;
 
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, Partitioning};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 
 /// CpgPhysicalRule extends base CodeAnatomyPhysicalRule with CPG-specific optimizations.
 ///
@@ -48,8 +50,8 @@ impl PhysicalOptimizerRule for CpgPhysicalRule {
             optimized = apply_post_filter_coalescing(optimized)?;
         }
 
-        if let Some(_memory_hint) = self.hash_join_memory_hint {
-            optimized = apply_hash_join_hints(optimized)?;
+        if let Some(memory_hint) = self.hash_join_memory_hint {
+            optimized = apply_hash_join_hints(optimized, memory_hint)?;
         }
 
         Ok(optimized)
@@ -89,15 +91,21 @@ impl PhysicalOptimizerRule for CostShapeRule {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Apply repartitioning strategy based on cost estimates
-        // In production, this would:
-        // 1. Estimate operator costs from plan statistics
-        // 2. Identify expensive operators (large joins, aggregations)
-        // 3. Insert repartitioning operations where beneficial
-        // 4. Use target_partitions as the parallelism goal
-        //
-        // For now, this is a placeholder that preserves the plan
-        Ok(plan)
+        let target = self.target_partitions as usize;
+        if target == 0 {
+            return Err(DataFusionError::Plan(
+                "cost_shape_rule target_partitions must be >= 1".to_string(),
+            ));
+        }
+        let current = plan.output_partitioning().partition_count();
+        if current == target {
+            return Ok(plan);
+        }
+        if target == 1 {
+            return Ok(Arc::new(CoalescePartitionsExec::new(plan)));
+        }
+        let repartition = RepartitionExec::try_new(plan, Partitioning::RoundRobinBatch(target))?;
+        Ok(Arc::new(repartition))
     }
 
     fn name(&self) -> &str {
@@ -123,9 +131,12 @@ impl PhysicalOptimizerRule for CostShapeRule {
 ///
 /// Optimized plan with coalescing operators inserted
 fn apply_post_filter_coalescing(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    // TODO: Implement filter-aware coalescing
-    // For now, return plan unchanged
-    Ok(plan)
+    let partitions = plan.output_partitioning().partition_count();
+    if partitions > 1 {
+        Ok(Arc::new(CoalescePartitionsExec::new(plan)))
+    } else {
+        Ok(plan)
+    }
 }
 
 /// Applies hash join memory hints for large join operations.
@@ -140,10 +151,26 @@ fn apply_post_filter_coalescing(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn 
 /// # Returns
 ///
 /// Plan with hash join hints applied
-fn apply_hash_join_hints(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    // TODO: Implement hash join hint injection
-    // For now, return plan unchanged
-    Ok(plan)
+fn apply_hash_join_hints(plan: Arc<dyn ExecutionPlan>, memory_hint: usize) -> Result<Arc<dyn ExecutionPlan>> {
+    let current = plan.output_partitioning().partition_count();
+    if current <= 1 {
+        return Ok(plan);
+    }
+
+    // Conservative pressure heuristic: lower available memory reduces partition fan-out.
+    let target = if memory_hint < 256 * 1024 * 1024 {
+        (current / 2).max(1)
+    } else {
+        current
+    };
+    if target == current {
+        return Ok(plan);
+    }
+    if target == 1 {
+        return Ok(Arc::new(CoalescePartitionsExec::new(plan)));
+    }
+    let repartition = RepartitionExec::try_new(plan, Partitioning::RoundRobinBatch(target))?;
+    Ok(Arc::new(repartition))
 }
 
 #[cfg(test)]

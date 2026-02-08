@@ -7,8 +7,9 @@ use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion::prelude::*;
 use datafusion_common::Result;
+use std::sync::Arc;
 
-use crate::executor::delta_writer::extract_row_count;
+use crate::executor::delta_writer::{ensure_output_table, extract_row_count, validate_output_schema};
 use crate::executor::result::{MaterializationResult, RunResult};
 use crate::spec::outputs::{MaterializationMode, OutputTarget};
 
@@ -19,7 +20,7 @@ use crate::spec::outputs::{MaterializationMode, OutputTarget};
 /// P0 correction #7: write_table().await? returns Vec<RecordBatch> directly.
 /// Do NOT chain .collect().await? after write_table.
 pub async fn execute_and_materialize(
-    _ctx: &SessionContext,
+    ctx: &SessionContext,
     output_plans: Vec<(OutputTarget, DataFrame)>,
 ) -> Result<Vec<MaterializationResult>> {
     let mut results = Vec::new();
@@ -35,6 +36,31 @@ pub async fn execute_and_materialize(
             MaterializationMode::Append => InsertOp::Append,
             MaterializationMode::Overwrite => InsertOp::Overwrite,
         };
+        let expected_schema = Arc::new(df.schema().as_arrow().clone());
+        let pre_registered_target = ctx.table(&target.table_name).await.ok();
+        if pre_registered_target.is_none() || target.delta_location.is_some() {
+            if pre_registered_target.is_some() && target.delta_location.is_some() {
+                let _ = ctx.deregister_table(&target.table_name)?;
+            }
+            let delta_location = target
+                .delta_location
+                .as_deref()
+                .unwrap_or(target.table_name.as_str());
+            ensure_output_table(
+                ctx,
+                &target.table_name,
+                delta_location,
+                &expected_schema,
+            )
+            .await?;
+        }
+        let existing_df = match pre_registered_target {
+            Some(df) => Some(df),
+            None => ctx.table(&target.table_name).await.ok(),
+        };
+        if let Some(existing_df) = existing_df {
+            validate_output_schema(existing_df.schema().as_arrow(), expected_schema.as_ref())?;
+        }
 
         // P0 correction #7: write_table returns Vec<RecordBatch> directly
         // This is the terminal operation — no .collect() afterward

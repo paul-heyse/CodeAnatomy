@@ -764,32 +764,6 @@ def _runtime_artifact_location(
     return DatasetLocation(path=str(cache_path), format="delta")
 
 
-def _lookup_rulepack_value(
-    values: Mapping[str, object],
-    *,
-    task_name: str,
-    output: str,
-    param_name: str,
-) -> object | None:
-    task_payload = values.get(task_name)
-    if isinstance(task_payload, Mapping) and param_name in task_payload:
-        return task_payload[param_name]
-    output_payload = values.get(output)
-    if isinstance(output_payload, Mapping) and param_name in output_payload:
-        return output_payload[param_name]
-    for key in (
-        f"{task_name}.{param_name}",
-        f"{output}.{param_name}",
-        param_name,
-    ):
-        if key in values and not isinstance(values[key], Mapping):
-            return values[key]
-    global_payload = values.get("*")
-    if isinstance(global_payload, Mapping) and param_name in global_payload:
-        return global_payload[param_name]
-    return None
-
-
 def summarize_artifacts(artifacts: RuntimeArtifacts) -> RuntimeArtifactsSummary:
     """Create a summary of runtime artifacts.
 

@@ -18,7 +18,6 @@ from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema.registry import extract_schema_for
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
-from semantics.incremental.registry_specs import dataset_schema as incremental_dataset_schema
 from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
@@ -261,10 +260,7 @@ def _check_contract_schema(
     try:
         expected = extract_schema_for(schema_name)
     except KeyError:
-        try:
-            expected = incremental_dataset_schema(schema_name)
-        except KeyError:
-            return
+        return
     actual_fp = schema_identity_hash(schema)
     expected_fp = schema_identity_hash(expected)
     if actual_fp != expected_fp:

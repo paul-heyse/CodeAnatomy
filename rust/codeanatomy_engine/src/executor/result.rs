@@ -14,6 +14,8 @@ pub struct RunResult {
     pub spec_hash: [u8; 32],
     pub envelope_hash: [u8; 32],
     pub rulepack_fingerprint: [u8; 32],
+    pub compliance_capture_json: Option<String>,
+    pub tuner_hints: Vec<TuningHint>,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
 }
@@ -31,6 +33,15 @@ pub struct MaterializationResult {
 pub struct DeterminismContract {
     pub spec_hash: [u8; 32],
     pub envelope_hash: [u8; 32],
+}
+
+/// Runtime tuning hint emitted after execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuningHint {
+    pub target_partitions: u32,
+    pub batch_size: u32,
+    pub repartition_joins: bool,
+    pub repartition_aggregations: bool,
 }
 
 impl DeterminismContract {
@@ -66,6 +77,8 @@ pub struct RunResultBuilder {
     spec_hash: [u8; 32],
     envelope_hash: [u8; 32],
     rulepack_fingerprint: [u8; 32],
+    compliance_capture_json: Option<String>,
+    tuner_hints: Vec<TuningHint>,
     started_at: Option<DateTime<Utc>>,
 }
 
@@ -85,6 +98,16 @@ impl RunResultBuilder {
         self
     }
 
+    pub fn with_compliance_capture(mut self, capture_json: Option<String>) -> Self {
+        self.compliance_capture_json = capture_json;
+        self
+    }
+
+    pub fn add_tuning_hint(mut self, hint: TuningHint) -> Self {
+        self.tuner_hints.push(hint);
+        self
+    }
+
     pub fn started_now(mut self) -> Self {
         self.started_at = Some(Utc::now());
         self
@@ -101,6 +124,8 @@ impl RunResultBuilder {
             spec_hash: self.spec_hash,
             envelope_hash: self.envelope_hash,
             rulepack_fingerprint: self.rulepack_fingerprint,
+            compliance_capture_json: self.compliance_capture_json,
+            tuner_hints: self.tuner_hints,
             started_at: self.started_at.unwrap_or_else(Utc::now),
             completed_at: Utc::now(),
         }

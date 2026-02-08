@@ -14,7 +14,6 @@ from relspec.inference_confidence import (
 )
 from semantics.catalog.dataset_registry import DatasetRegistrySpec
 from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
-from semantics.catalog.dataset_specs import dataset_schema
 from semantics.ir import (
     GraphPosition,
     InferredViewProperties,
@@ -1157,6 +1156,8 @@ _BUNDLE_IMPLIED_FIELDS: Mapping[str, frozenset[str]] = {
 def _build_schema_index(
     model: SemanticModel,
 ) -> dict[str, AnnotatedSchema]:
+    from datafusion_engine.extract.registry import dataset_schema as extract_dataset_schema
+
     rows = _dataset_rows_for_model(model)
     index: dict[str, AnnotatedSchema] = {}
     for row in rows:
@@ -1168,23 +1169,20 @@ def _build_schema_index(
 
         declared_schema: pa.Schema | None = None
         try:
-            candidate_schema = dataset_schema(row.name)
+            candidate_schema = extract_dataset_schema(row.name)
         except KeyError:
             candidate_schema = None
         if isinstance(candidate_schema, pa.Schema):
             declared_schema = candidate_schema
-            field_names |= frozenset(candidate_schema.names)
+            field_names |= frozenset(getattr(candidate_schema, "names", ()))
         if not field_names:
             continue
 
         declared_fields = (
-            {field.name: field for field in declared_schema}
-            if declared_schema is not None
-            else {}
+            {field.name: field for field in declared_schema} if declared_schema is not None else {}
         )
         merged_fields = [
-            declared_fields.get(name, pa.field(name, pa.string()))
-            for name in sorted(field_names)
+            declared_fields.get(name, pa.field(name, pa.string())) for name in sorted(field_names)
         ]
         index[row.name] = AnnotatedSchema.from_arrow_schema(pa.schema(merged_fields))
     return index

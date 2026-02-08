@@ -5,15 +5,18 @@ use std::collections::BTreeMap;
 
 /// Input relation specification — logical name mapped to Delta table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InputRelation {
     pub logical_name: String,
     pub delta_location: String,
+    #[serde(default)]
     pub requires_lineage: bool,
     pub version_pin: Option<i64>,
 }
 
 /// View definition with transformation semantics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ViewDefinition {
     pub name: String,
     pub view_kind: String,
@@ -25,7 +28,7 @@ pub struct ViewDefinition {
 
 /// View transformation variants with tagged enum serialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", deny_unknown_fields)]
 pub enum ViewTransform {
     Normalize {
         source: String,
@@ -62,6 +65,7 @@ pub enum ViewTransform {
 
 /// Join key pair for relate transformations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JoinKeyPair {
     pub left_key: String,
     pub right_key: String,
@@ -80,6 +84,7 @@ pub enum JoinType {
 
 /// Aggregation expression for aggregate transformations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AggregationExpr {
     pub column: String,
     pub function: String,
@@ -88,6 +93,7 @@ pub struct AggregationExpr {
 
 /// Schema contract with column name -> type mapping.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SchemaContract {
     pub columns: BTreeMap<String, String>,
 }

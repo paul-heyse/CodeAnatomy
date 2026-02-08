@@ -7,6 +7,13 @@
 - `bash scripts/bootstrap_codex.sh`
 - `uv sync`
 
+## Pre-Closure Checkpoint (2026-02-08)
+- Baseline CQ discovery completed for `src/engine` (`execute_cpg_build`, `build_spec_from_ir`).
+- Rust baseline validated with `cargo test -p codeanatomy-engine` before closure edits.
+- Contract freeze established:
+  - Rust `SemanticExecutionSpec` is canonical.
+  - Python `engine` entrypoints remain compatibility boundary.
+
 ## Scope Classification
 - **Partially incomplete**: implemented in part (or test-only), but not fully cut over in production flow.
 - **Fully incomplete**: no production implementation found for the planned capability.
@@ -364,4 +371,3 @@
 3. **Phase G runtime wiring**: workload classification/session profile application, pruning/provenance artifact emission.
 4. **Phase E/J consolidation**: complete 14→6 kind cutover and remove compatibility aliases.
 5. **Section 18 decommission pass**: remove heuristic/static/legacy surfaces once above gates pass.
-

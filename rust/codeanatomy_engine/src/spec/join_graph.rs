@@ -5,6 +5,7 @@ use crate::spec::relations::JoinType;
 
 /// Join graph encoding cross-relation dependencies.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct JoinGraph {
     pub edges: Vec<JoinEdge>,
     pub constraints: Vec<JoinConstraint>,
@@ -12,6 +13,7 @@ pub struct JoinGraph {
 
 /// Join edge between two relations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JoinEdge {
     pub left_relation: String,
     pub right_relation: String,
@@ -22,6 +24,7 @@ pub struct JoinEdge {
 
 /// Join constraint encoding semantic invariants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JoinConstraint {
     pub name: String,
     pub constraint_type: String,

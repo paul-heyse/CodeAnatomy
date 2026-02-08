@@ -220,6 +220,7 @@ mod tests {
 
         let outputs = vec![OutputTarget {
             table_name: "output1".to_string(),
+            delta_location: None,
             source_view: "view1".to_string(),
             columns: vec!["id".to_string()],
             materialization_mode: MaterializationMode::Overwrite,

@@ -26,10 +26,11 @@ pub fn standard_scan_config(requires_lineage: bool) -> DeltaScanConfig {
     // - schema_force_view_types: false
     // - file_column_name: None
     //
-    // Note: File column tracking requires DeltaScanConfigBuilder and snapshot,
-    // so it's handled in registration::build_scan_config() instead.
-    let _ = requires_lineage; // Used in registration layer
-    DeltaScanConfig::default()
+    let mut config = DeltaScanConfig::default();
+    if requires_lineage {
+        config.file_column_name = Some("__source_file".to_string());
+    }
+    config
 }
 
 /// Validate that the scan config is compatible with our engine requirements.
@@ -41,13 +42,32 @@ pub fn standard_scan_config(requires_lineage: bool) -> DeltaScanConfig {
 /// Ok if config is valid, Err with explanation otherwise.
 ///
 /// # Current checks
-/// - Placeholder for future validation (e.g., unsupported feature detection)
-pub fn validate_scan_config(_config: &DeltaScanConfig) -> Result<(), String> {
-    // Placeholder: validate no unsupported features enabled
-    // Future checks might include:
-    // - Verify parquet pushdown is enabled
-    // - Ensure schema_force_view_types matches expected value
-    // - Validate file_column_name format if present
+/// - Parquet pushdown must remain enabled
+/// - Partition values must remain wrapped for stable typing semantics
+/// - Optional lineage column names must be non-empty `[A-Za-z0-9_]`
+pub fn validate_scan_config(config: &DeltaScanConfig) -> Result<(), String> {
+    if !config.enable_parquet_pushdown {
+        return Err("Delta scan config must keep parquet pushdown enabled".to_string());
+    }
+    if !config.wrap_partition_values {
+        return Err(
+            "Delta scan config must keep partition values wrapped for deterministic typing"
+                .to_string(),
+        );
+    }
+    if let Some(file_col) = config.file_column_name.as_deref() {
+        if file_col.is_empty() {
+            return Err("Delta lineage column name must not be empty".to_string());
+        }
+        let valid = file_col
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
+        if !valid {
+            return Err(format!(
+                "Delta lineage column name '{file_col}' must use [A-Za-z0-9_]"
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -88,6 +108,13 @@ mod tests {
     fn test_validate_scan_config_accepts_default() {
         let config = DeltaScanConfig::default();
         assert!(validate_scan_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_scan_config_rejects_unwrapped_partitions() {
+        let mut config = DeltaScanConfig::default();
+        config.wrap_partition_values = false;
+        assert!(validate_scan_config(&config).is_err());
     }
 
     #[test]

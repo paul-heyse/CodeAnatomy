@@ -11,6 +11,7 @@ use datafusion_common::Result;
 /// - Uses DataFrame::union_by_name() for schema drift safety
 /// - Supports union_by_name_distinct() for deduplication
 /// - Adds optional discriminator column to track source provenance
+/// - Reorders projected columns deterministically
 ///
 /// Returns error if sources is empty.
 pub async fn build_union(
@@ -28,7 +29,7 @@ pub async fn build_union(
     // Build union by accumulating sources
     let mut union_df = None;
 
-    for source in sources.iter() {
+    for source in sources {
         let mut df = ctx.table(source).await?;
 
         // Add discriminator column if specified
@@ -42,16 +43,32 @@ pub async fn build_union(
             None => Some(df),
             Some(acc) => {
                 if distinct {
-                    Some(acc.union_distinct(df)?)
+                    Some(acc.union_by_name_distinct(df)?)
                 } else {
-                    Some(acc.union(df)?)
+                    Some(acc.union_by_name(df)?)
                 }
             }
         };
     }
 
-    // Return accumulated union (guaranteed Some() due to empty check)
-    Ok(union_df.unwrap())
+    let Some(mut combined) = union_df else {
+        return Err(datafusion_common::DataFusionError::Plan(
+            "Union requires at least one source".to_string(),
+        ));
+    };
+
+    let mut ordered_columns: Vec<String> = combined
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.name().clone())
+        .collect();
+    ordered_columns.sort();
+    if !ordered_columns.is_empty() {
+        combined = combined.select(ordered_columns.iter().map(col).collect::<Vec<_>>())?;
+    }
+
+    Ok(combined)
 }
 
 #[cfg(test)]

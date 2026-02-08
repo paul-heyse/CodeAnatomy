@@ -7,4 +7,5 @@ pub mod hashing;
 pub mod join_graph;
 pub mod outputs;
 pub mod relations;
+pub mod runtime;
 pub mod rule_intents;

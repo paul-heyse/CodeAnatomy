@@ -18,6 +18,7 @@ use codeanatomy_engine::spec::relations::{
     AggregationExpr, InputRelation, JoinKeyPair, JoinType, SchemaContract, ViewDefinition,
     ViewTransform,
 };
+use codeanatomy_engine::spec::runtime::RuntimeTunerMode;
 use codeanatomy_engine::spec::rule_intents::{
     ParameterTemplate, RuleClass, RuleIntent, RulepackProfile,
 };
@@ -32,6 +33,8 @@ fn test_spec_construction() {
     assert_eq!(spec.input_relations.len(), 1);
     assert_eq!(spec.view_definitions.len(), 1);
     assert_eq!(spec.rulepack_profile, RulepackProfile::Default);
+    assert!(!spec.runtime.compliance_capture);
+    assert_eq!(spec.runtime.tuner_mode, RuntimeTunerMode::Off);
     assert_ne!(spec.spec_hash, [0u8; 32], "Hash must be computed");
 }
 
@@ -240,6 +243,7 @@ fn test_join_graph() {
 fn test_output_target() {
     let target = OutputTarget {
         table_name: "cpg_nodes".to_string(),
+        delta_location: None,
         source_view: "normalized_nodes".to_string(),
         columns: vec!["id".to_string(), "type".to_string()],
         materialization_mode: MaterializationMode::Overwrite,
@@ -302,6 +306,130 @@ fn test_full_spec_integration() {
     deserialized.spec_hash = hash_spec(&deserialized);
 
     assert_eq!(spec.spec_hash, deserialized.spec_hash);
+}
+
+/// Test 12: Nested unknown fields are rejected.
+#[test]
+fn test_spec_nested_unknown_fields_rejected() {
+    let payload = serde_json::json!({
+        "version": 1,
+        "input_relations": [
+            {
+                "logical_name": "input",
+                "delta_location": "/tmp/input",
+                "requires_lineage": false,
+                "version_pin": null,
+                "unexpected_field": true
+            }
+        ],
+        "view_definitions": [
+            {
+                "name": "view1",
+                "view_kind": "project",
+                "view_dependencies": [],
+                "transform": {
+                    "kind": "Project",
+                    "source": "input",
+                    "columns": ["id"]
+                },
+                "output_schema": {
+                    "columns": {
+                        "id": "Int64"
+                    }
+                }
+            }
+        ],
+        "join_graph": {
+            "edges": [],
+            "constraints": []
+        },
+        "output_targets": [
+            {
+                "table_name": "out",
+                "source_view": "view1",
+                "columns": ["id"],
+                "materialization_mode": "Overwrite"
+            }
+        ],
+        "rule_intents": [],
+        "rulepack_profile": "Default",
+        "parameter_templates": []
+    });
+    let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
+    assert!(result.is_err());
+}
+
+/// Test 13: Enum mismatches return deserialization errors.
+#[test]
+fn test_spec_enum_mismatch_rejected() {
+    let payload = serde_json::json!({
+        "version": 1,
+        "input_relations": [],
+        "view_definitions": [],
+        "join_graph": { "edges": [], "constraints": [] },
+        "output_targets": [],
+        "rule_intents": [],
+        "rulepack_profile": "NotARealProfile",
+        "parameter_templates": []
+    });
+    let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
+    assert!(result.is_err());
+}
+
+/// Test 14: Required fields are enforced.
+#[test]
+fn test_spec_missing_required_field_rejected() {
+    let payload = serde_json::json!({
+        "version": 1,
+        "input_relations": [],
+        "join_graph": { "edges": [], "constraints": [] },
+        "output_targets": [],
+        "rule_intents": [],
+        "rulepack_profile": "Default",
+        "parameter_templates": []
+    });
+    let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
+    assert!(result.is_err());
+}
+
+/// Test 15: Runtime defaults apply when omitted.
+#[test]
+fn test_spec_runtime_defaults_when_omitted() {
+    let payload = serde_json::json!({
+        "version": 1,
+        "input_relations": [],
+        "view_definitions": [],
+        "join_graph": { "edges": [], "constraints": [] },
+        "output_targets": [],
+        "rule_intents": [],
+        "rulepack_profile": "Default",
+        "parameter_templates": []
+    });
+    let spec: SemanticExecutionSpec = serde_json::from_value(payload).expect("valid spec");
+    assert!(!spec.runtime.compliance_capture);
+    assert_eq!(spec.runtime.tuner_mode, RuntimeTunerMode::Off);
+}
+
+/// Test 16: Runtime unknown fields are rejected.
+#[test]
+fn test_spec_runtime_unknown_field_rejected() {
+    let payload = serde_json::json!({
+        "version": 1,
+        "input_relations": [],
+        "view_definitions": [],
+        "join_graph": { "edges": [], "constraints": [] },
+        "output_targets": [],
+        "rule_intents": [],
+        "rulepack_profile": "Default",
+        "parameter_templates": [],
+        "runtime": {
+            "compliance_capture": true,
+            "tuner_mode": "Observe",
+            "unexpected": true
+        }
+    });
+    let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
+    assert!(result.is_err());
 }
 
 // Helper: Create minimal test spec
@@ -428,6 +556,7 @@ fn create_full_spec() -> SemanticExecutionSpec {
         },
         vec![OutputTarget {
             table_name: "cpg_output".to_string(),
+            delta_location: None,
             source_view: "joined_data".to_string(),
             columns: vec!["id".to_string(), "name".to_string(), "value".to_string()],
             materialization_mode: MaterializationMode::Overwrite,

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::spec::relations::{InputRelation, ViewDefinition};
 use crate::spec::join_graph::JoinGraph;
 use crate::spec::outputs::OutputTarget;
+use crate::spec::runtime::RuntimeConfig;
 use crate::spec::rule_intents::{RuleIntent, RulepackProfile, ParameterTemplate};
 
 /// The root specification for semantic execution planning.
@@ -21,6 +22,8 @@ pub struct SemanticExecutionSpec {
     pub rule_intents: Vec<RuleIntent>,
     pub rulepack_profile: RulepackProfile,
     pub parameter_templates: Vec<ParameterTemplate>,
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
 
     /// Canonical BLAKE3 hash of this spec (computed on creation).
     #[serde(skip)]
@@ -48,6 +51,7 @@ impl SemanticExecutionSpec {
             rule_intents,
             rulepack_profile,
             parameter_templates,
+            runtime: RuntimeConfig::default(),
             spec_hash: [0u8; 32],
         };
 

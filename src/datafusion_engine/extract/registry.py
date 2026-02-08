@@ -60,6 +60,9 @@ _EXTRACT_ZORDER_CANDIDATES: tuple[str, ...] = (
     "edge_id",
     "span_id",
 )
+_LEGACY_DATASET_ALIASES: dict[str, str] = {
+    "scip_occurrences": "scip_index_v1",
+}
 
 _REPO_FILE_BLOBS_SCHEMA = pa.schema(
     [
@@ -102,7 +105,8 @@ def extract_metadata(name: str) -> ExtractMetadata:
     ExtractMetadata
         Extract metadata for the dataset.
     """
-    return extract_metadata_by_name()[name]
+    resolved_name = _LEGACY_DATASET_ALIASES.get(name, name)
+    return extract_metadata_by_name()[resolved_name]
 
 
 @cache
@@ -114,15 +118,16 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema with string-typed columns for metadata fields.
     """
-    if name in _TYPED_SCHEMA_OVERRIDES:
-        return _TYPED_SCHEMA_OVERRIDES[name]
+    resolved_name = _LEGACY_DATASET_ALIASES.get(name, name)
+    if resolved_name in _TYPED_SCHEMA_OVERRIDES:
+        return _TYPED_SCHEMA_OVERRIDES[resolved_name]
     try:
         from datafusion_engine.schema.registry import extract_schema_for
 
-        return extract_schema_for(name)
+        return extract_schema_for(resolved_name)
     except KeyError:
         pass
-    row = extract_metadata(name)
+    row = extract_metadata(resolved_name)
     fields = [
         pa.field(column, pa.string()) for column in (*row.fields, *row.row_fields, *row.row_extras)
     ]

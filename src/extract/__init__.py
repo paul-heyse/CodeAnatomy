@@ -169,6 +169,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ExtractionRowBuilder": ("extract.row_builder", "ExtractionRowBuilder"),
     "SchemaTemplateOptions": ("extract.row_builder", "SchemaTemplateOptions"),
     "SpanTemplateSpec": ("extract.row_builder", "SpanTemplateSpec"),
+    "ExternalInterfaceExtractOptions": (
+        "extract.extractors.external_scope",
+        "ExternalInterfaceExtractOptions",
+    ),
     "LineIndexOptions": ("extract.extractors.file_index.line_index", "LineIndexOptions"),
     "build_extraction_rows": ("extract.row_builder", "build_extraction_rows"),
     "extraction_schema_template": ("extract.row_builder", "extraction_schema_template"),

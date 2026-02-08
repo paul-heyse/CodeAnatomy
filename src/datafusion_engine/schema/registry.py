@@ -2771,12 +2771,22 @@ def _derived_extract_base_schema_for(name: str) -> pa.Schema | None:
         return None
 
 
+def _static_extract_base_schema_for(name: str) -> pa.Schema | None:
+    static_root_schemas: Mapping[str, pa.Schema] = {
+        "repo_files_v1": REPO_FILES_SCHEMA,
+        "libcst_files_v1": LIBCST_FILES_SCHEMA,
+        "ast_files_v1": AST_FILES_SCHEMA,
+        "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
+        "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
+        "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
+        "scip_index_v1": SCIP_INDEX_SCHEMA,
+    }
+    return static_root_schemas.get(name)
+
+
 def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:
     from datafusion_engine.extract.metadata import extract_metadata_by_name
-    from datafusion_engine.schema.derivation import (
-        derive_extract_schema,
-        derive_nested_dataset_schema,
-    )
+    from datafusion_engine.schema.derivation import derive_nested_dataset_schema
     from utils.schema_from_struct import schema_from_struct
 
     spec = NESTED_DATASET_INDEX.get(name)
@@ -2788,10 +2798,25 @@ def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:
     metadata = extract_metadata_by_name().get(root_name)
     if metadata is None:
         return None
-    try:
-        root_schema = derive_extract_schema(metadata)
-        row_struct = struct_for_path(root_schema, nested_path)
-    except (KeyError, TypeError, ValueError):
+    candidate_root_schemas: list[pa.Schema] = []
+    derived_root_schema = _derived_extract_base_schema_for(root_name)
+    if derived_root_schema is not None:
+        candidate_root_schemas.append(derived_root_schema)
+    static_root_schema = _static_extract_base_schema_for(root_name)
+    if static_root_schema is not None and static_root_schema not in candidate_root_schemas:
+        candidate_root_schemas.append(static_root_schema)
+
+    root_schema: pa.Schema | None = None
+    row_struct: pa.StructType | None = None
+    for candidate_schema in candidate_root_schemas:
+        try:
+            candidate_row_struct = struct_for_path(candidate_schema, nested_path)
+        except (KeyError, TypeError, ValueError):
+            continue
+        root_schema = candidate_schema
+        row_struct = candidate_row_struct
+        break
+    if root_schema is None or row_struct is None:
         return None
 
     row_schema = _resolve_nested_row_schema_authority(
@@ -3283,16 +3308,6 @@ def validate_ast_views(
 ) -> None:
     """No-op: AST view schemas are derived dynamically at registration time."""
     _ = (ctx, view_names)
-
-
-def _validate_ast_view_outputs_all(
-    ctx: SessionContext,
-    introspector: SchemaIntrospector,
-    view_names: Sequence[str],
-    errors: dict[str, str],
-) -> None:
-    for name in view_names:
-        _validate_ast_view_outputs(ctx, introspector=introspector, name=name, errors=errors)
 
 
 def _validate_ast_file_types(ctx: SessionContext, errors: dict[str, str]) -> None:
@@ -3839,102 +3854,9 @@ def validate_bytecode_views(ctx: SessionContext) -> None:
     _ = ctx
 
 
-def _validate_cst_view_dfschema(
-    ctx: SessionContext,
-    *,
-    name: str,
-    errors: dict[str, str],
-) -> None:
-    try:
-        df_schema = ctx.table(name).schema()
-    except (RuntimeError, TypeError, ValueError, KeyError) as exc:
-        errors[f"{name}_dfschema"] = str(exc)
-        return
-    df_names = _dfschema_names(df_schema)
-    df_invalid = _invalid_output_names(df_names)
-    if df_invalid:
-        errors[f"{name}_dfschema_names"] = f"Invalid DFSchema names: {df_invalid}"
-    nullability = _dfschema_nullability(df_schema)
-    if not nullability:
-        return
-    nullable_required = [
-        field for field in CST_VIEW_REQUIRED_NON_NULL_FIELDS if nullability.get(field) is True
-    ]
-    if nullable_required:
-        errors[f"{name}_dfschema_nullability"] = (
-            f"Expected non-nullable fields are nullable: {sorted(nullable_required)}"
-        )
-
-
-def _validate_cst_view_outputs(
-    ctx: SessionContext,
-    *,
-    introspector: SchemaIntrospector,
-    name: str,
-    errors: dict[str, str],
-) -> None:
-    try:
-        schema = introspector.table_schema(name)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        errors[name] = str(exc)
-        return
-    columns = [field.name for field in schema]
-    invalid = _invalid_output_names(columns)
-    if invalid:
-        errors[f"{name}_output_names"] = f"Invalid output column names: {invalid}"
-    _validate_cst_view_dfschema(ctx, name=name, errors=errors)
-
-
 def validate_cst_views(ctx: SessionContext) -> None:
-    """Validate CST view schemas using DataFusion introspection.
-
-    Args:
-        ctx: Description.
-
-    Raises:
-        ValueError: If the operation cannot be completed.
-    """
+    """No-op: CST view schemas are derived dynamically at registration time."""
     _ = ctx
-    return
-    errors: dict[str, str] = {}
-    sql_options = sql_options_for_profile(None)
-    function_catalog = _function_catalog(ctx)
-    requirements = _function_requirements(LIBCST_FILES_SCHEMA)
-    _validate_required_functions(
-        ctx,
-        required=requirements.required,
-        errors=errors,
-        catalog=function_catalog,
-    )
-    if requirements.signature_counts:
-        _validate_function_signatures(
-            ctx,
-            required=requirements.signature_counts,
-            errors=errors,
-            catalog=function_catalog,
-        )
-    if requirements.signature_types:
-        _validate_function_signature_types(
-            ctx,
-            required=requirements.signature_types,
-            errors=errors,
-            catalog=function_catalog,
-        )
-    introspector = SchemaIntrospector(ctx, sql_options=sql_options)
-    for name in CST_VIEW_NAMES:
-        _validate_cst_view_outputs(
-            ctx,
-            introspector=introspector,
-            name=name,
-            errors=errors,
-        )
-    try:
-        ctx.table("cst_schema_diagnostics").collect()
-    except (RuntimeError, TypeError, ValueError) as exc:
-        errors["cst_schema_diagnostics"] = str(exc)
-    if errors:
-        msg = f"CST view validation failed: {errors}."
-        raise ValueError(msg)
 
 
 def validate_required_cst_functions(ctx: SessionContext) -> None:

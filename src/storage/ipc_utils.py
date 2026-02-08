@@ -282,42 +282,6 @@ def write_table_ipc_stream(
     return str(target)
 
 
-def write_ipc_bundle(
-    table: IpcWriteInput,
-    base_path: PathLike,
-    *,
-    overwrite: bool = True,
-    schema_metadata: dict[bytes, bytes] | None = None,
-    config: IpcWriteConfig | None = None,
-) -> dict[str, str]:
-    """Write IPC file and stream artifacts for repro bundles.
-
-    Returns:
-    -------
-    dict[str, str]
-        Mapping with ``file`` and ``stream`` artifact paths.
-    """
-    base = ensure_path(base_path)
-    file_path = base.with_suffix(".arrow")
-    stream_path = base.with_suffix(".arrows")
-    return {
-        "file": write_table_ipc_file(
-            table,
-            file_path,
-            overwrite=overwrite,
-            schema_metadata=schema_metadata,
-            config=config,
-        ),
-        "stream": write_table_ipc_stream(
-            table,
-            stream_path,
-            overwrite=overwrite,
-            schema_metadata=schema_metadata,
-            config=config,
-        ),
-    }
-
-
 def ipc_write_config_payload(config: IpcWriteConfig | None) -> JsonDict:
     """Return a JSON-friendly payload for IPC write options.
 
@@ -352,21 +316,6 @@ def read_table_ipc_file(path: PathLike) -> TableLike:
         return reader.read_all()
 
 
-def read_table_ipc_stream(path: PathLike) -> TableLike:
-    """Read an Arrow IPC stream.
-
-    Returns:
-    -------
-    TableLike
-        Loaded table.
-    """
-    target = ensure_path(path)
-    options = ipc_read_options_factory()
-    with pa.memory_map(str(target), "r") as source:
-        reader = pa_ipc.open_stream(source, options=options)
-        return reader.read_all()
-
-
 __all__ = [
     "IpcWriteConfig",
     "ipc_bytes",
@@ -379,8 +328,6 @@ __all__ = [
     "payload_ipc_bytes",
     "payload_table",
     "read_table_ipc_file",
-    "read_table_ipc_stream",
-    "write_ipc_bundle",
     "write_table_ipc_file",
     "write_table_ipc_stream",
 ]

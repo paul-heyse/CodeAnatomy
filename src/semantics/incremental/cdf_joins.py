@@ -170,24 +170,6 @@ def is_cdf_enabled(df: DataFrame, cdf_column: str = DEFAULT_CDF_COLUMN) -> bool:
     return any(field.name == cdf_column for field in schema)
 
 
-def _has_cdf_column(schema_fields: list[object], cdf_column: str) -> bool:
-    """Check if schema fields include the CDF column.
-
-    Parameters
-    ----------
-    schema_fields
-        List of schema fields (with name attribute).
-    cdf_column
-        Expected CDF column name.
-
-    Returns:
-    -------
-    bool
-        True if the CDF column exists.
-    """
-    return any(getattr(field, "name", None) == cdf_column for field in schema_fields)
-
-
 # -----------------------------------------------------------------------------
 # CDF Filtering
 # -----------------------------------------------------------------------------

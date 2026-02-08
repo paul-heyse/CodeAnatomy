@@ -19,7 +19,6 @@ from relspec.rustworkx_graph import (
     TaskNode,
 )
 from semantics.ir import InferredViewProperties, SemanticIR, SemanticIRView
-from semantics.view_kinds import ViewKind
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -277,14 +276,14 @@ class TestDeriveCachePolicies:
             views=(
                 SemanticIRView(
                     name="parent",
-                    kind=ViewKind.RELATE,
+                    kind="relate",
                     inputs=(),
                     outputs=("parent_v1",),
                     inferred_properties=InferredViewProperties(inferred_cache_policy="lazy"),
                 ),
                 SemanticIRView(
                     name="child",
-                    kind=ViewKind.RELATE,
+                    kind="relate",
                     inputs=("parent",),
                     outputs=("child_v1",),
                     inferred_properties=InferredViewProperties(inferred_cache_policy="eager"),
@@ -313,7 +312,7 @@ class TestDeriveCachePolicies:
             views=(
                 SemanticIRView(
                     name="parent",
-                    kind=ViewKind.RELATE,
+                    kind="relate",
                     inputs=(),
                     outputs=("parent_v1",),
                     inferred_properties=InferredViewProperties(inferred_cache_policy="lazy"),
@@ -337,10 +336,12 @@ class TestDeriveCachePolicies:
             views=(
                 SemanticIRView(
                     name="parent",
-                    kind=ViewKind.RELATE,
+                    kind="relate",
                     inputs=(),
                     outputs=("parent_v1",),
-                    inferred_properties=InferredViewProperties(inferred_cache_policy="unknown_hint"),
+                    inferred_properties=InferredViewProperties(
+                        inferred_cache_policy="unknown_hint"
+                    ),
                 ),
             )
         )

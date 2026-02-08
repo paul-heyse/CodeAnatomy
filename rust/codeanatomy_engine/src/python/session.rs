@@ -74,9 +74,8 @@ impl SessionFactory {
 
     /// Get the profile configuration as JSON string.
     fn profile_json(&self) -> PyResult<String> {
-        // Note: This requires accessing the profile, which we'll need to expose
-        // For now, return a placeholder
-        Ok("{}".to_string())
+        serde_json::to_string(self.inner.profile())
+            .map_err(|e| PyValueError::new_err(format!("Failed to encode profile: {e}")))
     }
 
     fn __repr__(&self) -> String {
@@ -91,13 +90,7 @@ impl SessionFactory {
     }
 
     /// Internal accessor for the environment profile.
-    ///
-    /// Note: This requires exposing the profile field in the Rust SessionFactory.
-    /// For now, we create a minimal profile. In production, the factory should
-    /// expose its profile.
     pub(crate) fn get_profile(&self) -> EnvironmentProfile {
-        // TODO: This is a workaround. The factory should expose its profile.
-        // For now, return a default medium profile
-        EnvironmentProfile::from_class(EnvironmentClass::Medium)
+        self.inner.profile().clone()
     }
 }

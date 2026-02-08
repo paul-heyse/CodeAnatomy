@@ -10,6 +10,7 @@
 use datafusion::prelude::*;
 use datafusion_common::{DataFusionError, Result};
 use std::collections::{HashMap, VecDeque};
+use std::env;
 
 use crate::compiler::cache_boundaries;
 use crate::compiler::graph_validator;
@@ -53,13 +54,14 @@ impl<'a> SemanticPlanCompiler<'a> {
     pub async fn compile(&self) -> Result<Vec<(OutputTarget, DataFrame)>> {
         // 1. Validate graph
         graph_validator::validate_graph(self.spec)?;
+        let parameter_values = self.collect_parameter_values()?;
 
         // 2. Topological sort
         let ordered = self.topological_sort()?;
 
         // 3. Compile and register each view
         for view_def in &ordered {
-            let df = self.compile_view(view_def).await?;
+            let df = self.compile_view(view_def, &parameter_values).await?;
             let view = df.into_view();
             self.ctx.register_table(&view_def.name, view)?;
         }
@@ -71,7 +73,11 @@ impl<'a> SemanticPlanCompiler<'a> {
         let mut outputs = Vec::new();
         for target in &self.spec.output_targets {
             let df = self.ctx.table(&target.source_view).await?;
-            let projected = df.select(target.columns.iter().map(|c| col(c)).collect::<Vec<_>>())?;
+            let projected = if target.columns.is_empty() {
+                df
+            } else {
+                df.select(target.columns.iter().map(|c| col(c)).collect::<Vec<_>>())?
+            };
             outputs.push((target.clone(), projected));
         }
 
@@ -159,7 +165,11 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// Compile a single view definition into a DataFrame.
     ///
     /// Dispatches to transform-specific builders based on ViewTransform variant.
-    async fn compile_view(&self, view_def: &ViewDefinition) -> Result<DataFrame> {
+    async fn compile_view(
+        &self,
+        view_def: &ViewDefinition,
+        parameter_values: &HashMap<String, String>,
+    ) -> Result<DataFrame> {
         match &view_def.transform {
             ViewTransform::Normalize {
                 source,
@@ -167,10 +177,13 @@ impl<'a> SemanticPlanCompiler<'a> {
                 span_columns,
                 text_columns,
             } => {
+                let source = self
+                    .resolve_source_with_templates(source, parameter_values)
+                    .await?;
                 view_builder::build_normalize(
                     self.ctx,
                     &view_def.name,
-                    source,
+                    &source,
                     id_columns,
                     span_columns,
                     text_columns,
@@ -183,27 +196,190 @@ impl<'a> SemanticPlanCompiler<'a> {
                 right,
                 join_type,
                 join_keys,
-            } => join_builder::build_join(self.ctx, left, right, join_type, join_keys).await,
+            } => {
+                let left = self
+                    .resolve_source_with_templates(left, parameter_values)
+                    .await?;
+                let right = self
+                    .resolve_source_with_templates(right, parameter_values)
+                    .await?;
+                join_builder::build_join(self.ctx, &left, &right, join_type, join_keys).await
+            }
 
             ViewTransform::Union {
                 sources,
                 discriminator_column,
                 distinct,
-            } => union_builder::build_union(self.ctx, sources, discriminator_column, *distinct).await,
+            } => {
+                let mut resolved_sources = Vec::with_capacity(sources.len());
+                for source in sources {
+                    resolved_sources.push(
+                        self.resolve_source_with_templates(source, parameter_values)
+                            .await?,
+                    );
+                }
+                union_builder::build_union(
+                    self.ctx,
+                    resolved_sources.as_slice(),
+                    discriminator_column,
+                    *distinct,
+                )
+                .await
+            }
 
             ViewTransform::Project { source, columns } => {
-                view_builder::build_project(self.ctx, source, columns).await
+                let source = self
+                    .resolve_source_with_templates(source, parameter_values)
+                    .await?;
+                view_builder::build_project(self.ctx, &source, columns).await
             }
 
             ViewTransform::Filter { source, predicate } => {
-                view_builder::build_filter(self.ctx, source, predicate).await
+                let source = self
+                    .resolve_source_with_templates(source, parameter_values)
+                    .await?;
+                view_builder::build_filter(self.ctx, &source, predicate).await
             }
 
             ViewTransform::Aggregate {
                 source,
                 group_by,
                 aggregations,
-            } => view_builder::build_aggregate(self.ctx, source, group_by, aggregations).await,
+            } => {
+                let source = self
+                    .resolve_source_with_templates(source, parameter_values)
+                    .await?;
+                view_builder::build_aggregate(self.ctx, &source, group_by, aggregations).await
+            }
+        }
+    }
+
+    fn collect_parameter_values(&self) -> Result<HashMap<String, String>> {
+        let mut expected_names: HashMap<String, String> = HashMap::new();
+        for template in &self.spec.parameter_templates {
+            expected_names.insert(template.name.to_ascii_uppercase(), template.name.clone());
+        }
+
+        let mut values = HashMap::new();
+        for (key, value) in env::vars() {
+            let Some(suffix) = key.strip_prefix("CODEANATOMY_PARAM_") else {
+                continue;
+            };
+            let lookup = suffix.to_ascii_uppercase();
+            let Some(template_name) = expected_names.get(&lookup) else {
+                return Err(DataFusionError::Plan(format!(
+                    "Unknown parameter template env var '{key}'"
+                )));
+            };
+            values.insert(template_name.clone(), value);
+        }
+        let missing = self
+            .spec
+            .parameter_templates
+            .iter()
+            .filter(|template| !values.contains_key(&template.name))
+            .map(|template| template.name.clone())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(DataFusionError::Plan(format!(
+                "Missing required parameter template values: {}. Set env vars CODEANATOMY_PARAM_<NAME>.",
+                missing.join(", ")
+            )));
+        }
+        Ok(values)
+    }
+
+    async fn resolve_source_with_templates(
+        &self,
+        source: &str,
+        parameter_values: &HashMap<String, String>,
+    ) -> Result<String> {
+        let mut current_source = source.to_string();
+        let mut templates = self
+            .spec
+            .parameter_templates
+            .iter()
+            .filter(|template| template.base_table == source)
+            .collect::<Vec<_>>();
+        templates.sort_by(|left, right| left.name.cmp(&right.name));
+
+        for template in templates {
+            let Some(value) = parameter_values.get(&template.name) else {
+                continue;
+            };
+            let df = self.ctx.table(&current_source).await?;
+            let schema = df.schema();
+            let has_filter_column = schema
+                .fields()
+                .iter()
+                .any(|field| field.name() == template.filter_column.as_str());
+            if !has_filter_column {
+                let available_columns = schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(DataFusionError::Plan(format!(
+                    "Parameter template '{}' references unknown filter column '{}' in '{}'. Available columns: [{}]",
+                    template.name, template.filter_column, current_source, available_columns
+                )));
+            }
+            let parameter_literal =
+                Self::render_parameter_literal(value, &template.parameter_type)?;
+            let filter_sql = format!("{} = {}", template.filter_column, parameter_literal);
+            let filter_expr = self.ctx.parse_sql_expr(&filter_sql, &schema)?;
+            let filtered = df.filter(filter_expr)?;
+            let filtered_view_name = format!("__param_{}_{}", source, template.name);
+            self.ctx
+                .register_table(&filtered_view_name, filtered.into_view())?;
+            current_source = filtered_view_name;
+        }
+        Ok(current_source)
+    }
+
+    fn render_parameter_literal(raw: &str, parameter_type: &str) -> Result<String> {
+        let normalized = parameter_type.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "string" | "str" | "utf8" => {
+                let escaped = raw.replace('\'', "''");
+                Ok(format!("'{escaped}'"))
+            }
+            "int" | "integer" | "long" => raw
+                .parse::<i128>()
+                .map(|_| raw.to_string())
+                .map_err(|_| {
+                    DataFusionError::Plan(format!(
+                        "Invalid integer parameter value '{}' for type '{}'",
+                        raw, parameter_type
+                    ))
+                }),
+            "float" | "double" | "number" | "decimal" => raw
+                .parse::<f64>()
+                .map(|_| raw.to_string())
+                .map_err(|_| {
+                    DataFusionError::Plan(format!(
+                        "Invalid numeric parameter value '{}' for type '{}'",
+                        raw, parameter_type
+                    ))
+                }),
+            "bool" | "boolean" => {
+                let lowered = raw.trim().to_ascii_lowercase();
+                if lowered == "true" || lowered == "1" {
+                    Ok("true".to_string())
+                } else if lowered == "false" || lowered == "0" {
+                    Ok("false".to_string())
+                } else {
+                    Err(DataFusionError::Plan(format!(
+                        "Invalid boolean parameter value '{}' for type '{}'",
+                        raw, parameter_type
+                    )))
+                }
+            }
+            other => Err(DataFusionError::Plan(format!(
+                "Unsupported parameter type '{}' for runtime template substitution",
+                other
+            ))),
         }
     }
 
@@ -517,6 +693,7 @@ mod tests {
 
         let outputs = vec![OutputTarget {
             table_name: "output1".to_string(),
+            delta_location: None,
             source_view: "view1".to_string(),
             columns: vec!["id".to_string()],
             materialization_mode: MaterializationMode::Overwrite,

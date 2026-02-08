@@ -59,7 +59,7 @@ Extraction Outputs (Delta tables)
         |                              - UDF/UDAF/UDWF/UDTF registration
         v
 [2] SemanticPlanCompiler ─────────── Semantic view graph → LogicalPlan DAG
-        |                              - View spec → SQL/DataFrame/Builder
+        |                              - View spec → DataFrame/Expr/Builder
         |                              - Join inference → join nodes
         |                              - Union-by-name for schema drift
         |                              - CTE structure for reusable subplans
@@ -413,12 +413,18 @@ pub struct ViewDefinition {
 }
 
 pub enum ViewTransform {
-    /// SQL expression (parsed by DataFusion)
-    Sql(String),
+    /// Programmatic expression pipeline (type-checked at construction)
+    Programmatic(ExprPipeline),
     /// DataFrame-style operations (compiled to LogicalPlan)
     Relational(RelationalOps),
     /// Custom UDF application
     UdfApplication { udf_name: String, args: Vec<String> },
+}
+
+/// A composable sequence of Expr-returning functions that builds a
+/// LogicalPlan fragment without SQL parsing. See section 7A.
+pub struct ExprPipeline {
+    pub transforms: Vec<Box<dyn Fn(DataFrame) -> Result<DataFrame>>>,
 }
 ```
 
@@ -436,20 +442,14 @@ Step 3: Build final output plan combining all materialization targets
 Step 4: Return single LogicalPlan DAG for optimization
 ```
 
-**Implementation using three plan construction surfaces:**
+**Implementation using two plan construction surfaces:**
 
-#### Surface 1: SQL (for views defined as SQL expressions)
+All plan construction is programmatic. There is no SQL surface: SQL strings are
+parsed at runtime, cannot be type-checked by the Rust compiler, and concatenation
+is fragile. The DataFrame API and LogicalPlanBuilder provide equivalent
+expressiveness with compile-time safety.
 
-```rust
-// View defined as SQL against registered tables/views
-let df = ctx.sql(&view_def.sql_text)?;
-ctx.register_view(&view_def.name, df)?;
-```
-
-Views registered this way are lazy: DataFusion re-expands them at each reference
-point during optimization, enabling cross-view predicate pushdown.
-
-#### Surface 2: DataFrame API (for programmatic composition)
+#### Surface 1: DataFrame API (for programmatic composition)
 
 ```rust
 // Join two extraction tables with inferred keys
@@ -467,7 +467,10 @@ let joined = left.join(
 ctx.register_view("ast_sym_joined", joined)?;
 ```
 
-#### Surface 3: LogicalPlanBuilder (for complex DAG surgery)
+Views registered this way are lazy: DataFusion re-expands them at each reference
+point during optimization, enabling cross-view predicate pushdown.
+
+#### Surface 2: LogicalPlanBuilder (for complex DAG surgery)
 
 ```rust
 use datafusion::logical_expr::LogicalPlanBuilder;
@@ -564,28 +567,44 @@ and optimized view expansions).
 
 For repeated query patterns (incremental scans, validation probes, threshold-based
 filtering), the compiler emits parameterized plans that reuse a stable LogicalPlan
-shape with different scalar values:
+shape with different scalar values. All templates are built programmatically via
+the DataFrame API with `placeholder()` expressions.
 
-**SQL prepared statements (Rust):**
-
-```rust
-// Prepare once, execute many times with different thresholds
-ctx.sql("PREPARE scan_by_kind(VARCHAR) AS
-    SELECT * FROM ast_nodes WHERE kind = $1")?;
-
-// Execute with different parameters
-let functions = ctx.sql("EXECUTE scan_by_kind('function_def')")?.collect().await?;
-let classes = ctx.sql("EXECUTE scan_by_kind('class_def')")?.collect().await?;
-```
-
-**Rust DataFrame parameter binding:**
+**DataFrame parameter binding:**
 
 ```rust
-// Build plan template with placeholder
-let template_df = ctx.sql("SELECT * FROM ast_nodes WHERE bstart > $1 AND bend < $2")?;
+// Build plan template programmatically with placeholder expressions
+let template = ctx.table("ast_nodes")?
+    .filter(col("kind").eq(placeholder("$1")))?;
 
 // Bind parameters at execution time (stable plan shape, different values)
-let result = template_df
+let functions = template.clone()
+    .with_param_values(ParamValues::List(vec![
+        ScalarValue::Utf8(Some("function_def".into())),
+    ]))?
+    .collect()
+    .await?;
+
+let classes = template
+    .with_param_values(ParamValues::List(vec![
+        ScalarValue::Utf8(Some("class_def".into())),
+    ]))?
+    .collect()
+    .await?;
+```
+
+**Range-based template:**
+
+```rust
+// Build range template with multiple placeholders
+let range_template = ctx.table("ast_nodes")?
+    .filter(
+        col("bstart").gt(placeholder("$1"))
+            .and(col("bend").lt(placeholder("$2")))
+    )?;
+
+// Bind at execution time
+let result = range_template
     .with_param_values(ParamValues::List(vec![
         ScalarValue::Int64(Some(1000)),
         ScalarValue::Int64(Some(2000)),
@@ -594,46 +613,48 @@ let result = template_df
     .await?;
 ```
 
-**Value:** Prepared statements avoid re-parsing and re-analyzing for repeated query
-patterns. The logical plan shape is stable, enabling plan fingerprint comparison
-across parameter variations.
+**Value:** Programmatic templates avoid SQL parsing entirely. The logical plan shape
+is stable, enabling plan fingerprint comparison across parameter variations. The
+`placeholder()` expression constructor is type-safe and composable with other `Expr`
+combinators.
 
 ### 5.6 Subquery Composition
 
 The compiler uses subqueries for complex derivations that don't fit the
-join/union model:
+join/union model. All subqueries are built programmatically via `scalar_subquery()`,
+`exists()`, and derived DataFrames.
 
-```sql
--- Scalar subquery in SELECT: compute per-function metric inline
-SELECT
-    f.qualified_name,
-    f.bstart,
-    f.bend,
-    (SELECT COUNT(*) FROM ast_calls c
-     WHERE c.caller_qualified_name = f.qualified_name) AS call_count
-FROM ast_functions f;
+```rust
+// Scalar subquery: compute per-function call count inline
+let call_count_subquery = ctx.table("ast_calls")?
+    .filter(col("caller_qualified_name").eq(col("outer.qualified_name")))?
+    .aggregate(vec![], vec![count(lit(1)).alias("cnt")])?;
 
--- Correlated EXISTS: find functions that have at least one decorator
-SELECT f.*
-FROM ast_functions f
-WHERE EXISTS (
-    SELECT 1 FROM ast_decorators d
-    WHERE d.target_qualified_name = f.qualified_name
-);
+let with_call_count = ctx.table("ast_functions")?
+    .with_column(
+        "call_count",
+        scalar_subquery(call_count_subquery.into_unoptimized_plan()),
+    )?;
 
--- Derived table (FROM subquery): intermediate aggregation
-SELECT scope_id, total_complexity
-FROM (
-    SELECT scope_id, SUM(complexity) AS total_complexity
-    FROM ast_nodes
-    GROUP BY scope_id
-) sub
-WHERE total_complexity > 10;
+// Correlated EXISTS: find functions with at least one decorator
+let has_decorator = ctx.table("ast_decorators")?
+    .filter(col("target_qualified_name").eq(col("outer.qualified_name")))?;
+
+let decorated_fns = ctx.table("ast_functions")?
+    .filter(exists(has_decorator.into_unoptimized_plan()))?;
+
+// Derived table: intermediate aggregation then filter
+let complex_scopes = ctx.table("ast_nodes")?
+    .aggregate(
+        vec![col("scope_id")],
+        vec![sum(col("complexity")).alias("total_complexity")],
+    )?
+    .filter(col("total_complexity").gt(lit(10)))?;
 ```
 
 **Watchout:** DataFusion only supports correlated subqueries for EXISTS/NOT EXISTS.
 The optimizer rewrites correlated subqueries to joins when possible. LATERAL joins
-are not yet supported — use explicit joins or CTEs instead.
+are not yet supported -- use explicit joins or CTEs instead.
 
 ### 5.7 Recursive CTEs for Graph Traversal
 
@@ -661,24 +682,8 @@ let recursive_plan = LogicalPlanBuilder::from(base_case)
     .build()?;
 ```
 
-**SQL equivalent:**
-
-```sql
-WITH RECURSIVE scope_hierarchy AS (
-    -- Base case: root scopes
-    SELECT scope_id, qualified_name, 0 AS depth
-    FROM scopes
-    WHERE parent_scope_id IS NULL
-
-    UNION ALL
-
-    -- Recursive step: child scopes
-    SELECT s.scope_id, s.qualified_name, h.depth + 1
-    FROM scopes s
-    JOIN scope_hierarchy h ON s.parent_scope_id = h.scope_id
-)
-SELECT * FROM scope_hierarchy;
-```
+The `LogicalPlanBuilder::to_recursive_query` API is the programmatic equivalent
+of `WITH RECURSIVE` SQL syntax, building the same plan nodes without parsing.
 
 **Requires:** `SET datafusion.execution.enable_recursive_ctes = true` (set in
 session factory).
@@ -728,23 +733,32 @@ metadata bundles, property maps), DataFusion applies name-based struct field
 mapping:
 
 ```rust
-// Union two sources with different struct field orders
-// DataFusion matches fields by NAME, not position
-let source_a = ctx.sql("SELECT named_struct('kind', kind, 'line', line_no) AS meta FROM src_a")?;
-let source_b = ctx.sql("SELECT named_struct('line', line_no, 'kind', kind) AS meta FROM src_b")?;
+use datafusion::functions::named_struct;
+
+// Build struct columns programmatically with named_struct()
+let source_a = ctx.table("src_a")?
+    .with_column("meta", named_struct(vec![
+        lit("kind"), col("kind"),
+        lit("line"), col("line_no"),
+    ]))?
+    .select(vec![col("meta")])?;
+
+let source_b = ctx.table("src_b")?
+    .with_column("meta", named_struct(vec![
+        lit("line"), col("line_no"),
+        lit("kind"), col("kind"),
+    ]))?
+    .select(vec![col("meta")])?;
 
 // union_by_name handles top-level column alignment;
 // struct coercion handles nested field alignment
 let combined = source_a.union_by_name(source_b)?;
 ```
 
-**Missing fields are filled with NULL** when casting to a unified schema:
-
-```sql
--- Source A has {kind, line, col}, Source B has {kind, line}
--- After union, Source B rows get col = NULL
-SELECT CAST(meta AS STRUCT(kind VARCHAR, line INT, col INT)) ...
-```
+**Missing fields are filled with NULL** when casting to a unified schema.
+For example, if Source A has `{kind, line, col}` and Source B has `{kind, line}`,
+after union Source B rows get `col = NULL`. Use `arrow_typeof(meta)` to confirm
+the unified struct type.
 
 **Verification:** Use `arrow_typeof(meta)` to confirm unified struct types after
 combination. Schema mismatches in nested structs are a common source of silent
@@ -753,23 +767,23 @@ data corruption in union pipelines.
 ### 5.10 UNNEST for Nested Data Expansion
 
 Extraction outputs may contain list-valued columns (e.g., decorator lists,
-parameter lists, base classes). The compiler uses UNNEST to expand these into
-flat relational form inside the plan graph:
+parameter lists, base classes). The compiler uses `unnest_columns` to expand these
+into flat relational form inside the plan graph:
 
-```sql
--- Expand list-valued decorator column into one row per decorator
-SELECT
-    f.qualified_name,
-    unnest(f.decorators) AS decorator
-FROM ast_functions f;
+```rust
+// Expand list-valued decorator column into one row per decorator
+let expanded = ctx.table("ast_functions")?
+    .unnest_columns(&["decorators"])?
+    .select(vec![col("qualified_name"), col("decorators").alias("decorator")])?;
 
--- Expand struct column into individual columns
-SELECT unnest(metadata) FROM extraction_output;
+// Expand struct column into individual columns
+let flattened = ctx.table("extraction_output")?
+    .unnest_columns(&["metadata"])?;
 ```
 
 **Watchout:** Struct unnest uses placeholder-prefixed column names. Always follow
-with explicit `SELECT ... AS ...` rename to stable identifiers before downstream
-joins or unions.
+with explicit `.alias()` renames to stable identifiers before downstream joins
+or unions.
 
 ---
 
@@ -829,18 +843,35 @@ ctx.state().add_physical_optimizer_rule(
 
 ### 6.3 Optimizer Debugging
 
-`EXPLAIN VERBOSE` shows the effect of each optimizer rule in sequence:
+Programmatic plan inspection reveals the effect of optimizer rules without
+constructing SQL strings:
 
-```sql
-EXPLAIN VERBOSE
-SELECT n.qualified_name, e.edge_type, e.target
-FROM cpg_nodes n
-JOIN cpg_edges e ON n.node_id = e.source_id
-WHERE n.kind = 'function_def';
+```rust
+// Build the query programmatically
+let df = ctx.table("cpg_nodes")?
+    .join(
+        ctx.table("cpg_edges")?,
+        JoinType::Inner,
+        &["node_id"],
+        &["source_id"],
+        None,
+    )?
+    .filter(col("kind").eq(lit("function_def")))?
+    .select(vec![col("qualified_name"), col("edge_type"), col("target")])?;
+
+// Inspect plans at each stage without SQL
+let p0 = df.logical_plan();
+let p0_text = format!("{}", p0.display_indent_schema());
+
+let p1 = df.clone().into_optimized_plan()?;
+let p1_text = format!("{}", p1.display_indent_schema());
+
+let p0_graphviz = format!("{}", p0.display_graphviz());
+let p1_graphviz = format!("{}", p1.display_graphviz());
 ```
 
-This produces rule-by-rule plan deltas, making optimization behavior transparent
-and debuggable. Store `EXPLAIN VERBOSE` output in the plan bundle for regression
+Comparing P0 (pre-optimization) and P1 (post-optimization) text makes optimization
+behavior transparent and debuggable. Store both in the plan bundle for regression
 detection.
 
 ### 6.4 Optimizer Toggle Controls
@@ -933,26 +964,36 @@ This is the engine-native replacement for our current Python-side
 `_default_semantic_cache_policy()` — the optimizer identifies reuse
 opportunities automatically.
 
-### 6.7 Custom SQL Syntax Extension Points
+### 6.7 Custom Expression Extension Points
 
-For domain-specific constructs that the semantic compiler must express in SQL,
-DataFusion provides planner extension hooks:
+Since all plan construction is programmatic, domain-specific constructs are
+expressed directly as `Expr::ScalarFunction` calls and composable
+`fn(DataFrame) -> Result<DataFrame>` transforms rather than SQL syntax extensions.
 
 ```rust
-// ExprPlanner: custom expression syntax
-ctx.register_expr_planner(Arc::new(CpgExprPlanner::new()));
+// Register domain-specific UDFs that produce Expr nodes directly
+ctx.register_udf(create_udf(
+    "cpg_traverse",
+    vec![DataType::Utf8, DataType::Int32],  // edge_type, depth
+    Arc::new(DataType::List(Arc::new(Field::new("item", DataType::Utf8, true)))),
+    Volatility::Immutable,
+    Arc::new(cpg_traverse_impl),
+));
 
-// RelationPlanner: custom FROM-clause syntax
-ctx.register_relation_planner(Arc::new(CpgRelationPlanner::new()));
+// Use via Expr::ScalarFunction -- no SQL parsing needed
+let traversal = cpg_traverse_udf().call(vec![lit("calls"), lit(3)]);
+
+// Or build as a DataFrame transform (see section 7A.3)
+let with_calls = df
+    .with_column("call_targets", cpg_traverse_udf().call(vec![
+        col("qualified_name"), lit(3),
+    ]))?;
 ```
 
-**Potential use:** A custom `RelationPlanner` could parse
-`FROM cpg_traverse('calls', depth=3)` directly in SQL, compiling to a
-recursive CTE plan without requiring the UDTF registration path.
-
-**Watchout:** Planner precedence is "last registered wins." Return
-`Original(...)` to delegate to the default planner when the custom
-planner doesn't handle the construct.
+**Design choice:** `ExprPlanner` and `RelationPlanner` hooks exist for extending
+SQL syntax, but since we do not use SQL for plan construction, these hooks are
+unnecessary. All domain-specific operations are expressed as UDFs callable
+from `Expr` trees or as `DataFrame` transforms.
 
 ---
 
@@ -1058,8 +1099,8 @@ impl AggregateUDFImpl for SpanMerge {
 // UDTF: generate CPG edges from a set of matched relationships
 ctx.register_udtf("emit_cpg_edges", Arc::new(EmitCpgEdges::new()));
 
-// Usage in SQL:
-// SELECT * FROM emit_cpg_edges('calls', 'ast_calls_v1')
+// Usage via DataFrame API:
+let edges = ctx.table_function("emit_cpg_edges", vec![lit("calls"), lit("ast_calls_v1")])?;
 ```
 
 ### 7.5 Performance Patterns
@@ -1100,6 +1141,377 @@ impl ScalarUDFImpl for ByteSpanContains {
     }
 }
 ```
+
+---
+
+## 7A) SQL-Free Programmatic Expression Algebra
+
+### 7A.1 Design Principle: Zero SQL in the Hot Path
+
+All plan construction uses the DataFrame API, `Expr` composition, and
+`LogicalPlanBuilder`. SQL strings are never used for plan construction. The reasons
+are structural, not stylistic:
+
+- **Type safety.** `Expr` trees are type-checked at construction by the Rust compiler.
+  SQL strings are parsed at runtime -- type errors surface late and produce opaque
+  DataFusion parse errors rather than Rust compile errors.
+- **Optimizer visibility.** `Expr` trees built from primitives (`col`, `lit`, `and`,
+  `lt_eq`) are fully transparent to the optimizer. It can push predicates, reorder
+  joins, and fold constants through the entire tree. SQL-constructed plans go through
+  an extra parse-analyze cycle that can obscure optimization opportunities.
+- **Composability.** Rust functions that return `Expr` compose naturally. SQL
+  concatenation (`format!("WHERE {} > {}", col_name, threshold)`) is fragile,
+  injection-prone, and cannot be unit-tested without a `SessionContext`.
+- **Determinism.** `Expr` trees produce identical plan nodes regardless of engine
+  version. SQL parsing behavior can vary across DataFusion versions (whitespace
+  handling, precedence rules, reserved word changes).
+- **Testing.** Expression constructors are pure functions testable with `assert_eq!`
+  on the resulting `Expr` tree. SQL requires a full `SessionContext` to validate.
+
+### 7A.2 Shared Expression Library (`CpgExprLib`)
+
+A Rust module exporting composable `Expr`-returning functions that every view builder
+uses. These are NOT UDFs -- they are plan-level expression constructors that decompose
+into primitive DataFusion expressions the optimizer can see through:
+
+```rust
+pub mod cpg_expr {
+    use datafusion::prelude::*;
+    use datafusion::logical_expr::Expr;
+    use datafusion::functions::named_struct;
+
+    /// Span containment predicate -- decomposes into primitive comparisons
+    /// that the optimizer can push down through joins and into scans.
+    pub fn span_contains(
+        outer_start: Expr, outer_end: Expr,
+        inner_start: Expr, inner_end: Expr,
+    ) -> Expr {
+        outer_start.lt_eq(inner_start.clone())
+            .and(inner_end.lt_eq(outer_end))
+    }
+
+    /// Span overlap predicate
+    pub fn span_overlaps(
+        a_start: Expr, a_end: Expr,
+        b_start: Expr, b_end: Expr,
+    ) -> Expr {
+        a_start.lt_eq(b_end.clone())
+            .and(b_start.lt_eq(a_end))
+    }
+
+    /// Span containment join condition (file equality + span containment)
+    pub fn span_containment_join_on(
+        outer_table: &str, inner_table: &str,
+    ) -> Vec<Expr> {
+        vec![
+            col(format!("{outer_table}.file_path"))
+                .eq(col(format!("{inner_table}.file_path"))),
+            span_contains(
+                col(format!("{outer_table}.bstart")),
+                col(format!("{outer_table}.bend")),
+                col(format!("{inner_table}.bstart")),
+                col(format!("{inner_table}.bend")),
+            ),
+        ]
+    }
+
+    /// Location struct constructor -- reusable across all views
+    pub fn location_struct(
+        file: Expr, bstart: Expr, bend: Expr,
+        start_line: Expr, start_col: Expr,
+        end_line: Expr, end_col: Expr,
+    ) -> Expr {
+        named_struct(vec![
+            lit("file"), file,
+            lit("bstart"), bstart,
+            lit("bend"), bend,
+            lit("start"), named_struct(vec![
+                lit("line"), start_line,
+                lit("col"), start_col,
+            ]),
+            lit("end"), named_struct(vec![
+                lit("line"), end_line,
+                lit("col"), end_col,
+            ]),
+        ])
+    }
+
+    /// Evidence struct constructor
+    pub fn evidence_struct(
+        source: Expr, confidence: Expr, value: Expr,
+    ) -> Expr {
+        named_struct(vec![
+            lit("source"), source,
+            lit("confidence"), confidence,
+            lit("value"), value,
+        ])
+    }
+
+    /// CASE expression builder for semantic type dispatch
+    pub fn semantic_type_case(
+        kind_col: Expr,
+        mappings: &[(ScalarValue, Expr)],
+        default: Expr,
+    ) -> Expr {
+        let mut builder = case(kind_col);
+        for (when_val, then_expr) in mappings {
+            builder = builder.when(lit(when_val.clone()), then_expr.clone());
+        }
+        builder.otherwise(default).unwrap()
+    }
+
+    /// Qualified name depth via UDF (optimizer can constant-fold via simplify())
+    pub fn qname_depth(qname: Expr) -> Expr {
+        qualified_name_depth_udf().call(vec![qname])
+    }
+
+    /// Qualified name parent via UDF
+    pub fn qname_parent(qname: Expr) -> Expr {
+        qualified_name_parent_udf().call(vec![qname])
+    }
+
+    /// Stable hash ID generation via UDF
+    pub fn stable_id(file: Expr, kind: Expr, bstart: Expr, bend: Expr) -> Expr {
+        stable_hash_id_udf().call(vec![file, kind, bstart, bend])
+    }
+}
+```
+
+**Critical distinction:** Expression constructors like `span_contains()` produce
+primitive `Expr` trees (`a.bstart <= b.bstart AND b.bend <= a.bend`) that the
+optimizer can push down, reorder, and simplify. UDF-wrapping functions like
+`qname_depth()` call through registered UDFs where the optimizer relies on
+`simplify()` hooks. Use expression constructors for predicates in WHERE/JOIN;
+use UDFs for computed columns.
+
+### 7A.3 View Transform Library
+
+Reusable `fn(DataFrame) -> Result<DataFrame>` transforms composable via chaining:
+
+```rust
+pub mod cpg_transforms {
+    /// Namespace all columns with a prefix (e.g., "ast__node_id")
+    pub fn namespace_columns(prefix: &str) -> impl Fn(DataFrame) -> Result<DataFrame> {
+        let prefix = prefix.to_string();
+        move |df| {
+            let schema = df.schema();
+            let projections: Vec<Expr> = schema.fields().iter()
+                .map(|f| col(f.name()).alias(&format!("{prefix}__{}", f.name())))
+                .collect();
+            df.select(projections)
+        }
+    }
+
+    /// Add stable ID column from key columns
+    pub fn add_stable_id(
+        id_cols: &[&str],
+    ) -> impl Fn(DataFrame) -> Result<DataFrame> {
+        let cols: Vec<String> = id_cols.iter().map(|s| s.to_string()).collect();
+        move |df| {
+            let args: Vec<Expr> = cols.iter().map(|c| col(c.as_str())).collect();
+            df.with_column("stable_id", stable_hash_id_udf().call(args))
+        }
+    }
+
+    /// Enforce schema contract: validate + cast
+    pub fn enforce_schema(
+        contract: SchemaContract,
+    ) -> impl Fn(DataFrame) -> Result<DataFrame> {
+        move |df| contract.enforce(df)
+    }
+
+    /// Attach nested struct payload from related columns
+    pub fn attach_struct_payload(
+        name: &str,
+        fields: Vec<(&str, &str)>, // (struct_field_name, source_column)
+    ) -> impl Fn(DataFrame) -> Result<DataFrame> {
+        let name = name.to_string();
+        let fields: Vec<(String, String)> = fields.into_iter()
+            .map(|(f, c)| (f.to_string(), c.to_string()))
+            .collect();
+        move |df| {
+            let struct_args: Vec<Expr> = fields.iter()
+                .flat_map(|(f, c)| vec![lit(f.as_str()), col(c.as_str())])
+                .collect();
+            df.with_column(&name, named_struct(struct_args))
+        }
+    }
+}
+```
+
+### 7A.4 Programmatic View Factory Pattern
+
+Views are built entirely programmatically using the expression library:
+
+```rust
+pub fn build_ast_sym_joined_view(ctx: &SessionContext) -> Result<DataFrame> {
+    let ast = ctx.table("ast_nodes")?;
+    let sym = ctx.table("symtable_entries")?;
+
+    // Programmatic join with inferred keys
+    let joined = ast.join(
+        sym,
+        JoinType::Left,
+        &["qualified_name"],
+        &["qualified_name"],
+        None,
+    )?;
+
+    // Add computed columns using shared expression library
+    let enriched = joined
+        .with_column("loc", cpg_expr::location_struct(
+            col("file_path"), col("bstart"), col("bend"),
+            col("start_line"), col("start_col"),
+            col("end_line"), col("end_col"),
+        ))?
+        .with_column("qname_depth", cpg_expr::qname_depth(col("qualified_name")))?
+        .with_column("stable_id", cpg_expr::stable_id(
+            col("file_path"), col("kind"), col("bstart"), col("bend"),
+        ))?;
+
+    // Register as lazy view (no execution until terminal operation)
+    ctx.register_view("ast_sym_joined", enriched.clone())?;
+    Ok(enriched)
+}
+```
+
+### 7A.5 Aggregation Without SQL
+
+Array-of-struct construction programmatically:
+
+```rust
+// Build nested payload struct per row
+let evidence_expr = cpg_expr::evidence_struct(
+    lit("scip"), col("confidence"), col("symbol"),
+);
+
+// Aggregate into array-of-struct grouped by node
+let by_node = df.aggregate(
+    vec![col("node_id")],
+    vec![
+        array_agg(evidence_expr)
+            .order_by(vec![col("bstart").sort(true, true)])
+            .alias("evidence_list"),
+    ],
+)?;
+```
+
+### 7A.6 Subquery Composition Without SQL
+
+Scalar subqueries and EXISTS via the DataFrame/Builder API:
+
+```rust
+// Scalar subquery: count calls per function
+let call_count_subquery = ctx.table("ast_calls")?
+    .filter(col("caller_qname").eq(col("outer.qualified_name")))?
+    .aggregate(vec![], vec![count(lit(1)).alias("cnt")])?;
+
+let with_call_count = functions_df
+    .with_column("call_count", scalar_subquery(
+        call_count_subquery.into_unoptimized_plan(),
+    ))?;
+
+// EXISTS: functions with decorators
+let has_decorator = ctx.table("ast_decorators")?
+    .filter(col("target_qname").eq(col("outer.qualified_name")))?;
+
+let decorated_fns = functions_df
+    .filter(exists(has_decorator.into_unoptimized_plan()))?;
+```
+
+### 7A.7 UDF-Expression Duality: When to Use Each
+
+| Construct | Use Expression Constructor | Use UDF |
+|-----------|---------------------------|---------|
+| Span containment predicate | Yes -- optimizer pushdown | No |
+| Span overlap predicate | Yes -- optimizer pushdown | No |
+| Qualified name parsing | No | Yes -- `simplify()` for constants |
+| Stable hash generation | No | Yes -- encapsulation |
+| Semantic type check | No | Yes -- `simplify()` for constants |
+| Location struct | Yes -- `named_struct()` | No |
+| Evidence aggregation | Yes -- `array_agg()` | No |
+| Span merging | No | Yes -- UDAF with GroupsAccumulator |
+| Scope nesting level | No | Yes -- UDWF with PartitionEvaluator |
+| CASE dispatch on kind | Yes -- `case().when()` | No |
+
+**Rule:** If the optimizer benefits from seeing the internal structure (predicates,
+join conditions), use an expression constructor. If encapsulation and plan-time
+`simplify()` are sufficient, use a UDF.
+
+### 7A.8 Schema Contract Enforcement (Programmatic)
+
+```rust
+pub struct SchemaContract {
+    pub name: String,
+    pub required_columns: Vec<(String, DataType, bool)>, // name, type, nullable
+    pub cast_policy: CastPolicy, // Strict (fail) or Coerce (cast)
+}
+
+impl SchemaContract {
+    pub fn enforce(&self, df: DataFrame) -> Result<DataFrame> {
+        let schema = df.schema();
+        let mut casts: HashMap<String, DataType> = HashMap::new();
+
+        for (name, expected_type, _nullable) in &self.required_columns {
+            match schema.field_with_name(None, name) {
+                Ok(field) if field.data_type() != expected_type => {
+                    match self.cast_policy {
+                        CastPolicy::Strict => {
+                            return Err(DataFusionError::SchemaError(
+                                SchemaError::FieldNotFound { ... },
+                                Box::new(None),
+                            ));
+                        }
+                        CastPolicy::Coerce => {
+                            casts.insert(name.clone(), expected_type.clone());
+                        }
+                    }
+                }
+                Err(_) => {
+                    return Err(DataFusionError::SchemaError(
+                        SchemaError::FieldNotFound { ... },
+                        Box::new(None),
+                    ));
+                }
+                _ => {} // type matches
+            }
+        }
+
+        if casts.is_empty() {
+            Ok(df)
+        } else {
+            // Apply casts via select with try_cast expressions
+            let exprs: Vec<Expr> = schema.fields().iter()
+                .map(|f| {
+                    if let Some(target) = casts.get(f.name()) {
+                        try_cast(col(f.name()), target.clone()).alias(f.name())
+                    } else {
+                        col(f.name())
+                    }
+                })
+                .collect();
+            df.select(exprs)
+        }
+    }
+}
+```
+
+### 7A.9 Complete SQL Elimination Matrix
+
+| Previous Pattern | Programmatic Replacement | Location |
+|-----------------|-------------------------|----------|
+| `ctx.sql("SELECT ...")` | `ctx.table("t")?.select(exprs)?` | View construction |
+| `ctx.sql("INSERT INTO ...")` | `df.write_table("t", opts).await?` | Materialization |
+| `PREPARE / EXECUTE` | `placeholder()` + `with_param_values()` | Parameterized plans |
+| SQL subqueries | `scalar_subquery()` / `exists()` | Derived computations |
+| SQL UNNEST | `df.unnest_columns("col")?` | Nested data expansion |
+| SQL CTEs | `LogicalPlanBuilder::to_recursive_query()` | Recursive plans |
+| `EXPLAIN VERBOSE` SQL | `df.explain(true, false)?` + `plan.display_indent_schema()` | Plan capture |
+| `COPY TO` SQL | `df.write_table()` with partition options | Partitioned output |
+| `CREATE TABLE AS` SQL | `df.cache().await?` + `register_view()` | Cache boundaries |
+| `named_struct()` in SQL | `functions::named_struct(fields)` | Nested output |
+| `CASE WHEN` in SQL | `case(expr).when().otherwise()` | Conditional logic |
+| CDF query SQL | `ctx.table("cdf")?.filter(predicate)?` | Change detection |
 
 ---
 
@@ -1168,48 +1580,48 @@ let p1_graphviz = format!("{}", p1.display_graphviz());
 
 ### 8.2 Capture Implementation
 
+All plan capture uses programmatic plan introspection methods on `DataFrame` and
+`LogicalPlan`. No SQL string construction or `reconstruct_sql_from_plan` is needed.
+
 ```rust
 pub async fn capture_plan_bundle(
-    ctx: &SessionContext,
     df: &DataFrame,
     envelope: &SessionEnvelope,
 ) -> Result<PlanBundle> {
-    // P0: unoptimized logical
-    let p0 = df.logical_plan();
+    // P0: unoptimized logical plan -- direct accessor, no SQL
+    let p0 = df.logical_plan().clone();
     let p0_text = format!("{}", p0.display_indent_schema());
+    let p0_graphviz = format!("{}", p0.display_graphviz());
 
-    // P1: optimized logical
-    let p1 = df.optimized_logical_plan()?;
+    // P1: optimized logical plan -- runs optimizer rules, no SQL
+    let p1 = df.clone().into_optimized_plan()?;
     let p1_text = format!("{}", p1.display_indent_schema());
+    let p1_graphviz = format!("{}", p1.display_graphviz());
 
-    // P2: physical (without executing)
+    // P2: physical plan (without executing) -- physical planning, no SQL
     let p2 = df.execution_plan().await?;
     let p2_text = format!("{}", DisplayableExecutionPlan::indent(&*p2, true));
 
-    // EXPLAIN VERBOSE (rule-by-rule trace, non-executing)
+    // Rule-by-rule trace via explain() on the DataFrame
+    // Returns a DataFrame with plan_type and plan columns
     let explain_verbose = {
-        let explain_df = ctx.sql(&format!(
-            "EXPLAIN VERBOSE {}",
-            reconstruct_sql_from_plan(&p0)?
-        ))?;
+        let explain_df = df.clone().explain(true, false)?;  // verbose=true
         format_explain_output(explain_df.collect().await?)
     };
 
-    // EXPLAIN TREE (diff-friendly)
-    let explain_tree = {
-        let tree_df = ctx.sql(&format!(
-            "EXPLAIN FORMAT TREE {}",
-            reconstruct_sql_from_plan(&p0)?
-        ))?;
-        format_explain_output(tree_df.collect().await?)
-    };
+    // Diff-friendly rendering from plan display methods
+    let explain_tree = format!("{}", p1.display_indent());
 
     Ok(PlanBundle {
         p0_logical: p0_text.clone(),
+        p0_graphviz,
         p1_optimized: p1_text.clone(),
+        p1_graphviz,
         p2_physical: p2_text.clone(),
+        p2_partition_count: p2.output_partitioning().partition_count(),
         explain_verbose,
         explain_tree,
+        explain_graphviz: p1_graphviz.clone(),
         p0_hash: hash_string(&p0_text),
         p1_hash: hash_string(&p1_text),
         p2_hash: hash_string(&p2_text),
@@ -1362,11 +1774,15 @@ pub async fn execute_and_materialize(
 
         ctx.register_table(&format!("__output_{table_name}"), Arc::new(target_provider))?;
 
-        // Execute INSERT INTO (streaming, partitioned)
-        let insert_df = ctx.sql(&format!(
-            "INSERT INTO __output_{table_name} SELECT * FROM {table_name}"
-        ))?;
-        let insert_results = insert_df.collect().await?;
+        // Execute write via DataFrame API (streaming, partitioned)
+        let insert_results = df.clone()
+            .write_table(
+                &format!("__output_{table_name}"),
+                DataFrameWriteOptions::new(),
+            )
+            .await?
+            .collect()
+            .await?;
 
         results.push(MaterializationResult {
             table_name,
@@ -1405,7 +1821,7 @@ expression evaluation:
 
 ### 9.4 Alternative Materialization Paths
 
-Beyond `INSERT INTO`, two additional materialization surfaces are available:
+Beyond `write_table`, additional programmatic materialization surfaces:
 
 **`DataFrame::write_table` (Rust):** Direct terminal operation that executes
 and persists in one call:
@@ -1415,25 +1831,30 @@ let df = ctx.table("cpg_nodes_view")?;
 df.write_table("cpg_nodes_output", DataFrameWriteOptions::new()).await?;
 ```
 
-**`COPY TO` with partitioned output:** For hive-style partitioned Delta output:
+**Partitioned output via `write_table` with options:**
 
-```sql
-COPY (SELECT * FROM cpg_edges_view)
-TO 'delta://output/cpg_edges'
-STORED AS PARQUET
-PARTITIONED BY (edge_type)
-OPTIONS (
-    'execution.keep_partition_by_columns' 'true'
-);
+```rust
+let df = ctx.table("cpg_edges_view")?;
+df.write_table(
+    "cpg_edges_output",
+    DataFrameWriteOptions::new()
+        .with_partition_by(vec!["edge_type".to_string()])
+        .with_insert_op(InsertOp::Overwrite),
+).await?;
 ```
 
-**CTAS for intermediate cache boundaries:** When the optimizer's view expansion
-creates redundant scans, materialize as a named in-memory table:
+**Cache boundaries via `cache()` + `register_view()`:** When the optimizer's view
+expansion creates redundant scans, materialize as a named in-memory table:
 
-```sql
-CREATE TABLE cached_functions AS
-SELECT * FROM ast_functions
-WHERE kind = 'function_def';
+```rust
+// Materialize to memory (executes the plan)
+let cached = ctx.table("ast_functions")?
+    .filter(col("kind").eq(lit("function_def")))?
+    .cache()
+    .await?;
+
+// Register as a named table for downstream consumers
+ctx.register_view("cached_functions", cached)?;
 ```
 
 This is a plan-level cache boundary: downstream joins against `cached_functions`
@@ -1557,10 +1978,12 @@ let cdf_builder = CdfLoadBuilder::new(table.log_store(), table.snapshot()?)
 let cdf_provider = DeltaCdfTableProvider::try_new(cdf_builder)?;
 ctx.register_table("extraction_changes", Arc::new(cdf_provider))?;
 
-// Query only changed rows
-let changes = ctx.sql(
-    "SELECT * FROM extraction_changes WHERE _change_type IN ('insert', 'update_postimage')"
-)?;
+// Query only changed rows -- programmatic filter, no SQL
+let changes = ctx.table("extraction_changes")?
+    .filter(col("_change_type").in_list(
+        vec![lit("insert"), lit("update_postimage")],
+        false,
+    ))?;
 ```
 
 CDF provides `_change_type`, `_commit_version`, and `_commit_timestamp` columns
@@ -1919,24 +2342,18 @@ Substrait enables:
 - Plan diffing at the IR level
 - "Planner agent → executor agent" patterns (ship Substrait, hydrate, execute)
 
-### 14.3 Plan ↔ SQL Unparser
+### 14.3 Plan ↔ SQL Unparser (Diagnostic Only)
 
-The unparser converts a LogicalPlan back to SQL text — enabling "plan fragment
-regeneration" workflows where the compiler builds plan fragments, unparsess to SQL,
-and re-combines as CTEs in a larger statement:
+The unparser converts a LogicalPlan back to SQL text for diagnostic and portability
+purposes. It is NOT used in the plan construction hot path.
 
 ```rust
 use datafusion::sql::unparser::{plan_to_sql, Unparser};
 
-// Convert optimized plan fragment to SQL
+// Convert optimized plan fragment to SQL for logging/debugging
 let sql_stmt = plan_to_sql(&optimized_fragment)?;
 let sql_text = sql_stmt.to_string();
-
-// Embed as CTE in a larger query
-let combined_sql = format!(
-    "WITH fragment AS ({sql_text}) SELECT f.*, t.extra FROM fragment f JOIN other t ON f.key = t.key"
-);
-let combined_df = ctx.sql(&combined_sql)?;
+log::debug!("Plan fragment as SQL: {sql_text}");
 ```
 
 **Dialect-aware unparser (Python):**
@@ -1948,12 +2365,12 @@ unparser = Unparser(Dialect.postgres()).with_pretty(True)
 sql_text = unparser.plan_to_sql(df.optimized_logical_plan())
 ```
 
-**Use case:** When the semantic compiler needs to move plan fragments between
-different catalog contexts (e.g., staging → production), unparse to SQL and
-re-plan in the target context. This is safer than binary serialization because
-it re-resolves names and types.
+**Use case:** Human-readable plan inspection, cross-engine validation (e.g.,
+comparing DataFusion plans against DuckDB), and plan migration between catalog
+contexts. For plan combination, always use the programmatic `LogicalPlanBuilder`
+or DataFrame API rather than unparsing to SQL and re-parsing.
 
-**Watchout:** Not all plans can be converted to SQL — custom operators and
+**Watchout:** Not all plans can be converted to SQL -- custom operators and
 provider-specific nodes may fail. The unparser uses qualified identifiers
 (`"table"."col"`); do not post-process with naive string operations.
 
@@ -2000,7 +2417,7 @@ state) for the common case.
 
 **Exit criteria:**
 - All extraction outputs register as native Delta providers
-- Two-tier pruning verified via `EXPLAIN ANALYZE` output
+- Two-tier pruning verified via `df.explain(true, true)` output
 - No Arrow Dataset fallback path
 
 ### WS3: Custom UDFs (Week 2-4)
@@ -2012,14 +2429,14 @@ state) for the common case.
 - `stable_hash_id` for deterministic ID generation
 
 **Exit criteria:**
-- All UDFs registered and callable from SQL
+- All UDFs registered and callable from Expr trees
 - UDF performance benchmarks (columnar vs row-at-a-time comparison)
 - `Volatility::Immutable` set for all deterministic UDFs
 
 ### WS4: Semantic Plan Compiler (Week 3-6)
 
 **Deliverables:**
-- View definition → SQL/DataFrame/LogicalPlanBuilder compilation
+- View definition → DataFrame/Expr/LogicalPlanBuilder compilation
 - Join graph inference from semantic model
 - Union-by-name for multi-source extraction composition
 - CTE/view structure for reusable subplans
@@ -2090,7 +2507,7 @@ state) for the common case.
 
 **Exit criteria:**
 - Custom rules improve relevant query patterns
-- `EXPLAIN VERBOSE` shows custom rule effects
+- `df.explain(true, false)` output shows custom rule effects
 - No regressions on existing query patterns
 
 ### WS10: Adaptive Tuner (Week 9-11)
@@ -2112,7 +2529,7 @@ state) for the common case.
 ### Phase 1: Deterministic Core (WS1 + WS2 + WS3)
 
 **Exit:** Deterministic session with registered Delta providers and custom UDFs.
-Can execute hand-written SQL against extraction tables and verify two-tier pruning.
+Can execute programmatic queries against extraction tables and verify two-tier pruning.
 
 ### Phase 2: Semantic Compilation (WS4 + WS5)
 
@@ -2179,16 +2596,14 @@ Production-grade performance and change management.
 | DataFrame.cache | `cache()` for shared subplans | WS4: Subplan caching |
 | View registration | `ctx.register_view(name, df)` | WS4: CTE structure |
 | LogicalPlanBuilder | `from(plan).join().union().build()` | WS4: Complex DAG surgery |
-| SQL planning | `ctx.sql(query)` → DataFrame | WS4: SQL-defined views |
-| SQLOptions safety | `sql_with_options` + `SQLOptions::with_allow_ddl(false)` | WS4: Plan-only mode |
-| EXPLAIN / EXPLAIN VERBOSE | Non-executing plan inspection | WS5: Plan bundle |
-| EXPLAIN FORMAT TREE | Diff-friendly plan rendering | WS5: Plan bundle |
+| CpgExprLib expression algebra | `cpg_expr::span_contains()`, `location_struct()`, etc. | S7A: Expression library |
+| DataFrame.explain | `df.explain(verbose, analyze)?` | WS5: Plan bundle |
 | EXPLAIN ANALYZE | Post-execution metrics | WS5: Execution metrics |
 | logical_plan() | Unoptimized logical plan accessor | WS5: P0 capture |
 | optimized_logical_plan() | Optimized logical plan accessor | WS5: P1 capture |
 | execution_plan() | Physical plan accessor | WS5: P2 capture |
 | execute_stream_partitioned | Partitioned streaming execution | WS6: Materializer |
-| INSERT INTO | DML for Delta writes | WS6: Materializer |
+| DataFrame::write_table | Programmatic Delta writes | WS6: Materializer |
 | ScalarUDFImpl | Custom scalar functions | WS3: CPG UDFs |
 | AggregateUDFImpl | Custom aggregate functions | WS3: CPG UDFs |
 | GroupsAccumulator | Vectorized aggregation | WS3: CPG UDFs |
@@ -2200,25 +2615,24 @@ Production-grade performance and change management.
 | add_physical_optimizer_rule | Custom physical optimizer passes | WS9: Custom rules |
 | remove_optimizer_rule | Rule toggle for A/B testing | WS9: Experimentation |
 | Substrait serialize/deserialize | Portable plan interchange | WS5: Optional |
-| parse_sql_expr | SQL text → typed Expr | WS4: Expression parsing |
+| Expr composition (`col`, `lit`, `and`, etc.) | Type-safe expression construction | WS4/S7A: Expression algebra |
 | arrow_cast / arrow_typeof | Type introspection + explicit casts | WS3/WS4: Schema alignment |
-| named_struct / struct | Nested CPG output construction | WS6: Output schema |
+| functions::named_struct | Programmatic nested CPG output construction | WS6/S7A: Output schema |
 | get_field / bracket syntax | Nested field extraction | WS4: Struct navigation |
-| unnest | Array/struct expansion to rows | WS4: List-valued extraction |
-| PREPARE / EXECUTE | Prepared statement plan reuse | WS4: Parameterized templates |
+| DataFrame.unnest_columns | Array/struct expansion to rows | WS4: List-valued extraction |
+| placeholder() + with_param_values | Programmatic parameterized plan templates | WS4: Parameterized templates |
 | with_param_values | Rust DataFrame parameter binding | WS4: Parameterized templates |
 | Recursive CTE / to_recursive_query | Graph-style plan expansion | WS4: Scope/call graph traversal |
 | join_on (inequality predicates) | Range-join for byte spans | WS4: Span containment joins |
-| Subqueries (correlated/derived) | SELECT/FROM/WHERE subqueries | WS4: Complex derivations |
+| scalar_subquery() / exists() | Programmatic subquery composition | WS4/S7A: Complex derivations |
 | union_by_name_distinct | By-name union with dedup | WS4: Multi-source dedup |
 | intersect / except_all | Set difference operations | WS4: Evidence disagreement detection |
 | coalesce_duplicate_keys | Post-join key column behavior | WS4: Join schema control |
 | DataFrame.repartition_by_hash | Pre-position data for joins | WS4/WS9: Partition optimization |
 | TreeNode transform/rewrite | Deterministic plan normalization | WS4/WS9: Plan canonicalization |
 | LogicalPlan.display_graphviz | DOT format plan rendering | WS5: Visual plan artifacts |
-| EXPLAIN FORMAT GRAPHVIZ | Machine-ingestible plan format | WS5: Plan tooling |
-| EXPLAIN ANALYZE VERBOSE | Per-partition execution metrics | WS5: Detailed diagnostics |
-| explain.show_schema/show_statistics | Enriched EXPLAIN output | WS5: Plan bundle enrichment |
+| LogicalPlan::display_graphviz | Programmatic DOT format plan rendering | WS5: Plan tooling |
+| df.explain(true, true) | Programmatic EXPLAIN ANALYZE with per-partition metrics | WS5: Detailed diagnostics |
 | ExecutionPlan::metrics() | Programmatic metric extraction | WS5: Structured metrics |
 | ExecutionPlan::partition_count | Physical parallelism topology | WS5: Partition tracking |
 | planning_concurrency | Parallel UNION child planning | WS1: Session config |
@@ -2226,14 +2640,13 @@ Production-grade performance and change management.
 | enable_sort_pushdown / prefer_existing_sort | Sort optimization knobs | WS1: Session config |
 | spill_compression / max_spill_file_size | Spill tuning | WS1: Session config |
 | metadata_cache_limit / list_files_cache | Runtime caches for view re-expansion | WS1: Session config |
-| plan_to_sql (Unparser) | LogicalPlan → SQL round-trip | WS4: Fragment regeneration |
+| plan_to_sql (Unparser) | LogicalPlan → SQL round-trip (diagnostics only) | WS5: Plan debugging |
 | logical_plan_to_bytes / from_bytes | Binary plan serialization | WS5: Plan caching |
 | physical_plan_to_bytes / from_bytes | Physical plan serialization | WS5: Plan caching |
-| COPY TO PARTITIONED BY | Hive-style partitioned output | WS6: Output materialization |
-| DataFrame::write_table | Direct terminal write operation | WS6: Materializer |
-| CREATE TABLE AS SELECT | In-memory cache boundary | WS4: Subplan materialization |
-| CREATE VIEW (SQL DDL) | SQL-level modular subplans | WS4: View composition |
-| ExprPlanner / RelationPlanner | Custom SQL syntax extension | WS9: Domain-specific SQL |
+| DataFrame::write_table with partition options | Programmatic partitioned output | WS6: Output materialization |
+| DataFrame.cache() + register_view() | In-memory cache boundary | WS4: Subplan materialization |
+| ctx.register_view(name, df) | Programmatic view composition | WS4: View composition |
+| Expr::ScalarFunction | Direct UDF invocation in Expr trees | S7A/WS3: Domain-specific expressions |
 | into_parts() | Safe plan + state extraction | WS4: Plan combination safety |
 | UnionExec / InterleaveExec awareness | Physical union partition topology | WS4/WS9: Union optimization |
 | datafusion-tracing | OpenTelemetry plan/execution tracing | WS5: Observability |

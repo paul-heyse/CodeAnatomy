@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import pytest
 
+from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.views.artifacts import CachePolicy
 from relspec.calibration_bounds import (
     DEFAULT_CALIBRATION_BOUNDS,
     CalibrationBounds,
@@ -41,8 +43,6 @@ from semantics.pipeline import (
     _default_semantic_cache_policy,
     _resolve_cache_policy_hierarchy,
 )
-from datafusion_engine.dataset.registry import DatasetLocation
-from datafusion_engine.views.artifacts import CachePolicy
 from semantics.registry import SEMANTIC_TABLE_SPECS
 
 

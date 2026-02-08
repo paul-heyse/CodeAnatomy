@@ -27,3 +27,29 @@ fn test_rulepack_factory_strict_profile_includes_strict_safety() {
         .iter()
         .any(|rule| rule.name() == "strict_safety_rule"));
 }
+
+#[cfg(feature = "compliance")]
+#[test]
+fn test_compliance_capture_populated() {
+    use codeanatomy_engine::compliance::capture::{ComplianceCapture, RetentionPolicy};
+    use codeanatomy_engine::rules::rulepack::RulepackFactory;
+    use codeanatomy_engine::session::profiles::{EnvironmentClass, EnvironmentProfile};
+    use codeanatomy_engine::spec::rule_intents::RulepackProfile;
+
+    let env_profile = EnvironmentProfile::from_class(EnvironmentClass::Small);
+    let ruleset = RulepackFactory::build_ruleset(&RulepackProfile::Default, &[], &env_profile);
+    let snapshot = RulepackFactory::build_snapshot(&ruleset, &RulepackProfile::Default);
+
+    let mut capture = ComplianceCapture::new(RetentionPolicy::Short);
+    capture.capture_rulepack(snapshot.clone());
+    capture.record_explain("test_output", vec!["PhysicalPlan".to_string(), "Filter".to_string()]);
+
+    assert!(!capture.is_empty());
+    assert_eq!(capture.rulepack_snapshot.profile, "Default");
+    assert_eq!(capture.rulepack_snapshot.fingerprint, ruleset.fingerprint);
+
+    let json = capture.to_json().unwrap();
+    assert!(json.contains("rulepack_snapshot"));
+    assert!(json.contains("explain_traces"));
+    assert!(json.contains("test_output"));
+}

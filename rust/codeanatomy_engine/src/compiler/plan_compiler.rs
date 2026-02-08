@@ -14,7 +14,9 @@ use std::env;
 
 use crate::compiler::cache_boundaries;
 use crate::compiler::graph_validator;
+use crate::compiler::inline_policy::{compute_inline_policy, InlineDecision};
 use crate::compiler::join_builder;
+use crate::compiler::udtf_builder;
 use crate::compiler::union_builder;
 use crate::compiler::view_builder;
 use crate::spec::execution_spec::SemanticExecutionSpec;
@@ -59,11 +61,30 @@ impl<'a> SemanticPlanCompiler<'a> {
         // 2. Topological sort
         let ordered = self.topological_sort()?;
 
-        // 3. Compile and register each view
+        // 2.5. Compute inline policy for cross-view optimization
+        let ref_counts = self.compute_ref_counts();
+        let output_views: Vec<String> = self
+            .spec
+            .output_targets
+            .iter()
+            .map(|t| t.source_view.clone())
+            .collect();
+        let inline_policy =
+            compute_inline_policy(&self.spec.view_definitions, &output_views, &ref_counts);
+        let mut inline_cache: HashMap<String, DataFrame> = HashMap::new();
+
+        // 3. Compile and register each view (respecting inline policy)
         for view_def in &ordered {
             let df = self.compile_view(view_def, &parameter_values).await?;
-            let view = df.into_view();
-            self.ctx.register_table(&view_def.name, view)?;
+            match inline_policy.get(&view_def.name) {
+                Some(InlineDecision::Inline) => {
+                    inline_cache.insert(view_def.name.clone(), df);
+                }
+                _ => {
+                    let view = df.into_view();
+                    self.ctx.register_table(&view_def.name, view)?;
+                }
+            }
         }
 
         // 4. Insert cache boundaries
@@ -251,6 +272,32 @@ impl<'a> SemanticPlanCompiler<'a> {
                     .await?;
                 view_builder::build_aggregate(self.ctx, &source, group_by, aggregations).await
             }
+
+            ViewTransform::IncrementalCdf {
+                source,
+                starting_version,
+                ending_version,
+                starting_timestamp,
+                ending_timestamp,
+            } => {
+                udtf_builder::build_incremental_cdf(
+                    self.ctx,
+                    source,
+                    *starting_version,
+                    *ending_version,
+                    starting_timestamp.as_deref(),
+                    ending_timestamp.as_deref(),
+                )
+                .await
+            }
+
+            ViewTransform::Metadata { source } => {
+                udtf_builder::build_metadata(self.ctx, source).await
+            }
+
+            ViewTransform::FileManifest { source } => {
+                udtf_builder::build_file_manifest(self.ctx, source).await
+            }
         }
     }
 
@@ -380,6 +427,52 @@ impl<'a> SemanticPlanCompiler<'a> {
                 "Unsupported parameter type '{}' for runtime template substitution",
                 other
             ))),
+        }
+    }
+
+    /// Compute reference counts (fanout) for each view by name.
+    ///
+    /// Counts how many times each view is referenced as a dependency by other views.
+    /// Borrows from `self.spec` and returns owned `HashMap` with borrowed `&str` keys
+    /// tied to the spec's lifetime.
+    fn compute_ref_counts(&self) -> HashMap<&'a str, usize> {
+        let mut ref_counts: HashMap<&str, usize> = HashMap::new();
+
+        // Initialize all views with zero refs
+        for view in &self.spec.view_definitions {
+            ref_counts.insert(&view.name, 0);
+        }
+
+        // Count references from view dependencies
+        for view in &self.spec.view_definitions {
+            for dep in &view.view_dependencies {
+                *ref_counts.entry(dep.as_str()).or_insert(0) += 1;
+            }
+        }
+
+        // Count references from output targets
+        for target in &self.spec.output_targets {
+            *ref_counts.entry(target.source_view.as_str()).or_insert(0) += 1;
+        }
+
+        ref_counts
+    }
+
+    /// Resolve a source name, checking the inline cache before falling back
+    /// to a registered table in the SessionContext.
+    ///
+    /// This allows inlined views to be consumed by downstream views without
+    /// requiring named registration.
+    #[allow(dead_code)]
+    async fn resolve_source(
+        &self,
+        source_name: &str,
+        inline_cache: &HashMap<String, DataFrame>,
+    ) -> Result<DataFrame> {
+        if let Some(df) = inline_cache.get(source_name) {
+            Ok(df.clone())
+        } else {
+            self.ctx.table(source_name).await
         }
     }
 
@@ -697,6 +790,9 @@ mod tests {
             source_view: "view1".to_string(),
             columns: vec!["id".to_string()],
             materialization_mode: MaterializationMode::Overwrite,
+            partition_by: vec![],
+            write_metadata: std::collections::BTreeMap::new(),
+            max_commit_retries: None,
         }];
 
         let spec = SemanticExecutionSpec::new(

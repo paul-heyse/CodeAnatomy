@@ -42,6 +42,7 @@ datafusion-functions-window-common = "51.0.0"
 datafusion-physical-expr-adapter = "51.0.0"
 datafusion-physical-expr-common = "51.0.0"
 datafusion-macros = "51.0.0"
+datafusion-sql = "51.0.0"
 object_store = "0.12.5"
 pyo3 = "0.26"
 serde = { version = "1", features = ["derive"] }

@@ -52,3 +52,12 @@ def test_rust_engine_compile_and_materialize_boundary() -> None:
 
     with pytest.raises(RuntimeError):
         materializer.execute(factory, compiled)
+
+
+@pytest.mark.integration
+def test_rust_engine_exports_all_classes() -> None:
+    """All expected Rust engine classes are importable."""
+    codeanatomy_engine = pytest.importorskip("codeanatomy_engine")
+    assert hasattr(codeanatomy_engine, "SessionFactory")
+    assert hasattr(codeanatomy_engine, "SemanticPlanCompiler")
+    assert hasattr(codeanatomy_engine, "CpgMaterializer")

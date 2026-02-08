@@ -6,6 +6,11 @@ use tokio::runtime::Runtime;
 
 use crate::compiler::plan_compiler::SemanticPlanCompiler;
 use crate::compliance::capture::{capture_explain_verbose, ComplianceCapture, RetentionPolicy, RulepackSnapshot};
+// WS-P7: metrics_collector is available for real physical metrics extraction.
+// Integration with the execution path requires runner.rs to capture the
+// physical plan reference post-execution. See collect_plan_metrics().
+#[allow(unused_imports)]
+use crate::executor::metrics_collector;
 use crate::executor::runner::execute_and_materialize;
 use crate::executor::result::{RunResult, TuningHint};
 use crate::providers::registration::register_extraction_inputs;
@@ -173,7 +178,7 @@ impl CpgMaterializer {
             }
 
             // Execute and materialize to Delta
-            let materialization_results = execute_and_materialize(&ctx, output_plans)
+            let materialization_results = execute_and_materialize(&ctx, output_plans, &spec.spec_hash, &envelope.envelope_hash)
                 .await
                 .map_err(|e| PyRuntimeError::new_err(format!("Materialization failed: {e}")))?;
             let compliance_capture_json = compliance_capture
@@ -205,6 +210,11 @@ impl CpgMaterializer {
                     .iter()
                     .map(|outcome| outcome.rows_written)
                     .sum();
+                // WS-P7: Synthetic placeholder metrics. Real per-operator metrics
+                // (spill_count, scan_selectivity, peak_memory) require the physical
+                // plan reference post-execution. Wire collect_plan_metrics() here
+                // once runner.rs returns the executed plan tree alongside results.
+                // See: executor::metrics_collector::collect_plan_metrics()
                 let metrics = ExecutionMetrics {
                     elapsed_ms,
                     spill_count: 0,

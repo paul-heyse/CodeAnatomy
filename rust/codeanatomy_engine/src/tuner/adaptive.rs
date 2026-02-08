@@ -47,7 +47,7 @@ impl Default for TunerConfig {
 }
 
 /// Execution metrics for a single query run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionMetrics {
     /// Total elapsed time in milliseconds.
     pub elapsed_ms: u64,

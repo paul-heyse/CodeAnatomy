@@ -15,6 +15,7 @@ use datafusion_common::Result;
 
 use super::envelope::SessionEnvelope;
 use super::profiles::EnvironmentProfile;
+use super::runtime_profiles::RuntimeProfileSpec;
 use crate::rules::registry::CpgRuleSet;
 
 /// Factory for building deterministic DataFusion sessions.
@@ -140,6 +141,91 @@ impl SessionFactory {
         .await?;
 
         Ok((ctx, envelope))
+    }
+
+    /// Build a SessionContext from a `RuntimeProfileSpec`.
+    ///
+    /// All config knobs are applied from the profile. The resulting
+    /// session is deterministic: same profile produces same session config.
+    ///
+    /// This method applies the comprehensive set of knobs from the profile,
+    /// including repartition_sorts, repartition_file_scans, page index
+    /// pruning, and other WS-P9 gap-table deltas not covered by `build_session`.
+    ///
+    /// # Arguments
+    ///
+    /// * `profile` - Comprehensive runtime profile spec
+    /// * `ruleset` - Immutable rule set for execution policy
+    ///
+    /// # Returns
+    ///
+    /// Configured SessionContext with all profile knobs applied
+    pub async fn build_session_from_profile(
+        &self,
+        profile: &RuntimeProfileSpec,
+        ruleset: &CpgRuleSet,
+    ) -> Result<SessionContext> {
+        // Build RuntimeEnv with profile memory/spill settings
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_pool(Arc::new(FairSpillPool::new(profile.memory_pool_bytes)))
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+            )
+            .with_max_temp_directory_size(profile.max_temp_directory_bytes as u64)
+            .build_arc()?;
+
+        // Build SessionConfig from profile using builder methods
+        let mut config = SessionConfig::new()
+            .with_default_catalog_and_schema("codeanatomy", "public")
+            .with_information_schema(true)
+            .with_target_partitions(profile.target_partitions)
+            .with_batch_size(profile.batch_size)
+            .with_repartition_joins(profile.repartition_joins)
+            .with_repartition_aggregations(profile.repartition_aggregations)
+            .with_repartition_windows(profile.repartition_windows)
+            .with_repartition_sorts(profile.repartition_sorts)
+            .with_repartition_file_scans(profile.repartition_file_scans)
+            .with_repartition_file_min_size(profile.repartition_file_min_size)
+            .with_parquet_pruning(profile.parquet_pruning);
+
+        // Apply remaining knobs via typed options
+        let opts = config.options_mut();
+        opts.execution.coalesce_batches = true;
+        opts.execution.collect_statistics = profile.collect_statistics;
+        opts.execution.parquet.pushdown_filters = profile.pushdown_filters;
+        opts.execution.parquet.enable_page_index = profile.enable_page_index;
+        opts.execution.parquet.metadata_size_hint = Some(profile.metadata_size_hint);
+        opts.execution.enable_recursive_ctes = profile.enable_recursive_ctes;
+        opts.execution.planning_concurrency = profile.planning_concurrency;
+
+        // Optimizer options
+        opts.optimizer.max_passes = profile.optimizer_max_passes;
+        opts.optimizer.skip_failed_rules = profile.skip_failed_rules;
+        opts.optimizer.filter_null_join_keys = profile.filter_null_join_keys;
+        opts.optimizer.enable_dynamic_filter_pushdown = profile.enable_dynamic_filter_pushdown;
+        opts.optimizer.enable_topk_dynamic_filter_pushdown =
+            profile.enable_topk_dynamic_filter_pushdown;
+
+        // SQL parser and explain options
+        opts.sql_parser.enable_ident_normalization = profile.enable_ident_normalization;
+        opts.explain.show_statistics = profile.show_statistics;
+        opts.explain.show_schema = profile.show_schema;
+
+        // Build SessionState with rules
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_analyzer_rules(ruleset.analyzer_rules.clone())
+            .with_optimizer_rules(ruleset.optimizer_rules.clone())
+            .with_physical_optimizer_rules(ruleset.physical_rules.clone())
+            .build();
+
+        let ctx = SessionContext::new_with_state(state);
+
+        // Register all UDFs from datafusion_ext
+        datafusion_ext::udf_registry::register_all(&ctx)?;
+
+        Ok(ctx)
     }
 }
 

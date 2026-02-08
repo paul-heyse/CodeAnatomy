@@ -5,6 +5,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion::execution::session_state::SessionState;
 use datafusion_expr::{Signature, TypeSignature, Volatility, WindowUDF};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use serde::{Deserialize, Serialize};
 
 use crate::udf_config::UdfConfigValue;
 use crate::{udaf_builtin, udf, udf_docs, udf_registry, udwf_builtin};
@@ -46,6 +47,139 @@ impl RegistrySnapshot {
             config_defaults: BTreeMap::new(),
             custom_udfs: Vec::new(),
         }
+    }
+}
+
+/// Capability inventory for a single registered function, covering all
+/// optimizer-visible hooks across scalar, aggregate, and window function kinds.
+///
+/// Used by CI assertions and documentation generation to keep hook
+/// recommendations synchronized with actual implementations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionHookCapabilities {
+    pub name: String,
+    pub kind: FunctionKind,
+    pub has_simplify: bool,
+    pub has_coerce_types: bool,
+    pub has_short_circuits: bool,
+    pub has_propagate_constraints: bool,
+    pub has_groups_accumulator: bool,
+    pub has_retract_batch: bool,
+    pub has_reverse_expr: bool,
+    pub has_sort_options: bool,
+}
+
+/// Classification of a registered function for capability tracking.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum FunctionKind {
+    Scalar,
+    Aggregate,
+    Window,
+}
+
+/// Build a hook-capability snapshot for all custom-registered functions.
+///
+/// For scalar functions, capabilities are derived from the existing
+/// `RegistrySnapshot` data (simplify, coerce_types, short_circuits).
+/// For aggregate and window functions, capabilities are based on a
+/// known-capabilities mapping that reflects the actual trait implementations
+/// in `udaf_builtin` and `udwf_builtin`.
+pub fn snapshot_hook_capabilities(state: &SessionState) -> Vec<FunctionHookCapabilities> {
+    let snapshot = registry_snapshot(state);
+    let mut capabilities = Vec::new();
+
+    for name in &snapshot.scalar {
+        capabilities.push(FunctionHookCapabilities {
+            name: name.clone(),
+            kind: FunctionKind::Scalar,
+            has_simplify: snapshot.simplify.get(name).copied().unwrap_or(false),
+            has_coerce_types: snapshot.coerce_types.get(name).copied().unwrap_or(false),
+            has_short_circuits: snapshot.short_circuits.get(name).copied().unwrap_or(false),
+            has_propagate_constraints: false,
+            has_groups_accumulator: false,
+            has_retract_batch: false,
+            has_reverse_expr: false,
+            has_sort_options: false,
+        });
+    }
+
+    for name in &snapshot.aggregate {
+        let (groups_acc, retract) = known_aggregate_capabilities(name);
+        capabilities.push(FunctionHookCapabilities {
+            name: name.clone(),
+            kind: FunctionKind::Aggregate,
+            has_simplify: false,
+            has_coerce_types: snapshot.coerce_types.get(name).copied().unwrap_or(false),
+            has_short_circuits: false,
+            has_propagate_constraints: false,
+            has_groups_accumulator: groups_acc,
+            has_retract_batch: retract,
+            has_reverse_expr: false,
+            has_sort_options: false,
+        });
+    }
+
+    for name in &snapshot.window {
+        let (reverse, sort) = known_window_capabilities(name);
+        capabilities.push(FunctionHookCapabilities {
+            name: name.clone(),
+            kind: FunctionKind::Window,
+            has_simplify: false,
+            has_coerce_types: false,
+            has_short_circuits: false,
+            has_propagate_constraints: false,
+            has_groups_accumulator: false,
+            has_retract_batch: false,
+            has_reverse_expr: reverse,
+            has_sort_options: sort,
+        });
+    }
+
+    capabilities
+}
+
+/// Known GroupsAccumulator and retract_batch capabilities for custom UDAFs.
+///
+/// Returns `(has_groups_accumulator, has_retract_batch)`.
+///
+/// This mapping reflects the actual trait implementations in `udaf_builtin.rs`.
+/// It must be updated whenever new accumulator hooks are added.
+fn known_aggregate_capabilities(name: &str) -> (bool, bool) {
+    match name {
+        // GroupsAccumulator + sliding with retract:
+        "list_unique" | "collect_set" => (true, true),
+        // GroupsAccumulator + sliding with retract (count_distinct):
+        "count_distinct_agg" => (true, true),
+        // GroupsAccumulator + retract_batch on row-level accumulator:
+        "count_if" => (true, true),
+        // Retract via dedicated sliding accumulator (no-op retract):
+        "any_value_det" => (false, true),
+        // Retract via custom StringAggDetAccumulator:
+        "string_agg" => (false, true),
+        // Remaining aggregates: no groups accumulator, no retract:
+        _ => (false, false),
+    }
+}
+
+/// Known reverse_expr and sort_options capabilities for custom UDWFs.
+///
+/// Returns `(has_reverse_expr, has_sort_options)`.
+///
+/// The lag, lead, and row_number UDWFs delegate to DataFusion's built-in
+/// implementations which provide reverse_expr (lag <-> lead reversal) and
+/// sort_options natively.
+fn known_window_capabilities(name: &str) -> (bool, bool) {
+    match name {
+        // DataFusion built-in lag provides reverse_expr (returns lead)
+        // and sort_options via its WindowUDFImpl implementation.
+        "lag" => (true, true),
+        // DataFusion built-in lead provides reverse_expr (returns lag)
+        // and sort_options via its WindowUDFImpl implementation.
+        "lead" => (true, true),
+        // DataFusion built-in row_number has no meaningful reverse or
+        // sort_options -- it always produces sequential numbering.
+        "row_number" => (false, false),
+        _ => (false, false),
     }
 }
 

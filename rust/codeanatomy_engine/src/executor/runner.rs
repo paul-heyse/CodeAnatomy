@@ -22,6 +22,8 @@ use crate::spec::outputs::{MaterializationMode, OutputTarget};
 pub async fn execute_and_materialize(
     ctx: &SessionContext,
     output_plans: Vec<(OutputTarget, DataFrame)>,
+    spec_hash: &[u8; 32],
+    envelope_hash: &[u8; 32],
 ) -> Result<Vec<MaterializationResult>> {
     let mut results = Vec::new();
 
@@ -69,10 +71,15 @@ pub async fn execute_and_materialize(
 
         let rows_written = extract_row_count(&write_result);
 
+        let _commit_props = crate::executor::delta_writer::build_commit_properties(&target, spec_hash, envelope_hash);
+
         results.push(MaterializationResult {
             table_name: target.table_name.clone(),
             rows_written,
             partition_count: partition_count as u32,
+            delta_version: None,
+            files_added: None,
+            bytes_written: None,
         });
     }
 
@@ -95,7 +102,7 @@ pub async fn run_full_pipeline(
         .started_now();
 
     let output_plans = compiler.compile().await?;
-    let results = execute_and_materialize(ctx, output_plans).await?;
+    let results = execute_and_materialize(ctx, output_plans, &spec.spec_hash, &envelope_hash).await?;
 
     for result in results {
         builder = builder.add_output(result);

@@ -6,6 +6,7 @@
 pub mod analyzer;
 pub mod intent_compiler;
 pub mod optimizer;
+pub mod overlay;
 pub mod physical;
 pub mod registry;
 pub mod rulepack;

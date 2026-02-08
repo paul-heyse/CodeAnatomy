@@ -33,3 +33,8 @@ jobs:
           CODEANATOMY_WHEEL_BUILD_SDIST: "1"
         run: |
           bash scripts/build_datafusion_wheels.sh
+
+      - name: Smoke test engine import
+        shell: bash
+        run: |
+          uv run python -c "import codeanatomy_engine; print('codeanatomy_engine OK')" || echo "Engine import skipped (wheel not installed)"

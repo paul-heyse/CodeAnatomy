@@ -247,6 +247,9 @@ fn test_output_target() {
         source_view: "normalized_nodes".to_string(),
         columns: vec!["id".to_string(), "type".to_string()],
         materialization_mode: MaterializationMode::Overwrite,
+        partition_by: vec![],
+        write_metadata: std::collections::BTreeMap::new(),
+        max_commit_retries: None,
     };
 
     let json = serde_json::to_string(&target).unwrap();
@@ -560,6 +563,9 @@ fn create_full_spec() -> SemanticExecutionSpec {
             source_view: "joined_data".to_string(),
             columns: vec!["id".to_string(), "name".to_string(), "value".to_string()],
             materialization_mode: MaterializationMode::Overwrite,
+            partition_by: vec![],
+            write_metadata: std::collections::BTreeMap::new(),
+            max_commit_retries: None,
         }],
         vec![RuleIntent {
             name: "span_consistency".to_string(),

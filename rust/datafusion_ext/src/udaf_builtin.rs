@@ -16,7 +16,6 @@ use datafusion_expr::{
     Signature, TypeSignature, Volatility,
 };
 use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
-use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_macros::user_doc;
 
 use crate::{aggregate_udfs, macros::AggregateUdfSpec};
@@ -29,6 +28,7 @@ const ANY_VALUE_DET_NAME: &str = "any_value_det";
 const ARG_MAX_NAME: &str = "arg_max";
 const ARG_MIN_NAME: &str = "arg_min";
 const ASOF_SELECT_NAME: &str = "asof_select";
+const STRING_AGG_NAME: &str = "string_agg";
 
 pub fn builtin_udafs() -> Vec<AggregateUDF> {
     builtin_udaf_specs()
@@ -80,7 +80,7 @@ fn last_value_base_udaf() -> AggregateUDF {
 }
 
 fn string_agg_base_udaf() -> AggregateUDF {
-    string_agg_udaf().as_ref().clone()
+    AggregateUDF::new_from_shared_impl(Arc::new(StringAggDetUdaf::new()))
 }
 
 #[user_doc(
@@ -501,6 +501,31 @@ impl Accumulator for CountIfAccumulator {
         }
         Ok(())
     }
+
+    /// Support retraction for bounded window frames.
+    ///
+    /// When a row exits the window frame, retract_batch is called
+    /// with the rows leaving the frame. For count_if, we decrement
+    /// the count for rows that matched the predicate.
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let [predicate] = values else {
+            return Err(DataFusionError::Plan(
+                "count_if expects a single predicate argument".into(),
+            ));
+        };
+        let predicate = boolean_array(predicate, "count_if expects boolean input")?;
+        for row in 0..predicate.len() {
+            if predicate.is_null(row) || !predicate.value(row) {
+                continue;
+            }
+            self.count -= 1;
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Default)]
@@ -912,8 +937,281 @@ impl AggregateUDFImpl for AnyValueDetUdaf {
         Ok(Box::new(ArgBestAccumulator::new(ArgBestMode::Min)))
     }
 
+    fn create_sliding_accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(AnyValueDetSlidingAccumulator::new()))
+    }
+
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Utf8(None))
+    }
+}
+
+/// Sliding accumulator for any_value_det that supports retract_batch.
+///
+/// `any_value_det` captures the row with the smallest order key (deterministic
+/// first value). For bounded window frames, retraction is a semantic no-op
+/// because the "first value" contract means the captured value does not change
+/// when later rows leave the frame. The accumulator delegates to ArgBestAccumulator
+/// for the forward path and reports retract support so the DataFusion window
+/// executor can use the sliding code path.
+#[derive(Debug)]
+struct AnyValueDetSlidingAccumulator {
+    inner: ArgBestAccumulator,
+}
+
+impl AnyValueDetSlidingAccumulator {
+    fn new() -> Self {
+        Self {
+            inner: ArgBestAccumulator::new(ArgBestMode::Min),
+        }
+    }
+}
+
+impl Accumulator for AnyValueDetSlidingAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.inner.update_batch(values)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.inner.evaluate()
+    }
+
+    fn size(&self) -> usize {
+        self.inner.size()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.inner.state()
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.inner.merge_batch(states)
+    }
+
+    /// Retract for any_value_det is a no-op. The semantic contract is
+    /// "first seen wins" -- the value with the smallest order key is
+    /// captured and does not change when later rows exit the window frame.
+    fn retract_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
+/// Custom string_agg aggregate that supports retract_batch for bounded
+/// window frames. Uses a Vec-based internal representation so individual
+/// values can be removed during retraction.
+#[user_doc(
+    doc_section(label = "Built-in Functions"),
+    description = "Concatenate string values with a separator.",
+    syntax_example = "string_agg(value, separator)",
+    argument(name = "value", description = "String value to aggregate."),
+    argument(
+        name = "separator",
+        description = "Separator string placed between concatenated values."
+    )
+)]
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct StringAggDetUdaf {
+    signature: Signature,
+}
+
+impl StringAggDetUdaf {
+    fn new() -> Self {
+        let signature = Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::Utf8View, DataType::Utf8]),
+            ],
+            Volatility::Immutable,
+        );
+        let signature = signature_with_names(signature, &["value", "separator"]);
+        Self { signature }
+    }
+}
+
+impl AggregateUDFImpl for StringAggDetUdaf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        STRING_AGG_NAME
+    }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        Ok(vec![
+            Field::new_list(
+                format_state_name(args.name, "string_agg_values"),
+                Field::new_list_field(DataType::Utf8, true),
+                true,
+            )
+            .into(),
+            Field::new(
+                format_state_name(args.name, "string_agg_sep"),
+                DataType::Utf8,
+                true,
+            )
+            .into(),
+        ])
+    }
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(StringAggDetAccumulator::default()))
+    }
+
+    fn create_sliding_accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(StringAggDetAccumulator::default()))
+    }
+
+    fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
+        Ok(ScalarValue::Utf8(None))
+    }
+}
+
+/// Accumulator for string_agg that maintains a Vec of values for retract
+/// support. On evaluate, joins them with the separator.
+#[derive(Debug, Default)]
+struct StringAggDetAccumulator {
+    values: Vec<String>,
+    separator: Option<String>,
+}
+
+impl Accumulator for StringAggDetAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.len() != 2 {
+            return Err(DataFusionError::Plan(
+                "string_agg expects value and separator arguments".into(),
+            ));
+        }
+        let arr = string_array_any(&values[0], "string_agg expects string value")?;
+        let sep_arr = string_array_any(&values[1], "string_agg expects string separator")?;
+
+        // Capture separator from first non-null row if not yet set.
+        if self.separator.is_none() {
+            for i in 0..sep_arr.len() {
+                if !sep_arr.is_null(i) {
+                    self.separator = Some(sep_arr.value(i).to_string());
+                    break;
+                }
+            }
+        }
+
+        for i in 0..arr.len() {
+            if arr.is_null(i) {
+                continue;
+            }
+            self.values.push(arr.value(i).to_string());
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.values.is_empty() {
+            return Ok(ScalarValue::Utf8(None));
+        }
+        let sep = self.separator.as_deref().unwrap_or(",");
+        Ok(ScalarValue::Utf8(Some(self.values.join(sep))))
+    }
+
+    fn size(&self) -> usize {
+        let values_size: usize = self.values.iter().map(|v| v.len()).sum();
+        let sep_size = self.separator.as_ref().map_or(0, |s| s.len());
+        size_of_val(self) + values_size + sep_size
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // State: list of individual values + separator string.
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for v in &self.values {
+            builder.values().append_value(v);
+        }
+        builder.append(true);
+        let list_array = builder.finish();
+        Ok(vec![
+            ScalarValue::List(Arc::new(list_array)),
+            ScalarValue::Utf8(self.separator.clone()),
+        ])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.len() != 2 {
+            return Err(DataFusionError::Plan(
+                "string_agg expects list and separator state".into(),
+            ));
+        }
+        let list_array = states[0]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| DataFusionError::Plan("string_agg expects list state".into()))?;
+        let sep_array =
+            string_array_any(&states[1], "string_agg expects string separator state")?;
+
+        // Capture separator from merge state if not yet set.
+        if self.separator.is_none() {
+            for i in 0..sep_array.len() {
+                if !sep_array.is_null(i) {
+                    self.separator = Some(sep_array.value(i).to_string());
+                    break;
+                }
+            }
+        }
+
+        for row in 0..list_array.len() {
+            if list_array.is_null(row) {
+                continue;
+            }
+            let inner = list_array.value(row);
+            let inner_strings =
+                string_array_any(&inner, "string_agg expects string values in state")?;
+            for i in 0..inner_strings.len() {
+                if inner_strings.is_null(i) {
+                    continue;
+                }
+                self.values.push(inner_strings.value(i).to_string());
+            }
+        }
+        Ok(())
+    }
+
+    /// Retract values from the accumulator for bounded window frame retraction.
+    ///
+    /// Removes the first occurrence of each retracting value from the Vec.
+    /// This preserves insertion order for the remaining values.
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let arr = string_array_any(&values[0], "string_agg expects string value")?;
+        for i in 0..arr.len() {
+            if arr.is_null(i) {
+                continue;
+            }
+            let val = arr.value(i);
+            if let Some(pos) = self.values.iter().position(|v| v == val) {
+                self.values.remove(pos);
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 

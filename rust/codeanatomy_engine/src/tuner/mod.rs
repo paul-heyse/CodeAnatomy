@@ -4,6 +4,7 @@
 //! options; tunes only bounded execution knobs.
 
 pub mod adaptive;
+pub mod metrics_store;
 
 // Re-export key types for convenience
 pub use adaptive::{AdaptiveTuner, ExecutionMetrics, TunerConfig, TunerMode};

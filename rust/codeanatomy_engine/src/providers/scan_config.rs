@@ -3,6 +3,7 @@
 //! Provides validated scan config builders for CPG extraction inputs.
 
 use deltalake::delta_datafusion::DeltaScanConfig;
+use serde::{Deserialize, Serialize};
 
 /// Build a standardized scan config for CPG extraction inputs.
 ///
@@ -93,6 +94,31 @@ pub fn lineage_column_name(config: &DeltaScanConfig) -> Option<&str> {
     config.file_column_name.as_deref()
 }
 
+/// Provider capability matrix inferred from scan configuration.
+///
+/// Records which optimizations a Delta provider supports based on its
+/// scan config. Used for execution planning and observability.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderCapabilities {
+    pub predicate_pushdown: bool,
+    pub projection_pushdown: bool,
+    pub partition_pruning: bool,
+}
+
+/// Infer provider capabilities from a DeltaScanConfig.
+///
+/// Maps config flags to capability booleans:
+/// - predicate_pushdown: from enable_parquet_pushdown
+/// - projection_pushdown: always true (Delta providers always support)
+/// - partition_pruning: from wrap_partition_values
+pub fn infer_capabilities(config: &DeltaScanConfig) -> ProviderCapabilities {
+    ProviderCapabilities {
+        predicate_pushdown: config.enable_parquet_pushdown,
+        projection_pushdown: true,
+        partition_pruning: config.wrap_partition_values,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +164,25 @@ mod tests {
             lineage_column_name(&config_with_lineage),
             Some("__source_file")
         );
+    }
+
+    #[test]
+    fn test_capabilities_inferred_from_config() {
+        let config = DeltaScanConfig::default();
+        let caps = infer_capabilities(&config);
+        assert!(caps.predicate_pushdown);
+        assert!(caps.projection_pushdown);
+        assert!(caps.partition_pruning);
+    }
+
+    #[test]
+    fn test_capabilities_with_pushdown_disabled() {
+        let mut config = DeltaScanConfig::default();
+        config.enable_parquet_pushdown = false;
+        config.wrap_partition_values = false;
+        let caps = infer_capabilities(&config);
+        assert!(!caps.predicate_pushdown);
+        assert!(caps.projection_pushdown); // always true
+        assert!(!caps.partition_pruning);
     }
 }

@@ -13,7 +13,7 @@ use datafusion_ext::DeltaFeatureGate;
 use deltalake::delta_datafusion::DeltaScanConfig;
 use serde::{Deserialize, Serialize};
 
-use crate::providers::scan_config::{standard_scan_config, validate_scan_config};
+use crate::providers::scan_config::{infer_capabilities, standard_scan_config, validate_scan_config};
 use crate::schema::introspection::hash_arrow_schema;
 use crate::spec::relations::InputRelation;
 
@@ -24,6 +24,7 @@ pub struct TableRegistration {
     pub delta_version: i64,
     pub schema_hash: [u8; 32],
     pub provider_identity: [u8; 32],
+    pub capabilities: crate::providers::scan_config::ProviderCapabilities,
 }
 
 fn provider_identity_key(
@@ -117,6 +118,7 @@ pub async fn register_extraction_inputs(
         // Hash the schema for envelope tracking
         let provider_schema = provider.schema();
         let schema_hash = hash_arrow_schema(provider_schema.as_ref());
+        let capabilities = infer_capabilities(&resolved_scan_config);
 
         // Register as table in the session context
         ctx.register_table(&input.logical_name, Arc::new(provider))?;
@@ -131,6 +133,7 @@ pub async fn register_extraction_inputs(
                 snapshot.version,
                 &resolved_scan_config,
             ),
+            capabilities,
         });
     }
 
@@ -148,6 +151,11 @@ mod tests {
             delta_version: 42,
             schema_hash: [0u8; 32],
             provider_identity: [1u8; 32],
+            capabilities: crate::providers::scan_config::ProviderCapabilities {
+                predicate_pushdown: true,
+                projection_pushdown: true,
+                partition_pruning: true,
+            },
         };
 
         // Test serde round-trip
@@ -157,6 +165,7 @@ mod tests {
         assert_eq!(record.delta_version, deserialized.delta_version);
         assert_eq!(record.schema_hash, deserialized.schema_hash);
         assert_eq!(record.provider_identity, deserialized.provider_identity);
+        assert!(deserialized.capabilities.predicate_pushdown);
     }
 
     #[test]

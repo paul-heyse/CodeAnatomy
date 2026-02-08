@@ -108,6 +108,32 @@ impl RulepackFactory {
 
         CpgRuleSet::new(analyzer_rules, optimizer_rules, physical_rules)
     }
+
+    /// Build a snapshot of the rulepack configuration for compliance capture.
+    pub fn build_snapshot(
+        ruleset: &CpgRuleSet,
+        profile: &RulepackProfile,
+    ) -> crate::compliance::capture::RulepackSnapshot {
+        crate::compliance::capture::RulepackSnapshot {
+            profile: format!("{profile:?}"),
+            analyzer_rules: ruleset
+                .analyzer_rules
+                .iter()
+                .map(|r| r.name().to_string())
+                .collect(),
+            optimizer_rules: ruleset
+                .optimizer_rules
+                .iter()
+                .map(|r| r.name().to_string())
+                .collect(),
+            physical_rules: ruleset
+                .physical_rules
+                .iter()
+                .map(|r| r.name().to_string())
+                .collect(),
+            fingerprint: ruleset.fingerprint,
+        }
+    }
 }
 
 /// Checks if a rule is considered a correctness rule (essential for LowLatency).
@@ -238,5 +264,26 @@ mod tests {
         assert!(is_correctness_rule("type_check_validation"));
         assert!(!is_correctness_rule("cost_based_optimization"));
         assert!(!is_correctness_rule("join_reorder"));
+    }
+
+    #[test]
+    fn test_snapshot_from_rulepack() {
+        use crate::spec::rule_intents::RuleClass;
+
+        let env_profile = EnvironmentProfile::from_class(EnvironmentClass::Small);
+        let intents = vec![RuleIntent {
+            name: "semantic_integrity".to_string(),
+            class: RuleClass::SemanticIntegrity,
+            params: serde_json::Value::Null,
+        }];
+        let profile = RulepackProfile::Strict;
+        let ruleset = RulepackFactory::build_ruleset(&profile, &intents, &env_profile);
+        let snapshot = RulepackFactory::build_snapshot(&ruleset, &profile);
+
+        assert_eq!(snapshot.profile, "Strict");
+        assert_eq!(snapshot.fingerprint, ruleset.fingerprint);
+        assert!(!snapshot.analyzer_rules.is_empty());
+        // Verify the snapshot contains the policy rule
+        assert!(snapshot.analyzer_rules.iter().any(|r| r == "codeanatomy_policy_rule"));
     }
 }

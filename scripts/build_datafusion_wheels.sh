@@ -98,14 +98,27 @@ uv_run_cmd=(uv run --no-sync)
   "${uv_run_cmd[@]}" maturin build --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 )
 
+# Build codeanatomy_engine wheel (pyo3 bindings)
+uv run --no-sync maturin build -m rust/codeanatomy_engine/Cargo.toml \
+    --${profile} --features pyo3 \
+    "${maturin_common_flags[@]}" "${compatibility_args[@]}" \
+    "${manylinux_args[@]}" -o "${run_wheel_dir}"
+
 shopt -s nullglob
 datafusion_wheels=("${run_wheel_dir}"/datafusion-*.whl)
 datafusion_ext_wheels=("${run_wheel_dir}"/datafusion_ext-*.whl)
+engine_wheels=("${run_wheel_dir}"/codeanatomy_engine-*.whl)
 shopt -u nullglob
 
 if [ "${#datafusion_wheels[@]}" -ne 1 ] || [ "${#datafusion_ext_wheels[@]}" -ne 1 ]; then
   echo "Wheel build did not produce exactly one datafusion and one datafusion_ext wheel in ${run_wheel_dir}." >&2
   echo "Found datafusion wheels: ${#datafusion_wheels[@]}, datafusion_ext wheels: ${#datafusion_ext_wheels[@]}." >&2
+  exit 1
+fi
+
+if [ "${#engine_wheels[@]}" -ne 1 ]; then
+  echo "Wheel build did not produce exactly one codeanatomy_engine wheel in ${run_wheel_dir}." >&2
+  echo "Found engine wheels: ${#engine_wheels[@]}." >&2
   exit 1
 fi
 
@@ -216,6 +229,7 @@ PY
 echo "Selected wheel artifacts:"
 echo "  datafusion    : ${datafusion_wheel}"
 echo "  datafusion_ext: ${datafusion_ext_wheel}"
+echo "  engine        : ${engine_wheels[0]}"
 
 cp -f "${run_wheel_dir}"/* "${wheel_dir}/"
 datafusion_wheel="${wheel_dir}/$(basename "${datafusion_wheel}")"

@@ -161,6 +161,52 @@
 - Use `--update-golden` flag: `uv run pytest tests/semantics/test_semantic_ir_snapshot.py --update-golden`
 - Always review diff before committing updated goldens
 
+## Rust datafusion_ext Crate Patterns
+- Crate at `rust/datafusion_ext/`; check with `cargo check -p datafusion_ext`
+- Downstream `codeanatomy-engine` at `rust/codeanatomy_engine/`; check with `cargo check -p codeanatomy-engine`
+- `serde` with derive feature is available
+- UDAFs: `aggregate_udfs![]` macro generates `AggregateUdfSpec` entries
+- `ArgBestAccumulator` shared by AnyValueDet/ArgMax/ArgMin/AsofSelect
+- Sliding accumulators are separate structs for retract support
+- `string_agg` replaced DataFusion re-export with custom `StringAggDetUdaf` for retract (WS-P12)
+- UDWFs delegate to DataFusion builtins; sort_options/reverse_expr inherited
+- `RegistrySnapshot`: scalar flags detected dynamically; aggregate/window via static known-capabilities
+- `FunctionHookCapabilities` + `snapshot_hook_capabilities()` added for WS-P6 governance
+- Test suite: `tests/udf_conformance.rs` (~41 tests); `information_schema_*` tests are critical contracts
+
+## Rust Engine Executor Modules (WS-P11/P13)
+- `executor/mod.rs` registers: delta_writer, maintenance, metrics_collector, result, runner, tracing
+- Pre-existing build errors in param_compiler.rs (ScalarAndMetadata) and datafusion_ext (StringAggDetUdaf)
+- `tracing` feature NOT yet in Cargo.toml (deferred to integration agent) -- cfg warnings expected
+- maintenance.rs: engine-level `MaintenanceReport` (stub); MIN_VACUUM_RETENTION_HOURS=168
+- tracing.rs: `#[cfg(feature = "tracing")]` dual paths; ExecutionSpanInfo always available
+
+## Rust Engine PlanBundle + Substrait (WS-P1/P2)
+- `compiler/plan_bundle.rs`: PlanBundleRuntime (not serializable) + PlanBundleArtifact (Serialize/Deserialize)
+- `compiler/substrait.rs`: feature-gated via `#[cfg(feature = "substrait")]` with stub fallbacks
+- RunResult in `executor/result.rs` extended with `plan_bundles: Vec<PlanBundleArtifact>`
+- RunResultBuilder extended with `with_plan_bundles()` method
+- KNOWN: `python/materializer.rs` direct struct construction of RunResult needs `plan_bundles: vec![]` field
+- DataFusion API notes:
+  - `DFSchema::as_arrow()` returns `&Schema` (not Into<Schema>)
+  - `DataFrame::create_physical_plan()` consumes self (must clone)
+  - `datafusion_sql::unparser::plan_to_sql` for SQL unparse
+  - `displayable(plan).indent(true)` for normalized physical plan text
+  - `plan.display_indent()` for normalized logical plan text
+- Dependencies added: datafusion-sql (workspace), prost, optional datafusion-substrait + substrait
+- Feature flag: `substrait = ["dep:datafusion-substrait", "dep:substrait"]`
+
+## WS-P3: Typed Parametric Planning + WS-P4: Dynamic Rule Composition
+- `spec/parameters.rs`: TypedParameter, ParameterTarget, ParameterValue with to_scalar_value()
+- `compiler/param_compiler.rs`: compile_positional_param_values() + apply_typed_parameters()
+- `rules/overlay.rs`: RuleOverlayProfile, build_overlaid_ruleset(), build_overlaid_session(), capture_per_rule_deltas()
+- DataFusion 51: `ParamValues::List` takes `Vec<ScalarAndMetadata>` not `Vec<ScalarValue>` -- use `.into()`
+- DataFusion 51: `SessionState::analyzer()` returns `Analyzer` struct; access rules via `.analyzer().rules`
+- `ScalarAndMetadata.value` is the public field for accessing the inner `ScalarValue`
+- chrono is already a workspace dependency with serde feature -- use for Date32/Timestamp parsing
+- EXPLAIN VERBOSE rows have "plan_type" and "plan" columns; rule transitions follow pattern "logical_plan after <rule_name>"
+- 45 tests covering all three modules pass
+
 ## Wave 3-B: Integration Tests + Drift Surface Expansion
 - Integration tests: `tests/integration/test_programmatic_architecture_parity.py`
   - 5 test classes covering cache policy hierarchy, entity registry parity, join key inference, inference confidence, calibration

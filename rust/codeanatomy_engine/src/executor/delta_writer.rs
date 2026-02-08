@@ -222,3 +222,20 @@ pub fn validate_output_schema(
 pub fn extract_row_count(batches: &[RecordBatch]) -> u64 {
     batches.iter().map(|b| b.num_rows() as u64).sum()
 }
+
+/// Build commit properties from output target metadata and determinism hashes.
+///
+/// Merges user-supplied write metadata with codeanatomy provenance hashes.
+pub fn build_commit_properties(
+    target: &crate::spec::outputs::OutputTarget,
+    spec_hash: &[u8; 32],
+    envelope_hash: &[u8; 32],
+) -> std::collections::BTreeMap<String, String> {
+    let mut props = target.write_metadata.clone();
+    props.insert("codeanatomy.spec_hash".into(), hex::encode(spec_hash));
+    props.insert(
+        "codeanatomy.envelope_hash".into(),
+        hex::encode(envelope_hash),
+    );
+    props
+}

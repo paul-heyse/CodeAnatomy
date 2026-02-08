@@ -61,6 +61,44 @@ pub enum ViewTransform {
         group_by: Vec<String>,
         aggregations: Vec<AggregationExpr>,
     },
+
+    /// Incremental change detection via Delta CDF.
+    ///
+    /// Expresses a change-data-feed scan as a planning primitive,
+    /// allowing the optimizer to push down predicates into the CDF scan
+    /// and compose the result with downstream joins/unions.
+    IncrementalCdf {
+        /// Delta table location.
+        source: String,
+        /// Starting version for CDF range (inclusive).
+        starting_version: Option<i64>,
+        /// Ending version for CDF range (inclusive).
+        ending_version: Option<i64>,
+        /// Starting timestamp (ISO 8601).
+        starting_timestamp: Option<String>,
+        /// Ending timestamp (ISO 8601).
+        ending_timestamp: Option<String>,
+    },
+
+    /// Table metadata inspection via `delta_snapshot` UDTF.
+    ///
+    /// Produces a single-row relation with table metadata:
+    /// version, schema_json, protocol, properties, partition_columns.
+    /// Useful for schema-aware conditional compilation.
+    Metadata {
+        /// Delta table location.
+        source: String,
+    },
+
+    /// File manifest via `delta_add_actions` UDTF.
+    ///
+    /// Produces one row per file in the Delta table, with path, size,
+    /// stats, and partition values. Useful for file-level cost estimation
+    /// and selective file scanning.
+    FileManifest {
+        /// Delta table location.
+        source: String,
+    },
 }
 
 /// Join key pair for relate transformations.

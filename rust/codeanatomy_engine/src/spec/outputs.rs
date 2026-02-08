@@ -1,5 +1,7 @@
 //! Output target specifications for materialization.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Materialization mode for output targets.
@@ -26,4 +28,10 @@ pub struct OutputTarget {
     pub columns: Vec<String>,
     #[serde(default)]
     pub materialization_mode: MaterializationMode,
+    #[serde(default)]
+    pub partition_by: Vec<String>,
+    #[serde(default)]
+    pub write_metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    pub max_commit_retries: Option<u32>,
 }

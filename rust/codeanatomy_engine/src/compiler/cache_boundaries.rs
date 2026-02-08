@@ -224,6 +224,9 @@ mod tests {
             source_view: "view1".to_string(),
             columns: vec!["id".to_string()],
             materialization_mode: MaterializationMode::Overwrite,
+            partition_by: vec![],
+            write_metadata: std::collections::BTreeMap::new(),
+            max_commit_retries: None,
         }];
 
         let spec = SemanticExecutionSpec::new(

@@ -17,6 +17,9 @@ fn extract_sources(transform: &ViewTransform) -> Vec<&str> {
         ViewTransform::Project { source, .. } => vec![source.as_str()],
         ViewTransform::Filter { source, .. } => vec![source.as_str()],
         ViewTransform::Aggregate { source, .. } => vec![source.as_str()],
+        ViewTransform::IncrementalCdf { source, .. } => vec![source.as_str()],
+        ViewTransform::Metadata { source } => vec![source.as_str()],
+        ViewTransform::FileManifest { source } => vec![source.as_str()],
     }
 }
 

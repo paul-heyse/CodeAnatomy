@@ -3,6 +3,7 @@
 //! Provides EXPLAIN VERBOSE capture, per-rule impact digest,
 //! and retention controls. Zero overhead when disabled.
 
+use arrow::array::Array;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -118,18 +119,17 @@ impl ComplianceCapture {
 #[cfg(feature = "compliance")]
 pub async fn capture_explain_verbose(
     df: &datafusion::prelude::DataFrame,
-    output_name: &str,
+    _output_name: &str,
 ) -> datafusion_common::Result<Vec<String>> {
-    let explain_df = df.explain(true, false)?;
+    let explain_df = df.clone().explain(true, false)?;
     let batches = explain_df.collect().await?;
     let mut lines = Vec::new();
     for batch in &batches {
         let array = batch.column(1); // plan_type column
         if let Some(string_array) = array.as_any().downcast_ref::<arrow::array::StringArray>() {
             for i in 0..string_array.len() {
-                if let Some(line) = string_array.value(i) {
-                    lines.push(line.to_string());
-                }
+                let line = string_array.value(i);
+                lines.push(line.to_string());
             }
         }
     }

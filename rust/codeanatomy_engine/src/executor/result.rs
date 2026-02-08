@@ -7,6 +7,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::compiler::plan_bundle::PlanBundleArtifact;
+
 /// Compact result envelope containing both determinism layers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResult {
@@ -16,6 +18,7 @@ pub struct RunResult {
     pub rulepack_fingerprint: [u8; 32],
     pub compliance_capture_json: Option<String>,
     pub tuner_hints: Vec<TuningHint>,
+    pub plan_bundles: Vec<PlanBundleArtifact>,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
 }
@@ -26,6 +29,9 @@ pub struct MaterializationResult {
     pub table_name: String,
     pub rows_written: u64,
     pub partition_count: u32,
+    pub delta_version: Option<i64>,
+    pub files_added: Option<u64>,
+    pub bytes_written: Option<u64>,
 }
 
 /// Two-layer determinism contract.
@@ -79,6 +85,7 @@ pub struct RunResultBuilder {
     rulepack_fingerprint: [u8; 32],
     compliance_capture_json: Option<String>,
     tuner_hints: Vec<TuningHint>,
+    plan_bundles: Vec<PlanBundleArtifact>,
     started_at: Option<DateTime<Utc>>,
 }
 
@@ -108,6 +115,11 @@ impl RunResultBuilder {
         self
     }
 
+    pub fn with_plan_bundles(mut self, bundles: Vec<PlanBundleArtifact>) -> Self {
+        self.plan_bundles = bundles;
+        self
+    }
+
     pub fn started_now(mut self) -> Self {
         self.started_at = Some(Utc::now());
         self
@@ -126,6 +138,7 @@ impl RunResultBuilder {
             rulepack_fingerprint: self.rulepack_fingerprint,
             compliance_capture_json: self.compliance_capture_json,
             tuner_hints: self.tuner_hints,
+            plan_bundles: self.plan_bundles,
             started_at: self.started_at.unwrap_or_else(Utc::now),
             completed_at: Utc::now(),
         }

@@ -238,7 +238,7 @@ def _extract_sort_keys(lineage: LineageReport | None) -> tuple[str, ...]:
     lineage
         Lineage report that may contain Sort-kind expressions.
 
-    Returns
+    Returns:
     -------
     tuple[str, ...]
         Deduplicated column names referenced in Sort expressions,
@@ -279,7 +279,7 @@ def _estimate_predicate_selectivity(
         function returns ``None`` because selectivity is meaningless
         without a row-count baseline.
 
-    Returns
+    Returns:
     -------
     float | None
         Estimated selectivity, or ``None`` when evidence is insufficient.
@@ -311,7 +311,7 @@ def _compute_projection_ratio(
     schema
         Output schema from the plan DataFrame.
 
-    Returns
+    Returns:
     -------
     float | None
         Ratio in ``(0.0, 1.0]``, or ``None`` when evidence is insufficient.

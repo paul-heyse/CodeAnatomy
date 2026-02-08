@@ -216,6 +216,18 @@ Schema evolution:
 
 - Controlled via `schema_mode=merge/overwrite` only where explicitly needed.
 
+## 8.5 Caching Hierarchy (Delta-First)
+
+Caching strategy is layered and explicit:
+
+1. Primary cache layer: Delta snapshot/log state.
+   - Determines authoritative table membership and versioned schema.
+   - Reused across planning/execution within the active run envelope.
+2. Secondary cache layer: Parquet metadata/statistics cache.
+   - Accelerates row-group/page pruning and repeated footer/stat reads.
+   - Complements, but does not replace, Delta snapshot-driven file selection.
+3. Optional tertiary layer: targeted file-subset scans (`with_files`) for curated workloads.
+
 ---
 
 ## 9) Set-and-Forget Self-Optimization Loop
@@ -232,11 +244,12 @@ Enable and rely on engine-native optimizers:
 
 ## 9.2 Metadata and Statistics
 
-Treat metadata caches as first-class optimization substrate:
+Treat metadata/statistics optimization as Delta-first:
 
-- Parquet metadata/statistics caching enabled.
-- Runtime metadata cache limits tuned once per environment class.
-- Table statistics available for planner decisions.
+- Delta snapshot/log reuse is the authoritative membership and schema cache.
+- Parquet metadata/statistics caching remains enabled as a complementary acceleration layer.
+- Runtime metadata cache limits are tuned once per environment class.
+- Table statistics remain available for planner decisions.
 
 ## 9.3 Automatic Runtime Tuning (Minimal Surface)
 
@@ -517,7 +530,151 @@ Exit:
 
 ---
 
-## 16) Immediate Next Actions
+## 16) Feature Utilization Matrix (Doc-to-Implementation)
+
+## 16.1 Plan Combination Features
+
+Use directly:
+
+- Single DAG composition via chaining, joins, unions, CTEs, subqueries.
+- Rust `LogicalPlanBuilder` for explicit structural composition.
+- Prepared statements and parameter binding for stable plan shapes.
+- Optional Substrait for portable logical plan interchange.
+
+Implementation usage:
+
+- WS4 (Global Plan Combiner) and WS5 (Parameterized Plan Templates).
+
+## 16.2 Planning Pipeline Features
+
+Use directly:
+
+- Analyzer/optimizer/physical-planner pipeline.
+- Optional rule injection through Rust session hooks.
+- `EXPLAIN` and `EXPLAIN VERBOSE` only as optional operational introspection.
+
+Implementation usage:
+
+- WS2 (Session Factory), WS4 (Combiner), WS10 (Compliance Pack).
+
+## 16.3 Schema and Catalog Features
+
+Use directly:
+
+- `information_schema` and `SHOW` surfaces for runtime truth.
+- `DESCRIBE`, `arrow_typeof`, `arrow_cast`, `arrow_metadata` for schema correctness/debug.
+- TableProvider schema/default/constraint hooks where evolution requires it.
+
+Implementation usage:
+
+- WS8 (Schema Runtime Utilities), WS3 (Delta Provider Manager).
+
+## 16.4 Delta Integration Features
+
+Use directly:
+
+- Native `DeltaTableProvider`.
+- `DeltaScanConfig` and session-derived scan config.
+- Optional `.with_files(...)` for curated file sets.
+- `DeltaCdfTableProvider` for change-centric flows.
+- Provider-supported append/overwrite write modes.
+
+Implementation usage:
+
+- WS3 (Provider Manager), WS6 (Execution Engine), WS7 (Adaptive Tuner).
+
+## 16.5 Rust Packaging and Runtime Delivery Features
+
+Use directly:
+
+- PyO3 + maturin packaging path.
+- `abi3` where feasible.
+- manylinux/musllinux portable wheel strategy.
+
+Implementation usage:
+
+- WS2 + WS9 deployment envelope.
+
+---
+
+## 17) Canonical Runtime Defaults (Set-and-Forget Baseline)
+
+## 17.1 Session Defaults
+
+1. One SessionContext per run.
+2. information_schema enabled.
+3. target partitions initialized from environment profile (small/medium/large repo class).
+4. repartition joins/aggregations/windows enabled.
+5. parquet pushdown enabled.
+
+## 17.2 Delta Defaults
+
+1. Native Delta provider path required.
+2. Delta scan config derived from session config.
+3. Delta snapshot/log state reused as the primary cache layer within the run envelope.
+4. latest snapshot at run start for default mode.
+5. file-subset scans disabled by default and enabled only for explicit workflows.
+6. explicit version pin for replay mode.
+7. Parquet metadata/statistics cache enabled as secondary acceleration.
+
+## 17.3 Tuning Defaults
+
+1. Auto-tuner starts in observe-only mode.
+2. After stability window, bounded adaptation is enabled.
+3. Any detected regression reverts to last stable configuration.
+
+---
+
+## 18) Concrete Interface and Module Blueprint (Blank-Page)
+
+## 18.1 Rust Modules
+
+1. `semantic_spec`:
+   - Spec structs, schema versioning, strict decode.
+2. `session_factory`:
+   - Session construction, registration ordering, environment fingerprint.
+3. `delta_provider_manager`:
+   - Provider build/registration, snapshot mode, CDF path.
+4. `semantic_plan_compiler`:
+   - Semantic spec -> combined logical plan builder.
+5. `plan_executor`:
+   - Physical plan execution + CPG output writes.
+6. `adaptive_tuner`:
+   - Bounded tuning logic.
+7. `compliance_overlay`:
+   - Optional explain/config/commit capture.
+
+## 18.2 Python Modules
+
+1. `semantic_request_api`:
+   - Accepts extraction dataset pointers + semantic view definitions.
+2. `semantic_spec_builder`:
+   - Produces validated `SemanticExecutionSpec` payload.
+3. `rust_engine_facade`:
+   - Single call boundary into Rust runtime.
+
+---
+
+## 19) Deterministic Execution Algorithm (Reference)
+
+1. Receive extraction dataset map + semantic view definitions.
+2. Build `SemanticExecutionSpec` and hash it.
+3. Create deterministic SessionContext via Rust session factory.
+4. Register all Delta inputs as native providers in deterministic order.
+5. Compile semantic spec to combined LogicalPlan DAG.
+6. Bind parameters and finalize plan.
+7. Run analyzer/optimizer/physical planning.
+8. Execute physical plan and materialize CPG outputs to Delta.
+9. Return compact result envelope:
+   - output tables,
+   - commit versions,
+   - spec hash,
+   - session fingerprint.
+10. Optionally run compliance capture if enabled.
+
+---
+
+## 20) Immediate Next Actions
 
 1. Approve `SemanticExecutionSpec` field schema.
 2. Build Rust session/provider/planner skeleton (WS1-WS4).
@@ -525,4 +682,3 @@ Exit:
    - extraction Delta inputs -> semantic spec -> combined plan -> CPG Delta outputs.
 4. Add bounded auto-tuner skeleton with no-op defaults.
 5. Keep compliance overlay out-of-path until explicitly requested.
-

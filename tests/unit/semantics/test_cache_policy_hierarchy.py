@@ -10,17 +10,19 @@ from __future__ import annotations
 
 import pytest
 
+from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.views.artifacts import CachePolicy
 from semantics.pipeline import (
     _default_semantic_cache_policy,
     _resolve_cache_policy_hierarchy,
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def sample_view_names() -> list[str]:
     """Return a representative set of view names for testing.
 
-    Returns
+    Returns:
     -------
     list[str]
         View names spanning cpg, relationship, normalization, and join kinds.
@@ -35,16 +37,16 @@ def sample_view_names() -> list[str]:
     ]
 
 
-@pytest.fixture()
-def sample_output_locations() -> dict[str, object]:
+@pytest.fixture
+def sample_output_locations() -> dict[str, DatasetLocation]:
     """Return a minimal output locations mapping for heuristic fallback testing.
 
-    Returns
+    Returns:
     -------
-    dict[str, object]
+    dict[str, DatasetLocation]
         Mapping with ``cpg_nodes`` as a known output location.
     """
-    return {"cpg_nodes": object()}
+    return {"cpg_nodes": DatasetLocation(path="/tmp/cpg_nodes")}
 
 
 class TestResolveCachePolicyHierarchy:
@@ -53,10 +55,10 @@ class TestResolveCachePolicyHierarchy:
     def test_explicit_policy_takes_highest_precedence(
         self,
         sample_view_names: list[str],
-        sample_output_locations: dict[str, object],
+        sample_output_locations: dict[str, DatasetLocation],
     ) -> None:
         """Verify explicit cache_policy overrides both compiled and heuristic."""
-        explicit = {"cpg_nodes": "none", "rel_calls": "delta_output"}
+        explicit: dict[str, CachePolicy] = {"cpg_nodes": "none", "rel_calls": "delta_output"}
         compiled = {"cpg_nodes": "delta_staging", "rel_calls": "delta_staging"}
 
         result = _resolve_cache_policy_hierarchy(
@@ -73,7 +75,7 @@ class TestResolveCachePolicyHierarchy:
     def test_compiled_policy_takes_precedence_over_heuristic(
         self,
         sample_view_names: list[str],
-        sample_output_locations: dict[str, object],
+        sample_output_locations: dict[str, DatasetLocation],
     ) -> None:
         """Verify compiled_cache_policy is used when explicit policy is absent."""
         compiled = {
@@ -100,7 +102,7 @@ class TestResolveCachePolicyHierarchy:
     def test_heuristic_fallback_when_both_policies_absent(
         self,
         sample_view_names: list[str],
-        sample_output_locations: dict[str, object],
+        sample_output_locations: dict[str, DatasetLocation],
     ) -> None:
         """Verify naming heuristic is used when no compiled or explicit policy exists."""
         result = _resolve_cache_policy_hierarchy(
@@ -118,7 +120,7 @@ class TestResolveCachePolicyHierarchy:
 
     def test_heuristic_assigns_delta_output_for_cpg_in_locations(
         self,
-        sample_output_locations: dict[str, object],
+        sample_output_locations: dict[str, DatasetLocation],
     ) -> None:
         """Verify the naming heuristic gives delta_output to cpg views with locations."""
         result = _default_semantic_cache_policy(
@@ -142,7 +144,7 @@ class TestResolveCachePolicyHierarchy:
     def test_empty_compiled_policy_is_used_not_skipped(
         self,
         sample_view_names: list[str],
-        sample_output_locations: dict[str, object],
+        sample_output_locations: dict[str, DatasetLocation],
     ) -> None:
         """Verify an empty compiled policy mapping is not treated as absent."""
         compiled: dict[str, str] = {}

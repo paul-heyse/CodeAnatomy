@@ -11,9 +11,11 @@ from semantics.joins import (
     SPAN_OVERLAP_STRATEGY,
     JoinInferenceError,
     JoinStrategyType,
+    build_join_inference_confidence,
     infer_join_strategy,
+    infer_join_strategy_with_confidence,
 )
-from semantics.joins.inference import JoinCapabilities, require_join_strategy
+from semantics.joins.inference import JoinCapabilities, JoinStrategyResult, require_join_strategy
 from semantics.joins.strategies import make_fk_strategy, make_symbol_match_strategy
 from semantics.types import AnnotatedSchema
 
@@ -318,3 +320,133 @@ class TestRequireJoinStrategy:
             )
 
         assert "span_overlap" in str(exc_info.value)
+
+
+class TestBuildJoinInferenceConfidence:
+    """Test build_join_inference_confidence helper."""
+
+    def test_none_strategy_returns_none(self) -> None:
+        """Return None when strategy is None."""
+        result = build_join_inference_confidence(None)
+        assert result is None
+
+    def test_high_confidence_for_span_overlap(self) -> None:
+        """Span overlap strategy should produce high confidence."""
+        strategy = SPAN_OVERLAP_STRATEGY
+        confidence = build_join_inference_confidence(strategy)
+
+        assert confidence is not None
+        assert confidence.confidence_score >= 0.8
+        assert confidence.decision_type == "join_strategy"
+        assert confidence.decision_value == "span_overlap"
+        assert confidence.fallback_reason is None
+        assert "schema" in confidence.evidence_sources
+
+    def test_high_confidence_for_fk(self) -> None:
+        """FK strategy should produce high confidence."""
+        strategy = make_fk_strategy("def_id", "entity_id")
+        # FK confidence is 0.85 in the inference module
+        from dataclasses import replace
+
+        strategy = replace(strategy, confidence=0.85)
+        confidence = build_join_inference_confidence(strategy)
+
+        assert confidence is not None
+        assert confidence.confidence_score >= 0.8
+        assert confidence.decision_type == "join_strategy"
+        assert confidence.decision_value == "foreign_key"
+
+    def test_low_confidence_for_equi_join(self) -> None:
+        """Equi-join strategy should produce low confidence (0.6 < 0.8 threshold)."""
+        from dataclasses import replace
+
+        strategy = replace(FILE_EQUI_JOIN, confidence=0.6)
+        confidence = build_join_inference_confidence(strategy)
+
+        assert confidence is not None
+        assert confidence.confidence_score < 0.5
+        assert confidence.decision_type == "join_strategy"
+        assert confidence.decision_value == "equi_join"
+        assert confidence.fallback_reason == "weak_schema_evidence"
+
+    def test_evidence_sources_vary_by_strategy_type(self) -> None:
+        """Evidence sources differ by strategy type."""
+        from dataclasses import replace
+
+        span_strategy = replace(SPAN_OVERLAP_STRATEGY, confidence=0.95)
+        span_conf = build_join_inference_confidence(span_strategy)
+        assert span_conf is not None
+        assert "semantic_type" in span_conf.evidence_sources
+        assert "compatibility_group" in span_conf.evidence_sources
+
+        symbol_strategy = replace(make_symbol_match_strategy(), confidence=0.75)
+        sym_conf = build_join_inference_confidence(symbol_strategy)
+        assert sym_conf is not None
+        assert "compatibility_group" in sym_conf.evidence_sources
+
+
+class TestInferJoinStrategyWithConfidence:
+    """Test infer_join_strategy_with_confidence function."""
+
+    def test_returns_result_for_span_overlap(self) -> None:
+        """Return JoinStrategyResult with confidence for span schemas."""
+        left = pa.schema(
+            [
+                ("file_id", pa.string()),
+                ("bstart", pa.int64()),
+                ("bend", pa.int64()),
+            ]
+        )
+        right = pa.schema(
+            [
+                ("file_id", pa.string()),
+                ("bstart", pa.int64()),
+                ("bend", pa.int64()),
+            ]
+        )
+        left_annotated = AnnotatedSchema.from_arrow_schema(left)
+        right_annotated = AnnotatedSchema.from_arrow_schema(right)
+
+        result = infer_join_strategy_with_confidence(left_annotated, right_annotated)
+
+        assert result is not None
+        assert isinstance(result, JoinStrategyResult)
+        assert result.strategy.strategy_type == JoinStrategyType.SPAN_OVERLAP
+        assert result.confidence.confidence_score >= 0.8
+        assert result.confidence.decision_type == "join_strategy"
+
+    def test_returns_none_when_no_strategy(self) -> None:
+        """Return None when no join strategy can be inferred."""
+        left = pa.schema([("name", pa.string())])
+        right = pa.schema([("value", pa.int64())])
+
+        left_annotated = AnnotatedSchema.from_arrow_schema(left)
+        right_annotated = AnnotatedSchema.from_arrow_schema(right)
+
+        result = infer_join_strategy_with_confidence(left_annotated, right_annotated)
+
+        assert result is None
+
+    def test_result_is_frozen(self) -> None:
+        """JoinStrategyResult should be immutable."""
+        left = pa.schema(
+            [
+                ("file_id", pa.string()),
+                ("bstart", pa.int64()),
+                ("bend", pa.int64()),
+            ]
+        )
+        right = pa.schema(
+            [
+                ("file_id", pa.string()),
+                ("bstart", pa.int64()),
+                ("bend", pa.int64()),
+            ]
+        )
+        left_annotated = AnnotatedSchema.from_arrow_schema(left)
+        right_annotated = AnnotatedSchema.from_arrow_schema(right)
+
+        result = infer_join_strategy_with_confidence(left_annotated, right_annotated)
+        assert result is not None
+        with pytest.raises(AttributeError):
+            result.strategy = None  # type: ignore[misc]

@@ -7,9 +7,14 @@ chosen" and "whether it helped."
 
 from __future__ import annotations
 
-from typing import Final, Literal
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Literal
 
 from serde_msgspec import StructBaseCompat
+
+if TYPE_CHECKING:
+    from relspec.compiled_policy import CompiledExecutionPolicy
+    from relspec.inference_confidence import InferenceConfidence
 
 DecisionDomain = Literal[
     "scan_policy",
@@ -283,12 +288,128 @@ def decision_chain(
     return tuple(chain)
 
 
+# ---------------------------------------------------------------------------
+# Factory: build from CompiledExecutionPolicy + InferenceConfidence
+# ---------------------------------------------------------------------------
+
+_CACHE_POLICY_DOMAIN = "cache_policy"
+_SCAN_POLICY_DOMAIN = "scan_policy"
+
+
+def build_provenance_graph(
+    compiled_policy: CompiledExecutionPolicy,
+    confidence_records: Mapping[str, InferenceConfidence],
+    *,
+    run_id: str = "",
+) -> DecisionProvenanceGraph:
+    """Build a provenance graph from a compiled policy and confidence records.
+
+    Extract cache-policy and scan-policy decisions from
+    ``CompiledExecutionPolicy`` and attach matching
+    ``InferenceConfidence`` records where view/dataset names align.
+
+    Parameters
+    ----------
+    compiled_policy
+        Compile-time-resolved execution policy containing cache and scan
+        policy decisions.
+    confidence_records
+        Mapping of view or dataset names to inference confidence metadata.
+        Keys should match the view names in ``cache_policy_by_view`` or
+        the dataset names in ``scan_policy_overrides``.
+    run_id
+        Pipeline run identifier for the provenance graph.
+
+    Returns:
+    -------
+    DecisionProvenanceGraph
+        Immutable graph of all extracted decisions.
+    """
+    decisions: list[DecisionRecord] = []
+    counter = 0
+
+    # --- cache_policy_by_view decisions ---
+    for view_name, policy_value in compiled_policy.cache_policy_by_view.items():
+        counter += 1
+        decision_id = f"cache_{counter}"
+        confidence = confidence_records.get(view_name)
+        evidence = _evidence_from_confidence(confidence)
+        score = confidence.confidence_score if confidence is not None else 1.0
+        fallback = (
+            confidence.fallback_reason
+            if confidence is not None and confidence.fallback_reason
+            else None
+        )
+        decisions.append(
+            DecisionRecord(
+                decision_id=decision_id,
+                domain=_CACHE_POLICY_DOMAIN,
+                decision_type="compiled",
+                decision_value=str(policy_value),
+                confidence_score=score,
+                evidence=evidence,
+                context_label=view_name,
+                fallback_reason=fallback,
+            ),
+        )
+
+    # --- scan_policy_overrides decisions ---
+    for dataset_name, override_value in compiled_policy.scan_policy_overrides.items():
+        counter += 1
+        decision_id = f"scan_{counter}"
+        confidence = confidence_records.get(dataset_name)
+        evidence = _evidence_from_confidence(confidence)
+        score = confidence.confidence_score if confidence is not None else 1.0
+        fallback = (
+            confidence.fallback_reason
+            if confidence is not None and confidence.fallback_reason
+            else None
+        )
+        decisions.append(
+            DecisionRecord(
+                decision_id=decision_id,
+                domain=_SCAN_POLICY_DOMAIN,
+                decision_type="compiled",
+                decision_value=str(override_value),
+                confidence_score=score,
+                evidence=evidence,
+                context_label=dataset_name,
+                fallback_reason=fallback,
+            ),
+        )
+
+    # All decisions from a compiled policy are roots (no parent chain).
+    root_ids = tuple(d.decision_id for d in decisions)
+
+    return DecisionProvenanceGraph(
+        run_id=run_id,
+        decisions=tuple(decisions),
+        root_ids=root_ids,
+    )
+
+
+def _evidence_from_confidence(
+    confidence: InferenceConfidence | None,
+) -> tuple[EvidenceRecord, ...]:
+    if confidence is None:
+        return ()
+    return tuple(
+        EvidenceRecord(
+            source=source,
+            key="evidence_source",
+            value=source,
+        )
+        for source in confidence.evidence_sources
+    )
+
+
 __all__ = [
     "DecisionDomain",
     "DecisionOutcome",
     "DecisionProvenanceGraph",
     "DecisionRecord",
     "EvidenceRecord",
+    "build_provenance_graph",
     "decision_chain",
     "decision_children",
     "decisions_above_confidence",

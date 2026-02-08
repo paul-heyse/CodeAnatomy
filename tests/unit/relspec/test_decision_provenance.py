@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from relspec.compiled_policy import CompiledExecutionPolicy
 from relspec.decision_provenance import (
     DecisionOutcome,
     DecisionProvenanceGraph,
     DecisionRecord,
     EvidenceRecord,
+    build_provenance_graph,
     decision_chain,
     decision_children,
     decisions_above_confidence,
@@ -16,6 +18,7 @@ from relspec.decision_provenance import (
     decisions_with_fallback,
 )
 from relspec.decision_recorder import DecisionRecorder
+from relspec.inference_confidence import high_confidence, low_confidence
 from serde_artifacts import DecisionProvenanceGraphArtifact
 
 # ---------------------------------------------------------------------------
@@ -561,3 +564,163 @@ class TestDecisionProvenanceGraphArtifact:
         )
         with pytest.raises(AttributeError):
             artifact.run_id = "other"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# build_provenance_graph factory
+# ---------------------------------------------------------------------------
+
+
+class TestBuildProvenanceGraph:
+    """Test the build_provenance_graph factory function."""
+
+    def test_empty_policy_produces_empty_graph(self) -> None:
+        """Empty compiled policy produces a graph with zero decisions."""
+        policy = CompiledExecutionPolicy()
+        graph = build_provenance_graph(policy, {}, run_id="run-empty")
+        assert graph.run_id == "run-empty"
+        assert graph.decisions == ()
+        assert graph.root_ids == ()
+
+    def test_cache_policies_become_decisions(self) -> None:
+        """Cache policy entries become cache_policy domain decisions."""
+        policy = CompiledExecutionPolicy(
+            cache_policy_by_view={
+                "view_a": "delta_staging",
+                "view_b": "delta_output",
+            },
+        )
+        graph = build_provenance_graph(policy, {}, run_id="run-1")
+        assert len(graph.decisions) == 2
+        assert all(d.domain == "cache_policy" for d in graph.decisions)
+        values = {d.decision_value for d in graph.decisions}
+        assert values == {"delta_staging", "delta_output"}
+
+    def test_scan_policies_become_decisions(self) -> None:
+        """Scan policy override entries become scan_policy domain decisions."""
+        policy = CompiledExecutionPolicy(
+            scan_policy_overrides={"dataset_x": {"enable_pushdown": True}},
+        )
+        graph = build_provenance_graph(policy, {}, run_id="run-2")
+        assert len(graph.decisions) == 1
+        assert graph.decisions[0].domain == "scan_policy"
+        assert graph.decisions[0].context_label == "dataset_x"
+
+    def test_confidence_attached_to_cache_policy(self) -> None:
+        """InferenceConfidence records are attached to matching cache decisions."""
+        policy = CompiledExecutionPolicy(
+            cache_policy_by_view={"view_a": "delta_staging"},
+        )
+        conf = high_confidence(
+            decision_type="cache_policy",
+            decision_value="delta_staging",
+            evidence_sources=("topology", "plan_stats"),
+        )
+        graph = build_provenance_graph(
+            policy,
+            {"view_a": conf},
+            run_id="run-3",
+        )
+        assert len(graph.decisions) == 1
+        decision = graph.decisions[0]
+        assert decision.confidence_score >= 0.8
+        assert len(decision.evidence) == 2
+        sources = {e.source for e in decision.evidence}
+        assert sources == {"topology", "plan_stats"}
+
+    def test_confidence_attached_to_scan_policy(self) -> None:
+        """InferenceConfidence records are attached to matching scan decisions."""
+        policy = CompiledExecutionPolicy(
+            scan_policy_overrides={"dataset_y": {"pushdown": True}},
+        )
+        conf = low_confidence(
+            decision_type="scan_policy",
+            decision_value="pushdown",
+            fallback_reason="missing stats",
+            evidence_sources=("lineage",),
+        )
+        graph = build_provenance_graph(
+            policy,
+            {"dataset_y": conf},
+            run_id="run-4",
+        )
+        assert len(graph.decisions) == 1
+        decision = graph.decisions[0]
+        assert decision.confidence_score < 0.5
+        assert decision.fallback_reason == "missing stats"
+        assert len(decision.evidence) == 1
+
+    def test_unmatched_confidence_ignored(self) -> None:
+        """Confidence records for unknown views are ignored gracefully."""
+        policy = CompiledExecutionPolicy(
+            cache_policy_by_view={"view_a": "none"},
+        )
+        conf = high_confidence(
+            decision_type="cache_policy",
+            decision_value="delta_staging",
+            evidence_sources=("topology",),
+        )
+        graph = build_provenance_graph(
+            policy,
+            {"view_b": conf},
+            run_id="run-5",
+        )
+        assert len(graph.decisions) == 1
+        decision = graph.decisions[0]
+        # No confidence match, so default score and no evidence
+        assert decision.confidence_score == 1.0
+        assert decision.evidence == ()
+
+    def test_mixed_cache_and_scan_decisions(self) -> None:
+        """Graph contains both cache and scan policy decisions."""
+        policy = CompiledExecutionPolicy(
+            cache_policy_by_view={"view_a": "delta_staging"},
+            scan_policy_overrides={"dataset_x": {"pushdown": True}},
+        )
+        graph = build_provenance_graph(policy, {}, run_id="run-6")
+        assert len(graph.decisions) == 2
+        domains = {d.domain for d in graph.decisions}
+        assert domains == {"cache_policy", "scan_policy"}
+
+    def test_all_decisions_are_roots(self) -> None:
+        """All compiled policy decisions are root nodes (no parent chain)."""
+        policy = CompiledExecutionPolicy(
+            cache_policy_by_view={"v1": "a", "v2": "b"},
+            scan_policy_overrides={"d1": {"x": 1}},
+        )
+        graph = build_provenance_graph(policy, {}, run_id="run-7")
+        assert len(graph.root_ids) == 3
+        assert set(graph.root_ids) == {d.decision_id for d in graph.decisions}
+
+    def test_decision_type_is_compiled(self) -> None:
+        """All decisions from compiled policy have decision_type 'compiled'."""
+        policy = CompiledExecutionPolicy(
+            cache_policy_by_view={"v1": "delta_output"},
+        )
+        graph = build_provenance_graph(policy, {}, run_id="run-8")
+        assert all(d.decision_type == "compiled" for d in graph.decisions)
+
+    def test_context_label_is_view_name(self) -> None:
+        """Context label carries the view/dataset name."""
+        policy = CompiledExecutionPolicy(
+            cache_policy_by_view={"my_view": "none"},
+        )
+        graph = build_provenance_graph(policy, {}, run_id="run-9")
+        assert graph.decisions[0].context_label == "my_view"
+
+    def test_fallback_reason_none_when_no_fallback(self) -> None:
+        """Fallback reason is None when confidence has no fallback."""
+        policy = CompiledExecutionPolicy(
+            cache_policy_by_view={"v1": "delta_staging"},
+        )
+        conf = high_confidence(
+            decision_type="cache_policy",
+            decision_value="delta_staging",
+            evidence_sources=("topology",),
+        )
+        graph = build_provenance_graph(
+            policy,
+            {"v1": conf},
+            run_id="run-10",
+        )
+        assert graph.decisions[0].fallback_reason is None

@@ -319,3 +319,412 @@ class TestInferSemanticsFullPipeline:
             assert view.inferred_properties.graph_position is not None, (
                 f"View {view.name!r} has no graph_position"
             )
+
+
+# ---------------------------------------------------------------------------
+# _resolve_keys_from_inferred
+# ---------------------------------------------------------------------------
+
+
+class TestResolveKeysFromInferred:
+    """Verify FILE_IDENTITY key extraction from inferred view properties."""
+
+    def test_returns_file_id_when_present(self) -> None:
+        """Extract file_id from inferred join keys."""
+        from semantics.ir_pipeline import _resolve_keys_from_inferred
+
+        view = SemanticIRView(
+            name="v",
+            kind="relate",
+            inputs=("left", "right"),
+            outputs=("v",),
+            inferred_properties=InferredViewProperties(
+                inferred_join_keys=(("file_id", "file_id"), ("bstart", "bstart")),
+            ),
+        )
+        result = _resolve_keys_from_inferred(view)
+        assert result is not None
+        left_on, right_on = result
+        assert left_on == ("file_id",)
+        assert right_on == ("file_id",)
+
+    def test_returns_file_id_and_path(self) -> None:
+        """Extract both file_id and path when present."""
+        from semantics.ir_pipeline import _resolve_keys_from_inferred
+
+        view = SemanticIRView(
+            name="v",
+            kind="relate",
+            inputs=("left", "right"),
+            outputs=("v",),
+            inferred_properties=InferredViewProperties(
+                inferred_join_keys=(
+                    ("file_id", "file_id"),
+                    ("path", "path"),
+                    ("symbol", "symbol"),
+                ),
+            ),
+        )
+        result = _resolve_keys_from_inferred(view)
+        assert result is not None
+        resolved_left_on, _resolved_right_on = result
+        assert "file_id" in resolved_left_on
+        assert "path" in resolved_left_on
+        # symbol is not FILE_IDENTITY, should be excluded
+        assert "symbol" not in resolved_left_on
+
+    def test_returns_none_when_no_inferred_properties(self) -> None:
+        """Return None when inferred_properties is absent."""
+        from semantics.ir_pipeline import _resolve_keys_from_inferred
+
+        view = SemanticIRView(
+            name="v",
+            kind="relate",
+            inputs=("left", "right"),
+            outputs=("v",),
+        )
+        assert _resolve_keys_from_inferred(view) is None
+
+    def test_returns_none_when_inferred_keys_is_none(self) -> None:
+        """Return None when inferred_join_keys is None."""
+        from semantics.ir_pipeline import _resolve_keys_from_inferred
+
+        view = SemanticIRView(
+            name="v",
+            kind="relate",
+            inputs=("left", "right"),
+            outputs=("v",),
+            inferred_properties=InferredViewProperties(),
+        )
+        assert _resolve_keys_from_inferred(view) is None
+
+    def test_returns_none_when_only_span_keys(self) -> None:
+        """Return None when only non-FILE_IDENTITY keys are inferred."""
+        from semantics.ir_pipeline import _resolve_keys_from_inferred
+
+        view = SemanticIRView(
+            name="v",
+            kind="relate",
+            inputs=("left", "right"),
+            outputs=("v",),
+            inferred_properties=InferredViewProperties(
+                inferred_join_keys=(("bstart", "bstart"), ("bend", "bend")),
+            ),
+        )
+        assert _resolve_keys_from_inferred(view) is None
+
+    def test_skips_cross_name_pairs(self) -> None:
+        """Cross-name pairs like (file_id, path) are excluded."""
+        from semantics.ir_pipeline import _resolve_keys_from_inferred
+
+        view = SemanticIRView(
+            name="v",
+            kind="relate",
+            inputs=("left", "right"),
+            outputs=("v",),
+            inferred_properties=InferredViewProperties(
+                inferred_join_keys=(("file_id", "path"),),
+            ),
+        )
+        assert _resolve_keys_from_inferred(view) is None
+
+
+# ---------------------------------------------------------------------------
+# _build_join_groups with inferred keys
+# ---------------------------------------------------------------------------
+
+
+class TestBuildJoinGroupsWithInferredKeys:
+    """Verify _build_join_groups uses inferred keys for empty-key specs."""
+
+    def test_groups_specs_with_inferred_keys(self) -> None:
+        """Specs with empty join keys should be grouped via inferred properties."""
+        from semantics.ir_pipeline import _build_join_groups
+        from semantics.quality import QualityRelationshipSpec
+
+        inferred_props = InferredViewProperties(
+            inferred_join_keys=(("file_id", "file_id"),),
+        )
+        views = [
+            SemanticIRView(
+                name="rel_a",
+                kind="relate",
+                inputs=("left_v", "right_v"),
+                outputs=("rel_a",),
+                inferred_properties=inferred_props,
+            ),
+            SemanticIRView(
+                name="rel_b",
+                kind="relate",
+                inputs=("left_v", "right_v"),
+                outputs=("rel_b",),
+                inferred_properties=inferred_props,
+            ),
+        ]
+        specs = {
+            "rel_a": QualityRelationshipSpec(
+                name="rel_a",
+                left_view="left_v",
+                right_view="right_v",
+                how="inner",
+            ),
+            "rel_b": QualityRelationshipSpec(
+                name="rel_b",
+                left_view="left_v",
+                right_view="right_v",
+                how="inner",
+            ),
+        }
+        groups, _group_views = _build_join_groups(views, specs, existing_names=set())
+        # Two specs with same inferred keys -> one join group
+        assert len(groups) == 1
+        assert set(groups[0].relationship_names) == {"rel_a", "rel_b"}
+        assert groups[0].left_on == ("file_id",)
+        assert groups[0].right_on == ("file_id",)
+
+    def test_skips_specs_with_no_inferred_keys(self) -> None:
+        """Specs without inferred properties should still be skipped."""
+        from semantics.ir_pipeline import _build_join_groups
+        from semantics.quality import QualityRelationshipSpec
+
+        views = [
+            SemanticIRView(
+                name="rel_a",
+                kind="relate",
+                inputs=("left_v", "right_v"),
+                outputs=("rel_a",),
+                # No inferred_properties
+            ),
+            SemanticIRView(
+                name="rel_b",
+                kind="relate",
+                inputs=("left_v", "right_v"),
+                outputs=("rel_b",),
+                # No inferred_properties
+            ),
+        ]
+        specs = {
+            "rel_a": QualityRelationshipSpec(
+                name="rel_a",
+                left_view="left_v",
+                right_view="right_v",
+                how="inner",
+            ),
+            "rel_b": QualityRelationshipSpec(
+                name="rel_b",
+                left_view="left_v",
+                right_view="right_v",
+                how="inner",
+            ),
+        }
+        groups, _ = _build_join_groups(views, specs, existing_names=set())
+        assert len(groups) == 0
+
+    def test_explicit_keys_still_work(self) -> None:
+        """Specs with explicit join keys bypass inference as before."""
+        from semantics.ir_pipeline import _build_join_groups
+        from semantics.quality import QualityRelationshipSpec
+
+        views = [
+            SemanticIRView(
+                name="rel_a",
+                kind="relate",
+                inputs=("left_v", "right_v"),
+                outputs=("rel_a",),
+            ),
+            SemanticIRView(
+                name="rel_b",
+                kind="relate",
+                inputs=("left_v", "right_v"),
+                outputs=("rel_b",),
+            ),
+        ]
+        specs = {
+            "rel_a": QualityRelationshipSpec(
+                name="rel_a",
+                left_view="left_v",
+                right_view="right_v",
+                left_on=["file_id"],
+                right_on=["file_id"],
+                how="inner",
+            ),
+            "rel_b": QualityRelationshipSpec(
+                name="rel_b",
+                left_view="left_v",
+                right_view="right_v",
+                left_on=["file_id"],
+                right_on=["file_id"],
+                how="inner",
+            ),
+        }
+        groups, _ = _build_join_groups(views, specs, existing_names=set())
+        assert len(groups) == 1
+        assert groups[0].left_on == ("file_id",)
+
+    def test_mixed_explicit_and_inferred(self) -> None:
+        """Explicit and inferred keys resolving to same values group together."""
+        from semantics.ir_pipeline import _build_join_groups
+        from semantics.quality import QualityRelationshipSpec
+
+        inferred_props = InferredViewProperties(
+            inferred_join_keys=(("file_id", "file_id"),),
+        )
+        views = [
+            SemanticIRView(
+                name="rel_explicit",
+                kind="relate",
+                inputs=("left_v", "right_v"),
+                outputs=("rel_explicit",),
+            ),
+            SemanticIRView(
+                name="rel_inferred",
+                kind="relate",
+                inputs=("left_v", "right_v"),
+                outputs=("rel_inferred",),
+                inferred_properties=inferred_props,
+            ),
+        ]
+        specs = {
+            "rel_explicit": QualityRelationshipSpec(
+                name="rel_explicit",
+                left_view="left_v",
+                right_view="right_v",
+                left_on=["file_id"],
+                right_on=["file_id"],
+                how="inner",
+            ),
+            "rel_inferred": QualityRelationshipSpec(
+                name="rel_inferred",
+                left_view="left_v",
+                right_view="right_v",
+                how="inner",
+            ),
+        }
+        groups, _ = _build_join_groups(views, specs, existing_names=set())
+        # Both should resolve to the same key and form one group
+        assert len(groups) == 1
+        assert set(groups[0].relationship_names) == {"rel_explicit", "rel_inferred"}
+
+
+# ---------------------------------------------------------------------------
+# InferenceConfidence on InferredViewProperties
+# ---------------------------------------------------------------------------
+
+
+class TestInferenceConfidenceField:
+    """Verify InferenceConfidence is attached to InferredViewProperties."""
+
+    def test_defaults_to_none(self) -> None:
+        """The inference_confidence field defaults to None."""
+        props = InferredViewProperties()
+        assert props.inference_confidence is None
+
+    def test_field_is_accessible(self) -> None:
+        """The inference_confidence field can be set at construction."""
+        from relspec.inference_confidence import high_confidence
+
+        conf = high_confidence(
+            decision_type="join_strategy",
+            decision_value="span_overlap",
+            evidence_sources=("schema",),
+        )
+        props = InferredViewProperties(
+            graph_position="source",
+            inference_confidence=conf,
+        )
+        assert props.inference_confidence is not None
+        assert props.inference_confidence.decision_type == "join_strategy"
+        assert props.inference_confidence.confidence_score >= 0.8
+
+    def test_frozen_inference_confidence(self) -> None:
+        """InferenceConfidence field is immutable on InferredViewProperties."""
+        from relspec.inference_confidence import high_confidence
+
+        conf = high_confidence(
+            decision_type="cache_policy",
+            decision_value="eager",
+            evidence_sources=("graph_topology",),
+        )
+        props = InferredViewProperties(inference_confidence=conf)
+        with pytest.raises(AttributeError):
+            props.inference_confidence = None  # type: ignore[misc]
+
+
+class TestInferSemanticsAttachesConfidence:
+    """Verify that infer_semantics populates inference_confidence."""
+
+    def test_high_fan_out_view_has_cache_confidence(self) -> None:
+        """High fan-out views should have cache_policy confidence attached."""
+        views = (
+            _make_view("hub"),
+            _make_view("a", inputs=("hub",)),
+            _make_view("b", inputs=("hub",)),
+            _make_view("c", inputs=("hub",)),
+        )
+        ir = _make_ir(views)
+        result = infer_semantics(ir)
+        hub_props = result.views[0].inferred_properties
+        assert hub_props is not None
+        assert hub_props.inference_confidence is not None
+        assert hub_props.inference_confidence.decision_type == "cache_policy"
+        assert hub_props.inference_confidence.decision_value == "eager"
+        assert hub_props.inference_confidence.confidence_score >= 0.8
+
+    def test_terminal_view_has_cache_confidence(self) -> None:
+        """Terminal views should have cache_policy confidence attached."""
+        views = (
+            _make_view("root"),
+            _make_view("leaf", inputs=("root",)),
+        )
+        ir = _make_ir(views)
+        result = infer_semantics(ir)
+        leaf_props = result.views[1].inferred_properties
+        assert leaf_props is not None
+        assert leaf_props.inference_confidence is not None
+        assert leaf_props.inference_confidence.decision_type == "cache_policy"
+        assert leaf_props.inference_confidence.decision_value == "lazy"
+
+    def test_source_view_with_no_cache_hint_has_no_confidence(self) -> None:
+        """Source views without cache hint should have no confidence."""
+        views = (
+            _make_view("root"),
+            _make_view("child", inputs=("root",)),
+        )
+        ir = _make_ir(views)
+        result = infer_semantics(ir)
+        root_props = result.views[0].inferred_properties
+        assert root_props is not None
+        # Source views have no cache hint, so no confidence
+        assert root_props.inference_confidence is None
+
+    def test_full_pipeline_relate_views_have_confidence(self) -> None:
+        """Relate views in the full pipeline should have confidence metadata."""
+        from semantics.ir_pipeline import build_semantic_ir
+
+        ir = build_semantic_ir()
+        relate_views = [v for v in ir.views if v.kind == "relate"]
+        assert len(relate_views) > 0
+
+        # At least some relate views with inferred strategies should have confidence
+        relate_with_confidence = [
+            v
+            for v in relate_views
+            if v.inferred_properties is not None
+            and v.inferred_properties.inference_confidence is not None
+        ]
+        assert len(relate_with_confidence) > 0
+
+    def test_confidence_has_valid_score_range(self) -> None:
+        """All confidence scores should be in [0.0, 1.0]."""
+        from semantics.ir_pipeline import build_semantic_ir
+
+        ir = build_semantic_ir()
+        for view in ir.views:
+            if (
+                view.inferred_properties is not None
+                and view.inferred_properties.inference_confidence is not None
+            ):
+                score = view.inferred_properties.inference_confidence.confidence_score
+                assert 0.0 <= score <= 1.0, (
+                    f"View {view.name!r} has out-of-range confidence: {score}"
+                )

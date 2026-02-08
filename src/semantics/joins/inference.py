@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+from relspec.inference_confidence import InferenceConfidence, high_confidence, low_confidence
 from semantics.joins.strategies import (
     JoinStrategy,
     JoinStrategyType,
@@ -35,6 +36,33 @@ _SPAN_CONFIDENCE: float = 0.95
 _FK_CONFIDENCE: float = 0.85
 _SYMBOL_CONFIDENCE: float = 0.75
 _FILE_EQUI_CONFIDENCE: float = 0.6
+
+# Threshold for routing to high_confidence vs low_confidence.
+_HIGH_CONFIDENCE_THRESHOLD: float = 0.8
+
+# Evidence source tags for join strategy inference.
+_EVIDENCE_SCHEMA: str = "schema"
+_EVIDENCE_SEMANTIC_TYPE: str = "semantic_type"
+_EVIDENCE_COMPATIBILITY_GROUP: str = "compatibility_group"
+
+_DECISION_TYPE_JOIN_STRATEGY: str = "join_strategy"
+
+
+@dataclass(frozen=True)
+class JoinStrategyResult:
+    """Pair a join strategy with structured confidence metadata.
+
+    Attributes:
+    ----------
+    strategy
+        The inferred join strategy.
+    confidence
+        Structured confidence metadata describing the evidence quality
+        and decision rationale.
+    """
+
+    strategy: JoinStrategy
+    confidence: InferenceConfidence
 
 
 class JoinInferenceError(Exception):
@@ -516,9 +544,115 @@ def require_join_strategy(
     raise JoinInferenceError(msg)
 
 
+def _evidence_sources_for_strategy(
+    strategy_type: JoinStrategyType,
+) -> tuple[str, ...]:
+    """Return evidence source tags for a given strategy type.
+
+    Parameters
+    ----------
+    strategy_type
+        The type of join strategy that was inferred.
+
+    Returns:
+    -------
+    tuple[str, ...]
+        Evidence source identifiers.
+    """
+    if strategy_type in {JoinStrategyType.SPAN_OVERLAP, JoinStrategyType.SPAN_CONTAINS}:
+        return (_EVIDENCE_SCHEMA, _EVIDENCE_SEMANTIC_TYPE, _EVIDENCE_COMPATIBILITY_GROUP)
+    if strategy_type == JoinStrategyType.FOREIGN_KEY:
+        return (_EVIDENCE_SCHEMA, _EVIDENCE_SEMANTIC_TYPE)
+    if strategy_type == JoinStrategyType.SYMBOL_MATCH:
+        return (_EVIDENCE_SCHEMA, _EVIDENCE_COMPATIBILITY_GROUP)
+    # EQUI_JOIN
+    return (_EVIDENCE_SCHEMA, _EVIDENCE_COMPATIBILITY_GROUP)
+
+
+def build_join_inference_confidence(
+    strategy: JoinStrategy | None,
+) -> InferenceConfidence | None:
+    """Build structured confidence metadata from a join strategy.
+
+    Convert the raw ``confidence`` float on a ``JoinStrategy`` into a
+    structured ``InferenceConfidence`` payload. Return ``None`` when no
+    strategy was inferred (i.e. inference produced no result).
+
+    Parameters
+    ----------
+    strategy
+        Inferred join strategy, or ``None`` if inference failed.
+
+    Returns:
+    -------
+    InferenceConfidence | None
+        Structured confidence metadata, or ``None`` when no strategy exists.
+    """
+    if strategy is None:
+        return None
+
+    decision_value = strategy.strategy_type.value
+    evidence = _evidence_sources_for_strategy(strategy.strategy_type)
+
+    if strategy.confidence >= _HIGH_CONFIDENCE_THRESHOLD:
+        return high_confidence(
+            decision_type=_DECISION_TYPE_JOIN_STRATEGY,
+            decision_value=decision_value,
+            evidence_sources=evidence,
+            score=strategy.confidence,
+        )
+    return low_confidence(
+        decision_type=_DECISION_TYPE_JOIN_STRATEGY,
+        decision_value=decision_value,
+        fallback_reason="weak_schema_evidence",
+        evidence_sources=evidence,
+        score=strategy.confidence,
+    )
+
+
+def infer_join_strategy_with_confidence(
+    left_schema: AnnotatedSchema,
+    right_schema: AnnotatedSchema,
+    *,
+    hint: JoinStrategyType | None = None,
+) -> JoinStrategyResult | None:
+    """Infer join strategy with structured confidence metadata.
+
+    Combine ``infer_join_strategy()`` with ``build_join_inference_confidence()``
+    into a single result that pairs the strategy with its evidence quality.
+
+    Parameters
+    ----------
+    left_schema
+        Annotated schema of the left table.
+    right_schema
+        Annotated schema of the right table.
+
+    Hint:
+        Optional hint for preferred strategy type.
+
+    Returns:
+    -------
+    JoinStrategyResult | None
+        Strategy paired with confidence, or ``None`` if no valid strategy.
+    """
+    strategy = infer_join_strategy(left_schema, right_schema, hint=hint)
+    if strategy is None:
+        return None
+    confidence = build_join_inference_confidence(strategy)
+    # confidence should never be None here since strategy is not None,
+    # but defend against it for robustness.
+    if confidence is None:
+        return None
+    return JoinStrategyResult(strategy=strategy, confidence=confidence)
+
+
 __all__ = [
     "JoinCapabilities",
     "JoinInferenceError",
+    "JoinStrategyResult",
+    "build_join_inference_confidence",
     "infer_join_strategy",
+    "infer_join_strategy_with_confidence",
     "require_join_strategy",
 ]

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from relspec.inference_confidence import InferenceConfidence, high_confidence, low_confidence
 from relspec.table_size_tiers import _DEFAULT_THRESHOLDS
 
 if TYPE_CHECKING:
@@ -51,12 +52,18 @@ class ScanPolicyOverride:
     confidence
         Inference confidence score in [0.0, 1.0].  Higher values
         indicate stronger evidence backing the override.
+    inference_confidence
+        Structured confidence metadata with evidence sources and
+        fallback reasoning.  ``None`` when the override was created
+        by legacy code paths that do not yet produce structured
+        confidence.
     """
 
     dataset_name: str
     policy: ScanPolicyConfig
     reasons: tuple[str, ...] = ()
     confidence: float = 1.0
+    inference_confidence: InferenceConfidence | None = None
 
 
 def derive_scan_policy_overrides(
@@ -144,9 +151,11 @@ def _infer_override_for_scan(
         Override when policy differs from base, otherwise ``None``.
     """
     reasons: list[str] = []
+    evidence_sources: list[str] = []
     delta_scan_overrides: dict[str, object] = {}
     listing_overrides: dict[str, object] = {}
     confidence = 1.0
+    fallback_reason: str | None = None
 
     has_stats = stats is not None and stats.num_rows is not None
     has_cap = _stats_heuristics_capable(capability_snapshot)
@@ -157,16 +166,23 @@ def _infer_override_for_scan(
         reasons.append("small_table")
         if has_cap and has_stats:
             confidence = min(confidence, 0.9)
+            evidence_sources.extend(("stats", "capabilities"))
         elif has_stats:
             confidence = min(confidence, 0.7)
+            evidence_sources.append("stats")
+            fallback_reason = "capabilities_unavailable"
         else:
             confidence = min(confidence, 0.5)
+            fallback_reason = "no_row_statistics"
 
     # Tables with pushed filters: enable Parquet pushdown
     if scan.pushed_filters:
         delta_scan_overrides["enable_parquet_pushdown"] = True
         reasons.append("has_pushed_filters")
         confidence = min(confidence, 0.8)
+        evidence_sources.append("lineage")
+        if fallback_reason is None:
+            fallback_reason = "lineage_only_no_stats"
 
     # Sort-order exploitation: when the scan's projected columns already
     # include all sort keys, downstream sorts may be redundant.  This is a
@@ -174,6 +190,7 @@ def _infer_override_for_scan(
     if sort_keys and _scan_covers_sort_keys(scan, sort_keys):
         reasons.append("sort_order_aligned")
         confidence = min(confidence, _SORT_ORDER_CONFIDENCE)
+        evidence_sources.append("lineage")
 
     # Narrow projection: when only a small fraction of columns are projected,
     # enable parquet pushdown to exploit column pruning at the storage layer.
@@ -181,9 +198,19 @@ def _infer_override_for_scan(
         delta_scan_overrides["enable_parquet_pushdown"] = True
         reasons.append("narrow_projection")
         confidence = min(confidence, _NARROW_PROJECTION_CONFIDENCE)
+        evidence_sources.append("lineage")
 
     if not reasons:
         return None
+
+    # Build structured confidence metadata.
+    deduped_sources = tuple(dict.fromkeys(evidence_sources))
+    structured_confidence = _build_inference_confidence(
+        confidence=confidence,
+        reasons=tuple(reasons),
+        evidence_sources=deduped_sources,
+        fallback_reason=fallback_reason,
+    )
 
     # Build inferred policy config from base + overrides
     inferred_listing = (
@@ -212,6 +239,34 @@ def _infer_override_for_scan(
         policy=inferred_policy,
         reasons=tuple(reasons),
         confidence=confidence,
+        inference_confidence=structured_confidence,
+    )
+
+
+_HIGH_CONFIDENCE_THRESHOLD = 0.8
+
+
+def _build_inference_confidence(
+    *,
+    confidence: float,
+    reasons: tuple[str, ...],
+    evidence_sources: tuple[str, ...],
+    fallback_reason: str | None,
+) -> InferenceConfidence:
+    decision_value = ",".join(reasons) if reasons else "none"
+    if confidence >= _HIGH_CONFIDENCE_THRESHOLD:
+        return high_confidence(
+            decision_type="scan_policy",
+            decision_value=decision_value,
+            evidence_sources=evidence_sources,
+            score=confidence,
+        )
+    return low_confidence(
+        decision_type="scan_policy",
+        decision_value=decision_value,
+        fallback_reason=fallback_reason or "insufficient_evidence",
+        evidence_sources=evidence_sources,
+        score=confidence,
     )
 
 
@@ -228,7 +283,7 @@ def _scan_covers_sort_keys(
     sort_keys
         Column names from plan Sort nodes.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when every sort key is present in the scan's projection.
@@ -255,7 +310,7 @@ def _is_narrow_projection(
     projection_ratio
         Ratio of projected columns to total schema columns.
 
-    Returns
+    Returns:
     -------
     bool
         ``True`` when the projection is narrow enough to benefit from
@@ -399,12 +454,21 @@ def scan_policy_override_artifact_payload(
     dict[str, object]
         Payload suitable for ``profile.record_artifact()``.
     """
-    return {
+    payload: dict[str, object] = {
         "dataset_name": override.dataset_name,
         "reasons": list(override.reasons),
         "override_applied": True,
         "confidence": override.confidence,
     }
+    if override.inference_confidence is not None:
+        payload["inference_confidence"] = {
+            "confidence_score": override.inference_confidence.confidence_score,
+            "evidence_sources": list(override.inference_confidence.evidence_sources),
+            "fallback_reason": override.inference_confidence.fallback_reason,
+            "decision_type": override.inference_confidence.decision_type,
+            "decision_value": override.inference_confidence.decision_value,
+        }
+    return payload
 
 
 def record_scan_policy_decisions(

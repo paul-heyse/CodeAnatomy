@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from datafusion_engine.extensions.runtime_capabilities import RuntimeCapabilitiesSnapshot
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
+    from relspec.inference_confidence import InferenceConfidence
     from schema_spec.system import ScanPolicyConfig
     from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
@@ -442,12 +443,31 @@ def _merge_scan_policy_override(
     merged_policy = _merge_scan_policy_config(current.policy, incoming.policy)
     merged_reasons = tuple(sorted(set(current.reasons) | set(incoming.reasons)))
     merged_confidence = min(current.confidence, incoming.confidence)
+    # Keep the inference_confidence from the override with the lower raw
+    # confidence score so the structured metadata matches the merged float.
+    merged_inference_confidence = _merge_inference_confidence(current, incoming)
     return ScanPolicyOverride(
         dataset_name=current.dataset_name,
         policy=merged_policy,
         reasons=merged_reasons,
         confidence=merged_confidence,
+        inference_confidence=merged_inference_confidence,
     )
+
+
+def _merge_inference_confidence(
+    current: ScanPolicyOverride,
+    incoming: ScanPolicyOverride,
+) -> InferenceConfidence | None:
+    if current.inference_confidence is None and incoming.inference_confidence is None:
+        return None
+    if current.inference_confidence is None:
+        return incoming.inference_confidence
+    if incoming.inference_confidence is None:
+        return current.inference_confidence
+    if incoming.confidence <= current.confidence:
+        return incoming.inference_confidence
+    return current.inference_confidence
 
 
 def _merge_scan_policy_config(

@@ -5,6 +5,11 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from typing import TYPE_CHECKING
 
+from relspec.inference_confidence import (
+    InferenceConfidence,
+    high_confidence,
+    low_confidence,
+)
 from semantics.catalog.dataset_registry import DatasetRegistrySpec
 from semantics.catalog.dataset_rows import SEMANTIC_SCHEMA_VERSION, SemanticDatasetRow
 from semantics.ir import (
@@ -167,6 +172,45 @@ def _join_group_name(
     return f"join_{left_view}__{right_view}__{digest:x}"
 
 
+def _resolve_keys_from_inferred(
+    view: SemanticIRView,
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """Extract FILE_IDENTITY equi-join keys from inferred view properties.
+
+    Mirrors the compiler's ``_resolve_join_keys`` filtering logic: only
+    exact-name pairs from the FILE_IDENTITY compatibility group are
+    returned.  This ensures join group optimization produces groupings
+    consistent with runtime join resolution.
+
+    Parameters
+    ----------
+    view
+        IR view with optional inferred_properties.
+
+    Returns:
+    -------
+    tuple[tuple[str, ...], tuple[str, ...]] | None
+        ``(left_on, right_on)`` if FILE_IDENTITY keys were inferred,
+        None otherwise.
+    """
+    props = view.inferred_properties
+    if props is None or props.inferred_join_keys is None:
+        return None
+    # Filter to FILE_IDENTITY exact-name pairs only, matching the
+    # compiler's _resolve_join_keys semantics.
+    left_cols: list[str] = []
+    right_cols: list[str] = []
+    for left_col, right_col in props.inferred_join_keys:
+        if left_col != right_col:
+            continue
+        if left_col in _FILE_IDENTITY_NAMES:
+            left_cols.append(left_col)
+            right_cols.append(right_col)
+    if not left_cols:
+        return None
+    return tuple(left_cols), tuple(right_cols)
+
+
 def _build_join_groups(
     views: Sequence[SemanticIRView],
     relationship_specs: Mapping[str, QualityRelationshipSpec],
@@ -183,7 +227,12 @@ def _build_join_groups(
         left_on = tuple(rel_spec.left_on)
         right_on = tuple(rel_spec.right_on)
         if not left_on or not right_on:
-            continue
+            # Attempt to resolve from inferred properties when the spec
+            # declares empty join keys (the default for quality specs).
+            resolved = _resolve_keys_from_inferred(view)
+            if resolved is None:
+                continue
+            left_on, right_on = resolved
         key = (
             rel_spec.left_view,
             rel_spec.right_view,
@@ -939,6 +988,73 @@ def _cache_policy_for_position(position: GraphPosition) -> str | None:
     return None
 
 
+# Confidence scores mirror those in semantics.joins.inference so that
+# the lightweight field-based inference in the IR pipeline produces
+# comparable confidence values.
+_STRATEGY_CONFIDENCE: dict[str, float] = {
+    "span_overlap": 0.95,
+    "foreign_key": 0.85,
+    "symbol_match": 0.75,
+    "equi_join": 0.6,
+}
+_CACHE_POLICY_CONFIDENCE: dict[str, float] = {
+    "eager": 0.9,
+    "lazy": 0.85,
+}
+_CONFIDENCE_THRESHOLD: float = 0.8
+_DECISION_TYPE_JOIN_STRATEGY: str = "join_strategy"
+_DECISION_TYPE_CACHE_POLICY: str = "cache_policy"
+
+
+def _build_view_inference_confidence(
+    *,
+    strategy: str | None,
+    cache_hint: str | None,
+) -> InferenceConfidence | None:
+    """Build structured confidence for the strongest inference signal.
+
+    When both a join strategy and a cache policy hint were inferred,
+    select the one with higher confidence as the representative.
+
+    Returns:
+    -------
+    InferenceConfidence | None
+        Confidence metadata, or ``None`` when no signal is available.
+    """
+    strategy_score = _STRATEGY_CONFIDENCE.get(strategy, 0.0) if strategy else 0.0
+    cache_score = _CACHE_POLICY_CONFIDENCE.get(cache_hint, 0.0) if cache_hint else 0.0
+
+    if strategy_score == 0.0 and cache_score == 0.0:
+        return None
+
+    # Pick the stronger signal.
+    if strategy_score >= cache_score:
+        decision_type = _DECISION_TYPE_JOIN_STRATEGY
+        decision_value = strategy or ""
+        score = strategy_score
+        evidence = ("field_metadata", "schema")
+    else:
+        decision_type = _DECISION_TYPE_CACHE_POLICY
+        decision_value = cache_hint or ""
+        score = cache_score
+        evidence = ("graph_topology",)
+
+    if score >= _CONFIDENCE_THRESHOLD:
+        return high_confidence(
+            decision_type=decision_type,
+            decision_value=decision_value,
+            evidence_sources=evidence,
+            score=score,
+        )
+    return low_confidence(
+        decision_type=decision_type,
+        decision_value=decision_value,
+        fallback_reason="weak_field_evidence",
+        evidence_sources=evidence,
+        score=score,
+    )
+
+
 def _infer_view_properties(
     view: SemanticIRView,
     *,
@@ -951,9 +1067,14 @@ def _infer_view_properties(
     cache_hint = _cache_policy_for_position(position)
 
     if view.kind not in {"relate", "join_group"}:
+        confidence = _build_view_inference_confidence(
+            strategy=None,
+            cache_hint=cache_hint,
+        )
         return InferredViewProperties(
             graph_position=position,
             inferred_cache_policy=cache_hint,
+            inference_confidence=confidence,
         )
 
     rel_spec = relationship_specs.get(view.name)
@@ -964,28 +1085,43 @@ def _infer_view_properties(
         left_name = view.inputs[0]
         right_name = view.inputs[1]
     else:
+        confidence = _build_view_inference_confidence(
+            strategy=None,
+            cache_hint=cache_hint,
+        )
         return InferredViewProperties(
             graph_position=position,
             inferred_cache_policy=cache_hint,
+            inference_confidence=confidence,
         )
 
     left_fields = field_index.get(left_name, frozenset())
     right_fields = field_index.get(right_name, frozenset())
 
     if not left_fields or not right_fields:
+        confidence = _build_view_inference_confidence(
+            strategy=None,
+            cache_hint=cache_hint,
+        )
         return InferredViewProperties(
             graph_position=position,
             inferred_cache_policy=cache_hint,
+            inference_confidence=confidence,
         )
 
     strategy = _infer_join_strategy_from_fields(left_fields, right_fields)
     keys = _infer_join_keys_from_fields(left_fields, right_fields)
 
+    confidence = _build_view_inference_confidence(
+        strategy=strategy,
+        cache_hint=cache_hint,
+    )
     return InferredViewProperties(
         inferred_join_strategy=strategy,
         inferred_join_keys=keys,
         inferred_cache_policy=cache_hint,
         graph_position=position,
+        inference_confidence=confidence,
     )
 
 

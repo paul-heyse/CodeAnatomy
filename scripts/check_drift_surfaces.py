@@ -7,6 +7,9 @@ This script replaces text-grep heuristics with deterministic AST checks for:
 2. Resolver identity instrumentation drift
 3. Typed artifact adherence for ``record_artifact(...)``
 4. Manifest-authoritative naming drift
+5. ViewKind sole authority
+6. Builder dispatch coverage
+7. Entity registry derivation
 
 Usage:
     scripts/check_drift_surfaces.py
@@ -56,6 +59,35 @@ _REQUIRED_RESOLVER_BOUNDARY_SCOPES: tuple[tuple[str, str], ...] = (
 )
 _RECORD_ARTIFACT_MIN_ARGS = 2
 _MAX_VIOLATION_PREVIEW = 5
+
+# ---------------------------------------------------------------------------
+# Programmatic architecture drift constants
+# ---------------------------------------------------------------------------
+
+_VIEW_KIND_AUTHORITY_PATH = "src/semantics/view_kinds.py"
+_VIEW_KIND_VALUES: frozenset[str] = frozenset(
+    {
+        "normalize",
+        "scip_normalize",
+        "bytecode_line_index",
+        "span_unnest",
+        "symtable",
+        "diagnostic",
+        "export",
+        "projection",
+        "finalize",
+        "artifact",
+        "join_group",
+        "relate",
+        "union_nodes",
+        "union_edges",
+    }
+)
+
+_BUILDER_DISPATCH_PATH = "src/semantics/pipeline.py"
+_BUILDER_DISPATCH_VAR = "_BUILDER_HANDLERS"
+
+_ENTITY_REGISTRY_PATH = "src/semantics/registry.py"
 
 
 @dataclass(frozen=True, order=True)
@@ -304,6 +336,228 @@ def _check_result(
     )
 
 
+def _is_strenum_class(node: ast.ClassDef) -> bool:
+    """Check whether a class definition inherits from StrEnum.
+
+    Returns:
+        True when any base class is ``StrEnum``.
+    """
+    return any(
+        (isinstance(base, ast.Name) and base.id == "StrEnum")
+        or (isinstance(base, ast.Attribute) and base.attr == "StrEnum")
+        for base in node.bases
+    )
+
+
+def _strenum_member_values(node: ast.ClassDef) -> set[str]:
+    """Extract string constant member values from a StrEnum class body.
+
+    Returns:
+        Set of string literal values assigned in the class body.
+    """
+    values: set[str] = set()
+    for item in node.body:
+        if not isinstance(item, ast.Assign):
+            continue
+        if isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
+            for target in item.targets:
+                if isinstance(target, ast.Name):
+                    values.add(item.value.value)
+    return values
+
+
+def _check_viewkind_sole_authority(
+    src_root: Path,
+    repo_root: Path,
+) -> tuple[Violation, ...]:
+    """Verify ViewKind is the sole StrEnum defining view kind values.
+
+    Scan all Python files in ``src/`` for StrEnum class definitions that
+    contain member values overlapping with the canonical ViewKind values.
+    The canonical definition in ``view_kinds.py`` is excluded.
+
+    Returns:
+        Violations for any file with overlapping StrEnum values.
+    """
+    violations: list[Violation] = []
+    for path in sorted(src_root.rglob("*.py")):
+        rel_path = path.relative_to(repo_root).as_posix()
+        if rel_path == _VIEW_KIND_AUTHORITY_PATH:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if not _is_strenum_class(node):
+                continue
+            overlap = _strenum_member_values(node) & _VIEW_KIND_VALUES
+            if overlap:
+                violations.append(
+                    Violation(
+                        path=rel_path,
+                        line=node.lineno,
+                        scope=node.name,
+                        detail=(
+                            f"StrEnum {node.name} has ViewKind-overlapping values: "
+                            f"{sorted(overlap)}"
+                        ),
+                    )
+                )
+    return _sorted_violations(violations)
+
+
+def _extract_dict_string_keys(tree: ast.Module, var_name: str) -> set[str]:
+    """Extract string keys from a module-level dict assignment by variable name.
+
+    Returns:
+        Set of string keys found in the dict literal.
+    """
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        targets_match = any(isinstance(t, ast.Name) and t.id == var_name for t in node.targets)
+        if not targets_match or not isinstance(node.value, ast.Dict):
+            continue
+        for key in node.value.keys:
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                keys.add(key.value)
+    return keys
+
+
+def _check_builder_dispatch_coverage(
+    repo_root: Path,
+) -> tuple[Violation, ...]:
+    """Verify _BUILDER_HANDLERS covers all ViewKind values.
+
+    Parse the builder dispatch dict in ``pipeline.py`` and check that
+    every ViewKind value has a corresponding handler entry.
+
+    Returns:
+        Violations for any missing ViewKind handler.
+    """
+    pipeline_path = repo_root / _BUILDER_DISPATCH_PATH
+    if not pipeline_path.exists():
+        return (
+            Violation(
+                path=_BUILDER_DISPATCH_PATH,
+                line=0,
+                scope="<module>",
+                detail=f"{_BUILDER_DISPATCH_PATH} not found",
+            ),
+        )
+
+    tree = ast.parse(pipeline_path.read_text(encoding="utf-8"))
+    handler_keys = _extract_dict_string_keys(tree, _BUILDER_DISPATCH_VAR)
+
+    missing = sorted(_VIEW_KIND_VALUES - handler_keys)
+    violations = [
+        Violation(
+            path=_BUILDER_DISPATCH_PATH,
+            line=0,
+            scope=_BUILDER_DISPATCH_VAR,
+            detail=f"ViewKind {kind!r} missing from {_BUILDER_DISPATCH_VAR}",
+        )
+        for kind in missing
+    ]
+    return _sorted_violations(violations)
+
+
+def _check_entity_registry_derivation(
+    repo_root: Path,
+) -> tuple[Violation, ...]:
+    """Verify SEMANTIC_TABLE_SPECS derives from entity_registry.
+
+    Confirm that ``registry.py`` imports from ``entity_registry`` and
+    uses ``generate_table_specs`` to produce the specs dict.
+
+    Returns:
+        Violations when the derivation pattern is not detected.
+    """
+    registry_path = repo_root / _ENTITY_REGISTRY_PATH
+    if not registry_path.exists():
+        return (
+            Violation(
+                path=_ENTITY_REGISTRY_PATH,
+                line=0,
+                scope="<module>",
+                detail=f"{_ENTITY_REGISTRY_PATH} not found",
+            ),
+        )
+
+    text = registry_path.read_text(encoding="utf-8")
+    violations: list[Violation] = []
+
+    if "generate_table_specs" not in text:
+        violations.append(
+            Violation(
+                path=_ENTITY_REGISTRY_PATH,
+                line=0,
+                scope="<module>",
+                detail=(
+                    "registry.py does not reference generate_table_specs; "
+                    "SEMANTIC_TABLE_SPECS may not derive from entity_registry"
+                ),
+            )
+        )
+
+    if "entity_registry" not in text:
+        violations.append(
+            Violation(
+                path=_ENTITY_REGISTRY_PATH,
+                line=0,
+                scope="<module>",
+                detail=(
+                    "registry.py does not import from entity_registry; "
+                    "SEMANTIC_TABLE_SPECS may use a static dict"
+                ),
+            )
+        )
+
+    return _sorted_violations(violations)
+
+
+def _aggregate_visitor_violations(
+    visitors: list[_DriftVisitor],
+) -> dict[str, list[Violation]]:
+    """Aggregate violation lists from all visitors into a single mapping.
+
+    Returns:
+        Mapping from violation category name to aggregated violation list.
+    """
+    result: dict[str, list[Violation]] = {
+        "compile_context_instantiations": [],
+        "dataset_bindings_fallback_calls": [],
+        "untyped_record_artifact_strings": [],
+        "untyped_record_artifact_inline_specs": [],
+        "canonical_name_missing_manifest": [],
+    }
+    for visitor in visitors:
+        result["compile_context_instantiations"].extend(visitor.compile_context_instantiations)
+        result["dataset_bindings_fallback_calls"].extend(visitor.dataset_bindings_fallback_calls)
+        result["untyped_record_artifact_strings"].extend(visitor.untyped_record_artifact_strings)
+        result["untyped_record_artifact_inline_specs"].extend(
+            visitor.untyped_record_artifact_inline_specs
+        )
+        result["canonical_name_missing_manifest"].extend(visitor.canonical_name_missing_manifest)
+    return result
+
+
+def _build_call_map(
+    visitors: list[_DriftVisitor],
+) -> dict[tuple[str, str], set[str]]:
+    """Build call map from all visitors.
+
+    Returns:
+        Mapping from ``(path, scope)`` to set of call names.
+    """
+    call_map: dict[tuple[str, str], set[str]] = {}
+    for visitor in visitors:
+        for scope, names in visitor.calls_by_scope.items():
+            call_map.setdefault((visitor.rel_path, scope), set()).update(names)
+    return call_map
+
+
 def run_audit(repo_root: Path) -> AuditReport:
     """Run drift audit and return a deterministic report.
 
@@ -316,27 +570,13 @@ def run_audit(repo_root: Path) -> AuditReport:
     visitors: list[_DriftVisitor] = []
     for path in sorted(src_root.rglob("*.py")):
         rel_path = path.relative_to(repo_root).as_posix()
-        text = path.read_text(encoding="utf-8")
-        tree = ast.parse(text)
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         visitor = _DriftVisitor(rel_path)
         visitor.visit(tree)
         visitors.append(visitor)
 
-    compile_context_instantiations: list[Violation] = []
-    dataset_bindings_fallback_calls: list[Violation] = []
-    untyped_record_artifact_strings: list[Violation] = []
-    untyped_record_artifact_inline_specs: list[Violation] = []
-    canonical_name_missing_manifest: list[Violation] = []
-    call_map: dict[tuple[str, str], set[str]] = {}
-
-    for visitor in visitors:
-        compile_context_instantiations.extend(visitor.compile_context_instantiations)
-        dataset_bindings_fallback_calls.extend(visitor.dataset_bindings_fallback_calls)
-        untyped_record_artifact_strings.extend(visitor.untyped_record_artifact_strings)
-        untyped_record_artifact_inline_specs.extend(visitor.untyped_record_artifact_inline_specs)
-        canonical_name_missing_manifest.extend(visitor.canonical_name_missing_manifest)
-        for scope, names in visitor.calls_by_scope.items():
-            call_map.setdefault((visitor.rel_path, scope), set()).update(names)
+    agg = _aggregate_visitor_violations(visitors)
+    call_map = _build_call_map(visitors)
 
     missing_compile_tracking = _missing_scope_calls(
         call_map=call_map,
@@ -357,18 +597,23 @@ def run_audit(repo_root: Path) -> AuditReport:
         detail="missing record_resolver_if_tracking(...) boundary instrumentation",
     )
 
+    # Programmatic architecture drift checks.
+    viewkind_authority_violations = _check_viewkind_sole_authority(src_root, repo_root)
+    builder_dispatch_violations = _check_builder_dispatch_coverage(repo_root)
+    entity_registry_violations = _check_entity_registry_derivation(repo_root)
+
     checks = (
         _check_result(
             check_id="compile_context_fallback.compile_context_instantiations",
             title="CompileContext(...) outside compile boundary",
             target=0,
-            violations=_sorted_violations(compile_context_instantiations),
+            violations=_sorted_violations(agg["compile_context_instantiations"]),
         ),
         _check_result(
             check_id="compile_context_fallback.dataset_bindings_for_profile",
             title="dataset_bindings_for_profile(...) compatibility fallback usage",
             target=0,
-            violations=_sorted_violations(dataset_bindings_fallback_calls),
+            violations=_sorted_violations(agg["dataset_bindings_fallback_calls"]),
         ),
         _check_result(
             check_id="resolver_identity.compile_tracking_entrypoints",
@@ -392,19 +637,37 @@ def run_audit(repo_root: Path) -> AuditReport:
             check_id="typed_artifacts.record_artifact_string_literal",
             title="record_artifact(...) string-literal names",
             target=0,
-            violations=_sorted_violations(untyped_record_artifact_strings),
+            violations=_sorted_violations(agg["untyped_record_artifact_strings"]),
         ),
         _check_result(
             check_id="typed_artifacts.record_artifact_inline_spec",
             title="record_artifact(...) inline ArtifactSpec(...) constructors",
             target=0,
-            violations=_sorted_violations(untyped_record_artifact_inline_specs),
+            violations=_sorted_violations(agg["untyped_record_artifact_inline_specs"]),
         ),
         _check_result(
             check_id="manifest_naming.canonical_output_without_manifest",
             title="canonical_output_name(...) without manifest= outside allowlist",
             target=0,
-            violations=_sorted_violations(canonical_name_missing_manifest),
+            violations=_sorted_violations(agg["canonical_name_missing_manifest"]),
+        ),
+        _check_result(
+            check_id="programmatic.viewkind_sole_authority",
+            title="ViewKind sole authority (no competing StrEnum definitions)",
+            target=0,
+            violations=viewkind_authority_violations,
+        ),
+        _check_result(
+            check_id="programmatic.builder_dispatch_coverage",
+            title="_BUILDER_HANDLERS covers all ViewKind values",
+            target=0,
+            violations=builder_dispatch_violations,
+        ),
+        _check_result(
+            check_id="programmatic.entity_registry_derivation",
+            title="SEMANTIC_TABLE_SPECS derives from entity_registry",
+            target=0,
+            violations=entity_registry_violations,
         ),
     )
 

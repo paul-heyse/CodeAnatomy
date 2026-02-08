@@ -136,10 +136,13 @@ def _scan_overrides_to_mapping(
     """
     result: dict[str, object] = {}
     for override in overrides:
-        result[override.dataset_name] = {
+        entry: dict[str, object] = {
             "policy": to_builtins(override.policy),
             "reasons": override.reasons,
         }
+        if override.inference_confidence is not None:
+            entry["inference_confidence"] = to_builtins(override.inference_confidence)
+        result[override.dataset_name] = entry
     return result
 
 

@@ -63,7 +63,8 @@
 
 ## Semantic IR Pipeline (Task 11.1)
 - Pipeline: `compile_semantics -> infer_semantics -> optimize_semantics -> emit_semantics`
-- `InferredViewProperties` on `SemanticIRView`: join_strategy, join_keys, cache_policy, graph_position
+- `InferredViewProperties` on `SemanticIRView`: join_strategy, join_keys, cache_policy, graph_position, inference_confidence
+- `inference_confidence: InferenceConfidence | None` added in B.3 confidence threading
 - Bundle-implied fields: `file_identity` -> file_id/path; `span` -> bstart/bend/span
 - `_BUNDLE_IMPLIED_FIELDS` mapping in ir_pipeline.py expands bundles in field index
 - Join strategy inference from field metadata (lightweight, no DataFusion schemas needed)
@@ -90,18 +91,30 @@
 - `build_view_product` in `materialize_pipeline.py` has zero callsites (public API via lazy import)
 
 ## Policy Validation Module (`src/relspec/policy_validation.py`)
-- `validate_policy_bundle()` composes 6 core + 3 compiled-policy validators
+- `validate_policy_bundle()` composes 7 core + 3 compiled-policy validators
 - New `compiled_policy: CompiledExecutionPolicy | None = None` param (backward compat)
-- New validators: `_compiled_policy_consistency_issues`, `_statistics_availability_issues`, `_evidence_coherence_issues`
-- Issue codes: `compiled_policy_extra_cache_views`, `compiled_policy_extra_scan_overrides`, `stats_dependent_override_without_capabilities`, `compiled_policy_missing_fingerprint`, `compiled_policy_empty_cache_section`
+- Core validators: udf_feature_gate, udf_availability, delta_protocol, manifest_alignment, small_scan_policy, capability, scan_policy_compatibility
+- Compiled-policy validators: `_compiled_policy_consistency_issues`, `_statistics_availability_issues`, `_evidence_coherence_issues`
+- Issue codes: `compiled_policy_extra_cache_views`, `compiled_policy_extra_scan_overrides`, `stats_dependent_override_without_capabilities`, `compiled_policy_missing_fingerprint`, `compiled_policy_empty_cache_section`, `scan_override_stats_without_capabilities`
+- `_STATS_REASON_KEYWORDS` for compiled policy reasons, `_PLAN_STATS_DEPENDENT_REASONS` for plan-level reasons
 - `_manifest_view_names()` extracts view names from `semantic_ir.views` via `getattr()` (defensive)
-- `_STATS_REASON_KEYWORDS` at module level (N806 rule: no uppercase in function scope)
 - Caller in `driver_factory.py:build_plan_context()` passes `compiled_policy=authority_context.compiled_policy`
 - Test monkeypatch of `validate_policy_bundle` must accept `compiled_policy` kwarg
 - `test_driver_factory_config.py` fake authority context needs `compiled_policy=None` attribute
 
+## Scan Policy Inference + InferenceConfidence (Phase B.3)
+- `ScanPolicyOverride` has dual confidence: `confidence: float` (raw) + `inference_confidence: InferenceConfidence | None` (structured)
+- `_build_inference_confidence()` routes to `high_confidence()`/`low_confidence()` based on 0.8 threshold
+- Evidence sources: "stats", "capabilities", "lineage" - tracked per-signal
+- `high_confidence()` clamps to [0.8, 1.0]; `low_confidence()` clamps to [0.0, 0.49]
+- Merge strategy in pipeline.py: keep inference_confidence from override with lower raw confidence
+- `scan_policy_override_artifact_payload()` and `_scan_overrides_to_mapping()` both serialize inference_confidence when present
+- Existing tests construct `ScanPolicyOverride` without inference_confidence (defaults to None), backward compatible
+
 ## Workload & Pruning Infrastructure (Phase G, Section 12)
-- Workload classification: `src/datafusion_engine/workload/classifier.py` (WorkloadClass StrEnum + classify_workload)
+- Workload classification: `src/datafusion_engine/workload/classifier.py` (WorkloadClass StrEnum + classify_workload + session_config_for_workload)
+- `session_config_for_workload()` returns `Mapping[str, str]` of DataFusion config overrides; uses deferred import of session_profiles
+- DataFusion config key convention: `datafusion.execution.*`, `datafusion.optimizer.*`; advisory keys: `codeanatomy.workload.*`
 - Session profiles: `src/datafusion_engine/workload/session_profiles.py` (WorkloadSessionProfile + workload_session_profile)
 - Pruning metrics: `src/datafusion_engine/pruning/metrics.py` (PruningMetrics StructBaseStrict)
 - Explain parser: `src/datafusion_engine/pruning/explain_parser.py` (parse_pruning_metrics with multi-pattern regex)
@@ -110,7 +123,50 @@
 - Specs: WORKLOAD_CLASSIFICATION_SPEC, PRUNING_METRICS_SPEC in serde_artifact_specs.py
 - Regex gotcha: `pages` as alt in `(?:total_pages|pages_total|pages)` matches `pruned_pages` - use specific alternatives only
 
+## Decision Provenance (Phase G, Section 12.3)
+- Types: `src/relspec/decision_provenance.py` (DecisionRecord, DecisionProvenanceGraph, EvidenceRecord, DecisionOutcome)
+- Recorder: `src/relspec/decision_recorder.py` (DecisionRecorder mutable builder -> immutable graph)
+- Factory: `build_provenance_graph(compiled_policy, confidence_records, run_id=...)` in decision_provenance.py
+- Factory bridges CompiledExecutionPolicy + InferenceConfidence -> DecisionProvenanceGraph
+- Cache policy entries -> "cache_policy" domain decisions; scan overrides -> "scan_policy" domain decisions
+- All compiled-policy decisions are roots (no parent chain); parent_ids used by DecisionRecorder for incremental recording
+- Artifact: DecisionProvenanceGraphArtifact in serde_artifacts.py; spec: DECISION_PROVENANCE_GRAPH_SPEC
+- Query helpers: decisions_by_domain, decisions_above_confidence, decisions_with_fallback, decision_children, decision_chain
+
+## Join Group Optimization with Inferred Keys (Phase D.1)
+- `_build_join_groups()` in `ir_pipeline.py` now resolves empty join keys from `inferred_properties`
+- `_resolve_keys_from_inferred()` extracts FILE_IDENTITY exact-name pairs only
+- Mirrors compiler's `_resolve_join_keys()` filtering: FILE_IDENTITY group, exact-name matches
+- `_FILE_IDENTITY_NAMES = {"file_id", "path"}` at module level in ir_pipeline.py
+- Flow: compile_semantics -> infer_semantics (adds inferred_join_keys) -> optimize_semantics (uses them in _build_join_groups)
+- Parity tests in `tests/unit/semantics/test_join_inference.py::TestIRInferredKeysParityWithCompiler`
+- Unit tests in `tests/unit/semantics/test_ir_inference_phase.py::TestResolveKeysFromInferred` and `TestBuildJoinGroupsWithInferredKeys`
+- Golden snapshot (`tests/fixtures/semantic_ir_snapshot.json`) may need updating after this change
+
+## InferenceConfidence Threading (Phase B.3)
+- `InferenceConfidence` struct: `src/relspec/inference_confidence.py` (frozen StructBaseStrict)
+- Join strategy confidence: `build_join_inference_confidence()` in `semantics/joins/inference.py`
+- `JoinStrategyResult` dataclass pairs `JoinStrategy` + `InferenceConfidence`
+- `infer_join_strategy_with_confidence()` convenience wrapper
+- IR pipeline confidence: `_build_view_inference_confidence()` in `ir_pipeline.py`
+- IR pipeline selects strongest signal (join strategy vs cache policy) for representative confidence
+- Confidence score mirrors: `_STRATEGY_CONFIDENCE` and `_CACHE_POLICY_CONFIDENCE` dicts in ir_pipeline.py
+- Threshold: 0.8 separates high_confidence from low_confidence (matches scan policy pattern)
+- `InferenceConfidence` imported as TYPE_CHECKING in `ir.py` (safe with `from __future__ import annotations`)
+- `InferenceConfidence` imported as runtime import in `ir_pipeline.py` (needed for function returns)
+- Golden snapshot test does NOT capture inferred_properties (safe from changes)
+
 ## Golden Snapshot Tests
 - `tests/fixtures/semantic_ir_snapshot.json` must be updated when IR pipeline changes
 - Use `--update-golden` flag: `uv run pytest tests/semantics/test_semantic_ir_snapshot.py --update-golden`
 - Always review diff before committing updated goldens
+
+## Wave 3-B: Integration Tests + Drift Surface Expansion
+- Integration tests: `tests/integration/test_programmatic_architecture_parity.py`
+  - 5 test classes covering cache policy hierarchy, entity registry parity, join key inference, inference confidence, calibration
+  - Imports private functions from semantics.pipeline and ir_pipeline
+- Drift surface: 3 new checks in `scripts/check_drift_surfaces.py`
+  - `programmatic.viewkind_sole_authority`: scans StrEnums for ViewKind value overlap
+  - `programmatic.builder_dispatch_coverage`: AST-parses _BUILDER_HANDLERS keys vs ViewKind values
+  - `programmatic.entity_registry_derivation`: checks registry.py references generate_table_specs + entity_registry
+- `_VIEW_KIND_VALUES` frozenset in drift checker must stay in sync with ViewKind enum

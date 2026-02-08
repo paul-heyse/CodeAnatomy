@@ -14,6 +14,7 @@ the registry.
 from __future__ import annotations
 
 from relspec.execution_package import ExecutionPackageArtifact
+from relspec.policy_calibrator import PolicyCalibrationResult
 from serde_artifacts import (
     CompiledExecutionPolicyArtifact,
     CompileResolverInvariantArtifact,
@@ -1286,6 +1287,18 @@ DECISION_PROVENANCE_GRAPH_SPEC = register_artifact_spec(
     )
 )
 
+# ---------------------------------------------------------------------------
+# Calibration (Phase C.2)
+# ---------------------------------------------------------------------------
+
+POLICY_CALIBRATION_RESULT_SPEC = register_artifact_spec(
+    ArtifactSpec(
+        canonical_name="policy_calibration_result_v1",
+        description="Closed-loop policy calibration result with bounded threshold adjustments.",
+        payload_type=PolicyCalibrationResult,
+    )
+)
+
 __all__ = [
     "ADAPTIVE_WRITE_POLICY_SPEC",
     "ARTIFACT_STORE_RESET_SPEC",
@@ -1403,6 +1416,7 @@ __all__ = [
     "PLAN_SCHEDULE_SPEC",
     "PLAN_SIGNALS_SPEC",
     "PLAN_VALIDATION_SPEC",
+    "POLICY_CALIBRATION_RESULT_SPEC",
     "POLICY_VALIDATION_SPEC",
     "PROJECTION_VIEW_ARTIFACT_SKIPPED_SPEC",
     "PRUNING_METRICS_SPEC",

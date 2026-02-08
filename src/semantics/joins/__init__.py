@@ -42,7 +42,10 @@ from __future__ import annotations
 
 from semantics.joins.inference import (
     JoinInferenceError,
+    JoinStrategyResult,
+    build_join_inference_confidence,
     infer_join_strategy,
+    infer_join_strategy_with_confidence,
     require_join_strategy,
 )
 from semantics.joins.strategies import (
@@ -59,7 +62,10 @@ __all__ = [
     "SPAN_OVERLAP_STRATEGY",
     "JoinInferenceError",
     "JoinStrategy",
+    "JoinStrategyResult",
     "JoinStrategyType",
+    "build_join_inference_confidence",
     "infer_join_strategy",
+    "infer_join_strategy_with_confidence",
     "require_join_strategy",
 ]

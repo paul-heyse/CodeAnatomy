@@ -2,10 +2,15 @@
 
 Classify a ``PlanSignals`` bundle into a ``WorkloadClass`` to enable
 workload-aware session configuration and resource tuning.
+
+``session_config_for_workload`` converts a classified workload into a
+DataFusion session configuration dictionary suitable for applying via
+``SessionConfig.set()``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -67,6 +72,66 @@ def classify_workload(plan_signals: PlanSignals) -> WorkloadClass:
     return WorkloadClass.BATCH_INGEST
 
 
+def session_config_for_workload(
+    workload_class: WorkloadClass,
+) -> Mapping[str, str]:
+    """Return DataFusion session config overrides for a workload class.
+
+    Map a ``WorkloadClass`` to a flat dictionary of DataFusion session
+    configuration keys and string values.  The returned mapping is suitable
+    for applying to a ``SessionConfig`` via ``config.set(key, value)``.
+
+    Only settings that differ from DataFusion defaults are included.
+    ``memory_fraction`` and ``sort_spill_reservation_bytes`` from the
+    workload profile are advisory hints included under the
+    ``codeanatomy.workload.*`` namespace (not native DataFusion keys) so
+    that downstream consumers can interpret them without polluting the
+    DataFusion config namespace.
+
+    Parameters
+    ----------
+    workload_class
+        Classified workload category.
+
+    Returns:
+    -------
+    Mapping[str, str]
+        Flat dictionary of DataFusion-compatible config overrides.
+    """
+    from datafusion_engine.workload.session_profiles import workload_session_profile
+
+    profile = workload_session_profile(workload_class)
+    config: dict[str, str] = {}
+
+    if profile.target_partitions is not None:
+        config["datafusion.execution.target_partitions"] = str(
+            profile.target_partitions,
+        )
+
+    if profile.batch_size is not None:
+        config["datafusion.execution.batch_size"] = str(profile.batch_size)
+
+    if profile.repartition_aggregations is not None:
+        config["datafusion.optimizer.repartition_aggregations"] = str(
+            profile.repartition_aggregations,
+        ).lower()
+
+    if profile.repartition_file_scans is not None:
+        config["datafusion.execution.repartition_file_scans"] = str(
+            profile.repartition_file_scans,
+        ).lower()
+
+    if profile.sort_spill_reservation_bytes is not None:
+        config["datafusion.execution.sort_spill_reservation_bytes"] = str(
+            profile.sort_spill_reservation_bytes,
+        )
+
+    if profile.memory_fraction is not None:
+        config["codeanatomy.workload.memory_fraction"] = str(profile.memory_fraction)
+
+    return config
+
+
 # ---------------------------------------------------------------------------
 # Internal heuristics
 # ---------------------------------------------------------------------------
@@ -122,4 +187,5 @@ def _is_batch_ingest(signals: PlanSignals) -> bool:
 __all__ = [
     "WorkloadClass",
     "classify_workload",
+    "session_config_for_workload",
 ]

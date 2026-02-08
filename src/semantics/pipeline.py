@@ -87,7 +87,7 @@ CPG_INPUT_TABLES: tuple[str, ...] = (
 class CpgBuildOptions:
     """Configuration for semantic CPG construction.
 
-    Attributes
+    Attributes:
     ----------
     cache_policy
         Explicit per-view cache policy override.  When provided this takes
@@ -1294,7 +1294,7 @@ def _resolve_cache_policy_hierarchy(
         Mapping of output view names to dataset locations, used by the
         naming heuristic fallback.
 
-    Returns
+    Returns:
     -------
     Mapping[str, str]
         Resolved cache policy mapping covering all views.

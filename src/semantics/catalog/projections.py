@@ -70,7 +70,7 @@ def _resolve_edge_owner(
     coalesce
         DataFusion ``coalesce`` function reference.
 
-    Returns
+    Returns:
     -------
     Expr
         Expression for the edge_owner_file_id output column.

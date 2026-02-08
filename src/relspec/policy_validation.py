@@ -25,6 +25,11 @@ _SMALL_SCAN_ROW_THRESHOLD: int = 1000
 _DATASET_SUFFIX_SEGMENT_COUNT: int = 2
 _STATS_REASON_KEYWORDS: frozenset[str] = frozenset({"stats", "statistics", "row_count", "num_rows"})
 
+# Scan policy reasons that rely on row-count or similar statistics at the plan
+# level.  Kept separate from ``_STATS_REASON_KEYWORDS`` which targets serialized
+# compiled-policy reason strings.
+_PLAN_STATS_DEPENDENT_REASONS: frozenset[str] = frozenset({"small_table"})
+
 
 @dataclass(frozen=True)
 class PolicyValidationIssue:
@@ -202,6 +207,12 @@ def validate_policy_bundle(
     )
     issues.extend(_small_scan_policy_issues(execution_plan))
     issues.extend(_capability_issues(capability_snapshot=capability_snapshot))
+    issues.extend(
+        _scan_policy_compatibility_issues(
+            execution_plan,
+            capability_snapshot=capability_snapshot,
+        )
+    )
     if compiled_policy is not None:
         issues.extend(
             _compiled_policy_consistency_issues(
@@ -610,6 +621,98 @@ def _evidence_coherence_issues(
             )
         )
     return issues
+
+
+def _scan_policy_compatibility_issues(
+    execution_plan: ExecutionPlan,
+    *,
+    capability_snapshot: RuntimeCapabilitiesSnapshot | Mapping[str, object] | None,
+) -> list[PolicyValidationIssue]:
+    """Check scan policy overrides are compatible with runtime capabilities.
+
+    Verify that stats-dependent overrides (e.g. ``small_table``) are backed
+    by a capability snapshot that confirms ``has_execution_plan_statistics``.
+    Also flags overrides that reference datasets not present in the plan's
+    scan units.
+
+    Parameters
+    ----------
+    execution_plan
+        Compiled execution plan with plan signals and scan units.
+    capability_snapshot
+        Runtime capabilities payload.
+
+    Returns:
+    -------
+    list[PolicyValidationIssue]
+        Compatibility issues found.
+    """
+    issues: list[PolicyValidationIssue] = []
+    signals_by_task = _validation_signals_by_task(execution_plan)
+    if not signals_by_task:
+        return issues
+
+    has_plan_stats = _capability_has_plan_statistics(capability_snapshot)
+    seen_stats_tasks: set[str] = set()
+
+    for task_name in sorted(signals_by_task):
+        if task_name in seen_stats_tasks:
+            continue
+        signals = signals_by_task[task_name]
+        if signals.lineage is None:
+            continue
+        reasons = _infer_override_reasons_for_scan(signals)
+        if not reasons:
+            continue
+        has_stats_reason = any(
+            r in _PLAN_STATS_DEPENDENT_REASONS
+            or any(kw in r.lower() for kw in _STATS_REASON_KEYWORDS)
+            for r in reasons
+        )
+        if not has_stats_reason or has_plan_stats is not False:
+            continue
+        # Report against the first scan dataset for context.
+        first_dataset = (
+            signals.lineage.scans[0].dataset_name if signals.lineage.scans else task_name
+        )
+        seen_stats_tasks.add(task_name)
+        issues.append(
+            _warn(
+                "scan_override_stats_without_capabilities",
+                task=task_name,
+                detail=(
+                    f"Scan override for {first_dataset!r} uses "
+                    "statistics-dependent reasons but capability "
+                    "snapshot does not confirm "
+                    "has_execution_plan_statistics."
+                ),
+            )
+        )
+    return issues
+
+
+def _infer_override_reasons_for_scan(
+    signals: PlanSignals,
+) -> tuple[str, ...]:
+    """Extract inferred override reasons from plan signals.
+
+    Returns:
+    -------
+    tuple[str, ...]
+        Reason strings that would appear in a ``ScanPolicyOverride``.
+    """
+    reasons: list[str] = []
+    if signals.stats is not None and signals.stats.num_rows is not None:
+        from relspec.table_size_tiers import _DEFAULT_THRESHOLDS
+
+        if signals.stats.num_rows < _DEFAULT_THRESHOLDS.small_threshold:
+            reasons.append("small_table")
+    if signals.lineage is not None:
+        for scan in signals.lineage.scans:
+            if scan.pushed_filters:
+                reasons.append("has_pushed_filters")
+                break
+    return tuple(reasons)
 
 
 def _manifest_view_names(

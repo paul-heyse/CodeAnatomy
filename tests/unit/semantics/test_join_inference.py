@@ -301,3 +301,154 @@ class TestJoinKeyInferenceEndToEnd:
         result = df.collect()[0]
         # Inner join on file_id: f1->sym_1, f2->sym_2 (f3 has no left match)
         assert len(result["entity_id"].to_pylist()) == 2
+
+
+class TestIRInferredKeysParityWithCompiler:
+    """Verify IR-level inferred keys match compiler _resolve_join_keys output.
+
+    The IR pipeline's ``_resolve_keys_from_inferred`` must produce keys
+    consistent with the compiler's ``_resolve_join_keys`` so that join
+    group optimization groups specs the same way the compiler would
+    resolve them at runtime.
+    """
+
+    def test_file_id_parity(self) -> None:
+        """IR inferred keys match compiler resolution for file_id columns."""
+        from semantics.ir import InferredViewProperties, SemanticIRView
+        from semantics.ir_pipeline import _resolve_keys_from_inferred
+
+        ctx = SessionContext()
+        left_df = ctx.from_pydict(
+            {"file_id": ["f1"], "bstart": [0], "bend": [10]},
+            name="left_parity",
+        )
+        right_df = ctx.from_pydict(
+            {"file_id": ["f1"], "bstart": [0], "bend": [10]},
+            name="right_parity",
+        )
+        left_info = TableInfo.analyze("left_parity", left_df)
+        right_info = TableInfo.analyze("right_parity", right_df)
+
+        # Compiler resolution
+        compiler_left, compiler_right = SemanticCompiler._resolve_join_keys(
+            left_info=left_info,
+            right_info=right_info,
+            left_on=[],
+            right_on=[],
+        )
+
+        # IR-level inference: simulate what _infer_join_keys_from_fields produces
+        # then verify _resolve_keys_from_inferred extracts the same FILE_IDENTITY keys
+        from semantics.ir_pipeline import _infer_join_keys_from_fields
+
+        left_fields = frozenset(left_df.schema().names)
+        right_fields = frozenset(right_df.schema().names)
+        inferred_keys = _infer_join_keys_from_fields(left_fields, right_fields)
+        assert inferred_keys is not None
+
+        view = SemanticIRView(
+            name="test_rel",
+            kind="relate",
+            inputs=("left_parity", "right_parity"),
+            outputs=("test_rel",),
+            inferred_properties=InferredViewProperties(
+                inferred_join_keys=inferred_keys,
+            ),
+        )
+        ir_result = _resolve_keys_from_inferred(view)
+        assert ir_result is not None
+        ir_left, ir_right = ir_result
+
+        # Parity: both should resolve to the same FILE_IDENTITY keys
+        assert set(ir_left) == set(compiler_left)
+        assert set(ir_right) == set(compiler_right)
+
+    def test_file_id_and_path_parity(self) -> None:
+        """IR inferred keys match compiler for file_id + path columns."""
+        from semantics.ir import InferredViewProperties, SemanticIRView
+        from semantics.ir_pipeline import (
+            _infer_join_keys_from_fields,
+            _resolve_keys_from_inferred,
+        )
+
+        ctx = SessionContext()
+        left_df = ctx.from_pydict(
+            {"file_id": ["f1"], "path": ["/a.py"], "entity_id": ["e1"]},
+            name="left_parity2",
+        )
+        right_df = ctx.from_pydict(
+            {"file_id": ["f1"], "path": ["/a.py"], "symbol": ["sym"]},
+            name="right_parity2",
+        )
+        left_info = TableInfo.analyze("left_parity2", left_df)
+        right_info = TableInfo.analyze("right_parity2", right_df)
+
+        compiler_left, compiler_right = SemanticCompiler._resolve_join_keys(
+            left_info=left_info,
+            right_info=right_info,
+            left_on=[],
+            right_on=[],
+        )
+
+        left_fields = frozenset(left_df.schema().names)
+        right_fields = frozenset(right_df.schema().names)
+        inferred_keys = _infer_join_keys_from_fields(left_fields, right_fields)
+        assert inferred_keys is not None
+
+        view = SemanticIRView(
+            name="test_rel2",
+            kind="relate",
+            inputs=("left_parity2", "right_parity2"),
+            outputs=("test_rel2",),
+            inferred_properties=InferredViewProperties(
+                inferred_join_keys=inferred_keys,
+            ),
+        )
+        ir_result = _resolve_keys_from_inferred(view)
+        assert ir_result is not None
+        ir_left, ir_right = ir_result
+
+        assert set(ir_left) == set(compiler_left)
+        assert set(ir_right) == set(compiler_right)
+
+    def test_no_file_identity_parity(self) -> None:
+        """Both IR and compiler fail gracefully when no FILE_IDENTITY columns."""
+        from semantics.ir import InferredViewProperties, SemanticIRView
+        from semantics.ir_pipeline import (
+            _infer_join_keys_from_fields,
+            _resolve_keys_from_inferred,
+        )
+
+        ctx = SessionContext()
+        left_df = ctx.from_pydict({"x": [1], "y": [2]}, name="left_no_fid2")
+        right_df = ctx.from_pydict({"x": [1], "y": [2]}, name="right_no_fid2")
+        left_info = TableInfo.analyze("left_no_fid2", left_df)
+        right_info = TableInfo.analyze("right_no_fid2", right_df)
+
+        # Compiler raises on no FILE_IDENTITY columns
+        with pytest.raises(SemanticSchemaError, match="FILE_IDENTITY"):
+            SemanticCompiler._resolve_join_keys(
+                left_info=left_info,
+                right_info=right_info,
+                left_on=[],
+                right_on=[],
+            )
+
+        # IR-level: _infer_join_keys_from_fields finds common columns
+        # but _resolve_keys_from_inferred filters to FILE_IDENTITY only
+        left_fields = frozenset(left_df.schema().names)
+        right_fields = frozenset(right_df.schema().names)
+        inferred_keys = _infer_join_keys_from_fields(left_fields, right_fields)
+
+        if inferred_keys is not None:
+            view = SemanticIRView(
+                name="test_no_fid",
+                kind="relate",
+                inputs=("left_no_fid2", "right_no_fid2"),
+                outputs=("test_no_fid",),
+                inferred_properties=InferredViewProperties(
+                    inferred_join_keys=inferred_keys,
+                ),
+            )
+            # IR returns None (graceful degradation) instead of raising
+            assert _resolve_keys_from_inferred(view) is None

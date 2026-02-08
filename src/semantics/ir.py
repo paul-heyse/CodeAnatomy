@@ -9,6 +9,8 @@ from semantics.view_kinds import ViewKindStr
 
 if TYPE_CHECKING:
     from cpg.specs import NodePlanSpec, PropTableSpec
+    from datafusion_engine.views.artifacts import CachePolicy
+    from relspec.inference_confidence import InferenceConfidence
     from semantics.catalog.dataset_rows import SemanticDatasetRow
     from semantics.quality import JoinHow
 
@@ -36,6 +38,39 @@ high_fan_out
 """
 
 
+def ir_cache_hint_to_execution_policy(hint: str | None) -> CachePolicy | None:
+    """Map IR cache hint vocabulary to execution layer CachePolicy.
+
+    The IR pipeline uses a simplified "eager"/"lazy" vocabulary based on
+    graph topology. The execution layer uses a more detailed
+    "none"/"delta_staging"/"delta_output" vocabulary for cache materialization.
+
+    Parameters
+    ----------
+
+    Hint:
+        IR cache hint from ``_cache_policy_for_position()`` in ir_pipeline.
+        "eager" for high fan-out views, "lazy" for terminal views, None otherwise.
+
+    Returns:
+    -------
+    CachePolicy | None
+        "delta_staging" for "eager" (cache to avoid recomputation on high fan-out),
+        "none" for "lazy" (terminal views don't need intermediate caching),
+        None when no recommendation applies.
+
+    Notes:
+    -----
+    This mapping bridges the IR vocabulary (intent-based: eager/lazy) to the
+    execution vocabulary (mechanism-based: where to materialize the cache).
+    """
+    if hint == "eager":
+        return "delta_staging"
+    if hint == "lazy":
+        return "none"
+    return None
+
+
 @dataclass(frozen=True)
 class InferredViewProperties:
     """Properties inferred from schemas and graph topology during the infer phase.
@@ -60,12 +95,18 @@ class InferredViewProperties:
     graph_position
         Topological position of the view in the IR dependency graph.
         None when position cannot be determined.
+    inference_confidence
+        Structured confidence metadata for the strongest inference
+        decision applied to this view (join strategy or cache policy).
+        None when no inference was performed or confidence could not
+        be determined.
     """
 
     inferred_join_strategy: str | None = None
     inferred_join_keys: tuple[tuple[str, str], ...] | None = None
     inferred_cache_policy: str | None = None
     graph_position: GraphPosition | None = None
+    inference_confidence: InferenceConfidence | None = None
 
 
 @dataclass(frozen=True)
@@ -112,4 +153,5 @@ __all__ = [
     "SemanticIRJoinGroup",
     "SemanticIRKind",
     "SemanticIRView",
+    "ir_cache_hint_to_execution_policy",
 ]

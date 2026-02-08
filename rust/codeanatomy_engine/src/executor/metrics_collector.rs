@@ -11,12 +11,13 @@
 
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanProperties;
+use serde::{Deserialize, Serialize};
 
 /// Real execution metrics collected from the executed plan tree.
 ///
 /// Replaces the synthetic metrics at materializer.rs:208-214 once the
 /// integration agent wires plan capture into the execution path.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CollectedMetrics {
     /// Total rows produced across all output partitions.
     pub output_rows: u64,
@@ -38,7 +39,7 @@ pub struct CollectedMetrics {
 }
 
 /// Per-operator metric summary extracted from the plan tree.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperatorMetricSummary {
     /// Operator name (e.g., "HashJoinExec", "ParquetExec").
     pub operator_name: String,

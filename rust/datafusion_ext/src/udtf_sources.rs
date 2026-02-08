@@ -62,6 +62,38 @@ fn ensure_exact_args(args: &[Expr], expected: usize, name: &str) -> Result<()> {
     Ok(())
 }
 
+fn ensure_arg_range(args: &[Expr], min: usize, max: usize, name: &str) -> Result<()> {
+    if args.len() < min || args.len() > max {
+        return Err(DataFusionError::Plan(format!(
+            "{name} expects between {min} and {max} arguments, got {}",
+            args.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Extract an optional `i64` from a positional argument.
+///
+/// Returns `None` if the index is out of bounds or the value is a NULL literal.
+fn optional_int64_arg(args: &[Expr], idx: usize) -> Option<i64> {
+    args.get(idx).and_then(|expr| match expr {
+        Expr::Literal(ScalarValue::Int64(v), _) => *v,
+        _ => None,
+    })
+}
+
+/// Extract an optional `String` from a positional argument.
+///
+/// Returns `None` if the index is out of bounds or the value is a NULL literal.
+fn optional_string_arg(args: &[Expr], idx: usize) -> Option<String> {
+    args.get(idx).and_then(|expr| match expr {
+        Expr::Literal(ScalarValue::Utf8(v), _)
+        | Expr::Literal(ScalarValue::LargeUtf8(v), _)
+        | Expr::Literal(ScalarValue::Utf8View(v), _) => v.clone(),
+        _ => None,
+    })
+}
+
 fn literal_string_arg(args: &[Expr], idx: usize, name: &str) -> Result<String> {
     let Some(expr) = args.get(idx) else {
         return Err(DataFusionError::Plan(format!(
@@ -275,14 +307,28 @@ impl fmt::Debug for ReadDeltaCdfTableFunction {
 impl TableFunctionImpl for ReadDeltaCdfTableFunction {
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         let _ = &self.ctx;
-        ensure_exact_args(args, 1, READ_DELTA_CDF_TABLE_FUNCTION)?;
+        ensure_arg_range(args, 1, 5, READ_DELTA_CDF_TABLE_FUNCTION)?;
         let table_uri = literal_string_arg(args, 0, READ_DELTA_CDF_TABLE_FUNCTION)?;
+
+        let starting_version = optional_int64_arg(args, 1);
+        let ending_version = optional_int64_arg(args, 2);
+        let starting_timestamp = optional_string_arg(args, 3);
+        let ending_timestamp = optional_string_arg(args, 4);
+
+        let scan_options = delta_control_plane::DeltaCdfScanOptions {
+            starting_version,
+            ending_version,
+            starting_timestamp,
+            ending_timestamp,
+            ..delta_control_plane::DeltaCdfScanOptions::default()
+        };
+
         let resolved = async_runtime::block_on(delta_control_plane::delta_cdf_provider(
             table_uri.as_str(),
             None,
             None,
             None,
-            delta_control_plane::DeltaCdfScanOptions::default(),
+            scan_options,
             None,
         ))?;
         let (provider, _) =

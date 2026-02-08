@@ -96,6 +96,28 @@ class AggregateTransform(msgspec.Struct, frozen=True, tag="Aggregate", tag_field
     aggregations: tuple[AggregationExpr, ...]
 
 
+class IncrementalCdfTransform(msgspec.Struct, frozen=True, tag="IncrementalCdf", tag_field="kind"):
+    """Incremental CDF transform for Delta change data feed."""
+
+    source: str
+    starting_version: int | None = None
+    ending_version: int | None = None
+    starting_timestamp: str | None = None
+    ending_timestamp: str | None = None
+
+
+class MetadataTransform(msgspec.Struct, frozen=True, tag="Metadata", tag_field="kind"):
+    """Delta table metadata transform."""
+
+    source: str
+
+
+class FileManifestTransform(msgspec.Struct, frozen=True, tag="FileManifest", tag_field="kind"):
+    """Delta table file manifest transform."""
+
+    source: str
+
+
 type ViewTransform = (
     NormalizeTransform
     | RelateTransform
@@ -103,6 +125,9 @@ type ViewTransform = (
     | ProjectTransform
     | FilterTransform
     | AggregateTransform
+    | IncrementalCdfTransform
+    | MetadataTransform
+    | FileManifestTransform
 )
 
 
@@ -138,6 +163,9 @@ class OutputTarget(msgspec.Struct, frozen=True):
     columns: tuple[str, ...]
     delta_location: str | None = None
     materialization_mode: MaterializationMode = "Overwrite"
+    partition_by: tuple[str, ...] = ()
+    write_metadata: dict[str, str] = msgspec.field(default_factory=dict)
+    max_commit_retries: int | None = None
 
 
 class ParameterTemplate(msgspec.Struct, frozen=True):
@@ -180,6 +208,12 @@ class RuntimeConfig(msgspec.Struct, frozen=True):
 
     compliance_capture: bool = False
     tuner_mode: RuntimeTunerMode = "Off"
+    capture_substrait: bool = False
+    enable_tracing: bool = False
+    enable_rule_tracing: bool = False
+    enable_plan_preview: bool = False
+    enable_function_factory: bool = False
+    enable_domain_planner: bool = False
 
 
 class SemanticExecutionSpec(msgspec.Struct, frozen=True):

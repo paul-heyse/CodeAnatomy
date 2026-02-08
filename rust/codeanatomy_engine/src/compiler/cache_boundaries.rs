@@ -10,11 +10,13 @@ use datafusion::prelude::*;
 use datafusion_common::Result;
 use std::collections::HashMap;
 
+use crate::compiler::cache_policy::{compute_cache_boundaries, CachePlacementPolicy};
 use crate::spec::execution_spec::SemanticExecutionSpec;
 use crate::spec::relations::ViewTransform;
+use crate::tuner::metrics_store::MetricsStore;
 
 /// Compute fanout (downstream reference count) for each view.
-fn compute_fanout(spec: &SemanticExecutionSpec) -> HashMap<String, usize> {
+pub(crate) fn compute_fanout(spec: &SemanticExecutionSpec) -> HashMap<String, usize> {
     let mut fanout: HashMap<String, usize> = HashMap::new();
 
     // Initialize all views with zero fanout
@@ -91,6 +93,70 @@ pub async fn insert_cache_boundaries(
 
             cached_count += 1;
         }
+    }
+
+    Ok(cached_count)
+}
+
+/// Insert cache boundaries using a policy-based decision system.
+///
+/// Delegates view selection to [`compute_cache_boundaries`] from the
+/// `cache_policy` module, which uses fanout, estimated row counts, and
+/// explicit overrides to decide which views to cache. For each selected
+/// view, performs the cache-deregister-reregister dance.
+///
+/// This is the policy-aware successor to [`insert_cache_boundaries`],
+/// which remains available for backward compatibility.
+///
+/// Parameters
+/// ----------
+/// ctx
+///     The DataFusion session context containing registered views.
+/// spec
+///     The semantic execution spec describing views and outputs.
+/// policy
+///     Cache placement policy controlling thresholds and overrides.
+/// metrics_store
+///     Optional historical metrics store for cost-informed decisions.
+///
+/// Returns
+/// -------
+/// Count of views that were cached.
+pub async fn insert_cache_boundaries_with_policy(
+    ctx: &SessionContext,
+    spec: &SemanticExecutionSpec,
+    policy: &CachePlacementPolicy,
+    metrics_store: Option<&MetricsStore>,
+) -> Result<usize> {
+    let fanout = compute_fanout(spec);
+
+    // Delegate view selection to the policy-aware cache boundary computation.
+    let views_to_cache = compute_cache_boundaries(
+        ctx,
+        &spec.view_definitions,
+        &fanout,
+        policy,
+        metrics_store,
+    )
+    .await;
+
+    let mut cached_count = 0;
+
+    for view_name in &views_to_cache {
+        // Get current DataFrame
+        let df = ctx.table(view_name.as_str()).await?;
+
+        // Materialize it
+        let cached = df.cache().await?;
+
+        // Deregister original
+        ctx.deregister_table(view_name.as_str())?;
+
+        // Re-register as cached view
+        let cached_view = cached.into_view();
+        ctx.register_table(view_name.as_str(), cached_view)?;
+
+        cached_count += 1;
     }
 
     Ok(cached_count)

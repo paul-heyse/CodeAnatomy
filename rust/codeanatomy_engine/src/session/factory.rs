@@ -152,10 +152,17 @@ impl SessionFactory {
     /// including repartition_sorts, repartition_file_scans, page index
     /// pruning, and other WS-P9 gap-table deltas not covered by `build_session`.
     ///
+    /// Optionally installs the SQL macro function factory (enabling
+    /// `CREATE FUNCTION` syntax) and/or domain-specific expression planners
+    /// for span-alignment operations. Installation failures are hard errors
+    /// when the corresponding flag is `true`.
+    ///
     /// # Arguments
     ///
     /// * `profile` - Comprehensive runtime profile spec
     /// * `ruleset` - Immutable rule set for execution policy
+    /// * `enable_function_factory` - Install `SqlMacroFunctionFactory` for `CREATE FUNCTION` support
+    /// * `enable_domain_planner` - Install `CodeAnatomyDomainPlanner` for domain expression planning
     ///
     /// # Returns
     ///
@@ -164,6 +171,8 @@ impl SessionFactory {
         &self,
         profile: &RuntimeProfileSpec,
         ruleset: &CpgRuleSet,
+        enable_function_factory: bool,
+        enable_domain_planner: bool,
     ) -> Result<SessionContext> {
         // Build RuntimeEnv with profile memory/spill settings
         let runtime = RuntimeEnvBuilder::default()
@@ -224,6 +233,17 @@ impl SessionFactory {
 
         // Register all UDFs from datafusion_ext
         datafusion_ext::udf_registry::register_all(&ctx)?;
+
+        // WS-P14: Wire function factory and domain planners when enabled.
+        // Installation failures are hard errors per the capability policy:
+        // if a caller requests a capability, it must succeed or the session
+        // build fails entirely.
+        if enable_function_factory {
+            datafusion_ext::install_sql_macro_factory_native(&ctx)?;
+        }
+        if enable_domain_planner {
+            datafusion_ext::install_expr_planners_native(&ctx, &["codeanatomy_domain"])?;
+        }
 
         Ok(ctx)
     }

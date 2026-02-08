@@ -4,17 +4,16 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
+use crate::compiler::plan_bundle::{build_plan_bundle_artifact, capture_plan_bundle_runtime, PlanBundleArtifact};
 use crate::compiler::plan_compiler::SemanticPlanCompiler;
 use crate::compliance::capture::{capture_explain_verbose, ComplianceCapture, RetentionPolicy, RulepackSnapshot};
-// WS-P7: metrics_collector is available for real physical metrics extraction.
-// Integration with the execution path requires runner.rs to capture the
-// physical plan reference post-execution. See collect_plan_metrics().
-#[allow(unused_imports)]
-use crate::executor::metrics_collector;
+use crate::executor::metrics_collector::{collect_plan_metrics, CollectedMetrics};
+use crate::executor::maintenance::execute_maintenance;
 use crate::executor::runner::execute_and_materialize;
 use crate::executor::result::{RunResult, TuningHint};
 use crate::providers::registration::register_extraction_inputs;
 use crate::rules::rulepack::RulepackFactory;
+use crate::session::envelope::SessionEnvelope;
 use crate::spec::runtime::RuntimeTunerMode;
 use crate::tuner::adaptive::{AdaptiveTuner, ExecutionMetrics, TunerConfig};
 
@@ -109,12 +108,37 @@ impl CpgMaterializer {
                 &env_profile,
             );
 
-            // Build session with ruleset and spec hash
-            let (ctx, envelope) = session_factory
-                .inner()
-                .build_session(&ruleset, compiled_plan.spec_hash())
+            // WS-P9: Build session with ruleset, using profiled builder when available.
+            let (ctx, envelope) = if let Some(profile) = &spec.runtime_profile {
+                let ctx = session_factory
+                    .inner()
+                    .build_session_from_profile(
+                        profile,
+                        &ruleset,
+                        spec.runtime.enable_function_factory,
+                        spec.runtime.enable_domain_planner,
+                    )
+                    .await
+                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to build profiled session: {e}")))?;
+                // build_session_from_profile returns only SessionContext;
+                // build the envelope separately.
+                let envelope = SessionEnvelope::capture(
+                    &ctx,
+                    compiled_plan.spec_hash(),
+                    ruleset.fingerprint,
+                    profile.memory_pool_bytes as u64,
+                    true, // FairSpillPool always enables spilling
+                )
                 .await
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to build session: {e}")))?;
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to capture envelope: {e}")))?;
+                (ctx, envelope)
+            } else {
+                session_factory
+                    .inner()
+                    .build_session(&ruleset, compiled_plan.spec_hash())
+                    .await
+                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to build session: {e}")))?
+            };
 
             // Register input relations as Delta providers
             register_extraction_inputs(&ctx, &spec.input_relations)
@@ -177,6 +201,39 @@ impl CpgMaterializer {
                 }
             }
 
+            // WS-P1: Capture plan bundles BEFORE execution consumes output_plans.
+            let plan_bundles: Vec<PlanBundleArtifact> = if compliance_enabled {
+                let mut bundles = Vec::new();
+                for (_target, df) in &output_plans {
+                    if let Ok(runtime_bundle) = capture_plan_bundle_runtime(&ctx, df).await {
+                        if let Ok(artifact) = build_plan_bundle_artifact(
+                            &ctx,
+                            &runtime_bundle,
+                            ruleset.fingerprint,
+                            vec![],
+                            spec.runtime.capture_substrait,
+                            false,
+                        )
+                        .await
+                        {
+                            bundles.push(artifact);
+                        }
+                    }
+                }
+                bundles
+            } else {
+                vec![]
+            };
+
+            // WS-P7: Create physical plans for real metrics collection
+            // BEFORE execution consumes the DataFrames.
+            let mut physical_plans = Vec::new();
+            for (_target, df) in &output_plans {
+                if let Ok(plan) = df.clone().create_physical_plan().await {
+                    physical_plans.push(plan);
+                }
+            }
+
             // Execute and materialize to Delta
             let materialization_results = execute_and_materialize(&ctx, output_plans, &spec.spec_hash, &envelope.envelope_hash)
                 .await
@@ -184,6 +241,45 @@ impl CpgMaterializer {
             let compliance_capture_json = compliance_capture
                 .filter(|capture| !capture.is_empty())
                 .and_then(|capture| capture.to_json().ok());
+
+            // WS-P7: Collect real metrics from physical plans captured pre-execution.
+            let mut collected = CollectedMetrics::default();
+            for plan in &physical_plans {
+                let plan_metrics = collect_plan_metrics(plan.as_ref());
+                collected.output_rows += plan_metrics.output_rows;
+                collected.spill_count += plan_metrics.spill_count;
+                collected.spilled_bytes += plan_metrics.spilled_bytes;
+                collected.elapsed_compute_nanos += plan_metrics.elapsed_compute_nanos;
+                collected.peak_memory_bytes = collected.peak_memory_bytes.max(plan_metrics.peak_memory_bytes);
+                collected.scan_selectivity = if plan_metrics.scan_selectivity > 0.0 {
+                    plan_metrics.scan_selectivity
+                } else {
+                    collected.scan_selectivity
+                };
+                collected.partition_count += plan_metrics.partition_count;
+                collected.operator_metrics.extend(plan_metrics.operator_metrics);
+            }
+
+            // WS-P11: Execute post-materialization maintenance if configured.
+            let maintenance_reports = if let Some(schedule) = &spec.maintenance {
+                let output_locations: Vec<(String, String)> = materialization_results
+                    .iter()
+                    .map(|r| {
+                        let location = spec
+                            .output_targets
+                            .iter()
+                            .find(|t| t.table_name == r.table_name)
+                            .and_then(|t| t.delta_location.clone())
+                            .unwrap_or_else(|| r.table_name.clone());
+                        (r.table_name.clone(), location)
+                    })
+                    .collect();
+                execute_maintenance(&ctx, schedule, &output_locations)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
 
             let mut tuner_hints: Vec<TuningHint> = Vec::new();
             if tuner_mode != RuntimeTunerMode::Off {
@@ -210,16 +306,21 @@ impl CpgMaterializer {
                     .iter()
                     .map(|outcome| outcome.rows_written)
                     .sum();
-                // WS-P7: Synthetic placeholder metrics. Real per-operator metrics
-                // (spill_count, scan_selectivity, peak_memory) require the physical
-                // plan reference post-execution. Wire collect_plan_metrics() here
-                // once runner.rs returns the executed plan tree alongside results.
-                // See: executor::metrics_collector::collect_plan_metrics()
+                // WS-P7: Use real metrics from physical plan tree when available,
+                // falling back to environment defaults for zero values.
                 let metrics = ExecutionMetrics {
                     elapsed_ms,
-                    spill_count: 0,
-                    scan_selectivity: 1.0,
-                    peak_memory_bytes: env_profile.memory_pool_bytes,
+                    spill_count: collected.spill_count,
+                    scan_selectivity: if collected.scan_selectivity > 0.0 {
+                        collected.scan_selectivity
+                    } else {
+                        1.0
+                    },
+                    peak_memory_bytes: if collected.peak_memory_bytes > 0 {
+                        collected.peak_memory_bytes
+                    } else {
+                        env_profile.memory_pool_bytes
+                    },
                     rows_processed,
                 };
                 if let Some(next) = tuner.observe(&metrics) {
@@ -240,6 +341,9 @@ impl CpgMaterializer {
                 rulepack_fingerprint: ruleset.fingerprint,
                 compliance_capture_json,
                 tuner_hints,
+                plan_bundles,
+                collected_metrics: Some(collected),
+                maintenance_reports,
                 started_at: start_time,
                 completed_at: chrono::Utc::now(),
             };

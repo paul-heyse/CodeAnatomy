@@ -1,9 +1,14 @@
 //! Root SemanticExecutionSpec — the immutable contract between Python and Rust.
 
 use serde::{Deserialize, Serialize};
-use crate::spec::relations::{InputRelation, ViewDefinition};
+use crate::compiler::cache_policy::CachePlacementPolicy;
+use crate::executor::maintenance::MaintenanceSchedule;
+use crate::rules::overlay::RuleOverlayProfile;
+use crate::session::runtime_profiles::RuntimeProfileSpec;
 use crate::spec::join_graph::JoinGraph;
 use crate::spec::outputs::OutputTarget;
+use crate::spec::parameters::TypedParameter;
+use crate::spec::relations::{InputRelation, ViewDefinition};
 use crate::spec::runtime::RuntimeConfig;
 use crate::spec::rule_intents::{RuleIntent, RulepackProfile, ParameterTemplate};
 
@@ -12,7 +17,6 @@ use crate::spec::rule_intents::{RuleIntent, RulepackProfile, ParameterTemplate};
 /// This is the immutable contract between Python and Rust. Python builds it;
 /// Rust consumes it. Nothing else crosses the boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SemanticExecutionSpec {
     pub version: u32,
     pub input_relations: Vec<InputRelation>,
@@ -24,6 +28,28 @@ pub struct SemanticExecutionSpec {
     pub parameter_templates: Vec<ParameterTemplate>,
     #[serde(default)]
     pub runtime: RuntimeConfig,
+
+    // --- Wave 3 expansion fields (all default for backward compatibility) ---
+
+    /// Typed parameter bindings for parametric plan compilation.
+    #[serde(default)]
+    pub typed_parameters: Vec<TypedParameter>,
+
+    /// Per-execution rule overlay (additions, exclusions, priority overrides).
+    #[serde(default)]
+    pub rule_overlay: Option<RuleOverlayProfile>,
+
+    /// Deterministic runtime profile capturing all session knobs.
+    #[serde(default)]
+    pub runtime_profile: Option<RuntimeProfileSpec>,
+
+    /// Policy-based cache placement for the compiled plan DAG.
+    #[serde(default)]
+    pub cache_policy: Option<CachePlacementPolicy>,
+
+    /// Post-execution Delta maintenance schedule.
+    #[serde(default)]
+    pub maintenance: Option<MaintenanceSchedule>,
 
     /// Canonical BLAKE3 hash of this spec (computed on creation).
     #[serde(skip)]
@@ -52,6 +78,11 @@ impl SemanticExecutionSpec {
             rulepack_profile,
             parameter_templates,
             runtime: RuntimeConfig::default(),
+            typed_parameters: vec![],
+            rule_overlay: None,
+            runtime_profile: None,
+            cache_policy: None,
+            maintenance: None,
             spec_hash: [0u8; 32],
         };
 

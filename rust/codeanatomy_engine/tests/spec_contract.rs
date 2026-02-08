@@ -413,9 +413,14 @@ fn test_spec_runtime_defaults_when_omitted() {
     assert_eq!(spec.runtime.tuner_mode, RuntimeTunerMode::Off);
 }
 
-/// Test 16: Runtime unknown fields are rejected.
+/// Test 16: Runtime unknown fields are silently ignored.
+///
+/// RuntimeConfig no longer uses `#[serde(deny_unknown_fields)]` because
+/// new fields are added incrementally (Wave 3 integration) and old JSON
+/// payloads must remain forward-compatible. All new fields use
+/// `#[serde(default)]` so missing fields get sensible defaults.
 #[test]
-fn test_spec_runtime_unknown_field_rejected() {
+fn test_spec_runtime_unknown_field_ignored() {
     let payload = serde_json::json!({
         "version": 1,
         "input_relations": [],
@@ -431,8 +436,10 @@ fn test_spec_runtime_unknown_field_rejected() {
             "unexpected": true
         }
     });
-    let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
-    assert!(result.is_err());
+    let spec: SemanticExecutionSpec = serde_json::from_value(payload)
+        .expect("RuntimeConfig should ignore unknown fields for forward compatibility");
+    assert!(spec.runtime.compliance_capture);
+    assert_eq!(spec.runtime.tuner_mode, RuntimeTunerMode::Observe);
 }
 
 // Helper: Create minimal test spec

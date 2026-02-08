@@ -173,20 +173,30 @@
 - `RegistrySnapshot`: scalar flags detected dynamically; aggregate/window via static known-capabilities
 - `FunctionHookCapabilities` + `snapshot_hook_capabilities()` added for WS-P6 governance
 - Test suite: `tests/udf_conformance.rs` (~41 tests); `information_schema_*` tests are critical contracts
+- UDTF arg validation: `ensure_exact_args()` for fixed-arity; `ensure_arg_range()` for variable-arity
+- Optional arg extraction: `optional_int64_arg()` / `optional_string_arg()` in udtf_sources.rs
+- Delta CDF UDTF accepts 1-5 args: (uri, start_version, end_version, start_timestamp, end_timestamp)
+- CDF scan range args go into `DeltaCdfScanOptions` fields; `delta_cdf_provider` version/timestamp params are for table snapshot loading
 
-## Rust Engine Executor Modules (WS-P11/P13)
+## Rust Engine Executor Modules (WS-P11/P13/P7)
 - `executor/mod.rs` registers: delta_writer, maintenance, metrics_collector, result, runner, tracing
 - Pre-existing build errors in param_compiler.rs (ScalarAndMetadata) and datafusion_ext (StringAggDetUdaf)
 - `tracing` feature NOT yet in Cargo.toml (deferred to integration agent) -- cfg warnings expected
 - maintenance.rs: engine-level `MaintenanceReport` (stub); MIN_VACUUM_RETENTION_HOURS=168
 - tracing.rs: `#[cfg(feature = "tracing")]` dual paths; ExecutionSpanInfo always available
+- metrics_collector.rs (WS-P7): CollectedMetrics + collect_plan_metrics() tree walker
+  - Uses `partition_statistics(None)` not deprecated `statistics()` in DF 51
+  - WIRED: materializer.rs creates physical plans BEFORE execute_and_materialize() consumes output_plans
+  - Physical plans are created via df.clone().create_physical_plan() pre-execution
+  - Post-execution: collect_plan_metrics() walks each captured plan tree for real spill/memory/selectivity
+  - Fallback: when collected values are zero, falls back to env_profile defaults for tuner metrics
 
 ## Rust Engine PlanBundle + Substrait (WS-P1/P2)
 - `compiler/plan_bundle.rs`: PlanBundleRuntime (not serializable) + PlanBundleArtifact (Serialize/Deserialize)
 - `compiler/substrait.rs`: feature-gated via `#[cfg(feature = "substrait")]` with stub fallbacks
 - RunResult in `executor/result.rs` extended with `plan_bundles: Vec<PlanBundleArtifact>`
 - RunResultBuilder extended with `with_plan_bundles()` method
-- KNOWN: `python/materializer.rs` direct struct construction of RunResult needs `plan_bundles: vec![]` field
+- WIRED: `python/materializer.rs` now captures plan bundles when compliance_enabled (WS-P1)
 - DataFusion API notes:
   - `DFSchema::as_arrow()` returns `&Schema` (not Into<Schema>)
   - `DataFrame::create_physical_plan()` consumes self (must clone)
@@ -195,6 +205,15 @@
   - `plan.display_indent()` for normalized logical plan text
 - Dependencies added: datafusion-sql (workspace), prost, optional datafusion-substrait + substrait
 - Feature flag: `substrait = ["dep:datafusion-substrait", "dep:substrait"]`
+
+## Wave 3 Spec Expansion (SemanticExecutionSpec)
+- Removed `#[serde(deny_unknown_fields)]` from root spec; nested structs keep theirs
+- 5 new fields added (all `#[serde(default)]`): typed_parameters, rule_overlay, runtime_profile, cache_policy, maintenance
+- Struct literal construction sites that need updating when adding fields:
+  - `spec/hashing.rs` test helper `create_test_spec()` (struct literal)
+  - `spec/execution_spec.rs` `new()` constructor body
+  - All other test helpers use `::new()` (auto-defaults)
+- Cargo.toml tracing feature wired: `tracing = ["dep:tracing", "dep:tracing-subscriber"]`
 
 ## WS-P3: Typed Parametric Planning + WS-P4: Dynamic Rule Composition
 - `spec/parameters.rs`: TypedParameter, ParameterTarget, ParameterValue with to_scalar_value()
@@ -206,6 +225,68 @@
 - chrono is already a workspace dependency with serde feature -- use for Date32/Timestamp parsing
 - EXPLAIN VERBOSE rows have "plan_type" and "plan" columns; rule transitions follow pattern "logical_plan after <rule_name>"
 - 45 tests covering all three modules pass
+
+## WS-P7/P9: Real Metrics + Runtime Profiles
+- `ExecutionMetrics` now derives `Serialize, Deserialize` (added for MetricsStore)
+- `tuner/metrics_store.rs`: bounded FIFO MetricsStore with spec_hash-keyed history
+- `session/runtime_profiles.rs`: RuntimeProfileSpec with fingerprint() and small/medium/large presets
+- `factory.rs`: build_session_from_profile() takes (profile, ruleset, enable_function_factory, enable_domain_planner)
+- DF 51 API: `with_max_temp_directory_size` takes u64; `with_repartition_sorts/file_scans/file_min_size` exist as builder methods
+- DF 51 API: `metadata_size_hint` is `Option<usize>` in ParquetOptions; `max_predicate_cache_size` may not exist as typed field
+
+## WS-P14: Named Arguments + Custom Expression Planning
+- `build_session_from_profile()` extended with `enable_function_factory` and `enable_domain_planner` bool params
+- Wires `install_sql_macro_factory_native(&ctx)` and `install_expr_planners_native(&ctx, &["codeanatomy_domain"])` after UDF registration
+- Capability policy: installation failures are hard errors when flag is true; no-op when false
+- All UDAFs already have `.with_parameter_names()` via `signature_with_names()` helper -- no udaf_builtin.rs changes needed
+- `build_session_from_profile` has no external callers yet (safe to change signature)
+- Both install functions are pub at `datafusion_ext::` crate root (lib.rs)
+
+## ERR-02: Inline Cache Wiring in Plan Compiler
+- Inline cache (`HashMap<String, DataFrame>`) now threaded through compile_view() and resolve_source_with_templates()
+- resolve_source_with_templates() returns String (source name), not DataFrame -- builders resolve by name via ctx.table()
+- KEY: when an inlined source has no templates, it must be lazily registered in SessionContext so builders can find it
+- resolve_source() (cache-first DataFrame lookup) is used for output target resolution in compile() step 5
+- This eliminates the dead-code warning on resolve_source() naturally by actually using it
+
+## WS-P10: Plan-Aware Cache Boundaries
+- `compiler/cache_policy.rs`: CachePlacementPolicy, CacheOverride, CacheAction structs + compute_cache_boundaries() async fn
+- `cache_boundaries.rs`: Added insert_cache_boundaries_with_policy() that delegates to cache_policy module
+- compute_fanout() changed from `fn` to `pub(crate) fn` to allow reuse from cache_boundaries' new function
+- estimate_view_rows() uses partition_statistics(None) (DF 51+), falls back to 1000
+- Priority ordering: fanout * estimated_rows, descending; ForceCache gets u64::MAX priority
+- Test pattern: async test helpers calling compute_cache_boundaries need .await at callsite (easy to miss)
+- SessionContext::new() in tests creates empty context where all views fall back to 1000 estimated rows
+
+## Materializer.rs Bridge Wiring (Wave 2, Agent G)
+- All 5 stubs replaced with real implementations in `python/materializer.rs`
+- WS-P9: Profile-based session uses `build_session_from_profile()` + separate `SessionEnvelope::capture()`
+  - `RuntimeProfileSpec.memory_pool_bytes` is `usize`, needs `as u64` cast for envelope capture
+- WS-P1: Plan bundles captured in compliance path BEFORE execute_and_materialize consumes output_plans
+- WS-P7: Physical plans created pre-execution via `df.clone().create_physical_plan()`
+  - Metrics aggregated post-execution across all plans; tuner uses real values with env_profile fallbacks
+- WS-P11: Maintenance runs post-materialization; output_locations built from materialization_results + output_targets
+- Ordering constraint: plan_bundles capture + physical_plans capture MUST precede execute_and_materialize()
+  - output_plans is moved by execute_and_materialize (takes Vec by value)
+  - compliance explain loop already borrows &output_plans; bundles + plans captured in same region
+
+## Runner.rs Full Pipeline Wiring (Wave 2, Agent F)
+- `execute_and_materialize_with_plans()` added as new function (backward-compat; original unchanged)
+- Returns `(Vec<MaterializationResult>, Vec<Arc<dyn ExecutionPlan>>)` -- plan refs for post-exec metrics
+- `run_full_pipeline()` expanded with 4 integration points:
+  1. WS-P1: Plan bundles captured BEFORE output_plans consumed (iterates &output_plans)
+  2. WS-P7: Metrics aggregated via `collect_plan_metrics()` across all physical plans, scan_selectivity averaged
+  3. WS-P11: Maintenance locations derived from results + spec.output_targets.delta_location
+  4. WS-P13: Tracing span guard via `#[cfg(feature = "tracing")]` block (compile-time elimination when disabled)
+- `plan_compiler.rs` cache policy switch: `spec.cache_policy.is_some()` -> `insert_cache_boundaries_with_policy()`
+- All 241 unit + integration tests pass; both default and tracing-feature builds compile clean
+
+## Wave 3 Verification Results (2026-02-08)
+- All 3 compilation targets pass: default, `--features tracing`, `--features substrait`
+- Substrait fix: `prost` 0.13->0.14, `substrait` 0.52->0.62 (must match datafusion-substrait transitive dep)
+- 340+ tests pass across all workspace crates (241 lib + 8+5+1+8+3+6+3+1+16+5+45 = 342+ total)
+- All 15 audit gap items verified closed
+- Python quality gate passes (ruff format clean, ruff check 29 pre-existing errors, pyrefly 0 errors)
 
 ## Wave 3-B: Integration Tests + Drift Surface Expansion
 - Integration tests: `tests/integration/test_programmatic_architecture_parity.py`

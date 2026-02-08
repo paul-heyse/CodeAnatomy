@@ -75,7 +75,7 @@ impl<'a> SemanticPlanCompiler<'a> {
 
         // 3. Compile and register each view (respecting inline policy)
         for view_def in &ordered {
-            let df = self.compile_view(view_def, &parameter_values).await?;
+            let df = self.compile_view(view_def, &parameter_values, &inline_cache).await?;
             match inline_policy.get(&view_def.name) {
                 Some(InlineDecision::Inline) => {
                     inline_cache.insert(view_def.name.clone(), df);
@@ -87,13 +87,20 @@ impl<'a> SemanticPlanCompiler<'a> {
             }
         }
 
-        // 4. Insert cache boundaries
-        cache_boundaries::insert_cache_boundaries(self.ctx, self.spec).await?;
+        // 4. Insert cache boundaries (policy-aware when configured)
+        if let Some(policy) = &self.spec.cache_policy {
+            cache_boundaries::insert_cache_boundaries_with_policy(
+                self.ctx, self.spec, policy, None,
+            )
+            .await?;
+        } else {
+            cache_boundaries::insert_cache_boundaries(self.ctx, self.spec).await?;
+        }
 
         // 5. Build output DataFrames
         let mut outputs = Vec::new();
         for target in &self.spec.output_targets {
-            let df = self.ctx.table(&target.source_view).await?;
+            let df = self.resolve_source(&target.source_view, &inline_cache).await?;
             let projected = if target.columns.is_empty() {
                 df
             } else {
@@ -186,10 +193,13 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// Compile a single view definition into a DataFrame.
     ///
     /// Dispatches to transform-specific builders based on ViewTransform variant.
+    /// Accepts the inline cache so that inlined upstream views can be resolved
+    /// without requiring named registration in the SessionContext.
     async fn compile_view(
         &self,
         view_def: &ViewDefinition,
         parameter_values: &HashMap<String, String>,
+        inline_cache: &HashMap<String, DataFrame>,
     ) -> Result<DataFrame> {
         match &view_def.transform {
             ViewTransform::Normalize {
@@ -199,7 +209,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 text_columns,
             } => {
                 let source = self
-                    .resolve_source_with_templates(source, parameter_values)
+                    .resolve_source_with_templates(source, parameter_values, inline_cache)
                     .await?;
                 view_builder::build_normalize(
                     self.ctx,
@@ -219,10 +229,10 @@ impl<'a> SemanticPlanCompiler<'a> {
                 join_keys,
             } => {
                 let left = self
-                    .resolve_source_with_templates(left, parameter_values)
+                    .resolve_source_with_templates(left, parameter_values, inline_cache)
                     .await?;
                 let right = self
-                    .resolve_source_with_templates(right, parameter_values)
+                    .resolve_source_with_templates(right, parameter_values, inline_cache)
                     .await?;
                 join_builder::build_join(self.ctx, &left, &right, join_type, join_keys).await
             }
@@ -235,7 +245,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 let mut resolved_sources = Vec::with_capacity(sources.len());
                 for source in sources {
                     resolved_sources.push(
-                        self.resolve_source_with_templates(source, parameter_values)
+                        self.resolve_source_with_templates(source, parameter_values, inline_cache)
                             .await?,
                     );
                 }
@@ -250,14 +260,14 @@ impl<'a> SemanticPlanCompiler<'a> {
 
             ViewTransform::Project { source, columns } => {
                 let source = self
-                    .resolve_source_with_templates(source, parameter_values)
+                    .resolve_source_with_templates(source, parameter_values, inline_cache)
                     .await?;
                 view_builder::build_project(self.ctx, &source, columns).await
             }
 
             ViewTransform::Filter { source, predicate } => {
                 let source = self
-                    .resolve_source_with_templates(source, parameter_values)
+                    .resolve_source_with_templates(source, parameter_values, inline_cache)
                     .await?;
                 view_builder::build_filter(self.ctx, &source, predicate).await
             }
@@ -268,7 +278,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 aggregations,
             } => {
                 let source = self
-                    .resolve_source_with_templates(source, parameter_values)
+                    .resolve_source_with_templates(source, parameter_values, inline_cache)
                     .await?;
                 view_builder::build_aggregate(self.ctx, &source, group_by, aggregations).await
             }
@@ -340,6 +350,7 @@ impl<'a> SemanticPlanCompiler<'a> {
         &self,
         source: &str,
         parameter_values: &HashMap<String, String>,
+        inline_cache: &HashMap<String, DataFrame>,
     ) -> Result<String> {
         let mut current_source = source.to_string();
         let mut templates = self
@@ -350,11 +361,25 @@ impl<'a> SemanticPlanCompiler<'a> {
             .collect::<Vec<_>>();
         templates.sort_by(|left, right| left.name.cmp(&right.name));
 
+        // If the source is in the inline cache and has no templates to apply,
+        // register it lazily in the SessionContext so downstream builders
+        // (which resolve sources by name via ctx.table()) can find it.
+        if templates.is_empty() {
+            if let Some(cached_df) = inline_cache.get(&current_source) {
+                self.ctx
+                    .register_table(&current_source, cached_df.clone().into_view())?;
+            }
+        }
+
         for template in templates {
             let Some(value) = parameter_values.get(&template.name) else {
                 continue;
             };
-            let df = self.ctx.table(&current_source).await?;
+            let df = if let Some(cached) = inline_cache.get(&current_source) {
+                cached.clone()
+            } else {
+                self.ctx.table(&current_source).await?
+            };
             let schema = df.schema();
             let has_filter_column = schema
                 .fields()
@@ -463,7 +488,6 @@ impl<'a> SemanticPlanCompiler<'a> {
     ///
     /// This allows inlined views to be consumed by downstream views without
     /// requiring named registration.
-    #[allow(dead_code)]
     async fn resolve_source(
         &self,
         source_name: &str,

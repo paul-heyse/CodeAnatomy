@@ -170,6 +170,11 @@ mod tests {
             rulepack_profile: RulepackProfile::Default,
             parameter_templates: vec![],
             runtime: RuntimeConfig::default(),
+            typed_parameters: vec![],
+            rule_overlay: None,
+            runtime_profile: None,
+            cache_policy: None,
+            maintenance: None,
             spec_hash: [0u8; 32],
         }
     }

@@ -27,6 +27,10 @@ use datafusion_ext::{
     udf_registry,
 };
 
+type ParameterRow = (u64, Option<String>, String);
+type ParameterRowsByRid = HashMap<u8, Vec<ParameterRow>>;
+type ParameterRowsByFunction = HashMap<String, ParameterRowsByRid>;
+
 fn hash64_value(value: &str) -> i64 {
     let mut hasher = Blake2bVar::new(8).expect("blake2b supports 8-byte output");
     hasher.update(value.as_bytes());
@@ -472,8 +476,8 @@ fn identity_udfs_preserve_ordering() -> Result<()> {
         .scalar_functions()
         .get("cpg_score")
         .expect("cpg_score udf");
-    assert!(cpg.preserves_lex_ordering(&[props.clone()])?);
-    assert_eq!(cpg.output_ordering(&[props.clone()])?, ordered);
+    assert!(cpg.preserves_lex_ordering(std::slice::from_ref(&props))?);
+    assert_eq!(cpg.output_ordering(std::slice::from_ref(&props))?, ordered);
 
     Ok(())
 }
@@ -594,8 +598,7 @@ fn information_schema_parameters_match_snapshot() -> Result<()> {
         .downcast_ref::<UInt8Array>()
         .expect("rid");
 
-    let mut param_map: HashMap<String, HashMap<u8, Vec<(u64, Option<String>, String)>>> =
-        HashMap::new();
+    let mut param_map: ParameterRowsByFunction = HashMap::new();
     for row in 0..batch.num_rows() {
         if names.is_null(row) || modes.is_null(row) || data_types.is_null(row) {
             continue;
@@ -1093,7 +1096,7 @@ fn list_unique_sliding_window_retracts() -> Result<()> {
         .as_any()
         .downcast_ref::<ListArray>()
         .expect("list column");
-    let expected = vec![
+    let expected = [
         vec![Some("a")],
         vec![Some("a"), Some("b")],
         vec![Some("b"), Some("c")],

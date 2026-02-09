@@ -10,10 +10,12 @@ use datafusion_tracing::pretty_format_compact_batch;
 
 use crate::spec::runtime::{PreviewRedactionMode, TracingConfig};
 
+pub type PreviewFormatter = dyn Fn(&RecordBatch) -> Result<String, ArrowError> + Send + Sync;
+
 /// Build compact preview formatter from runtime config.
 pub fn build_preview_formatter(
     config: &TracingConfig,
-) -> Arc<dyn Fn(&RecordBatch) -> Result<String, ArrowError> + Send + Sync> {
+) -> Arc<PreviewFormatter> {
     let max_width = config.preview_max_width;
     let max_row_height = config.preview_max_row_height;
     let min_compacted_col_width = config.preview_min_compacted_col_width;

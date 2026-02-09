@@ -1,0 +1,26 @@
+[package]
+name = "codeanatomy_engine_py"
+version = "0.1.0"
+edition = "2021"
+description.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "codeanatomy_engine_py"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+codeanatomy-engine = { path = "../codeanatomy_engine" }
+pyo3 = { workspace = true, features = ["extension-module", "abi3-py313"] }
+serde_json = { workspace = true }
+serde_path_to_error = "0.1"
+hex = "0.4"
+tokio = { workspace = true }
+chrono = { workspace = true }
+
+[features]
+default = []
+tracing = ["codeanatomy-engine/tracing"]

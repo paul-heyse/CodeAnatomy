@@ -262,7 +262,7 @@ impl ScalarUDFImpl for PrefixedHash64Udf {
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args
             .arg_fields
-            .get(0)
+            .first()
             .map(|field| field.is_nullable())
             .unwrap_or(true)
             || args
@@ -414,7 +414,7 @@ impl ScalarUDFImpl for StableIdUdf {
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args
             .arg_fields
-            .get(0)
+            .first()
             .map(|field| field.is_nullable())
             .unwrap_or(true)
             || args

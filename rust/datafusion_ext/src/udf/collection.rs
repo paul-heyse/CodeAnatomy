@@ -125,8 +125,8 @@ impl ScalarUDFImpl for MapGetDefaultUdf {
         )?;
 
         let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 8);
-        for row in 0..num_rows {
-            let default_value = default_values[row].as_deref();
+        for (row, default_value) in default_values.iter().enumerate().take(num_rows) {
+            let default_value = default_value.as_deref();
             if map_values.is_null(row) {
                 if let Some(value) = default_value {
                     builder.append_value(value);

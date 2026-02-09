@@ -38,7 +38,6 @@ fn test_graph_validator_rejects_duplicate_output_tables() {
         ],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
 
     let result = validate_graph(&spec);

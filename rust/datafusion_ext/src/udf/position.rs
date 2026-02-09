@@ -107,13 +107,13 @@ fn code_unit_offset_to_py_index(line: &str, offset: usize, unit: ColUnit) -> Res
                 String::from_utf16(prefix).map_err(|err| DataFusionError::Plan(err.to_string()))?;
             Ok(prefix_str.chars().count())
         }
-        ColUnit::Byte => Ok(offset.min(line.as_bytes().len())),
+        ColUnit::Byte => Ok(offset.min(line.len())),
     }
 }
 
 fn byte_offset_from_py_index(line: &str, py_index: usize) -> usize {
     let prefix: String = line.chars().take(py_index).collect();
-    prefix.as_bytes().len()
+    prefix.len()
 }
 
 #[user_doc(
@@ -220,7 +220,7 @@ impl ScalarUDFImpl for ColToByteUdf {
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let nullable = args
             .arg_fields
-            .get(0)
+            .first()
             .map(|field| field.is_nullable())
             .unwrap_or(true)
             || args
@@ -268,7 +268,7 @@ impl ScalarUDFImpl for ColToByteUdf {
                 None => ColUnit::Utf32,
             };
             let byte_offset = if matches!(unit, ColUnit::Byte) {
-                clamp_offset(*offset, line.as_bytes().len()) as i64
+                clamp_offset(*offset, line.len()) as i64
             } else {
                 let py_index = code_unit_offset_to_py_index(line, normalize_offset(*offset), unit)?;
                 byte_offset_from_py_index(line, py_index) as i64
@@ -365,7 +365,7 @@ impl ScalarUDFImpl for ColToByteUdf {
                 None => ColUnit::Utf32,
             };
             if matches!(unit, ColUnit::Byte) {
-                let max_len = line.as_bytes().len();
+                let max_len = line.len();
                 let bytes = clamp_offset(offset, max_len);
                 builder.append_value(bytes as i64);
                 continue;

@@ -42,7 +42,7 @@ pub fn register_instrumented_stores_for_locations(
             store_urls.push(store_url);
         }
     }
-    store_urls.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    store_urls.sort_by_key(|left| left.to_string());
 
     for store_url in store_urls {
         register_instrumented_store(ctx, &store_url)?;

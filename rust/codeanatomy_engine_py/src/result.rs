@@ -26,7 +26,7 @@ impl PyRunResult {
 }
 
 impl PyRunResult {
-    pub fn from_run_result(result: &crate::executor::result::RunResult) -> Self {
+    pub fn from_run_result(result: &codeanatomy_engine::executor::result::RunResult) -> Self {
         Self {
             inner_json: result.to_json().unwrap_or_else(|_| "{}".to_string()),
         }

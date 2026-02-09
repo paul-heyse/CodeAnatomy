@@ -14,7 +14,7 @@ fn minimal_spec_payload(runtime: serde_json::Value) -> serde_json::Value {
         "output_targets": [],
         "rule_intents": [],
         "rulepack_profile": "Default",
-        "parameter_templates": [],
+        "typed_parameters": [],
         "runtime": runtime,
     })
 }
@@ -74,4 +74,3 @@ fn test_otlp_protocol_variants_deserialize() {
         assert_eq!(tracing.otlp_protocol, Some(expected));
     }
 }
-

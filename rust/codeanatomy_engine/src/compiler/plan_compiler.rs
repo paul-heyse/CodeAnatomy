@@ -9,8 +9,7 @@
 
 use datafusion::prelude::*;
 use datafusion_common::{DataFusionError, Result};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::env;
+use std::collections::{HashMap, VecDeque};
 
 use crate::compiler::cache_boundaries;
 use crate::compiler::graph_validator;
@@ -32,86 +31,6 @@ pub struct PlanValidation {
     pub explain_verbose: String,
 }
 
-/// Validate that the spec does not use both typed parameters and parameter templates.
-///
-/// Typed parameters and parameter templates are mutually exclusive parameter modes.
-/// Using both simultaneously is a configuration error that prevents deterministic
-/// compilation. Typed parameters are the canonical path; parameter templates are
-/// retained only for transitional compatibility.
-///
-/// # Errors
-///
-/// Returns `DataFusionError::Plan` if both `typed_parameters` and
-/// `parameter_templates` are non-empty.
-pub fn validate_parameter_mode(spec: &SemanticExecutionSpec) -> Result<()> {
-    if !spec.typed_parameters.is_empty() && !spec.parameter_templates.is_empty() {
-        return Err(DataFusionError::Plan(
-            "Parameter mode conflict: use either typed_parameters or parameter_templates, \
-             not both. typed_parameters is the canonical path; parameter_templates is \
-             deprecated and retained only for transitional compatibility."
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// Runtime warning for deprecated template parameter mode.
-pub fn deprecated_template_warning(spec: &SemanticExecutionSpec) -> Option<String> {
-    if spec.parameter_templates.is_empty() {
-        None
-    } else {
-        Some(
-            "parameter_templates is deprecated and will be removed in a future release; migrate to typed_parameters."
-                .to_string(),
-        )
-    }
-}
-
-/// Derive per-input filter probe expressions from `ViewTransform::Filter`.
-pub async fn extract_input_filter_predicates(
-    ctx: &SessionContext,
-    spec: &SemanticExecutionSpec,
-) -> (BTreeMap<String, Vec<Expr>>, Vec<String>) {
-    let input_names: HashSet<&str> = spec
-        .input_relations
-        .iter()
-        .map(|relation| relation.logical_name.as_str())
-        .collect();
-    let mut predicates: BTreeMap<String, Vec<Expr>> = BTreeMap::new();
-    let mut warnings = Vec::new();
-
-    for view in &spec.view_definitions {
-        let ViewTransform::Filter { source, predicate } = &view.transform else {
-            continue;
-        };
-        if !input_names.contains(source.as_str()) {
-            continue;
-        }
-
-        let source_df = match ctx.table(source).await {
-            Ok(df) => df,
-            Err(err) => {
-                warnings.push(format!(
-                    "Pushdown probe skipped for '{source}': failed to resolve source table ({err})"
-                ));
-                continue;
-            }
-        };
-        match ctx.parse_sql_expr(predicate, &source_df.schema()) {
-            Ok(expr) => {
-                predicates.entry(source.clone()).or_default().push(expr);
-            }
-            Err(err) => {
-                warnings.push(format!(
-                    "Pushdown probe skipped for '{source}': failed to parse predicate '{predicate}' ({err})"
-                ));
-            }
-        }
-    }
-
-    (predicates, warnings)
-}
-
 /// Central plan compiler for semantic execution specs.
 pub struct SemanticPlanCompiler<'a> {
     ctx: &'a SessionContext,
@@ -129,29 +48,15 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// Returns Vec<(OutputTarget, DataFrame)> ready for materialization.
     ///
     /// Process:
-    /// 0. Validate parameter mode exclusivity (typed vs template)
     /// 1. Validate graph structure (WS4.5)
     /// 2. Topological sort (view-to-view edges only)
     /// 3. Compile each view and register as lazy view
     /// 4. Insert cost-aware cache boundaries
     /// 5. Build output DataFrames
-    /// 6. Apply typed parameters to outputs (when using typed path)
+    /// 6. Apply typed parameters to outputs when configured
     pub async fn compile(&self) -> Result<Vec<(OutputTarget, DataFrame)>> {
-        // 0. Validate parameter mode exclusivity
-        validate_parameter_mode(self.spec)?;
-
-        let uses_typed_parameters = !self.spec.typed_parameters.is_empty();
-
         // 1. Validate graph
         graph_validator::validate_graph(self.spec)?;
-
-        // Collect template parameter values only when NOT using typed parameters.
-        // When typed parameters are present, template collection is bypassed entirely.
-        let parameter_values = if uses_typed_parameters {
-            HashMap::new()
-        } else {
-            self.collect_parameter_values()?
-        };
 
         // 2. Topological sort
         let ordered = self.topological_sort()?;
@@ -170,7 +75,7 @@ impl<'a> SemanticPlanCompiler<'a> {
 
         // 3. Compile and register each view (respecting inline policy)
         for view_def in &ordered {
-            let df = self.compile_view(view_def, &parameter_values, &inline_cache).await?;
+            let df = self.compile_view(view_def, &inline_cache).await?;
             match inline_policy.get(&view_def.name) {
                 Some(InlineDecision::Inline) => {
                     inline_cache.insert(view_def.name.clone(), df);
@@ -199,14 +104,14 @@ impl<'a> SemanticPlanCompiler<'a> {
             let projected = if target.columns.is_empty() {
                 df
             } else {
-                df.select(target.columns.iter().map(|c| col(c)).collect::<Vec<_>>())?
+                df.select(target.columns.iter().map(col).collect::<Vec<_>>())?
             };
 
-            // 6. Apply typed parameters when using the canonical typed path.
+            // 6. Apply typed parameters when the canonical typed path is active.
             // This applies positional placeholder bindings and typed filter
             // expressions directly at the DataFrame level, bypassing SQL
             // literal interpolation entirely.
-            let final_df = if uses_typed_parameters {
+            let final_df = if !self.spec.typed_parameters.is_empty() {
                 param_compiler::apply_typed_parameters(
                     projected,
                     &self.spec.typed_parameters,
@@ -308,7 +213,6 @@ impl<'a> SemanticPlanCompiler<'a> {
     async fn compile_view(
         &self,
         view_def: &ViewDefinition,
-        parameter_values: &HashMap<String, String>,
         inline_cache: &HashMap<String, DataFrame>,
     ) -> Result<DataFrame> {
         match &view_def.transform {
@@ -318,9 +222,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 span_columns,
                 text_columns,
             } => {
-                let source = self
-                    .resolve_source_with_templates(source, parameter_values, inline_cache)
-                    .await?;
+                let source = self.resolve_source_name(source, inline_cache).await?;
                 view_builder::build_normalize(
                     self.ctx,
                     &view_def.name,
@@ -338,12 +240,8 @@ impl<'a> SemanticPlanCompiler<'a> {
                 join_type,
                 join_keys,
             } => {
-                let left = self
-                    .resolve_source_with_templates(left, parameter_values, inline_cache)
-                    .await?;
-                let right = self
-                    .resolve_source_with_templates(right, parameter_values, inline_cache)
-                    .await?;
+                let left = self.resolve_source_name(left, inline_cache).await?;
+                let right = self.resolve_source_name(right, inline_cache).await?;
                 join_builder::build_join(self.ctx, &left, &right, join_type, join_keys).await
             }
 
@@ -354,10 +252,7 @@ impl<'a> SemanticPlanCompiler<'a> {
             } => {
                 let mut resolved_sources = Vec::with_capacity(sources.len());
                 for source in sources {
-                    resolved_sources.push(
-                        self.resolve_source_with_templates(source, parameter_values, inline_cache)
-                            .await?,
-                    );
+                    resolved_sources.push(self.resolve_source_name(source, inline_cache).await?);
                 }
                 union_builder::build_union(
                     self.ctx,
@@ -369,16 +264,12 @@ impl<'a> SemanticPlanCompiler<'a> {
             }
 
             ViewTransform::Project { source, columns } => {
-                let source = self
-                    .resolve_source_with_templates(source, parameter_values, inline_cache)
-                    .await?;
+                let source = self.resolve_source_name(source, inline_cache).await?;
                 view_builder::build_project(self.ctx, &source, columns).await
             }
 
             ViewTransform::Filter { source, predicate } => {
-                let source = self
-                    .resolve_source_with_templates(source, parameter_values, inline_cache)
-                    .await?;
+                let source = self.resolve_source_name(source, inline_cache).await?;
                 view_builder::build_filter(self.ctx, &source, predicate).await
             }
 
@@ -387,9 +278,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 group_by,
                 aggregations,
             } => {
-                let source = self
-                    .resolve_source_with_templates(source, parameter_values, inline_cache)
-                    .await?;
+                let source = self.resolve_source_name(source, inline_cache).await?;
                 view_builder::build_aggregate(self.ctx, &source, group_by, aggregations).await
             }
 
@@ -421,148 +310,15 @@ impl<'a> SemanticPlanCompiler<'a> {
         }
     }
 
-    fn collect_parameter_values(&self) -> Result<HashMap<String, String>> {
-        let mut expected_names: HashMap<String, String> = HashMap::new();
-        for template in &self.spec.parameter_templates {
-            expected_names.insert(template.name.to_ascii_uppercase(), template.name.clone());
-        }
-
-        let mut values = HashMap::new();
-        for (key, value) in env::vars() {
-            let Some(suffix) = key.strip_prefix("CODEANATOMY_PARAM_") else {
-                continue;
-            };
-            let lookup = suffix.to_ascii_uppercase();
-            let Some(template_name) = expected_names.get(&lookup) else {
-                return Err(DataFusionError::Plan(format!(
-                    "Unknown parameter template env var '{key}'"
-                )));
-            };
-            values.insert(template_name.clone(), value);
-        }
-        let missing = self
-            .spec
-            .parameter_templates
-            .iter()
-            .filter(|template| !values.contains_key(&template.name))
-            .map(|template| template.name.clone())
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            return Err(DataFusionError::Plan(format!(
-                "Missing required parameter template values: {}. Set env vars CODEANATOMY_PARAM_<NAME>.",
-                missing.join(", ")
-            )));
-        }
-        Ok(values)
-    }
-
-    async fn resolve_source_with_templates(
+    async fn resolve_source_name(
         &self,
         source: &str,
-        parameter_values: &HashMap<String, String>,
         inline_cache: &HashMap<String, DataFrame>,
     ) -> Result<String> {
-        let mut current_source = source.to_string();
-        let mut templates = self
-            .spec
-            .parameter_templates
-            .iter()
-            .filter(|template| template.base_table == source)
-            .collect::<Vec<_>>();
-        templates.sort_by(|left, right| left.name.cmp(&right.name));
-
-        // If the source is in the inline cache and has no templates to apply,
-        // register it lazily in the SessionContext so downstream builders
-        // (which resolve sources by name via ctx.table()) can find it.
-        if templates.is_empty() {
-            if let Some(cached_df) = inline_cache.get(&current_source) {
-                self.ctx
-                    .register_table(&current_source, cached_df.clone().into_view())?;
-            }
+        if let Some(cached_df) = inline_cache.get(source) {
+            self.ctx.register_table(source, cached_df.clone().into_view())?;
         }
-
-        for template in templates {
-            let Some(value) = parameter_values.get(&template.name) else {
-                continue;
-            };
-            let df = if let Some(cached) = inline_cache.get(&current_source) {
-                cached.clone()
-            } else {
-                self.ctx.table(&current_source).await?
-            };
-            let schema = df.schema();
-            let has_filter_column = schema
-                .fields()
-                .iter()
-                .any(|field| field.name() == template.filter_column.as_str());
-            if !has_filter_column {
-                let available_columns = schema
-                    .fields()
-                    .iter()
-                    .map(|field| field.name().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                return Err(DataFusionError::Plan(format!(
-                    "Parameter template '{}' references unknown filter column '{}' in '{}'. Available columns: [{}]",
-                    template.name, template.filter_column, current_source, available_columns
-                )));
-            }
-            let parameter_literal =
-                Self::render_parameter_literal(value, &template.parameter_type)?;
-            let filter_sql = format!("{} = {}", template.filter_column, parameter_literal);
-            let filter_expr = self.ctx.parse_sql_expr(&filter_sql, &schema)?;
-            let filtered = df.filter(filter_expr)?;
-            let filtered_view_name = format!("__param_{}_{}", source, template.name);
-            self.ctx
-                .register_table(&filtered_view_name, filtered.into_view())?;
-            current_source = filtered_view_name;
-        }
-        Ok(current_source)
-    }
-
-    fn render_parameter_literal(raw: &str, parameter_type: &str) -> Result<String> {
-        let normalized = parameter_type.trim().to_ascii_lowercase();
-        match normalized.as_str() {
-            "string" | "str" | "utf8" => {
-                let escaped = raw.replace('\'', "''");
-                Ok(format!("'{escaped}'"))
-            }
-            "int" | "integer" | "long" => raw
-                .parse::<i128>()
-                .map(|_| raw.to_string())
-                .map_err(|_| {
-                    DataFusionError::Plan(format!(
-                        "Invalid integer parameter value '{}' for type '{}'",
-                        raw, parameter_type
-                    ))
-                }),
-            "float" | "double" | "number" | "decimal" => raw
-                .parse::<f64>()
-                .map(|_| raw.to_string())
-                .map_err(|_| {
-                    DataFusionError::Plan(format!(
-                        "Invalid numeric parameter value '{}' for type '{}'",
-                        raw, parameter_type
-                    ))
-                }),
-            "bool" | "boolean" => {
-                let lowered = raw.trim().to_ascii_lowercase();
-                if lowered == "true" || lowered == "1" {
-                    Ok("true".to_string())
-                } else if lowered == "false" || lowered == "0" {
-                    Ok("false".to_string())
-                } else {
-                    Err(DataFusionError::Plan(format!(
-                        "Invalid boolean parameter value '{}' for type '{}'",
-                        raw, parameter_type
-                    )))
-                }
-            }
-            other => Err(DataFusionError::Plan(format!(
-                "Unsupported parameter type '{}' for runtime template substitution",
-                other
-            ))),
-        }
+        Ok(source.to_string())
     }
 
     /// Compute reference counts (fanout) for each view by name.
@@ -613,8 +369,7 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// Apply parameters to a DataFrame using the appropriate mode.
     ///
     /// Routes to the typed parameter path when `typed_parameters` is non-empty,
-    /// otherwise returns the DataFrame unchanged (template parameters are applied
-    /// inline during view compilation via `resolve_source_with_templates`).
+    /// otherwise returns the DataFrame unchanged.
     ///
     /// This method is intended for callers who need explicit parameter application
     /// outside the main `compile()` flow.
@@ -623,9 +378,7 @@ impl<'a> SemanticPlanCompiler<'a> {
             return param_compiler::apply_typed_parameters(df, &self.spec.typed_parameters)
                 .await;
         }
-        // Transitional fallback: template parameters are applied inline during
-        // view compilation (resolve_source_with_templates), not at this stage.
-        // This path returns the DataFrame unchanged.
+        // No typed parameters configured; leave DataFrame unchanged.
         Ok(df)
     }
 
@@ -704,7 +457,6 @@ mod tests {
             vec![],
             vec![],
             RulepackProfile::Default,
-            vec![],
         );
 
         let ctx = SessionContext::new();
@@ -735,7 +487,6 @@ mod tests {
             vec![],
             vec![],
             RulepackProfile::Default,
-            vec![],
         );
 
         let ctx = SessionContext::new();
@@ -789,7 +540,6 @@ mod tests {
             vec![],
             vec![],
             RulepackProfile::Default,
-            vec![],
         );
 
         let ctx = SessionContext::new();
@@ -856,7 +606,6 @@ mod tests {
             vec![],
             vec![],
             RulepackProfile::Default,
-            vec![],
         );
 
         let ctx = SessionContext::new();
@@ -904,7 +653,6 @@ mod tests {
             vec![],
             vec![],
             RulepackProfile::Default,
-            vec![],
         );
 
         let ctx = SessionContext::new();
@@ -956,7 +704,6 @@ mod tests {
             outputs,
             vec![],
             RulepackProfile::Default,
-            vec![],
         );
 
         let compiler = SemanticPlanCompiler::new(&ctx, &spec);

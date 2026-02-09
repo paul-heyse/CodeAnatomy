@@ -35,10 +35,22 @@ pub async fn test_session() -> (datafusion::prelude::SessionContext, SessionEnve
     let profile = test_environment_profile();
     let factory = SessionFactory::new(profile);
     let ruleset = empty_ruleset();
-    factory
-        .build_session(&ruleset, [0u8; 32], None)
+    let state = factory
+        .build_session_state(&ruleset, [0u8; 32], None)
         .await
-        .expect("test session should build successfully")
+        .expect("test session should build successfully");
+    let envelope = SessionEnvelope::capture(
+        &state.ctx,
+        [0u8; 32],
+        ruleset.fingerprint,
+        state.memory_pool_bytes,
+        true,
+        state.planning_surface_hash,
+        SessionEnvelope::hash_provider_identities(&[]),
+    )
+    .await
+    .expect("test envelope should capture successfully");
+    (state.ctx, envelope)
 }
 
 /// Create a test `EnvironmentProfile` with deterministic values.

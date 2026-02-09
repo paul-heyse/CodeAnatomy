@@ -12,6 +12,7 @@
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Stable summary payload for trace/observability consumers.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -25,6 +26,8 @@ pub struct TraceMetricsSummary {
     pub spilled_rows: u64,
     pub selectivity: Option<f64>,
     pub operator_count: usize,
+    pub warning_count_total: u64,
+    pub warning_counts_by_code: BTreeMap<String, u64>,
 }
 
 /// Real execution metrics collected from the executed plan tree.
@@ -81,6 +84,8 @@ pub fn summarize_collected_metrics(metrics: &CollectedMetrics) -> TraceMetricsSu
         spilled_rows: 0,
         selectivity: Some(metrics.scan_selectivity),
         operator_count: metrics.operator_metrics.len(),
+        warning_count_total: 0,
+        warning_counts_by_code: BTreeMap::new(),
     }
 }
 

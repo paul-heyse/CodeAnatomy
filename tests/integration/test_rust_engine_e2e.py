@@ -17,7 +17,7 @@ def test_rust_engine_compile_and_materialize_boundary() -> None:
     join_edges: list[dict[str, object]] = []
     join_constraints: list[dict[str, object]] = []
     rule_intents: list[dict[str, object]] = []
-    parameter_templates: list[dict[str, object]] = []
+    typed_parameters: list[dict[str, object]] = []
 
     spec_payload = {
         "version": 1,
@@ -42,7 +42,7 @@ def test_rust_engine_compile_and_materialize_boundary() -> None:
         ],
         "rule_intents": rule_intents,
         "rulepack_profile": "Default",
-        "parameter_templates": parameter_templates,
+        "typed_parameters": typed_parameters,
     }
     spec_json = json.dumps(spec_payload)
 
@@ -96,7 +96,7 @@ def _successful_spec(input_location: str, output_location: str) -> dict[str, obj
         ],
         "rule_intents": [],
         "rulepack_profile": "Default",
-        "parameter_templates": [],
+        "typed_parameters": [],
         "runtime": {"compliance_capture": True},
     }
 

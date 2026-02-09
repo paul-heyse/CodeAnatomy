@@ -13,25 +13,34 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::context::{PyRuntimeEnvBuilder, PySessionContext};
 use crate::delta_control_plane::{
     delta_add_actions as delta_add_actions_native, delta_cdf_provider as delta_cdf_provider_native,
-    delta_provider_from_session as delta_provider_from_session_native,
-    delta_provider_with_files as delta_provider_with_files_native,
+    delta_provider_from_session_request as delta_provider_from_session_native,
+    delta_provider_with_files_request as delta_provider_with_files_native,
     scan_config_from_session as delta_scan_config_from_session_native,
-    snapshot_info_with_gate as delta_snapshot_info_native, DeltaCdfScanOptions, DeltaScanOverrides,
+    snapshot_info_with_gate as delta_snapshot_info_native, DeltaCdfScanOptions,
+    DeltaProviderFromSessionRequest, DeltaProviderWithFilesRequest, DeltaScanOverrides,
 };
 use crate::delta_maintenance::{
-    delta_add_constraints as delta_add_constraints_native,
-    delta_add_features as delta_add_features_native,
+    delta_add_constraints_request as delta_add_constraints_native,
+    delta_add_features_request as delta_add_features_native,
     delta_cleanup_metadata as delta_cleanup_metadata_native,
     delta_create_checkpoint as delta_create_checkpoint_native,
-    delta_drop_constraints as delta_drop_constraints_native,
-    delta_optimize_compact as delta_optimize_compact_native, delta_restore as delta_restore_native,
-    delta_set_properties as delta_set_properties_native, delta_vacuum as delta_vacuum_native,
-    DeltaMaintenanceReport,
+    delta_drop_constraints_request as delta_drop_constraints_native,
+    delta_optimize_compact_request as delta_optimize_compact_native,
+    delta_restore_request as delta_restore_native,
+    delta_set_properties_request as delta_set_properties_native,
+    delta_vacuum_request as delta_vacuum_native, DeltaAddConstraintsRequest,
+    DeltaAddFeaturesRequest, DeltaDropConstraintsRequest, DeltaMaintenanceReport,
+    DeltaOptimizeCompactRequest, DeltaRestoreRequest, DeltaSetPropertiesRequest,
+    DeltaVacuumRequest,
 };
 use crate::delta_mutations::{
-    delta_data_check as delta_data_check_native, delta_delete as delta_delete_native,
-    delta_merge as delta_merge_native, delta_update as delta_update_native,
-    delta_write_ipc as delta_write_ipc_native, DeltaMutationReport,
+    delta_data_check_request as delta_data_check_native,
+    delta_delete_request as delta_delete_native,
+    delta_merge_request as delta_merge_native,
+    delta_update_request as delta_update_native,
+    delta_write_ipc_request as delta_write_ipc_native, DeltaDataCheckRequest,
+    DeltaDeleteRequest, DeltaMergeRequest, DeltaMutationReport, DeltaUpdateRequest,
+    DeltaWriteIpcRequest,
 };
 use crate::delta_observability::{
     add_action_payloads, maintenance_report_payload, mutation_report_payload, scan_config_payload,
@@ -1415,7 +1424,16 @@ fn delta_table_provider_with_files(
     let runtime = runtime()?;
     let (provider, snapshot, scan_config, add_actions) = runtime
         .block_on(delta_provider_with_files_native(
-            &ctx.ctx, &table_uri, storage, version, timestamp, overrides, files, gate,
+            DeltaProviderWithFilesRequest {
+                session_ctx: &ctx.ctx,
+                table_uri: &table_uri,
+                storage_options: storage,
+                version,
+                timestamp,
+                overrides,
+                files,
+                gate,
+            },
         ))
         .map_err(|err| {
             PyRuntimeError::new_err(format!(
@@ -2090,7 +2108,16 @@ fn delta_table_provider_from_session(
     let runtime = runtime()?;
     let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
         .block_on(delta_provider_from_session_native(
-            &ctx.ctx, &table_uri, storage, version, timestamp, predicate, overrides, gate,
+            DeltaProviderFromSessionRequest {
+                session_ctx: &ctx.ctx,
+                table_uri: &table_uri,
+                storage_options: storage,
+                version,
+                timestamp,
+                predicate,
+                overrides,
+                gate,
+            },
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to build Delta provider: {err}")))?;
     let payload = PyDict::new(py);
@@ -2246,21 +2273,21 @@ fn delta_write_ipc(
     )?;
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_write_ipc_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_write_ipc_native(DeltaWriteIpcRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
-            data_ipc.as_slice(),
+            data_ipc: data_ipc.as_slice(),
             save_mode,
-            schema_mode,
+            schema_mode_label: schema_mode,
             partition_columns,
             target_file_size,
             gate,
-            Some(commit_options),
+            commit_options: Some(commit_options),
             extra_constraints,
-        ))
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta write failed: {err}")))?;
     mutation_report_to_pydict(py, &report)
 }
@@ -2303,16 +2330,16 @@ fn delta_delete(
     )?;
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_delete_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_delete_native(DeltaDeleteRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             predicate,
             gate,
-            Some(commit_options),
-        ))
+            commit_options: Some(commit_options),
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta delete failed: {err}")))?;
     mutation_report_to_pydict(py, &report)
 }
@@ -2362,17 +2389,17 @@ fn delta_update(
     )?;
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_update_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_update_native(DeltaUpdateRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             predicate,
             updates,
             gate,
-            Some(commit_options),
-        ))
+            commit_options: Some(commit_options),
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta update failed: {err}")))?;
     mutation_report_to_pydict(py, &report)
 }
@@ -2437,13 +2464,13 @@ fn delta_merge(
     )?;
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_merge_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_merge_native(DeltaMergeRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
-            &source_table,
+            source_table: &source_table,
             predicate,
             source_alias,
             target_alias,
@@ -2454,9 +2481,9 @@ fn delta_merge(
             not_matched_by_source_predicate,
             delete_not_matched_by_source,
             gate,
-            Some(commit_options),
+            commit_options: Some(commit_options),
             extra_constraints,
-        ))
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta merge failed: {err}")))?;
     mutation_report_to_pydict(py, &report)
 }
@@ -2505,16 +2532,16 @@ fn delta_optimize_compact(
     };
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_optimize_compact_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_optimize_compact_native(DeltaOptimizeCompactRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             target_size,
             gate,
-            Some(commit_options),
-        ))
+            commit_options: Some(commit_options),
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta optimize failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
 }
@@ -2562,10 +2589,10 @@ fn delta_vacuum(
     let require_vacuum_protocol_check = require_vacuum_protocol_check.unwrap_or(false);
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_vacuum_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_vacuum_native(DeltaVacuumRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             retention_hours,
@@ -2573,8 +2600,8 @@ fn delta_vacuum(
             enforce_retention_duration,
             require_vacuum_protocol_check,
             gate,
-            Some(commit_options),
-        ))
+            commit_options: Some(commit_options),
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta vacuum failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
 }
@@ -2617,17 +2644,17 @@ fn delta_restore(
     )?;
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_restore_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_restore_native(DeltaRestoreRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             restore_version,
             restore_timestamp,
             gate,
-            Some(commit_options),
-        ))
+            commit_options: Some(commit_options),
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta restore failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
 }
@@ -2675,16 +2702,16 @@ fn delta_set_properties(
     )?;
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_set_properties_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_set_properties_native(DeltaSetPropertiesRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             properties,
             gate,
-            Some(commit_options),
-        ))
+            commit_options: Some(commit_options),
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta set-properties failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
 }
@@ -2733,17 +2760,17 @@ fn delta_add_features(
     let allow_protocol_versions_increase = allow_protocol_versions_increase.unwrap_or(true);
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_add_features_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_add_features_native(DeltaAddFeaturesRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             features,
             allow_protocol_versions_increase,
             gate,
-            Some(commit_options),
-        ))
+            commit_options: Some(commit_options),
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta add-features failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
 }
@@ -2790,16 +2817,16 @@ fn delta_add_constraints(
     )?;
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_add_constraints_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_add_constraints_native(DeltaAddConstraintsRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             constraints,
             gate,
-            Some(commit_options),
-        ))
+            commit_options: Some(commit_options),
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta add-constraints failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
 }
@@ -2847,17 +2874,17 @@ fn delta_drop_constraints(
     )?;
     let runtime = runtime()?;
     let report = runtime
-        .block_on(delta_drop_constraints_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_drop_constraints_native(DeltaDropConstraintsRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             constraints,
-            raise_if_not_exists.unwrap_or(true),
+            raise_if_not_exists: raise_if_not_exists.unwrap_or(true),
             gate,
-            Some(commit_options),
-        ))
+            commit_options: Some(commit_options),
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta drop-constraints failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
 }
@@ -2944,16 +2971,16 @@ fn delta_data_checker(
     );
     let runtime = runtime()?;
     runtime
-        .block_on(delta_data_check_native(
-            &ctx.ctx,
-            &table_uri,
-            storage,
+        .block_on(delta_data_check_native(DeltaDataCheckRequest {
+            session_ctx: &ctx.ctx,
+            table_uri: &table_uri,
+            storage_options: storage,
             version,
             timestamp,
             gate,
-            data_ipc.as_slice(),
+            data_ipc: data_ipc.as_slice(),
             extra_constraints,
-        ))
+        }))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta data check failed: {err}")))
 }
 

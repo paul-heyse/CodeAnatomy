@@ -10,3 +10,4 @@ pub mod pipeline;
 pub mod result;
 pub mod runner;
 pub mod tracing;
+pub mod warnings;

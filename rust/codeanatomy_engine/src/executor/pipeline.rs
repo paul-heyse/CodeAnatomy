@@ -30,11 +30,14 @@ use datafusion::prelude::*;
 use datafusion_common::Result;
 
 use crate::compiler::plan_bundle::{self, PlanBundleArtifact};
-use crate::compiler::plan_compiler::{deprecated_template_warning, SemanticPlanCompiler};
+use crate::compiler::plan_compiler::SemanticPlanCompiler;
+use crate::executor::delta_writer::LineageContext;
 use crate::executor::maintenance;
 use crate::executor::metrics_collector::{self, CollectedMetrics, summarize_collected_metrics};
 use crate::executor::result::RunResult;
 use crate::executor::runner::execute_and_materialize_with_plans;
+use crate::executor::warnings::{warning_counts_by_code, RunWarning, WarningCode, WarningStage};
+use crate::session::envelope::SessionEnvelope;
 use crate::spec::execution_spec::SemanticExecutionSpec;
 
 /// Outcome of the unified pipeline execution.
@@ -90,12 +93,10 @@ pub async fn execute_pipeline(
     rulepack_fingerprint: [u8; 32],
     provider_identities: Vec<plan_bundle::ProviderIdentity>,
     planning_surface_hash: [u8; 32],
-    preflight_warnings: Vec<String>,
+    preflight_warnings: Vec<RunWarning>,
 ) -> Result<PipelineOutcome> {
     let mut warnings = preflight_warnings;
-    if let Some(template_warning) = deprecated_template_warning(spec) {
-        warnings.push(template_warning);
-    }
+    let run_started_at = chrono::Utc::now().to_rfc3339();
 
     let mut builder = RunResult::builder()
         .with_spec_hash(spec.spec_hash)
@@ -118,14 +119,16 @@ pub async fn execute_pipeline(
             match plan_bundle::capture_plan_bundle_runtime(ctx, df).await {
                 Ok(runtime) => {
                     match plan_bundle::build_plan_bundle_artifact_with_warnings(
-                        ctx,
-                        &runtime,
-                        rulepack_fingerprint,
-                        provider_identities.clone(),
-                        spec.runtime.capture_substrait,
-                        false, // SQL text capture not enabled by default
-                        spec.runtime.capture_delta_codec,
-                        planning_surface_hash,
+                        plan_bundle::PlanBundleArtifactBuildRequest {
+                            ctx,
+                            runtime: &runtime,
+                            rulepack_fingerprint,
+                            provider_identities: provider_identities.clone(),
+                            capture_substrait: spec.runtime.capture_substrait,
+                            capture_sql: false, // SQL text capture not enabled by default
+                            capture_delta_codec: spec.runtime.capture_delta_codec,
+                            planning_surface_hash,
+                        },
                     )
                     .await
                     {
@@ -133,13 +136,17 @@ pub async fn execute_pipeline(
                             plan_bundles.push(artifact);
                             warnings.extend(capture_warnings);
                         }
-                        Err(e) => warnings.push(format!(
-                            "Plan bundle artifact construction failed: {e}"
+                        Err(e) => warnings.push(RunWarning::new(
+                            WarningCode::PlanBundleArtifactBuildFailed,
+                            WarningStage::PlanBundle,
+                            format!("Plan bundle artifact construction failed: {e}"),
                         )),
                     }
                 }
-                Err(e) => warnings.push(format!(
-                    "Plan bundle runtime capture failed: {e}"
+                Err(e) => warnings.push(RunWarning::new(
+                    WarningCode::PlanBundleRuntimeCaptureFailed,
+                    WarningStage::PlanBundle,
+                    format!("Plan bundle runtime capture failed: {e}"),
                 )),
             }
         }
@@ -149,13 +156,29 @@ pub async fn execute_pipeline(
     }
 
     // 3. Execute and materialize, retaining physical plan references for metrics
-    let (results, physical_plans) = execute_and_materialize_with_plans(
-        ctx,
-        output_plans,
-        &spec.spec_hash,
-        &envelope_hash,
-    )
-    .await?;
+    let provider_identity_hash_input: Vec<(String, [u8; 32])> = provider_identities
+        .iter()
+        .map(|identity| (identity.table_name.clone(), identity.identity_hash))
+        .collect();
+    let provider_identity_hash =
+        SessionEnvelope::hash_provider_identities(&provider_identity_hash_input);
+    let lineage = LineageContext {
+        spec_hash: spec.spec_hash,
+        envelope_hash,
+        planning_surface_hash,
+        provider_identity_hash,
+        rulepack_fingerprint,
+        rulepack_profile: format!("{:?}", spec.rulepack_profile),
+        runtime_profile_name: spec
+            .runtime_profile
+            .as_ref()
+            .map(|profile| profile.profile_name.clone()),
+        run_started_at_rfc3339: run_started_at,
+        runtime_lineage_tags: spec.runtime.lineage_tags.clone(),
+    };
+
+    let (results, physical_plans) =
+        execute_and_materialize_with_plans(ctx, output_plans, &lineage).await?;
 
     // 4. Collect real physical metrics from executed plan trees.
     //
@@ -188,8 +211,10 @@ pub async fn execute_pipeline(
             Ok(maintenance_reports) => {
                 builder = builder.with_maintenance_reports(maintenance_reports);
             }
-            Err(e) => warnings.push(format!(
-                "Post-materialization maintenance failed: {e}"
+            Err(e) => warnings.push(RunWarning::new(
+                WarningCode::MaintenanceFailed,
+                WarningStage::Maintenance,
+                format!("Post-materialization maintenance failed: {e}"),
             )),
         }
     }
@@ -199,7 +224,11 @@ pub async fn execute_pipeline(
         builder = builder.add_output(result);
     }
 
-    let run_result = builder.with_warnings(warnings).build();
+    let mut run_result = builder.with_warnings(warnings).build();
+    if let Some(summary) = run_result.trace_metrics_summary.as_mut() {
+        summary.warning_count_total = run_result.warnings.len() as u64;
+        summary.warning_counts_by_code = warning_counts_by_code(&run_result.warnings);
+    }
 
     Ok(PipelineOutcome {
         run_result,

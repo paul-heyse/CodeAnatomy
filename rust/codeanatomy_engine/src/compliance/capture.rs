@@ -49,20 +49,15 @@ pub struct RulepackSnapshot {
     pub fingerprint: [u8; 32],
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum RetentionPolicy {
     /// Short default retention (7 days)
+    #[default]
     Short,
     /// Long retention for regulatory compliance (90 days)
     Long,
     /// Custom retention period in days
     Custom(u32),
-}
-
-impl Default for RetentionPolicy {
-    fn default() -> Self {
-        Self::Short
-    }
 }
 
 impl ComplianceCapture {

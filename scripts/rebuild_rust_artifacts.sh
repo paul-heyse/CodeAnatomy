@@ -43,10 +43,7 @@ fi
 
 uv run maturin develop -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}"
 uv run maturin develop -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}"
-(
-  cd rust/codeanatomy_engine
-  uv run maturin develop --${profile} --features codeanatomy-engine/pyo3
-)
+uv run maturin develop -m rust/codeanatomy_engine_py/Cargo.toml --${profile}
 
 wheel_dir="dist/wheels"
 mkdir -p "${wheel_dir}"
@@ -71,10 +68,7 @@ uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafu
 uv lock --refresh-package datafusion
 uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_wheel_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion-ext
-(
-  cd rust/codeanatomy_engine
-  uv run maturin build --${profile} --features codeanatomy-engine/pyo3 "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
-)
+uv run maturin build -m rust/codeanatomy_engine_py/Cargo.toml --${profile} "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 
 (
   cd rust/df_plugin_codeanatomy

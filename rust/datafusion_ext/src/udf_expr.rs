@@ -69,12 +69,9 @@ fn literal_i64_arg(args: &[Expr], idx: usize, name: &str) -> Result<i64> {
 }
 
 fn resolve_scalar_udf(name: &str) -> Option<udf_registry::ScalarUdfSpec> {
-    for spec in udf_registry::scalar_udf_specs() {
-        if spec.name == name || spec.aliases.iter().any(|alias| *alias == name) {
-            return Some(spec);
-        }
-    }
-    None
+    udf_registry::scalar_udf_specs()
+        .into_iter()
+        .find(|spec| spec.name == name || spec.aliases.contains(&name))
 }
 
 pub fn expr_from_name(name: &str, args: Vec<Expr>, config: Option<&ConfigOptions>) -> Result<Expr> {

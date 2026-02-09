@@ -9,7 +9,9 @@ use datafusion::datasource::TableProvider;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result as DFResult;
 use datafusion_expr::Expr;
-use datafusion_ext::delta_control_plane::{delta_provider_from_session, DeltaScanOverrides};
+use datafusion_ext::delta_control_plane::{
+    delta_provider_from_session_request, DeltaProviderFromSessionRequest, DeltaScanOverrides,
+};
 use datafusion_ext::DeltaFeatureGate;
 use deltalake::delta_datafusion::DeltaScanConfig;
 use serde::{Deserialize, Serialize};
@@ -96,16 +98,16 @@ pub async fn register_extraction_inputs(
             schema: requested_scan_config.schema.clone(),
         };
         let (provider, snapshot, resolved_scan_config, _pruned_files, predicate_error) =
-            delta_provider_from_session(
-                ctx,
-                &input.delta_location,
-                None,
-                input.version_pin,
-                None,
-                None,
+            delta_provider_from_session_request(DeltaProviderFromSessionRequest {
+                session_ctx: ctx,
+                table_uri: &input.delta_location,
+                storage_options: None,
+                version: input.version_pin,
+                timestamp: None,
+                predicate: None,
                 overrides,
-                Some(DeltaFeatureGate::default()),
-            )
+                gate: Some(DeltaFeatureGate::default()),
+            })
             .await
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
         if let Some(error) = predicate_error {

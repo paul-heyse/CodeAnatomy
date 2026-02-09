@@ -96,7 +96,7 @@ mod tests {
                 None,
             )),
         ));
-        let rewrite = CodeAnatomyOperatorRewrite::default();
+        let rewrite = CodeAnatomyOperatorRewrite;
         let transformed = rewrite.rewrite(expr, &df_schema, &ConfigOptions::new())?;
         assert!(transformed.transformed);
         let Expr::ScalarFunction(scalar) = transformed.data else {

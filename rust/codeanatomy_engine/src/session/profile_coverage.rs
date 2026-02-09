@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use crate::session::runtime_profiles::RuntimeProfileSpec;
 
 /// Whether a profile field is actively applied or intentionally reserved.
@@ -225,12 +226,20 @@ pub fn reserved_count() -> usize {
 }
 
 /// Emit runtime warnings for reserved profile knobs.
-pub fn reserved_profile_warnings(profile: &RuntimeProfileSpec) -> Vec<String> {
+pub fn reserved_profile_warnings(profile: &RuntimeProfileSpec) -> Vec<RunWarning> {
     let mut warnings = Vec::new();
-    let push = |warnings: &mut Vec<String>, field: &str, value: String| {
-        warnings.push(format!(
-            "Runtime profile field '{field}' is reserved and currently ignored in execution path (value={value})."
-        ));
+    let push = |warnings: &mut Vec<RunWarning>, field: &str, value: String| {
+        warnings.push(
+            RunWarning::new(
+                WarningCode::ReservedProfileKnobIgnored,
+                WarningStage::RuntimeProfile,
+                format!(
+                    "Runtime profile field '{field}' is reserved and currently ignored in execution path."
+                ),
+            )
+            .with_context("field", field)
+            .with_context("value", value),
+        );
     };
 
     push(
@@ -375,10 +384,20 @@ mod tests {
         let warnings = reserved_profile_warnings(&profile);
 
         assert_eq!(warnings.len(), 5);
-        assert!(warnings.iter().any(|w| w.contains("meta_fetch_concurrency")));
-        assert!(warnings.iter().any(|w| w.contains("max_predicate_cache_size")));
-        assert!(warnings.iter().any(|w| w.contains("list_files_cache_limit")));
-        assert!(warnings.iter().any(|w| w.contains("list_files_cache_ttl")));
-        assert!(warnings.iter().any(|w| w.contains("metadata_cache_limit")));
+        assert!(warnings.iter().any(|w| {
+            w.context.get("field") == Some(&"meta_fetch_concurrency".to_string())
+        }));
+        assert!(warnings.iter().any(|w| {
+            w.context.get("field") == Some(&"max_predicate_cache_size".to_string())
+        }));
+        assert!(warnings.iter().any(|w| {
+            w.context.get("field") == Some(&"list_files_cache_limit".to_string())
+        }));
+        assert!(warnings.iter().any(|w| {
+            w.context.get("field") == Some(&"list_files_cache_ttl".to_string())
+        }));
+        assert!(warnings.iter().any(|w| {
+            w.context.get("field") == Some(&"metadata_cache_limit".to_string())
+        }));
     }
 }

@@ -194,8 +194,10 @@ mod tests {
 
     #[test]
     fn test_validate_scan_config_rejects_unwrapped_partitions() {
-        let mut config = DeltaScanConfig::default();
-        config.wrap_partition_values = false;
+        let config = DeltaScanConfig {
+            wrap_partition_values: false,
+            ..DeltaScanConfig::default()
+        };
         assert!(validate_scan_config(&config).is_err());
     }
 
@@ -204,8 +206,10 @@ mod tests {
         let config_no_lineage = DeltaScanConfig::default();
         assert!(!has_lineage_tracking(&config_no_lineage));
 
-        let mut config_with_lineage = DeltaScanConfig::default();
-        config_with_lineage.file_column_name = Some("__source_file".to_string());
+        let config_with_lineage = DeltaScanConfig {
+            file_column_name: Some("__source_file".to_string()),
+            ..DeltaScanConfig::default()
+        };
         assert!(has_lineage_tracking(&config_with_lineage));
     }
 
@@ -214,8 +218,10 @@ mod tests {
         let config_no_lineage = DeltaScanConfig::default();
         assert_eq!(lineage_column_name(&config_no_lineage), None);
 
-        let mut config_with_lineage = DeltaScanConfig::default();
-        config_with_lineage.file_column_name = Some("__source_file".to_string());
+        let config_with_lineage = DeltaScanConfig {
+            file_column_name: Some("__source_file".to_string()),
+            ..DeltaScanConfig::default()
+        };
         assert_eq!(
             lineage_column_name(&config_with_lineage),
             Some("__source_file")
@@ -233,9 +239,11 @@ mod tests {
 
     #[test]
     fn test_capabilities_with_pushdown_disabled() {
-        let mut config = DeltaScanConfig::default();
-        config.enable_parquet_pushdown = false;
-        config.wrap_partition_values = false;
+        let config = DeltaScanConfig {
+            enable_parquet_pushdown: false,
+            wrap_partition_values: false,
+            ..DeltaScanConfig::default()
+        };
         let caps = infer_capabilities(&config);
         assert!(!caps.predicate_pushdown);
         assert!(caps.projection_pushdown); // always true

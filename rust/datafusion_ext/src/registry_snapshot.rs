@@ -50,6 +50,12 @@ impl RegistrySnapshot {
     }
 }
 
+impl Default for RegistrySnapshot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Capability inventory for a single registered function, covering all
 /// optimizer-visible hooks across scalar, aggregate, and window function kinds.
 ///
@@ -294,7 +300,7 @@ fn record_table_functions(
     custom_names: &BTreeSet<String>,
     snapshot: &mut RegistrySnapshot,
 ) {
-    for (name, _udtf) in state.table_functions() {
+    for name in state.table_functions().keys() {
         if !custom_names.contains(name) {
             continue;
         }
@@ -808,7 +814,7 @@ fn simplify_flag_for(name: &str) -> Option<bool> {
         "list_unique_sorted",
         "cpg_score",
     ];
-    if SIMPLIFY.iter().any(|entry| *entry == name) {
+    if SIMPLIFY.contains(&name) {
         Some(true)
     } else {
         None

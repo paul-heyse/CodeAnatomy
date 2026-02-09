@@ -77,10 +77,8 @@ pub fn install_expr_planners_native(ctx: &SessionContext, planner_names: &[&str]
         datafusion_functions_nested::planner::FieldAccessPlanner,
     ))?;
     if install_domain {
-        state.register_expr_planner(Arc::new(expr_planner::CodeAnatomyDomainPlanner::default()))?;
-        state.register_function_rewrite(Arc::new(
-            function_rewrite::CodeAnatomyOperatorRewrite::default(),
-        ))?;
+        state.register_expr_planner(Arc::new(expr_planner::CodeAnatomyDomainPlanner))?;
+        state.register_function_rewrite(Arc::new(function_rewrite::CodeAnatomyOperatorRewrite))?;
     }
     Ok(())
 }
@@ -104,7 +102,7 @@ pub fn domain_expr_planners() -> Vec<Arc<dyn ExprPlanner>> {
     vec![
         Arc::new(datafusion_functions_nested::planner::NestedFunctionPlanner),
         Arc::new(datafusion_functions_nested::planner::FieldAccessPlanner),
-        Arc::new(expr_planner::CodeAnatomyDomainPlanner::default()),
+        Arc::new(expr_planner::CodeAnatomyDomainPlanner),
     ]
 }
 
@@ -113,7 +111,5 @@ pub fn domain_expr_planners() -> Vec<Arc<dyn ExprPlanner>> {
 /// These are the same rewrites installed by `install_expr_planners_native`
 /// with `codeanatomy_domain`.
 pub fn domain_function_rewrites() -> Vec<Arc<dyn FunctionRewrite + Send + Sync>> {
-    vec![Arc::new(
-        function_rewrite::CodeAnatomyOperatorRewrite::default(),
-    )]
+    vec![Arc::new(function_rewrite::CodeAnatomyOperatorRewrite)]
 }

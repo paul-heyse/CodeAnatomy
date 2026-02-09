@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "codeanatomy_engine",
+    "codeanatomy_engine_py",
     "datafusion_ext",
     "datafusion_ext_py",
     "datafusion_python",

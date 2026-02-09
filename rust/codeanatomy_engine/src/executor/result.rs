@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::compiler::plan_bundle::PlanBundleArtifact;
 use crate::executor::maintenance::MaintenanceReport;
 use crate::executor::metrics_collector::{CollectedMetrics, TraceMetricsSummary};
+use crate::executor::warnings::RunWarning;
 
 /// Compact result envelope containing both determinism layers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +33,7 @@ pub struct RunResult {
     /// Captures errors from best-effort operations (plan bundle capture,
     /// maintenance, compliance serialization) that were previously swallowed
     /// silently. Each entry is a human-readable message with error context.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<RunWarning>,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
 }
@@ -103,7 +104,7 @@ pub struct RunResultBuilder {
     collected_metrics: Option<CollectedMetrics>,
     trace_metrics_summary: Option<TraceMetricsSummary>,
     maintenance_reports: Vec<MaintenanceReport>,
-    warnings: Vec<String>,
+    warnings: Vec<RunWarning>,
     started_at: Option<DateTime<Utc>>,
 }
 
@@ -159,13 +160,13 @@ impl RunResultBuilder {
     /// Append a single warning message to the result.
     ///
     /// Use this for best-effort operations that failed non-fatally.
-    pub fn add_warning(mut self, warning: impl Into<String>) -> Self {
-        self.warnings.push(warning.into());
+    pub fn add_warning(mut self, warning: RunWarning) -> Self {
+        self.warnings.push(warning);
         self
     }
 
     /// Replace the entire warnings list.
-    pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+    pub fn with_warnings(mut self, warnings: Vec<RunWarning>) -> Self {
         self.warnings = warnings;
         self
     }

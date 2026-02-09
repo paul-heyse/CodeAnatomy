@@ -172,13 +172,35 @@ class OutputTarget(msgspec.Struct, frozen=True):
     max_commit_retries: int | None = None
 
 
-class ParameterTemplate(msgspec.Struct, frozen=True):
-    """Runtime parameter template."""
+class PlaceholderPosTarget(msgspec.Struct, frozen=True, tag="PlaceholderPos", tag_field="kind"):
+    """Positional placeholder target (`$1`, `$2`, ...)."""
 
-    name: str
-    base_table: str
+    position: int
+
+
+class FilterEqTarget(msgspec.Struct, frozen=True, tag="FilterEq", tag_field="kind"):
+    """Typed direct filter target."""
+
     filter_column: str
-    parameter_type: str
+    base_table: str | None = None
+
+
+type ParameterTarget = PlaceholderPosTarget | FilterEqTarget
+
+
+class ParameterValue(msgspec.Struct, frozen=True):
+    """Typed parameter value payload matching Rust `ParameterValue` contract."""
+
+    type: Literal["Utf8", "Int64", "Float64", "Boolean", "Date", "Timestamp", "Null"]
+    value: object
+
+
+class TypedParameter(msgspec.Struct, frozen=True):
+    """Typed runtime parameter binding."""
+
+    target: ParameterTarget
+    value: ParameterValue
+    label: str | None = None
 
 
 class JoinEdge(msgspec.Struct, frozen=True):
@@ -217,11 +239,14 @@ class RuntimeConfig(msgspec.Struct, frozen=True):
     compliance_capture: bool = False
     tuner_mode: RuntimeTunerMode = "Off"
     capture_substrait: bool = False
+    capture_optimizer_lab: bool = False
+    capture_delta_codec: bool = False
     enable_tracing: bool = False
     enable_rule_tracing: bool = False
     enable_plan_preview: bool = False
     enable_function_factory: bool = False
     enable_domain_planner: bool = False
+    lineage_tags: dict[str, str] = msgspec.field(default_factory=dict)
     tracing_preset: TracingPreset | None = None
     tracing: TracingConfig = msgspec.field(default_factory=_default_tracing_config)
 
@@ -270,7 +295,7 @@ class SemanticExecutionSpec(msgspec.Struct, frozen=True):
     output_targets: tuple[OutputTarget, ...]
     rule_intents: tuple[RuleIntent, ...]
     rulepack_profile: RulepackProfile
-    parameter_templates: tuple[ParameterTemplate, ...] = ()
+    typed_parameters: tuple[TypedParameter, ...] = ()
     runtime: RuntimeConfig = msgspec.field(default_factory=RuntimeConfig)
     spec_hash: bytes = b""
 
@@ -449,7 +474,7 @@ def build_execution_spec(
         output_targets=output_specs,
         rule_intents=_default_rule_intents(profile),
         rulepack_profile=profile,
-        parameter_templates=(),
+        typed_parameters=(),
         runtime=RuntimeConfig(),
     )
 

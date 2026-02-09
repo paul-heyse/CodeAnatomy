@@ -211,7 +211,6 @@ mod tests {
             vec![],
             vec![],
             RulepackProfile::Default,
-            vec![],
         );
 
         let fanout = compute_fanout(&spec);
@@ -262,7 +261,6 @@ mod tests {
             vec![],
             vec![],
             RulepackProfile::Default,
-            vec![],
         );
 
         let fanout = compute_fanout(&spec);
@@ -303,7 +301,6 @@ mod tests {
             outputs,
             vec![],
             RulepackProfile::Default,
-            vec![],
         );
 
         let fanout = compute_fanout(&spec);

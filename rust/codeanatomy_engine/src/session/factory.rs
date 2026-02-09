@@ -1,8 +1,8 @@
 //! Session factory for deterministic SessionContext construction.
 //!
 //! Uses SessionStateBuilder for builder-first session creation.
-//! Both `build_session()` and `build_session_from_profile()` route
-//! through a shared planning-surface path — see `planning_surface.rs`.
+//! Both profile and non-profile session-state builders route through a
+//! shared planning-surface path — see `planning_surface.rs`.
 //!
 //! The only post-build mutation is `install_rewrites()` for function
 //! rewrites that lack a builder API in DataFusion 51.
@@ -18,11 +18,11 @@ use datafusion::prelude::SessionConfig;
 use datafusion_common::Result;
 
 use crate::compiler::plan_codec;
+use crate::executor::warnings::RunWarning;
 use crate::executor::tracing as engine_tracing;
 use crate::rules::registry::CpgRuleSet;
 use crate::spec::runtime::TracingConfig;
 
-use super::envelope::SessionEnvelope;
 use super::format_policy::{build_table_options, default_file_formats, FormatPolicySpec};
 use super::planning_manifest::{manifest_from_surface, PlanningSurfaceManifest};
 use super::planning_surface::{apply_to_builder, install_rewrites, PlanningSurfaceSpec};
@@ -45,7 +45,7 @@ pub struct SessionBuildState {
     pub memory_pool_bytes: u64,
     pub planning_surface_manifest: PlanningSurfaceManifest,
     pub planning_surface_hash: [u8; 32],
-    pub build_warnings: Vec<String>,
+    pub build_warnings: Vec<RunWarning>,
 }
 
 /// Optional session build behavior overrides used by execution entrypoints.
@@ -148,30 +148,6 @@ impl SessionFactory {
         .await
     }
 
-    /// Compatibility wrapper retained during migration.
-    pub async fn build_session(
-        &self,
-        ruleset: &CpgRuleSet,
-        spec_hash: [u8; 32],
-        tracing_config: Option<&TracingConfig>,
-    ) -> Result<(SessionContext, SessionEnvelope)> {
-        let state = self
-            .build_session_state(ruleset, spec_hash, tracing_config)
-            .await?;
-        let provider_identity_hash = SessionEnvelope::hash_provider_identities(&[]);
-        let envelope = SessionEnvelope::capture(
-            &state.ctx,
-            spec_hash,
-            ruleset.fingerprint,
-            state.memory_pool_bytes,
-            true,
-            state.planning_surface_hash,
-            provider_identity_hash,
-        )
-        .await?;
-        Ok((state.ctx, envelope))
-    }
-
     /// Build deterministic session state from a runtime profile.
     pub async fn build_session_state_from_profile(
         &self,
@@ -258,32 +234,6 @@ impl SessionFactory {
         .await
     }
 
-    /// Compatibility wrapper retained during migration.
-    pub async fn build_session_from_profile(
-        &self,
-        profile: &RuntimeProfileSpec,
-        ruleset: &CpgRuleSet,
-        enable_function_factory: bool,
-        enable_domain_planner: bool,
-        spec_hash: [u8; 32],
-        tracing_config: Option<&TracingConfig>,
-    ) -> Result<SessionContext> {
-        Ok(self
-            .build_session_state_from_profile_with_overrides(
-                profile,
-                ruleset,
-                spec_hash,
-                tracing_config,
-                SessionBuildOverrides {
-                    enable_function_factory,
-                    enable_domain_planner,
-                    ..SessionBuildOverrides::default()
-                },
-            )
-            .await?
-            .ctx)
-    }
-
     #[allow(clippy::too_many_arguments)]
     async fn build_session_state_internal(
         &self,
@@ -295,7 +245,7 @@ impl SessionFactory {
         spec_hash: [u8; 32],
         tracing_config: Option<&TracingConfig>,
         overrides: SessionBuildOverrides,
-        build_warnings: Vec<String>,
+        build_warnings: Vec<RunWarning>,
     ) -> Result<SessionBuildState> {
         let tracing_config = tracing_config.cloned().unwrap_or_default();
         engine_tracing::init_otel_tracing(&tracing_config)?;
@@ -368,9 +318,8 @@ impl SessionFactory {
         }
 
         if overrides.enable_function_factory {
-            planning_surface.function_factory = Some(Arc::new(
-                datafusion_ext::function_factory::SqlMacroFunctionFactory::default(),
-            ));
+            planning_surface.function_factory =
+                Some(Arc::new(datafusion_ext::function_factory::SqlMacroFunctionFactory));
         }
         if overrides.enable_domain_planner {
             planning_surface.expr_planners = datafusion_ext::domain_expr_planners();
@@ -384,6 +333,7 @@ impl SessionFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::envelope::SessionEnvelope;
     use crate::rules::registry::CpgRuleSet;
     use crate::session::profiles::{EnvironmentClass, EnvironmentProfile};
 
@@ -400,13 +350,24 @@ mod tests {
             fingerprint: [0u8; 32],
         };
 
-        let result = factory.build_session(&ruleset, [0u8; 32], None).await;
-        assert!(result.is_ok());
-
-        let (ctx, envelope) = result.unwrap();
+        let state = factory
+            .build_session_state(&ruleset, [0u8; 32], None)
+            .await
+            .unwrap();
+        let envelope = SessionEnvelope::capture(
+            &state.ctx,
+            [0u8; 32],
+            ruleset.fingerprint,
+            state.memory_pool_bytes,
+            true,
+            state.planning_surface_hash,
+            SessionEnvelope::hash_provider_identities(&[]),
+        )
+        .await
+        .unwrap();
 
         // Verify session context is usable
-        let sql_result = ctx.sql("SELECT 1 as test").await;
+        let sql_result = state.ctx.sql("SELECT 1 as test").await;
         assert!(sql_result.is_ok());
 
         // Verify envelope captures correct metadata
@@ -430,14 +391,36 @@ mod tests {
             fingerprint: [0u8; 32],
         };
 
-        let (_small_ctx, small_envelope) = small_factory
-            .build_session(&ruleset, [0u8; 32], None)
+        let small_state = small_factory
+            .build_session_state(&ruleset, [0u8; 32], None)
             .await
             .unwrap();
-        let (_large_ctx, large_envelope) = large_factory
-            .build_session(&ruleset, [0u8; 32], None)
+        let small_envelope = SessionEnvelope::capture(
+            &small_state.ctx,
+            [0u8; 32],
+            ruleset.fingerprint,
+            small_state.memory_pool_bytes,
+            true,
+            small_state.planning_surface_hash,
+            SessionEnvelope::hash_provider_identities(&[]),
+        )
+        .await
+        .unwrap();
+        let large_state = large_factory
+            .build_session_state(&ruleset, [0u8; 32], None)
             .await
             .unwrap();
+        let large_envelope = SessionEnvelope::capture(
+            &large_state.ctx,
+            [0u8; 32],
+            ruleset.fingerprint,
+            large_state.memory_pool_bytes,
+            true,
+            large_state.planning_surface_hash,
+            SessionEnvelope::hash_provider_identities(&[]),
+        )
+        .await
+        .unwrap();
 
         // Verify different configurations
         assert_eq!(small_envelope.target_partitions, 4);

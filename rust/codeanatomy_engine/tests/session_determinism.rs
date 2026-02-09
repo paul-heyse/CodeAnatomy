@@ -13,14 +13,36 @@ async fn test_session_envelope_hash_is_deterministic() {
     let factory = SessionFactory::new(EnvironmentProfile::from_class(EnvironmentClass::Medium));
     let ruleset = common::empty_ruleset();
 
-    let (_, envelope_a) = factory
-        .build_session(&ruleset, [7u8; 32], None)
+    let state_a = factory
+        .build_session_state(&ruleset, [7u8; 32], None)
         .await
         .unwrap();
-    let (_, envelope_b) = factory
-        .build_session(&ruleset, [7u8; 32], None)
+    let envelope_a = SessionEnvelope::capture(
+        &state_a.ctx,
+        [7u8; 32],
+        ruleset.fingerprint,
+        state_a.memory_pool_bytes,
+        true,
+        state_a.planning_surface_hash,
+        SessionEnvelope::hash_provider_identities(&[]),
+    )
+    .await
+    .unwrap();
+    let state_b = factory
+        .build_session_state(&ruleset, [7u8; 32], None)
         .await
         .unwrap();
+    let envelope_b = SessionEnvelope::capture(
+        &state_b.ctx,
+        [7u8; 32],
+        ruleset.fingerprint,
+        state_b.memory_pool_bytes,
+        true,
+        state_b.planning_surface_hash,
+        SessionEnvelope::hash_provider_identities(&[]),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(envelope_a.envelope_hash, envelope_b.envelope_hash);
 }
@@ -134,10 +156,21 @@ async fn test_envelope_includes_planning_surface_hash() {
     let factory = SessionFactory::new(EnvironmentProfile::from_class(EnvironmentClass::Small));
     let ruleset = common::empty_ruleset();
 
-    let (_, envelope) = factory
-        .build_session(&ruleset, [0u8; 32], None)
+    let state = factory
+        .build_session_state(&ruleset, [0u8; 32], None)
         .await
         .unwrap();
+    let envelope = SessionEnvelope::capture(
+        &state.ctx,
+        [0u8; 32],
+        ruleset.fingerprint,
+        state.memory_pool_bytes,
+        true,
+        state.planning_surface_hash,
+        SessionEnvelope::hash_provider_identities(&[]),
+    )
+    .await
+    .unwrap();
 
     // The planning_surface_hash field must exist on SessionEnvelope.
     // With zeroed spec_hash and no planning surface override, the hash
@@ -227,14 +260,16 @@ async fn test_planning_hash_propagates_to_envelope_and_plan_bundle() {
     .await
     .unwrap();
     let (artifact, _warnings) = codeanatomy_engine::compiler::plan_bundle::build_plan_bundle_artifact_with_warnings(
-        &state.ctx,
-        &runtime,
-        ruleset.fingerprint,
-        vec![],
-        false,
-        false,
-        false,
-        state.planning_surface_hash,
+        codeanatomy_engine::compiler::plan_bundle::PlanBundleArtifactBuildRequest {
+            ctx: &state.ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: ruleset.fingerprint,
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: state.planning_surface_hash,
+        },
     )
     .await
     .unwrap();

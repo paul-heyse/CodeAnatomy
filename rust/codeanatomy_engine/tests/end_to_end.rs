@@ -6,18 +6,34 @@ use std::sync::Arc;
 use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use codeanatomy_engine::compiler::plan_compiler::{deprecated_template_warning, SemanticPlanCompiler};
+use codeanatomy_engine::compiler::plan_compiler::SemanticPlanCompiler;
+use codeanatomy_engine::executor::delta_writer::LineageContext;
 use codeanatomy_engine::executor::orchestration::prepare_execution_context;
 use codeanatomy_engine::executor::pipeline::execute_pipeline;
 use codeanatomy_engine::executor::runner::execute_and_materialize;
+use codeanatomy_engine::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use codeanatomy_engine::session::factory::SessionFactory;
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::spec::join_graph::JoinGraph;
 use codeanatomy_engine::spec::outputs::{MaterializationMode, OutputTarget};
 use codeanatomy_engine::spec::relations::{InputRelation, SchemaContract, ViewDefinition, ViewTransform};
-use codeanatomy_engine::spec::rule_intents::{ParameterTemplate, RulepackProfile};
+use codeanatomy_engine::spec::rule_intents::RulepackProfile;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
+
+fn test_lineage(spec_hash: [u8; 32], envelope_hash: [u8; 32]) -> LineageContext {
+    LineageContext {
+        spec_hash,
+        envelope_hash,
+        planning_surface_hash: [0u8; 32],
+        provider_identity_hash: [0u8; 32],
+        rulepack_fingerprint: [0u8; 32],
+        rulepack_profile: "Default".to_string(),
+        runtime_profile_name: None,
+        run_started_at_rfc3339: "2026-02-09T00:00:00Z".to_string(),
+        runtime_lineage_tags: BTreeMap::new(),
+    }
+}
 
 async fn seed_delta_input(location: &str) {
     let ctx = SessionContext::new();
@@ -67,11 +83,11 @@ async fn seed_delta_input(location: &str) {
         }],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
 
     let output_plans = SemanticPlanCompiler::new(&ctx, &spec).compile().await.unwrap();
-    execute_and_materialize(&ctx, output_plans, &[7u8; 32], &[8u8; 32])
+    let lineage = test_lineage([7u8; 32], [8u8; 32]);
+    execute_and_materialize(&ctx, output_plans, &lineage)
         .await
         .unwrap();
 }
@@ -110,7 +126,6 @@ fn build_delta_parity_spec(input_location: String, output_location: String) -> S
         }],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
     spec.runtime.compliance_capture = true;
     spec
@@ -175,14 +190,14 @@ async fn test_end_to_end_compile_and_materialize() {
         }],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
 
     let compiler = SemanticPlanCompiler::new(&ctx, &spec);
     let output_plans = compiler.compile().await.unwrap();
     let spec_hash = [0u8; 32];
     let envelope_hash = [0u8; 32];
-    let results = execute_and_materialize(&ctx, output_plans, &spec_hash, &envelope_hash).await.unwrap();
+    let lineage = test_lineage(spec_hash, envelope_hash);
+    let results = execute_and_materialize(&ctx, output_plans, &lineage).await.unwrap();
     assert_eq!(results.len(), 1);
 }
 
@@ -229,8 +244,8 @@ fn test_commit_properties_include_hashes() {
 
     let spec_hash = [0xABu8; 32];
     let envelope_hash = [0xCDu8; 32];
-
-    let props = build_commit_properties(&target, &spec_hash, &envelope_hash);
+    let lineage = test_lineage(spec_hash, envelope_hash);
+    let props = build_commit_properties(&target, &lineage);
 
     assert!(props.contains_key("codeanatomy.spec_hash"));
     assert!(props.contains_key("codeanatomy.envelope_hash"));
@@ -293,14 +308,14 @@ async fn test_delta_history_contains_lineage_metadata() {
         }],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
 
     let compiler = SemanticPlanCompiler::new(&ctx, &spec);
     let output_plans = compiler.compile().await.unwrap();
     let spec_hash = [0xABu8; 32];
     let envelope_hash = [0xCDu8; 32];
-    let results = execute_and_materialize(&ctx, output_plans, &spec_hash, &envelope_hash)
+    let lineage = test_lineage(spec_hash, envelope_hash);
+    let results = execute_and_materialize(&ctx, output_plans, &lineage)
         .await
         .unwrap();
     assert_eq!(results.len(), 1);
@@ -396,13 +411,13 @@ async fn test_write_idempotency_append_mode() {
         }],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
 
     // First execution
     let compiler = SemanticPlanCompiler::new(&ctx, &spec);
     let output_plans = compiler.compile().await.unwrap();
-    let results1 = execute_and_materialize(&ctx, output_plans, &spec.spec_hash, &[0u8; 32]).await.unwrap();
+    let lineage1 = test_lineage(spec.spec_hash, [0u8; 32]);
+    let results1 = execute_and_materialize(&ctx, output_plans, &lineage1).await.unwrap();
     assert_eq!(results1.len(), 1);
     let first_row_count = results1[0].rows_written;
 
@@ -435,7 +450,8 @@ async fn test_write_idempotency_append_mode() {
 
     let compiler2 = SemanticPlanCompiler::new(&ctx, &spec);
     let output_plans2 = compiler2.compile().await.unwrap();
-    let results2 = execute_and_materialize(&ctx, output_plans2, &spec.spec_hash, &[0u8; 32]).await.unwrap();
+    let lineage2 = test_lineage(spec.spec_hash, [0u8; 32]);
+    let results2 = execute_and_materialize(&ctx, output_plans2, &lineage2).await.unwrap();
     assert_eq!(results2.len(), 1);
 
     // Both runs should write the same number of rows (deterministic behavior)
@@ -471,14 +487,22 @@ fn test_run_result_warnings_can_be_populated() {
         .with_spec_hash([0u8; 32])
         .with_envelope_hash([0u8; 32])
         .with_rulepack_fingerprint([0u8; 32])
-        .add_warning("plan bundle capture failed: test error")
-        .add_warning("maintenance skipped: no locations")
+        .add_warning(RunWarning::new(
+            WarningCode::PlanBundleRuntimeCaptureFailed,
+            WarningStage::PlanBundle,
+            "plan bundle capture failed: test error",
+        ))
+        .add_warning(RunWarning::new(
+            WarningCode::MaintenanceFailed,
+            WarningStage::Maintenance,
+            "maintenance skipped: no locations",
+        ))
         .started_now()
         .build();
 
     assert_eq!(result.warnings.len(), 2);
-    assert!(result.warnings[0].contains("plan bundle capture failed"));
-    assert!(result.warnings[1].contains("maintenance skipped"));
+    assert!(result.warnings[0].message.contains("plan bundle capture failed"));
+    assert!(result.warnings[1].message.contains("maintenance skipped"));
 }
 
 #[tokio::test]
@@ -539,7 +563,6 @@ async fn test_pipeline_includes_preflight_warnings() {
         }],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
 
     let outcome = codeanatomy_engine::executor::pipeline::execute_pipeline(
@@ -549,7 +572,11 @@ async fn test_pipeline_includes_preflight_warnings() {
         [2u8; 32],
         vec![],
         [3u8; 32],
-        vec!["reserved knob warning".to_string()],
+        vec![RunWarning::new(
+            WarningCode::ReservedProfileKnobIgnored,
+            WarningStage::RuntimeProfile,
+            "reserved knob warning",
+        )],
     )
     .await
     .unwrap();
@@ -558,56 +585,19 @@ async fn test_pipeline_includes_preflight_warnings() {
             .run_result
             .warnings
             .iter()
-            .any(|warning| warning.contains("reserved knob warning"))
+            .any(|warning| warning.message.contains("reserved knob warning"))
     );
-}
-
-#[test]
-fn test_deprecated_template_warning_emitted_when_templates_present() {
-    let mut columns = BTreeMap::new();
-    columns.insert("id".to_string(), "Int64".to_string());
-    let spec = SemanticExecutionSpec::new(
-        1,
-        vec![InputRelation {
-            logical_name: "input".to_string(),
-            delta_location: "/tmp/input".to_string(),
-            requires_lineage: false,
-            version_pin: None,
-        }],
-        vec![ViewDefinition {
-            name: "view_out".to_string(),
-            view_kind: "project".to_string(),
-            view_dependencies: vec![],
-            transform: ViewTransform::Project {
-                source: "input".to_string(),
-                columns: vec!["id".to_string()],
-            },
-            output_schema: SchemaContract { columns },
-        }],
-        JoinGraph::default(),
-        vec![OutputTarget {
-            table_name: "out".to_string(),
-            delta_location: None,
-            source_view: "view_out".to_string(),
-            columns: vec!["id".to_string()],
-            materialization_mode: MaterializationMode::Append,
-            partition_by: vec![],
-            write_metadata: BTreeMap::new(),
-            max_commit_retries: None,
-        }],
-        vec![],
-        RulepackProfile::Default,
-        vec![ParameterTemplate {
-            name: "tenant_id".to_string(),
-            base_table: "input".to_string(),
-            filter_column: "id".to_string(),
-            parameter_type: "int".to_string(),
-        }],
+    let summary = outcome
+        .run_result
+        .trace_metrics_summary
+        .as_ref()
+        .expect("trace metrics summary should exist for executed plans");
+    assert!(summary.warning_count_total >= 1);
+    assert!(
+        summary
+            .warning_counts_by_code
+            .contains_key("reserved_profile_knob_ignored")
     );
-
-    let warning = deprecated_template_warning(&spec);
-    assert!(warning.is_some());
-    assert!(warning.unwrap().contains("deprecated"));
 }
 
 // ---------------------------------------------------------------------------
@@ -664,7 +654,7 @@ fn test_profile_driven_rulepack_construction() {
 
     // Verify that different profiles can produce different rule counts
     // (Though specific ordering is not guaranteed, all should be valid)
-    let total_counts = vec![
+    let total_counts = [
         low_latency.total_count(),
         default.total_count(),
         strict.total_count(),

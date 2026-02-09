@@ -50,9 +50,7 @@ impl RulepackFactory {
         let mut analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = Vec::new();
         let mut optimizer_rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> = Vec::new();
         let mut physical_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = Vec::new();
-        analyzer_rules.push(Arc::new(
-            datafusion_ext::planner_rules::CodeAnatomyPolicyRule::default(),
-        ));
+        analyzer_rules.push(Arc::new(datafusion_ext::planner_rules::CodeAnatomyPolicyRule));
 
         // Process each intent using the intent compiler
         for intent in intents {

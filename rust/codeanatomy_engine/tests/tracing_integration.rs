@@ -17,10 +17,11 @@ async fn test_execution_instrumentation_rule_is_last() {
         ..TracingConfig::default()
     };
 
-    let (ctx, _envelope) = factory
-        .build_session(&ruleset, [9u8; 32], Some(&tracing_config))
+    let state = factory
+        .build_session_state(&ruleset, [9u8; 32], Some(&tracing_config))
         .await
         .expect("session with tracing should build");
+    let ctx = state.ctx;
     let physical_rules = ctx.state().physical_optimizers().to_vec();
     assert_eq!(
         physical_rules.first().expect("phase sentinel start").name(),
@@ -47,10 +48,11 @@ async fn test_disabled_tracing_does_not_append_instrument_rule() {
         ..TracingConfig::default()
     };
 
-    let (ctx, _envelope) = factory
-        .build_session(&ruleset, [3u8; 32], Some(&tracing_config))
+    let state = factory
+        .build_session_state(&ruleset, [3u8; 32], Some(&tracing_config))
         .await
         .expect("session without tracing should build");
+    let ctx = state.ctx;
     assert!(
         ctx.state().physical_optimizers().is_empty(),
         "no additional physical rules should be installed when tracing is disabled",

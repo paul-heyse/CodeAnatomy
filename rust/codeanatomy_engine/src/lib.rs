@@ -23,6 +23,3 @@ pub mod session;
 pub mod spec;
 pub mod stability;
 pub mod tuner;
-
-#[cfg(feature = "pyo3")]
-pub mod python;

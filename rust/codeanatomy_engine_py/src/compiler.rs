@@ -1,9 +1,10 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-use crate::spec::execution_spec::SemanticExecutionSpec;
+use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 
 /// Semantic plan compiler that validates and prepares execution specs.
 ///
@@ -41,6 +42,19 @@ impl SemanticPlanCompiler {
     /// Raises:
     ///     ValueError: If JSON is malformed or spec is invalid
     fn compile(&self, spec_json: &str) -> PyResult<CompiledPlan> {
+        // Hard-cutover contract: reject legacy template mode payloads explicitly.
+        let payload: Value = serde_json::from_str(spec_json)
+            .map_err(|err| PyValueError::new_err(format!("Invalid spec JSON: {err}")))?;
+        if payload
+            .as_object()
+            .and_then(|obj| obj.get("parameter_templates"))
+            .is_some()
+        {
+            return Err(PyValueError::new_err(
+                "Legacy field 'parameter_templates' is no longer supported. Use typed_parameters.",
+            ));
+        }
+
         // Parse and validate spec structure with field-path diagnostics.
         let mut deserializer = serde_json::Deserializer::from_str(spec_json);
         let mut spec: SemanticExecutionSpec = serde_path_to_error::deserialize(&mut deserializer)
@@ -55,7 +69,7 @@ impl SemanticPlanCompiler {
             })?;
 
         // Compute canonical hash
-        spec.spec_hash = crate::spec::hashing::hash_spec(&spec);
+        spec.spec_hash = codeanatomy_engine::spec::hashing::hash_spec(&spec);
 
         // Validate basic structure
         if spec.view_definitions.is_empty() {
@@ -113,6 +127,7 @@ impl CompiledPlan {
     }
 
     /// Internal: get the spec hash.
+    #[allow(dead_code)]
     pub(crate) fn spec_hash(&self) -> [u8; 32] {
         self.spec_hash
     }

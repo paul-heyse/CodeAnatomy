@@ -1477,7 +1477,7 @@ fn ensure_group_capacity(groups: &mut Vec<DistinctStringSet>, total_num_groups: 
 }
 
 fn update_groups_from_values(
-    groups: &mut Vec<DistinctStringSet>,
+    groups: &mut [DistinctStringSet],
     values: &StringArray,
     group_indices: &[usize],
     opt_filter: Option<&BooleanArray>,
@@ -1504,7 +1504,7 @@ fn update_groups_from_values(
 }
 
 fn update_groups_from_list_array(
-    groups: &mut Vec<DistinctStringSet>,
+    groups: &mut [DistinctStringSet],
     list_array: &ListArray,
     group_indices: &[usize],
     opt_filter: Option<&BooleanArray>,

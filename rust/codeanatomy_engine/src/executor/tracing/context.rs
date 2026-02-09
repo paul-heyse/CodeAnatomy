@@ -89,6 +89,8 @@ pub fn execution_span(info: &ExecutionSpanInfo, config: &TracingConfig) -> traci
         tracing_plan_diff = tracing::field::Empty,
         tracing_preview_limit = tracing::field::Empty,
         trace_custom_fields_json = tracing::field::Empty,
+        warning_count_total = tracing::field::Empty,
+        warning_counts_by_code_json = tracing::field::Empty,
     );
 
     span.record("spec_hash", info.spec_hash.as_str());
@@ -111,6 +113,17 @@ pub fn execution_span(info: &ExecutionSpanInfo, config: &TracingConfig) -> traci
 pub fn record_envelope_hash(span: &tracing::Span, envelope_hash: &[u8; 32]) {
     let encoded = hex::encode(envelope_hash);
     span.record("envelope_hash", encoded.as_str());
+}
+
+#[cfg(feature = "tracing")]
+pub fn record_warning_summary(
+    span: &tracing::Span,
+    warning_count_total: u64,
+    warning_counts_by_code: &std::collections::BTreeMap<String, u64>,
+) {
+    span.record("warning_count_total", warning_count_total);
+    let serialized = serde_json::to_string(warning_counts_by_code).unwrap_or_else(|_| "{}".into());
+    span.record("warning_counts_by_code_json", serialized.as_str());
 }
 
 #[cfg(test)]

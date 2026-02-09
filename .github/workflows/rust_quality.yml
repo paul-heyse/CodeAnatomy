@@ -1,0 +1,144 @@
+name: Rust Quality
+
+on:
+  pull_request:
+    paths:
+      - "rust/**"
+      - "scripts/check_rust_quality.sh"
+      - "scripts/build_datafusion_wheels.sh"
+      - "scripts/rebuild_rust_artifacts.sh"
+      - ".github/workflows/rust_quality.yml"
+      - "tests/integration/test_rust_engine_e2e.py"
+      - "pyproject.toml"
+  push:
+    branches:
+      - main
+    paths:
+      - "rust/**"
+      - "scripts/check_rust_quality.sh"
+      - "scripts/build_datafusion_wheels.sh"
+      - "scripts/rebuild_rust_artifacts.sh"
+      - ".github/workflows/rust_quality.yml"
+      - "tests/integration/test_rust_engine_e2e.py"
+      - "pyproject.toml"
+  workflow_dispatch:
+
+jobs:
+  engine-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Bootstrap environment
+        shell: bash
+        run: |
+          bash scripts/bootstrap_codex.sh
+          uv sync
+
+      - name: Run core tests
+        shell: bash
+        run: |
+          cd rust
+          cargo test -p codeanatomy-engine
+
+      - name: Run core clippy
+        shell: bash
+        run: |
+          cd rust
+          cargo clippy -p codeanatomy-engine --all-targets --all-features --no-deps -- -D warnings
+
+  engine-bindings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Bootstrap environment
+        shell: bash
+        run: |
+          bash scripts/bootstrap_codex.sh
+          uv sync
+
+      - name: Set PyO3 interpreter
+        shell: bash
+        run: |
+          echo "PYO3_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+
+      - name: Build/install bindings
+        shell: bash
+        run: |
+          uv run maturin develop -m rust/codeanatomy_engine_py/Cargo.toml --release
+
+      - name: Smoke import bindings
+        shell: bash
+        run: |
+          uv run python -c "import codeanatomy_engine; print(codeanatomy_engine.__doc__ or 'ok')"
+
+      - name: Run bindings clippy
+        shell: bash
+        run: |
+          cd rust
+          cargo clippy -p codeanatomy_engine_py --all-targets --all-features -- -D warnings
+
+      - name: Run Python integration parity
+        shell: bash
+        run: |
+          uv run pytest tests/integration/test_rust_engine_e2e.py -q
+
+  datafusion-ext:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Bootstrap environment
+        shell: bash
+        run: |
+          bash scripts/bootstrap_codex.sh
+          uv sync
+
+      - name: Run datafusion_ext tests
+        shell: bash
+        run: |
+          cd rust
+          cargo test -p datafusion_ext
+
+      - name: Run datafusion_ext clippy
+        shell: bash
+        run: |
+          cd rust
+          cargo clippy -p datafusion_ext --all-targets --all-features -- -D warnings

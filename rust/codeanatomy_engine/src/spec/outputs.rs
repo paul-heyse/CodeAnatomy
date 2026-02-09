@@ -5,16 +5,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// Materialization mode for output targets.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum MaterializationMode {
     Append,
+    #[default]
     Overwrite,
-}
-
-impl Default for MaterializationMode {
-    fn default() -> Self {
-        Self::Overwrite
-    }
 }
 
 /// Output target specification for materialized views.

@@ -19,19 +19,10 @@ use tokio::time;
 
 use crate::async_runtime;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct AsyncUdfPolicy {
     pub ideal_batch_size: Option<usize>,
     pub timeout: Option<Duration>,
-}
-
-impl Default for AsyncUdfPolicy {
-    fn default() -> Self {
-        Self {
-            ideal_batch_size: None,
-            timeout: None,
-        }
-    }
 }
 
 static ASYNC_UDF_POLICY: OnceLock<RwLock<AsyncUdfPolicy>> = OnceLock::new();

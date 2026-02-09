@@ -281,26 +281,6 @@ impl Default for StabilityReport {
 mod tests {
     use super::*;
 
-    struct TestFixture;
-
-    impl StabilityFixture for TestFixture {
-        fn name(&self) -> &str {
-            "test_fixture"
-        }
-
-        fn description(&self) -> &str {
-            "Test fixture for unit tests"
-        }
-
-        fn expected_characteristics(&self) -> (u64, u64, u64) {
-            (100, 200, 1000)
-        }
-
-        fn strict_row_count(&self) -> bool {
-            true
-        }
-    }
-
     #[test]
     fn test_stability_fixture_defaults() {
         struct MinimalFixture;

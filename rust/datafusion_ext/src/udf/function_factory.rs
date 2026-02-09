@@ -181,12 +181,12 @@ fn read_primitives(
             continue;
         }
         let primitive = RulePrimitive {
-            name: read_string_value(&names, index)?,
-            params: read_params(&params, index)?,
-            return_type: read_string_value(&return_types, index)?,
-            volatility: read_string_value(&volatilities, index)?,
-            description: read_optional_string(&descriptions, index),
-            supports_named_args: read_bool_value(&supports_named, index)?,
+            name: read_string_value(names, index)?,
+            params: read_params(params, index)?,
+            return_type: read_string_value(return_types, index)?,
+            volatility: read_string_value(volatilities, index)?,
+            description: read_optional_string(descriptions, index),
+            supports_named_args: read_bool_value(supports_named, index)?,
         };
         output.push(primitive);
     }
@@ -210,8 +210,8 @@ fn read_params(array: &ListArray, index: usize) -> Result<Vec<FunctionParameter>
             continue;
         }
         output.push(FunctionParameter {
-            name: read_string_value(&names, row)?,
-            dtype: read_string_value(&dtypes, row)?,
+            name: read_string_value(names, row)?,
+            dtype: read_string_value(dtypes, row)?,
         });
     }
     Ok(output)

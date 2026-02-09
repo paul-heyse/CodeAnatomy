@@ -17,10 +17,11 @@ async fn test_instrumented_file_store_registration_keeps_session_usable() {
         ..TracingConfig::default()
     };
 
-    let (ctx, _envelope) = factory
-        .build_session(&ruleset, [1u8; 32], Some(&tracing_config))
+    let state = factory
+        .build_session_state(&ruleset, [1u8; 32], Some(&tracing_config))
         .await
         .expect("session should build with instrumented object store");
+    let ctx = state.ctx;
 
     let df = ctx.sql("SELECT 1 AS test").await.expect("query should parse");
     let batches = df.collect().await.expect("query should execute");
@@ -37,10 +38,11 @@ async fn test_store_registration_rejects_unsupported_scheme() {
         instrument_object_store: true,
         ..TracingConfig::default()
     };
-    let (ctx, _envelope) = factory
-        .build_session(&ruleset, [2u8; 32], Some(&tracing_config))
+    let state = factory
+        .build_session_state(&ruleset, [2u8; 32], Some(&tracing_config))
         .await
         .expect("session should build");
+    let ctx = state.ctx;
 
     let err = engine_tracing::register_instrumented_stores_for_locations(
         &ctx,
@@ -65,10 +67,11 @@ async fn test_store_registration_deduplicates_same_scheme_root() {
         instrument_object_store: true,
         ..TracingConfig::default()
     };
-    let (ctx, _envelope) = factory
-        .build_session(&ruleset, [3u8; 32], Some(&tracing_config))
+    let state = factory
+        .build_session_state(&ruleset, [3u8; 32], Some(&tracing_config))
         .await
         .expect("session should build");
+    let ctx = state.ctx;
 
     engine_tracing::register_instrumented_stores_for_locations(
         &ctx,

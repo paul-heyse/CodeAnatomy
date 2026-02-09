@@ -260,8 +260,7 @@ fn test_delta_provider_api() {
         // and are compatible with our usage patterns
     }
 
-    // If this test compiles, the API surface is correct
-    assert!(true, "Delta provider type signatures compile successfully");
+    // If this test compiles, the API surface is correct.
 }
 
 /// Feature gate: delta-planner
@@ -275,7 +274,6 @@ fn test_delta_planner_feature_compiles() {
 
     // Type-level assertion: DeltaPlanner can be constructed.
     let _planner = DeltaPlanner::new();
-    assert!(true, "delta-planner feature gate compiles with DeltaPlanner");
 }
 
 /// Feature gate: delta-codec
@@ -289,11 +287,11 @@ fn test_delta_codec_feature_compiles() {
 
     // Type-level assertion: the function exists and is importable.
     // Actual invocation requires a valid plan; compile check is sufficient.
-    let _fn_ref: fn(
+    type EncodeWithDeltaCodecsFn = fn(
         &datafusion::logical_expr::LogicalPlan,
         Arc<dyn datafusion::physical_plan::ExecutionPlan>,
-    ) -> datafusion_common::Result<(Vec<u8>, Vec<u8>)> = encode_with_delta_codecs;
-    assert!(true, "delta-codec feature gate compiles with encode_with_delta_codecs");
+    ) -> datafusion_common::Result<(Vec<u8>, Vec<u8>)>;
+    let _fn_ref: EncodeWithDeltaCodecsFn = encode_with_delta_codecs;
 }
 
 /// Feature gate: delta-codec install

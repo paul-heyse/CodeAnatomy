@@ -14,6 +14,8 @@ bash scripts/rebuild_rust_artifacts.sh
 
 | Crate | Purpose |
 |-------|---------|
+| `codeanatomy_engine` | Core Rust execution engine (no PyO3 bindings) |
+| `codeanatomy_engine_py` | Python bindings crate for `codeanatomy_engine` |
 | `datafusion_ext` | Core UDFs and DataFusion extensions |
 | `datafusion_ext_py` | Python bindings via PyO3 |
 | `datafusion_python` | Additional Python-facing APIs |
@@ -27,8 +29,9 @@ After a successful build:
 
 ```
 dist/wheels/
-  datafusion_python-*.whl
-  datafusion_ext_py-*.whl
+  datafusion-*.whl
+  datafusion_ext-*.whl
+  codeanatomy_engine-*.whl
 
 build/
   datafusion_plugin_manifest.json

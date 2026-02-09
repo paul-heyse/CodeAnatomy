@@ -10,13 +10,14 @@ use crate::spec::outputs::OutputTarget;
 use crate::spec::parameters::TypedParameter;
 use crate::spec::relations::{InputRelation, ViewDefinition};
 use crate::spec::runtime::RuntimeConfig;
-use crate::spec::rule_intents::{RuleIntent, RulepackProfile, ParameterTemplate};
+use crate::spec::rule_intents::{RuleIntent, RulepackProfile};
 
 /// The root specification for semantic execution planning.
 ///
 /// This is the immutable contract between Python and Rust. Python builds it;
 /// Rust consumes it. Nothing else crosses the boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SemanticExecutionSpec {
     pub version: u32,
     pub input_relations: Vec<InputRelation>,
@@ -25,15 +26,6 @@ pub struct SemanticExecutionSpec {
     pub output_targets: Vec<OutputTarget>,
     pub rule_intents: Vec<RuleIntent>,
     pub rulepack_profile: RulepackProfile,
-    /// **Deprecated**: Use `typed_parameters` instead. This field is retained for
-    /// transitional compatibility only. When both `typed_parameters` and
-    /// `parameter_templates` are non-empty, compilation fails with a parameter
-    /// mode exclusivity error.
-    ///
-    /// Template parameters use env-var string substitution (`CODEANATOMY_PARAM_<NAME>`)
-    /// and SQL literal interpolation, which is less type-safe and less deterministic
-    /// than the typed parameter path. New specs should use `typed_parameters` exclusively.
-    pub parameter_templates: Vec<ParameterTemplate>,
     #[serde(default)]
     pub runtime: RuntimeConfig,
 
@@ -74,7 +66,6 @@ impl SemanticExecutionSpec {
         output_targets: Vec<OutputTarget>,
         rule_intents: Vec<RuleIntent>,
         rulepack_profile: RulepackProfile,
-        parameter_templates: Vec<ParameterTemplate>,
     ) -> Self {
         let mut spec = Self {
             version,
@@ -84,7 +75,6 @@ impl SemanticExecutionSpec {
             output_targets,
             rule_intents,
             rulepack_profile,
-            parameter_templates,
             runtime: RuntimeConfig::default(),
             typed_parameters: vec![],
             rule_overlay: None,
@@ -168,7 +158,6 @@ mod tests {
             vec![],
             vec![],
             RulepackProfile::Default,
-            vec![],
         )
     }
 }

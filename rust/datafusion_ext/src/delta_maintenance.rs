@@ -23,6 +23,96 @@ pub struct DeltaMaintenanceReport {
     pub metrics: serde_json::Value,
 }
 
+#[derive(Clone)]
+pub struct DeltaOptimizeCompactRequest<'a> {
+    pub session_ctx: &'a SessionContext,
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub version: Option<i64>,
+    pub timestamp: Option<String>,
+    pub target_size: Option<u64>,
+    pub gate: Option<DeltaFeatureGate>,
+    pub commit_options: Option<DeltaCommitOptions>,
+}
+
+#[derive(Clone)]
+pub struct DeltaVacuumRequest<'a> {
+    pub session_ctx: &'a SessionContext,
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub version: Option<i64>,
+    pub timestamp: Option<String>,
+    pub retention_hours: Option<i64>,
+    pub dry_run: bool,
+    pub enforce_retention_duration: bool,
+    pub require_vacuum_protocol_check: bool,
+    pub gate: Option<DeltaFeatureGate>,
+    pub commit_options: Option<DeltaCommitOptions>,
+}
+
+#[derive(Clone)]
+pub struct DeltaRestoreRequest<'a> {
+    pub session_ctx: &'a SessionContext,
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub version: Option<i64>,
+    pub timestamp: Option<String>,
+    pub restore_version: Option<i64>,
+    pub restore_timestamp: Option<String>,
+    pub gate: Option<DeltaFeatureGate>,
+    pub commit_options: Option<DeltaCommitOptions>,
+}
+
+#[derive(Clone)]
+pub struct DeltaSetPropertiesRequest<'a> {
+    pub session_ctx: &'a SessionContext,
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub version: Option<i64>,
+    pub timestamp: Option<String>,
+    pub properties: HashMap<String, String>,
+    pub gate: Option<DeltaFeatureGate>,
+    pub commit_options: Option<DeltaCommitOptions>,
+}
+
+#[derive(Clone)]
+pub struct DeltaAddFeaturesRequest<'a> {
+    pub session_ctx: &'a SessionContext,
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub version: Option<i64>,
+    pub timestamp: Option<String>,
+    pub features: Vec<String>,
+    pub allow_protocol_versions_increase: bool,
+    pub gate: Option<DeltaFeatureGate>,
+    pub commit_options: Option<DeltaCommitOptions>,
+}
+
+#[derive(Clone)]
+pub struct DeltaAddConstraintsRequest<'a> {
+    pub session_ctx: &'a SessionContext,
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub version: Option<i64>,
+    pub timestamp: Option<String>,
+    pub constraints: Vec<(String, String)>,
+    pub gate: Option<DeltaFeatureGate>,
+    pub commit_options: Option<DeltaCommitOptions>,
+}
+
+#[derive(Clone)]
+pub struct DeltaDropConstraintsRequest<'a> {
+    pub session_ctx: &'a SessionContext,
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub version: Option<i64>,
+    pub timestamp: Option<String>,
+    pub constraints: Vec<String>,
+    pub raise_if_not_exists: bool,
+    pub gate: Option<DeltaFeatureGate>,
+    pub commit_options: Option<DeltaCommitOptions>,
+}
+
 async fn latest_operation_metrics(table: &deltalake::DeltaTable) -> serde_json::Value {
     let mut history = match table.history(Some(1)).await {
         Ok(history) => history,
@@ -54,9 +144,7 @@ async fn snapshot_with_gate(
 }
 
 fn retention_duration_hours(hours: Option<i64>) -> Option<Duration> {
-    let Some(hours) = hours else {
-        return None;
-    };
+    let hours = hours?;
     if hours <= 0 {
         return None;
     }
@@ -69,16 +157,19 @@ fn parse_rfc3339(timestamp: &str) -> Result<DateTime<Utc>, DeltaTableError> {
     Ok(parsed.with_timezone(&Utc))
 }
 
-pub async fn delta_optimize_compact(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    target_size: Option<u64>,
-    gate: Option<DeltaFeatureGate>,
-    commit_options: Option<DeltaCommitOptions>,
+pub async fn delta_optimize_compact_request(
+    request: DeltaOptimizeCompactRequest<'_>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    let DeltaOptimizeCompactRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        target_size,
+        gate,
+        commit_options,
+    } = request;
     let table = load_delta_table(
         table_uri,
         storage_options,
@@ -105,19 +196,47 @@ pub async fn delta_optimize_compact(
     })
 }
 
-pub async fn delta_vacuum(
+#[deprecated(note = "use delta_optimize_compact_request")]
+#[allow(clippy::too_many_arguments)]
+pub async fn delta_optimize_compact(
     session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
     timestamp: Option<String>,
-    retention_hours: Option<i64>,
-    dry_run: bool,
-    enforce_retention_duration: bool,
-    require_vacuum_protocol_check: bool,
+    target_size: Option<u64>,
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    delta_optimize_compact_request(DeltaOptimizeCompactRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        target_size,
+        gate,
+        commit_options,
+    })
+    .await
+}
+
+pub async fn delta_vacuum_request(
+    request: DeltaVacuumRequest<'_>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    let DeltaVacuumRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        retention_hours,
+        dry_run,
+        enforce_retention_duration,
+        require_vacuum_protocol_check,
+        gate,
+        commit_options,
+    } = request;
     let table = load_delta_table(
         table_uri,
         storage_options,
@@ -157,17 +276,51 @@ pub async fn delta_vacuum(
     })
 }
 
-pub async fn delta_restore(
+#[deprecated(note = "use delta_vacuum_request")]
+#[allow(clippy::too_many_arguments)]
+pub async fn delta_vacuum(
     session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
     timestamp: Option<String>,
-    restore_version: Option<i64>,
-    restore_timestamp: Option<String>,
+    retention_hours: Option<i64>,
+    dry_run: bool,
+    enforce_retention_duration: bool,
+    require_vacuum_protocol_check: bool,
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    delta_vacuum_request(DeltaVacuumRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        retention_hours,
+        dry_run,
+        enforce_retention_duration,
+        require_vacuum_protocol_check,
+        gate,
+        commit_options,
+    })
+    .await
+}
+
+pub async fn delta_restore_request(
+    request: DeltaRestoreRequest<'_>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    let DeltaRestoreRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        restore_version,
+        restore_timestamp,
+        gate,
+        commit_options,
+    } = request;
     if restore_version.is_some() && restore_timestamp.is_some() {
         return Err(DeltaTableError::Generic(
             "Specify either restore_version or restore_timestamp, not both.".to_owned(),
@@ -204,16 +357,46 @@ pub async fn delta_restore(
     })
 }
 
-pub async fn delta_set_properties(
+#[deprecated(note = "use delta_restore_request")]
+#[allow(clippy::too_many_arguments)]
+pub async fn delta_restore(
     session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
     timestamp: Option<String>,
-    properties: HashMap<String, String>,
+    restore_version: Option<i64>,
+    restore_timestamp: Option<String>,
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    delta_restore_request(DeltaRestoreRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        restore_version,
+        restore_timestamp,
+        gate,
+        commit_options,
+    })
+    .await
+}
+
+pub async fn delta_set_properties_request(
+    request: DeltaSetPropertiesRequest<'_>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    let DeltaSetPropertiesRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        properties,
+        gate,
+        commit_options,
+    } = request;
     let table = load_delta_table(
         table_uri,
         storage_options,
@@ -239,17 +422,45 @@ pub async fn delta_set_properties(
     })
 }
 
-pub async fn delta_add_features(
+#[deprecated(note = "use delta_set_properties_request")]
+#[allow(clippy::too_many_arguments)]
+pub async fn delta_set_properties(
     session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
     timestamp: Option<String>,
-    features: Vec<String>,
-    allow_protocol_versions_increase: bool,
+    properties: HashMap<String, String>,
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    delta_set_properties_request(DeltaSetPropertiesRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        properties,
+        gate,
+        commit_options,
+    })
+    .await
+}
+
+pub async fn delta_add_features_request(
+    request: DeltaAddFeaturesRequest<'_>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    let DeltaAddFeaturesRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        features,
+        allow_protocol_versions_increase,
+        gate,
+        commit_options,
+    } = request;
     let table = load_delta_table(
         table_uri,
         storage_options,
@@ -281,6 +492,33 @@ pub async fn delta_add_features(
         snapshot,
         metrics,
     })
+}
+
+#[deprecated(note = "use delta_add_features_request")]
+#[allow(clippy::too_many_arguments)]
+pub async fn delta_add_features(
+    session_ctx: &SessionContext,
+    table_uri: &str,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    features: Vec<String>,
+    allow_protocol_versions_increase: bool,
+    gate: Option<DeltaFeatureGate>,
+    commit_options: Option<DeltaCommitOptions>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    delta_add_features_request(DeltaAddFeaturesRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        features,
+        allow_protocol_versions_increase,
+        gate,
+        commit_options,
+    })
+    .await
 }
 
 pub async fn delta_create_checkpoint(
@@ -339,16 +577,19 @@ pub async fn delta_cleanup_metadata(
     })
 }
 
-pub async fn delta_add_constraints(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    constraints: Vec<(String, String)>,
-    gate: Option<DeltaFeatureGate>,
-    commit_options: Option<DeltaCommitOptions>,
+pub async fn delta_add_constraints_request(
+    request: DeltaAddConstraintsRequest<'_>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    let DeltaAddConstraintsRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        constraints,
+        gate,
+        commit_options,
+    } = request;
     if constraints.is_empty() {
         return Err(DeltaTableError::Generic(
             "Delta add-constraints requires at least one constraint.".to_owned(),
@@ -386,17 +627,45 @@ pub async fn delta_add_constraints(
     })
 }
 
-pub async fn delta_drop_constraints(
+#[deprecated(note = "use delta_add_constraints_request")]
+#[allow(clippy::too_many_arguments)]
+pub async fn delta_add_constraints(
     session_ctx: &SessionContext,
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
     version: Option<i64>,
     timestamp: Option<String>,
-    constraints: Vec<String>,
-    raise_if_not_exists: bool,
+    constraints: Vec<(String, String)>,
     gate: Option<DeltaFeatureGate>,
     commit_options: Option<DeltaCommitOptions>,
 ) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    delta_add_constraints_request(DeltaAddConstraintsRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        constraints,
+        gate,
+        commit_options,
+    })
+    .await
+}
+
+pub async fn delta_drop_constraints_request(
+    request: DeltaDropConstraintsRequest<'_>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    let DeltaDropConstraintsRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        constraints,
+        raise_if_not_exists,
+        gate,
+        commit_options,
+    } = request;
     if constraints.is_empty() {
         return Err(DeltaTableError::Generic(
             "Delta drop-constraints requires at least one constraint name.".to_owned(),
@@ -429,4 +698,31 @@ pub async fn delta_drop_constraints(
         snapshot,
         metrics,
     })
+}
+
+#[deprecated(note = "use delta_drop_constraints_request")]
+#[allow(clippy::too_many_arguments)]
+pub async fn delta_drop_constraints(
+    session_ctx: &SessionContext,
+    table_uri: &str,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    constraints: Vec<String>,
+    raise_if_not_exists: bool,
+    gate: Option<DeltaFeatureGate>,
+    commit_options: Option<DeltaCommitOptions>,
+) -> Result<DeltaMaintenanceReport, DeltaTableError> {
+    delta_drop_constraints_request(DeltaDropConstraintsRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        constraints,
+        raise_if_not_exists,
+        gate,
+        commit_options,
+    })
+    .await
 }

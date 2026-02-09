@@ -183,9 +183,9 @@ mod tests {
 
     #[test]
     fn test_float64_to_scalar() {
-        let pv = ParameterValue::Float64(3.14);
+        let pv = ParameterValue::Float64(std::f64::consts::PI);
         let sv = pv.to_scalar_value().unwrap();
-        assert_eq!(sv, ScalarValue::Float64(Some(3.14)));
+        assert_eq!(sv, ScalarValue::Float64(Some(std::f64::consts::PI)));
     }
 
     #[test]

@@ -4,18 +4,22 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-use crate::compiler::plan_compiler::{extract_input_filter_predicates, SemanticPlanCompiler};
-use crate::compliance::capture::{capture_explain_verbose, ComplianceCapture, RetentionPolicy, RulepackSnapshot};
-use crate::executor::orchestration::prepare_execution_context;
-use crate::executor::pipeline;
-use crate::executor::result::TuningHint;
-use crate::providers::registration::probe_provider_pushdown;
-use crate::rules::rulepack::RulepackFactory;
-use crate::spec::runtime::RuntimeTunerMode;
-use crate::stability::optimizer_lab::run_lab_from_ruleset;
-use crate::tuner::adaptive::{AdaptiveTuner, ExecutionMetrics, TunerConfig};
+use codeanatomy_engine::compiler::plan_compiler::SemanticPlanCompiler;
+use codeanatomy_engine::compiler::pushdown_probe_extract::extract_input_filter_predicates;
+use codeanatomy_engine::compliance::capture::{capture_explain_verbose, ComplianceCapture, RetentionPolicy, RulepackSnapshot};
+use codeanatomy_engine::executor::orchestration::prepare_execution_context;
+use codeanatomy_engine::executor::pipeline;
+use codeanatomy_engine::executor::result::TuningHint;
+use codeanatomy_engine::executor::warnings::{RunWarning, WarningCode, WarningStage};
 #[cfg(feature = "tracing")]
-use crate::executor::tracing as engine_tracing;
+use codeanatomy_engine::executor::warnings::warning_counts_by_code;
+use codeanatomy_engine::providers::registration::probe_provider_pushdown;
+use codeanatomy_engine::rules::rulepack::RulepackFactory;
+use codeanatomy_engine::spec::runtime::RuntimeTunerMode;
+use codeanatomy_engine::stability::optimizer_lab::run_lab_from_ruleset;
+use codeanatomy_engine::tuner::adaptive::{AdaptiveTuner, ExecutionMetrics, TunerConfig};
+#[cfg(feature = "tracing")]
+use codeanatomy_engine::executor::tracing as engine_tracing;
 
 use super::compiler::CompiledPlan;
 use super::result::PyRunResult;
@@ -184,7 +188,7 @@ impl CpgMaterializer {
             let tuner_mode = resolve_tuner_mode(runtime_config.tuner_mode);
 
             // Collect non-fatal warnings from Python-specific best-effort operations.
-            let mut py_warnings: Vec<String> = Vec::new();
+            let mut py_warnings: Vec<RunWarning> = Vec::new();
 
             let compliance_capture_json = if compliance_enabled {
                 // Compile plans for EXPLAIN VERBOSE capture. The pipeline will
@@ -239,10 +243,17 @@ impl CpgMaterializer {
                                 capture.record_explain(&target.table_name, explain_lines);
                             }
                         }
-                        Err(err) => py_warnings.push(format!(
-                            "Compliance EXPLAIN VERBOSE capture failed for '{}': {err}",
-                            target.table_name
-                        )),
+                        Err(err) => py_warnings.push(
+                            RunWarning::new(
+                                WarningCode::ComplianceExplainCaptureFailed,
+                                WarningStage::Compliance,
+                                format!(
+                                    "Compliance EXPLAIN VERBOSE capture failed for '{}': {err}",
+                                    target.table_name
+                                ),
+                            )
+                            .with_context("table_name", target.table_name.clone()),
+                        ),
                     }
                 }
 
@@ -263,10 +274,17 @@ impl CpgMaterializer {
                                 let lab_name = format!("{}::optimizer_lab", target.table_name);
                                 capture.record_lab_steps(&lab_name, lab_result.steps);
                             }
-                            Err(err) => py_warnings.push(format!(
-                                "Optimizer lab capture failed for '{}': {err}",
-                                target.table_name
-                            )),
+                            Err(err) => py_warnings.push(
+                                RunWarning::new(
+                                    WarningCode::ComplianceOptimizerLabFailed,
+                                    WarningStage::Compliance,
+                                    format!(
+                                        "Optimizer lab capture failed for '{}': {err}",
+                                        target.table_name
+                                    ),
+                                )
+                                .with_context("table_name", target.table_name.clone()),
+                            ),
                         }
                     }
                 }
@@ -280,9 +298,14 @@ impl CpgMaterializer {
                     }
                     match probe_provider_pushdown(&prepared.ctx, &table_name, &filters).await {
                         Ok(probe) => capture.record_pushdown_probe(&table_name, probe),
-                        Err(err) => py_warnings.push(format!(
-                            "Pushdown probe failed for '{table_name}': {err}"
-                        )),
+                        Err(err) => py_warnings.push(
+                            RunWarning::new(
+                                WarningCode::CompliancePushdownProbeFailed,
+                                WarningStage::Compliance,
+                                format!("Pushdown probe failed for '{table_name}': {err}"),
+                            )
+                            .with_context("table_name", table_name.clone()),
+                        ),
                     }
                 }
 
@@ -291,8 +314,10 @@ impl CpgMaterializer {
                     match capture.to_json() {
                         Ok(json) => Some(json),
                         Err(e) => {
-                            py_warnings.push(format!(
-                                "Compliance capture JSON serialization failed: {e}"
+                            py_warnings.push(RunWarning::new(
+                                WarningCode::ComplianceSerializationFailed,
+                                WarningStage::Compliance,
+                                format!("Compliance capture JSON serialization failed: {e}"),
                             ));
                             None
                         }
@@ -390,6 +415,16 @@ impl CpgMaterializer {
             // ---------------------------------------------------------------
             // Tracing flush and result mapping
             // ---------------------------------------------------------------
+            #[cfg(feature = "tracing")]
+            if tracing_config.enabled {
+                let warning_counts = warning_counts_by_code(&run_result.warnings);
+                engine_tracing::record_warning_summary(
+                    &execution_span,
+                    run_result.warnings.len() as u64,
+                    &warning_counts,
+                );
+            }
+
             #[cfg(feature = "tracing")]
             if tracing_config.enabled {
                 engine_tracing::flush_otel_tracing().map_err(|e| {

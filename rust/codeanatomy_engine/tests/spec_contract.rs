@@ -22,7 +22,7 @@ use codeanatomy_engine::spec::relations::{
 };
 use codeanatomy_engine::spec::runtime::RuntimeTunerMode;
 use codeanatomy_engine::spec::rule_intents::{
-    ParameterTemplate, RuleClass, RuleIntent, RulepackProfile,
+    RuleClass, RuleIntent, RulepackProfile,
 };
 use std::collections::BTreeMap;
 
@@ -274,19 +274,23 @@ fn test_rule_intent() {
     assert_eq!(deserialized.name, "enforce_span_consistency");
 }
 
-/// Test 10: ParameterTemplate
+/// Test 10: TypedParameter serialization
 #[test]
-fn test_parameter_template() {
-    let template = ParameterTemplate {
-        name: "file_filter".to_string(),
-        base_table: "files".to_string(),
-        filter_column: "path".to_string(),
-        parameter_type: "string".to_string(),
+fn test_typed_parameter() {
+    use codeanatomy_engine::spec::parameters::{ParameterTarget, ParameterValue, TypedParameter};
+
+    let parameter = TypedParameter {
+        label: Some("file_filter".to_string()),
+        target: ParameterTarget::FilterEq {
+            base_table: Some("files".to_string()),
+            filter_column: "path".to_string(),
+        },
+        value: ParameterValue::Utf8("src/main.rs".to_string()),
     };
 
-    let json = serde_json::to_string(&template).unwrap();
-    let deserialized: ParameterTemplate = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.name, "file_filter");
+    let json = serde_json::to_string(&parameter).unwrap();
+    let deserialized: TypedParameter = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.label, Some("file_filter".to_string()));
 }
 
 /// Test 11: Full spec with all components
@@ -300,7 +304,7 @@ fn test_full_spec_integration() {
     assert_eq!(spec.join_graph.edges.len(), 1);
     assert_eq!(spec.output_targets.len(), 1);
     assert_eq!(spec.rule_intents.len(), 1);
-    assert_eq!(spec.parameter_templates.len(), 1);
+    assert!(spec.typed_parameters.is_empty());
 
     // Verify serialization roundtrip
     let json = serde_json::to_string_pretty(&spec).unwrap();
@@ -354,8 +358,7 @@ fn test_spec_nested_unknown_fields_rejected() {
             }
         ],
         "rule_intents": [],
-        "rulepack_profile": "Default",
-        "parameter_templates": []
+        "rulepack_profile": "Default"
     });
     let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
     assert!(result.is_err());
@@ -371,8 +374,7 @@ fn test_spec_enum_mismatch_rejected() {
         "join_graph": { "edges": [], "constraints": [] },
         "output_targets": [],
         "rule_intents": [],
-        "rulepack_profile": "NotARealProfile",
-        "parameter_templates": []
+        "rulepack_profile": "NotARealProfile"
     });
     let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
     assert!(result.is_err());
@@ -387,8 +389,7 @@ fn test_spec_missing_required_field_rejected() {
         "join_graph": { "edges": [], "constraints": [] },
         "output_targets": [],
         "rule_intents": [],
-        "rulepack_profile": "Default",
-        "parameter_templates": []
+        "rulepack_profile": "Default"
     });
     let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
     assert!(result.is_err());
@@ -404,8 +405,7 @@ fn test_spec_runtime_defaults_when_omitted() {
         "join_graph": { "edges": [], "constraints": [] },
         "output_targets": [],
         "rule_intents": [],
-        "rulepack_profile": "Default",
-        "parameter_templates": []
+        "rulepack_profile": "Default"
     });
     let spec: SemanticExecutionSpec = serde_json::from_value(payload).expect("valid spec");
     assert!(!spec.runtime.compliance_capture);
@@ -428,7 +428,6 @@ fn test_spec_runtime_unknown_field_ignored() {
         "output_targets": [],
         "rule_intents": [],
         "rulepack_profile": "Default",
-        "parameter_templates": [],
         "runtime": {
             "compliance_capture": true,
             "tuner_mode": "Observe",
@@ -439,94 +438,6 @@ fn test_spec_runtime_unknown_field_ignored() {
         .expect("RuntimeConfig should ignore unknown fields for forward compatibility");
     assert!(spec.runtime.compliance_capture);
     assert_eq!(spec.runtime.tuner_mode, RuntimeTunerMode::Observe);
-}
-
-// ---------------------------------------------------------------------------
-// Scope 8: Dual-mode parameter rejection (typed + template = error)
-// ---------------------------------------------------------------------------
-
-/// Scope 8: Spec validation rejects dual-mode parameters.
-///
-/// When both typed_parameters and parameter_templates are non-empty,
-/// validate_parameter_mode must return an error. This is the canonical
-/// compile-time guard against parameter mode conflicts.
-#[test]
-fn test_dual_mode_parameter_rejection() {
-    use codeanatomy_engine::compiler::plan_compiler::validate_parameter_mode;
-    use codeanatomy_engine::spec::parameters::{ParameterTarget, ParameterValue, TypedParameter};
-
-    let mut spec = create_test_spec();
-
-    // Add a typed parameter.
-    spec.typed_parameters.push(TypedParameter {
-        label: Some("test_param".to_string()),
-        target: ParameterTarget::FilterEq {
-            base_table: None,
-            filter_column: "id".to_string(),
-        },
-        value: ParameterValue::Int64(42),
-    });
-
-    // Add a parameter template.
-    spec.parameter_templates.push(ParameterTemplate {
-        name: "template_param".to_string(),
-        base_table: "test_input".to_string(),
-        filter_column: "id".to_string(),
-        parameter_type: "string".to_string(),
-    });
-
-    // Both present => must reject.
-    let result = validate_parameter_mode(&spec);
-    assert!(
-        result.is_err(),
-        "validate_parameter_mode must reject dual-mode parameters"
-    );
-    let err_msg = result.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("Parameter mode conflict"),
-        "error message must indicate parameter mode conflict, got: {err_msg}"
-    );
-}
-
-/// Scope 8: validate_parameter_mode accepts specs with only typed_parameters.
-#[test]
-fn test_typed_parameters_only_accepted() {
-    use codeanatomy_engine::compiler::plan_compiler::validate_parameter_mode;
-    use codeanatomy_engine::spec::parameters::{ParameterTarget, ParameterValue, TypedParameter};
-
-    let mut spec = create_test_spec();
-    spec.typed_parameters.push(TypedParameter {
-        label: None,
-        target: ParameterTarget::FilterEq {
-            base_table: None,
-            filter_column: "id".to_string(),
-        },
-        value: ParameterValue::Int64(1),
-    });
-
-    assert!(
-        validate_parameter_mode(&spec).is_ok(),
-        "spec with only typed_parameters must pass validation"
-    );
-}
-
-/// Scope 8: validate_parameter_mode accepts specs with only parameter_templates.
-#[test]
-fn test_parameter_templates_only_accepted() {
-    use codeanatomy_engine::compiler::plan_compiler::validate_parameter_mode;
-
-    let mut spec = create_test_spec();
-    spec.parameter_templates.push(ParameterTemplate {
-        name: "tmpl".to_string(),
-        base_table: "test_input".to_string(),
-        filter_column: "id".to_string(),
-        parameter_type: "string".to_string(),
-    });
-
-    assert!(
-        validate_parameter_mode(&spec).is_ok(),
-        "spec with only parameter_templates must pass validation"
-    );
 }
 
 // Helper: Create minimal test spec
@@ -556,7 +467,6 @@ fn create_test_spec() -> SemanticExecutionSpec {
         vec![],
         vec![],
         RulepackProfile::Default,
-        vec![],
     )
 }
 
@@ -663,11 +573,5 @@ fn create_full_spec() -> SemanticExecutionSpec {
             params: serde_json::json!({"strict": true}),
         }],
         RulepackProfile::Default,
-        vec![ParameterTemplate {
-            name: "node_filter".to_string(),
-            base_table: "nodes".to_string(),
-            filter_column: "name".to_string(),
-            parameter_type: "string".to_string(),
-        }],
     )
 }

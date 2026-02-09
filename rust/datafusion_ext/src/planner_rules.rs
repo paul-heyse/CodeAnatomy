@@ -99,7 +99,7 @@ pub fn ensure_policy_config(options: &mut ConfigOptions) -> Result<&mut CodeAnat
 pub fn install_policy_rules(ctx: &SessionContext) -> Result<()> {
     let state_ref = ctx.state_ref();
     let mut state = state_ref.write();
-    state.add_analyzer_rule(Arc::new(CodeAnatomyPolicyRule::default()));
+    state.add_analyzer_rule(Arc::new(CodeAnatomyPolicyRule));
     Ok(())
 }
 

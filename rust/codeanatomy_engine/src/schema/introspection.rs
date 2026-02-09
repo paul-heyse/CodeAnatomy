@@ -10,6 +10,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{DataFusionError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub type SchemaDiff = (Vec<String>, Vec<String>, Vec<(String, DataType, DataType)>);
+
 /// Compute a BLAKE3 hash of an Arrow schema for drift detection.
 ///
 /// The hash includes field names, data types, and nullability flags.
@@ -108,7 +110,7 @@ pub fn hash_arrow_schema(schema: &Schema) -> [u8; 32] {
 pub fn schema_diff(
     old: &Schema,
     new: &Schema,
-) -> (Vec<String>, Vec<String>, Vec<(String, DataType, DataType)>) {
+) -> SchemaDiff {
     let old_fields: BTreeMap<String, &Field> = old
         .fields()
         .iter()

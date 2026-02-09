@@ -1,6 +1,6 @@
 //! Delta output table creation and schema enforcement.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use arrow::datatypes::{
@@ -10,7 +10,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_ext::delta_control_plane::{delta_provider_from_session, DeltaScanOverrides};
+use datafusion_ext::delta_control_plane::{
+    delta_provider_from_session_request, DeltaProviderFromSessionRequest, DeltaScanOverrides,
+};
 use datafusion_ext::DeltaFeatureGate;
 use deltalake::delta_datafusion::DeltaScanConfig;
 use deltalake::kernel::{
@@ -165,16 +167,16 @@ pub async fn ensure_output_table(
         schema: scan_config.schema,
     };
     let (provider, _snapshot, _scan_config, _pruned_files, predicate_error) =
-        delta_provider_from_session(
-            ctx,
-            delta_location,
-            None,
-            table.version(),
-            None,
-            None,
-            scan_overrides,
-            Some(DeltaFeatureGate::default()),
-        )
+        delta_provider_from_session_request(DeltaProviderFromSessionRequest {
+            session_ctx: ctx,
+            table_uri: delta_location,
+            storage_options: None,
+            version: table.version(),
+            timestamp: None,
+            predicate: None,
+            overrides: scan_overrides,
+            gate: Some(DeltaFeatureGate::default()),
+        })
         .await
         .map_err(|err| DataFusionError::External(Box::new(err)))?;
     if let Some(error) = predicate_error {
@@ -276,7 +278,7 @@ pub async fn read_write_outcome(delta_location: &str) -> WriteOutcome {
         };
     }
 
-    let delta_version = table.version().map(|v| v as i64);
+    let delta_version = table.version();
 
     // Attempt to read file metadata from the snapshot for files_added / bytes_written.
     // Uses the same log_data() API as providers/snapshot.rs::snapshot_metadata().
@@ -301,27 +303,68 @@ pub async fn read_write_outcome(delta_location: &str) -> WriteOutcome {
 /// Build commit properties from output target metadata and determinism hashes.
 ///
 /// Merges user-supplied write metadata with codeanatomy provenance hashes.
+#[derive(Debug, Clone)]
+pub struct LineageContext {
+    pub spec_hash: [u8; 32],
+    pub envelope_hash: [u8; 32],
+    pub planning_surface_hash: [u8; 32],
+    pub provider_identity_hash: [u8; 32],
+    pub rulepack_fingerprint: [u8; 32],
+    pub rulepack_profile: String,
+    pub runtime_profile_name: Option<String>,
+    pub run_started_at_rfc3339: String,
+    pub runtime_lineage_tags: BTreeMap<String, String>,
+}
+
 pub fn build_commit_properties(
     target: &crate::spec::outputs::OutputTarget,
-    spec_hash: &[u8; 32],
-    envelope_hash: &[u8; 32],
+    lineage: &LineageContext,
 ) -> std::collections::BTreeMap<String, String> {
     let mut props = target.write_metadata.clone();
-    props.insert("codeanatomy.spec_hash".into(), hex::encode(spec_hash));
+    props.insert("codeanatomy.spec_hash".into(), hex::encode(lineage.spec_hash));
     props.insert(
         "codeanatomy.envelope_hash".into(),
-        hex::encode(envelope_hash),
+        hex::encode(lineage.envelope_hash),
     );
+    props.insert(
+        "codeanatomy.planning_surface_hash".into(),
+        hex::encode(lineage.planning_surface_hash),
+    );
+    props.insert(
+        "codeanatomy.provider_identity_hash".into(),
+        hex::encode(lineage.provider_identity_hash),
+    );
+    props.insert(
+        "codeanatomy.rulepack_fingerprint".into(),
+        hex::encode(lineage.rulepack_fingerprint),
+    );
+    props.insert(
+        "codeanatomy.rulepack_profile".into(),
+        lineage.rulepack_profile.clone(),
+    );
+    props.insert(
+        "codeanatomy.runtime_profile".into(),
+        lineage
+            .runtime_profile_name
+            .clone()
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    props.insert(
+        "codeanatomy.run_started_at".into(),
+        lineage.run_started_at_rfc3339.clone(),
+    );
+    for (key, value) in &lineage.runtime_lineage_tags {
+        props.insert(format!("codeanatomy.lineage_tag.{key}"), value.clone());
+    }
     props
 }
 
 /// Build Delta commit options from output-target policy and provenance hashes.
 pub fn build_delta_commit_options(
     target: &crate::spec::outputs::OutputTarget,
-    spec_hash: &[u8; 32],
-    envelope_hash: &[u8; 32],
+    lineage: &LineageContext,
 ) -> datafusion_ext::DeltaCommitOptions {
-    let metadata: HashMap<String, String> = build_commit_properties(target, spec_hash, envelope_hash)
+    let metadata: HashMap<String, String> = build_commit_properties(target, lineage)
         .into_iter()
         .collect();
     datafusion_ext::DeltaCommitOptions {
@@ -352,13 +395,30 @@ mod tests {
         }
     }
 
+    fn sample_lineage(spec_hash: [u8; 32], envelope_hash: [u8; 32]) -> LineageContext {
+        let mut tags = BTreeMap::new();
+        tags.insert("team".to_string(), "graph".to_string());
+        LineageContext {
+            spec_hash,
+            envelope_hash,
+            planning_surface_hash: [0x33u8; 32],
+            provider_identity_hash: [0x44u8; 32],
+            rulepack_fingerprint: [0x55u8; 32],
+            rulepack_profile: "Default".to_string(),
+            runtime_profile_name: Some("small".to_string()),
+            run_started_at_rfc3339: "2026-02-09T00:00:00Z".to_string(),
+            runtime_lineage_tags: tags,
+        }
+    }
+
     #[test]
     fn test_build_commit_properties_merges_user_and_codeanatomy_keys() {
         let target = sample_target();
         let spec_hash = [0xABu8; 32];
         let envelope_hash = [0xCDu8; 32];
+        let lineage = sample_lineage(spec_hash, envelope_hash);
 
-        let props = build_commit_properties(&target, &spec_hash, &envelope_hash);
+        let props = build_commit_properties(&target, &lineage);
         assert_eq!(props.get("user.tag"), Some(&"v1".to_string()));
         assert_eq!(
             props.get("codeanatomy.spec_hash"),
@@ -368,6 +428,18 @@ mod tests {
             props.get("codeanatomy.envelope_hash"),
             Some(&hex::encode(envelope_hash))
         );
+        assert_eq!(
+            props.get("codeanatomy.planning_surface_hash"),
+            Some(&hex::encode([0x33u8; 32]))
+        );
+        assert_eq!(
+            props.get("codeanatomy.provider_identity_hash"),
+            Some(&hex::encode([0x44u8; 32]))
+        );
+        assert_eq!(
+            props.get("codeanatomy.lineage_tag.team"),
+            Some(&"graph".to_string())
+        );
     }
 
     #[test]
@@ -375,8 +447,9 @@ mod tests {
         let target = sample_target();
         let spec_hash = [0x11u8; 32];
         let envelope_hash = [0x22u8; 32];
+        let lineage = sample_lineage(spec_hash, envelope_hash);
 
-        let options = build_delta_commit_options(&target, &spec_hash, &envelope_hash);
+        let options = build_delta_commit_options(&target, &lineage);
         assert_eq!(options.max_retries, Some(7));
         assert_eq!(options.metadata.get("user.tag"), Some(&"v1".to_string()));
         assert_eq!(

@@ -277,16 +277,20 @@ impl TableFunctionImpl for ReadDeltaTableFunction {
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         ensure_exact_args(args, 1, READ_DELTA_TABLE_FUNCTION)?;
         let table_uri = literal_string_arg(args, 0, READ_DELTA_TABLE_FUNCTION)?;
-        let resolved = async_runtime::block_on(delta_control_plane::delta_provider_from_session(
-            &self.ctx,
-            table_uri.as_str(),
-            None,
-            None,
-            None,
-            None,
-            delta_control_plane::DeltaScanOverrides::default(),
-            None,
-        ))?;
+        let resolved = async_runtime::block_on(
+            delta_control_plane::delta_provider_from_session_request(
+                delta_control_plane::DeltaProviderFromSessionRequest {
+                    session_ctx: &self.ctx,
+                    table_uri: table_uri.as_str(),
+                    storage_options: None,
+                    version: None,
+                    timestamp: None,
+                    predicate: None,
+                    overrides: delta_control_plane::DeltaScanOverrides::default(),
+                    gate: None,
+                },
+            ),
+        )?;
         let (provider, _, _, _, _) =
             resolved.map_err(|err| map_delta_error(READ_DELTA_TABLE_FUNCTION, err))?;
         Ok(Arc::new(provider))

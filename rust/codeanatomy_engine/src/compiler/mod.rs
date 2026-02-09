@@ -12,6 +12,7 @@ pub mod param_compiler;
 pub mod plan_bundle;
 pub mod plan_codec;
 pub mod plan_compiler;
+pub mod pushdown_probe_extract;
 pub mod substrait;
 pub mod udtf_builder;
 pub mod union_builder;

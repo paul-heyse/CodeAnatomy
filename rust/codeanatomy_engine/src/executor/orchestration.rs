@@ -4,6 +4,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion_common::Result;
 
 use crate::compiler::plan_bundle::ProviderIdentity;
+use crate::executor::warnings::RunWarning;
 use crate::providers::registration::register_extraction_inputs;
 use crate::rules::registry::CpgRuleSet;
 use crate::session::envelope::SessionEnvelope;
@@ -16,7 +17,7 @@ pub struct PreparedExecutionContext {
     pub ctx: SessionContext,
     pub envelope: SessionEnvelope,
     pub provider_identities: Vec<ProviderIdentity>,
-    pub preflight_warnings: Vec<String>,
+    pub preflight_warnings: Vec<RunWarning>,
 }
 
 /// Build session state, register inputs, and capture the envelope.

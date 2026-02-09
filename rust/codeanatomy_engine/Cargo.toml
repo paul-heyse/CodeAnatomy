@@ -10,7 +10,7 @@ repository.workspace = true
 
 [lib]
 name = "codeanatomy_engine"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 # Workspace dependencies (pinned versions)
@@ -23,7 +23,6 @@ datafusion-tracing = { workspace = true, optional = true }
 instrumented-object-store = { workspace = true, optional = true }
 object_store = { workspace = true }
 arrow = { workspace = true }
-pyo3 = { workspace = true, features = ["extension-module", "abi3-py313"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_path_to_error = "0.1"
@@ -62,7 +61,6 @@ async-trait = "0.1"
 [features]
 default = ["compliance"]
 compliance = []
-pyo3 = ["dep:pyo3"]
 substrait = ["dep:datafusion-substrait", "dep:substrait"]
 tracing = [
     "dep:datafusion-tracing",

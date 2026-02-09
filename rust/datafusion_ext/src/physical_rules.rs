@@ -119,7 +119,7 @@ pub fn install_physical_rules(ctx: &SessionContext) -> Result<()> {
     let config = state.config_mut();
     let _ = ensure_physical_config(config.options_mut())?;
     let builder = SessionStateBuilder::from(state.clone())
-        .with_physical_optimizer_rule(Arc::new(CodeAnatomyPhysicalRule::default()));
+        .with_physical_optimizer_rule(Arc::new(CodeAnatomyPhysicalRule));
     *state = builder.build();
     Ok(())
 }

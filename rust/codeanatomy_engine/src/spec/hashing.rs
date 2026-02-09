@@ -168,7 +168,6 @@ mod tests {
             output_targets: vec![],
             rule_intents: vec![],
             rulepack_profile: RulepackProfile::Default,
-            parameter_templates: vec![],
             runtime: RuntimeConfig::default(),
             typed_parameters: vec![],
             rule_overlay: None,

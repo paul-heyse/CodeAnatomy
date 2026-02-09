@@ -16,6 +16,8 @@ use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
+
 use super::substrait::try_substrait_encode;
 
 // ---------------------------------------------------------------------------
@@ -35,6 +37,18 @@ pub struct PlanBundleRuntime {
     pub p1_optimized: LogicalPlan,
     /// P2: physical execution plan.
     pub p2_physical: Arc<dyn ExecutionPlan>,
+}
+
+/// Inputs required to build a persisted plan bundle artifact.
+pub struct PlanBundleArtifactBuildRequest<'a> {
+    pub ctx: &'a SessionContext,
+    pub runtime: &'a PlanBundleRuntime,
+    pub rulepack_fingerprint: [u8; 32],
+    pub provider_identities: Vec<ProviderIdentity>,
+    pub capture_substrait: bool,
+    pub capture_sql: bool,
+    pub capture_delta_codec: bool,
+    pub planning_surface_hash: [u8; 32],
 }
 
 // ---------------------------------------------------------------------------
@@ -155,8 +169,27 @@ pub struct PlanDiff {
     pub providers_changed: bool,
     /// True if planning surface hashes differ.
     pub planning_surface_changed: bool,
+    /// True if logical delta-codec bytes differ.
+    pub delta_codec_logical_changed: bool,
+    /// True if physical delta-codec bytes differ.
+    pub delta_codec_physical_changed: bool,
+    /// Digest summary for logical delta-codec payload in artifact A.
+    pub delta_codec_logical_before: Option<CodecDigestSummary>,
+    /// Digest summary for logical delta-codec payload in artifact B.
+    pub delta_codec_logical_after: Option<CodecDigestSummary>,
+    /// Digest summary for physical delta-codec payload in artifact A.
+    pub delta_codec_physical_before: Option<CodecDigestSummary>,
+    /// Digest summary for physical delta-codec payload in artifact B.
+    pub delta_codec_physical_after: Option<CodecDigestSummary>,
     /// Human-readable summary of what changed.
     pub summary: Vec<String>,
+}
+
+/// Compact digest summary for codec payload diagnostics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodecDigestSummary {
+    pub len: usize,
+    pub blake3: [u8; 32],
 }
 
 // ---------------------------------------------------------------------------
@@ -208,16 +241,17 @@ pub async fn capture_plan_bundle_runtime(
 /// planning_surface_hash
 ///     BLAKE3 hash of the planning surface manifest.
 pub async fn build_plan_bundle_artifact(
-    ctx: &SessionContext,
-    runtime: &PlanBundleRuntime,
-    rulepack_fingerprint: [u8; 32],
-    provider_identities: Vec<ProviderIdentity>,
-    capture_substrait: bool,
-    capture_sql: bool,
-    capture_delta_codec: bool,
-    planning_surface_hash: [u8; 32],
+    request: PlanBundleArtifactBuildRequest<'_>,
 ) -> Result<PlanBundleArtifact> {
-    let (artifact, _warnings) = build_plan_bundle_artifact_with_warnings(
+    let (artifact, _warnings) = build_plan_bundle_artifact_with_warnings(request).await?;
+    Ok(artifact)
+}
+
+/// Build a persisted artifact and return non-fatal capture warnings.
+pub async fn build_plan_bundle_artifact_with_warnings(
+    request: PlanBundleArtifactBuildRequest<'_>,
+) -> Result<(PlanBundleArtifact, Vec<RunWarning>)> {
+    let PlanBundleArtifactBuildRequest {
         ctx,
         runtime,
         rulepack_fingerprint,
@@ -226,29 +260,14 @@ pub async fn build_plan_bundle_artifact(
         capture_sql,
         capture_delta_codec,
         planning_surface_hash,
-    )
-    .await?;
-    Ok(artifact)
-}
-
-/// Build a persisted artifact and return non-fatal capture warnings.
-pub async fn build_plan_bundle_artifact_with_warnings(
-    ctx: &SessionContext,
-    runtime: &PlanBundleRuntime,
-    rulepack_fingerprint: [u8; 32],
-    provider_identities: Vec<ProviderIdentity>,
-    capture_substrait: bool,
-    capture_sql: bool,
-    capture_delta_codec: bool,
-    planning_surface_hash: [u8; 32],
-) -> Result<(PlanBundleArtifact, Vec<String>)> {
+    } = request;
     let p0_text = normalize_logical(&runtime.p0_logical);
     let p1_text = normalize_logical(&runtime.p1_optimized);
     let p2_text = normalize_physical(runtime.p2_physical.as_ref());
 
     let explain_verbose = capture_explain_verbose(ctx, &runtime.p1_optimized).await?;
     let explain_analyze = capture_explain_analyze(ctx, &runtime.p1_optimized).await?;
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<RunWarning> = Vec::new();
 
     // Schema fingerprints: P0/P1 use DFSchema::as_arrow(), P2 uses Arrow directly.
     let p0_arrow_schema = runtime.p0_logical.schema().as_arrow();
@@ -258,7 +277,13 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         match try_substrait_encode(ctx, &runtime.p1_optimized) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
-                warnings.push(format!("Optional plan capture failed for substrait: {err}"));
+                warnings.push(
+                    RunWarning::new(
+                        WarningCode::OptionalSubstraitCaptureFailed,
+                        WarningStage::PlanBundle,
+                        format!("Optional plan capture failed for substrait: {err}"),
+                    ),
+                );
                 None
             }
         }
@@ -269,7 +294,13 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         match try_sql_unparse(&runtime.p1_optimized) {
             Ok(text) => Some(text),
             Err(err) => {
-                warnings.push(format!("Optional plan capture failed for sql_text: {err}"));
+                warnings.push(
+                    RunWarning::new(
+                        WarningCode::OptionalSqlCaptureFailed,
+                        WarningStage::PlanBundle,
+                        format!("Optional plan capture failed for sql_text: {err}"),
+                    ),
+                );
                 None
             }
         }
@@ -283,7 +314,13 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         ) {
             Ok((logical, physical)) => (Some(logical), Some(physical)),
             Err(err) => {
-                warnings.push(format!("Optional plan capture failed for delta_codec: {err}"));
+                warnings.push(
+                    RunWarning::new(
+                        WarningCode::OptionalDeltaCodecCaptureFailed,
+                        WarningStage::PlanBundle,
+                        format!("Optional plan capture failed for delta_codec: {err}"),
+                    ),
+                );
                 (None, None)
             }
         }
@@ -334,6 +371,18 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
     let rulepack_changed = a.rulepack_fingerprint != b.rulepack_fingerprint;
     let providers_changed = a.provider_identities != b.provider_identities;
     let planning_surface_changed = a.planning_surface_hash != b.planning_surface_hash;
+    let delta_codec_logical_changed =
+        a.delta_codec_logical_bytes != b.delta_codec_logical_bytes;
+    let delta_codec_physical_changed =
+        a.delta_codec_physical_bytes != b.delta_codec_physical_bytes;
+    let delta_codec_logical_before =
+        codec_digest_summary(a.delta_codec_logical_bytes.as_deref());
+    let delta_codec_logical_after =
+        codec_digest_summary(b.delta_codec_logical_bytes.as_deref());
+    let delta_codec_physical_before =
+        codec_digest_summary(a.delta_codec_physical_bytes.as_deref());
+    let delta_codec_physical_after =
+        codec_digest_summary(b.delta_codec_physical_bytes.as_deref());
 
     let mut summary = Vec::new();
     if p0_changed {
@@ -357,6 +406,12 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
     if planning_surface_changed {
         summary.push("Planning surface hash changed".into());
     }
+    if delta_codec_logical_changed {
+        summary.push("Delta codec logical payload changed".into());
+    }
+    if delta_codec_physical_changed {
+        summary.push("Delta codec physical payload changed".into());
+    }
 
     PlanDiff {
         p0_changed,
@@ -366,6 +421,12 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
         rulepack_changed,
         providers_changed,
         planning_surface_changed,
+        delta_codec_logical_changed,
+        delta_codec_physical_changed,
+        delta_codec_logical_before,
+        delta_codec_logical_after,
+        delta_codec_physical_before,
+        delta_codec_physical_after,
         summary,
     }
 }
@@ -420,6 +481,13 @@ fn hash_schema(schema: &ArrowSchema) -> [u8; 32] {
     // Arrow's Schema implements Serialize via serde.
     let schema_json = serde_json::to_string(schema).unwrap_or_default();
     blake3_hash_bytes(schema_json.as_bytes())
+}
+
+fn codec_digest_summary(bytes: Option<&[u8]>) -> Option<CodecDigestSummary> {
+    bytes.map(|payload| CodecDigestSummary {
+        len: payload.len(),
+        blake3: blake3_hash_bytes(payload),
+    })
 }
 
 /// Capture EXPLAIN VERBOSE output for a logical plan.
@@ -531,16 +599,16 @@ mod tests {
         let df = ctx.table("test_table").await.unwrap();
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
-        let artifact = build_plan_bundle_artifact(
-            &ctx,
-            &runtime,
-            [0u8; 32],
-            vec![],
-            false,
-            false,
-            false,
-            [0u8; 32],
-        )
+        let artifact = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
@@ -557,31 +625,31 @@ mod tests {
         let df = ctx.table("test_table").await.unwrap();
 
         let runtime1 = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
-        let artifact1 = build_plan_bundle_artifact(
-            &ctx,
-            &runtime1,
-            [0u8; 32],
-            vec![],
-            false,
-            false,
-            false,
-            [0u8; 32],
-        )
+        let artifact1 = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime1,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
         let df2 = ctx.table("test_table").await.unwrap();
         let runtime2 = capture_plan_bundle_runtime(&ctx, &df2).await.unwrap();
-        let artifact2 = build_plan_bundle_artifact(
-            &ctx,
-            &runtime2,
-            [0u8; 32],
-            vec![],
-            false,
-            false,
-            false,
-            [0u8; 32],
-        )
+        let artifact2 = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime2,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
@@ -597,16 +665,16 @@ mod tests {
         let df = ctx.table("test_table").await.unwrap();
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
-        let artifact = build_plan_bundle_artifact(
-            &ctx,
-            &runtime,
-            [0u8; 32],
-            vec![],
-            false,
-            false,
-            false,
-            [0u8; 32],
-        )
+        let artifact = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
@@ -618,6 +686,12 @@ mod tests {
         assert!(!diff.rulepack_changed);
         assert!(!diff.providers_changed);
         assert!(!diff.planning_surface_changed);
+        assert!(!diff.delta_codec_logical_changed);
+        assert!(!diff.delta_codec_physical_changed);
+        assert!(diff.delta_codec_logical_before.is_none());
+        assert!(diff.delta_codec_logical_after.is_none());
+        assert!(diff.delta_codec_physical_before.is_none());
+        assert!(diff.delta_codec_physical_after.is_none());
         assert!(diff.summary.is_empty());
     }
 
@@ -627,29 +701,29 @@ mod tests {
         let df = ctx.table("test_table").await.unwrap();
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
-        let artifact_a = build_plan_bundle_artifact(
-            &ctx,
-            &runtime,
-            [0u8; 32],
-            vec![],
-            false,
-            false,
-            false,
-            [0u8; 32],
-        )
+        let artifact_a = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
-        let artifact_b = build_plan_bundle_artifact(
-            &ctx,
-            &runtime,
-            [1u8; 32],
-            vec![],
-            false,
-            false,
-            false,
-            [0u8; 32],
-        )
+        let artifact_b = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: [1u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
@@ -664,32 +738,32 @@ mod tests {
         let df = ctx.table("test_table").await.unwrap();
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
-        let artifact_a = build_plan_bundle_artifact(
-            &ctx,
-            &runtime,
-            [0u8; 32],
-            vec![],
-            false,
-            false,
-            false,
-            [0u8; 32],
-        )
+        let artifact_a = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
-        let artifact_b = build_plan_bundle_artifact(
-            &ctx,
-            &runtime,
-            [0u8; 32],
-            vec![ProviderIdentity {
+        let artifact_b = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![ProviderIdentity {
                 table_name: "test_table".into(),
                 identity_hash: [42u8; 32],
             }],
-            false,
-            false,
-            false,
-            [0u8; 32],
-        )
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
@@ -699,21 +773,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_diff_detects_codec_payload_changes() {
+        let ctx = test_ctx().await;
+        let df = ctx.table("test_table").await.unwrap();
+        let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
+
+        let mut artifact_a = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
+        .await
+        .unwrap();
+        artifact_a.delta_codec_logical_bytes = Some(vec![1, 2, 3]);
+        artifact_a.delta_codec_physical_bytes = Some(vec![4, 5, 6]);
+
+        let mut artifact_b = artifact_a.clone();
+        artifact_b.delta_codec_logical_bytes = Some(vec![1, 2, 9]);
+        artifact_b.delta_codec_physical_bytes = Some(vec![4, 5, 7]);
+
+        let diff = diff_artifacts(&artifact_a, &artifact_b);
+        assert!(diff.delta_codec_logical_changed);
+        assert!(diff.delta_codec_physical_changed);
+        assert!(diff.delta_codec_logical_before.is_some());
+        assert!(diff.delta_codec_logical_after.is_some());
+        assert!(diff.delta_codec_physical_before.is_some());
+        assert!(diff.delta_codec_physical_after.is_some());
+    }
+
+    #[tokio::test]
     async fn test_sql_unparse_produces_text() {
         let ctx = test_ctx().await;
         let df = ctx.table("test_table").await.unwrap();
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
-        let artifact = build_plan_bundle_artifact(
-            &ctx,
-            &runtime,
-            [0u8; 32],
-            vec![],
-            false,
-            true, // capture SQL
-            false,
-            [0u8; 32],
-        )
+        let artifact = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: true, // capture SQL
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
@@ -729,16 +837,16 @@ mod tests {
         let df = ctx.table("test_table").await.unwrap();
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
-        let artifact = build_plan_bundle_artifact(
-            &ctx,
-            &runtime,
-            [0u8; 32],
-            vec![],
-            false,
-            false,
-            false,
-            [0u8; 32],
-        )
+        let artifact = build_plan_bundle_artifact(PlanBundleArtifactBuildRequest {
+            ctx: &ctx,
+            runtime: &runtime,
+            rulepack_fingerprint: [0u8; 32],
+            provider_identities: vec![],
+            capture_substrait: false,
+            capture_sql: false,
+            capture_delta_codec: false,
+            planning_surface_hash: [0u8; 32],
+        })
         .await
         .unwrap();
 
@@ -756,20 +864,24 @@ mod tests {
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
         let (_artifact, warnings) = build_plan_bundle_artifact_with_warnings(
-            &ctx,
-            &runtime,
-            [0u8; 32],
-            vec![],
-            true,
-            false,
-            false,
-            [0u8; 32],
+            PlanBundleArtifactBuildRequest {
+                ctx: &ctx,
+                runtime: &runtime,
+                rulepack_fingerprint: [0u8; 32],
+                provider_identities: vec![],
+                capture_substrait: true,
+                capture_sql: false,
+                capture_delta_codec: false,
+                planning_surface_hash: [0u8; 32],
+            },
         )
         .await
         .unwrap();
 
         assert!(
-            warnings.iter().any(|warning| warning.contains("substrait")),
+            warnings
+                .iter()
+                .any(|warning| warning.code == WarningCode::OptionalSubstraitCaptureFailed),
             "optional capture failures should surface through warnings"
         );
     }
@@ -782,20 +894,24 @@ mod tests {
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
         let (_artifact, warnings) = build_plan_bundle_artifact_with_warnings(
-            &ctx,
-            &runtime,
-            [0u8; 32],
-            vec![],
-            false,
-            false,
-            true,
-            [0u8; 32],
+            PlanBundleArtifactBuildRequest {
+                ctx: &ctx,
+                runtime: &runtime,
+                rulepack_fingerprint: [0u8; 32],
+                provider_identities: vec![],
+                capture_substrait: false,
+                capture_sql: false,
+                capture_delta_codec: true,
+                planning_surface_hash: [0u8; 32],
+            },
         )
         .await
         .unwrap();
 
         assert!(
-            warnings.iter().any(|warning| warning.contains("delta_codec")),
+            warnings
+                .iter()
+                .any(|warning| warning.code == WarningCode::OptionalDeltaCodecCaptureFailed),
             "delta-codec optional capture failures should surface through warnings"
         );
     }

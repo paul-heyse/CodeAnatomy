@@ -19,8 +19,10 @@ use std::sync::Arc;
 
 use crate::executor::delta_writer::{
     build_delta_commit_options, ensure_output_table, extract_row_count, read_write_outcome,
-    validate_output_schema,
+    validate_output_schema, LineageContext,
 };
+#[cfg(feature = "tracing")]
+use crate::executor::warnings::warning_counts_by_code;
 use crate::executor::pipeline;
 use crate::executor::result::{MaterializationResult, RunResult};
 #[cfg(feature = "tracing")]
@@ -36,8 +38,7 @@ use crate::spec::outputs::{MaterializationMode, OutputTarget};
 pub async fn execute_and_materialize(
     ctx: &SessionContext,
     output_plans: Vec<(OutputTarget, DataFrame)>,
-    spec_hash: &[u8; 32],
-    envelope_hash: &[u8; 32],
+    lineage: &LineageContext,
 ) -> Result<Vec<MaterializationResult>> {
     let mut results = Vec::new();
 
@@ -86,28 +87,30 @@ pub async fn execute_and_materialize(
         let (rows_written, outcome) = if use_native_delta_writer {
             let batches = df.collect().await?;
             let rows_written: u64 = batches.iter().map(|batch| batch.num_rows() as u64).sum();
-            let commit_options = build_delta_commit_options(&target, spec_hash, envelope_hash);
-            datafusion_ext::delta_mutations::delta_write_batches(
-                ctx,
-                delta_location,
-                None,
-                None,
-                None,
-                batches,
-                match target.materialization_mode {
-                    MaterializationMode::Append => SaveMode::Append,
-                    MaterializationMode::Overwrite => SaveMode::Overwrite,
+            let commit_options = build_delta_commit_options(&target, lineage);
+            datafusion_ext::delta_mutations::delta_write_batches_request(
+                datafusion_ext::delta_mutations::DeltaWriteBatchesRequest {
+                    session_ctx: ctx,
+                    table_uri: delta_location,
+                    storage_options: None,
+                    version: None,
+                    timestamp: None,
+                    batches,
+                    save_mode: match target.materialization_mode {
+                        MaterializationMode::Append => SaveMode::Append,
+                        MaterializationMode::Overwrite => SaveMode::Overwrite,
+                    },
+                    schema_mode_label: None,
+                    partition_columns: if target.partition_by.is_empty() {
+                        None
+                    } else {
+                        Some(target.partition_by.clone())
+                    },
+                    target_file_size: None,
+                    gate: Some(datafusion_ext::DeltaFeatureGate::default()),
+                    commit_options: Some(commit_options),
+                    extra_constraints: None,
                 },
-                None,
-                if target.partition_by.is_empty() {
-                    None
-                } else {
-                    Some(target.partition_by.clone())
-                },
-                None,
-                Some(datafusion_ext::DeltaFeatureGate::default()),
-                Some(commit_options),
-                None,
             )
             .await
             .map_err(|err| DataFusionError::External(Box::new(err)))?;
@@ -146,8 +149,7 @@ pub async fn execute_and_materialize(
 pub async fn execute_and_materialize_with_plans(
     ctx: &SessionContext,
     output_plans: Vec<(OutputTarget, DataFrame)>,
-    spec_hash: &[u8; 32],
-    envelope_hash: &[u8; 32],
+    lineage: &LineageContext,
 ) -> Result<(Vec<MaterializationResult>, Vec<Arc<dyn ExecutionPlan>>)> {
     let mut results = Vec::new();
     let mut physical_plans: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
@@ -199,28 +201,30 @@ pub async fn execute_and_materialize_with_plans(
         let (rows_written, outcome) = if use_native_delta_writer {
             let batches = df.collect().await?;
             let rows_written: u64 = batches.iter().map(|batch| batch.num_rows() as u64).sum();
-            let commit_options = build_delta_commit_options(&target, spec_hash, envelope_hash);
-            datafusion_ext::delta_mutations::delta_write_batches(
-                ctx,
-                delta_location,
-                None,
-                None,
-                None,
-                batches,
-                match target.materialization_mode {
-                    MaterializationMode::Append => SaveMode::Append,
-                    MaterializationMode::Overwrite => SaveMode::Overwrite,
+            let commit_options = build_delta_commit_options(&target, lineage);
+            datafusion_ext::delta_mutations::delta_write_batches_request(
+                datafusion_ext::delta_mutations::DeltaWriteBatchesRequest {
+                    session_ctx: ctx,
+                    table_uri: delta_location,
+                    storage_options: None,
+                    version: None,
+                    timestamp: None,
+                    batches,
+                    save_mode: match target.materialization_mode {
+                        MaterializationMode::Append => SaveMode::Append,
+                        MaterializationMode::Overwrite => SaveMode::Overwrite,
+                    },
+                    schema_mode_label: None,
+                    partition_columns: if target.partition_by.is_empty() {
+                        None
+                    } else {
+                        Some(target.partition_by.clone())
+                    },
+                    target_file_size: None,
+                    gate: Some(datafusion_ext::DeltaFeatureGate::default()),
+                    commit_options: Some(commit_options),
+                    extra_constraints: None,
                 },
-                None,
-                if target.partition_by.is_empty() {
-                    None
-                } else {
-                    Some(target.partition_by.clone())
-                },
-                None,
-                Some(datafusion_ext::DeltaFeatureGate::default()),
-                Some(commit_options),
-                None,
             )
             .await
             .map_err(|err| DataFusionError::External(Box::new(err)))?;
@@ -301,6 +305,16 @@ pub async fn run_full_pipeline(
         prepared.preflight_warnings,
     )
     .await?;
+
+    #[cfg(feature = "tracing")]
+    if tracing_config.enabled {
+        let warning_counts = warning_counts_by_code(&outcome.run_result.warnings);
+        engine_tracing::record_warning_summary(
+            &execution_span,
+            outcome.run_result.warnings.len() as u64,
+            &warning_counts,
+        );
+    }
 
     #[cfg(feature = "tracing")]
     if tracing_config.enabled {

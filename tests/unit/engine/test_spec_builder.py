@@ -57,6 +57,9 @@ def test_build_spec_from_ir_produces_rust_compatible_payload() -> None:
 def test_runtime_tracing_contract_allows_new_preset_and_redaction_fields() -> None:
     runtime = {
         "tracing_preset": "MaximalNoData",
+        "capture_optimizer_lab": True,
+        "capture_delta_codec": True,
+        "lineage_tags": {"team": "graph"},
         "tracing": {
             "enabled": True,
             "rule_mode": "PhaseOnly",
@@ -77,7 +80,7 @@ def test_runtime_tracing_contract_allows_new_preset_and_redaction_fields() -> No
         "output_targets": (),
         "rule_intents": (),
         "rulepack_profile": "Default",
-        "parameter_templates": (),
+        "typed_parameters": (),
         "runtime": runtime,
     }
 
@@ -85,6 +88,9 @@ def test_runtime_tracing_contract_allows_new_preset_and_redaction_fields() -> No
     built = msgspec.to_builtins(spec)
 
     assert built["runtime"]["tracing_preset"] == "MaximalNoData"
+    assert built["runtime"]["capture_optimizer_lab"] is True
+    assert built["runtime"]["capture_delta_codec"] is True
+    assert built["runtime"]["lineage_tags"]["team"] == "graph"
     assert built["runtime"]["tracing"]["preview_redaction_mode"] == "DenyList"
     assert built["runtime"]["tracing"]["preview_redaction_token"] == "[MASKED]"
     assert built["runtime"]["tracing"]["otlp_protocol"] == "http/protobuf"

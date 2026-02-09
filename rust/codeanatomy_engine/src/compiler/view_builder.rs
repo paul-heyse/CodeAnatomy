@@ -26,7 +26,7 @@ pub async fn build_normalize(
     let mut df = ctx.table(source).await?;
 
     // Add entity_id via stable_id UDF
-    let id_col_exprs: Vec<Expr> = id_columns.iter().map(|c| col(c)).collect();
+    let id_col_exprs: Vec<Expr> = id_columns.iter().map(col).collect();
     let stable_id_udf = ctx.udf("stable_id")?;
     let entity_id_expr = stable_id_udf.call(id_col_exprs);
     df = df.with_column("entity_id", entity_id_expr)?;
@@ -59,7 +59,7 @@ pub async fn build_filter(
     let schema = df.schema();
 
     // Parse SQL expression in context of DataFrame schema
-    let filter_expr = ctx.parse_sql_expr(predicate, &schema)?;
+    let filter_expr = ctx.parse_sql_expr(predicate, schema)?;
 
     df.filter(filter_expr)
 }
@@ -71,7 +71,7 @@ pub async fn build_project(
     columns: &[String],
 ) -> Result<DataFrame> {
     let df = ctx.table(source).await?;
-    let select_exprs: Vec<Expr> = columns.iter().map(|c| col(c)).collect();
+    let select_exprs: Vec<Expr> = columns.iter().map(col).collect();
 
     df.select(select_exprs)
 }
@@ -86,7 +86,7 @@ pub async fn build_aggregate(
     let df = ctx.table(source).await?;
 
     // Build group expressions
-    let group_exprs: Vec<Expr> = group_by.iter().map(|c| col(c)).collect();
+    let group_exprs: Vec<Expr> = group_by.iter().map(col).collect();
 
     // Build aggregation expressions
     let mut agg_exprs: Vec<Expr> = Vec::new();
@@ -153,7 +153,11 @@ mod tests {
     async fn test_build_project() {
         let ctx = setup_test_context().await;
 
-        let df = build_project(&ctx, "test_source", &vec!["id".to_string(), "text".to_string()])
+        let df = build_project(
+            &ctx,
+            "test_source",
+            &["id".to_string(), "text".to_string()],
+        )
             .await
             .unwrap();
 

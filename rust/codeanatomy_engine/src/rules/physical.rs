@@ -42,7 +42,7 @@ impl PhysicalOptimizerRule for CpgPhysicalRule {
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Delegate to base CodeAnatomyPhysicalRule for standard optimizations
-        let base_rule = datafusion_ext::physical_rules::CodeAnatomyPhysicalRule::default();
+        let base_rule = datafusion_ext::physical_rules::CodeAnatomyPhysicalRule;
         let mut optimized = base_rule.optimize(plan, config)?;
 
         // Apply CPG-specific optimizations

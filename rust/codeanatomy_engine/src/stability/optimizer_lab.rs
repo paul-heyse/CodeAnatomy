@@ -50,6 +50,8 @@ pub struct LabResult {
     pub rules_with_changes: usize,
 }
 
+pub type RuleStepDiff = Vec<(usize, Option<[u8; 32]>, Option<[u8; 32]>)>;
+
 /// Run an offline optimizer lab experiment.
 ///
 /// Constructs an `Optimizer` from the given rule subset, configures it with
@@ -95,7 +97,7 @@ pub fn run_optimizer_lab(
         let digest = *blake3::hash(plan_text.as_bytes()).as_bytes();
 
         // Track whether this rule actually changed the plan.
-        let changed = prev_digest.map_or(true, |prev| prev != digest);
+        let changed = prev_digest != Some(digest);
         if changed {
             change_count += 1;
         }
@@ -141,7 +143,7 @@ pub fn run_lab_from_ruleset(
 pub fn diff_lab_results(
     baseline: &LabResult,
     candidate: &LabResult,
-) -> Vec<(usize, Option<[u8; 32]>, Option<[u8; 32]>)> {
+) -> RuleStepDiff {
     let max_len = baseline.steps.len().max(candidate.steps.len());
     let mut diffs = Vec::new();
 

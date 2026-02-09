@@ -1,7 +1,7 @@
 //! Unified planning-surface builder for deterministic session construction.
 //!
 //! `PlanningSurfaceSpec` captures all planning-time registrations as a single
-//! typed object. Both `build_session()` and `build_session_from_profile()` route
+//! typed object. Both profile and non-profile session-state builders route
 //! through this module so planning behavior is explicit, testable, and
 //! deterministic.
 //!
@@ -25,7 +25,7 @@ use datafusion_expr::registry::FunctionRegistry;
 ///
 /// All fields default to empty/disabled so callers only populate what they
 /// need. This replaces ad-hoc state writes and duplicated builder logic
-/// across `build_session` and `build_session_from_profile`.
+/// across `build_session_state*` builder paths.
 #[derive(Clone, Default)]
 pub struct PlanningSurfaceSpec {
     /// Whether to enable DataFusion's default features (catalog, file formats).

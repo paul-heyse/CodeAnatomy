@@ -99,16 +99,8 @@ uv_run_cmd=(uv run --no-sync)
   "${uv_run_cmd[@]}" maturin build --${profile} "${datafusion_feature_flags[@]}" "${maturin_wheel_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 )
 
-# Build codeanatomy_engine wheel (pyo3 bindings).
-# Build from the crate directory so feature selection is scoped to codeanatomy-engine.
-(
-  cd rust/codeanatomy_engine
-  "${uv_run_cmd[@]}" maturin build \
-      --${profile} \
-      --features codeanatomy-engine/pyo3 \
-      "${maturin_common_flags[@]}" "${compatibility_args[@]}" \
-      "${manylinux_args[@]}" -o "${run_wheel_dir}"
-)
+# Build codeanatomy_engine wheel from the dedicated bindings crate.
+"${uv_run_cmd[@]}" maturin build -m rust/codeanatomy_engine_py/Cargo.toml --${profile} "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 
 shopt -s nullglob
 datafusion_wheels=("${run_wheel_dir}"/datafusion-*.whl)
@@ -130,6 +122,7 @@ fi
 
 datafusion_wheel="${datafusion_wheels[0]}"
 datafusion_ext_wheel="${datafusion_ext_wheels[0]}"
+engine_wheel="${engine_wheels[0]}"
 
 if [ "$(uname -s)" = "Linux" ]; then
   case "${compatibility}" in
@@ -235,11 +228,12 @@ PY
 echo "Selected wheel artifacts:"
 echo "  datafusion    : ${datafusion_wheel}"
 echo "  datafusion_ext: ${datafusion_ext_wheel}"
-echo "  engine        : ${engine_wheels[0]}"
+echo "  engine        : ${engine_wheel}"
 
 cp -f "${run_wheel_dir}"/* "${wheel_dir}/"
 datafusion_wheel="${wheel_dir}/$(basename "${datafusion_wheel}")"
 datafusion_ext_wheel="${wheel_dir}/$(basename "${datafusion_ext_wheel}")"
+engine_wheel="${wheel_dir}/$(basename "${engine_wheel}")"
 
 "${uv_run_cmd[@]}" python - <<PY
 from __future__ import annotations
@@ -307,6 +301,19 @@ with tempfile.TemporaryDirectory() as tmpdir:
         register_udfs(ctx_builder(), True, 1000, 64)
     except Exception as exc:
         raise SystemExit(f"Async UDF feature validation failed: {exc}") from exc
+PY
+
+# Validate the engine wheel via a real install/import cycle.
+"${uv_run_cmd[@]}" python -m pip install --force-reinstall --no-deps "${engine_wheel}"
+"${uv_run_cmd[@]}" python - <<PY
+from __future__ import annotations
+
+import codeanatomy_engine
+
+required = ("SessionFactory", "SemanticPlanCompiler", "CpgMaterializer")
+for attr in required:
+    if not hasattr(codeanatomy_engine, attr):
+        raise SystemExit(f"codeanatomy_engine wheel missing attribute: {attr}")
 PY
 
 "${uv_run_cmd[@]}" python - <<PY

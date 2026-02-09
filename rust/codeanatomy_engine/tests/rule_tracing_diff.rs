@@ -95,10 +95,11 @@ async fn test_phase_only_rule_mode_uses_only_phase_sentinels() {
     };
     let ruleset = custom_ruleset();
 
-    let (ctx, _envelope) = factory
-        .build_session(&ruleset, [0xAA; 32], Some(&tracing_config))
+    let state = factory
+        .build_session_state(&ruleset, [0xAA; 32], Some(&tracing_config))
         .await
         .expect("phase-only tracing session should build");
+    let ctx = state.ctx;
 
     let state = ctx.state();
     let analyzer_rules = &state.analyzer().rules;
@@ -145,10 +146,11 @@ async fn test_full_rule_mode_wraps_rules_with_plan_diff_enabled() {
     };
     let ruleset = custom_ruleset();
 
-    let (ctx, _envelope) = factory
-        .build_session(&ruleset, [0xBB; 32], Some(&tracing_config))
+    let state = factory
+        .build_session_state(&ruleset, [0xBB; 32], Some(&tracing_config))
         .await
         .expect("full tracing session should build");
+    let ctx = state.ctx;
 
     let state = ctx.state();
     let analyzer_rules = &state.analyzer().rules;

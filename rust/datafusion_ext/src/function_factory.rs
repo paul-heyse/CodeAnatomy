@@ -121,7 +121,7 @@ impl FunctionFactory for SqlMacroFunctionFactory {
 
 pub fn with_sql_macro_factory(state: &SessionState) -> SessionState {
     SessionStateBuilder::new_from_existing(state.clone())
-        .with_function_factory(Some(Arc::new(SqlMacroFunctionFactory::default())))
+        .with_function_factory(Some(Arc::new(SqlMacroFunctionFactory)))
         .build()
 }
 

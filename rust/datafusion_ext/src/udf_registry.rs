@@ -59,13 +59,13 @@ pub fn scalar_udf_specs_with_async(enable_async: bool) -> Result<Vec<ScalarUdfSp
             builder: udf_async::async_echo_udf,
             aliases: &[],
         });
-        return Ok(specs);
+        Ok(specs)
     }
     #[cfg(not(feature = "async-udf"))]
     {
-        return Err(datafusion_common::DataFusionError::Plan(
+        Err(datafusion_common::DataFusionError::Plan(
             "Async UDFs require the async-udf feature".into(),
-        ));
+        ))
     }
 }
 

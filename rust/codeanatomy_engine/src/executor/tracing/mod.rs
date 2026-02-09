@@ -126,3 +126,12 @@ pub fn execution_span(info: &ExecutionSpanInfo, config: &TracingConfig) -> traci
 pub fn record_envelope_hash(span: &tracing::Span, envelope_hash: &[u8; 32]) {
     context::record_envelope_hash(span, envelope_hash);
 }
+
+#[cfg(feature = "tracing")]
+pub fn record_warning_summary(
+    span: &tracing::Span,
+    warning_count_total: u64,
+    warning_counts_by_code: &std::collections::BTreeMap<String, u64>,
+) {
+    context::record_warning_summary(span, warning_count_total, warning_counts_by_code);
+}

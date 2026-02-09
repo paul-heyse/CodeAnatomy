@@ -61,7 +61,6 @@ async fn test_plan_compiler_builds_single_output_plan() {
         )],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
 
     let compiler = SemanticPlanCompiler::new(&ctx, &spec);
@@ -142,7 +141,6 @@ async fn test_plan_compiler_builds_multi_output_plan() {
         ],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
 
     let compiler = SemanticPlanCompiler::new(&ctx, &spec);
@@ -211,7 +209,6 @@ async fn test_plan_compiler_rejects_cyclic_dependencies() {
         )],
         vec![],
         RulepackProfile::Default,
-        vec![],
     );
 
     let compiler = SemanticPlanCompiler::new(&ctx, &spec);

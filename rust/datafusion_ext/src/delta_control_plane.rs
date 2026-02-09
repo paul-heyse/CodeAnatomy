@@ -55,6 +55,30 @@ pub struct DeltaAddActionPayload {
     pub tags: BTreeMap<String, Option<String>>,
 }
 
+#[derive(Clone)]
+pub struct DeltaProviderFromSessionRequest<'a> {
+    pub session_ctx: &'a SessionContext,
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub version: Option<i64>,
+    pub timestamp: Option<String>,
+    pub predicate: Option<String>,
+    pub overrides: DeltaScanOverrides,
+    pub gate: Option<DeltaFeatureGate>,
+}
+
+#[derive(Clone)]
+pub struct DeltaProviderWithFilesRequest<'a> {
+    pub session_ctx: &'a SessionContext,
+    pub table_uri: &'a str,
+    pub storage_options: Option<HashMap<String, String>>,
+    pub version: Option<i64>,
+    pub timestamp: Option<String>,
+    pub overrides: DeltaScanOverrides,
+    pub files: Vec<String>,
+    pub gate: Option<DeltaFeatureGate>,
+}
+
 fn decode_add_path(path: &str) -> String {
     urlencoding::decode(path)
         .map(|decoded| decoded.into_owned())
@@ -237,15 +261,8 @@ fn parse_rfc3339_timestamp(value: &str) -> Result<DateTime<Utc>, DeltaTableError
         .map_err(|err| DeltaTableError::Generic(format!("Invalid Delta timestamp: {err}")))
 }
 
-pub async fn delta_provider_from_session(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    predicate: Option<String>,
-    overrides: DeltaScanOverrides,
-    gate: Option<DeltaFeatureGate>,
+pub async fn delta_provider_from_session_request(
+    request: DeltaProviderFromSessionRequest<'_>,
 ) -> Result<
     (
         DeltaTableProvider,
@@ -256,6 +273,16 @@ pub async fn delta_provider_from_session(
     ),
     DeltaTableError,
 > {
+    let DeltaProviderFromSessionRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        predicate,
+        overrides,
+        gate,
+    } = request;
     let table = load_delta_table(
         table_uri,
         storage_options,
@@ -305,6 +332,40 @@ pub async fn delta_provider_from_session(
     ))
 }
 
+#[deprecated(note = "use delta_provider_from_session_request")]
+#[allow(clippy::too_many_arguments)]
+pub async fn delta_provider_from_session(
+    session_ctx: &SessionContext,
+    table_uri: &str,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    predicate: Option<String>,
+    overrides: DeltaScanOverrides,
+    gate: Option<DeltaFeatureGate>,
+) -> Result<
+    (
+        DeltaTableProvider,
+        DeltaSnapshotInfo,
+        DeltaScanConfig,
+        Option<Vec<DeltaAddActionPayload>>,
+        Option<String>,
+    ),
+    DeltaTableError,
+> {
+    delta_provider_from_session_request(DeltaProviderFromSessionRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        predicate,
+        overrides,
+        gate,
+    })
+    .await
+}
+
 pub async fn delta_cdf_provider(
     table_uri: &str,
     storage_options: Option<HashMap<String, String>>,
@@ -340,15 +401,8 @@ pub async fn delta_cdf_provider(
     Ok((provider, snapshot))
 }
 
-pub async fn delta_provider_with_files(
-    session_ctx: &SessionContext,
-    table_uri: &str,
-    storage_options: Option<HashMap<String, String>>,
-    version: Option<i64>,
-    timestamp: Option<String>,
-    overrides: DeltaScanOverrides,
-    files: Vec<String>,
-    gate: Option<DeltaFeatureGate>,
+pub async fn delta_provider_with_files_request(
+    request: DeltaProviderWithFilesRequest<'_>,
 ) -> Result<
     (
         DeltaTableProvider,
@@ -358,6 +412,16 @@ pub async fn delta_provider_with_files(
     ),
     DeltaTableError,
 > {
+    let DeltaProviderWithFilesRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        overrides,
+        files,
+        gate,
+    } = request;
     let table = load_delta_table(
         table_uri,
         storage_options,
@@ -380,6 +444,39 @@ pub async fn delta_provider_with_files(
     let provider = provider.with_files(add_actions.clone());
     let add_payloads = add_actions.into_iter().map(delta_add_payload).collect();
     Ok((provider, snapshot, scan_config, add_payloads))
+}
+
+#[deprecated(note = "use delta_provider_with_files_request")]
+#[allow(clippy::too_many_arguments)]
+pub async fn delta_provider_with_files(
+    session_ctx: &SessionContext,
+    table_uri: &str,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    overrides: DeltaScanOverrides,
+    files: Vec<String>,
+    gate: Option<DeltaFeatureGate>,
+) -> Result<
+    (
+        DeltaTableProvider,
+        DeltaSnapshotInfo,
+        DeltaScanConfig,
+        Vec<DeltaAddActionPayload>,
+    ),
+    DeltaTableError,
+> {
+    delta_provider_with_files_request(DeltaProviderWithFilesRequest {
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        overrides,
+        files,
+        gate,
+    })
+    .await
 }
 
 fn logical_view_to_add(view: &LogicalFileView) -> Add {

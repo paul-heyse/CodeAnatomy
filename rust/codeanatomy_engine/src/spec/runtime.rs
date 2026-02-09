@@ -222,6 +222,10 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub enable_domain_planner: bool,
 
+    /// Additional deterministic lineage metadata to include in Delta commits.
+    #[serde(default)]
+    pub lineage_tags: BTreeMap<String, String>,
+
     /// Optional preset applied before explicit tracing config.
     #[serde(default)]
     pub tracing_preset: Option<TracingPreset>,
@@ -386,5 +390,24 @@ mod tests {
         assert!(runtime.capture_substrait);
         assert!(runtime.capture_optimizer_lab);
         assert!(runtime.capture_delta_codec);
+    }
+
+    #[test]
+    fn test_runtime_config_lineage_tags_default_empty() {
+        let runtime = RuntimeConfig::default();
+        assert!(runtime.lineage_tags.is_empty());
+    }
+
+    #[test]
+    fn test_runtime_config_deserializes_lineage_tags() {
+        let payload = serde_json::json!({
+            "lineage_tags": {
+                "team": "graph",
+                "env": "dev"
+            }
+        });
+        let runtime: RuntimeConfig = serde_json::from_value(payload).expect("valid runtime config");
+        assert_eq!(runtime.lineage_tags.get("team"), Some(&"graph".to_string()));
+        assert_eq!(runtime.lineage_tags.get("env"), Some(&"dev".to_string()));
     }
 }

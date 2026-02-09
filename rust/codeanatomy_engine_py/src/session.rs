@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 
-use crate::session::profiles::{EnvironmentClass, EnvironmentProfile};
+use codeanatomy_engine::session::profiles::{EnvironmentClass, EnvironmentProfile};
 
 /// Factory for creating DataFusion sessions with environment-specific configuration.
 ///
@@ -9,7 +9,7 @@ use crate::session::profiles::{EnvironmentClass, EnvironmentProfile};
 /// The factory stores configuration but creates sessions on-demand during execution.
 #[pyclass]
 pub struct SessionFactory {
-    inner: crate::session::factory::SessionFactory,
+    inner: codeanatomy_engine::session::factory::SessionFactory,
 }
 
 #[pymethods]
@@ -34,7 +34,7 @@ impl SessionFactory {
         let profile: EnvironmentProfile = serde_json::from_str(profile_json)
             .map_err(|e| PyValueError::new_err(format!("Invalid profile JSON: {e}")))?;
         Ok(Self {
-            inner: crate::session::factory::SessionFactory::new(profile),
+            inner: codeanatomy_engine::session::factory::SessionFactory::new(profile),
         })
     }
 
@@ -68,7 +68,7 @@ impl SessionFactory {
         };
         let profile = EnvironmentProfile::from_class(class);
         Ok(Self {
-            inner: crate::session::factory::SessionFactory::new(profile),
+            inner: codeanatomy_engine::session::factory::SessionFactory::new(profile),
         })
     }
 
@@ -85,7 +85,7 @@ impl SessionFactory {
 
 impl SessionFactory {
     /// Internal accessor for the Rust SessionFactory.
-    pub(crate) fn inner(&self) -> &crate::session::factory::SessionFactory {
+    pub(crate) fn inner(&self) -> &codeanatomy_engine::session::factory::SessionFactory {
         &self.inner
     }
 

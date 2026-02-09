@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-import pyarrow as pa
 import pytest
 
 from core_types import DeterminismTier
@@ -21,6 +20,7 @@ from extract.coordination.materialization import (
     ExtractPlanOptions,
     extract_plan_from_reader,
     materialize_extract_plan,
+    materialize_extract_plan_table,
     record_batch_reader_from_rows,
 )
 from extract.session import ExtractSession, build_extract_session
@@ -102,16 +102,11 @@ def test_materialize_basic_roundtrip(extract_session: ExtractSession) -> None:
     plan = extract_plan_from_reader("repo_files_v1", reader, session=extract_session)
 
     runtime_profile = extract_session.engine_session.datafusion_profile
-    result = materialize_extract_plan(
+    table = materialize_extract_plan_table(
         "repo_files_v1",
         plan,
         runtime_profile=runtime_profile,
         determinism_tier=DeterminismTier.STABLE,
-    )
-
-    # Result can be either Table or RecordBatchReader
-    table: pa.Table = (
-        result.read_all() if isinstance(result, pa.RecordBatchReader) else result  # type: ignore[assignment]
     )
 
     # Verify schema contains expected columns

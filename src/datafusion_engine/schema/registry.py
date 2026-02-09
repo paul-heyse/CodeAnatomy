@@ -2368,10 +2368,11 @@ def extract_base_schema_names() -> tuple[str, ...]:
     """
     from datafusion_engine.extract.metadata import extract_metadata_by_name
 
-    names: list[str] = []
-    for name in extract_metadata_by_name():
-        if _derived_extract_base_schema_for(name) is not None:
-            names.append(name)
+    names = [
+        name
+        for name in extract_metadata_by_name()
+        if _derived_extract_base_schema_for(name) is not None
+    ]
     return tuple(sorted(names))
 
 
@@ -2725,7 +2726,13 @@ def _resolve_nested_row_schema_authority(
     derived_schema: pa.Schema | None,
     struct_schema: pa.Schema,
 ) -> pa.Schema:
-    """Resolve nested row schema authority with deterministic conflict handling."""
+    """Resolve nested row schema authority with deterministic conflict handling.
+
+    Returns:
+    -------
+    pyarrow.Schema
+        Nested row schema to use for downstream extraction.
+    """
     if derived_schema is None:
         return struct_schema
     if _schema_signature(derived_schema) == _schema_signature(struct_schema):
@@ -2751,6 +2758,9 @@ def extract_nested_schema_for(name: str) -> pa.Schema:
     -------
     pyarrow.Schema
         Arrow schema derived from extract metadata.
+
+    Raises:
+        KeyError: If ``name`` is not a registered nested extract dataset.
     """
     if name not in NESTED_DATASET_INDEX:
         msg = f"{name!r} is not a registered extract nested dataset."
@@ -2784,7 +2794,7 @@ def _static_extract_base_schema_for(name: str) -> pa.Schema | None:
     return static_root_schemas.get(name)
 
 
-def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:
+def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:  # noqa: C901
     from datafusion_engine.extract.metadata import extract_metadata_by_name
     from datafusion_engine.schema.derivation import derive_nested_dataset_schema
     from utils.schema_from_struct import schema_from_struct
@@ -2851,12 +2861,16 @@ def extract_schema_for(name: str) -> pa.Schema:
     """Resolve schema for an extract base or nested dataset from metadata.
 
     Args:
-        name
+        name:
             Extract dataset name (base or nested).
 
+    Returns:
+    -------
+    pyarrow.Schema
+        Derived schema for the requested extract dataset.
+
     Raises:
-        KeyError
-            If no derived schema is available for the dataset name.
+        KeyError: If no derived schema is available for the dataset name.
     """
     derived_schema = _derived_extract_schema_for(name)
     if derived_schema is None:

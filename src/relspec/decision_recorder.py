@@ -55,6 +55,7 @@ class DecisionRecorder:
     """
 
     def __init__(self, run_id: str) -> None:
+        """Initialize a recorder for one pipeline run."""
         self._run_id = run_id
         self._decisions: list[DecisionRecord] = []
         self._outcomes: dict[str, DecisionOutcome] = {}
@@ -70,7 +71,7 @@ class DecisionRecorder:
         """
         return self._run_id
 
-    def record(
+    def record(  # noqa: PLR0913
         self,
         *,
         domain: str,
@@ -154,24 +155,25 @@ class DecisionRecorder:
         all_parent_ids: set[str] = set()
         final: list[DecisionRecord] = []
 
-        for d in self._decisions:
-            all_parent_ids.update(d.parent_ids)
-            outcome = self._outcomes.get(d.decision_id)
+        for decision_record in self._decisions:
+            all_parent_ids.update(decision_record.parent_ids)
+            outcome = self._outcomes.get(decision_record.decision_id)
+            final_decision = decision_record
             if outcome is not None:
-                d = DecisionRecord(
-                    decision_id=d.decision_id,
-                    domain=d.domain,
-                    decision_type=d.decision_type,
-                    decision_value=d.decision_value,
-                    confidence_score=d.confidence_score,
-                    evidence=d.evidence,
-                    parent_ids=d.parent_ids,
-                    fallback_reason=d.fallback_reason,
+                final_decision = DecisionRecord(
+                    decision_id=decision_record.decision_id,
+                    domain=decision_record.domain,
+                    decision_type=decision_record.decision_type,
+                    decision_value=decision_record.decision_value,
+                    confidence_score=decision_record.confidence_score,
+                    evidence=decision_record.evidence,
+                    parent_ids=decision_record.parent_ids,
+                    fallback_reason=decision_record.fallback_reason,
                     outcome=outcome,
-                    timestamp_ms=d.timestamp_ms,
-                    context_label=d.context_label,
+                    timestamp_ms=decision_record.timestamp_ms,
+                    context_label=decision_record.context_label,
                 )
-            final.append(d)
+            final.append(final_decision)
 
         all_ids = {d.decision_id for d in final}
         root_ids = tuple(

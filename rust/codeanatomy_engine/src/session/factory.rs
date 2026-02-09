@@ -13,10 +13,12 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::Result;
 
+use crate::executor::tracing as engine_tracing;
 use super::envelope::SessionEnvelope;
 use super::profiles::EnvironmentProfile;
 use super::runtime_profiles::RuntimeProfileSpec;
 use crate::rules::registry::CpgRuleSet;
+use crate::spec::runtime::TracingConfig;
 
 /// Factory for building deterministic DataFusion sessions.
 ///
@@ -67,7 +69,23 @@ impl SessionFactory {
         &self,
         ruleset: &CpgRuleSet,
         spec_hash: [u8; 32],
+        tracing_config: Option<&TracingConfig>,
     ) -> Result<(SessionContext, SessionEnvelope)> {
+        let tracing_config = tracing_config.cloned().unwrap_or_default();
+        engine_tracing::init_otel_tracing(&tracing_config)?;
+        let profile_name = format!("{:?}", self.profile.class);
+        let trace_ctx = engine_tracing::TraceRuleContext::from_hashes(
+            &spec_hash,
+            &ruleset.fingerprint,
+            &profile_name,
+            &tracing_config,
+        );
+        let physical_rules = engine_tracing::append_execution_instrumentation_rule(
+            ruleset.physical_rules.clone(),
+            &tracing_config,
+            &trace_ctx,
+        );
+
         // Build RuntimeEnv with memory pool and disk manager
         let memory_pool = Arc::new(FairSpillPool::new(
             self.profile.memory_pool_bytes.try_into().unwrap(),
@@ -121,14 +139,16 @@ impl SessionFactory {
             .with_runtime_env(runtime)
             .with_analyzer_rules(ruleset.analyzer_rules.clone())
             .with_optimizer_rules(ruleset.optimizer_rules.clone())
-            .with_physical_optimizer_rules(ruleset.physical_rules.clone())
+            .with_physical_optimizer_rules(physical_rules)
             .build();
+        let state = engine_tracing::instrument_session_state(state, &tracing_config, &trace_ctx);
 
         // Create SessionContext from state
         let ctx = SessionContext::new_with_state(state);
 
         // Register all UDFs from datafusion_ext
         datafusion_ext::udf_registry::register_all(&ctx)?;
+        engine_tracing::register_instrumented_file_store(&ctx, &tracing_config)?;
 
         // Capture SessionEnvelope
         let envelope = SessionEnvelope::capture(
@@ -173,7 +193,23 @@ impl SessionFactory {
         ruleset: &CpgRuleSet,
         enable_function_factory: bool,
         enable_domain_planner: bool,
+        spec_hash: [u8; 32],
+        tracing_config: Option<&TracingConfig>,
     ) -> Result<SessionContext> {
+        let tracing_config = tracing_config.cloned().unwrap_or_default();
+        engine_tracing::init_otel_tracing(&tracing_config)?;
+        let trace_ctx = engine_tracing::TraceRuleContext::from_hashes(
+            &spec_hash,
+            &ruleset.fingerprint,
+            &profile.profile_name,
+            &tracing_config,
+        );
+        let physical_rules = engine_tracing::append_execution_instrumentation_rule(
+            ruleset.physical_rules.clone(),
+            &tracing_config,
+            &trace_ctx,
+        );
+
         // Build RuntimeEnv with profile memory/spill settings
         let runtime = RuntimeEnvBuilder::default()
             .with_memory_pool(Arc::new(FairSpillPool::new(profile.memory_pool_bytes)))
@@ -226,13 +262,15 @@ impl SessionFactory {
             .with_runtime_env(runtime)
             .with_analyzer_rules(ruleset.analyzer_rules.clone())
             .with_optimizer_rules(ruleset.optimizer_rules.clone())
-            .with_physical_optimizer_rules(ruleset.physical_rules.clone())
+            .with_physical_optimizer_rules(physical_rules)
             .build();
+        let state = engine_tracing::instrument_session_state(state, &tracing_config, &trace_ctx);
 
         let ctx = SessionContext::new_with_state(state);
 
         // Register all UDFs from datafusion_ext
         datafusion_ext::udf_registry::register_all(&ctx)?;
+        engine_tracing::register_instrumented_file_store(&ctx, &tracing_config)?;
 
         // WS-P14: Wire function factory and domain planners when enabled.
         // Installation failures are hard errors per the capability policy:
@@ -268,7 +306,7 @@ mod tests {
             fingerprint: [0u8; 32],
         };
 
-        let result = factory.build_session(&ruleset, [0u8; 32]).await;
+        let result = factory.build_session(&ruleset, [0u8; 32], None).await;
         assert!(result.is_ok());
 
         let (ctx, envelope) = result.unwrap();
@@ -299,11 +337,11 @@ mod tests {
         };
 
         let (_small_ctx, small_envelope) = small_factory
-            .build_session(&ruleset, [0u8; 32])
+            .build_session(&ruleset, [0u8; 32], None)
             .await
             .unwrap();
         let (_large_ctx, large_envelope) = large_factory
-            .build_session(&ruleset, [0u8; 32])
+            .build_session(&ruleset, [0u8; 32], None)
             .await
             .unwrap();
 

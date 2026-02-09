@@ -52,3 +52,17 @@ jobs:
         run: |
           cd rust
           cargo test -p datafusion_ext --test registry_snapshot -- --nocapture
+
+      - name: Run tracing-surface tests
+        shell: bash
+        run: |
+          cd rust
+          cargo test -p codeanatomy-engine --features tracing --test tracing_integration --test object_store_tracing --test rule_tracing_diff --test tracing_preview_redaction
+
+      - name: Enforce tracing drift surfaces
+        shell: bash
+        run: |
+          test -f rust/codeanatomy_engine/tests/rule_tracing_diff.rs
+          test -f rust/codeanatomy_engine/tests/tracing_preview_redaction.rs
+          rg -n "__trace_analyzer_phase|__trace_optimizer_phase|__trace_physical_optimizer_phase" rust/codeanatomy_engine/src/executor/tracing/rule_instrumentation.rs
+          rg -n "with_physical_optimizer_rules\\(physical_rules\\)" rust/codeanatomy_engine/src/session/factory.rs

@@ -53,7 +53,7 @@ For canonical CQ behavior/output semantics, use
 | `/cq run` | Plan file execution | `/cq run --plan analysis.toml` |
 | `/cq chain` | Command chaining | `/cq chain q "..." AND calls foo AND search foo` |
 | `/ast-grep` | Structural search/rewrite | `/ast-grep pattern 'def $F($_): ...'` |
-| `/datafusion-and-deltalake-stack` | DataFusion + DeltaLake operations (query engine, storage, UDFs) | `/datafusion-and-deltalake-stack` |
+| `/dfdl_ref` | DataFusion + DeltaLake operations (query engine, storage, UDFs) | `/dfdl_ref` |
 
 ### Default: Start with Smart Search
 

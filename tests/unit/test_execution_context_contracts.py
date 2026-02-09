@@ -24,6 +24,7 @@ from relspec.execution_authority import (
 )
 from semantics.compile_context import SemanticExecutionContext
 from semantics.program_manifest import ManifestDatasetBindings, SemanticProgramManifest
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -347,8 +348,12 @@ class TestExecutionAuthorityImmutability:
             semantic_context=semantic_context,
             session_runtime_fingerprint="fp",
         )
-        with pytest.raises(FrozenInstanceError):
-            authority.enforcement_mode = "error"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: authority,
+            attribute="enforcement_mode",
+            attempted_value="error",
+            expected_exception=FrozenInstanceError,
+        )
 
     def test_execution_authority_semantic_context_not_reassignable(
         self, semantic_context: SemanticExecutionContext
@@ -358,15 +363,23 @@ class TestExecutionAuthorityImmutability:
             semantic_context=semantic_context,
             session_runtime_fingerprint="fp",
         )
-        with pytest.raises(FrozenInstanceError):
-            authority.semantic_context = semantic_context  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: authority,
+            attribute="semantic_context",
+            attempted_value=semantic_context,
+            expected_exception=FrozenInstanceError,
+        )
 
     def test_semantic_execution_context_is_frozen(
         self, semantic_context: SemanticExecutionContext
     ) -> None:
         """Raise FrozenInstanceError when setting manifest on SemanticExecutionContext."""
-        with pytest.raises(FrozenInstanceError):
-            semantic_context.manifest = _stub_manifest()  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: semantic_context,
+            attribute="manifest",
+            attempted_value=_stub_manifest(),
+            expected_exception=FrozenInstanceError,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -508,8 +521,12 @@ class TestValidationIssueImmutability:
             code="test_code",
             message="test message",
         )
-        with pytest.raises(FrozenInstanceError):
-            issue.code = "other"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: issue,
+            attribute="code",
+            attempted_value="other",
+            expected_exception=FrozenInstanceError,
+        )
 
     def test_issue_fields(self) -> None:
         """Verify code and message fields are preserved."""

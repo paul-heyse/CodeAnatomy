@@ -41,7 +41,13 @@ def replay_compiled_policy_counterfactuals(
     scenarios: Sequence[CounterfactualScenario],
     task_costs: Mapping[str, float] | None = None,
 ) -> tuple[CounterfactualReplayResult, ...]:
-    """Replay counterfactual policy scenarios against a baseline policy."""
+    """Replay counterfactual policy scenarios against a baseline policy.
+
+    Returns:
+    -------
+    tuple[CounterfactualReplayResult, ...]
+        Replay result for each input scenario, in order.
+    """
     results: list[CounterfactualReplayResult] = []
     baseline_cache = dict(baseline_policy.cache_policy_by_view)
     baseline_scan = dict(baseline_policy.scan_policy_overrides)

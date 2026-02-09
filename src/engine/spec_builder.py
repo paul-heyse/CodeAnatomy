@@ -19,6 +19,10 @@ type RuleClass = Literal[
 ]
 type RulepackProfile = Literal["Default", "LowLatency", "Replay", "Strict"]
 type RuntimeTunerMode = Literal["Off", "Observe", "Apply"]
+type RuleTraceMode = Literal["Disabled", "PhaseOnly", "Full"]
+type PreviewRedactionMode = Literal["None", "DenyList", "AllowList"]
+type OtlpProtocol = Literal["grpc", "http/protobuf", "http/json"]
+type TracingPreset = Literal["Maximal", "MaximalNoData", "ProductionLean"]
 type JoinType = Literal["Inner", "Left", "Right", "Full", "Semi", "Anti"]
 type MaterializationMode = Literal["Append", "Overwrite"]
 _MIN_RELATE_INPUTS = 2
@@ -203,6 +207,10 @@ class JoinGraph(msgspec.Struct, frozen=True):
     constraints: tuple[JoinConstraint, ...] = ()
 
 
+def _default_tracing_config() -> TracingConfig:
+    return TracingConfig()
+
+
 class RuntimeConfig(msgspec.Struct, frozen=True):
     """Optional runtime controls for compliance and tuning side channels."""
 
@@ -214,6 +222,42 @@ class RuntimeConfig(msgspec.Struct, frozen=True):
     enable_plan_preview: bool = False
     enable_function_factory: bool = False
     enable_domain_planner: bool = False
+    tracing_preset: TracingPreset | None = None
+    tracing: TracingConfig = msgspec.field(default_factory=_default_tracing_config)
+
+
+class TraceExportPolicy(msgspec.Struct, frozen=True):
+    """OpenTelemetry batch/sampling throughput controls."""
+
+    traces_sampler: str = "parentbased_always_on"
+    traces_sampler_arg: str | None = None
+    bsp_max_queue_size: int = 2048
+    bsp_max_export_batch_size: int = 512
+    bsp_schedule_delay_ms: int = 5000
+    bsp_export_timeout_ms: int = 30000
+
+
+class TracingConfig(msgspec.Struct, frozen=True):
+    """Maximal tracing control plane for DataFusion + OTel wiring."""
+
+    enabled: bool = False
+    record_metrics: bool = True
+    rule_mode: RuleTraceMode = "Disabled"
+    plan_diff: bool = False
+    preview_limit: int = 0
+    preview_redaction_mode: PreviewRedactionMode = "None"
+    preview_redacted_columns: tuple[str, ...] = ()
+    preview_redaction_token: str = "[REDACTED]"
+    preview_max_width: int = 96
+    preview_max_row_height: int = 4
+    preview_min_compacted_col_width: int = 10
+    instrument_object_store: bool = False
+    otlp_endpoint: str | None = None
+    otlp_protocol: OtlpProtocol | None = None
+    otel_service_name: str | None = None
+    otel_resource_attributes: dict[str, str] = msgspec.field(default_factory=dict)
+    custom_span_fields: dict[str, str] = msgspec.field(default_factory=dict)
+    export_policy: TraceExportPolicy = msgspec.field(default_factory=TraceExportPolicy)
 
 
 class SemanticExecutionSpec(msgspec.Struct, frozen=True):

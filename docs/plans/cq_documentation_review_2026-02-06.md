@@ -26,12 +26,12 @@ Validation method:
 
 ### 2) High: Skill name mismatch for DataFusion skill
 - Evidence:
-  - `AGENTS.md:54` and `CLAUDE.md:30` reference `/datafusion-and-deltalake-stack`.
+  - `AGENTS.md:54` and `CLAUDE.md:30` reference `/dfdl_ref`.
   - Available skill in current environment is `datafusion-stack`.
 - Impact:
   - Command discoverability failure and broken guidance.
 - Recommendation:
-  - Replace `/datafusion-and-deltalake-stack` with `/datafusion-stack` in both docs.
+  - Replace `/dfdl_ref` with `/datafusion-stack` in both docs.
 
 ### 3) High: Multiple `cq search --in <dir>/` examples are broken due trailing slash
 - Evidence (docs):

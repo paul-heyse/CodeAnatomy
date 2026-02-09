@@ -18,6 +18,7 @@ from semantics.joins import (
 from semantics.joins.inference import JoinCapabilities, JoinStrategyResult, require_join_strategy
 from semantics.joins.strategies import make_fk_strategy, make_symbol_match_strategy
 from semantics.types import AnnotatedSchema
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 
 class TestJoinStrategyType:
@@ -448,5 +449,9 @@ class TestInferJoinStrategyWithConfidence:
 
         result = infer_join_strategy_with_confidence(left_annotated, right_annotated)
         assert result is not None
-        with pytest.raises(AttributeError):
-            result.strategy = None  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: result,
+            attribute="strategy",
+            attempted_value=None,
+            expected_exception=AttributeError,
+        )

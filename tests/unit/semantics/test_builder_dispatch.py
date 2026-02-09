@@ -18,6 +18,7 @@ from semantics.pipeline import (
     _dispatch_from_registry,
 )
 from semantics.spec_registry import SemanticSpecIndex
+from semantics.view_kinds import ViewKindStr
 
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _make_spec(name: str, kind: str) -> SemanticSpecIndex:
+def _make_spec(name: str, kind: ViewKindStr = "normalize") -> SemanticSpecIndex:
     """Build a minimal ``SemanticSpecIndex`` for testing.
 
     Parameters
@@ -48,7 +49,7 @@ def _make_spec(name: str, kind: str) -> SemanticSpecIndex:
     """
     return SemanticSpecIndex(
         name=name,
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         inputs=(),
         outputs=(name,),
     )

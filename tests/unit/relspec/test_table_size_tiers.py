@@ -10,6 +10,7 @@ from relspec.table_size_tiers import (
     TableSizeTier,
     classify_table_size,
 )
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 
 class TestTableSizeThresholdsDefaults:
@@ -37,8 +38,12 @@ class TestTableSizeThresholdsDefaults:
     def test_frozen(self) -> None:
         """Thresholds struct is frozen (immutable)."""
         t = TableSizeThresholds()
-        with pytest.raises(AttributeError):
-            t.small_threshold = 42  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: t,
+            attribute="small_threshold",
+            attempted_value=42,
+            expected_exception=AttributeError,
+        )
 
 
 class TestClassifyTableSizeNone:

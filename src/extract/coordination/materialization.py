@@ -782,6 +782,81 @@ def materialize_extract_plan(
     return normalized
 
 
+def materialize_extract_plan_table(
+    name: str,
+    plan: DataFusionPlanBundle,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    determinism_tier: DeterminismTier,
+    options: ExtractMaterializeOptions | None = None,
+    execution_context: SemanticExecutionContext | None = None,
+) -> TableLike:
+    """Materialize an extract plan and always return an Arrow table-like object.
+
+    Returns:
+    -------
+    TableLike
+        Materialized extract output as a table.
+    """
+    result = materialize_extract_plan(
+        name,
+        plan,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
+        options=options,
+        execution_context=execution_context,
+    )
+    if isinstance(result, pa.RecordBatchReader):
+        reader = cast("pa.RecordBatchReader", result)
+        return cast("TableLike", reader.read_all())
+    return result
+
+
+def materialize_extract_plan_reader(
+    name: str,
+    plan: DataFusionPlanBundle,
+    *,
+    runtime_profile: DataFusionRuntimeProfile,
+    determinism_tier: DeterminismTier,
+    options: ExtractMaterializeOptions | None = None,
+    execution_context: SemanticExecutionContext | None = None,
+) -> pa.RecordBatchReader:
+    """Materialize an extract plan and always return an Arrow RecordBatchReader.
+
+    Returns:
+    -------
+    pa.RecordBatchReader
+        Materialized extract output as a streaming reader.
+
+    Raises:
+        TypeError: If materialization produces an unsupported output type.
+    """
+    resolved_options = options or ExtractMaterializeOptions()
+    reader_options = (
+        resolved_options
+        if resolved_options.prefer_reader
+        else ExtractMaterializeOptions(
+            normalize=resolved_options.normalize,
+            prefer_reader=True,
+            apply_post_kernels=resolved_options.apply_post_kernels,
+        )
+    )
+    result = materialize_extract_plan(
+        name,
+        plan,
+        runtime_profile=runtime_profile,
+        determinism_tier=determinism_tier,
+        options=reader_options,
+        execution_context=execution_context,
+    )
+    if isinstance(result, pa.RecordBatchReader):
+        return result
+    if isinstance(result, pa.Table):
+        return pa.RecordBatchReader.from_batches(result.schema, result.to_batches())
+    msg = f"Unsupported extract output type for reader materialization: {type(result)!r}"
+    raise TypeError(msg)
+
+
 def materialize_extract_reader(
     name: str,
     reader: RecordBatchReaderLike,
@@ -989,6 +1064,8 @@ __all__ = [
     "extract_plan_from_row_batches",
     "extract_plan_from_rows",
     "materialize_extract_plan",
+    "materialize_extract_plan_reader",
+    "materialize_extract_plan_table",
     "materialize_extract_reader",
     "raw_plan_from_rows",
     "record_batch_reader_from_row_batches",

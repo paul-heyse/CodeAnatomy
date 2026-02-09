@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from typing import cast
-
-import pytest
+from typing import Literal, TypedDict, Unpack
 
 from semantics.quality import QualityRelationshipSpec
 from semantics.quality_templates import EntitySymbolConfig, entity_symbol_relationship
+from tests.test_helpers.immutability import assert_immutable_assignment
+
+
+class _EntitySymbolConfigOverrides(TypedDict, total=False):
+    """Typed overrides for test config helper."""
+
+    name: str
+    left_view: str
+    entity_id_col: str
+    origin: str
+    span_strategy: Literal["overlap", "contains"]
+    scip_role_filter: str | None
+    exact_span_weight: float
 
 
 class TestEntitySymbolConfig:
@@ -19,8 +30,12 @@ class TestEntitySymbolConfig:
         cfg = EntitySymbolConfig(
             name="test", left_view="left", entity_id_col="l__id", origin="test"
         )
-        with pytest.raises(FrozenInstanceError):
-            cfg.name = "changed"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: cfg,
+            attribute="name",
+            attempted_value="changed",
+            expected_exception=FrozenInstanceError,
+        )
 
     def test_required_fields(self) -> None:
         """Config requires name, left_view, entity_id_col, and origin."""
@@ -90,7 +105,7 @@ class TestEntitySymbolConfig:
 class TestEntitySymbolRelationship:  # noqa: PLR0904
     """Tests for entity_symbol_relationship factory."""
 
-    def _default_cfg(self, **overrides: object) -> EntitySymbolConfig:
+    def _default_cfg(self, **overrides: Unpack[_EntitySymbolConfigOverrides]) -> EntitySymbolConfig:
         """Build a default config with optional overrides.
 
         Returns:
@@ -98,14 +113,15 @@ class TestEntitySymbolRelationship:  # noqa: PLR0904
         EntitySymbolConfig
             Config with test defaults.
         """
-        defaults: dict[str, object] = {
-            "name": "rel_test",
-            "left_view": "test_norm",
-            "entity_id_col": "l__test_id",
-            "origin": "test_origin",
-        }
-        defaults.update(cast("dict[str, object]", overrides))
-        return EntitySymbolConfig(**defaults)  # type: ignore[arg-type]
+        return EntitySymbolConfig(
+            name=overrides.get("name", "rel_test"),
+            left_view=overrides.get("left_view", "test_norm"),
+            entity_id_col=overrides.get("entity_id_col", "l__test_id"),
+            origin=overrides.get("origin", "test_origin"),
+            span_strategy=overrides.get("span_strategy", "overlap"),
+            scip_role_filter=overrides.get("scip_role_filter"),
+            exact_span_weight=overrides.get("exact_span_weight", 20.0),
+        )
 
     def test_produces_quality_spec(self) -> None:
         """Factory returns a QualityRelationshipSpec."""

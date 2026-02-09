@@ -28,7 +28,7 @@ Canonical CQ behavior/output semantics are documented in
 | `/cq run` | Multi-step execution with shared scan | Batch analysis workflows |
 | `/cq chain` | Command chaining frontend | Quick multi-command analysis |
 | `/ast-grep` | Structural search/rewrites (not regex) | Pattern-based code transformation |
-| `/datafusion-and-deltalake-stack` | DataFusion + DeltaLake operations (query engine, storage, UDFs) | Don't guess APIs - probe versions |
+| `/dfdl_ref` | DataFusion + DeltaLake operations (query engine, storage, UDFs) | Don't guess APIs - probe versions |
 
 ### Mandatory cq Usage
 

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::compiler::plan_bundle::PlanBundleArtifact;
 use crate::executor::maintenance::MaintenanceReport;
-use crate::executor::metrics_collector::CollectedMetrics;
+use crate::executor::metrics_collector::{CollectedMetrics, TraceMetricsSummary};
 
 /// Compact result envelope containing both determinism layers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +23,8 @@ pub struct RunResult {
     pub plan_bundles: Vec<PlanBundleArtifact>,
     /// WS-P7: Real physical metrics collected from the executed plan tree.
     pub collected_metrics: Option<CollectedMetrics>,
+    /// Stable summary metrics contract for observability consumers.
+    pub trace_metrics_summary: Option<TraceMetricsSummary>,
     /// WS-P11: Post-execution Delta maintenance reports.
     pub maintenance_reports: Vec<MaintenanceReport>,
     pub started_at: DateTime<Utc>,
@@ -93,6 +95,7 @@ pub struct RunResultBuilder {
     tuner_hints: Vec<TuningHint>,
     plan_bundles: Vec<PlanBundleArtifact>,
     collected_metrics: Option<CollectedMetrics>,
+    trace_metrics_summary: Option<TraceMetricsSummary>,
     maintenance_reports: Vec<MaintenanceReport>,
     started_at: Option<DateTime<Utc>>,
 }
@@ -133,6 +136,14 @@ impl RunResultBuilder {
         self
     }
 
+    pub fn with_trace_metrics_summary(
+        mut self,
+        summary: Option<TraceMetricsSummary>,
+    ) -> Self {
+        self.trace_metrics_summary = summary;
+        self
+    }
+
     pub fn with_maintenance_reports(mut self, reports: Vec<MaintenanceReport>) -> Self {
         self.maintenance_reports = reports;
         self
@@ -158,6 +169,7 @@ impl RunResultBuilder {
             tuner_hints: self.tuner_hints,
             plan_bundles: self.plan_bundles,
             collected_metrics: self.collected_metrics,
+            trace_metrics_summary: self.trace_metrics_summary,
             maintenance_reports: self.maintenance_reports,
             started_at: self.started_at.unwrap_or_else(Utc::now),
             completed_at: Utc::now(),

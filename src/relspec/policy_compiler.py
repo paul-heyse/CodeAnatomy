@@ -31,7 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 _HIGH_FANOUT_THRESHOLD = 2
 
 
-def compile_execution_policy(
+def compile_execution_policy(  # noqa: PLR0913
     *,
     task_graph: TaskGraph,
     output_locations: Mapping[str, DatasetLocation],
@@ -180,7 +180,13 @@ def _derive_cache_policies(
 def _cache_overrides_from_view_nodes(
     view_nodes: Sequence[ViewNode] | None,
 ) -> dict[str, str]:
-    """Extract cache-policy overrides from view nodes."""
+    """Extract cache-policy overrides from view nodes.
+
+    Returns:
+    -------
+    dict[str, str]
+        Per-view cache policy overrides keyed by view name.
+    """
     if view_nodes is None:
         return {}
     overrides: dict[str, str] = {}
@@ -195,7 +201,13 @@ def _cache_overrides_from_view_nodes(
 def _cache_overrides_from_semantic_ir(
     semantic_ir: SemanticIR | None,
 ) -> dict[str, str]:
-    """Extract cache-policy overrides from inferred Semantic IR hints."""
+    """Extract cache-policy overrides from inferred Semantic IR hints.
+
+    Returns:
+    -------
+    dict[str, str]
+        Per-view cache policy overrides inferred from IR cache hints.
+    """
     if semantic_ir is None:
         return {}
     from semantics.ir import ir_cache_hint_to_execution_policy
@@ -215,7 +227,13 @@ def _cache_overrides_from_semantic_ir(
 
 
 def _merge_cache_overrides(*sources: Mapping[str, str]) -> dict[str, str]:
-    """Merge cache override mappings with later mappings taking precedence."""
+    """Merge cache override mappings with later mappings taking precedence.
+
+    Returns:
+    -------
+    dict[str, str]
+        Merged cache override mapping.
+    """
     merged: dict[str, str] = {}
     for source in sources:
         merged.update(source)
@@ -320,7 +338,13 @@ def _derive_udf_requirements(
 def _derive_join_strategies_from_semantic_ir(
     semantic_ir: SemanticIR | None,
 ) -> dict[str, str]:
-    """Extract inferred join-strategy decisions from semantic IR."""
+    """Extract inferred join-strategy decisions from semantic IR.
+
+    Returns:
+    -------
+    dict[str, str]
+        Join strategy by view name for inferred join views.
+    """
     if semantic_ir is None:
         return {}
     strategies: dict[str, str] = {}
@@ -335,7 +359,13 @@ def _derive_join_strategies_from_semantic_ir(
 def _derive_inference_confidence_from_semantic_ir(
     semantic_ir: SemanticIR | None,
 ) -> dict[str, object]:
-    """Extract structured inference confidence from semantic IR views."""
+    """Extract structured inference confidence from semantic IR views.
+
+    Returns:
+    -------
+    dict[str, object]
+        Serialized inference confidence payload by view name.
+    """
     if semantic_ir is None:
         return {}
     confidence_by_view: dict[str, object] = {}

@@ -11,12 +11,12 @@
   - `src/datafusion_engine/session/runtime.py`
   - `src/datafusion_engine/delta/*`
 - Reference capability docs:
-  - `.codex/skills/datafusion-and-deltalake-stack/reference/datafusion_planning.md`
-  - `.codex/skills/datafusion-and-deltalake-stack/reference/deltalake_datafusion_integration.md`
-  - `.codex/skills/datafusion-and-deltalake-stack/reference/deltalake_datafusionmixins.md`
-  - `.codex/skills/datafusion-and-deltalake-stack/reference/datafusion_deltalake_advanced_rust_integration.md`
-  - `.codex/skills/datafusion-and-deltalake-stack/reference/datafusion_rust_UDFs.md`
-  - `.codex/skills/datafusion-and-deltalake-stack/reference/datafusion_schema.md`
+  - `.codex/skills/dfdl_ref/reference/datafusion_planning.md`
+  - `.codex/skills/dfdl_ref/reference/deltalake_datafusion_integration.md`
+  - `.codex/skills/dfdl_ref/reference/deltalake_datafusionmixins.md`
+  - `.codex/skills/dfdl_ref/reference/datafusion_deltalake_advanced_rust_integration.md`
+  - `.codex/skills/dfdl_ref/reference/datafusion_rust_UDFs.md`
+  - `.codex/skills/dfdl_ref/reference/datafusion_schema.md`
 
 ## Executive Conclusions
 - The v2 proposal is directionally strong, but several items need correction to avoid fragile diagnostics work that does not improve query outcomes.

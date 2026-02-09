@@ -120,7 +120,7 @@ Interpretation: these are natural integration points for a bootstrap planner/mat
 
 ## DataFusion + Delta Built-In Leverage (From Skill References)
 
-From `.claude/skills/datafusion-and-deltalake-stack/reference/...`:
+From `.claude/skills/dfdl_ref/reference/...`:
 
 - Delta as DataFusion table provider is the preferred path (query planning + pushdown benefits).
 - Arrow Dataset fallback exists but can lose optimization.

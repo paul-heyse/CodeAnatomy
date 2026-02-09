@@ -4,10 +4,10 @@ DataFusion integration guidance.
 
 ## Before You Start
 
-**Use the `datafusion-and-deltalake-stack` skill** before touching DataFusion/DeltaLake/UDF APIs:
+**Use the `dfdl_ref` skill** before touching DataFusion/DeltaLake/UDF APIs:
 
 ```
-/datafusion-and-deltalake-stack
+/dfdl_ref
 ```
 
 This skill provides version-correct API references for both DataFusion (query engine) and DeltaLake (storage layer). Do not guess APIs.
@@ -41,4 +41,4 @@ This skill provides version-correct API references for both DataFusion (query en
 ## Reference Docs
 
 - `docs/architecture/datafusion_engine_core.md`
-- Skill reference: `.claude/skills/datafusion-and-deltalake-stack/`
+- Skill reference: `.claude/skills/dfdl_ref/`

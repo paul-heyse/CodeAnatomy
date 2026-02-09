@@ -25,11 +25,11 @@ CQ-first discovery was used for all code-surface and caller analysis (examples):
 - `./cq calls evaluate_and_select_files`
 
 Reference guidance used:
-- `.codex/skills/datafusion-and-deltalake-stack/reference/deltalake.md`
-- `.codex/skills/datafusion-and-deltalake-stack/reference/deltalake_datafusionmixins.md`
-- `.codex/skills/datafusion-and-deltalake-stack/reference/deltalake_datafusion_integration.md`
-- `.codex/skills/datafusion-and-deltalake-stack/reference/datafusion_deltalake_advanced_rust_integration.md`
-- `.codex/skills/datafusion-and-deltalake-stack/reference/datafusion_rust_UDFs.md`
+- `.codex/skills/dfdl_ref/reference/deltalake.md`
+- `.codex/skills/dfdl_ref/reference/deltalake_datafusionmixins.md`
+- `.codex/skills/dfdl_ref/reference/deltalake_datafusion_integration.md`
+- `.codex/skills/dfdl_ref/reference/datafusion_deltalake_advanced_rust_integration.md`
+- `.codex/skills/dfdl_ref/reference/datafusion_rust_UDFs.md`
 - `docs/python_library_reference/msgspec.md`
 
 ---

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use crate::compiler::plan_bundle::{self, PlanBundleArtifact};
 use crate::executor::delta_writer::{ensure_output_table, extract_row_count, validate_output_schema};
 use crate::executor::maintenance;
-use crate::executor::metrics_collector::{self, CollectedMetrics};
+use crate::executor::metrics_collector::{self, CollectedMetrics, summarize_collected_metrics};
 use crate::executor::result::{MaterializationResult, RunResult};
 #[cfg(feature = "tracing")]
 use crate::executor::tracing as engine_tracing;
@@ -195,7 +195,11 @@ pub async fn run_full_pipeline(
 ) -> Result<RunResult> {
     // WS-P13: Create tracing span when feature is enabled
     #[cfg(feature = "tracing")]
-    let _span_guard = {
+    let tracing_config = spec.runtime.effective_tracing();
+    #[cfg(feature = "tracing")]
+    engine_tracing::init_otel_tracing(&tracing_config)?;
+    #[cfg(feature = "tracing")]
+    let execution_span = {
         let profile_name = format!("{:?}", spec.rulepack_profile);
         let span_info = engine_tracing::ExecutionSpanInfo::new(
             &spec.spec_hash,
@@ -203,9 +207,10 @@ pub async fn run_full_pipeline(
             &rulepack_fingerprint,
             &profile_name,
         );
-        let span = engine_tracing::execution_span(&span_info);
-        tracing::Instrument::instrument(std::future::ready(()), span)
+        engine_tracing::execution_span(&span_info, &tracing_config)
     };
+    #[cfg(feature = "tracing")]
+    let _execution_span_guard = execution_span.enter();
 
     let compiler = crate::compiler::plan_compiler::SemanticPlanCompiler::new(ctx, spec);
 
@@ -258,6 +263,8 @@ pub async fn run_full_pipeline(
     // This replaces the synthetic placeholder values that were previously used.
     if !physical_plans.is_empty() {
         let mut aggregated = CollectedMetrics::default();
+        let mut total_scan_selectivity_sum = 0.0f64;
+        let mut selectivity_samples = 0u64;
         for plan in &physical_plans {
             let plan_metrics = metrics_collector::collect_plan_metrics(plan.as_ref());
             aggregated.output_rows += plan_metrics.output_rows;
@@ -267,20 +274,20 @@ pub async fn run_full_pipeline(
             aggregated.peak_memory_bytes += plan_metrics.peak_memory_bytes;
             aggregated.partition_count += plan_metrics.partition_count;
             aggregated.operator_metrics.extend(plan_metrics.operator_metrics);
+            total_scan_selectivity_sum += plan_metrics.scan_selectivity;
+            selectivity_samples += 1;
         }
         // Scan selectivity: compute weighted average across plans that have scan data.
         // If no scans were found, default to 1.0 (passthrough).
-        let total_scan_selectivity_sum: f64 = physical_plans
-            .iter()
-            .map(|p| metrics_collector::collect_plan_metrics(p.as_ref()).scan_selectivity)
-            .sum();
-        let plan_count = physical_plans.len() as f64;
-        aggregated.scan_selectivity = if plan_count > 0.0 {
-            total_scan_selectivity_sum / plan_count
+        aggregated.scan_selectivity = if selectivity_samples > 0 {
+            total_scan_selectivity_sum / selectivity_samples as f64
         } else {
             1.0
         };
-        builder = builder.with_collected_metrics(Some(aggregated));
+        let summary = summarize_collected_metrics(&aggregated);
+        builder = builder
+            .with_collected_metrics(Some(aggregated))
+            .with_trace_metrics_summary(Some(summary));
     }
 
     // 5. WS-P11: Post-materialization Delta maintenance
@@ -312,5 +319,10 @@ pub async fn run_full_pipeline(
         builder = builder.add_output(result);
     }
 
-    Ok(builder.build())
+    let run_result = builder.build();
+    #[cfg(feature = "tracing")]
+    if tracing_config.enabled {
+        engine_tracing::flush_otel_tracing()?;
+    }
+    Ok(run_result)
 }

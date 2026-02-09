@@ -29,6 +29,8 @@ from extract.coordination.materialization import (
     extract_plan_from_row_batches,
     extract_plan_from_rows,
     materialize_extract_plan,
+    materialize_extract_plan_reader,
+    materialize_extract_plan_table,
 )
 from extract.coordination.schema_ops import (
     ExtractNormalizeOptions,
@@ -72,6 +74,8 @@ __all__ = [
     "extractor_option_values",
     "finalize_context_for_dataset",
     "materialize_extract_plan",
+    "materialize_extract_plan_reader",
+    "materialize_extract_plan_table",
     "metadata_spec_for_dataset",
     "metadata_specs_for_datasets",
     "normalized_schema_policy_for_dataset",

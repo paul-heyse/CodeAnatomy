@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
-
 from semantics.ir import (
     InferredViewProperties,
     SemanticIR,
     SemanticIRView,
 )
 from semantics.ir_pipeline import infer_semantics
+from semantics.view_kinds import ViewKindStr
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -18,13 +18,13 @@ from semantics.ir_pipeline import infer_semantics
 
 def _make_view(
     name: str,
-    kind: str = "normalize",
+    kind: ViewKindStr = "normalize",
     inputs: tuple[str, ...] = (),
     outputs: tuple[str, ...] | None = None,
 ) -> SemanticIRView:
     return SemanticIRView(
         name=name,
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         inputs=inputs,
         outputs=outputs if outputs is not None else (name,),
     )
@@ -270,8 +270,12 @@ class TestInferredViewPropertiesDefaults:
     def test_frozen(self) -> None:
         """InferredViewProperties should be immutable."""
         props = InferredViewProperties(graph_position="source")
-        with pytest.raises(AttributeError):
-            props.graph_position = "terminal"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: props,
+            attribute="graph_position",
+            attempted_value="terminal",
+            expected_exception=AttributeError,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -646,8 +650,12 @@ class TestInferenceConfidenceField:
             evidence_sources=("graph_topology",),
         )
         props = InferredViewProperties(inference_confidence=conf)
-        with pytest.raises(AttributeError):
-            props.inference_confidence = None  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: props,
+            attribute="inference_confidence",
+            attempted_value=None,
+            expected_exception=AttributeError,
+        )
 
 
 class TestInferSemanticsAttachesConfidence:

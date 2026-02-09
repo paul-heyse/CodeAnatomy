@@ -7,12 +7,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import msgspec
-import pytest
 
 from relspec.execution_package import (
     ExecutionPackageArtifact,
     build_execution_package,
 )
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 
 class TestExecutionPackageArtifactConstruction:
@@ -48,8 +48,12 @@ class TestExecutionPackageArtifactConstruction:
             session_config_hash="s",
             created_at_unix_ms=0,
         )
-        with pytest.raises(AttributeError):
-            pkg.package_fingerprint = "new"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: pkg,
+            attribute="package_fingerprint",
+            attempted_value="new",
+            expected_exception=AttributeError,
+        )
 
 
 class TestBuildExecutionPackageDeterminism:

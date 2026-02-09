@@ -946,7 +946,13 @@ def _infer_join_strategy_from_fields(
     left_fields: frozenset[str],
     right_fields: frozenset[str],
 ) -> str | None:
-    """Backward-compatible field-name inference helper."""
+    """Backward-compatible field-name inference helper.
+
+    Returns:
+    -------
+    str | None
+        Inferred join strategy name, if a strategy can be inferred.
+    """
     left_schema = _annotated_schema_from_field_names(left_fields)
     right_schema = _annotated_schema_from_field_names(right_fields)
     return _infer_join_strategy_from_schemas(left_schema, right_schema)
@@ -992,7 +998,13 @@ def _infer_join_keys_from_fields(
     left_fields: frozenset[str],
     right_fields: frozenset[str],
 ) -> tuple[tuple[str, str], ...] | None:
-    """Backward-compatible field-name join-key inference helper."""
+    """Backward-compatible field-name join-key inference helper.
+
+    Returns:
+    -------
+    tuple[tuple[str, str], ...] | None
+        Ordered join key pairs when inference succeeds.
+    """
     left_schema = _annotated_schema_from_field_names(left_fields)
     right_schema = _annotated_schema_from_field_names(right_fields)
     return _infer_join_keys_from_schemas(left_schema, right_schema)

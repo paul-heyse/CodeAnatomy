@@ -14,6 +14,16 @@
   - Rust `SemanticExecutionSpec` is canonical.
   - Python `engine` entrypoints remain compatibility boundary.
 
+## Tracing Closure Update (2026-02-08)
+- DataFusion tracing maximalist gaps `TRC-01`..`TRC-09` are closed in code:
+  - Rule mode semantics + phase diff contract: `rust/codeanatomy_engine/src/executor/tracing/rule_instrumentation.rs`
+  - Preview redaction controls: `rust/codeanatomy_engine/src/spec/runtime.rs`, `rust/codeanatomy_engine/src/executor/tracing/preview.rs`, `src/engine/spec_builder.py`
+  - Multi-scheme object-store instrumentation: `rust/codeanatomy_engine/src/executor/tracing/object_store.rs`
+  - Protocol-specific OTLP bootstrap + flush lifecycle: `rust/codeanatomy_engine/src/executor/tracing/bootstrap.rs`
+  - Stable metrics summary contract: `rust/codeanatomy_engine/src/executor/metrics_collector.rs`, `rust/codeanatomy_engine/src/executor/result.rs`
+  - Preset model (`Maximal`, `MaximalNoData`, `ProductionLean`): `rust/codeanatomy_engine/src/spec/runtime.rs`, `src/engine/spec_builder.py`
+  - Test/CI drift closure: `rust/codeanatomy_engine/tests/rule_tracing_diff.rs`, `rust/codeanatomy_engine/tests/tracing_preview_redaction.rs`, `.github/workflows/check_drift_surfaces.yml`
+
 ## Scope Classification
 - **Partially incomplete**: implemented in part (or test-only), but not fully cut over in production flow.
 - **Fully incomplete**: no production implementation found for the planned capability.

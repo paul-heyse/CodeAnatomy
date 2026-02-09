@@ -15,13 +15,36 @@ This plan implements a full-surface DataFusion tracing stack for CodeAnatomy, in
 
 Design intent: implement all capabilities now, keep them integrated behind one control plane, and allow "maximal" operation without future architecture rewrites.
 
+## 1.1 Implementation Status Snapshot (2026-02-08)
+
+Legend: `Complete` = implemented and wired, `Partial` = implemented with scope gaps, `Not Started` = no substantive implementation.
+
+| Scope | Status | Implemented evidence | Remaining scope |
+|---|---|---|---|
+| Scope 1: Dependency and feature wiring | Complete | `rust/Cargo.toml` + `rust/codeanatomy_engine/Cargo.toml` include `datafusion-tracing`, `instrumented-object-store`, OTel/tracing deps, and `tracing` feature gating. | None for core wiring. |
+| Scope 2: Unified runtime tracing control plane | Complete | `rust/codeanatomy_engine/src/spec/runtime.rs` and `src/engine/spec_builder.py` define mirrored `TracingConfig`, `RuleTraceMode`, and export policy types. | Optional: tighten contract docs around accepted protocol/sampler values. |
+| Scope 3: Tracing runtime bootstrap | Complete | `rust/codeanatomy_engine/src/executor/tracing/bootstrap.rs` now includes explicit protocol branches (`grpc`, `http/protobuf`, `http/json`), sampler parsing, and flush lifecycle via `flush_otel_tracing()`. | None. |
+| Scope 4: Physical plan instrumentation integration | Complete | `rust/codeanatomy_engine/src/executor/tracing/exec_instrumentation.rs` builds instrumentation rule; `rust/codeanatomy_engine/src/session/factory.rs` appends it last. | None for ordering/wiring. |
+| Scope 5: Rule/planner instrumentation integration | Complete | `rust/codeanatomy_engine/src/executor/tracing/rule_instrumentation.rs` now implements explicit `Disabled`/`PhaseOnly`/`Full` semantics with phase sentinels, optional per-rule wrappers, and deterministic diff recording. | None. |
+| Scope 6: Root execution span + context propagation | Complete | Root execution spans wired in `rust/codeanatomy_engine/src/python/materializer.rs` and `rust/codeanatomy_engine/src/executor/runner.rs`; envelope hash recording is wired. | None for baseline correlation path. |
+| Scope 7: Preview redaction + safe formatting | Complete | `rust/codeanatomy_engine/src/executor/tracing/preview.rs` implements `None`/`DenyList`/`AllowList` redaction, case-insensitive matching, token masking for string-like fields, and null masking for non-string fields with tests. | None. |
+| Scope 8: Storage tracing via instrumented object store | Complete | `rust/codeanatomy_engine/src/executor/tracing/object_store.rs` now performs deterministic multi-scheme registration (`file`, `memory`, `s3`, `gs/gcs`, `az/abfs/abfss`) with deduplication, ordering, and fail-fast unsupported-scheme diagnostics. | None. |
+| Scope 9: Metrics contract and RunResult surface | Complete | `RunResult` now includes both `collected_metrics` and stable `trace_metrics_summary`; summary generation is implemented in `rust/codeanatomy_engine/src/executor/metrics_collector.rs`. | None. |
+| Scope 10: Sampling/export throughput policy | Complete | `TraceExportPolicy` is enforced in bootstrap with deterministic protocol handling and sampler parsing; protocol variants are contract-tested. | None. |
+| Scope 11: CI and drift controls | Complete | Added `rule_tracing_diff` and `tracing_preview_redaction` tests; `.github/workflows/check_drift_surfaces.yml` now runs tracing-surface tests and enforces tracing drift invariants. | None. |
+| Scope 12: Rollout and operational profiles | Complete | `TracingPreset` is implemented in Rust runtime config and mirrored in `src/engine/spec_builder.py` with deterministic precedence in `effective_tracing()`. | None. |
+
+## 1.2 Current Incomplete Work (Actionable Delta)
+
+All previously identified tracing deltas in this plan are now implemented in code and covered by dedicated tests/CI drift checks.
+
 ## 2. Design Principles (from `datafusion-tracing.md`)
 
 1. Keep `datafusion` and `datafusion-tracing` on the same major/minor line (lockstep compatibility).
 2. Register physical instrumentation rule last so other optimizer rules never see wrapped nodes.
 3. Use `otel.name` for operator/rule/phase naming, attributes for high-cardinality context.
 4. Keep preview bounded and redacted; metrics always on for maximal observability mode.
-5. Use phase-only vs full-rule tracing as an explicit runtime mode (both implemented).
+5. Use phase-only vs full-rule tracing as an explicit runtime mode (phase-only fidelity still pending).
 6. Include object-store spans under query spans for full storage-to-operator visibility.
 7. Configure OTel exporter, BSP queue, sampling, and collector batching as first-class runtime settings.
 
@@ -42,13 +65,13 @@ Add full tracing dependencies and feature-gated builds for `codeanatomy-engine`.
 [workspace.dependencies]
 datafusion = { version = "51.0.0", default-features = false, features = ["parquet"] }
 datafusion-tracing = "51.0.0"
-instrumented-object-store = "0.1.2"
+instrumented-object-store = "51.0.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-tracing-opentelemetry = "0.31"
-opentelemetry = "0.30"
-opentelemetry_sdk = "0.30"
-opentelemetry-otlp = "0.30"
+tracing-opentelemetry = "0.32.1"
+opentelemetry = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+opentelemetry-otlp = "0.31.0"
 
 # rust/codeanatomy_engine/Cargo.toml
 [dependencies]
@@ -426,33 +449,33 @@ rust/codeanatomy_engine/tests/
 ## 5. Implementation Checklist
 
 ### Phase A: Core enablement
-- [ ] Add lockstep tracing dependencies and feature flags.
-- [ ] Implement unified `TracingConfig` contract in Rust and Python mirror.
-- [ ] Add bootstrap path for OTel exporter + subscriber initialization.
+- [x] Add lockstep tracing dependencies and feature flags.
+- [x] Implement unified `TracingConfig` contract in Rust and Python mirror.
+- [x] Add bootstrap path for OTel exporter + subscriber initialization.
 
 ### Phase B: DataFusion instrumentation wiring
-- [ ] Implement execution instrumentation rule construction from `TracingConfig`.
-- [ ] Guarantee physical instrumentation rule is appended last.
-- [ ] Implement rule-phase wrapper (`full` / `phase_only` + optional `plan_diff`).
-- [ ] Wire root execution span around compile+execute lifecycle.
+- [x] Implement execution instrumentation rule construction from `TracingConfig`.
+- [x] Guarantee physical instrumentation rule is appended last.
+- [ ] Implement rule-phase wrapper (`full` / `phase_only` + optional `plan_diff`) (`Partial`: wrapper exists; `PhaseOnly` semantics still incomplete).
+- [x] Wire root execution span around compile+execute lifecycle.
 
 ### Phase C: Maximal observability signals
-- [ ] Implement bounded/redacted preview formatter path.
-- [ ] Wire full metrics collection into `RunResult`.
-- [ ] Register instrumented object store in `SessionContext`.
-- [ ] Add stable custom field policy (declared placeholder keys + recorded values).
+- [ ] Implement bounded/redacted preview formatter path (`Partial`: bounded formatter exists; redaction policy not implemented).
+- [ ] Wire full metrics collection into `RunResult` (`Partial`: physical metrics are wired; maximal trace metrics contract still incomplete).
+- [ ] Register instrumented object store in `SessionContext` (`Partial`: `file://` implemented; multi-scheme registration pending).
+- [x] Add stable custom field policy (declared placeholder keys + recorded values).
 
 ### Phase D: Operational hardening
-- [ ] Add exporter queue/schedule/timeout/sampling controls and defaults.
+- [x] Add exporter queue/schedule/timeout/sampling controls and defaults.
 - [ ] Add collector deployment guidance (memory_limiter -> sampling -> batch order).
-- [ ] Add CI assertions for instrumentation ordering and span schema drift.
+- [ ] Add CI assertions for instrumentation ordering and span schema drift (`Partial`: instrumentation-order test exists; drift schema checks incomplete).
 
 ### Phase E: Validation
 - [ ] Validate phase spans appear: `analyze_logical_plan`, `optimize_logical_plan`, `optimize_physical_plan`.
 - [ ] Validate operator spans use `otel.name` = physical operator names.
 - [ ] Validate `datafusion.metrics.*` attributes for representative scan/join/aggregate/sort plans.
-- [ ] Validate preview behavior (`preview_limit=0` off, bounded format on).
-- [ ] Validate object store spans (`get`, `get_range`, `list`, `put`) nest under query spans.
+- [ ] Validate preview behavior (`preview_limit=0` off, bounded format on, redaction on).
+- [ ] Validate object store spans (`get`, `get_range`, `list`, `put`) nest under query spans across configured store schemes.
 - [ ] Validate no instrumentation holes when custom physical rules are present.
 
 ## 6. Acceptance Criteria

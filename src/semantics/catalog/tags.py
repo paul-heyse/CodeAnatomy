@@ -177,7 +177,9 @@ def _infer_entity_from_schema(name: str) -> tuple[str, str] | None:
     return mapping.get(table_type)
 
 
-def _infer_entity_grain_from_metadata(row: SemanticDatasetRow) -> tuple[str, str] | None:
+def _infer_entity_grain_from_metadata(  # noqa: PLR0911
+    row: SemanticDatasetRow,
+) -> tuple[str, str] | None:
     join_keys = tuple(row.join_keys)
     join_key_types = {infer_column_type(name) for name in join_keys}
     join_key_groups = {group for name in join_keys for group in get_compatibility_groups(name)}

@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import pyarrow as pa
 import pytest
-from pytest import MonkeyPatch
 
 from datafusion_engine.schema import registry as schema_registry
 
 
 def test_extract_schema_for_prefers_derived_when_shape_is_compatible(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Derived schemas should be returned when available."""
     derived = pa.schema([pa.field("file_id", pa.int64())])
@@ -22,7 +21,7 @@ def test_extract_schema_for_prefers_derived_when_shape_is_compatible(
 
 
 def test_extract_schema_for_raises_when_derived_missing(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Missing derived schemas should raise instead of static fallback."""
     monkeypatch.setattr(schema_registry, "_derived_extract_schema_for", lambda _name: None)
@@ -43,7 +42,8 @@ def test_nested_row_schema_authority_prefers_derived_on_conflict() -> None:
     derived = pa.schema([pa.field("node_id", pa.string()), pa.field("kind", pa.string())])
     struct = pa.schema([pa.field("id", pa.string()), pa.field("type", pa.string())])
 
-    resolved = schema_registry._resolve_nested_row_schema_authority(
+    resolve_nested_row_schema_authority = schema_registry._resolve_nested_row_schema_authority  # noqa: SLF001
+    resolved = resolve_nested_row_schema_authority(
         dataset_name="ast_nodes",
         nested_path="nodes",
         derived_schema=derived,
@@ -57,7 +57,8 @@ def test_nested_row_schema_authority_uses_struct_when_derived_missing() -> None:
     """Struct-derived schema should be used when metadata shape is absent."""
     struct = pa.schema([pa.field("id", pa.string()), pa.field("type", pa.string())])
 
-    resolved = schema_registry._resolve_nested_row_schema_authority(
+    resolve_nested_row_schema_authority = schema_registry._resolve_nested_row_schema_authority  # noqa: SLF001
+    resolved = resolve_nested_row_schema_authority(
         dataset_name="ast_nodes",
         nested_path="nodes",
         derived_schema=None,

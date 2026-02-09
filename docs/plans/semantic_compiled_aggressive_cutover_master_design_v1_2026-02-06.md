@@ -69,7 +69,7 @@ Business logic uses canonical names only (`cpg_nodes`, `cpg_edges`, etc.). Compa
 
 ## 4. DataFusion + Delta Guardrails (Locked)
 
-Based on `datafusion-and-deltalake-stack` references and local patterns:
+Based on `dfdl_ref` references and local patterns:
 
 1. Provider registration must be `register_table(...)` first; compatibility fallback paths are explicit and artifacted.
 2. Avoid `register_table_provider(...)` in new code paths (deprecated API surface).

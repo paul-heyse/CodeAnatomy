@@ -5,6 +5,7 @@ from __future__ import annotations
 import msgspec
 
 from datafusion_engine.pruning.metrics import PruningMetrics
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 
 class TestPruningMetricsCreation:
@@ -42,11 +43,13 @@ class TestPruningMetricsCreation:
 
     def test_frozen(self) -> None:
         """PruningMetrics is immutable (frozen)."""
-        import pytest
-
         m = PruningMetrics()
-        with pytest.raises(AttributeError):
-            m.row_groups_total = 5  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: m,
+            attribute="row_groups_total",
+            attempted_value=5,
+            expected_exception=AttributeError,
+        )
 
 
 class TestPruningMetricsSerialization:

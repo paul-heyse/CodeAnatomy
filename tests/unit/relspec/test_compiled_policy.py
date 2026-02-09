@@ -7,6 +7,7 @@ import pytest
 
 from relspec.compiled_policy import CompiledExecutionPolicy
 from serde_msgspec import to_builtins
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 
 class TestCompiledExecutionPolicyConstruction:
@@ -66,8 +67,12 @@ class TestCompiledExecutionPolicyConstruction:
     def test_frozen_immutability(self) -> None:
         """Verify the struct is frozen (immutable)."""
         policy = CompiledExecutionPolicy()
-        with pytest.raises(AttributeError):
-            policy.validation_mode = "error"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: policy,
+            attribute="validation_mode",
+            attempted_value="error",
+            expected_exception=AttributeError,
+        )
 
     def test_forbid_unknown_fields(self) -> None:
         """Verify the struct rejects unknown fields during deserialization."""

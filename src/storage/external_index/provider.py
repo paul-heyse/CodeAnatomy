@@ -48,14 +48,18 @@ class ExternalIndexProvider(Protocol):
 
     provider_name: str
 
-    def supports(self, request: ExternalIndexRequest) -> bool: ...
+    def supports(self, request: ExternalIndexRequest) -> bool:
+        """Return whether this provider supports the request."""
+        ...
 
     def select_candidates(
         self,
         ctx: SessionContext,
         *,
         request: ExternalIndexRequest,
-    ) -> ExternalIndexSelection | None: ...
+    ) -> ExternalIndexSelection | None:
+        """Return candidate files for ``request`` or ``None``."""
+        ...
 
 
 def select_candidates_with_external_indexes(
@@ -64,7 +68,13 @@ def select_candidates_with_external_indexes(
     request: ExternalIndexRequest,
     providers: Sequence[ExternalIndexProvider],
 ) -> tuple[ExternalIndexSelection | None, str | None]:
-    """Resolve candidate files from the first provider that returns a result."""
+    """Resolve candidate files from the first provider that returns a result.
+
+    Returns:
+    -------
+    tuple[ExternalIndexSelection | None, str | None]
+        Candidate selection and provider name when available.
+    """
     for provider in providers:
         if not provider.supports(request):
             continue

@@ -334,11 +334,12 @@ def plan_scan_units(
 class _DeltaAddActionsIndexProvider:
     provider_name = "delta_add_actions"
 
-    def supports(self, request: ExternalIndexRequest) -> bool:
+    @staticmethod
+    def supports(request: ExternalIndexRequest) -> bool:
         return request.location.format == "delta"
 
+    @staticmethod
     def select_candidates(
-        self,
         ctx: SessionContext,
         *,
         request: ExternalIndexRequest,

@@ -7,7 +7,9 @@ use tokio::runtime::Runtime;
 use crate::compiler::plan_bundle::{build_plan_bundle_artifact, capture_plan_bundle_runtime, PlanBundleArtifact};
 use crate::compiler::plan_compiler::SemanticPlanCompiler;
 use crate::compliance::capture::{capture_explain_verbose, ComplianceCapture, RetentionPolicy, RulepackSnapshot};
-use crate::executor::metrics_collector::{collect_plan_metrics, CollectedMetrics};
+use crate::executor::metrics_collector::{
+    collect_plan_metrics, summarize_collected_metrics, CollectedMetrics,
+};
 use crate::executor::maintenance::execute_maintenance;
 use crate::executor::runner::execute_and_materialize;
 use crate::executor::result::{RunResult, TuningHint};
@@ -16,6 +18,8 @@ use crate::rules::rulepack::RulepackFactory;
 use crate::session::envelope::SessionEnvelope;
 use crate::spec::runtime::RuntimeTunerMode;
 use crate::tuner::adaptive::{AdaptiveTuner, ExecutionMetrics, TunerConfig};
+#[cfg(feature = "tracing")]
+use crate::executor::tracing as engine_tracing;
 
 use super::compiler::CompiledPlan;
 use super::result::PyRunResult;
@@ -107,6 +111,27 @@ impl CpgMaterializer {
                 &spec.rule_intents,
                 &env_profile,
             );
+            let tracing_config = spec.runtime.effective_tracing();
+            #[cfg(feature = "tracing")]
+            engine_tracing::init_otel_tracing(&tracing_config)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to initialize tracing: {e}")))?;
+
+            #[cfg(feature = "tracing")]
+            let execution_span = {
+                let profile_name = spec
+                    .runtime_profile
+                    .as_ref()
+                    .map(|profile| profile.profile_name.as_str())
+                    .unwrap_or("environment");
+                let span_info = engine_tracing::ExecutionSpanInfo::without_envelope(
+                    &compiled_plan.spec_hash(),
+                    &ruleset.fingerprint,
+                    profile_name,
+                );
+                engine_tracing::execution_span(&span_info, &tracing_config)
+            };
+            #[cfg(feature = "tracing")]
+            let _execution_span_guard = execution_span.enter();
 
             // WS-P9: Build session with ruleset, using profiled builder when available.
             let (ctx, envelope) = if let Some(profile) = &spec.runtime_profile {
@@ -117,6 +142,8 @@ impl CpgMaterializer {
                         &ruleset,
                         spec.runtime.enable_function_factory,
                         spec.runtime.enable_domain_planner,
+                        compiled_plan.spec_hash(),
+                        Some(&tracing_config),
                     )
                     .await
                     .map_err(|e| PyRuntimeError::new_err(format!("Failed to build profiled session: {e}")))?;
@@ -135,10 +162,35 @@ impl CpgMaterializer {
             } else {
                 session_factory
                     .inner()
-                    .build_session(&ruleset, compiled_plan.spec_hash())
+                    .build_session(&ruleset, compiled_plan.spec_hash(), Some(&tracing_config))
                     .await
                     .map_err(|e| PyRuntimeError::new_err(format!("Failed to build session: {e}")))?
             };
+            #[cfg(feature = "tracing")]
+            engine_tracing::record_envelope_hash(&execution_span, &envelope.envelope_hash);
+            #[cfg(feature = "tracing")]
+            {
+                let mut locations: Vec<String> = spec
+                    .input_relations
+                    .iter()
+                    .map(|relation| relation.delta_location.clone())
+                    .collect();
+                locations.extend(
+                    spec.output_targets
+                        .iter()
+                        .filter_map(|target| target.delta_location.clone()),
+                );
+                engine_tracing::register_instrumented_stores_for_locations(
+                    &ctx,
+                    &tracing_config,
+                    &locations,
+                )
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!(
+                        "Failed to register instrumented object stores: {e}"
+                    ))
+                })?;
+            }
 
             // Register input relations as Delta providers
             register_extraction_inputs(&ctx, &spec.input_relations)
@@ -334,6 +386,7 @@ impl CpgMaterializer {
             }
 
             // Build RunResult with determinism contract
+            let trace_metrics_summary = summarize_collected_metrics(&collected);
             let run_result = RunResult {
                 outputs: materialization_results,
                 spec_hash: compiled_plan.spec_hash(),
@@ -343,10 +396,17 @@ impl CpgMaterializer {
                 tuner_hints,
                 plan_bundles,
                 collected_metrics: Some(collected),
+                trace_metrics_summary: Some(trace_metrics_summary),
                 maintenance_reports,
                 started_at: start_time,
                 completed_at: chrono::Utc::now(),
             };
+            #[cfg(feature = "tracing")]
+            if tracing_config.enabled {
+                engine_tracing::flush_otel_tracing().map_err(|e| {
+                    PyRuntimeError::new_err(format!("Failed to flush tracing provider: {e}"))
+                })?;
+            }
 
             Ok(PyRunResult::from_run_result(&run_result))
         })

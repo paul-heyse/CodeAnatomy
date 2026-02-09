@@ -46,7 +46,13 @@ def evaluate_fallback_quarantine(
     *,
     thresholds: QuarantineThresholds | None = None,
 ) -> FallbackQuarantineReport:
-    """Evaluate fallback quarantine status from a provenance graph."""
+    """Evaluate fallback quarantine status from a provenance graph.
+
+    Returns:
+    -------
+    FallbackQuarantineReport
+        Aggregate quarantine evaluation for all decision contexts.
+    """
     resolved_thresholds = thresholds or QuarantineThresholds()
     by_context: dict[str, list[tuple[float, str | None]]] = {}
     reason_counts: dict[str, int] = {}

@@ -1523,3 +1523,1196 @@ ctx.register_table("t_delta_v123", dt)
 [28]: https://datafusion.apache.org/python/user-guide/common-operations/udf-and-udfa.html?utm_source=chatgpt.com "User-Defined Functions - Apache DataFusion"
 [29]: https://docs.rs/datafusion/latest/datafusion/catalog/index.html?utm_source=chatgpt.com "datafusion::catalog - Rust"
 [30]: https://github.com/datafusion-contrib/datafusion-tracing "GitHub - datafusion-contrib/datafusion-tracing: Integration of opentelemetry with the tracing crate"
+
+# 5) Additional planning related capabilities
+
+According to a document from **January 27, 2026**, your attached DataFusion planning docs are already *very* broad: they cover the Rust physical-planner seams (`PhysicalPlanner` / `QueryPlanner`) and the “step-by-step” physical plan construction path, plus parameterized reuse (`PREPARE/EXECUTE`, and Rust-side parameter binding), and SQL-first custom source registration via `TableProviderFactory` (shown via Delta’s `DeltaTableFactory`).
+
+The remaining “exceedingly helpful” **Rust-planning** topics that are either missing or only appear indirectly are mostly in the **DDL/scan-format plumbing** and **extension-author migration contracts**:
+
+---
+
+## 1) File-format factories + table options are a first-class *planning* control plane (Rust)
+
+### Why this matters
+
+If you want *pure SQL* to register and scan *non-built-in* file layouts (or “specialized scans” that behave like a file format), the planning boundary is not just `TableProviderFactory`—it’s also **`FileFormatFactory` + `TableOptions`**, wired into `SessionStateBuilder`.
+
+### SessionStateBuilder knobs (Rust; exact entrypoints)
+
+* `SessionStateBuilder::with_default_features()` explicitly installs defaults for **table factories, file formats, expr planners, and built-in functions**. ([Docs.rs][1])
+* `SessionStateBuilder::with_file_formats(Vec<Arc<dyn FileFormatFactory>>)` sets the **file format registry** used during planning. ([Docs.rs][1])
+* `SessionStateBuilder::with_table_options(TableOptions)` sets the **format-option policy object** used to interpret per-table options. ([Docs.rs][1])
+
+### `FileFormatFactory` contract (planning-time)
+
+`FileFormatFactory` exists specifically to create `FileFormat` instances using *session + command-level* options:
+
+* `create(state: &dyn Session, format_options: &HashMap<String,String>) -> Result<Arc<dyn FileFormat>, DataFusionError>`
+* `default() -> Arc<dyn FileFormat>` ([Docs.rs][2])
+
+This is the “real” seam for adding *new* STORED AS formats (or variants of existing ones) without forking DataFusion.
+
+### `TableOptions` contract (format options as a structured object)
+
+`TableOptions` is a structured container for CSV/Parquet/JSON handling plus extensions; it supports:
+
+* `default_from_session_config(config: &ConfigOptions)` and `combine_with_session_config(...)` (session config → table options)
+* `set(key, value)` to mutate options by string keys (e.g., “format.delimiter”). ([Docs.rs][3])
+
+**Why it’s high leverage for your system:** it gives you a canonical place to version “how DDL options map to scan behavior,” rather than scattering those decisions across rule code.
+
+---
+
+## 2) “Custom file scan” implementors need an explicit upgrade/migration contract (FileSource / FileScanConfig / pushdowns)
+
+Your docs cover planning generally, but they don’t yet include the **extension-author migration checklist** that’s now critical if you ever:
+
+* construct file scans directly (`FileScanConfig`, `ParquetSource`, `CsvSource`, etc.), or
+* implement custom `FileFormat` / `FileSource` to get scan-time pushdowns for your own layouts.
+
+The official upgrade guides call out multiple **planning-facing** breaking changes, including:
+
+* **Schemas must be provided up front**: file sources now require schema (including partition cols) at construction time; `FileScanConfigBuilder` no longer takes schema separately. ([Apache DataFusion][4])
+* **Custom `FileFormat` signature changes**: `FileFormat::file_source()` now takes `TableSchema`, and pushdown APIs moved (e.g., filter pushdown shifts toward `FileSource::try_pushdown_filters`). ([Apache DataFusion][4])
+* **Statistics responsibilities moved** between `FileSource` and `FileScanConfig` (important because stats directly impact join planning / algorithm selection). ([Apache DataFusion][4])
+
+**Why it’s “exceedingly helpful”**: if you later decide to implement a “code-intel scan format” (specialized storage layout, pre-indexed fragments, etc.), these are exactly the contracts that determine whether your scan node participates in projection/filter pushdown and whether it feeds the optimizer usable statistics.
+
+---
+
+## 3) Standalone optimizer API (Optimizer / OptimizerContext / observer hook) for “offline compilation” and rulepack experiments
+
+Your docs emphasize `SessionContext`-driven optimization, but DataFusion also exposes an explicit optimizer API where you can:
+
+* construct an `Optimizer` with a **custom rule list** (`Optimizer::with_rules(rules)`),
+* set policy knobs (e.g., `OptimizerContext::new().with_max_passes(16)`),
+* and attach an **observer** to capture the plan after each rule. ([Apache DataFusion][5])
+
+This is extremely useful when you want a “compiler pipeline” that:
+
+* optimizes plan fragments *outside* a live session (or in a controlled harness),
+* records per-rule diffs deterministically,
+* or runs “what-if” experiments with subsets/reorderings of rules.
+
+---
+
+## 4) Generic TableProvider pushdown semantics (beyond the Delta-specific coverage)
+
+You have Delta-specific `TableProviderFactory` examples, but the official `TableProvider` guide includes concrete, planning-relevant contracts you’ll want captured for *any* custom source:
+
+* `TableProvider::scan` is the key planning method: it returns an `ExecutionPlan` DataFusion will execute. ([Apache DataFusion][6])
+* `supports_filters_pushdown` returns a per-filter status: `Unsupported | Exact | Inexact` (and DataFusion will re-apply `Inexact` filters post-scan for correctness). ([Apache DataFusion][6])
+
+If you ever build a “CPG-native” provider (e.g., scanning pre-partitioned evidence tables, or using an index), these pushdown contracts are the difference between “planner can exploit my source” vs “planner treats my source as opaque and does extra work.”
+
+---
+
+### If you want one “addendum target” for your docs
+
+Add a Rust-only chapter titled something like:
+
+**“DDL-to-scan compilation surfaces: TableProviderFactory + FileFormatFactory + TableOptions + upgrade contracts for FileSource/FileFormat implementors.”**
+
+That chapter is the last missing “planning deployment” layer that materially changes what you can do in Rust without dropping back to ad-hoc API registration.
+
+[1]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionStateBuilder.html "SessionStateBuilder in datafusion::execution::session_state - Rust"
+[2]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/trait.FileFormatFactory.html "FileFormatFactory in datafusion::datasource::file_format - Rust"
+[3]: https://docs.rs/datafusion/latest/datafusion/config/struct.TableOptions.html "TableOptions in datafusion::config - Rust"
+[4]: https://datafusion.apache.org/library-user-guide/upgrading.html "Upgrade Guides — Apache DataFusion  documentation"
+[5]: https://datafusion.apache.org/library-user-guide/query-optimizer.html "Query Optimizer — Apache DataFusion  documentation"
+[6]: https://datafusion.apache.org/_sources/library-user-guide/custom-table-providers.md.txt "datafusion.apache.org"
+
+## Mental model: where these knobs sit
+
+`SessionStateBuilder` is the “compile-time environment constructor” for DataFusion: you assemble **registries + policies** (formats, factories, function planners, defaults), `build()` a `SessionState`, then hand it to `SessionContext::new_with_state(state)` for SQL / planning / execution. ([Apache DataFusion][1])
+
+A practical consequence for agent-driven planning: **two identical SQL strings can produce different plans** if any of these registries/policies differ. These three knobs are the core “planning surface area” you should treat as part of your plan fingerprint.
+
+---
+
+## 1) `SessionStateBuilder::with_default_features()`
+
+### Syntax / call-site
+
+```rust
+let state = SessionStateBuilder::new()
+  .with_default_features()
+  .build();
+```
+
+Or the convenience constructor:
+
+```rust
+let state = SessionStateBuilder::new_with_default_features().build();
+```
+
+`new_with_default_features()` is documented as equivalent to `new()` + `with_default_features()`. ([Docs.rs][2])
+
+### What it installs (and why it matters)
+
+`with_default_features()` **adds defaults** for:
+
+* `table_factories`
+* `file formats`
+* `expr_planners`
+* **builtin** scalar + aggregate + window functions ([Docs.rs][2])
+
+This is the switch that turns a “bare SessionState” into a broadly SQL-capable environment. In DataFusion’s own docs/examples for customizing SQL planning, the baseline pattern is exactly `SessionStateBuilder::new().with_default_features()...build()` followed by `SessionContext::new_with_state(state)`. ([Apache DataFusion][1])
+
+### Value case: when to deploy
+
+Use `with_default_features()` when you want:
+
+* **Out-of-the-box SQL behavior** (common functions, formats, planners) rather than an allow-listed/minimal surface.
+* **Deterministic “known baseline”** before layering your own registries (custom file formats, custom function planners, custom type planners, etc.). ([Docs.rs][2])
+
+### Watchouts
+
+* **Overwrites on name collisions:** it “overwrites any previously registered items with the same name.” That makes call order *semantically significant*. If you want to override defaults, call `with_default_features()` **first**, then apply your custom registries. ([Docs.rs][2])
+* **Feature-gated defaults (compile-time):** defaults are conditional on crate features for some formats. For example, the default set includes Parquet only behind `#[cfg(feature = "parquet")]` and Avro behind `#[cfg(feature = "avro")]`. ([Docs.rs][3])
+
+---
+
+## 2) `SessionStateBuilder::with_file_formats(Vec<Arc<dyn FileFormatFactory>>)`
+
+### Syntax / call-site
+
+```rust
+let state = SessionStateBuilder::new()
+  .with_default_features()
+  .with_file_formats(vec![ /* Arc<dyn FileFormatFactory>... */ ])
+  .build();
+```
+
+The builder API is explicitly: `with_file_formats(self, file_formats: Vec<Arc<dyn FileFormatFactory>>) -> Self`. ([Docs.rs][2])
+
+### What a `FileFormatFactory` actually is (planning contract)
+
+A `FileFormatFactory` is a factory that can:
+
+* `create(&self, state: &dyn Session, format_options: &HashMap<String,String>) -> Result<Arc<dyn FileFormat>, DataFusionError>`
+* `default(&self) -> Arc<dyn FileFormat>`
+* `as_any(&self) -> &dyn Any` ([Docs.rs][4])
+
+Key implication: **format behavior is a function of both**:
+
+* **session state** (`state` gives access to configuration/policy), and
+* **command/table-level options** (`format_options`), which are typically derived from SQL `OPTIONS(...)` or statement-specific option tuples. ([Docs.rs][4])
+
+### Built-in factories you will likely compose/override
+
+From DataFusion’s own defaults, the list of file format factories is:
+
+* Parquet (feature-gated)
+* JSON
+* CSV
+* Arrow
+* Avro (feature-gated) ([Docs.rs][3])
+
+Concrete built-ins you can instantiate/parameterize:
+
+* `CsvFormatFactory { options: Option<CsvOptions> }`, with `new()` and `new_with_options(...)` ([Docs.rs][5])
+* `JsonFormatFactory { options: Option<JsonOptions> }`, with `new()` and `new_with_options(...)` ([Docs.rs][6])
+* `ParquetFormatFactory { options: Option<TableParquetOptions> }`, with `new()` and `new_with_options(...)` — **available only with crate feature `parquet`** ([Docs.rs][7])
+
+### Value case: when to deploy
+
+This knob is the highest-leverage “DDL/scan-format plumbing” hook when you need any of the following:
+
+**A) Format allow-listing (security / determinism)**
+If your agent is running SQL over potentially untrusted inputs (or you want strict reproducibility), replacing the registry with an explicit list is the easiest way to ensure “no surprise formats.” The builder-level override gives you a single choke point. ([Docs.rs][2])
+
+**B) Override default read/write semantics *without requiring SQL changes***
+Use `*_FormatFactory::new_with_options(...)` to change default parsing/writing behavior (e.g., CSV parsing defaults, Parquet defaults) while still allowing SQL `OPTIONS(...)` to override where appropriate. ([Docs.rs][5])
+
+**C) Introduce a custom file format into SQL-first workflows**
+A custom `FileFormatFactory` is *the* contract DataFusion expects for “create a FileFormat based on session + command options.” It’s the clean seam to make a new format participate in the same option flow as built-ins. ([Docs.rs][4])
+
+### Watchouts
+
+* **Order of operations with `with_default_features()`:** calling `with_default_features()` after you set `with_file_formats(...)` can clobber your registry because defaults overwrite by name. If you’re overriding defaults, call defaults first. ([Docs.rs][2])
+* **Feature flags dictate type availability:** if you intend to include Parquet in your registry, you must build with the `parquet` feature (and Parquet defaults are only included when that feature is enabled). ([Docs.rs][7])
+* **Option key hygiene:** `create(..., format_options: &HashMap<String,String>)` is stringly-typed. Your system should treat option keys as part of the “ABI” between SQL and your format logic; enforce validation (see `TableOptions` below). ([Docs.rs][4])
+
+---
+
+## 3) `SessionStateBuilder::with_table_options(TableOptions)`
+
+### Syntax / call-site
+
+```rust
+let state = SessionStateBuilder::new()
+  .with_default_features()
+  .with_table_options(my_table_options)
+  .build();
+```
+
+The builder API is explicitly: `with_table_options(self, table_options: TableOptions) -> Self`. ([Docs.rs][2])
+
+### What `TableOptions` is (the option-policy object)
+
+`TableOptions` is a structured container for **format-specific option policy**:
+
+* `csv: CsvOptions`
+* `parquet: TableParquetOptions`
+* `json: JsonOptions`
+* `current_format: Option<ConfigFileType>`
+* `extensions: Extensions` (explicitly intended for custom/extended behavior) ([Docs.rs][8])
+
+Relevant methods for “session policy” composition:
+
+* `TableOptions::default_from_session_config(config: &ConfigOptions) -> TableOptions`
+* `combine_with_session_config(&self, config: &ConfigOptions) -> TableOptions`
+* `set(&mut self, key: &str, value: &str) -> Result<(), DataFusionError>` (example key: `"format.delimiter"`) ([Docs.rs][8])
+
+### Value case: when to deploy
+
+This knob is for controlling **how option strings become actual behavior**.
+
+**A) Enforce stable, validated option semantics across your agent runs**
+Instead of letting “random SQL option tuples” shape behavior ad hoc, you can centralize defaults and validation in `TableOptions` (including custom `extensions`). ([Docs.rs][8])
+
+**B) Make precedence rules explicit (and reproducible)**
+DataFusion documents a clear precedence order for format-related options:
+
+1. `CREATE EXTERNAL TABLE` syntax
+2. `COPY` option tuples
+3. session-level config defaults (lowest precedence) ([Apache DataFusion][9])
+
+If you’re building a planner service, `with_table_options(...)` is where you pin your “session-level defaults” so you can later reason about exactly what won and why.
+
+**C) Provide “format defaults” that match your storage contract**
+If you always write CSV with `;` delimiter or always expect headers, you can set that as a session policy (rather than repeating it in every `CREATE EXTERNAL TABLE ... OPTIONS(...)`). The `TableOptions::set(...)` API is designed for this kind of policy mutation. ([Docs.rs][8])
+
+### Watchouts
+
+* **Precedence can surprise you if you treat session defaults as authoritative.** Session defaults are explicitly lowest precedence; table/statement-level options override them. That’s correct behavior, but if your agent assumes “the session config is the contract,” it will mis-explain plan behavior. ([Apache DataFusion][9])
+* **String-key ABI:** `TableOptions::set(key, value)` is stringly-typed and returns a `Result`—treat failures as configuration errors, not “best-effort.” Also, standardize key naming (`format.delimiter`, etc.) as part of your system’s spec. ([Docs.rs][8])
+* **Custom formats need custom option surfaces:** if you introduce a custom `FileFormatFactory`, decide whether its option keys live in `TableOptions.extensions` (preferred for “known keys”) vs passing opaque keys through. `extensions` exists specifically for extending/customizing behavior. ([Docs.rs][8])
+
+---
+
+## Canonical “agent-ready” composition pattern (order matters)
+
+**Default baseline → override registries → pin option policy:**
+
+```rust
+let mut table_opts = TableOptions::new();
+table_opts.set("format.delimiter", ";")?;
+
+let state = SessionStateBuilder::new()
+  .with_default_features()          // baseline registries
+  .with_file_formats(my_formats)    // override/whitelist/extend formats
+  .with_table_options(table_opts)   // session policy for options
+  .build();
+
+let ctx = SessionContext::new_with_state(state);
+```
+
+This ordering is specifically to avoid `with_default_features()` overwriting your custom registrations. ([Docs.rs][2])
+
+[1]: https://datafusion.apache.org/library-user-guide/extending-sql.html "Extending SQL Syntax — Apache DataFusion  documentation"
+[2]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionStateBuilder.html "SessionStateBuilder in datafusion::execution::session_state - Rust"
+[3]: https://docs.rs/datafusion/latest/src/datafusion/execution/session_state_defaults.rs.html "session_state_defaults.rs - source"
+[4]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/trait.FileFormatFactory.html "FileFormatFactory in datafusion::datasource::file_format - Rust"
+[5]: https://docs.rs/datafusion/52.1.0/datafusion/datasource/file_format/csv/struct.CsvFormatFactory.html "CsvFormatFactory in datafusion::datasource::file_format::csv - Rust"
+[6]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/json/struct.JsonFormatFactory.html "JsonFormatFactory in datafusion::datasource::file_format::json - Rust"
+[7]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/parquet/file_format/struct.ParquetFormatFactory.html "ParquetFormatFactory in datafusion::datasource::physical_plan::parquet::file_format - Rust"
+[8]: https://docs.rs/datafusion/latest/datafusion/config/struct.TableOptions.html "TableOptions in datafusion::config - Rust"
+[9]: https://datafusion.apache.org/user-guide/sql/format_options.html "Format Options — Apache DataFusion  documentation"
+
+## Mental model: how `FileFormatFactory` + `TableOptions` actually drive planning
+
+**SQL DDL/DML → option parsing → `FileFormatFactory::create(...)` → `Arc<dyn FileFormat>` → scan/write plan nodes**
+
+* In DataFusion’s datasource layer, **`FileFormatFactory` is the planning-time factory** that materializes a concrete `FileFormat` based on **session state + per-statement/table options**. It’s explicitly described as the factory “based on session and command level options.” ([Docs.rs][1])
+* **`TableOptions` is the structured “policy object”** for format settings (CSV / Parquet / JSON), with explicit APIs to derive defaults from session config, apply/merge overrides, and mutate options by string keys. ([Docs.rs][2])
+* For listing-based file tables, a `FileFormat` then gets wired into `ListingOptions` (`ListingOptions::new(format: Arc<dyn FileFormat>)`) which feeds `ListingTable` creation. ([Docs.rs][3])
+
+For an LLM agent: **these are the two canonical “option→behavior compilation” surfaces** you should treat as part of plan determinism and as the safest integration seam for “new STORED AS formats” or “same format, different semantics.”
+
+---
+
+## 1) `FileFormatFactory`: the planning-time contract (Rust)
+
+### 1.1 Trait signature + invariants
+
+The core trait (DataFusion 52.x as reference) is:
+
+```rust
+pub trait FileFormatFactory: Sync + Send + GetExt + Debug {
+  fn create(
+    &self,
+    state: &dyn Session,
+    format_options: &HashMap<String, String>,
+  ) -> Result<Arc<dyn FileFormat>, DataFusionError>;
+
+  fn default(&self) -> Arc<dyn FileFormat>;
+  fn as_any(&self) -> &(dyn Any + 'static);
+}
+```
+
+([Docs.rs][1])
+
+**Key invariants for implementors:**
+
+* **`create(...)` must be pure “configuration compilation”**: take session + option strings → produce a fully configured `FileFormat` (or error).
+* **`default()` must return a valid `FileFormat` with “all options set to default values.”** ([Docs.rs][1])
+* **`GetExt` is required** (see below): your factory must provide a file extension string via `get_ext()`. ([Docs.rs][4])
+* **`as_any()` is required** for downcasting / typed introspection. ([Docs.rs][1])
+
+### 1.2 Why `GetExt` exists (and why you care)
+
+`GetExt` is a tiny trait:
+
+```rust
+pub trait GetExt {
+  fn get_ext(&self) -> String;
+}
+```
+
+It’s explicitly “Define each `FileType`/`FileCompressionType`’s extension.” ([Docs.rs][4])
+
+This matters because **file listings frequently default to extension-based filtering**. `ListingOptions::new(...)` states its default behavior includes “use default file extension filter,” and it exposes `file_extension: String` as the filter suffix. ([Docs.rs][3])
+
+**Implication:** if your factory returns the wrong extension (or a non-standard one), DataFusion can silently **skip files** during listing scans unless you explicitly override `ListingOptions.file_extension`.
+
+### 1.3 “Planning-time” vs “execution-time” split: `FileType` and `DefaultFileType`
+
+The `datafusion::datasource::file_format` module documents an important layering:
+
+* `DefaultFileType` is “a container of `FileFormatFactory` which also implements `FileType`.”
+* It states `FileFormatFactory` is a **superset** of `FileType` (includes execution-time relevant methods), while **`FileType` is only used in logical planning** and implements only the subset needed there. ([Docs.rs][5])
+* The module also provides conversions between these worlds: `file_type_to_format` and `format_as_file_type`. ([Docs.rs][5])
+
+**Agent takeaway:** “STORED AS …” (logical planning) selects a `FileType`-level identity, but once options are applied and plans are built, you’re in the `FileFormatFactory`/`FileFormat` world.
+
+### 1.4 What `create(...)` should do (recommended structure)
+
+A robust `create(...)` typically does:
+
+1. **Start from a baseline**
+
+   * Either `self.default()` or a known default `FileFormat` constructor.
+2. **Read session configuration** via `state`
+
+   * Use this for global defaults / policy gates (“we don’t allow X in this deployment”).
+3. **Parse + validate `format_options`** (stringly-typed ABI)
+4. **Apply options deterministically** (no ambient IO / time / randomness)
+5. **Reject unknown options (or explicitly namespace them)**
+
+DataFusion’s SQL format-options docs are very explicit that for CSV/JSON “if any unsupported option is specified, an error will be raised and the query will fail.” ([Apache DataFusion][6])
+If you want your custom format to behave like built-ins, emulate that strictness.
+
+### 1.5 The “real seam” for new STORED AS formats (without forking)
+
+The trait’s own docs: “Users can provide their own `FileFormatFactory` to support arbitrary file formats.” ([Docs.rs][1])
+
+That’s your hook for:
+
+* **New formats** (e.g., GeoJSON, custom indexed layout, domain-specific encoding)
+* **Variants of existing formats** (same “CSV” but with a locked schema-infer policy, delimiter enforcement, custom compression policy, etc.)
+
+### 1.6 Minimal implementation skeleton (what an agent needs to know)
+
+```rust
+use std::{any::Any, collections::HashMap, sync::Arc};
+use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion::common::{DataFusionError, Result, GetExt};
+use datafusion::execution::context::Session;
+
+#[derive(Debug)]
+pub struct MyFormatFactory;
+
+impl GetExt for MyFormatFactory {
+  fn get_ext(&self) -> String { ".myfmt".to_string() }
+}
+
+impl FileFormatFactory for MyFormatFactory {
+  fn create(
+    &self,
+    state: &dyn Session,
+    format_options: &HashMap<String, String>,
+  ) -> Result<Arc<dyn FileFormat>, DataFusionError> {
+    // 1) baseline
+    let mut fmt = self.default();
+
+    // 2) session defaults/policy (read via state)
+    // 3) parse+validate format_options
+    // 4) configure fmt
+    Ok(fmt)
+  }
+
+  fn default(&self) -> Arc<dyn FileFormat> {
+    // return a concrete FileFormat impl as Arc<dyn FileFormat>
+    unimplemented!()
+  }
+
+  fn as_any(&self) -> &(dyn Any + 'static) { self }
+}
+```
+
+**Watchout:** the option ABI is `HashMap<String,String>` by design. Your team should treat those keys as “contracted API,” not casual strings.
+
+---
+
+## 2) `TableOptions`: the structured option-policy object
+
+### 2.1 What it contains
+
+`TableOptions` bundles per-format config plus a place to extend:
+
+```rust
+pub struct TableOptions {
+  pub csv: CsvOptions,
+  pub parquet: TableParquetOptions,
+  pub json: JsonOptions,
+  pub current_format: Option<ConfigFileType>,
+  pub extensions: Extensions,
+}
+```
+
+([Docs.rs][2])
+
+The docs explicitly describe `extensions` as optional customization hooks that “might include custom file handling logic [or] additional configuration parameters.” ([Docs.rs][2])
+
+### 2.2 The APIs that matter for “session policy → statement options → final behavior”
+
+**Session → options:**
+
+* `TableOptions::default_from_session_config(config: &ConfigOptions) -> TableOptions` ([Docs.rs][2])
+* `TableOptions::combine_with_session_config(&self, config: &ConfigOptions) -> TableOptions` ([Docs.rs][2])
+
+**Option application / mutation:**
+
+* `set_config_format(format: ConfigFileType)` (select which format the table ops assume) ([Docs.rs][2])
+* `set(key, value) -> Result<(), DataFusionError>` (string-key mutation; example key `"format.delimiter"`) ([Docs.rs][2])
+* `from_string_hash_map(settings: &HashMap<String,String>) -> Result<TableOptions, DataFusionError>` ([Docs.rs][2])
+* `alter_with_string_hash_map(&mut self, settings: &HashMap<String,String>) -> Result<(), DataFusionError>` ([Docs.rs][2])
+
+**Introspection (critical for your “LLM materialized planning artifacts”):**
+
+* `entries(&self) -> Vec<ConfigEntry>` (enumerate all config entries) ([Docs.rs][2])
+
+### 2.3 Why `TableOptions` is “canonical versioning surface” for your system
+
+If you’re trying to make *agent runs reproducible*, you want a single place where:
+
+* Session defaults are captured once (`default_from_session_config`)
+* Statement/table overrides are applied in a controlled way (`set` / `alter_with_string_hash_map`)
+* The final effective configuration can be serialized (`entries()`)
+
+That lets you define a stable “**option schema version**” for your environment:
+
+* **Persist `TableOptions.entries()`** alongside your plan snapshots
+* Version it with your own “planner environment version” (crate versions + registry composition + option policy hash)
+
+This avoids the failure mode where option mapping logic is scattered across:
+
+* SQL parser glue
+* ad-hoc per-format factories
+* optimizer rules
+* scan-node constructors
+
+### 2.4 Precedence rules (the big gotcha)
+
+DataFusion’s SQL docs define option precedence (high → low):
+
+1. `CREATE EXTERNAL TABLE` syntax
+2. `COPY` option tuples
+3. Session-level config defaults ([Apache DataFusion][6])
+
+It also warns about collisions: if both dedicated syntax and arbitrary option tuples specify the same thing, “Dedicated syntax … always takes precedence … the `OPTIONS` setting will be ignored.” ([Apache DataFusion][6])
+
+**Agent implication:** when diagnosing “why did DataFusion choose delimiter X,” you must attribute the winning source: dedicated syntax vs options vs session defaults.
+
+### 2.5 Error / silent-ignore behavior differs by format
+
+From the SQL format-options reference:
+
+* For **CSV/JSON**, unsupported options cause an error and fail the query. ([Apache DataFusion][6])
+* For **Parquet**, if a column-specific option targets a non-existent column, the option “will be ignored without error.” ([Apache DataFusion][6])
+
+**Practical watchout:** Parquet’s “ignore unknown column” behavior is a footgun for agents—your system may want an extra validation layer that asserts all `::col` references exist before planning.
+
+---
+
+## 3) How to decide “when and where to deploy” these surfaces
+
+### Deploy `FileFormatFactory` when…
+
+* You need **a new `STORED AS <format>` identity** in SQL workflows. ([Docs.rs][1])
+* You need **format variants** that must be centralized (policy, defaults, validation) and shouldn’t rely on every query specifying `OPTIONS(...)`.
+* You want to treat “format behavior” as a **registry artifact** (whitelist, override defaults, deterministic fingerprints).
+
+### Deploy `TableOptions` when…
+
+* You want a **single, serializable option-policy object** that explains plan outcomes and can be snapshotted (`entries()`).
+* You need to manage **precedence + defaults** explicitly across DDL/COPY/session. ([Apache DataFusion][6])
+* You plan to introduce **custom option keys** in a controlled way (`extensions`). ([Docs.rs][2])
+
+---
+
+## 4) Recommended “agent-safe” operational pattern
+
+1. **Pin and snapshot**:
+
+   * DataFusion version
+   * file-format registry (factory names + `get_ext()`)
+   * `TableOptions.entries()`
+
+2. **Make options strict by default**:
+
+   * Fail fast on unknown keys (like CSV/JSON behavior) unless you have a documented namespace for extension keys. ([Apache DataFusion][6])
+
+3. **Add Parquet guardrails**:
+
+   * Validate `compression::col` / `encoding::col` columns exist before executing, because DataFusion may ignore invalid ones silently. ([Apache DataFusion][6])
+
+If you want, I can follow this with a “wiring recipe” that shows how to:
+
+* build a `TableOptions` policy from `ConfigOptions`,
+* accept user SQL `OPTIONS(...)`,
+* validate and convert to a canonical `HashMap<String,String>` ABI,
+* and feed it into a custom `FileFormatFactory::create(...)` in a way that produces deterministic, explainable plan artifacts.
+
+[1]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/trait.FileFormatFactory.html "FileFormatFactory in datafusion::datasource::file_format - Rust"
+[2]: https://docs.rs/datafusion/latest/datafusion/config/struct.TableOptions.html "TableOptions in datafusion::config - Rust"
+[3]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingOptions.html "ListingOptions in datafusion::datasource::listing - Rust"
+[4]: https://docs.rs/datafusion/latest/datafusion/common/trait.GetExt.html "GetExt in datafusion::common - Rust"
+[5]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/index.html "datafusion::datasource::file_format - Rust"
+[6]: https://datafusion.apache.org/user-guide/sql/format_options.html "Format Options — Apache DataFusion  documentation"
+
+## Why this matters (and when to reach for it)
+
+If you’re building a **non-trivial “scan layer”** (specialized layouts, pre-indexed fragments, hybrid row/column encodings, schema evolution shims, filter→metadata pruning, etc.), the “real integration surface” is:
+
+**`DataSourceExec` → `FileScanConfig` → `FileSource` → `FileOpener`**
+
+`DataSourceExec` is the generic file-reading `ExecutionPlan`; it delegates file-format specifics to the `FileSource` trait for file-based data sources. ([Docs.rs][1])
+
+That means: **pushdowns + ordering + repartitioning + stats** for file scans are now expressed primarily through `FileScanConfig` + `FileSource` contracts—not through one-off `ParquetExec`/`CsvExec` nodes. ([Apache DataFusion][2])
+
+---
+
+## The new “extension-author contract” in one picture
+
+### 1) Schema is *owned upfront* by the `FileSource` (via `TableSchema`)
+
+DataFusion refactored file-scan APIs so **file sources require schema (including partition cols) at construction**, and `FileScanConfigBuilder` **no longer takes a separate schema parameter**. ([Apache DataFusion][2])
+
+`TableSchema` is the canonical container for:
+
+* **file schema** (columns physically in files),
+* **partition columns** (derived from directory structure),
+* **table schema** = file schema + partition cols. ([Docs.rs][3])
+
+`TableSchema::new(file_schema, partition_cols)` appends partition columns and caches the combined schema (and is the preferred constructor when you have both). ([Docs.rs][3])
+
+### 2) `FileScanConfig` is the “plan-level envelope”
+
+`FileScanConfig` is the base config for a file scan `DataSourceExec`. ([Docs.rs][4])
+It carries:
+
+* `object_store_url` (must be registered in the runtime env)
+* `file_groups` (partitioned list of `PartitionedFile`s)
+* `limit`, `output_ordering`, `file_compression_type`
+* `file_source: Arc<dyn FileSource>`
+* `batch_size`
+* `expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>`
+* `partitioned_by_file_group` (optimization declaration) ([Docs.rs][4])
+
+Notable semantics:
+
+* `file_groups`: each file must match `file_schema` **or be a subset**; missing columns are padded with NULLs; partitions may be read concurrently, files within a partition sequentially. ([Docs.rs][4])
+* `expr_adapter_factory`: used to adapt pushed-down filters/projections from logical schema → physical file schema. ([Docs.rs][4])
+* `partitioned_by_file_group=true`: declares output partitioning as hash partitioned on partition columns and can let optimizer skip repartitioning for joins/aggregates on those cols. **This is correctness-sensitive if mis-declared.** ([Docs.rs][4])
+
+### 3) `FileSource` is the “format-specific behavior + pushdown implementor”
+
+Required methods include:
+
+* `create_file_opener(object_store, base_config, partition) -> Result<Arc<dyn FileOpener>>`
+* `table_schema() -> &TableSchema` (unprojected full schema)
+* `with_batch_size(...)`
+* `metrics()`
+* `file_type()` ([Docs.rs][5])
+
+Key planning-time pushdown methods:
+
+* `try_pushdown_filters(filters, config) -> FilterPushdownPropagation<Arc<dyn FileSource>>` ([Docs.rs][5])
+* `try_pushdown_projection(projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>>`
+  If you accept a projection, you’re expected to handle it **in entirety, including partition columns**. If only part is pushdownable, use `SplitProjection` + `ProjectionOpener` to split pushdownable vs residual projection (helpers also handle partition column projection). ([Docs.rs][5])
+* `try_reverse_output(order, eq_properties) -> SortOrderPushdownResult<Arc<dyn FileSource>>`
+  Lets a source optimize for requested ordering (e.g., reverse row-groups). Returns `Exact | Inexact | Unsupported`. ([Docs.rs][5])
+* Repartitioning contract:
+
+  * `supports_repartitioning() -> bool` (default true; override false for formats that can’t be split by byte range—CSV with `newlines_in_values` is called out explicitly) ([Docs.rs][5])
+  * `repartitioned(target_partitions, repartition_file_min_size, output_ordering, config)` can redistribute file work; default uses `FileGroupPartitioner`. ([Docs.rs][5])
+
+---
+
+## FileScanConfigBuilder: what it *enforces* (and why that’s important)
+
+### Constructor contract (schema must already be in the FileSource)
+
+```rust
+pub fn new(object_store_url: ObjectStoreUrl, file_source: Arc<dyn FileSource>) -> Self
+// doc: "The file source must have a schema set via its constructor."
+```
+
+([Docs.rs][6])
+
+### Projection pushdown is “hard-required” if you call it
+
+`with_projection_indices(...) -> Result<Self>` builds `ProjectionExprs` against the **table schema** and then calls `file_source.try_pushdown_projection(...)`. If the `FileSource` returns `None`, the builder raises an error: “does not support projection pushdown.” ([Docs.rs][6])
+
+This is a big behavioral difference from older “best-effort projection” systems: if you want to support `FileScanConfigBuilder::with_projection_indices`, your `FileSource` must implement projection pushdown (or you must avoid calling it).
+
+### Builder knobs you’ll actually use in custom scans
+
+* `with_statistics(stats)` — “estimated overall statistics … taking filters into account” (defaults unknown). ([Docs.rs][6])
+* `with_file_groups(Vec<FileGroup>)`, `with_file_group(FileGroup)`, `with_file(PartitionedFile)` (grouping + concurrency semantics). ([Docs.rs][6])
+* `with_output_ordering(Vec<LexOrdering>)` — feeds ordering properties / sort pushdown surfaces. ([Docs.rs][6])
+* `with_batch_size(Option<usize>)` ([Docs.rs][6])
+* `with_expr_adapter(Some(factory))` — adapt filters/projections for schema drift/reordering/missing cols or “rewrite to precomputed values.” ([Docs.rs][6])
+
+---
+
+## The migration / upgrade checklist (extension-author “contract”)
+
+This is the part you want in your docs as a *standing compatibility checklist* for any custom scan implementation.
+
+### A) Schema plumbing refactor (TableSchema + new builder signature)
+
+**Breaking changes**:
+
+1. File source constructors require `TableSchema` (incl partition cols).
+2. `FileScanConfigBuilder::new(url, schema, source)` → `FileScanConfigBuilder::new(url, source)`
+3. `with_table_partition_cols(...)` removed; partition cols live inside `TableSchema`. ([Apache DataFusion][2])
+
+### B) Custom `FileFormat` must now accept a schema when producing a FileSource
+
+`FileFormat::file_source()` now takes `TableSchema`. ([Apache DataFusion][2])
+
+### C) Custom `FileSource` schema update method signature changed
+
+`FileSource::with_schema(SchemaRef)` → `FileSource::with_schema(TableSchema)`
+Guidance in the upgrade notes: most implementations only need to store `schema.file_schema()`; only advanced cases need file schema + partition cols + table schema simultaneously. ([Apache DataFusion][2])
+
+### D) Filter pushdown moved from `FileFormat` to `FileSource`
+
+`FileFormat::supports_filters_pushdown` is removed; implement `FileSource::try_pushdown_filters` instead (ParquetSource has an example). ([Apache DataFusion][2])
+
+### E) Statistics responsibilities moved: `FileSource` → `FileScanConfig`
+
+Two methods removed from `FileSource`: `with_statistics(...)` and `statistics()`. Stats are now managed on `FileScanConfig` and accessed via `config.statistics()`. Upgrade notes also call out: `FileScanConfig::statistics()` marks stats inexact when filters are present, for correctness. ([Apache DataFusion][2])
+
+### F) FileOpener trait change: `PartitionedFile` is now passed to openers
+
+If you implemented a custom `FileOpener`, you must accept `PartitionedFile` as an argument (needed for correct filter pushdown involving both partition cols and file cols). ([Apache DataFusion][2])
+
+### G) Schema adaptation changes: SchemaAdapter is gone; planning-time expr adaptation is the supported path
+
+* SchemaAdapterFactory / SchemaAdapter were removed; use `PhysicalExprAdapterFactory` (planning-time rewrite) instead. ([Apache DataFusion][2])
+* Partition-column replacement is no longer inside the adapter; it’s a preprocessing step (`replace_columns_with_literals()` happens before expression rewriting). ([Apache DataFusion][2])
+* You’ll still see deprecated hooks on built-in sources referencing the removal (e.g., `JsonSource::with_schema_adapter_factory` is deprecated since 52). ([Docs.rs][7])
+
+### H) Legacy exec nodes removed (don’t build plans out of them anymore)
+
+`ParquetExec`, `CsvExec`, `JsonExec`, `AvroExec` were deprecated and removed; `DataSourceExec` + `FileScanConfig` is the intended path. ([Apache DataFusion][2])
+
+---
+
+## “Where do I deploy this?” (value-case mapping)
+
+### Deploy a custom `FileSource` when you need **scan-time** semantics that DataFusion’s generic layer can exploit:
+
+* **Projection pushdown beyond “select columns”** (struct-field pruning, computed-expression pushdown into encoded data, partition col projection handling). ([Docs.rs][5])
+* **Predicate pushdown at scan** (and/or split pushdownable vs residual filters).
+* **Ordering-aware scans** (reverse row-groups / exploit monotonicity to satisfy `ORDER BY` cheaply). ([Docs.rs][5])
+* **Format-specific repartitioning** (byte-range splits or custom file grouping logic). ([Docs.rs][5])
+* **Schema drift mediation** via `expr_adapter_factory` instead of runtime batch shims. ([Docs.rs][6])
+
+For your “code-intel scan format” idea: this is the interface that determines whether your scan node:
+
+* participates in optimizer-visible projection/filter pushdowns,
+* can truthfully declare partitioning/order properties,
+* and exposes usable statistics to the optimizer (join algorithm choices, pruning effectiveness, etc.). ([Docs.rs][4])
+
+---
+
+## Watchouts (these are the footguns that bite extension authors)
+
+1. **Projection pushdown is not optional if you call builder projection APIs**
+   `FileScanConfigBuilder::with_projection_indices` errors if the `FileSource` doesn’t support projection pushdown. If you want “best-effort projection,” you need to *not call it* and instead layer a projection above the scan. ([Docs.rs][6])
+
+2. **Partition columns must be treated as *not in-file***
+   `TableSchema` distinguishes file schema vs partition cols; most scan implementations should operate on `schema.file_schema()` for file-level operations and only use `table_schema()` when you must speak in query-visible schema terms. ([Docs.rs][3])
+
+3. **`partitioned_by_file_group` is correctness-sensitive**
+   Setting it true tells the optimizer it can skip repartitioning on partition cols for joins/aggregations. If your file groups are *not actually organized by partition values*, you can end up with wrong results. ([Docs.rs][4])
+
+4. **Ordering claims are correctness-sensitive**
+   If you declare `output_ordering` or return `Exact` ordering pushdown incorrectly, the optimizer can remove sorts it shouldn’t. Keep `Inexact` unless you can truly guarantee the ordering. ([Docs.rs][5])
+
+5. **Byte-range repartitioning is not universally safe**
+   If record boundaries can’t be reliably found from byte offsets (CSV with newlines in values is the canonical example), override `supports_repartitioning()` to false. ([Docs.rs][5])
+
+6. **Stats moved; don’t stash them in the FileSource anymore**
+   If you’re migrating older code, remove internal stats caching in `FileSource` and treat `FileScanConfig::statistics()` as the authoritative access point (it also handles “filters make stats inexact”). ([Apache DataFusion][2])
+
+---
+
+If you want the next increment: I can write an “agent-ready implementation template” for a **custom FileSource + FileOpener** that (a) supports projection pushdown via `SplitProjection`, (b) supports filter pushdown with partition literal substitution, and (c) cleanly uses `expr_adapter_factory` for schema drift—structured as a minimal compile-able Rust module skeleton with explicit TODOs and invariants.
+
+[1]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.DataSourceExec.html "DataSourceExec in datafusion::datasource::memory - Rust"
+[2]: https://datafusion.apache.org/library-user-guide/upgrading.html "Upgrade Guides — Apache DataFusion  documentation"
+[3]: https://docs.rs/datafusion/latest/datafusion/datasource/table_schema/struct.TableSchema.html "TableSchema in datafusion::datasource::table_schema - Rust"
+[4]: https://docs.rs/datafusion-datasource/latest/datafusion_datasource/file_scan_config/struct.FileScanConfig.html "FileScanConfig in datafusion_datasource::file_scan_config - Rust"
+[5]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/trait.FileSource.html "FileSource in datafusion::datasource::physical_plan - Rust"
+[6]: https://docs.rs/datafusion-datasource/latest/src/datafusion_datasource/file_scan_config.rs.html "file_scan_config.rs - source"
+[7]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.JsonSource.html "JsonSource in datafusion::datasource::physical_plan - Rust"
+
+## Mental model: “standalone optimizer” = a pure LogicalPlan rewrite harness
+
+DataFusion’s planning pipeline is explicitly staged: **AnalyzerRules** enforce semantic validity (e.g., type coercion), and **OptimizerRules** rewrite the **LogicalPlan** to improve efficiency while preserving semantics. ([Docs.rs][1])
+
+Running the optimizer “standalone” means you can take *any* `LogicalPlan` (from SQL planner, DataFrame API, or hand-built), run the rule pipeline with a controlled config, and capture **per-rule plan deltas** without going through `SessionContext` planning. ([Apache DataFusion][2])
+
+---
+
+## 1) Core API surface: `Optimizer` + observer hook
+
+### Entry points
+
+* `Optimizer::new()` creates an optimizer using the “recommended list of rules.” ([Docs.rs][3])
+* `Optimizer::with_rules(rules)` creates an optimizer with an explicit rule list. ([Docs.rs][3])
+* `Optimizer::optimize(plan, config, observer)` applies rules and invokes an observer after each rule application. The observer type is `FnMut(&LogicalPlan, &dyn OptimizerRule)`. ([Docs.rs][3])
+
+### Minimal “offline compilation” harness
+
+```rust
+use std::sync::Arc;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion::optimizer::{Optimizer, OptimizerContext, OptimizerRule};
+
+fn main() -> datafusion::common::Result<()> {
+    let initial: LogicalPlan = LogicalPlanBuilder::empty(false).build()?;
+
+    let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> = vec![
+        // Arc::new(MyRule::default()),
+    ];
+
+    let optimizer = Optimizer::with_rules(rules);
+
+    // max passes is critical when rules interact / need convergence
+    let config = OptimizerContext::new().with_max_passes(16);
+
+    let mut step: usize = 0;
+    let optimized = optimizer.optimize(initial, &config, |plan, rule| {
+        step += 1;
+        println!("#{} after {}:\n{}", step, rule.name(), plan.display_indent());
+    })?;
+
+    println!("FINAL:\n{}", optimized.display_indent());
+    Ok(())
+}
+```
+
+This is the same control flow DataFusion’s docs recommend for standalone usage, including the observer printing `rule.name()` and `plan.display_indent()`. ([Apache DataFusion][2])
+
+### What the observer actually buys you
+
+Because `optimize(...)` invokes the observer “after each call,” you can materialize:
+
+* **rule-by-rule snapshots** (for golden tests / diffing)
+* **rule ordering sensitivity** diagnostics (see what breaks when reordering)
+* **early detection** of a rule that introduces instability (plan oscillation across passes) ([Docs.rs][3])
+
+---
+
+## 2) The config contract: `OptimizerConfig` trait and why it matters offline
+
+`Optimizer::optimize` takes `&dyn OptimizerConfig`. The trait requires:
+
+* `query_execution_start_time()` — used as the value for `now()` (important for determinism)
+* `alias_generator()` — generates unique aliases for subqueries
+* `options()` — returns `Arc<ConfigOptions>`
+* optional `function_registry()` ([Docs.rs][4])
+
+### Determinism watchout: “now()” is config-dependent
+
+If your plan contains `now()` / time-dependent expressions and you run expression simplification, **the chosen timestamp is driven by `query_execution_start_time()`**. For reproducible rulepack experiments, set this explicitly. ([Docs.rs][4])
+
+---
+
+## 3) `OptimizerContext`: the built-in standalone `OptimizerConfig`
+
+`OptimizerContext` is explicitly “a standalone `OptimizerConfig`” for use independent of DataFusion’s config management. ([Docs.rs][5])
+
+### Methods you actually use in harnesses
+
+* `OptimizerContext::new()`
+* `OptimizerContext::new_with_config_options(Arc<ConfigOptions>)`
+* `with_max_passes(u8)` — “how many times to attempt to optimize the plan”
+* `with_skip_failing_rules(bool)` — skip rule errors vs fail the query
+* `with_query_execution_start_time(DateTime<Utc>)` — control `now()`
+* `filter_null_keys(bool)` — enable/disable the **filter-null-join-keys** behavior ([Docs.rs][5])
+
+### Mapping to config keys (important for “policy as data”)
+
+Several `OptimizerContext` toggles correspond directly to config keys exposed in the global config table:
+
+* `datafusion.optimizer.max_passes` (default shown as 3)
+* `datafusion.optimizer.skip_failed_rules`
+* `datafusion.optimizer.filter_null_join_keys` ([Apache DataFusion][6])
+
+**Key design choice for your system:** treat `ConfigOptions` + `OptimizerContext` as part of the plan fingerprint. Otherwise you’ll see “same SQL, different plan” with no obvious cause.
+
+### “Rulepack experiments” pattern: isolate rule ordering from config effects
+
+Use `new_with_config_options(...)` to pin *all* optimizer knobs, not just max passes:
+
+```rust
+use std::sync::Arc;
+use datafusion::common::config::ConfigOptions;
+use datafusion::optimizer::OptimizerContext;
+
+let mut opts = ConfigOptions::new();
+
+// Examples from documented config keys
+opts.optimizer.max_passes = 8;                 // == datafusion.optimizer.max_passes
+opts.optimizer.skip_failed_rules = true;       // == datafusion.optimizer.skip_failed_rules
+opts.optimizer.filter_null_join_keys = true;   // == datafusion.optimizer.filter_null_join_keys
+opts.optimizer.enable_sort_pushdown = true;    // == datafusion.optimizer.enable_sort_pushdown
+
+let ctx = OptimizerContext::new_with_config_options(Arc::new(opts));
+```
+
+`enable_sort_pushdown` is a good example of a knob that can dramatically change plans/behavior and is explicitly documented as enabled by default and returning “inexact ordering” (sort kept for correctness, but scan order optimized). ([Apache DataFusion][6])
+
+---
+
+## 4) `OptimizerRule` mechanics that matter when you’re doing “what-if” experiments
+
+### Rule contract: semantics-preserving rewrite
+
+Optimizer rules must compute the same results; semantic changes belong in AnalyzerRules. ([Docs.rs][7])
+
+### Rewrite API: `Transformed<LogicalPlan>`
+
+Rules implement `rewrite(plan, config) -> Result<Transformed<LogicalPlan>, DataFusionError>`, returning `Transformed::yes` if changed, `Transformed::no` otherwise. ([Docs.rs][8])
+
+### Recursion control: `apply_order() -> Option<ApplyOrder>`
+
+`ApplyOrder` specifies whether the optimizer handles recursion:
+
+* `Some(TopDown)` / `Some(BottomUp)` → optimizer applies rule recursively for you
+* `None` → your rule must recurse itself ([Docs.rs][9])
+
+**Why agents care:** recursion choice affects both performance and correctness. If you return `None` and forget to recurse into children, your rule silently becomes “shallow-only,” which can *look* correct in small tests but fail on nested plans.
+
+### Deprecated footgun: `supports_rewrite`
+
+Many rule impls still show `supports_rewrite`, but it’s deprecated (no longer used since 47.0.0). Don’t build new behavior around it. ([Docs.rs][8])
+
+---
+
+## 5) Observer-driven “diff harness” design (goldens + diagnostics)
+
+### Use schema-including plan strings for stable comparisons
+
+Prefer `display_indent_schema()` when snapshotting, because it includes schema annotations that catch “the plan text is identical but the types changed” cases. It’s documented and used in examples. ([Docs.rs][10])
+
+### Canonical snapshot structure
+
+Capture (at minimum):
+
+* `pass_index` (implicit; infer by counting rule cycles if needed)
+* `step_index` (monotonic counter inside observer)
+* `rule_name`
+* `plan_display_indent_schema` (or indent-only if you want smaller diffs)
+* `config_digest` (hash/serialization of relevant `ConfigOptions` + `OptimizerContext` knobs)
+
+```rust
+#[derive(Clone)]
+struct Snapshot {
+    step: usize,
+    rule: String,
+    plan: String,
+}
+
+let mut out: Vec<Snapshot> = vec![];
+let mut step = 0usize;
+
+let optimized = optimizer.optimize(plan, &ctx, |p, r| {
+    step += 1;
+    out.push(Snapshot {
+        step,
+        rule: r.name().to_string(),
+        plan: format!("{}", p.display_indent_schema()),
+    });
+})?;
+```
+
+This gives you:
+
+* deterministic per-rule artifacts
+* rule ordering experiments: run multiple rule lists and compare `out`
+* failure localization: the first snapshot that diverges is your breakpoint ([Docs.rs][3])
+
+---
+
+## 6) High-value policy knobs for “offline compilation” experiments
+
+When you’re evaluating rulepack changes, pin these because they drive major plan shape changes:
+
+* `datafusion.optimizer.max_passes` — too low can prevent convergence; too high increases optimization time (defaults to 3). ([Apache DataFusion][6])
+* `datafusion.optimizer.skip_failed_rules` — useful for exploration, but can mask real issues; produces warnings and continues. ([Apache DataFusion][6])
+* `datafusion.optimizer.repartition_*` knobs influence whether logical/physical planning aims for parallelism via repartitioning (aggregations, joins, windows, scans). ([Apache DataFusion][6])
+* dynamic filter pushdown flags (`enable_dynamic_filter_pushdown` and the per-operator variants) can alter scan pruning behavior significantly. ([Apache DataFusion][6])
+
+---
+
+## 7) Watchouts (the ones that break rulepack experiments)
+
+1. **Expression/field naming stability is correctness-critical**
+   DataFusion uses expression names as identifiers across plan stages; optimizer rewrites must not accidentally change them. (This is called out in the optimizer guide’s “Expression Naming” section.) ([Apache DataFusion][11])
+
+2. **`skip_failed_rules` can turn “broken rule” into “silent no-op”**
+   Great for exploratory harnesses; risky for production because you may ship a configuration that disables key optimizations via warnings. ([Apache DataFusion][6])
+
+3. **Time-dependent rewrites need pinned start time**
+   If you’re snapshotting or comparing rulepacks, set `with_query_execution_start_time(...)` to a fixed value or your goldens can churn. ([Docs.rs][4])
+
+---
+
+## Adjacent note: the same “standalone optimizer” idea exists for physical plans
+
+If your “offline compilation” harness wants to go further, DataFusion also has a **rule-based physical optimizer** (`PhysicalOptimizer` + `PhysicalOptimizerRule`) in the physical optimizer crate/re-exports. ([Docs.rs][12])
+
+If you want, the next useful increment is a single “compiler harness” pattern that runs:
+**Analyzer → Logical Optimizer (with observer snapshots) → create physical plan → Physical optimizer (with snapshots)** and emits a fully versioned plan artifact bundle.
+
+[1]: https://docs.rs/datafusion/latest/datafusion/?utm_source=chatgpt.com "datafusion - Rust"
+[2]: https://datafusion.apache.org/library-user-guide/query-optimizer.html "Query Optimizer — Apache DataFusion  documentation"
+[3]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Optimizer.html "Optimizer in datafusion::optimizer - Rust"
+[4]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerConfig.html?utm_source=chatgpt.com "OptimizerConfig in datafusion::optimizer - Rust"
+[5]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.OptimizerContext.html "OptimizerContext in datafusion::optimizer - Rust"
+[6]: https://datafusion.apache.org/user-guide/configs.html "Configuration Settings — Apache DataFusion  documentation"
+[7]: https://docs.rs/deltalake/latest/deltalake/datafusion/optimizer/trait.OptimizerRule.html?utm_source=chatgpt.com "OptimizerRule in deltalake::datafusion::optimizer - Rust"
+[8]: https://docs.rs/datafusion/latest/datafusion/optimizer/scalar_subquery_to_join/struct.ScalarSubqueryToJoin.html "ScalarSubqueryToJoin in datafusion::optimizer::scalar_subquery_to_join - Rust"
+[9]: https://docs.rs/datafusion/latest/datafusion/optimizer/optimizer/enum.ApplyOrder.html?utm_source=chatgpt.com "ApplyOrder in datafusion::optimizer::optimizer - Rust"
+[10]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/enum.LogicalPlan.html?utm_source=chatgpt.com "LogicalPlan in datafusion_expr::logical_plan - Rust"
+[11]: https://datafusion.apache.org/_sources/library-user-guide/query-optimizer.md.txt "datafusion.apache.org"
+[12]: https://docs.rs/deltalake/latest/deltalake/datafusion/physical_optimizer/optimizer/struct.PhysicalOptimizer.html?utm_source=chatgpt.com "PhysicalOptimizer in deltalake::datafusion"
+
+## Mental model: `TableSource` decides *what can be pushed*, `TableProvider` builds *what will run*
+
+DataFusion intentionally splits “planning-time info about a table” from “physical execution”:
+
+* **`TableSource`** is used during *logical planning + optimizations*; it exposes schema + pushdown capability probes like `supports_filters_pushdown(...)`. It exists so projects can reuse DataFusion logical plans without depending on the execution engine. ([Docs.rs][1])
+* **`TableProvider`** is used for *physical execution planning*; it must be able to produce an `ExecutionPlan` (via `scan`) and optionally handle inserts/updates/deletes. ([Docs.rs][2])
+* **`DefaultTableSource`** is the adapter that wraps an `Arc<dyn TableProvider>` and exposes it as a `TableSource` to the logical planner. ([Docs.rs][1])
+
+Practical implication for “CPG-native” sources: **pushdown begins as a planning contract** (TableSource / `supports_filters_pushdown`) and only becomes real if **your `TableProvider::scan` can exploit the passed `projection/filters/limit`**.
+
+---
+
+## 1) `TableProvider::scan`: the physical planning choke point
+
+### Signature (and what DataFusion expects you to do)
+
+```rust
+async fn scan(
+  &self,
+  state: &dyn Session,
+  projection: Option<&Vec<usize>>,
+  filters: &[Expr],
+  limit: Option<usize>,
+) -> Result<Arc<dyn ExecutionPlan>, DataFusionError>
+```
+
+([Docs.rs][2])
+
+Key contract statement: `scan` must “Create an `ExecutionPlan` for scanning the table with optionally specified projection, filter and limit” and that `ExecutionPlan` is responsible for scanning partitions “in a streaming, parallelized fashion.” ([Docs.rs][2])
+
+### Projection semantics (projection pushdown)
+
+* `projection` is **indexes into `Self::schema()` fields**, and the scan should return **only those columns** in the **specified order**. ([Docs.rs][2])
+* DataFusion uses this for **projection pushdown**: scanning only columns actually used by the query. ([Docs.rs][2])
+
+**Critical watchout: projection can omit columns required only for filters**
+DataFusion explicitly warns that *if a column appears only in a filter that is fully pushed down*, the scan’s `projection` may **not include** that column—even though you still need it to evaluate the predicate. The docs illustrate `SELECT t.a FROM t WHERE t.b > 5` where the pushed-down scan receives `projection=(t.a)` and `filter=(t.b > 5)`; internally, evaluating the predicate still requires `t.b`. ([Docs.rs][2])
+
+For implementors: **treat `projection` as “what to output”, not “what you’re allowed to read.”**
+
+### Filter semantics (filter pushdown)
+
+* `filters` are a list of boolean `Expr`s; **all must evaluate to `true`** for a row to be returned (they’re effectively AND’ed). ([Docs.rs][2])
+* You only receive filters here if you override `supports_filters_pushdown`; otherwise the default behavior is “no pushdown” and `filters` will be empty. ([Docs.rs][2])
+
+### Limit semantics (limit pushdown)
+
+* If `limit` is specified, the scan **must produce at least that many rows** (it may return more). DataFusion tries to push limits down for performance (“Limit Pushdown”). ([Docs.rs][2])
+* **Hard constraint:** if any pushed filters are `Inexact`, the **LIMIT cannot be pushed down**, because inexact filtering can’t guarantee enough qualifying rows remain; pushing the limit could yield too few rows for the final result. ([Docs.rs][2])
+
+---
+
+## 2) `supports_filters_pushdown`: per-filter contract and the Exact/Inexact/Unsupported truth table
+
+### Signature + invariants
+
+`TableProvider` exposes:
+
+```rust
+fn supports_filters_pushdown(
+  &self,
+  filters: &[&Expr],
+) -> Result<Vec<TableProviderFilterPushDown>, DataFusionError>
+```
+
+and:
+
+* The returned `Vec` **must have one element per input filter**, or DataFusion will error. ([Docs.rs][2])
+* Default implementation returns `Unsupported` for all filters → no filters passed to `scan`. ([Docs.rs][2])
+
+**Planning-time nuance:** only **non-volatile** expressions are passed to `supports_filters_pushdown`. ([Docs.rs][1])
+
+### `TableProviderFilterPushDown` semantics (the core meaning)
+
+The enum is:
+
+```rust
+enum TableProviderFilterPushDown { Unsupported, Inexact, Exact }
+```
+
+([Docs.rs][3])
+
+Meaning (load-bearing correctness rules):
+
+* **Unsupported**: filter is not pushed; DataFusion will handle it above the scan. ([Docs.rs][3])
+* **Exact**: provider guarantees it will omit all rows that do not pass the filter; DataFusion **will not** add an extra filter above the scan. ([Docs.rs][3])
+* **Inexact**: provider may still return some rows that do not pass; DataFusion will add an additional filter after scan to ensure correctness. ([Docs.rs][3])
+
+Also note the boolean semantics: rows that evaluate to `true` pass; `false` or `NULL` are omitted. Your “Exact” implementation must match this tri-valued behavior. ([Docs.rs][3])
+
+### What actually gets passed into `scan(filters=...)`
+
+DataFusion’s custom-table-provider guide makes the important operational point:
+
+> For filters that can be pushed down, they’ll be passed to `scan` as the `filters` parameter…
+> For `Inexact`, DataFusion will apply filters again after the scan. ([Apache DataFusion][4])
+
+So the working model is:
+
+* You declare pushdown support via `supports_filters_pushdown`.
+* DataFusion passes accepted filters into `scan`.
+* For `Inexact`, DataFusion **also** applies a `Filter` operator after scan.
+
+---
+
+## 3) Implementation pattern: safe pushdown classification (for agents writing a provider)
+
+### The “never wrong” default
+
+If you’re unsure: return `Unsupported` for everything. It’s slower, but correct. ([Docs.rs][3])
+
+### Common “Exact” cases (indexable and semantically complete)
+
+Mark `Exact` only when your scan can fully enforce the predicate for all rows:
+
+* equality / range predicates on indexed columns
+* partition pruning where partition predicate *fully determines* row qualification
+* remote DB where the DB filter semantics match DataFusion’s (including NULL behavior)
+
+DataFusion’s docs explicitly call out that some providers can evaluate filters more efficiently (e.g., “by using an index”). ([Docs.rs][2])
+
+### Common “Inexact” cases (coarse pruning; must be superset-safe)
+
+Use `Inexact` when you can reduce IO/CPU but can’t guarantee perfection:
+
+* bloom filters / probabilistic structures
+* min/max statistics pruning that can only exclude some row-groups/partitions
+* prefix filters or token indexes that return false positives
+
+**Correctness invariant:** Inexact pushdown must not drop any row that would pass the filter; it may only include extras (false positives), which DataFusion removes with the post-scan filter. ([Docs.rs][3])
+
+### Watchout: double evaluation and “filters with side effects”
+
+Because `Inexact` leads to an additional post-scan `Filter`, the same expression can be evaluated multiple times. A real-world bug report describes a case where `RANDOM()` ends up evaluated twice, leading to fewer rows sampled than expected. ([GitHub][5])
+
+Mitigations:
+
+* Rely on DataFusion’s “only non-volatile expressions are passed” rule, but **don’t assume it’s impossible** to hit bad behavior (e.g., UDF volatility annotations, misclassification, or hidden nondeterminism). ([Docs.rs][1])
+* If you ever accept “nondeterministic-but-marked-stable” predicates, prefer `Unsupported` (let DataFusion evaluate once in a single place).
+
+---
+
+## 4) How to build a “CPG-native” provider that actually benefits from pushdown
+
+### What the optimizer can exploit if you implement these contracts
+
+When you implement pushdowns correctly, DataFusion can:
+
+* avoid scanning unused columns (projection pushdown)
+* reduce rows read early (filter pushdown)
+* sometimes stop earlier (limit pushdown; but blocked by any inexact pushdown) ([Docs.rs][2])
+
+### The minimal “indexed provider” shape
+
+1. **`supports_filters_pushdown`** recognizes filter shapes you can exploit (e.g., `col = literal`, `col IN (...)`, `col BETWEEN ...`).
+
+   * Return `Exact` if your index is exact.
+   * Return `Inexact` if it’s coarse/probabilistic.
+   * Return `Unsupported` otherwise. ([Docs.rs][2])
+
+2. **`scan`**:
+
+   * compute an *internal read set*: output `projection` columns **plus** any filter-only columns needed to evaluate pushed filters (because projection may omit them). ([Docs.rs][2])
+   * build an `ExecutionPlan` that:
+
+     * partitions work (so it can run in parallel),
+     * applies any pushdownable filters internally (exact or inexact pruning),
+     * returns only projected columns in requested order. ([Docs.rs][2])
+
+3. **Limit**:
+
+   * treat `limit` as a hint to reduce work (early stop), but do **not** apply it if you accepted any `Inexact` filters (DataFusion itself won’t push it down in that case). ([Docs.rs][2])
+
+### Bonus: `scan_with_args` for forward-compatible ordering pushdown
+
+DataFusion provides `scan_with_args` using `ScanArgs` / `ScanResult`, and notes providers can override it to access additional parameters like upcoming `preferred_ordering` that may not be available through `scan`. ([Docs.rs][2])
+
+For “CPG-native” sources, this is the hook you’ll likely want once you start optimizing for TopK / pagination / “fetch next page ordered by …” cases.
+
+---
+
+## 5) Agent checklist: pushdown correctness and performance in one pass
+
+* **Projection**
+
+  * Output schema matches `projection` order and types.
+  * Internally read filter-only columns even if not projected. ([Docs.rs][2])
+
+* **Filters**
+
+  * Override `supports_filters_pushdown` or `scan` sees `filters=[]`. ([Docs.rs][2])
+  * Return vector length exactly matches input filter count. ([Docs.rs][2])
+  * `Exact` only if fully semantically correct (including NULL behavior). ([Docs.rs][3])
+  * `Inexact` only if it returns a superset; expect DataFusion to re-filter afterward. ([Docs.rs][3])
+  * Beware double-evaluation edge cases with nondeterministic functions. ([GitHub][5])
+
+* **Limit**
+
+  * If you apply limit early, ensure it doesn’t combine with `Inexact` pushdown (not allowed). ([Docs.rs][2])
+
+This is the core set of contracts that determines whether DataFusion can treat your provider as “pushdown-capable” (planner exploits it) vs “opaque” (planner does extra work above your scan).
+
+[1]: https://docs.rs/datafusion-expr/latest/datafusion_expr/trait.TableSource.html "TableSource in datafusion_expr - Rust"
+[2]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html "TableProvider in datafusion::datasource - Rust"
+[3]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/enum.TableProviderFilterPushDown.html "TableProviderFilterPushDown in datafusion::datasource::provider - Rust"
+[4]: https://datafusion.apache.org/_sources/library-user-guide/custom-table-providers.md.txt "datafusion.apache.org"
+[5]: https://github.com/apache/datafusion/issues/13268?utm_source=chatgpt.com "Filters on RANDOM() are applied incorrectly when ..."

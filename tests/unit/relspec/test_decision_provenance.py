@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from relspec.compiled_policy import CompiledExecutionPolicy
 from relspec.decision_provenance import (
     DecisionOutcome,
@@ -20,6 +18,7 @@ from relspec.decision_provenance import (
 from relspec.decision_recorder import DecisionRecorder
 from relspec.inference_confidence import high_confidence, low_confidence
 from serde_artifacts import DecisionProvenanceGraphArtifact
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 # ---------------------------------------------------------------------------
 # EvidenceRecord
@@ -39,8 +38,12 @@ class TestEvidenceRecord:
     def test_frozen(self) -> None:
         """EvidenceRecord is immutable."""
         rec = EvidenceRecord(source="stats", key="k", value="v")
-        with pytest.raises(AttributeError):
-            rec.source = "other"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: rec,
+            attribute="source",
+            attempted_value="other",
+            expected_exception=AttributeError,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -562,8 +565,12 @@ class TestDecisionProvenanceGraphArtifact:
             decision_count=0,
             root_count=0,
         )
-        with pytest.raises(AttributeError):
-            artifact.run_id = "other"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: artifact,
+            attribute="run_id",
+            attempted_value="other",
+            expected_exception=AttributeError,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from datafusion_engine.workload.classifier import WorkloadClass
 from datafusion_engine.workload.session_profiles import (
     WorkloadSessionProfile,
     workload_session_profile,
 )
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 
 class TestWorkloadSessionProfile:
@@ -27,8 +26,12 @@ class TestWorkloadSessionProfile:
     def test_frozen_immutable(self) -> None:
         """Profile is frozen and immutable."""
         profile = WorkloadSessionProfile(target_partitions=4)
-        with pytest.raises(AttributeError):
-            profile.target_partitions = 8  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: profile,
+            attribute="target_partitions",
+            attempted_value=8,
+            expected_exception=AttributeError,
+        )
 
 
 class TestWorkloadSessionProfileLookup:

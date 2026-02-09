@@ -16,6 +16,7 @@ from semantics.view_kinds import (
     ViewKindParams,
     ViewKindStr,
 )
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 # ---------------------------------------------------------------------------
 # Expected raw string values (the canonical set from the old Literal types)
@@ -257,5 +258,9 @@ class TestViewKindParams:
     def test_frozen(self) -> None:
         """Instances must be immutable (frozen)."""
         params = ViewKindParams()
-        with pytest.raises(AttributeError):
-            params.span_unit = "byte"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: params,
+            attribute="span_unit",
+            attempted_value="byte",
+            expected_exception=AttributeError,
+        )

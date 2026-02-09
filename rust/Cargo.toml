@@ -43,11 +43,20 @@ datafusion-physical-expr-adapter = "51.0.0"
 datafusion-physical-expr-common = "51.0.0"
 datafusion-macros = "51.0.0"
 datafusion-sql = "51.0.0"
+datafusion-tracing = "51.0.0"
+instrumented-object-store = "51.0.0"
 object_store = "0.12.5"
+opentelemetry = "0.31.0"
+opentelemetry-otlp = { version = "0.31.0", features = ["trace", "http-proto", "http-json", "grpc-tonic"] }
+opentelemetry_sdk = "0.31.0"
 pyo3 = "0.26"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.49.0", features = ["rt-multi-thread"] }
+tracing = "0.1"
+tracing-opentelemetry = "0.32.1"
+tracing-subscriber = "0.3"
+url = "2.5.4"
 
 [profile.release]
 lto = true

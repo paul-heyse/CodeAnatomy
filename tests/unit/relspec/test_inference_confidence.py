@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from relspec.inference_confidence import (
     InferenceConfidence,
     high_confidence,
     low_confidence,
 )
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 
 class TestInferenceConfidence:
@@ -41,8 +40,12 @@ class TestInferenceConfidence:
     def test_frozen(self) -> None:
         """Verify struct is immutable."""
         conf = InferenceConfidence(confidence_score=0.5)
-        with pytest.raises(AttributeError):
-            conf.confidence_score = 0.9  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: conf,
+            attribute="confidence_score",
+            attempted_value=0.9,
+            expected_exception=AttributeError,
+        )
 
     def test_confidence_boundary_values(self) -> None:
         """Construct at boundary values of 0 and 1."""

@@ -1,5 +1,5 @@
 ---
-name: datafusion-and-deltalake-stack
+name: dfdl_ref
 description: DataFusion + DeltaLake operations manual for this repo. DataFusion is the core query engine; DeltaLake provides the storage layer and integrates tightly via scan providers, schema bridging, and predicate pushdown. Use lookup + local probes; do not guess APIs.
 allowed-tools: Read, Grep, Glob, Bash
 ---
@@ -22,4 +22,6 @@ When uncertain:
 - Advanced Rust integration (PyO3 packaging, wheels, CI, native module distribution): reference/datafusion_deltalake_advanced_rust_integration.md
 - DataFusionMixins trait (Delta snapshot schema + predicate parsing helpers): reference/deltalake_datafusionmixins.md
 - Plan combination (composing DataFusion plans via joins/unions/CTEs, Delta integration, parameterized queries, plan serialization): reference/datafusion_plan_combination.md
+- Rust LogicalPlan programmatic construction (LogicalPlanBuilder, Expr, schema/DFSchema, plan rewriting via TreeNode, extensibility, serialization): reference/Datafusion_logicplan_rust.md
+- DataFusion tracing (Rust community extension: execution spans, metrics capture, partial-result previews, rule-phase instrumentation, OpenTelemetry export): reference/datafusion-tracing.md
 - DeltaLake core (format/protocol, client APIs, 3-layer model): reference/deltalake.md

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import msgspec
 
-from engine.spec_builder import build_spec_from_ir
+from engine.spec_builder import SemanticExecutionSpec, build_spec_from_ir
 from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
 
 
@@ -52,3 +52,39 @@ def test_build_spec_from_ir_produces_rust_compatible_payload() -> None:
     assert any(rule["name"] == "strict_safety" for rule in payload["rule_intents"])
     assert payload["runtime"]["compliance_capture"] is False
     assert payload["runtime"]["tuner_mode"] == "Off"
+
+
+def test_runtime_tracing_contract_allows_new_preset_and_redaction_fields() -> None:
+    runtime = {
+        "tracing_preset": "MaximalNoData",
+        "tracing": {
+            "enabled": True,
+            "rule_mode": "PhaseOnly",
+            "plan_diff": True,
+            "preview_limit": 0,
+            "preview_redaction_mode": "DenyList",
+            "preview_redacted_columns": ["token"],
+            "preview_redaction_token": "[MASKED]",
+            "otlp_protocol": "http/protobuf",
+        },
+    }
+
+    payload = {
+        "version": 1,
+        "input_relations": (),
+        "view_definitions": (),
+        "join_graph": {"edges": (), "constraints": ()},
+        "output_targets": (),
+        "rule_intents": (),
+        "rulepack_profile": "Default",
+        "parameter_templates": (),
+        "runtime": runtime,
+    }
+
+    spec = msgspec.convert(payload, type=SemanticExecutionSpec)
+    built = msgspec.to_builtins(spec)
+
+    assert built["runtime"]["tracing_preset"] == "MaximalNoData"
+    assert built["runtime"]["tracing"]["preview_redaction_mode"] == "DenyList"
+    assert built["runtime"]["tracing"]["preview_redaction_token"] == "[MASKED]"
+    assert built["runtime"]["tracing"]["otlp_protocol"] == "http/protobuf"

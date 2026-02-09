@@ -15,6 +15,7 @@ from relspec.policy_calibrator import (
     ExecutionMetricsSummary,
     calibrate_from_execution_metrics,
 )
+from tests.test_helpers.immutability import assert_immutable_assignment
 
 # ---------------------------------------------------------------------------
 # CalibrationBounds
@@ -45,8 +46,12 @@ class TestCalibrationBoundsDefaults:
     def test_frozen(self) -> None:
         """CalibrationBounds struct is immutable."""
         b = CalibrationBounds()
-        with pytest.raises(AttributeError):
-            b.min_high_fanout_threshold = 99  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: b,
+            attribute="min_high_fanout_threshold",
+            attempted_value=99,
+            expected_exception=AttributeError,
+        )
 
 
 class TestDefaultCalibrationBounds:
@@ -164,8 +169,12 @@ class TestCalibrationThresholds:
     def test_frozen(self) -> None:
         """CalibrationThresholds is immutable."""
         t = CalibrationThresholds()
-        with pytest.raises(AttributeError):
-            t.high_fanout_threshold = 99  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: t,
+            attribute="high_fanout_threshold",
+            attempted_value=99,
+            expected_exception=AttributeError,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -588,8 +597,12 @@ class TestPolicyCalibrationResult:
             bounds=DEFAULT_CALIBRATION_BOUNDS,
             mode="off",
         )
-        with pytest.raises(AttributeError):
-            result.mode = "apply"  # type: ignore[misc]
+        assert_immutable_assignment(
+            factory=lambda: result,
+            attribute="mode",
+            attempted_value="apply",
+            expected_exception=AttributeError,
+        )
 
     def test_result_has_all_fields(self) -> None:
         """Result contains all expected fields."""

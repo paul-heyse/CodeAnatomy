@@ -13,6 +13,20 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use serde::{Deserialize, Serialize};
 
+/// Stable summary payload for trace/observability consumers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TraceMetricsSummary {
+    pub output_rows: u64,
+    pub output_batches: u64,
+    pub output_bytes: u64,
+    pub elapsed_compute_nanos: u64,
+    pub spill_file_count: u64,
+    pub spilled_bytes: u64,
+    pub spilled_rows: u64,
+    pub selectivity: Option<f64>,
+    pub operator_count: usize,
+}
+
 /// Real execution metrics collected from the executed plan tree.
 ///
 /// Replaces the synthetic metrics at materializer.rs:208-214 once the
@@ -53,6 +67,21 @@ pub struct OperatorMetricSummary {
     pub spilled_bytes: u64,
     /// Current memory usage for this operator.
     pub memory_usage: u64,
+}
+
+/// Build a stable summary payload from collected physical metrics.
+pub fn summarize_collected_metrics(metrics: &CollectedMetrics) -> TraceMetricsSummary {
+    TraceMetricsSummary {
+        output_rows: metrics.output_rows,
+        output_batches: 0,
+        output_bytes: 0,
+        elapsed_compute_nanos: metrics.elapsed_compute_nanos,
+        spill_file_count: metrics.spill_count,
+        spilled_bytes: metrics.spilled_bytes,
+        spilled_rows: 0,
+        selectivity: Some(metrics.scan_selectivity),
+        operator_count: metrics.operator_metrics.len(),
+    }
 }
 
 /// Walk the executed plan tree and collect real metrics.
@@ -172,5 +201,32 @@ mod tests {
         assert_eq!(cloned.operator_name, "TestExec");
         assert_eq!(cloned.output_rows, 100);
         assert_eq!(cloned.spill_count, 1);
+    }
+
+    #[test]
+    fn test_trace_metrics_summary_from_collected_metrics() {
+        let metrics = CollectedMetrics {
+            output_rows: 42,
+            spill_count: 3,
+            spilled_bytes: 1024,
+            elapsed_compute_nanos: 777,
+            scan_selectivity: 0.5,
+            operator_metrics: vec![OperatorMetricSummary {
+                operator_name: "ScanExec".to_string(),
+                output_rows: 42,
+                elapsed_compute_nanos: 777,
+                spill_count: 3,
+                spilled_bytes: 1024,
+                memory_usage: 0,
+            }],
+            ..CollectedMetrics::default()
+        };
+        let summary = summarize_collected_metrics(&metrics);
+        assert_eq!(summary.output_rows, 42);
+        assert_eq!(summary.spill_file_count, 3);
+        assert_eq!(summary.spilled_bytes, 1024);
+        assert_eq!(summary.elapsed_compute_nanos, 777);
+        assert_eq!(summary.selectivity, Some(0.5));
+        assert_eq!(summary.operator_count, 1);
     }
 }

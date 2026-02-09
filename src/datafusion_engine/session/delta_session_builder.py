@@ -205,6 +205,11 @@ def build_delta_session_context(
     -------
     DeltaSessionBuildResult
         Session construction result with runtime-policy bridge diagnostics.
+
+    Raises:
+        TypeError: Internal legacy-signature probing may trigger ``TypeError``
+            before the function converts it into an error-bearing
+            ``DeltaSessionBuildResult``.
     """
     from datafusion_engine.session.runtime import delta_runtime_env_options
 
@@ -233,12 +238,22 @@ def build_delta_session_context(
                 delta_runtime,
             )
         else:
-            ctx = resolution.builder(
-                list(settings.items()),
-                None,
-                delta_runtime,
-                bridge.options,
-            )
+            try:
+                ctx = resolution.builder(
+                    list(settings.items()),
+                    None,
+                    delta_runtime,
+                    bridge.options,
+                )
+            except TypeError as exc:
+                if not _is_legacy_datafusion_ext_signature_error(exc):
+                    raise
+                ctx = resolution.builder(
+                    list(settings.items()),
+                    None,
+                    delta_runtime,
+                )
+                runtime_policy_bridge = _legacy_runtime_policy_bridge_payload(bridge.payload)
     except (RuntimeError, TypeError, ValueError) as exc:
         return DeltaSessionBuildResult(
             ctx=None,
@@ -279,6 +294,23 @@ def _bridge_payload_for_runtime_policy(
     settings.clear()
     settings.update(non_runtime_settings)
     return build_runtime_policy_options(resolution.module_owner, runtime_settings)
+
+
+def _is_legacy_datafusion_ext_signature_error(exc: TypeError) -> bool:
+    message = str(exc)
+    return (
+        "delta_session_context" in message
+        and "3 positional arguments" in message
+        and "4 were given" in message
+    )
+
+
+def _legacy_runtime_policy_bridge_payload(
+    payload: Mapping[str, object] | None,
+) -> dict[str, object]:
+    merged = dict(payload or {})
+    merged["reason"] = "legacy_builder_signature"
+    return merged
 
 
 def _normalize_session_context(ctx: object) -> SessionContext | None:

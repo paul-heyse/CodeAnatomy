@@ -8,11 +8,13 @@ use std::sync::Arc;
 use datafusion::datasource::TableProvider;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result as DFResult;
+use datafusion_expr::Expr;
 use datafusion_ext::delta_control_plane::{delta_provider_from_session, DeltaScanOverrides};
 use datafusion_ext::DeltaFeatureGate;
 use deltalake::delta_datafusion::DeltaScanConfig;
 use serde::{Deserialize, Serialize};
 
+use crate::providers::pushdown_contract::{self, PushdownProbe};
 use crate::providers::scan_config::{infer_capabilities, standard_scan_config, validate_scan_config};
 use crate::schema::introspection::hash_arrow_schema;
 use crate::spec::relations::InputRelation;
@@ -138,6 +140,33 @@ pub async fn register_extraction_inputs(
     }
 
     Ok(registrations)
+}
+
+/// Probe pushdown capabilities for a registered provider.
+///
+/// Call after registration to capture the provider's filter pushdown contract.
+/// Retrieves the provider from the session catalog and invokes
+/// `supports_filters_pushdown` with the given filter expressions.
+///
+/// # Arguments
+/// * `ctx` - DataFusion session context with the table already registered
+/// * `table_name` - Name of the registered table to probe
+/// * `filters` - Filter expressions to test against the provider
+///
+/// # Returns
+/// A `PushdownProbe` with per-filter statuses.
+///
+/// # Errors
+/// Returns error if:
+/// - The table is not registered in the session
+/// - The provider's `supports_filters_pushdown` call fails
+pub async fn probe_provider_pushdown(
+    ctx: &SessionContext,
+    table_name: &str,
+    filters: &[Expr],
+) -> DFResult<PushdownProbe> {
+    let provider = ctx.table_provider(table_name).await?;
+    pushdown_contract::probe_pushdown(table_name, provider.as_ref(), filters)
 }
 
 #[cfg(test)]

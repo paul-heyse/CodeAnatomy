@@ -9,13 +9,14 @@
 
 use datafusion::prelude::*;
 use datafusion_common::{DataFusionError, Result};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 
 use crate::compiler::cache_boundaries;
 use crate::compiler::graph_validator;
 use crate::compiler::inline_policy::{compute_inline_policy, InlineDecision};
 use crate::compiler::join_builder;
+use crate::compiler::param_compiler;
 use crate::compiler::udtf_builder;
 use crate::compiler::union_builder;
 use crate::compiler::view_builder;
@@ -29,6 +30,86 @@ pub struct PlanValidation {
     pub unoptimized_plan: String,
     pub physical_plan: String,
     pub explain_verbose: String,
+}
+
+/// Validate that the spec does not use both typed parameters and parameter templates.
+///
+/// Typed parameters and parameter templates are mutually exclusive parameter modes.
+/// Using both simultaneously is a configuration error that prevents deterministic
+/// compilation. Typed parameters are the canonical path; parameter templates are
+/// retained only for transitional compatibility.
+///
+/// # Errors
+///
+/// Returns `DataFusionError::Plan` if both `typed_parameters` and
+/// `parameter_templates` are non-empty.
+pub fn validate_parameter_mode(spec: &SemanticExecutionSpec) -> Result<()> {
+    if !spec.typed_parameters.is_empty() && !spec.parameter_templates.is_empty() {
+        return Err(DataFusionError::Plan(
+            "Parameter mode conflict: use either typed_parameters or parameter_templates, \
+             not both. typed_parameters is the canonical path; parameter_templates is \
+             deprecated and retained only for transitional compatibility."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Runtime warning for deprecated template parameter mode.
+pub fn deprecated_template_warning(spec: &SemanticExecutionSpec) -> Option<String> {
+    if spec.parameter_templates.is_empty() {
+        None
+    } else {
+        Some(
+            "parameter_templates is deprecated and will be removed in a future release; migrate to typed_parameters."
+                .to_string(),
+        )
+    }
+}
+
+/// Derive per-input filter probe expressions from `ViewTransform::Filter`.
+pub async fn extract_input_filter_predicates(
+    ctx: &SessionContext,
+    spec: &SemanticExecutionSpec,
+) -> (BTreeMap<String, Vec<Expr>>, Vec<String>) {
+    let input_names: HashSet<&str> = spec
+        .input_relations
+        .iter()
+        .map(|relation| relation.logical_name.as_str())
+        .collect();
+    let mut predicates: BTreeMap<String, Vec<Expr>> = BTreeMap::new();
+    let mut warnings = Vec::new();
+
+    for view in &spec.view_definitions {
+        let ViewTransform::Filter { source, predicate } = &view.transform else {
+            continue;
+        };
+        if !input_names.contains(source.as_str()) {
+            continue;
+        }
+
+        let source_df = match ctx.table(source).await {
+            Ok(df) => df,
+            Err(err) => {
+                warnings.push(format!(
+                    "Pushdown probe skipped for '{source}': failed to resolve source table ({err})"
+                ));
+                continue;
+            }
+        };
+        match ctx.parse_sql_expr(predicate, &source_df.schema()) {
+            Ok(expr) => {
+                predicates.entry(source.clone()).or_default().push(expr);
+            }
+            Err(err) => {
+                warnings.push(format!(
+                    "Pushdown probe skipped for '{source}': failed to parse predicate '{predicate}' ({err})"
+                ));
+            }
+        }
+    }
+
+    (predicates, warnings)
 }
 
 /// Central plan compiler for semantic execution specs.
@@ -48,15 +129,29 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// Returns Vec<(OutputTarget, DataFrame)> ready for materialization.
     ///
     /// Process:
+    /// 0. Validate parameter mode exclusivity (typed vs template)
     /// 1. Validate graph structure (WS4.5)
     /// 2. Topological sort (view-to-view edges only)
     /// 3. Compile each view and register as lazy view
     /// 4. Insert cost-aware cache boundaries
     /// 5. Build output DataFrames
+    /// 6. Apply typed parameters to outputs (when using typed path)
     pub async fn compile(&self) -> Result<Vec<(OutputTarget, DataFrame)>> {
+        // 0. Validate parameter mode exclusivity
+        validate_parameter_mode(self.spec)?;
+
+        let uses_typed_parameters = !self.spec.typed_parameters.is_empty();
+
         // 1. Validate graph
         graph_validator::validate_graph(self.spec)?;
-        let parameter_values = self.collect_parameter_values()?;
+
+        // Collect template parameter values only when NOT using typed parameters.
+        // When typed parameters are present, template collection is bypassed entirely.
+        let parameter_values = if uses_typed_parameters {
+            HashMap::new()
+        } else {
+            self.collect_parameter_values()?
+        };
 
         // 2. Topological sort
         let ordered = self.topological_sort()?;
@@ -106,7 +201,22 @@ impl<'a> SemanticPlanCompiler<'a> {
             } else {
                 df.select(target.columns.iter().map(|c| col(c)).collect::<Vec<_>>())?
             };
-            outputs.push((target.clone(), projected));
+
+            // 6. Apply typed parameters when using the canonical typed path.
+            // This applies positional placeholder bindings and typed filter
+            // expressions directly at the DataFrame level, bypassing SQL
+            // literal interpolation entirely.
+            let final_df = if uses_typed_parameters {
+                param_compiler::apply_typed_parameters(
+                    projected,
+                    &self.spec.typed_parameters,
+                )
+                .await?
+            } else {
+                projected
+            };
+
+            outputs.push((target.clone(), final_df));
         }
 
         Ok(outputs)
@@ -498,6 +608,25 @@ impl<'a> SemanticPlanCompiler<'a> {
         } else {
             self.ctx.table(source_name).await
         }
+    }
+
+    /// Apply parameters to a DataFrame using the appropriate mode.
+    ///
+    /// Routes to the typed parameter path when `typed_parameters` is non-empty,
+    /// otherwise returns the DataFrame unchanged (template parameters are applied
+    /// inline during view compilation via `resolve_source_with_templates`).
+    ///
+    /// This method is intended for callers who need explicit parameter application
+    /// outside the main `compile()` flow.
+    pub async fn apply_parameters(&self, df: DataFrame) -> Result<DataFrame> {
+        if !self.spec.typed_parameters.is_empty() {
+            return param_compiler::apply_typed_parameters(df, &self.spec.typed_parameters)
+                .await;
+        }
+        // Transitional fallback: template parameters are applied inline during
+        // view compilation (resolve_source_with_templates), not at this stage.
+        // This path returns the DataFrame unchanged.
+        Ok(df)
     }
 
     /// Validate a DataFrame's plan via EXPLAIN.

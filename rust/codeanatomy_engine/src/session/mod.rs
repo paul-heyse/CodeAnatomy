@@ -5,5 +5,9 @@
 
 pub mod envelope;
 pub mod factory;
+pub mod format_policy;
+pub mod planning_manifest;
+pub mod planning_surface;
+pub mod profile_coverage;
 pub mod profiles;
 pub mod runtime_profiles;

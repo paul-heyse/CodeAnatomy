@@ -178,7 +178,8 @@ impl TracingPreset {
 /// Runtime controls that do not affect logical correctness.
 ///
 /// All fields use `#[serde(default)]` for backward-compatible deserialization.
-/// New fields added by Wave 3 integration: `capture_substrait`, `enable_tracing`,
+/// New fields added by Wave 3 integration: `capture_substrait`,
+/// `capture_optimizer_lab`, `capture_delta_codec`, `enable_tracing`,
 /// `enable_rule_tracing`, `enable_plan_preview`, `enable_function_factory`,
 /// `enable_domain_planner`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -194,6 +195,12 @@ pub struct RuntimeConfig {
     /// When true, encode optimized plans to Substrait bytes for portability.
     #[serde(default)]
     pub capture_substrait: bool,
+    /// When true, run offline optimizer lab capture during compliance mode.
+    #[serde(default)]
+    pub capture_optimizer_lab: bool,
+    /// When true, capture Delta extension-codec plan bytes in plan artifacts.
+    #[serde(default)]
+    pub capture_delta_codec: bool,
 
     // -- WS-P13: OpenTelemetry tracing --
     /// Enable OpenTelemetry-native execution tracing (requires `tracing` feature).
@@ -358,5 +365,26 @@ mod tests {
         assert_eq!(effective.rule_mode, RuleTraceMode::PhaseOnly);
         assert!(!effective.plan_diff);
         assert_eq!(effective.preview_limit, 1);
+    }
+
+    #[test]
+    fn test_runtime_config_defaults_new_capture_flags_to_false() {
+        let runtime = RuntimeConfig::default();
+        assert!(!runtime.capture_substrait);
+        assert!(!runtime.capture_optimizer_lab);
+        assert!(!runtime.capture_delta_codec);
+    }
+
+    #[test]
+    fn test_runtime_config_deserializes_new_capture_flags() {
+        let payload = serde_json::json!({
+            "capture_substrait": true,
+            "capture_optimizer_lab": true,
+            "capture_delta_codec": true
+        });
+        let runtime: RuntimeConfig = serde_json::from_value(payload).expect("valid runtime config");
+        assert!(runtime.capture_substrait);
+        assert!(runtime.capture_optimizer_lab);
+        assert!(runtime.capture_delta_codec);
     }
 }

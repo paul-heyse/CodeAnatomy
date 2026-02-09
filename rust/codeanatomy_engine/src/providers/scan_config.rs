@@ -119,6 +119,62 @@ pub fn infer_capabilities(config: &DeltaScanConfig) -> ProviderCapabilities {
     }
 }
 
+/// Richer pushdown status bridging boolean capability flags to the per-filter
+/// contract model in `pushdown_contract`.
+///
+/// While `ProviderCapabilities` captures coarse boolean flags inferred from
+/// scan configuration, `PushdownStatus` maps these to the three-level contract
+/// model for introspection and documentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PushdownStatus {
+    /// Pushdown is not supported by this capability dimension.
+    Unsupported,
+
+    /// Pushdown is supported but no per-filter exactness guarantee is modeled
+    /// at the config level. Actual exactness depends on the provider and filter.
+    Supported,
+}
+
+impl PushdownStatus {
+    /// Convert a boolean capability flag to a `PushdownStatus`.
+    pub fn from_capability(enabled: bool) -> Self {
+        if enabled {
+            PushdownStatus::Supported
+        } else {
+            PushdownStatus::Unsupported
+        }
+    }
+}
+
+/// Derive a pushdown status summary from provider capabilities.
+///
+/// Maps each boolean capability dimension to a `PushdownStatus` for
+/// use in documentation and introspection tooling.
+///
+/// # Arguments
+/// * `capabilities` - Provider capabilities inferred from scan config
+///
+/// # Returns
+/// A mapping of capability dimension to pushdown status.
+pub fn pushdown_status_from_capabilities(
+    capabilities: &ProviderCapabilities,
+) -> CapabilityPushdownSummary {
+    CapabilityPushdownSummary {
+        predicate: PushdownStatus::from_capability(capabilities.predicate_pushdown),
+        projection: PushdownStatus::from_capability(capabilities.projection_pushdown),
+        partition_pruning: PushdownStatus::from_capability(capabilities.partition_pruning),
+    }
+}
+
+/// Summary of pushdown status across all capability dimensions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityPushdownSummary {
+    pub predicate: PushdownStatus,
+    pub projection: PushdownStatus,
+    pub partition_pruning: PushdownStatus,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +240,66 @@ mod tests {
         assert!(!caps.predicate_pushdown);
         assert!(caps.projection_pushdown); // always true
         assert!(!caps.partition_pruning);
+    }
+
+    #[test]
+    fn test_pushdown_status_from_capability() {
+        assert_eq!(
+            PushdownStatus::from_capability(true),
+            PushdownStatus::Supported
+        );
+        assert_eq!(
+            PushdownStatus::from_capability(false),
+            PushdownStatus::Unsupported
+        );
+    }
+
+    #[test]
+    fn test_pushdown_status_serde_roundtrip() {
+        for status in [PushdownStatus::Supported, PushdownStatus::Unsupported] {
+            let json = serde_json::to_string(&status).unwrap();
+            let deserialized: PushdownStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(status, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_pushdown_status_from_capabilities_all_enabled() {
+        let caps = ProviderCapabilities {
+            predicate_pushdown: true,
+            projection_pushdown: true,
+            partition_pruning: true,
+        };
+        let summary = pushdown_status_from_capabilities(&caps);
+        assert_eq!(summary.predicate, PushdownStatus::Supported);
+        assert_eq!(summary.projection, PushdownStatus::Supported);
+        assert_eq!(summary.partition_pruning, PushdownStatus::Supported);
+    }
+
+    #[test]
+    fn test_pushdown_status_from_capabilities_mixed() {
+        let caps = ProviderCapabilities {
+            predicate_pushdown: false,
+            projection_pushdown: true,
+            partition_pruning: false,
+        };
+        let summary = pushdown_status_from_capabilities(&caps);
+        assert_eq!(summary.predicate, PushdownStatus::Unsupported);
+        assert_eq!(summary.projection, PushdownStatus::Supported);
+        assert_eq!(summary.partition_pruning, PushdownStatus::Unsupported);
+    }
+
+    #[test]
+    fn test_capability_pushdown_summary_serde_roundtrip() {
+        let summary = CapabilityPushdownSummary {
+            predicate: PushdownStatus::Supported,
+            projection: PushdownStatus::Supported,
+            partition_pruning: PushdownStatus::Unsupported,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let deserialized: CapabilityPushdownSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(summary.predicate, deserialized.predicate);
+        assert_eq!(summary.projection, deserialized.projection);
+        assert_eq!(summary.partition_pruning, deserialized.partition_pruning);
     }
 }

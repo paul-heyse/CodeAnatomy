@@ -1,31 +1,59 @@
 //! Session factory for deterministic SessionContext construction.
 //!
-//! Uses SessionStateBuilder for builder-first session creation with no
-//! post-build mutation.
+//! Uses SessionStateBuilder for builder-first session creation.
+//! Both `build_session()` and `build_session_from_profile()` route
+//! through a shared planning-surface path — see `planning_surface.rs`.
+//!
+//! The only post-build mutation is `install_rewrites()` for function
+//! rewrites that lack a builder API in DataFusion 51.
 
 use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion::execution::memory_pool::FairSpillPool;
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::Result;
 
+use crate::compiler::plan_codec;
 use crate::executor::tracing as engine_tracing;
-use super::envelope::SessionEnvelope;
-use super::profiles::EnvironmentProfile;
-use super::runtime_profiles::RuntimeProfileSpec;
 use crate::rules::registry::CpgRuleSet;
 use crate::spec::runtime::TracingConfig;
+
+use super::envelope::SessionEnvelope;
+use super::format_policy::{build_table_options, default_file_formats, FormatPolicySpec};
+use super::planning_manifest::{manifest_from_surface, PlanningSurfaceManifest};
+use super::planning_surface::{apply_to_builder, install_rewrites, PlanningSurfaceSpec};
+use super::profile_coverage::reserved_profile_warnings;
+use super::profiles::EnvironmentProfile;
+use super::runtime_profiles::RuntimeProfileSpec;
 
 /// Factory for building deterministic DataFusion sessions.
 ///
 /// Constructs SessionContext via SessionStateBuilder with all configuration,
-/// rules, and UDFs registered upfront. No post-build mutation allowed.
+/// rules, and UDFs registered upfront. Post-build mutation is limited to
+/// function rewrites via `install_rewrites()`.
 pub struct SessionFactory {
     profile: EnvironmentProfile,
+}
+
+/// Canonical pre-registration session build output.
+pub struct SessionBuildState {
+    pub ctx: SessionContext,
+    pub memory_pool_bytes: u64,
+    pub planning_surface_manifest: PlanningSurfaceManifest,
+    pub planning_surface_hash: [u8; 32],
+    pub build_warnings: Vec<String>,
+}
+
+/// Optional session build behavior overrides used by execution entrypoints.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionBuildOverrides {
+    pub enable_function_factory: bool,
+    pub enable_domain_planner: bool,
+    pub enable_delta_codec: bool,
 }
 
 impl SessionFactory {
@@ -47,58 +75,40 @@ impl SessionFactory {
         &self.profile
     }
 
-    /// Builds a deterministic SessionContext with the given ruleset.
-    ///
-    /// Construction order:
-    /// 1. Build RuntimeEnv with memory pool and disk manager
-    /// 2. Build SessionConfig with typed configuration
-    /// 3. Build SessionState via SessionStateBuilder with rules
-    /// 4. Create SessionContext from state
-    /// 5. Register all UDFs via datafusion_ext
-    /// 6. Capture SessionEnvelope
-    ///
-    /// # Arguments
-    ///
-    /// * `ruleset` - Immutable rule set for execution policy
-    /// * `spec_hash` - BLAKE3 hash of the execution spec
-    ///
-    /// # Returns
-    ///
-    /// Tuple of (SessionContext, SessionEnvelope)
-    pub async fn build_session(
+    /// Build deterministic session state (without input registration).
+    pub async fn build_session_state(
         &self,
         ruleset: &CpgRuleSet,
         spec_hash: [u8; 32],
         tracing_config: Option<&TracingConfig>,
-    ) -> Result<(SessionContext, SessionEnvelope)> {
-        let tracing_config = tracing_config.cloned().unwrap_or_default();
-        engine_tracing::init_otel_tracing(&tracing_config)?;
-        let profile_name = format!("{:?}", self.profile.class);
-        let trace_ctx = engine_tracing::TraceRuleContext::from_hashes(
-            &spec_hash,
-            &ruleset.fingerprint,
-            &profile_name,
-            &tracing_config,
-        );
-        let physical_rules = engine_tracing::append_execution_instrumentation_rule(
-            ruleset.physical_rules.clone(),
-            &tracing_config,
-            &trace_ctx,
-        );
+    ) -> Result<SessionBuildState> {
+        self.build_session_state_with_overrides(
+            ruleset,
+            spec_hash,
+            tracing_config,
+            SessionBuildOverrides::default(),
+        )
+        .await
+    }
 
-        // Build RuntimeEnv with memory pool and disk manager
+    /// Build deterministic session state with explicit planning/runtime overrides.
+    pub async fn build_session_state_with_overrides(
+        &self,
+        ruleset: &CpgRuleSet,
+        spec_hash: [u8; 32],
+        tracing_config: Option<&TracingConfig>,
+        overrides: SessionBuildOverrides,
+    ) -> Result<SessionBuildState> {
         let memory_pool = Arc::new(FairSpillPool::new(
             self.profile.memory_pool_bytes.try_into().unwrap(),
         ));
         let disk_manager_builder =
             DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory);
-
         let runtime = RuntimeEnvBuilder::default()
             .with_memory_pool(memory_pool)
             .with_disk_manager_builder(disk_manager_builder)
             .build_arc()?;
 
-        // Build SessionConfig with typed configuration
         let mut config = SessionConfig::new()
             .with_default_catalog_and_schema("codeanatomy", "public")
             .with_information_schema(true)
@@ -108,86 +118,62 @@ impl SessionFactory {
             .with_repartition_aggregations(true)
             .with_repartition_windows(true)
             .with_parquet_pruning(true);
-
-        // Typed config mutation via options_mut()
         let config_opts = config.options_mut();
         config_opts.execution.coalesce_batches = true;
         config_opts.execution.collect_statistics = true;
         config_opts.execution.parquet.pushdown_filters = true;
+        config_opts.execution.parquet.enable_page_index = true;
         config_opts.execution.enable_recursive_ctes = true;
-
-        // Optimizer options
         config_opts.optimizer.filter_null_join_keys = true;
         config_opts.optimizer.skip_failed_rules = false;
         config_opts.optimizer.max_passes = 3;
         config_opts.optimizer.enable_dynamic_filter_pushdown = true;
         config_opts.optimizer.enable_topk_dynamic_filter_pushdown = true;
-
-        // Parallel planning for UNION children (materially reduces compile time)
         config_opts.execution.planning_concurrency = self.profile.target_partitions as usize;
-
-        // Canonical lowercase, no normalization surprises
         config_opts.sql_parser.enable_ident_normalization = false;
-
-        // Explain options for debugging
         config_opts.explain.show_statistics = true;
         config_opts.explain.show_schema = true;
 
-        // Build SessionState via SessionStateBuilder
-        let state = SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_analyzer_rules(ruleset.analyzer_rules.clone())
-            .with_optimizer_rules(ruleset.optimizer_rules.clone())
-            .with_physical_optimizer_rules(physical_rules)
-            .build();
-        let state = engine_tracing::instrument_session_state(state, &tracing_config, &trace_ctx);
-
-        // Create SessionContext from state
-        let ctx = SessionContext::new_with_state(state);
-
-        // Register all UDFs from datafusion_ext
-        datafusion_ext::udf_registry::register_all(&ctx)?;
-        engine_tracing::register_instrumented_file_store(&ctx, &tracing_config)?;
-
-        // Capture SessionEnvelope
-        let envelope = SessionEnvelope::capture(
-            &ctx,
-            spec_hash,
-            ruleset.fingerprint,
+        self.build_session_state_internal(
+            format!("{:?}", self.profile.class),
             self.profile.memory_pool_bytes,
-            true, // spill_enabled (FairSpillPool always enables spilling)
+            config,
+            runtime,
+            ruleset,
+            spec_hash,
+            tracing_config,
+            overrides,
+            Vec::new(),
         )
-        .await?;
-
-        Ok((ctx, envelope))
+        .await
     }
 
-    /// Build a SessionContext from a `RuntimeProfileSpec`.
-    ///
-    /// All config knobs are applied from the profile. The resulting
-    /// session is deterministic: same profile produces same session config.
-    ///
-    /// This method applies the comprehensive set of knobs from the profile,
-    /// including repartition_sorts, repartition_file_scans, page index
-    /// pruning, and other WS-P9 gap-table deltas not covered by `build_session`.
-    ///
-    /// Optionally installs the SQL macro function factory (enabling
-    /// `CREATE FUNCTION` syntax) and/or domain-specific expression planners
-    /// for span-alignment operations. Installation failures are hard errors
-    /// when the corresponding flag is `true`.
-    ///
-    /// # Arguments
-    ///
-    /// * `profile` - Comprehensive runtime profile spec
-    /// * `ruleset` - Immutable rule set for execution policy
-    /// * `enable_function_factory` - Install `SqlMacroFunctionFactory` for `CREATE FUNCTION` support
-    /// * `enable_domain_planner` - Install `CodeAnatomyDomainPlanner` for domain expression planning
-    ///
-    /// # Returns
-    ///
-    /// Configured SessionContext with all profile knobs applied
-    pub async fn build_session_from_profile(
+    /// Compatibility wrapper retained during migration.
+    pub async fn build_session(
+        &self,
+        ruleset: &CpgRuleSet,
+        spec_hash: [u8; 32],
+        tracing_config: Option<&TracingConfig>,
+    ) -> Result<(SessionContext, SessionEnvelope)> {
+        let state = self
+            .build_session_state(ruleset, spec_hash, tracing_config)
+            .await?;
+        let provider_identity_hash = SessionEnvelope::hash_provider_identities(&[]);
+        let envelope = SessionEnvelope::capture(
+            &state.ctx,
+            spec_hash,
+            ruleset.fingerprint,
+            state.memory_pool_bytes,
+            true,
+            state.planning_surface_hash,
+            provider_identity_hash,
+        )
+        .await?;
+        Ok((state.ctx, envelope))
+    }
+
+    /// Build deterministic session state from a runtime profile.
+    pub async fn build_session_state_from_profile(
         &self,
         profile: &RuntimeProfileSpec,
         ruleset: &CpgRuleSet,
@@ -195,22 +181,30 @@ impl SessionFactory {
         enable_domain_planner: bool,
         spec_hash: [u8; 32],
         tracing_config: Option<&TracingConfig>,
-    ) -> Result<SessionContext> {
-        let tracing_config = tracing_config.cloned().unwrap_or_default();
-        engine_tracing::init_otel_tracing(&tracing_config)?;
-        let trace_ctx = engine_tracing::TraceRuleContext::from_hashes(
-            &spec_hash,
-            &ruleset.fingerprint,
-            &profile.profile_name,
-            &tracing_config,
-        );
-        let physical_rules = engine_tracing::append_execution_instrumentation_rule(
-            ruleset.physical_rules.clone(),
-            &tracing_config,
-            &trace_ctx,
-        );
+    ) -> Result<SessionBuildState> {
+        self.build_session_state_from_profile_with_overrides(
+            profile,
+            ruleset,
+            spec_hash,
+            tracing_config,
+            SessionBuildOverrides {
+                enable_function_factory,
+                enable_domain_planner,
+                ..SessionBuildOverrides::default()
+            },
+        )
+        .await
+    }
 
-        // Build RuntimeEnv with profile memory/spill settings
+    /// Build deterministic session state from a runtime profile with explicit overrides.
+    pub async fn build_session_state_from_profile_with_overrides(
+        &self,
+        profile: &RuntimeProfileSpec,
+        ruleset: &CpgRuleSet,
+        spec_hash: [u8; 32],
+        tracing_config: Option<&TracingConfig>,
+        overrides: SessionBuildOverrides,
+    ) -> Result<SessionBuildState> {
         let runtime = RuntimeEnvBuilder::default()
             .with_memory_pool(Arc::new(FairSpillPool::new(profile.memory_pool_bytes)))
             .with_disk_manager_builder(
@@ -219,7 +213,6 @@ impl SessionFactory {
             .with_max_temp_directory_size(profile.max_temp_directory_bytes as u64)
             .build_arc()?;
 
-        // Build SessionConfig from profile using builder methods
         let mut config = SessionConfig::new()
             .with_default_catalog_and_schema("codeanatomy", "public")
             .with_information_schema(true)
@@ -233,7 +226,6 @@ impl SessionFactory {
             .with_repartition_file_min_size(profile.repartition_file_min_size)
             .with_parquet_pruning(profile.parquet_pruning);
 
-        // Apply remaining knobs via typed options
         let opts = config.options_mut();
         opts.execution.coalesce_batches = true;
         opts.execution.collect_statistics = profile.collect_statistics;
@@ -242,48 +234,150 @@ impl SessionFactory {
         opts.execution.parquet.metadata_size_hint = Some(profile.metadata_size_hint);
         opts.execution.enable_recursive_ctes = profile.enable_recursive_ctes;
         opts.execution.planning_concurrency = profile.planning_concurrency;
-
-        // Optimizer options
         opts.optimizer.max_passes = profile.optimizer_max_passes;
         opts.optimizer.skip_failed_rules = profile.skip_failed_rules;
         opts.optimizer.filter_null_join_keys = profile.filter_null_join_keys;
         opts.optimizer.enable_dynamic_filter_pushdown = profile.enable_dynamic_filter_pushdown;
         opts.optimizer.enable_topk_dynamic_filter_pushdown =
             profile.enable_topk_dynamic_filter_pushdown;
-
-        // SQL parser and explain options
         opts.sql_parser.enable_ident_normalization = profile.enable_ident_normalization;
         opts.explain.show_statistics = profile.show_statistics;
         opts.explain.show_schema = profile.show_schema;
 
-        // Build SessionState with rules
-        let state = SessionStateBuilder::new()
+        self.build_session_state_internal(
+            profile.profile_name.clone(),
+            profile.memory_pool_bytes as u64,
+            config,
+            runtime,
+            ruleset,
+            spec_hash,
+            tracing_config,
+            overrides,
+            reserved_profile_warnings(profile),
+        )
+        .await
+    }
+
+    /// Compatibility wrapper retained during migration.
+    pub async fn build_session_from_profile(
+        &self,
+        profile: &RuntimeProfileSpec,
+        ruleset: &CpgRuleSet,
+        enable_function_factory: bool,
+        enable_domain_planner: bool,
+        spec_hash: [u8; 32],
+        tracing_config: Option<&TracingConfig>,
+    ) -> Result<SessionContext> {
+        Ok(self
+            .build_session_state_from_profile_with_overrides(
+                profile,
+                ruleset,
+                spec_hash,
+                tracing_config,
+                SessionBuildOverrides {
+                    enable_function_factory,
+                    enable_domain_planner,
+                    ..SessionBuildOverrides::default()
+                },
+            )
+            .await?
+            .ctx)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn build_session_state_internal(
+        &self,
+        profile_name: String,
+        memory_pool_bytes: u64,
+        config: SessionConfig,
+        runtime: Arc<RuntimeEnv>,
+        ruleset: &CpgRuleSet,
+        spec_hash: [u8; 32],
+        tracing_config: Option<&TracingConfig>,
+        overrides: SessionBuildOverrides,
+        build_warnings: Vec<String>,
+    ) -> Result<SessionBuildState> {
+        let tracing_config = tracing_config.cloned().unwrap_or_default();
+        engine_tracing::init_otel_tracing(&tracing_config)?;
+        let trace_ctx = engine_tracing::TraceRuleContext::from_hashes(
+            &spec_hash,
+            &ruleset.fingerprint,
+            &profile_name,
+            &tracing_config,
+        );
+        let physical_rules = engine_tracing::append_execution_instrumentation_rule(
+            ruleset.physical_rules.clone(),
+            &tracing_config,
+            &trace_ctx,
+        );
+
+        let planning_surface = Self::build_planning_surface(&config, overrides)?;
+
+        let builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
             .with_analyzer_rules(ruleset.analyzer_rules.clone())
             .with_optimizer_rules(ruleset.optimizer_rules.clone())
-            .with_physical_optimizer_rules(physical_rules)
-            .build();
+            .with_physical_optimizer_rules(physical_rules);
+        let builder = apply_to_builder(builder, &planning_surface);
+        let state = builder.build();
         let state = engine_tracing::instrument_session_state(state, &tracing_config, &trace_ctx);
-
         let ctx = SessionContext::new_with_state(state);
 
-        // Register all UDFs from datafusion_ext
         datafusion_ext::udf_registry::register_all(&ctx)?;
+        if planning_surface.delta_codec_enabled {
+            plan_codec::install_delta_codecs(&ctx);
+        }
         engine_tracing::register_instrumented_file_store(&ctx, &tracing_config)?;
+        install_rewrites(&ctx, &planning_surface.function_rewrites)?;
 
-        // WS-P14: Wire function factory and domain planners when enabled.
-        // Installation failures are hard errors per the capability policy:
-        // if a caller requests a capability, it must succeed or the session
-        // build fails entirely.
-        if enable_function_factory {
-            datafusion_ext::install_sql_macro_factory_native(&ctx)?;
-        }
-        if enable_domain_planner {
-            datafusion_ext::install_expr_planners_native(&ctx, &["codeanatomy_domain"])?;
+        let planning_surface_manifest = manifest_from_surface(&planning_surface);
+        let planning_surface_hash = planning_surface_manifest.hash();
+        Ok(SessionBuildState {
+            ctx,
+            memory_pool_bytes,
+            planning_surface_manifest,
+            planning_surface_hash,
+            build_warnings,
+        })
+    }
+
+    fn build_planning_surface(
+        config: &SessionConfig,
+        overrides: SessionBuildOverrides,
+    ) -> Result<PlanningSurfaceSpec> {
+        let options = config.options();
+        let format_policy = FormatPolicySpec {
+            parquet_pushdown_filters: options.execution.parquet.pushdown_filters,
+            parquet_enable_page_index: options.execution.parquet.enable_page_index,
+            csv_delimiter: None,
+        };
+
+        let mut planning_surface = PlanningSurfaceSpec {
+            enable_default_features: true,
+            file_formats: default_file_formats(),
+            table_options: Some(build_table_options(config, &format_policy)?),
+            delta_codec_enabled: overrides.enable_delta_codec,
+            ..PlanningSurfaceSpec::default()
+        };
+
+        #[cfg(feature = "delta-planner")]
+        {
+            use deltalake::delta_datafusion::planner::DeltaPlanner;
+            planning_surface.query_planner = Some(DeltaPlanner::new());
         }
 
-        Ok(ctx)
+        if overrides.enable_function_factory {
+            planning_surface.function_factory = Some(Arc::new(
+                datafusion_ext::function_factory::SqlMacroFunctionFactory::default(),
+            ));
+        }
+        if overrides.enable_domain_planner {
+            planning_surface.expr_planners = datafusion_ext::domain_expr_planners();
+            planning_surface.function_rewrites = datafusion_ext::domain_function_rewrites();
+        }
+
+        Ok(planning_surface)
     }
 }
 

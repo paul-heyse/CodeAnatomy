@@ -10,10 +10,12 @@
 //! 5. Tagged enum serialization (ViewTransform)
 //! 6. DeterminismContract replay validation
 
+mod common;
+
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::spec::hashing::{hash_spec, DeterminismContract};
 use codeanatomy_engine::spec::join_graph::{JoinConstraint, JoinEdge, JoinGraph};
-use codeanatomy_engine::spec::outputs::{MaterializationMode, OutputTarget};
+use codeanatomy_engine::spec::outputs::MaterializationMode;
 use codeanatomy_engine::spec::relations::{
     AggregationExpr, InputRelation, JoinKeyPair, JoinType, SchemaContract, ViewDefinition,
     ViewTransform,
@@ -241,21 +243,18 @@ fn test_join_graph() {
 /// Test 8: OutputTarget with MaterializationMode
 #[test]
 fn test_output_target() {
-    let target = OutputTarget {
-        table_name: "cpg_nodes".to_string(),
-        delta_location: None,
-        source_view: "normalized_nodes".to_string(),
-        columns: vec!["id".to_string(), "type".to_string()],
-        materialization_mode: MaterializationMode::Overwrite,
-        partition_by: vec![],
-        write_metadata: std::collections::BTreeMap::new(),
-        max_commit_retries: None,
-    };
+    let target = common::output_target(
+        "cpg_nodes",
+        "normalized_nodes",
+        &["id", "type"],
+        MaterializationMode::Overwrite,
+    );
 
     let json = serde_json::to_string(&target).unwrap();
     assert!(json.contains("Overwrite"));
 
-    let deserialized: OutputTarget = serde_json::from_str(&json).unwrap();
+    let deserialized: codeanatomy_engine::spec::outputs::OutputTarget =
+        serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.table_name, "cpg_nodes");
 }
 
@@ -442,6 +441,94 @@ fn test_spec_runtime_unknown_field_ignored() {
     assert_eq!(spec.runtime.tuner_mode, RuntimeTunerMode::Observe);
 }
 
+// ---------------------------------------------------------------------------
+// Scope 8: Dual-mode parameter rejection (typed + template = error)
+// ---------------------------------------------------------------------------
+
+/// Scope 8: Spec validation rejects dual-mode parameters.
+///
+/// When both typed_parameters and parameter_templates are non-empty,
+/// validate_parameter_mode must return an error. This is the canonical
+/// compile-time guard against parameter mode conflicts.
+#[test]
+fn test_dual_mode_parameter_rejection() {
+    use codeanatomy_engine::compiler::plan_compiler::validate_parameter_mode;
+    use codeanatomy_engine::spec::parameters::{ParameterTarget, ParameterValue, TypedParameter};
+
+    let mut spec = create_test_spec();
+
+    // Add a typed parameter.
+    spec.typed_parameters.push(TypedParameter {
+        label: Some("test_param".to_string()),
+        target: ParameterTarget::FilterEq {
+            base_table: None,
+            filter_column: "id".to_string(),
+        },
+        value: ParameterValue::Int64(42),
+    });
+
+    // Add a parameter template.
+    spec.parameter_templates.push(ParameterTemplate {
+        name: "template_param".to_string(),
+        base_table: "test_input".to_string(),
+        filter_column: "id".to_string(),
+        parameter_type: "string".to_string(),
+    });
+
+    // Both present => must reject.
+    let result = validate_parameter_mode(&spec);
+    assert!(
+        result.is_err(),
+        "validate_parameter_mode must reject dual-mode parameters"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Parameter mode conflict"),
+        "error message must indicate parameter mode conflict, got: {err_msg}"
+    );
+}
+
+/// Scope 8: validate_parameter_mode accepts specs with only typed_parameters.
+#[test]
+fn test_typed_parameters_only_accepted() {
+    use codeanatomy_engine::compiler::plan_compiler::validate_parameter_mode;
+    use codeanatomy_engine::spec::parameters::{ParameterTarget, ParameterValue, TypedParameter};
+
+    let mut spec = create_test_spec();
+    spec.typed_parameters.push(TypedParameter {
+        label: None,
+        target: ParameterTarget::FilterEq {
+            base_table: None,
+            filter_column: "id".to_string(),
+        },
+        value: ParameterValue::Int64(1),
+    });
+
+    assert!(
+        validate_parameter_mode(&spec).is_ok(),
+        "spec with only typed_parameters must pass validation"
+    );
+}
+
+/// Scope 8: validate_parameter_mode accepts specs with only parameter_templates.
+#[test]
+fn test_parameter_templates_only_accepted() {
+    use codeanatomy_engine::compiler::plan_compiler::validate_parameter_mode;
+
+    let mut spec = create_test_spec();
+    spec.parameter_templates.push(ParameterTemplate {
+        name: "tmpl".to_string(),
+        base_table: "test_input".to_string(),
+        filter_column: "id".to_string(),
+        parameter_type: "string".to_string(),
+    });
+
+    assert!(
+        validate_parameter_mode(&spec).is_ok(),
+        "spec with only parameter_templates must pass validation"
+    );
+}
+
 // Helper: Create minimal test spec
 fn create_test_spec() -> SemanticExecutionSpec {
     let mut schema = BTreeMap::new();
@@ -564,16 +651,12 @@ fn create_full_spec() -> SemanticExecutionSpec {
                 columns: vec!["id".to_string()],
             }],
         },
-        vec![OutputTarget {
-            table_name: "cpg_output".to_string(),
-            delta_location: None,
-            source_view: "joined_data".to_string(),
-            columns: vec!["id".to_string(), "name".to_string(), "value".to_string()],
-            materialization_mode: MaterializationMode::Overwrite,
-            partition_by: vec![],
-            write_metadata: std::collections::BTreeMap::new(),
-            max_commit_retries: None,
-        }],
+        vec![common::output_target(
+            "cpg_output",
+            "joined_data",
+            &["id", "name", "value"],
+            MaterializationMode::Overwrite,
+        )],
         vec![RuleIntent {
             name: "span_consistency".to_string(),
             class: RuleClass::SemanticIntegrity,

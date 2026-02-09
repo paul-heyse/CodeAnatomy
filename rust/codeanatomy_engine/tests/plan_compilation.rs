@@ -1,13 +1,17 @@
+mod common;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use codeanatomy_engine::compiler::param_compiler::apply_typed_parameters;
+use codeanatomy_engine::compiler::plan_bundle::{PlanBundleArtifact, ProviderIdentity};
 use codeanatomy_engine::compiler::plan_compiler::SemanticPlanCompiler;
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::spec::join_graph::JoinGraph;
-use codeanatomy_engine::spec::outputs::{MaterializationMode, OutputTarget};
+use codeanatomy_engine::spec::outputs::MaterializationMode;
 use codeanatomy_engine::spec::relations::{InputRelation, SchemaContract, ViewDefinition, ViewTransform};
 use codeanatomy_engine::spec::rule_intents::RulepackProfile;
 use datafusion::datasource::MemTable;
@@ -49,16 +53,12 @@ async fn test_plan_compiler_builds_single_output_plan() {
             output_schema: SchemaContract { columns },
         }],
         JoinGraph::default(),
-        vec![OutputTarget {
-            table_name: "out_table".to_string(),
-            delta_location: None,
-            source_view: "projected".to_string(),
-            columns: vec!["id".to_string()],
-            materialization_mode: MaterializationMode::Overwrite,
-            partition_by: vec![],
-            write_metadata: std::collections::BTreeMap::new(),
-            max_commit_retries: None,
-        }],
+        vec![common::output_target(
+            "out_table",
+            "projected",
+            &["id"],
+            MaterializationMode::Overwrite,
+        )],
         vec![],
         RulepackProfile::Default,
         vec![],
@@ -127,26 +127,18 @@ async fn test_plan_compiler_builds_multi_output_plan() {
         ],
         JoinGraph::default(),
         vec![
-            OutputTarget {
-                table_name: "ids_out".to_string(),
-                delta_location: None,
-                source_view: "ids_view".to_string(),
-                columns: vec!["id".to_string()],
-                materialization_mode: MaterializationMode::Overwrite,
-                partition_by: vec![],
-                write_metadata: std::collections::BTreeMap::new(),
-                max_commit_retries: None,
-            },
-            OutputTarget {
-                table_name: "names_out".to_string(),
-                delta_location: None,
-                source_view: "names_view".to_string(),
-                columns: vec!["name".to_string()],
-                materialization_mode: MaterializationMode::Overwrite,
-                partition_by: vec![],
-                write_metadata: std::collections::BTreeMap::new(),
-                max_commit_retries: None,
-            },
+            common::output_target(
+                "ids_out",
+                "ids_view",
+                &["id"],
+                MaterializationMode::Overwrite,
+            ),
+            common::output_target(
+                "names_out",
+                "names_view",
+                &["name"],
+                MaterializationMode::Overwrite,
+            ),
         ],
         vec![],
         RulepackProfile::Default,
@@ -211,16 +203,12 @@ async fn test_plan_compiler_rejects_cyclic_dependencies() {
             },
         ],
         JoinGraph::default(),
-        vec![OutputTarget {
-            table_name: "out".to_string(),
-            delta_location: None,
-            source_view: "view_a".to_string(),
-            columns: vec!["id".to_string()],
-            materialization_mode: MaterializationMode::Overwrite,
-            partition_by: vec![],
-            write_metadata: std::collections::BTreeMap::new(),
-            max_commit_retries: None,
-        }],
+        vec![common::output_target(
+            "out",
+            "view_a",
+            &["id"],
+            MaterializationMode::Overwrite,
+        )],
         vec![],
         RulepackProfile::Default,
         vec![],
@@ -231,4 +219,97 @@ async fn test_plan_compiler_rejects_cyclic_dependencies() {
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
     assert!(err_msg.contains("Cycle detected"), "Expected cycle detection error, got: {err_msg}");
+}
+
+// ---------------------------------------------------------------------------
+// Scope 8: Typed parameter compile path (apply_typed_parameters exists and callable)
+// ---------------------------------------------------------------------------
+
+/// Scope 8: apply_typed_parameters is importable and callable with empty params.
+#[tokio::test]
+async fn test_apply_typed_parameters_exists_and_callable() {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+    )
+    .unwrap();
+    ctx.register_table(
+        "test_input",
+        Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()),
+    )
+    .unwrap();
+
+    let df = ctx.table("test_input").await.unwrap();
+
+    // Empty params should return the DataFrame unchanged.
+    let result = apply_typed_parameters(df, &[]).await;
+    assert!(
+        result.is_ok(),
+        "apply_typed_parameters with empty params must succeed"
+    );
+
+    let batches = result.unwrap().collect().await.unwrap();
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_rows, 3, "empty params must not filter any rows");
+}
+
+// ---------------------------------------------------------------------------
+// Scope 4: PlanBundleArtifact has planning_surface_hash and provider_identities
+// ---------------------------------------------------------------------------
+
+/// Scope 4: PlanBundleArtifact contains planning_surface_hash and provider_identities fields.
+///
+/// This is a structural/compile-time assertion that verifies these fields exist
+/// and are accessible on the artifact struct.
+#[test]
+fn test_plan_bundle_artifact_has_required_scope4_fields() {
+    // Construct a minimal PlanBundleArtifact to verify field presence.
+    let artifact = PlanBundleArtifact {
+        artifact_version: 1,
+        p0_digest: [0u8; 32],
+        p1_digest: [0u8; 32],
+        p2_digest: [0u8; 32],
+        p0_text: None,
+        p1_text: None,
+        p2_text: None,
+        explain_verbose: vec![],
+        explain_analyze: vec![],
+        rulepack_fingerprint: [0u8; 32],
+        provider_identities: vec![
+            ProviderIdentity {
+                table_name: "test_table".to_string(),
+                identity_hash: [42u8; 32],
+            },
+        ],
+        schema_fingerprints: codeanatomy_engine::compiler::plan_bundle::SchemaFingerprints {
+            p0_schema_hash: [0u8; 32],
+            p1_schema_hash: [0u8; 32],
+            p2_schema_hash: [0u8; 32],
+        },
+        planning_surface_hash: [99u8; 32],
+        substrait_bytes: None,
+        sql_text: None,
+        delta_codec_logical_bytes: None,
+        delta_codec_physical_bytes: None,
+    };
+
+    // Scope 4: provider_identities field exists and is populated.
+    assert_eq!(artifact.provider_identities.len(), 1);
+    assert_eq!(artifact.provider_identities[0].table_name, "test_table");
+
+    // Scope 3/4: planning_surface_hash field exists.
+    assert_eq!(artifact.planning_surface_hash, [99u8; 32]);
+
+    // Serialization includes both fields.
+    let json = serde_json::to_string(&artifact).unwrap();
+    assert!(
+        json.contains("planning_surface_hash"),
+        "serialized artifact must contain planning_surface_hash"
+    );
+    assert!(
+        json.contains("provider_identities"),
+        "serialized artifact must contain provider_identities"
+    );
 }

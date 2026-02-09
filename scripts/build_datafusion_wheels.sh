@@ -86,23 +86,29 @@ if [ "${#datafusion_python_features[@]}" -gt 0 ]; then
   datafusion_feature_flags=(--features "${datafusion_feature_csv}")
 fi
 maturin_common_flags=(--locked)
+maturin_wheel_flags=("${maturin_common_flags[@]}")
 if [ "${profile}" = "release" ] && [ "${CODEANATOMY_WHEEL_BUILD_SDIST:-1}" = "1" ]; then
-  maturin_common_flags+=(--sdist)
+  maturin_wheel_flags+=(--sdist)
 fi
 
 uv_run_cmd=(uv run --no-sync)
 
-"${uv_run_cmd[@]}" maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
+"${uv_run_cmd[@]}" maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_wheel_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 (
   cd rust/datafusion_ext_py
-  "${uv_run_cmd[@]}" maturin build --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
+  "${uv_run_cmd[@]}" maturin build --${profile} "${datafusion_feature_flags[@]}" "${maturin_wheel_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${run_wheel_dir}"
 )
 
-# Build codeanatomy_engine wheel (pyo3 bindings)
-uv run --no-sync maturin build -m rust/codeanatomy_engine/Cargo.toml \
-    --${profile} --features pyo3 \
-    "${maturin_common_flags[@]}" "${compatibility_args[@]}" \
-    "${manylinux_args[@]}" -o "${run_wheel_dir}"
+# Build codeanatomy_engine wheel (pyo3 bindings).
+# Build from the crate directory so feature selection is scoped to codeanatomy-engine.
+(
+  cd rust/codeanatomy_engine
+  "${uv_run_cmd[@]}" maturin build \
+      --${profile} \
+      --features codeanatomy-engine/pyo3 \
+      "${maturin_common_flags[@]}" "${compatibility_args[@]}" \
+      "${manylinux_args[@]}" -o "${run_wheel_dir}"
+)
 
 shopt -s nullglob
 datafusion_wheels=("${run_wheel_dir}"/datafusion-*.whl)

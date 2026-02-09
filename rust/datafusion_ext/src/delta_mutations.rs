@@ -202,6 +202,40 @@ pub async fn delta_write_ipc(
     commit_options: Option<DeltaCommitOptions>,
     extra_constraints: Option<Vec<String>>,
 ) -> Result<DeltaMutationReport, DeltaTableError> {
+    let batches = batches_from_ipc(data_ipc)?;
+    delta_write_batches(
+        session_ctx,
+        table_uri,
+        storage_options,
+        version,
+        timestamp,
+        batches,
+        save_mode,
+        schema_mode_label,
+        partition_columns,
+        target_file_size,
+        gate,
+        commit_options,
+        extra_constraints,
+    )
+    .await
+}
+
+pub async fn delta_write_batches(
+    session_ctx: &SessionContext,
+    table_uri: &str,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    batches: Vec<RecordBatch>,
+    save_mode: SaveMode,
+    schema_mode_label: Option<String>,
+    partition_columns: Option<Vec<String>>,
+    target_file_size: Option<usize>,
+    gate: Option<DeltaFeatureGate>,
+    commit_options: Option<DeltaCommitOptions>,
+    extra_constraints: Option<Vec<String>>,
+) -> Result<DeltaMutationReport, DeltaTableError> {
     let table = load_delta_table(
         table_uri,
         storage_options,
@@ -212,7 +246,6 @@ pub async fn delta_write_ipc(
     .await?;
     let _snapshot = snapshot_with_gate(table_uri, &table, gate).await?;
     let eager_snapshot = table.snapshot()?.snapshot().clone();
-    let batches = batches_from_ipc(data_ipc)?;
     let violations =
         run_constraint_check(session_ctx, &eager_snapshot, &batches, extra_constraints).await?;
     ensure_no_violations(violations)?;

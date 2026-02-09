@@ -84,11 +84,19 @@ pub struct PlanBundleArtifact {
     /// Schema fingerprints at each plan boundary.
     pub schema_fingerprints: SchemaFingerprints,
 
+    // -- Planning surface identity --
+    /// BLAKE3 hash of the planning surface manifest.
+    pub planning_surface_hash: [u8; 32],
+
     // -- Portability artifacts (optional) --
     /// Substrait-encoded logical plan bytes (requires `substrait` feature).
     pub substrait_bytes: Option<Vec<u8>>,
     /// SQL text unparsed from the optimized logical plan.
     pub sql_text: Option<String>,
+    /// Delta extension-codec logical plan bytes.
+    pub delta_codec_logical_bytes: Option<Vec<u8>>,
+    /// Delta extension-codec physical plan bytes.
+    pub delta_codec_physical_bytes: Option<Vec<u8>>,
 }
 
 /// A single entry from EXPLAIN output.
@@ -145,6 +153,8 @@ pub struct PlanDiff {
     pub rulepack_changed: bool,
     /// True if provider identity sets differ.
     pub providers_changed: bool,
+    /// True if planning surface hashes differ.
+    pub planning_surface_changed: bool,
     /// Human-readable summary of what changed.
     pub summary: Vec<String>,
 }
@@ -193,6 +203,10 @@ pub async fn capture_plan_bundle_runtime(
 ///     When true, encode the optimized plan to Substrait bytes.
 /// capture_sql
 ///     When true, unparse the optimized plan to SQL text.
+/// capture_delta_codec
+///     When true, encode logical/physical plans with Delta extension codecs.
+/// planning_surface_hash
+///     BLAKE3 hash of the planning surface manifest.
 pub async fn build_plan_bundle_artifact(
     ctx: &SessionContext,
     runtime: &PlanBundleRuntime,
@@ -200,19 +214,84 @@ pub async fn build_plan_bundle_artifact(
     provider_identities: Vec<ProviderIdentity>,
     capture_substrait: bool,
     capture_sql: bool,
+    capture_delta_codec: bool,
+    planning_surface_hash: [u8; 32],
 ) -> Result<PlanBundleArtifact> {
+    let (artifact, _warnings) = build_plan_bundle_artifact_with_warnings(
+        ctx,
+        runtime,
+        rulepack_fingerprint,
+        provider_identities,
+        capture_substrait,
+        capture_sql,
+        capture_delta_codec,
+        planning_surface_hash,
+    )
+    .await?;
+    Ok(artifact)
+}
+
+/// Build a persisted artifact and return non-fatal capture warnings.
+pub async fn build_plan_bundle_artifact_with_warnings(
+    ctx: &SessionContext,
+    runtime: &PlanBundleRuntime,
+    rulepack_fingerprint: [u8; 32],
+    provider_identities: Vec<ProviderIdentity>,
+    capture_substrait: bool,
+    capture_sql: bool,
+    capture_delta_codec: bool,
+    planning_surface_hash: [u8; 32],
+) -> Result<(PlanBundleArtifact, Vec<String>)> {
     let p0_text = normalize_logical(&runtime.p0_logical);
     let p1_text = normalize_logical(&runtime.p1_optimized);
     let p2_text = normalize_physical(runtime.p2_physical.as_ref());
 
     let explain_verbose = capture_explain_verbose(ctx, &runtime.p1_optimized).await?;
     let explain_analyze = capture_explain_analyze(ctx, &runtime.p1_optimized).await?;
+    let mut warnings = Vec::new();
 
     // Schema fingerprints: P0/P1 use DFSchema::as_arrow(), P2 uses Arrow directly.
     let p0_arrow_schema = runtime.p0_logical.schema().as_arrow();
     let p1_arrow_schema = runtime.p1_optimized.schema().as_arrow();
 
-    Ok(PlanBundleArtifact {
+    let substrait_bytes = if capture_substrait {
+        match try_substrait_encode(ctx, &runtime.p1_optimized) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                warnings.push(format!("Optional plan capture failed for substrait: {err}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let sql_text = if capture_sql {
+        match try_sql_unparse(&runtime.p1_optimized) {
+            Ok(text) => Some(text),
+            Err(err) => {
+                warnings.push(format!("Optional plan capture failed for sql_text: {err}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (delta_codec_logical_bytes, delta_codec_physical_bytes) = if capture_delta_codec {
+        match super::plan_codec::encode_with_delta_codecs(
+            &runtime.p1_optimized,
+            Arc::clone(&runtime.p2_physical),
+        ) {
+            Ok((logical, physical)) => (Some(logical), Some(physical)),
+            Err(err) => {
+                warnings.push(format!("Optional plan capture failed for delta_codec: {err}"));
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+
+    Ok((PlanBundleArtifact {
         artifact_version: 1,
         p0_digest: blake3_hash_bytes(p0_text.as_bytes()),
         p1_digest: blake3_hash_bytes(p1_text.as_bytes()),
@@ -229,17 +308,12 @@ pub async fn build_plan_bundle_artifact(
             p1_schema_hash: hash_schema(p1_arrow_schema),
             p2_schema_hash: hash_schema(&runtime.p2_physical.schema()),
         },
-        substrait_bytes: if capture_substrait {
-            try_substrait_encode(ctx, &runtime.p1_optimized).ok()
-        } else {
-            None
-        },
-        sql_text: if capture_sql {
-            try_sql_unparse(&runtime.p1_optimized).ok()
-        } else {
-            None
-        },
-    })
+        planning_surface_hash,
+        substrait_bytes,
+        sql_text,
+        delta_codec_logical_bytes,
+        delta_codec_physical_bytes,
+    }, warnings))
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +333,7 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
         || a.schema_fingerprints.p2_schema_hash != b.schema_fingerprints.p2_schema_hash;
     let rulepack_changed = a.rulepack_fingerprint != b.rulepack_fingerprint;
     let providers_changed = a.provider_identities != b.provider_identities;
+    let planning_surface_changed = a.planning_surface_hash != b.planning_surface_hash;
 
     let mut summary = Vec::new();
     if p0_changed {
@@ -279,6 +354,9 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
     if providers_changed {
         summary.push("Provider identities changed".into());
     }
+    if planning_surface_changed {
+        summary.push("Planning surface hash changed".into());
+    }
 
     PlanDiff {
         p0_changed,
@@ -287,6 +365,7 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
         schema_drift,
         rulepack_changed,
         providers_changed,
+        planning_surface_changed,
         summary,
     }
 }
@@ -459,6 +538,8 @@ mod tests {
             vec![],
             false,
             false,
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -483,6 +564,8 @@ mod tests {
             vec![],
             false,
             false,
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -496,6 +579,8 @@ mod tests {
             vec![],
             false,
             false,
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -519,6 +604,8 @@ mod tests {
             vec![],
             false,
             false,
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -530,6 +617,7 @@ mod tests {
         assert!(!diff.schema_drift);
         assert!(!diff.rulepack_changed);
         assert!(!diff.providers_changed);
+        assert!(!diff.planning_surface_changed);
         assert!(diff.summary.is_empty());
     }
 
@@ -546,6 +634,8 @@ mod tests {
             vec![],
             false,
             false,
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -557,6 +647,8 @@ mod tests {
             vec![],
             false,
             false,
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -579,6 +671,8 @@ mod tests {
             vec![],
             false,
             false,
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -593,6 +687,8 @@ mod tests {
             }],
             false,
             false,
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -615,6 +711,8 @@ mod tests {
             vec![],
             false,
             true, // capture SQL
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -638,6 +736,8 @@ mod tests {
             vec![],
             false,
             false,
+            false,
+            [0u8; 32],
         )
         .await
         .unwrap();
@@ -646,6 +746,58 @@ mod tests {
         assert!(!artifact.explain_verbose.is_empty());
         // EXPLAIN ANALYZE should produce at least one entry.
         assert!(!artifact.explain_analyze.is_empty());
+    }
+
+    #[cfg(not(feature = "substrait"))]
+    #[tokio::test]
+    async fn test_optional_substrait_capture_failure_returns_warning() {
+        let ctx = test_ctx().await;
+        let df = ctx.table("test_table").await.unwrap();
+        let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
+
+        let (_artifact, warnings) = build_plan_bundle_artifact_with_warnings(
+            &ctx,
+            &runtime,
+            [0u8; 32],
+            vec![],
+            true,
+            false,
+            false,
+            [0u8; 32],
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            warnings.iter().any(|warning| warning.contains("substrait")),
+            "optional capture failures should surface through warnings"
+        );
+    }
+
+    #[cfg(not(feature = "delta-codec"))]
+    #[tokio::test]
+    async fn test_optional_delta_codec_capture_failure_returns_warning() {
+        let ctx = test_ctx().await;
+        let df = ctx.table("test_table").await.unwrap();
+        let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
+
+        let (_artifact, warnings) = build_plan_bundle_artifact_with_warnings(
+            &ctx,
+            &runtime,
+            [0u8; 32],
+            vec![],
+            false,
+            false,
+            true,
+            [0u8; 32],
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            warnings.iter().any(|warning| warning.contains("delta_codec")),
+            "delta-codec optional capture failures should surface through warnings"
+        );
     }
 
     #[test]

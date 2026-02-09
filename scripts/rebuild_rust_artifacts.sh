@@ -36,13 +36,17 @@ fi
 feature_csv="$(IFS=,; echo "${datafusion_python_features[*]}")"
 datafusion_feature_flags=(--features "${feature_csv}")
 maturin_common_flags=(--locked)
+maturin_wheel_flags=("${maturin_common_flags[@]}")
 if [ "${profile}" = "release" ] && [ "${CODEANATOMY_WHEEL_BUILD_SDIST:-1}" = "1" ]; then
-  maturin_common_flags+=(--sdist)
+  maturin_wheel_flags+=(--sdist)
 fi
 
 uv run maturin develop -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}"
 uv run maturin develop -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}"
-uv run maturin develop -m rust/codeanatomy_engine/Cargo.toml --${profile} --features pyo3
+(
+  cd rust/codeanatomy_engine
+  uv run maturin develop --${profile} --features codeanatomy-engine/pyo3
+)
 
 wheel_dir="dist/wheels"
 mkdir -p "${wheel_dir}"
@@ -63,11 +67,14 @@ if [ "$(uname -s)" = "Linux" ] && [ "${compatibility}" = "pypi" ]; then
     manylinux_args=(--manylinux "${manylinux_policy}")
   fi
 fi
-uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_python/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_wheel_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion
-uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+uv run maturin build -m rust/datafusion_ext_py/Cargo.toml --${profile} "${datafusion_feature_flags[@]}" "${maturin_wheel_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
 uv lock --refresh-package datafusion-ext
-uv run maturin build -m rust/codeanatomy_engine/Cargo.toml --${profile} --features pyo3 "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+(
+  cd rust/codeanatomy_engine
+  uv run maturin build --${profile} --features codeanatomy-engine/pyo3 "${maturin_common_flags[@]}" "${compatibility_args[@]}" "${manylinux_args[@]}" -o "${wheel_dir}"
+)
 
 (
   cd rust/df_plugin_codeanatomy

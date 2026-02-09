@@ -25,6 +25,14 @@ pub struct SemanticExecutionSpec {
     pub output_targets: Vec<OutputTarget>,
     pub rule_intents: Vec<RuleIntent>,
     pub rulepack_profile: RulepackProfile,
+    /// **Deprecated**: Use `typed_parameters` instead. This field is retained for
+    /// transitional compatibility only. When both `typed_parameters` and
+    /// `parameter_templates` are non-empty, compilation fails with a parameter
+    /// mode exclusivity error.
+    ///
+    /// Template parameters use env-var string substitution (`CODEANATOMY_PARAM_<NAME>`)
+    /// and SQL literal interpolation, which is less type-safe and less deterministic
+    /// than the typed parameter path. New specs should use `typed_parameters` exclusively.
     pub parameter_templates: Vec<ParameterTemplate>,
     #[serde(default)]
     pub runtime: RuntimeConfig,

@@ -7,6 +7,8 @@ use arrow::array::Array;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use crate::providers::pushdown_contract::PushdownProbe;
+
 /// Compliance capture context — only active in strict/replay profiles.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplianceCapture {
@@ -20,6 +22,15 @@ pub struct ComplianceCapture {
     pub rulepack_snapshot: RulepackSnapshot,
     /// Retention policy
     pub retention: RetentionPolicy,
+    /// Optimizer lab step traces keyed by lab experiment name.
+    ///
+    /// Populated via `record_lab_steps()` when offline optimizer lab results
+    /// should be included in compliance artifacts for auditing.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lab_traces: BTreeMap<String, Vec<crate::stability::optimizer_lab::RuleStep>>,
+    /// Per-table provider pushdown probes captured from spec filter predicates.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pushdown_probes: BTreeMap<String, PushdownProbe>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +80,8 @@ impl ComplianceCapture {
                 fingerprint: [0u8; 32],
             },
             retention,
+            lab_traces: BTreeMap::new(),
+            pushdown_probes: BTreeMap::new(),
         }
     }
 
@@ -100,6 +113,29 @@ impl ComplianceCapture {
         self.rulepack_snapshot = snapshot;
     }
 
+    /// Record optimizer lab step traces for compliance auditing.
+    ///
+    /// Stores the full sequence of `RuleStep` records from an offline optimizer
+    /// lab run, keyed by the experiment name. Multiple experiments can be
+    /// recorded under different names.
+    ///
+    /// # Arguments
+    ///
+    /// * `lab_name` - Identifier for this lab experiment (e.g., "baseline", "candidate").
+    /// * `steps` - Ordered rule step trace from `run_optimizer_lab`.
+    pub fn record_lab_steps(
+        &mut self,
+        lab_name: &str,
+        steps: Vec<crate::stability::optimizer_lab::RuleStep>,
+    ) {
+        self.lab_traces.insert(lab_name.to_string(), steps);
+    }
+
+    /// Record a pushdown probe for a specific table/provider.
+    pub fn record_pushdown_probe(&mut self, table_name: &str, probe: PushdownProbe) {
+        self.pushdown_probes.insert(table_name.to_string(), probe);
+    }
+
     /// Serialize to JSON for persistence.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
@@ -110,6 +146,8 @@ impl ComplianceCapture {
         self.explain_traces.is_empty()
             && self.rule_impact.is_empty()
             && self.config_snapshot.is_empty()
+            && self.lab_traces.is_empty()
+            && self.pushdown_probes.is_empty()
     }
 }
 
@@ -192,5 +230,111 @@ mod tests {
     fn test_retention_policy_default() {
         let policy = RetentionPolicy::default();
         matches!(policy, RetentionPolicy::Short);
+    }
+
+    #[test]
+    fn test_compliance_capture_record_lab_steps() {
+        use crate::stability::optimizer_lab::RuleStep;
+
+        let mut capture = ComplianceCapture::new(RetentionPolicy::Short);
+        assert!(capture.is_empty());
+
+        let steps = vec![
+            RuleStep {
+                ordinal: 0,
+                rule_name: "rule_a".to_string(),
+                plan_digest: [1u8; 32],
+            },
+            RuleStep {
+                ordinal: 1,
+                rule_name: "rule_b".to_string(),
+                plan_digest: [2u8; 32],
+            },
+        ];
+
+        capture.record_lab_steps("baseline", steps);
+        assert!(!capture.is_empty());
+        assert_eq!(capture.lab_traces.len(), 1);
+        assert_eq!(capture.lab_traces.get("baseline").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_compliance_capture_lab_traces_serialization() {
+        use crate::stability::optimizer_lab::RuleStep;
+
+        let mut capture = ComplianceCapture::new(RetentionPolicy::Short);
+
+        let steps = vec![RuleStep {
+            ordinal: 0,
+            rule_name: "test_rule".to_string(),
+            plan_digest: [0u8; 32],
+        }];
+
+        capture.record_lab_steps("experiment_1", steps);
+
+        let json = capture.to_json().unwrap();
+        assert!(json.contains("lab_traces"));
+        assert!(json.contains("experiment_1"));
+        assert!(json.contains("test_rule"));
+    }
+
+    #[test]
+    fn test_compliance_capture_lab_traces_skipped_when_empty() {
+        let capture = ComplianceCapture::new(RetentionPolicy::Short);
+
+        let json = capture.to_json().unwrap();
+        // lab_traces should be skipped in serialization when empty
+        assert!(!json.contains("lab_traces"));
+    }
+
+    #[test]
+    fn test_compliance_capture_multiple_lab_experiments() {
+        use crate::stability::optimizer_lab::RuleStep;
+
+        let mut capture = ComplianceCapture::new(RetentionPolicy::Short);
+
+        capture.record_lab_steps(
+            "baseline",
+            vec![RuleStep {
+                ordinal: 0,
+                rule_name: "rule_a".to_string(),
+                plan_digest: [1u8; 32],
+            }],
+        );
+
+        capture.record_lab_steps(
+            "candidate",
+            vec![RuleStep {
+                ordinal: 0,
+                rule_name: "rule_a".to_string(),
+                plan_digest: [2u8; 32],
+            }],
+        );
+
+        assert_eq!(capture.lab_traces.len(), 2);
+        assert!(capture.lab_traces.contains_key("baseline"));
+        assert!(capture.lab_traces.contains_key("candidate"));
+    }
+
+    #[test]
+    fn test_compliance_capture_records_pushdown_probe() {
+        use crate::providers::pushdown_contract::{FilterPushdownStatus, PushdownProbe};
+
+        let mut capture = ComplianceCapture::new(RetentionPolicy::Short);
+        capture.record_pushdown_probe(
+            "nodes",
+            PushdownProbe {
+                provider: "nodes".to_string(),
+                filter_sql: vec!["id > 1".to_string()],
+                statuses: vec![FilterPushdownStatus::Inexact],
+            },
+        );
+
+        assert!(!capture.is_empty());
+        assert!(capture.pushdown_probes.contains_key("nodes"));
+
+        let json = capture.to_json().unwrap();
+        assert!(json.contains("pushdown_probes"));
+        assert!(json.contains("inexact"));
     }
 }

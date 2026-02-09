@@ -51,9 +51,13 @@ prost = "0.14"
 datafusion-substrait = { version = "51.0.0", optional = true }
 substrait = { version = "0.62", optional = true }
 
+# Optional Delta codec support (plan serialization with extension codecs)
+datafusion-proto = { version = "51.0.0", optional = true }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1"
 
 [features]
 default = ["compliance"]
@@ -70,3 +74,5 @@ tracing = [
     "dep:tracing-opentelemetry",
     "dep:tracing-subscriber",
 ]
+delta-planner = []
+delta-codec = ["dep:datafusion-proto"]

@@ -1,14 +1,14 @@
 #![cfg(feature = "tracing")]
 
-use codeanatomy_engine::rules::registry::CpgRuleSet;
+mod common;
+
 use codeanatomy_engine::session::factory::SessionFactory;
-use codeanatomy_engine::session::profiles::{EnvironmentClass, EnvironmentProfile};
 use codeanatomy_engine::spec::runtime::{RuleTraceMode, TracingConfig};
 
 #[tokio::test]
 async fn test_execution_instrumentation_rule_is_last() {
-    let factory = SessionFactory::new(EnvironmentProfile::from_class(EnvironmentClass::Small));
-    let ruleset = CpgRuleSet::new(vec![], vec![], vec![]);
+    let factory = SessionFactory::new(common::test_environment_profile());
+    let ruleset = common::empty_ruleset();
     let tracing_config = TracingConfig {
         enabled: true,
         record_metrics: true,
@@ -40,8 +40,8 @@ async fn test_execution_instrumentation_rule_is_last() {
 
 #[tokio::test]
 async fn test_disabled_tracing_does_not_append_instrument_rule() {
-    let factory = SessionFactory::new(EnvironmentProfile::from_class(EnvironmentClass::Small));
-    let ruleset = CpgRuleSet::new(vec![], vec![], vec![]);
+    let factory = SessionFactory::new(common::test_environment_profile());
+    let ruleset = common::empty_ruleset();
     let tracing_config = TracingConfig {
         enabled: false,
         ..TracingConfig::default()

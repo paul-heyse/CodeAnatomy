@@ -161,6 +161,21 @@
 - Use `--update-golden` flag: `uv run pytest tests/semantics/test_semantic_ir_snapshot.py --update-golden`
 - Always review diff before committing updated goldens
 
+## Typed Parameter Planning Cutover (Scope 8)
+- `validate_parameter_mode()` free fn in plan_compiler.rs: rejects specs with both typed_parameters AND parameter_templates
+- Graph validator also validates mode exclusivity (defense in depth)
+- When typed_parameters present: skip collect_parameter_values(), pass empty HashMap to compile_view, apply typed params to output DataFrames
+- Template path unchanged when typed_parameters is empty (backward compat)
+- `apply_parameters()` method on SemanticPlanCompiler for external callers
+- ParameterTemplate + parameter_templates field: deprecated doc comments added with migration guide
+- All 352 tests pass, no regressions
+
+## Pushdown Contract (Scope 6)
+- `providers/pushdown_contract.rs`: `FilterPushdownStatus` (serde wrapper for `TableProviderFilterPushDown`)
+- DF 51 `TableProviderFilterPushDown` only derives `Debug, Clone, PartialEq, Eq` -- no serde
+- `probe_pushdown()` takes `&dyn TableProvider` + `&[Expr]`; `probe_provider_pushdown()` in registration.rs fetches from session catalog
+- `ctx.table_provider(name).await` returns `Result<Arc<dyn TableProvider>>` in DF 51
+
 ## Rust datafusion_ext Crate Patterns
 - Crate at `rust/datafusion_ext/`; check with `cargo check -p datafusion_ext`
 - Downstream `codeanatomy-engine` at `rust/codeanatomy_engine/`; check with `cargo check -p codeanatomy-engine`
@@ -287,6 +302,27 @@
 - 340+ tests pass across all workspace crates (241 lib + 8+5+1+8+3+6+3+1+16+5+45 = 342+ total)
 - All 15 audit gap items verified closed
 - Python quality gate passes (ruff format clean, ruff check 29 pre-existing errors, pyrefly 0 errors)
+
+## Scope Item 3: Planning-Surface Manifest Hash (Wave 2, Agent E)
+- `session/planning_manifest.rs`: PlanningSurfaceManifest (Serialize + hash via blake3 over sorted canonical JSON)
+- `SessionEnvelope` gained `planning_surface_hash: [u8; 32]` field + parameter in `capture()`
+- `PlanBundleArtifact` gained `planning_surface_hash: [u8; 32]` field + parameter in `build_plan_bundle_artifact()`
+- `PlanDiff` gained `planning_surface_changed: bool` field
+- All callsites pass `[0u8; 32]` default until Wave 3 wires real manifest hash
+- Callsites: factory.rs (1), materializer.rs (2: envelope + bundle), runner.rs (1)
+- Name vectors sorted inside `hash()` for order-independent determinism
+- 10 new unit tests for hash determinism, order independence, serde round-trip
+
+## Scope Item 7: Optional Delta Planner + Delta Codec Seams (Wave 2, Agent F)
+- Feature gates: `delta-planner = []` (marker) and `delta-codec = ["dep:datafusion-proto"]` in Cargo.toml
+- Plan erroneously specified `delta-codec = ["dep:datafusion-substrait"]`; codec APIs live in `datafusion-proto`
+- `DeltaPlanner::new()` returns `Arc<DeltaPlanner>` -- do NOT wrap in `Arc::new()` (double-Arc error)
+- `physical_plan_to_bytes_with_extension_codec()` takes `Arc<dyn ExecutionPlan>`, not `&dyn`
+- `install_delta_codecs()` pattern: `ctx.state_ref().write().config_mut().set_extension(Arc::new(codec))`
+- `PlanningSurfaceSpec.query_planner` already exists; feature gate just conditionally sets it
+- When `mut` binding is only needed under cfg feature: use `#[allow(unused_mut)]`
+- Test pattern for cfg-gated tests: put imports in test fn body to avoid unused-import warnings
+- `#[cfg(not(feature))]` test functions don't see `use super::*` -- use explicit imports
 
 ## Wave 3-B: Integration Tests + Drift Surface Expansion
 - Integration tests: `tests/integration/test_programmatic_architecture_parity.py`

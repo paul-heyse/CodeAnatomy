@@ -3,13 +3,16 @@
 //! Always register native Delta providers. No Arrow Dataset fallback.
 //! Reuses existing `datafusion_ext::delta_control_plane`.
 
+pub mod pushdown_contract;
 pub mod registration;
 pub mod scan_config;
 pub mod snapshot;
 
 // Re-export key types for convenience
+pub use pushdown_contract::{probe_pushdown, FilterPushdownStatus, PushdownProbe};
 pub use registration::{register_extraction_inputs, TableRegistration};
 pub use scan_config::{
     has_lineage_tracking, lineage_column_name, standard_scan_config, validate_scan_config,
+    PushdownStatus,
 };
 pub use snapshot::{snapshot_metadata, table_version, validate_version_pin, SnapshotMode};

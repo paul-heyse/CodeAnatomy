@@ -84,3 +84,36 @@ pub fn install_expr_planners_native(ctx: &SessionContext, planner_names: &[&str]
     }
     Ok(())
 }
+
+// ---- Planning-Surface Builder Helpers ----
+//
+// These functions expose planner/rewrite components for use in
+// PlanningSurfaceSpec construction. They allow codeanatomy_engine
+// to assemble a typed planning surface without needing direct
+// dependencies on datafusion_functions_nested.
+
+use datafusion_expr::expr_rewriter::FunctionRewrite;
+use datafusion_expr::planner::ExprPlanner;
+
+/// Return the domain expression planners for builder-path registration.
+///
+/// Includes NestedFunctionPlanner, FieldAccessPlanner, and the
+/// CodeAnatomy domain planner. These are the same planners installed
+/// by `install_expr_planners_native` with `codeanatomy_domain`.
+pub fn domain_expr_planners() -> Vec<Arc<dyn ExprPlanner>> {
+    vec![
+        Arc::new(datafusion_functions_nested::planner::NestedFunctionPlanner),
+        Arc::new(datafusion_functions_nested::planner::FieldAccessPlanner),
+        Arc::new(expr_planner::CodeAnatomyDomainPlanner::default()),
+    ]
+}
+
+/// Return the domain function rewrites for builder-path registration.
+///
+/// These are the same rewrites installed by `install_expr_planners_native`
+/// with `codeanatomy_domain`.
+pub fn domain_function_rewrites() -> Vec<Arc<dyn FunctionRewrite + Send + Sync>> {
+    vec![Arc::new(
+        function_rewrite::CodeAnatomyOperatorRewrite::default(),
+    )]
+}

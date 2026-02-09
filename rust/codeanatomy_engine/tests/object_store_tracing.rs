@@ -1,15 +1,15 @@
 #![cfg(feature = "tracing")]
 
-use codeanatomy_engine::rules::registry::CpgRuleSet;
+mod common;
+
 use codeanatomy_engine::executor::tracing as engine_tracing;
 use codeanatomy_engine::session::factory::SessionFactory;
-use codeanatomy_engine::session::profiles::{EnvironmentClass, EnvironmentProfile};
 use codeanatomy_engine::spec::runtime::{RuleTraceMode, TracingConfig};
 
 #[tokio::test]
 async fn test_instrumented_file_store_registration_keeps_session_usable() {
-    let factory = SessionFactory::new(EnvironmentProfile::from_class(EnvironmentClass::Small));
-    let ruleset = CpgRuleSet::new(vec![], vec![], vec![]);
+    let factory = SessionFactory::new(common::test_environment_profile());
+    let ruleset = common::empty_ruleset();
     let tracing_config = TracingConfig {
         enabled: true,
         rule_mode: RuleTraceMode::Disabled,
@@ -30,8 +30,8 @@ async fn test_instrumented_file_store_registration_keeps_session_usable() {
 
 #[tokio::test]
 async fn test_store_registration_rejects_unsupported_scheme() {
-    let factory = SessionFactory::new(EnvironmentProfile::from_class(EnvironmentClass::Small));
-    let ruleset = CpgRuleSet::new(vec![], vec![], vec![]);
+    let factory = SessionFactory::new(common::test_environment_profile());
+    let ruleset = common::empty_ruleset();
     let tracing_config = TracingConfig {
         enabled: true,
         instrument_object_store: true,
@@ -58,8 +58,8 @@ async fn test_store_registration_rejects_unsupported_scheme() {
 
 #[tokio::test]
 async fn test_store_registration_deduplicates_same_scheme_root() {
-    let factory = SessionFactory::new(EnvironmentProfile::from_class(EnvironmentClass::Small));
-    let ruleset = CpgRuleSet::new(vec![], vec![], vec![]);
+    let factory = SessionFactory::new(common::test_environment_profile());
+    let ruleset = common::empty_ruleset();
     let tracing_config = TracingConfig {
         enabled: true,
         instrument_object_store: true,

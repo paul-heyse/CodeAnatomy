@@ -27,6 +27,12 @@ pub struct RunResult {
     pub trace_metrics_summary: Option<TraceMetricsSummary>,
     /// WS-P11: Post-execution Delta maintenance reports.
     pub maintenance_reports: Vec<MaintenanceReport>,
+    /// WS-P10: Non-fatal warnings collected during pipeline execution.
+    ///
+    /// Captures errors from best-effort operations (plan bundle capture,
+    /// maintenance, compliance serialization) that were previously swallowed
+    /// silently. Each entry is a human-readable message with error context.
+    pub warnings: Vec<String>,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
 }
@@ -97,6 +103,7 @@ pub struct RunResultBuilder {
     collected_metrics: Option<CollectedMetrics>,
     trace_metrics_summary: Option<TraceMetricsSummary>,
     maintenance_reports: Vec<MaintenanceReport>,
+    warnings: Vec<String>,
     started_at: Option<DateTime<Utc>>,
 }
 
@@ -149,6 +156,20 @@ impl RunResultBuilder {
         self
     }
 
+    /// Append a single warning message to the result.
+    ///
+    /// Use this for best-effort operations that failed non-fatally.
+    pub fn add_warning(mut self, warning: impl Into<String>) -> Self {
+        self.warnings.push(warning.into());
+        self
+    }
+
+    /// Replace the entire warnings list.
+    pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
+    }
+
     pub fn started_now(mut self) -> Self {
         self.started_at = Some(Utc::now());
         self
@@ -171,6 +192,7 @@ impl RunResultBuilder {
             collected_metrics: self.collected_metrics,
             trace_metrics_summary: self.trace_metrics_summary,
             maintenance_reports: self.maintenance_reports,
+            warnings: self.warnings,
             started_at: self.started_at.unwrap_or_else(Utc::now),
             completed_at: Utc::now(),
         }

@@ -6,6 +6,7 @@ use codeanatomy_engine::rules::registry::CpgRuleSet;
 use codeanatomy_engine::session::factory::SessionFactory;
 use codeanatomy_engine::session::profiles::{EnvironmentClass, EnvironmentProfile};
 use codeanatomy_engine::spec::runtime::{RuleTraceMode, TracingConfig};
+use codeanatomy_engine::stability::optimizer_lab::RuleStep;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::Transformed;
 use datafusion::common::{DataFusionError, Result};
@@ -177,4 +178,28 @@ async fn test_full_rule_mode_wraps_rules_with_plan_diff_enabled() {
             .any(|rule| format!("{rule:?}").contains("plan_diff: true")),
         "full mode should carry plan_diff=true into wrappers",
     );
+}
+
+// ---------------------------------------------------------------------------
+// Scope 5: Lab result types are serializable
+// ---------------------------------------------------------------------------
+
+/// Scope 5: RuleStep derives Serialize + Deserialize and round-trips through JSON.
+#[test]
+fn test_lab_rule_step_is_serializable() {
+    let step = RuleStep {
+        ordinal: 5,
+        rule_name: "simplify_expressions".to_string(),
+        plan_digest: [0xBBu8; 32],
+    };
+
+    let json = serde_json::to_string(&step).expect("RuleStep must serialize");
+    assert!(json.contains("simplify_expressions"));
+    assert!(json.contains("ordinal"));
+
+    let deserialized: RuleStep =
+        serde_json::from_str(&json).expect("RuleStep must deserialize");
+    assert_eq!(deserialized.ordinal, 5);
+    assert_eq!(deserialized.rule_name, "simplify_expressions");
+    assert_eq!(deserialized.plan_digest, [0xBBu8; 32]);
 }

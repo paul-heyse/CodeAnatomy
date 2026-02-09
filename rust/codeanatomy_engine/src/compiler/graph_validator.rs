@@ -91,7 +91,17 @@ pub fn validate_graph(spec: &SemanticExecutionSpec) -> Result<()> {
         }
     }
 
-    // Validate parameter templates
+    // Validate parameter mode exclusivity: typed and template modes are mutually exclusive.
+    if !spec.typed_parameters.is_empty() && !spec.parameter_templates.is_empty() {
+        return Err(DataFusionError::Plan(
+            "Parameter mode conflict: spec contains both typed_parameters and \
+             parameter_templates. Use typed_parameters (canonical) or \
+             parameter_templates (deprecated transitional), not both."
+                .to_string(),
+        ));
+    }
+
+    // Validate parameter templates (deprecated transitional path)
     let mut template_names: HashSet<&str> = HashSet::new();
     for template in &spec.parameter_templates {
         if !template_names.insert(template.name.as_str()) {

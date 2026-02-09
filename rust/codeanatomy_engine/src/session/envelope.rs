@@ -39,6 +39,10 @@ pub struct SessionEnvelope {
     pub spec_hash: [u8; 32],
     /// BLAKE3 fingerprint of the rulepack
     pub rulepack_fingerprint: [u8; 32],
+    /// BLAKE3 hash of the planning surface manifest
+    pub planning_surface_hash: [u8; 32],
+    /// BLAKE3 hash of registered provider identities
+    pub provider_identity_hash: [u8; 32],
     /// BLAKE3 hash of this envelope (computed after all fields set)
     pub envelope_hash: [u8; 32],
 }
@@ -53,6 +57,8 @@ impl SessionEnvelope {
     /// * `rulepack_fingerprint` - Fingerprint of the rulepack
     /// * `memory_pool_bytes` - Memory pool size
     /// * `spill_enabled` - Whether spilling is enabled
+    /// * `planning_surface_hash` - BLAKE3 hash of the planning surface manifest
+    /// * `provider_identity_hash` - BLAKE3 hash of provider identities
     ///
     /// # Returns
     ///
@@ -63,6 +69,8 @@ impl SessionEnvelope {
         rulepack_fingerprint: [u8; 32],
         memory_pool_bytes: u64,
         spill_enabled: bool,
+        planning_surface_hash: [u8; 32],
+        provider_identity_hash: [u8; 32],
     ) -> Result<Self> {
         // Capture version information
         let datafusion_version = datafusion::DATAFUSION_VERSION.to_string();
@@ -165,6 +173,8 @@ impl SessionEnvelope {
             &registered_functions,
             &spec_hash,
             &rulepack_fingerprint,
+            &planning_surface_hash,
+            &provider_identity_hash,
         );
 
         Ok(Self {
@@ -180,8 +190,30 @@ impl SessionEnvelope {
             registered_functions,
             spec_hash,
             rulepack_fingerprint,
+            planning_surface_hash,
+            provider_identity_hash,
             envelope_hash,
         })
+    }
+
+    /// Compute a deterministic provider-identity aggregate hash.
+    ///
+    /// Accepts `(table_name, identity_hash)` tuples and hashes them in sorted
+    /// order so registration order does not affect identity.
+    pub fn hash_provider_identities(provider_identities: &[(String, [u8; 32])]) -> [u8; 32] {
+        let mut sorted: Vec<(&str, [u8; 32])> = provider_identities
+            .iter()
+            .map(|(table_name, identity_hash)| (table_name.as_str(), *identity_hash))
+            .collect();
+        sorted.sort_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)));
+
+        let mut hasher = blake3::Hasher::new();
+        for (table_name, identity_hash) in sorted {
+            hasher.update(table_name.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(&identity_hash);
+        }
+        *hasher.finalize().as_bytes()
     }
 
     /// Computes BLAKE3 hash of the envelope contents.
@@ -201,6 +233,8 @@ impl SessionEnvelope {
         registered_functions: &[String],
         spec_hash: &[u8; 32],
         rulepack_fingerprint: &[u8; 32],
+        planning_surface_hash: &[u8; 32],
+        provider_identity_hash: &[u8; 32],
     ) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
 
@@ -233,6 +267,10 @@ impl SessionEnvelope {
         hasher.update(spec_hash);
         hasher.update(rulepack_fingerprint);
 
+        // Hash planning surface identity
+        hasher.update(planning_surface_hash);
+        hasher.update(provider_identity_hash);
+
         *hasher.finalize().as_bytes()
     }
 }
@@ -261,6 +299,8 @@ mod tests {
             &["fn1".to_string(), "fn2".to_string()],
             &[0u8; 32],
             &[1u8; 32],
+            &[2u8; 32],
+            &[3u8; 32],
         );
 
         let hash2 = SessionEnvelope::compute_envelope_hash(
@@ -276,6 +316,8 @@ mod tests {
             &["fn1".to_string(), "fn2".to_string()],
             &[0u8; 32],
             &[1u8; 32],
+            &[2u8; 32],
+            &[3u8; 32],
         );
 
         assert_eq!(hash1, hash2);
@@ -299,6 +341,8 @@ mod tests {
             &[],
             &[0u8; 32],
             &[1u8; 32],
+            &[0u8; 32],
+            &[3u8; 32],
         );
 
         let hash2 = SessionEnvelope::compute_envelope_hash(
@@ -314,8 +358,105 @@ mod tests {
             &[],
             &[0u8; 32],
             &[1u8; 32],
+            &[0u8; 32],
+            &[3u8; 32],
         );
 
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_envelope_hash_changes_with_planning_surface() {
+        let config = BTreeMap::from([("key1".to_string(), "value1".to_string())]);
+
+        let hash1 = SessionEnvelope::compute_envelope_hash(
+            "51.0.0",
+            "0.30.1",
+            "0.1.0",
+            &config,
+            8,
+            8192,
+            2 * 1024 * 1024 * 1024,
+            true,
+            &[],
+            &[],
+            &[0u8; 32],
+            &[1u8; 32],
+            &[0u8; 32],
+            &[3u8; 32],
+        );
+
+        let hash2 = SessionEnvelope::compute_envelope_hash(
+            "51.0.0",
+            "0.30.1",
+            "0.1.0",
+            &config,
+            8,
+            8192,
+            2 * 1024 * 1024 * 1024,
+            true,
+            &[],
+            &[],
+            &[0u8; 32],
+            &[1u8; 32],
+            &[99u8; 32],
+            &[3u8; 32],
+        );
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_provider_identity_hash_deterministic() {
+        let ids = vec![
+            ("b".to_string(), [2u8; 32]),
+            ("a".to_string(), [1u8; 32]),
+        ];
+        let ids_reordered = vec![
+            ("a".to_string(), [1u8; 32]),
+            ("b".to_string(), [2u8; 32]),
+        ];
+        assert_eq!(
+            SessionEnvelope::hash_provider_identities(&ids),
+            SessionEnvelope::hash_provider_identities(&ids_reordered)
+        );
+    }
+
+    #[test]
+    fn test_envelope_hash_changes_with_provider_identity() {
+        let config = BTreeMap::from([("key1".to_string(), "value1".to_string())]);
+        let hash1 = SessionEnvelope::compute_envelope_hash(
+            "51.0.0",
+            "0.30.1",
+            "0.1.0",
+            &config,
+            8,
+            8192,
+            2 * 1024 * 1024 * 1024,
+            true,
+            &[],
+            &[],
+            &[0u8; 32],
+            &[1u8; 32],
+            &[2u8; 32],
+            &[3u8; 32],
+        );
+        let hash2 = SessionEnvelope::compute_envelope_hash(
+            "51.0.0",
+            "0.30.1",
+            "0.1.0",
+            &config,
+            8,
+            8192,
+            2 * 1024 * 1024 * 1024,
+            true,
+            &[],
+            &[],
+            &[0u8; 32],
+            &[1u8; 32],
+            &[2u8; 32],
+            &[4u8; 32],
+        );
         assert_ne!(hash1, hash2);
     }
 }

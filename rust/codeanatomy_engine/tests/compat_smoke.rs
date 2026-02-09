@@ -263,3 +263,116 @@ fn test_delta_provider_api() {
     // If this test compiles, the API surface is correct
     assert!(true, "Delta provider type signatures compile successfully");
 }
+
+/// Feature gate: delta-planner
+///
+/// Verifies that the `delta-planner` feature gate compiles correctly
+/// and that the DeltaPlanner type is accessible from the deltalake crate.
+#[cfg(feature = "delta-planner")]
+#[test]
+fn test_delta_planner_feature_compiles() {
+    use deltalake::delta_datafusion::planner::DeltaPlanner;
+
+    // Type-level assertion: DeltaPlanner can be constructed.
+    let _planner = DeltaPlanner::new();
+    assert!(true, "delta-planner feature gate compiles with DeltaPlanner");
+}
+
+/// Feature gate: delta-codec
+///
+/// Verifies that the `delta-codec` feature gate compiles correctly
+/// and that the plan_codec module's encode function is accessible.
+#[cfg(feature = "delta-codec")]
+#[test]
+fn test_delta_codec_feature_compiles() {
+    use codeanatomy_engine::compiler::plan_codec::encode_with_delta_codecs;
+
+    // Type-level assertion: the function exists and is importable.
+    // Actual invocation requires a valid plan; compile check is sufficient.
+    let _fn_ref: fn(
+        &datafusion::logical_expr::LogicalPlan,
+        Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+    ) -> datafusion_common::Result<(Vec<u8>, Vec<u8>)> = encode_with_delta_codecs;
+    assert!(true, "delta-codec feature gate compiles with encode_with_delta_codecs");
+}
+
+/// Feature gate: delta-codec install
+///
+/// Verifies that `install_delta_codecs` works with a real SessionContext
+/// when the `delta-codec` feature is enabled.
+#[cfg(feature = "delta-codec")]
+#[test]
+fn test_delta_codec_install_compiles() {
+    use codeanatomy_engine::compiler::plan_codec::install_delta_codecs;
+
+    let ctx = SessionContext::new();
+    // Should not panic — installs Delta codecs as config extensions.
+    install_delta_codecs(&ctx);
+}
+
+// ---------------------------------------------------------------------------
+// Scope 2: FormatPolicySpec, build_table_options, default_file_formats compile/link
+// ---------------------------------------------------------------------------
+
+/// Scope 2: Verify that FormatPolicySpec, build_table_options, and
+/// default_file_formats compile and link correctly as public API.
+#[test]
+fn test_format_policy_types_compile_and_link() {
+    use codeanatomy_engine::session::format_policy::{
+        build_table_options, default_file_formats, FormatPolicySpec,
+    };
+
+    // Type-level: FormatPolicySpec is constructible.
+    let policy = FormatPolicySpec {
+        parquet_pushdown_filters: true,
+        parquet_enable_page_index: false,
+        csv_delimiter: Some("|".into()),
+    };
+
+    // Function-level: build_table_options is callable.
+    let config = SessionConfig::new();
+    let result = build_table_options(&config, &policy);
+    assert!(result.is_ok(), "build_table_options must succeed");
+
+    // Function-level: default_file_formats is callable.
+    let formats = default_file_formats();
+    // Currently returns empty vec; compile/link is the assertion.
+    let _ = formats;
+}
+
+// ---------------------------------------------------------------------------
+// Scope 7: Feature-gated types compile under delta-planner / delta-codec
+// ---------------------------------------------------------------------------
+// (Already tested above by test_delta_planner_feature_compiles and
+// test_delta_codec_feature_compiles / test_delta_codec_install_compiles.)
+
+// ---------------------------------------------------------------------------
+// Scope 12: RuntimeProfileCoverage, evaluate_profile_coverage compile/link
+// ---------------------------------------------------------------------------
+
+/// Scope 12: RuntimeProfileCoverage and evaluate_profile_coverage compile and
+/// link as public API.
+#[test]
+fn test_profile_coverage_types_compile_and_link() {
+    use codeanatomy_engine::session::profile_coverage::{
+        applied_count, evaluate_profile_coverage, reserved_count, CoverageState,
+        RuntimeProfileCoverage,
+    };
+
+    // Type-level: RuntimeProfileCoverage is constructible.
+    let entry = RuntimeProfileCoverage {
+        field: "test_field".to_string(),
+        state: CoverageState::Applied,
+        note: "Compile-time check".to_string(),
+    };
+    assert_eq!(entry.state, CoverageState::Applied);
+
+    // Function-level: evaluate_profile_coverage returns non-empty results.
+    let coverage = evaluate_profile_coverage();
+    assert!(!coverage.is_empty());
+
+    // Function-level: applied_count and reserved_count are callable.
+    let applied = applied_count();
+    let reserved = reserved_count();
+    assert_eq!(applied + reserved, coverage.len());
+}

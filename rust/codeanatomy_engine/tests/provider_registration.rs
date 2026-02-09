@@ -1,3 +1,8 @@
+mod common;
+
+use codeanatomy_engine::providers::pushdown_contract::{
+    FilterPushdownStatus, PushdownProbe,
+};
 use codeanatomy_engine::providers::scan_config::{
     has_lineage_tracking, standard_scan_config, validate_scan_config,
 };
@@ -81,4 +86,83 @@ fn test_capabilities_serialization_roundtrip() {
     assert_eq!(caps.predicate_pushdown, deserialized.predicate_pushdown);
     assert_eq!(caps.projection_pushdown, deserialized.projection_pushdown);
     assert_eq!(caps.partition_pruning, deserialized.partition_pruning);
+}
+
+// ---------------------------------------------------------------------------
+// Scope 4: Provider identity hash determinism
+// ---------------------------------------------------------------------------
+
+/// Scope 4: Same ProviderIdentity inputs produce the same identity hash.
+#[test]
+fn test_provider_identity_hash_is_deterministic() {
+    let id_a = common::provider_identity("cpg_nodes", 42);
+    let id_b = common::provider_identity("cpg_nodes", 42);
+
+    assert_eq!(
+        id_a, id_b,
+        "identical ProviderIdentity values must be equal"
+    );
+
+    // Serialization is deterministic.
+    let json_a = serde_json::to_string(&id_a).unwrap();
+    let json_b = serde_json::to_string(&id_b).unwrap();
+    assert_eq!(json_a, json_b, "identical ProviderIdentity JSON must match");
+}
+
+/// Scope 4: Different provider identity hashes produce non-equal structs.
+#[test]
+fn test_provider_identity_different_hashes_differ() {
+    let id_a = common::provider_identity("table", 1);
+    let id_b = common::provider_identity("table", 2);
+
+    assert_ne!(
+        id_a, id_b,
+        "different identity_hash values must produce non-equal ProviderIdentity"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Scope 6: PushdownProbe struct exists and serializes correctly
+// ---------------------------------------------------------------------------
+
+/// Scope 6: PushdownProbe struct can be constructed with known filter statuses.
+#[test]
+fn test_pushdown_probe_construction_and_status_queries() {
+    let probe = PushdownProbe {
+        provider: "test_table".to_string(),
+        filter_sql: vec![
+            "id > 10".to_string(),
+            "name = 'test'".to_string(),
+        ],
+        statuses: vec![
+            FilterPushdownStatus::Exact,
+            FilterPushdownStatus::Inexact,
+        ],
+    };
+
+    assert!(!probe.all_exact(), "mixed statuses must not be all exact");
+    assert!(probe.has_inexact(), "must detect inexact status");
+    assert!(!probe.has_unsupported(), "no unsupported filters present");
+
+    let counts = probe.status_counts();
+    assert_eq!(counts.exact, 1);
+    assert_eq!(counts.inexact, 1);
+    assert_eq!(counts.unsupported, 0);
+}
+
+/// Scope 6: PushdownProbe serializes and deserializes correctly.
+#[test]
+fn test_pushdown_probe_serialization_roundtrip() {
+    let probe = PushdownProbe {
+        provider: "delta_table".to_string(),
+        filter_sql: vec!["col > 5".to_string()],
+        statuses: vec![FilterPushdownStatus::Exact],
+    };
+
+    let json = serde_json::to_string(&probe).unwrap();
+    let deserialized: PushdownProbe = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(probe.provider, deserialized.provider);
+    assert_eq!(probe.filter_sql, deserialized.filter_sql);
+    assert_eq!(probe.statuses, deserialized.statuses);
 }

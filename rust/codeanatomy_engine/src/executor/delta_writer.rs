@@ -1,5 +1,6 @@
 //! Delta output table creation and schema enforcement.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{
@@ -223,6 +224,80 @@ pub fn extract_row_count(batches: &[RecordBatch]) -> u64 {
     batches.iter().map(|b| b.num_rows() as u64).sum()
 }
 
+/// Post-write metadata outcome from a Delta table.
+///
+/// Captures best-effort metadata about the write: delta version, files
+/// added, and bytes written. All fields are optional because metadata
+/// capture must never block the pipeline.
+pub struct WriteOutcome {
+    /// Delta table version after the write commit.
+    pub delta_version: Option<i64>,
+    /// Number of files added by the write operation.
+    pub files_added: Option<u64>,
+    /// Total bytes written across all added files.
+    pub bytes_written: Option<u64>,
+}
+
+/// Best-effort read-back of Delta table metadata after a write.
+///
+/// Attempts to load the Delta log at `delta_location` and extract the
+/// latest version plus file-level statistics. If any step fails, returns
+/// a `WriteOutcome` with all `None` fields -- metadata capture failure
+/// must never block the pipeline.
+pub async fn read_write_outcome(delta_location: &str) -> WriteOutcome {
+    let table_uri = match ensure_table_uri(delta_location) {
+        Ok(uri) => uri,
+        Err(_) => {
+            return WriteOutcome {
+                delta_version: None,
+                files_added: None,
+                bytes_written: None,
+            };
+        }
+    };
+
+    let mut table = match DeltaTable::try_from_url(table_uri).await {
+        Ok(t) => t,
+        Err(_) => {
+            return WriteOutcome {
+                delta_version: None,
+                files_added: None,
+                bytes_written: None,
+            };
+        }
+    };
+
+    // Load the latest snapshot so version() returns the current version.
+    if table.load().await.is_err() {
+        return WriteOutcome {
+            delta_version: None,
+            files_added: None,
+            bytes_written: None,
+        };
+    }
+
+    let delta_version = table.version().map(|v| v as i64);
+
+    // Attempt to read file metadata from the snapshot for files_added / bytes_written.
+    // Uses the same log_data() API as providers/snapshot.rs::snapshot_metadata().
+    let (files_added, bytes_written) = match table.snapshot() {
+        Ok(snapshot) => {
+            let eager = snapshot.snapshot();
+            let log_data = eager.log_data();
+            let count = log_data.iter().count() as u64;
+            let total_bytes: i64 = log_data.iter().map(|file_view| file_view.size()).sum();
+            (Some(count), Some(total_bytes as u64))
+        }
+        Err(_) => (None, None),
+    };
+
+    WriteOutcome {
+        delta_version,
+        files_added,
+        bytes_written,
+    }
+}
+
 /// Build commit properties from output target metadata and determinism hashes.
 ///
 /// Merges user-supplied write metadata with codeanatomy provenance hashes.
@@ -238,4 +313,79 @@ pub fn build_commit_properties(
         hex::encode(envelope_hash),
     );
     props
+}
+
+/// Build Delta commit options from output-target policy and provenance hashes.
+pub fn build_delta_commit_options(
+    target: &crate::spec::outputs::OutputTarget,
+    spec_hash: &[u8; 32],
+    envelope_hash: &[u8; 32],
+) -> datafusion_ext::DeltaCommitOptions {
+    let metadata: HashMap<String, String> = build_commit_properties(target, spec_hash, envelope_hash)
+        .into_iter()
+        .collect();
+    datafusion_ext::DeltaCommitOptions {
+        metadata,
+        max_retries: target.max_commit_retries.map(i64::from),
+        ..datafusion_ext::DeltaCommitOptions::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec::outputs::{MaterializationMode, OutputTarget};
+    use std::collections::BTreeMap;
+
+    fn sample_target() -> OutputTarget {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("user.tag".to_string(), "v1".to_string());
+        OutputTarget {
+            table_name: "out".to_string(),
+            delta_location: Some("/tmp/out".to_string()),
+            source_view: "view_out".to_string(),
+            columns: vec!["id".to_string()],
+            materialization_mode: MaterializationMode::Append,
+            partition_by: vec!["id".to_string()],
+            write_metadata: metadata,
+            max_commit_retries: Some(7),
+        }
+    }
+
+    #[test]
+    fn test_build_commit_properties_merges_user_and_codeanatomy_keys() {
+        let target = sample_target();
+        let spec_hash = [0xABu8; 32];
+        let envelope_hash = [0xCDu8; 32];
+
+        let props = build_commit_properties(&target, &spec_hash, &envelope_hash);
+        assert_eq!(props.get("user.tag"), Some(&"v1".to_string()));
+        assert_eq!(
+            props.get("codeanatomy.spec_hash"),
+            Some(&hex::encode(spec_hash))
+        );
+        assert_eq!(
+            props.get("codeanatomy.envelope_hash"),
+            Some(&hex::encode(envelope_hash))
+        );
+    }
+
+    #[test]
+    fn test_build_delta_commit_options_maps_retries_and_metadata() {
+        let target = sample_target();
+        let spec_hash = [0x11u8; 32];
+        let envelope_hash = [0x22u8; 32];
+
+        let options = build_delta_commit_options(&target, &spec_hash, &envelope_hash);
+        assert_eq!(options.max_retries, Some(7));
+        assert_eq!(options.metadata.get("user.tag"), Some(&"v1".to_string()));
+        assert_eq!(
+            options.metadata.get("codeanatomy.spec_hash"),
+            Some(&hex::encode(spec_hash))
+        );
+        assert_eq!(
+            options.metadata.get("codeanatomy.envelope_hash"),
+            Some(&hex::encode(envelope_hash))
+        );
+    }
 }

@@ -5,6 +5,8 @@
 pub mod delta_writer;
 pub mod maintenance;
 pub mod metrics_collector;
+pub mod orchestration;
+pub mod pipeline;
 pub mod result;
 pub mod runner;
 pub mod tracing;

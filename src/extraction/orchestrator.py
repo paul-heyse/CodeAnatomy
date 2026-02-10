@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from extraction.contracts import resolve_semantic_input_locations, with_compat_aliases
 from obs.otel.metrics import record_error, record_stage_duration
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
@@ -33,11 +34,12 @@ class ExtractionResult(msgspec.Struct, frozen=True):
     """Result of running the extraction pipeline."""
 
     delta_locations: dict[str, str]
+    semantic_input_locations: dict[str, str]
     errors: list[dict[str, object]]
     timing: dict[str, float]
 
 
-def run_extraction(
+def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
     repo_root: Path,
     work_dir: Path,
     *,
@@ -45,6 +47,7 @@ def run_extraction(
     scip_identity_overrides: object | None = None,
     tree_sitter_enabled: bool = True,
     max_workers: int = 6,
+    options: dict[str, object] | None = None,
 ) -> ExtractionResult:
     """Run the full extraction pipeline with staged execution.
 
@@ -62,13 +65,21 @@ def run_extraction(
         Whether to enable tree-sitter extraction.
     max_workers
         Maximum parallel workers for Stage 1.
+    options
+        Additional extraction options (repo scope/incremental controls).
 
     Returns:
     -------
     ExtractionResult
         Delta locations, errors, and timing data.
+
+    Raises:
+    -------
+    ValueError
+        If required Stage 0 repo scan outputs are missing.
     """
     delta_locations: dict[str, str] = {}
+    semantic_input_locations: dict[str, str] = {}
     errors: list[dict[str, object]] = []
     timing: dict[str, float] = {}
     extract_dir = work_dir / "extract"
@@ -86,11 +97,11 @@ def run_extraction(
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "repo_scan"},
         ):
-            repo_files = _run_repo_scan(repo_root)
+            repo_scan_outputs = _run_repo_scan(repo_root, options=options)
         timing["repo_scan"] = time.monotonic() - t0
-        delta_locations["repo_files"] = _write_delta(
-            repo_files, extract_dir / "repo_files", "repo_files"
-        )
+        repo_files = _require_repo_scan_table(repo_scan_outputs, "repo_files_v1")
+        for name, table in sorted(repo_scan_outputs.items()):
+            delta_locations[name] = _write_delta(table, extract_dir / name, name)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         timing["repo_scan"] = time.monotonic() - t0
         errors.append({"extractor": "repo_scan", "error": str(exc)})
@@ -99,6 +110,7 @@ def run_extraction(
         # Cannot proceed without repo_files
         return ExtractionResult(
             delta_locations=delta_locations,
+            semantic_input_locations=semantic_input_locations,
             errors=errors,
             timing=timing,
         )
@@ -132,7 +144,7 @@ def run_extraction(
                 record_error("extraction", type(exc).__name__)
                 logger.warning("Extractor %s failed: %s", name, exc)
 
-    # Stage 2: python_imports (depends on ast_imports, cst_imports, ts_imports)
+    # Stage 2: python_imports (depends on ast/cst/tree-sitter tables)
     t2 = time.monotonic()
     try:
         with stage_span(
@@ -163,14 +175,20 @@ def run_extraction(
         ):
             python_external = _run_python_external(delta_locations, repo_root)
         timing["python_external"] = time.monotonic() - t3
-        delta_locations["python_external"] = _write_delta(
-            python_external, extract_dir / "python_external", "python_external"
+        delta_locations["python_external_interfaces"] = _write_delta(
+            python_external,
+            extract_dir / "python_external_interfaces",
+            "python_external_interfaces",
         )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         timing["python_external"] = time.monotonic() - t3
         errors.append({"extractor": "python_external", "error": str(exc)})
         record_error("extraction", type(exc).__name__)
         logger.warning("python_external failed: %s", exc)
+
+    delta_locations = with_compat_aliases(delta_locations)
+    semantic_input_locations = resolve_semantic_input_locations(delta_locations)
+    delta_locations.update(semantic_input_locations)
 
     # Record overall extraction phase duration
     extraction_elapsed = time.monotonic() - extraction_start
@@ -179,6 +197,7 @@ def run_extraction(
 
     return ExtractionResult(
         delta_locations=delta_locations,
+        semantic_input_locations=semantic_input_locations,
         errors=errors,
         timing=timing,
     )
@@ -210,7 +229,22 @@ def _write_delta(table: pa.Table, location: Path, name: str) -> str:
     return loc_str
 
 
-def _run_repo_scan(repo_root: Path) -> pa.Table:
+def _require_repo_scan_table(
+    repo_scan_outputs: dict[str, pa.Table],
+    table_name: str,
+) -> pa.Table:
+    table = repo_scan_outputs.get(table_name)
+    if table is None:
+        msg = f"repo_scan did not produce {table_name} output"
+        raise ValueError(msg)
+    return table
+
+
+def _run_repo_scan(  # noqa: PLR0914
+    repo_root: Path,
+    *,
+    options: dict[str, object] | None,
+) -> dict[str, pa.Table]:
     """Run repo scan extraction.
 
     Parameters
@@ -220,11 +254,8 @@ def _run_repo_scan(repo_root: Path) -> pa.Table:
 
     Returns:
     -------
-    pa.Table
-        Repo files table.
-
-    Raises:
-        ValueError: If repo scan produces no output.
+    dict[str, pa.Table]
+        Repo scan tables keyed by dataset name.
     """
     from engine.runtime_profile import resolve_runtime_profile
     from engine.session_factory import build_engine_session
@@ -240,16 +271,41 @@ def _run_repo_scan(repo_root: Path) -> pa.Table:
     extract_session = ExtractSession(engine_session=engine_session)
 
     # Build scan options directly (no Hamilton dependency)
+    options_payload = options or {}
+
+    include_globs_raw = options_payload.get("include_globs")
+    include_globs = (
+        tuple(str(item) for item in include_globs_raw if isinstance(item, str))
+        if isinstance(include_globs_raw, (list, tuple))
+        else ()
+    )
+    exclude_globs_raw = options_payload.get("exclude_globs")
+    exclude_globs = (
+        tuple(str(item) for item in exclude_globs_raw if isinstance(item, str))
+        if isinstance(exclude_globs_raw, (list, tuple))
+        else ()
+    )
+    include_untracked_raw = options_payload.get("include_untracked", True)
+    include_untracked = include_untracked_raw if isinstance(include_untracked_raw, bool) else True
+    include_submodules_raw = options_payload.get("include_submodules", False)
+    include_submodules = (
+        include_submodules_raw if isinstance(include_submodules_raw, bool) else False
+    )
+    include_worktrees_raw = options_payload.get("include_worktrees", False)
+    include_worktrees = include_worktrees_raw if isinstance(include_worktrees_raw, bool) else False
+    follow_symlinks_raw = options_payload.get("follow_symlinks", False)
+    follow_symlinks = follow_symlinks_raw if isinstance(follow_symlinks_raw, bool) else False
+
     scope_policy = RepoScopeOptions(
         python_scope=PythonScopePolicy(),
-        include_globs=(),
-        exclude_globs=(),
-        include_untracked=True,
-        include_submodules=False,
-        include_worktrees=False,
-        follow_symlinks=False,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        include_untracked=include_untracked,
+        include_submodules=include_submodules,
+        include_worktrees=include_worktrees,
+        follow_symlinks=follow_symlinks,
     )
-    options = RepoScanOptions(
+    scan_options = RepoScanOptions(
         repo_id="extraction_orchestrator",
         scope_policy=scope_policy,
         max_files=None,
@@ -264,19 +320,12 @@ def _run_repo_scan(repo_root: Path) -> pa.Table:
 
     outputs = scan_repo_tables(
         str(repo_root),
-        options=options,
+        options=scan_options,
         context=exec_ctx,
         prefer_reader=False,
     )
 
-    # Extract repo_files table (key is with _v1 suffix)
-    repo_files = outputs.get("repo_files_v1")
-    if repo_files is None:
-        msg = "repo_scan did not produce repo_files_v1 output"
-        raise ValueError(msg)
-
-    # Coerce to Arrow table
-    return _coerce_to_table(repo_files)
+    return {name: _coerce_to_table(value) for name, value in outputs.items()}
 
 
 def _build_stage1_extractors(
@@ -317,24 +366,19 @@ def _build_stage1_extractors(
     extract_session = ExtractSession(engine_session=engine_session)
 
     extractors: dict[str, Callable[[], pa.Table]] = {
-        "ast_imports": lambda: _extract_ast(repo_files, extract_session, runtime_spec),
-        "ast_symbols": lambda: _extract_ast(repo_files, extract_session, runtime_spec),
-        "cst_imports": lambda: _extract_cst(repo_files, extract_session, runtime_spec),
-        "cst_symbols": lambda: _extract_cst(repo_files, extract_session, runtime_spec),
-        "bytecode_files": lambda: _extract_bytecode(repo_files, extract_session, runtime_spec),
-        "symtable_files": lambda: _extract_symtable(repo_files, extract_session, runtime_spec),
+        "ast_files": lambda: _extract_ast(repo_files, extract_session, runtime_spec),
+        "libcst_files": lambda: _extract_cst(repo_files, extract_session, runtime_spec),
+        "bytecode_files_v1": lambda: _extract_bytecode(repo_files, extract_session, runtime_spec),
+        "symtable_files_v1": lambda: _extract_symtable(repo_files, extract_session, runtime_spec),
     }
 
     if tree_sitter_enabled:
-        extractors["ts_imports"] = lambda: _extract_tree_sitter(
-            repo_files, extract_session, runtime_spec
-        )
-        extractors["ts_symbols"] = lambda: _extract_tree_sitter(
+        extractors["tree_sitter_files"] = lambda: _extract_tree_sitter(
             repo_files, extract_session, runtime_spec
         )
 
     if scip_index_config is not None:
-        extractors["scip_symbols"] = lambda: _extract_scip(
+        extractors["scip_index"] = lambda: _extract_scip(
             repo_root,
             scip_index_config,
             scip_identity_overrides,
@@ -364,7 +408,7 @@ def _extract_ast(
     Returns:
     -------
     pa.Table
-        AST imports/symbols table.
+        AST files table.
 
     Raises:
         ValueError: If extraction produces no outputs.
@@ -378,14 +422,9 @@ def _extract_ast(
         prefer_reader=False,
     )
 
-    # Merge ast_imports and ast_symbols outputs
-    ast_imports = outputs.get("ast_imports")
-    ast_symbols = outputs.get("ast_symbols")
-
-    if ast_imports is not None:
-        return _coerce_to_table(ast_imports)
-    if ast_symbols is not None:
-        return _coerce_to_table(ast_symbols)
+    ast_files = outputs.get("ast_files")
+    if ast_files is not None:
+        return _coerce_to_table(ast_files)
 
     msg = "ast extraction produced no outputs"
     raise ValueError(msg)
@@ -410,7 +449,7 @@ def _extract_cst(
     Returns:
     -------
     pa.Table
-        CST imports/symbols table.
+        LibCST files table.
 
     Raises:
         ValueError: If extraction produces no outputs.
@@ -424,14 +463,9 @@ def _extract_cst(
         prefer_reader=False,
     )
 
-    # Merge cst_imports and cst_symbols outputs
-    cst_imports = outputs.get("cst_imports")
-    cst_symbols = outputs.get("cst_symbols")
-
-    if cst_imports is not None:
-        return _coerce_to_table(cst_imports)
-    if cst_symbols is not None:
-        return _coerce_to_table(cst_symbols)
+    cst_files = outputs.get("libcst_files")
+    if cst_files is not None:
+        return _coerce_to_table(cst_files)
 
     msg = "cst extraction produced no outputs"
     raise ValueError(msg)
@@ -456,7 +490,7 @@ def _extract_tree_sitter(
     Returns:
     -------
     pa.Table
-        Tree-sitter imports/symbols table.
+        Tree-sitter files table.
 
     Raises:
         ValueError: If extraction produces no outputs.
@@ -470,14 +504,9 @@ def _extract_tree_sitter(
         prefer_reader=False,
     )
 
-    # Merge ts_imports and ts_symbols outputs
-    ts_imports = outputs.get("ts_imports")
-    ts_symbols = outputs.get("ts_symbols")
-
-    if ts_imports is not None:
-        return _coerce_to_table(ts_imports)
-    if ts_symbols is not None:
-        return _coerce_to_table(ts_symbols)
+    ts_files = outputs.get("tree_sitter_files")
+    if ts_files is not None:
+        return _coerce_to_table(ts_files)
 
     msg = "tree-sitter extraction produced no outputs"
     raise ValueError(msg)
@@ -574,7 +603,7 @@ def _extract_scip(
     Returns:
     -------
     pa.Table
-        SCIP symbols table.
+        SCIP index table.
 
     Raises:
         ValueError: If extraction produces no outputs.
@@ -588,8 +617,10 @@ def _extract_scip(
 
     scip_extract_options = ScipExtractOptions()
 
-    # Extract scip_index_path from config
-    scip_index_path = getattr(scip_index_config, "scip_index_path", None)
+    # Extract scip_index_path from config (new canonical field with fallback)
+    scip_index_path = getattr(scip_index_config, "index_path_override", None)
+    if scip_index_path is None:
+        scip_index_path = getattr(scip_index_config, "scip_index_path", None)
 
     context = ScipExtractContext(
         scip_index_path=scip_index_path,
@@ -604,12 +635,12 @@ def _extract_scip(
         prefer_reader=False,
     )
 
-    scip_symbols = outputs.get("scip_symbols")
-    if scip_symbols is None:
-        msg = "scip extraction produced no scip_symbols output"
+    scip_index = outputs.get("scip_index")
+    if scip_index is None:
+        msg = "scip extraction produced no scip_index output"
         raise ValueError(msg)
 
-    return _coerce_to_table(scip_symbols)
+    return _coerce_to_table(scip_index)
 
 
 def _run_python_imports(delta_locations: dict[str, str]) -> pa.Table:
@@ -633,10 +664,10 @@ def _run_python_imports(delta_locations: dict[str, str]) -> pa.Table:
     from extract.extractors.imports_extract import extract_python_imports_tables
     from extract.session import ExtractSession
 
-    # Load inputs from Delta locations
-    ast_imports = _load_delta_table(delta_locations.get("ast_imports"))
-    cst_imports = _load_delta_table(delta_locations.get("cst_imports"))
-    ts_imports = _load_delta_table(delta_locations.get("ts_imports"))
+    # Load inputs from Delta locations (adapter-normalized dataset keys)
+    ast_imports = _load_delta_table(delta_locations.get("ast_files"))
+    cst_imports = _load_delta_table(delta_locations.get("libcst_files"))
+    ts_imports = _load_delta_table(delta_locations.get("tree_sitter_files"))
 
     # Create extract session
     runtime_spec = resolve_runtime_profile("default")
@@ -702,9 +733,9 @@ def _run_python_external(delta_locations: dict[str, str], repo_root: Path) -> pa
         prefer_reader=False,
     )
 
-    python_external = outputs.get("python_external")
+    python_external = outputs.get("python_external_interfaces")
     if python_external is None:
-        msg = "python_external extraction produced no output"
+        msg = "python_external extraction produced no python_external_interfaces output"
         raise ValueError(msg)
 
     return _coerce_to_table(python_external)

@@ -56,13 +56,15 @@ def record_engine_plan_summary(spec: SemanticExecutionSpec) -> EnginePlanSummary
     EnginePlanSummaryArtifact
         Summary suitable for diagnostics recording.
     """
-    join_edge_count = 0
-    if spec.view_definitions:
-        for view_def in spec.view_definitions:
-            transform = view_def.transform
-            transform_kind = getattr(transform, "kind", None)
-            if transform_kind == "Relate":
-                join_edge_count += 1
+    join_edge_count = len(spec.join_graph.edges)
+    if join_edge_count == 0 and spec.view_definitions:
+        # Backward-compatible fallback for specs that don't populate join_graph edges.
+        join_edge_count = sum(
+            1
+            for view_def in spec.view_definitions
+            if view_def.view_kind == "relate"
+            or view_def.transform.__class__.__name__ == "RelateTransform"
+        )
 
     return EnginePlanSummaryArtifact(
         spec_hash=spec.spec_hash.hex() if spec.spec_hash else "",

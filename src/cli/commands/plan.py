@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import sys
 from dataclasses import dataclass
@@ -121,19 +122,26 @@ def plan_command(
     config_contents = dict(run_context.config_contents) if run_context else {}
     config_contents.setdefault("repo_root", str(resolved_root))
 
+    from engine.output_contracts import ENGINE_CPG_OUTPUTS
+    from engine.runtime_profile import resolve_runtime_profile
     from engine.spec_builder import build_execution_spec
     from semantics.ir_pipeline import build_semantic_ir
 
+    runtime_profile = resolve_runtime_profile(options.engine_profile)
+    _ = runtime_profile
     ir = build_semantic_ir()
+    output_targets = list(ENGINE_CPG_OUTPUTS)
+    output_locations = {name: str(resolved_root / "build" / name) for name in output_targets}
     spec = build_execution_spec(
         ir=ir,
         input_locations={},
-        output_targets=[],
+        output_targets=output_targets,
         rulepack_profile=options.rulepack_profile,
+        output_locations=output_locations,
     )
 
     try:
-        import codeanatomy_engine
+        engine_module = importlib.import_module("codeanatomy_engine")
     except ImportError:
         msg = (
             "codeanatomy_engine Rust extension not built. "
@@ -145,7 +153,7 @@ def plan_command(
     import msgspec
 
     spec_json = msgspec.json.encode(spec).decode()
-    compiler = codeanatomy_engine.SemanticPlanCompiler()
+    compiler = engine_module.SemanticPlanCompiler()
 
     try:
         compiled = compiler.compile(spec_json)

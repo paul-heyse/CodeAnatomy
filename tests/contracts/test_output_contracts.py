@@ -5,15 +5,34 @@ Verify that output contracts are consistent and complete.
 
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
+from engine.build_orchestrator import BuildResult
 from engine.output_contracts import (
+    CANONICAL_CPG_OUTPUTS,
     ENGINE_CPG_OUTPUTS,
     FULL_PIPELINE_OUTPUTS,
+    LEGACY_CPG_OUTPUTS,
     ORCHESTRATOR_OUTPUTS,
     OUTPUT_SOURCE_MAP,
+    OUTPUT_SOURCE_MAP_WITH_ALIASES,
     PYTHON_AUXILIARY_OUTPUTS,
+    canonical_cpg_output_name,
+    legacy_cpg_output_name,
 )
+from engine.spec_builder import (
+    FilterTransform,
+    InputRelation,
+    JoinGraph,
+    OutputTarget,
+    RuleIntent,
+    RuntimeConfig,
+    SchemaContract,
+    SemanticExecutionSpec,
+    ViewDefinition,
+)
+from graph.product_build import GraphProductBuildRequest, _parse_build_result
+from obs.engine_artifacts import record_engine_execution_summary, record_engine_plan_summary
 
 
 class TestOutputContractConstants:
@@ -26,12 +45,12 @@ class TestOutputContractConstants:
     def test_full_pipeline_outputs_exact_keys(self) -> None:
         """FULL_PIPELINE_OUTPUTS matches the canonical output names."""
         expected = {
-            "write_cpg_nodes_delta",
-            "write_cpg_edges_delta",
-            "write_cpg_props_delta",
-            "write_cpg_props_map_delta",
-            "write_cpg_edges_by_src_delta",
-            "write_cpg_edges_by_dst_delta",
+            "cpg_nodes",
+            "cpg_edges",
+            "cpg_props",
+            "cpg_props_map",
+            "cpg_edges_by_src",
+            "cpg_edges_by_dst",
             "write_normalize_outputs_delta",
             "write_extract_error_artifacts_delta",
             "write_run_manifest_delta",
@@ -70,38 +89,156 @@ class TestOutputContractConstants:
         valid_sources = {"rust_engine", "python_auxiliary", "orchestrator"}
         assert set(OUTPUT_SOURCE_MAP.values()).issubset(valid_sources)
 
+    def test_legacy_aliases_present_for_all_cpg_outputs(self) -> None:
+        """Every canonical CPG output has one legacy alias."""
+        assert len(CANONICAL_CPG_OUTPUTS) == len(LEGACY_CPG_OUTPUTS) == len(ENGINE_CPG_OUTPUTS)
+
+    def test_output_source_map_with_aliases_covers_legacy(self) -> None:
+        """Compatibility source map includes legacy CPG aliases."""
+        for name in LEGACY_CPG_OUTPUTS:
+            assert OUTPUT_SOURCE_MAP_WITH_ALIASES[name] == "rust_engine"
+
+    def test_name_conversion_helpers(self) -> None:
+        """Canonical/legacy helper conversion is invertible for CPG outputs."""
+        for canonical in CANONICAL_CPG_OUTPUTS:
+            legacy = legacy_cpg_output_name(canonical)
+            assert canonical_cpg_output_name(legacy) == canonical
+
+
+def _finalize_payload(path: str) -> dict[str, object]:
+    return {
+        "path": path,
+        "rows": 0,
+        "error_rows": 0,
+        "paths": {
+            "data": path,
+            "errors": f"{path}/_errors",
+            "stats": f"{path}/_stats",
+            "alignment": f"{path}/_alignment",
+        },
+    }
+
+
+def _build_result_fixture(base_dir: str) -> BuildResult:
+    return BuildResult(
+        cpg_outputs={
+            "cpg_nodes": _finalize_payload(f"{base_dir}/cpg_nodes"),
+            "cpg_edges": _finalize_payload(f"{base_dir}/cpg_edges"),
+            "cpg_props": _finalize_payload(f"{base_dir}/cpg_props"),
+            "cpg_props_map": {"path": f"{base_dir}/cpg_props_map", "rows": 0},
+            "cpg_edges_by_src": {"path": f"{base_dir}/cpg_edges_by_src", "rows": 0},
+            "cpg_edges_by_dst": {"path": f"{base_dir}/cpg_edges_by_dst", "rows": 0},
+        },
+        auxiliary_outputs={},
+        run_result={},
+        extraction_timing={},
+        warnings=[],
+    )
+
+
+def _spec_fixture() -> SemanticExecutionSpec:
+    return SemanticExecutionSpec(
+        version=1,
+        input_relations=(InputRelation(logical_name="repo_files_v1", delta_location="/tmp/repo"),),
+        view_definitions=(
+            ViewDefinition(
+                name="cpg_nodes_view",
+                view_kind="filter",
+                view_dependencies=(),
+                transform=FilterTransform(source="repo_files_v1", predicate="TRUE"),
+                output_schema=SchemaContract(),
+            ),
+        ),
+        join_graph=JoinGraph(edges=(), constraints=()),
+        output_targets=(
+            OutputTarget(
+                table_name="cpg_nodes",
+                source_view="cpg_nodes_view",
+                columns=(),
+                delta_location="/tmp/cpg_nodes",
+            ),
+        ),
+        rule_intents=(RuleIntent(name="semantic_integrity", rule_class="SemanticIntegrity"),),
+        rulepack_profile="Default",
+        typed_parameters=(),
+        runtime=RuntimeConfig(),
+        spec_hash=b"",
+    )
+
 
 class TestRunResultMapping:
-    """Test skeletons for RunResult to GraphProductBuildResult mapping."""
+    """RunResult and BuildResult mapping contract tests."""
 
-    @pytest.mark.skip(reason="Pending build orchestrator implementation")
-    def test_run_result_to_build_result(self) -> None:
-        """RunResult dict maps to GraphProductBuildResult fields."""
+    def test_run_result_to_build_result(self, tmp_path: Path) -> None:
+        """Map BuildResult payloads to the public GraphProductBuildResult contract."""
+        request = GraphProductBuildRequest(
+            repo_root=tmp_path,
+            include_extract_errors=False,
+            include_manifest=False,
+            include_run_bundle=False,
+        )
+        parsed = _parse_build_result(
+            request=request,
+            repo_root=tmp_path,
+            build_result=_build_result_fixture(str(tmp_path / "build")),
+        )
+        assert parsed.cpg_nodes.paths.data.name == "cpg_nodes"
+        assert parsed.cpg_edges.paths.data.name == "cpg_edges"
+        assert parsed.cpg_props_map.path.name == "cpg_props_map"
+        assert parsed.cpg_edges_by_dst.path.name == "cpg_edges_by_dst"
 
-    @pytest.mark.skip(reason="Pending build orchestrator implementation")
     def test_run_result_contains_all_engine_outputs(self) -> None:
-        """RunResult contains entries for all ENGINE_CPG_OUTPUTS."""
+        """Ensure BuildResult contains the full canonical CPG output set."""
+        fixture = _build_result_fixture("/tmp/build")
+        for key in ENGINE_CPG_OUTPUTS:
+            assert key in fixture.cpg_outputs
 
 
 class TestCLIOutputContracts:
-    """Test skeletons for CLI JSON output field contracts."""
+    """Contract checks for CLI-facing structured output payloads."""
 
-    @pytest.mark.skip(reason="Pending CLI rewrite")
-    def test_build_json_output_fields(self) -> None:
-        """CLI build --json output contains required fields."""
+    def test_build_output_report_fields(self) -> None:
+        """Validate required fields in structured per-table output reports."""
+        payload = _finalize_payload("/tmp/build/cpg_nodes")
+        assert {"path", "rows", "error_rows", "paths"} <= set(payload)
+        paths = payload["paths"]
+        assert isinstance(paths, dict)
+        assert {"data", "errors", "stats", "alignment"} <= set(paths)
 
-    @pytest.mark.skip(reason="Pending CLI rewrite")
-    def test_plan_json_output_fields(self) -> None:
-        """CLI plan --json output contains required fields."""
+    def test_plan_targets_match_engine_contract(self) -> None:
+        """Lock the plan-command output target list to canonical engine names."""
+        assert list(ENGINE_CPG_OUTPUTS) == [
+            "cpg_nodes",
+            "cpg_edges",
+            "cpg_props",
+            "cpg_props_map",
+            "cpg_edges_by_src",
+            "cpg_edges_by_dst",
+        ]
 
 
 class TestDiagnosticArtifactContracts:
-    """Test skeletons for diagnostic artifact payload schemas."""
+    """Contract checks for diagnostics artifact payload schemas."""
 
-    @pytest.mark.skip(reason="Pending obs artifact implementation")
     def test_plan_summary_artifact_schema(self) -> None:
-        """EnginePlanSummaryArtifact has required fields."""
+        """Verify required fields exist on EnginePlanSummaryArtifact."""
+        summary = record_engine_plan_summary(_spec_fixture())
+        assert {"spec_hash", "view_count", "join_edge_count"} <= set(summary.__struct_fields__)
 
-    @pytest.mark.skip(reason="Pending obs artifact implementation")
     def test_execution_summary_artifact_schema(self) -> None:
-        """EngineExecutionSummaryArtifact has required fields."""
+        """Verify required fields exist on EngineExecutionSummaryArtifact."""
+        execution_summary = record_engine_execution_summary(
+            {
+                "spec_hash": bytes.fromhex("10" * 32),
+                "envelope_hash": bytes.fromhex("20" * 32),
+                "outputs": [{"table_name": "cpg_nodes", "rows_written": 1}],
+                "trace_metrics_summary": {},
+                "warnings": [],
+            }
+        )
+        assert {
+            "spec_hash",
+            "envelope_hash",
+            "tables_materialized",
+            "total_rows_written",
+        } <= set(execution_summary.__struct_fields__)

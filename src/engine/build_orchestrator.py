@@ -15,6 +15,12 @@ from typing import TYPE_CHECKING
 import msgspec
 from opentelemetry import trace
 
+from engine.output_contracts import (
+    CPG_OUTPUT_CANONICAL_TO_LEGACY,
+    ENGINE_CPG_OUTPUTS,
+    canonical_cpg_output_name,
+)
+from obs.otel.logs import emit_diagnostics_event
 from obs.otel.scopes import SCOPE_PIPELINE
 from obs.otel.tracing import stage_span
 
@@ -30,8 +36,8 @@ tracer = trace.get_tracer(__name__)
 class BuildResult(msgspec.Struct, frozen=True):
     """Result of running the complete CPG build pipeline."""
 
-    cpg_outputs: dict[str, str]
-    auxiliary_outputs: dict[str, str]
+    cpg_outputs: dict[str, dict[str, object]]
+    auxiliary_outputs: dict[str, dict[str, object]]
     run_result: dict[str, object]
     extraction_timing: dict[str, float]
     warnings: list[dict[str, object]]
@@ -80,16 +86,26 @@ def orchestrate_build(  # noqa: PLR0913
     BuildResult
         CPG outputs, auxiliary outputs, RunResult envelope, extraction timing, and warnings.
     """
-    _ = runtime_config
-    cpg_outputs: dict[str, str]
-    auxiliary_outputs: dict[str, str]
+    cpg_outputs: dict[str, dict[str, object]]
+    auxiliary_outputs: dict[str, dict[str, object]]
 
     with stage_span("build_orchestrator", stage="orchestrator", scope_name=SCOPE_PIPELINE):
         extraction_result = _run_extraction_phase(
             repo_root, work_dir, extraction_config=extraction_config
         )
-        _, spec = _compile_semantic_phase(extraction_result, engine_profile, rulepack_profile)
-        run_result = _execute_engine_phase(extraction_result, spec, engine_profile)
+        semantic_inputs = (
+            extraction_result.semantic_input_locations
+            if extraction_result.semantic_input_locations
+            else extraction_result.delta_locations
+        )
+        _, spec = _compile_semantic_phase(
+            semantic_input_locations=semantic_inputs,
+            engine_profile=engine_profile,
+            rulepack_profile=rulepack_profile,
+            output_dir=output_dir,
+            runtime_config=runtime_config,
+        )
+        run_result = _execute_engine_phase(semantic_inputs, spec, engine_profile)
         cpg_outputs = _collect_cpg_outputs(run_result, output_dir=output_dir)
         auxiliary_outputs = _write_auxiliary_outputs(
             output_dir=output_dir,
@@ -126,10 +142,17 @@ def _run_extraction_phase(
         scip_overrides = (
             extraction_config.get("scip_identity_overrides") if extraction_config else None
         )
-        ts_raw = extraction_config.get("tree_sitter_enabled", True) if extraction_config else True
+        ts_raw = (
+            extraction_config.get("tree_sitter_enabled")
+            if extraction_config and "tree_sitter_enabled" in extraction_config
+            else extraction_config.get("enable_tree_sitter", True)
+            if extraction_config
+            else True
+        )
         ts_enabled: bool = ts_raw if isinstance(ts_raw, bool) else True
         mw_raw = extraction_config.get("max_workers", 6) if extraction_config else 6
         max_workers: int = mw_raw if isinstance(mw_raw, int) else 6
+        run_options: dict[str, object] = extraction_config.copy() if extraction_config else {}
         extraction_result = run_extraction(
             repo_root=repo_root,
             work_dir=work_dir,
@@ -137,6 +160,7 @@ def _run_extraction_phase(
             scip_identity_overrides=scip_overrides,
             tree_sitter_enabled=ts_enabled,
             max_workers=max_workers,
+            options=run_options,
         )
         elapsed = time.monotonic() - t_start
         logger.info(
@@ -151,12 +175,15 @@ def _run_extraction_phase(
 
 
 def _compile_semantic_phase(
-    extraction_result: ExtractionResult,
+    semantic_input_locations: dict[str, str],
     engine_profile: str,
     rulepack_profile: str,
+    *,
+    output_dir: Path,
+    runtime_config: object | None,
 ) -> tuple[SemanticExecutionContext, SemanticExecutionSpec]:
     from engine.runtime_profile import resolve_runtime_profile
-    from engine.spec_builder import build_execution_spec
+    from engine.spec_builder import RuntimeConfig, build_execution_spec
     from semantics.compile_context import build_semantic_execution_context
 
     with stage_span("semantic_ir_compile", stage="semantic", scope_name=SCOPE_PIPELINE):
@@ -169,7 +196,7 @@ def _compile_semantic_phase(
             outputs=None,
             policy="schema_only",
             ctx=ctx,
-            input_mapping=extraction_result.delta_locations,
+            input_mapping=semantic_input_locations,
         )
         ir_elapsed = time.monotonic() - t_ir_start
         logger.info(
@@ -183,11 +210,15 @@ def _compile_semantic_phase(
         t_spec_start = time.monotonic()
         semantic_ir = execution_context.manifest.semantic_ir
         output_targets = _resolve_output_targets()
+        output_locations = _resolve_output_locations(output_dir, output_targets)
+        resolved_runtime = runtime_config if isinstance(runtime_config, RuntimeConfig) else None
         spec = build_execution_spec(
             ir=semantic_ir,
-            input_locations=extraction_result.delta_locations,
+            input_locations=semantic_input_locations,
             output_targets=output_targets,
             rulepack_profile=rulepack_profile,
+            runtime_config=resolved_runtime,
+            output_locations=output_locations,
         )
         spec_elapsed = time.monotonic() - t_spec_start
         logger.info("Execution spec built in %.2fs", spec_elapsed)
@@ -196,7 +227,7 @@ def _compile_semantic_phase(
 
 
 def _execute_engine_phase(
-    extraction_result: ExtractionResult,
+    semantic_input_locations: dict[str, str],
     spec: SemanticExecutionSpec,
     engine_profile: str,
 ) -> dict[str, object]:
@@ -205,7 +236,7 @@ def _execute_engine_phase(
     with stage_span("engine_execute", stage="engine", scope_name=SCOPE_PIPELINE):
         t_start = time.monotonic()
         run_result = execute_cpg_build(
-            extraction_inputs=extraction_result.delta_locations,
+            extraction_inputs=semantic_input_locations,
             semantic_spec=spec,
             environment_class=engine_profile,
         )
@@ -218,29 +249,63 @@ def _record_observability(
     spec: SemanticExecutionSpec,
     run_result: dict[str, object],
 ) -> None:
-    from obs.engine_artifacts import record_engine_plan_summary
+    from obs.engine_artifacts import record_engine_execution_summary, record_engine_plan_summary
     from obs.engine_metrics_bridge import record_engine_metrics
 
     with stage_span("observability", stage="orchestrator", scope_name=SCOPE_PIPELINE):
-        record_engine_plan_summary(spec)
+        plan_summary = record_engine_plan_summary(spec)
+        emit_diagnostics_event(
+            "engine_spec_summary_v1",
+            payload={
+                "spec_hash": plan_summary.spec_hash,
+                "view_count": plan_summary.view_count,
+                "view_names": [view.name for view in spec.view_definitions],
+                "join_edge_count": plan_summary.join_edge_count,
+                "rule_intent_count": plan_summary.rule_intent_count,
+                "rulepack_profile": plan_summary.rulepack_profile,
+                "input_relation_count": plan_summary.input_relation_count,
+                "output_target_count": plan_summary.output_target_count,
+            },
+            event_kind="event",
+        )
+        execution_summary = record_engine_execution_summary(run_result)
+        emit_diagnostics_event(
+            "engine_execution_summary_v1",
+            payload=msgspec.to_builtins(execution_summary),
+            event_kind="event",
+        )
+        outputs_field = run_result.get("outputs")
+        if isinstance(outputs_field, (list, tuple)):
+            for output in outputs_field:
+                if isinstance(output, dict):
+                    emit_diagnostics_event(
+                        "engine_output_v1",
+                        payload={
+                            "table_name": output.get("table_name"),
+                            "delta_location": output.get("delta_location"),
+                            "rows_written": output.get("rows_written"),
+                            "partition_count": output.get("partition_count"),
+                        },
+                        event_kind="event",
+                    )
         record_engine_metrics(run_result)
 
 
 def _resolve_output_targets() -> list[str]:
-    from engine.output_contracts import ENGINE_CPG_OUTPUTS
-    from semantics.naming import canonical_output_name
+    return list(ENGINE_CPG_OUTPUTS)
 
-    return [canonical_output_name(name) for name in ENGINE_CPG_OUTPUTS]
+
+def _resolve_output_locations(output_dir: Path, output_targets: list[str]) -> dict[str, str]:
+    return {target: str(output_dir / target) for target in output_targets}
 
 
 def _collect_cpg_outputs(
     run_result: dict[str, object],
     *,
     output_dir: Path,
-) -> dict[str, str]:
+) -> dict[str, dict[str, object]]:
     with stage_span("collect_outputs", stage="orchestrator", scope_name=SCOPE_PIPELINE):
-        _ = output_dir
-        outputs: dict[str, str] = {}
+        outputs: dict[str, dict[str, object]] = {}
         outputs_field = run_result.get("outputs")
         if not isinstance(outputs_field, (list, tuple)):
             return outputs
@@ -250,9 +315,39 @@ def _collect_cpg_outputs(
                 continue
             table_name = output.get("table_name")
             delta_location = output.get("delta_location")
-            if not isinstance(table_name, str) or not isinstance(delta_location, str):
+            if not isinstance(table_name, str):
                 continue
-            outputs[table_name] = delta_location
+            canonical_name = canonical_cpg_output_name(table_name)
+            if canonical_name not in ENGINE_CPG_OUTPUTS:
+                continue
+            location = (
+                delta_location
+                if isinstance(delta_location, str) and delta_location
+                else str(output_dir / canonical_name)
+            )
+            rows = output.get("rows_written", 0)
+            row_count = int(rows) if isinstance(rows, (int, float)) else 0
+            payload: dict[str, object] = {
+                "table_name": canonical_name,
+                "path": location,
+                "rows": row_count,
+                "rows_written": row_count,
+                "partition_count": output.get("partition_count"),
+                "delta_version": output.get("delta_version"),
+                "files_added": output.get("files_added"),
+                "bytes_written": output.get("bytes_written"),
+                "error_rows": 0,
+                "paths": {
+                    "data": location,
+                    "errors": str(Path(location) / "_errors"),
+                    "stats": str(Path(location) / "_stats"),
+                    "alignment": str(Path(location) / "_alignment"),
+                },
+            }
+            outputs[canonical_name] = payload
+            legacy = CPG_OUTPUT_CANONICAL_TO_LEGACY.get(canonical_name)
+            if legacy is not None:
+                outputs[legacy] = payload
         logger.info("Collected %d CPG outputs", len(outputs))
     return outputs
 
@@ -266,16 +361,16 @@ def _write_auxiliary_outputs(  # noqa: PLR0913
     include_errors: bool,
     include_manifest: bool,
     include_run_bundle: bool,
-) -> dict[str, str]:
+) -> dict[str, dict[str, object]]:
     with stage_span("auxiliary_outputs", stage="orchestrator", scope_name=SCOPE_PIPELINE):
-        auxiliary: dict[str, str] = {}
+        auxiliary: dict[str, dict[str, object]] = {}
 
         normalize_location = _write_normalize_outputs(
             output_dir=output_dir,
             spec=spec,
         )
         if normalize_location:
-            auxiliary["write_normalize_outputs_delta"] = normalize_location
+            auxiliary["write_normalize_outputs_delta"] = {"path": normalize_location}
 
         if include_errors and extraction_result.errors:
             error_location = _write_extract_error_artifacts(
@@ -283,7 +378,10 @@ def _write_auxiliary_outputs(  # noqa: PLR0913
                 errors=extraction_result.errors,
             )
             if error_location:
-                auxiliary["write_extract_error_artifacts_delta"] = error_location
+                auxiliary["write_extract_error_artifacts_delta"] = {
+                    "path": error_location,
+                    "rows": len(extraction_result.errors),
+                }
 
         if include_manifest:
             manifest_location = _write_run_manifest(
@@ -293,7 +391,7 @@ def _write_auxiliary_outputs(  # noqa: PLR0913
                 extraction_result=extraction_result,
             )
             if manifest_location:
-                auxiliary["write_run_manifest_delta"] = manifest_location
+                auxiliary["write_run_manifest_delta"] = {"path": manifest_location}
 
         if include_run_bundle:
             bundle_location = _write_run_bundle_dir(
@@ -303,7 +401,10 @@ def _write_auxiliary_outputs(  # noqa: PLR0913
                 extraction_result=extraction_result,
             )
             if bundle_location:
-                auxiliary["write_run_bundle_dir"] = bundle_location
+                auxiliary["write_run_bundle_dir"] = {
+                    "bundle_dir": bundle_location,
+                    "run_id": Path(bundle_location).name,
+                }
 
         logger.info("Wrote %d auxiliary outputs", len(auxiliary))
 

@@ -126,6 +126,7 @@ pub async fn execute_and_materialize(
 
         results.push(MaterializationResult {
             table_name: target.table_name.clone(),
+            delta_location: Some(delta_location.to_string()),
             rows_written,
             partition_count: partition_count as u32,
             delta_version: outcome.delta_version,
@@ -240,6 +241,7 @@ pub async fn execute_and_materialize_with_plans(
 
         results.push(MaterializationResult {
             table_name: target.table_name.clone(),
+            delta_location: Some(delta_location.to_string()),
             rows_written,
             partition_count: partition_count as u32,
             delta_version: outcome.delta_version,

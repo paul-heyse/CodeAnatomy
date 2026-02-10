@@ -127,6 +127,23 @@ def _spec_payload_with_input_overrides(
     return payload
 
 
+def _validate_output_targets(semantic_spec: SemanticExecutionSpec) -> None:
+    output_targets = semantic_spec.output_targets
+    if not output_targets:
+        msg = "SemanticExecutionSpec must define at least one output target."
+        raise EngineValidationError(msg)
+    missing_locations: list[str] = []
+    for target in output_targets:
+        table_name = target.table_name
+        delta_location = target.delta_location
+        if not isinstance(delta_location, str) or not delta_location:
+            missing_locations.append(table_name)
+    if missing_locations:
+        joined = ", ".join(sorted(missing_locations))
+        msg = f"Missing output delta locations for targets: {joined}"
+        raise EngineValidationError(msg)
+
+
 def execute_cpg_build(
     extraction_inputs: dict[str, str],
     semantic_spec: SemanticExecutionSpec,
@@ -156,6 +173,8 @@ def execute_cpg_build(
     session_factory_cls = engine_module.SessionFactory
     semantic_plan_compiler_cls = engine_module.SemanticPlanCompiler
     cpg_materializer_cls = engine_module.CpgMaterializer
+
+    _validate_output_targets(semantic_spec)
 
     spec_payload = _spec_payload_with_input_overrides(
         semantic_spec=semantic_spec,

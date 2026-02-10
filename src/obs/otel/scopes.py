@@ -11,8 +11,10 @@ SCOPE_NORMALIZE = ScopeName.NORMALIZE
 SCOPE_PLANNING = ScopeName.PLANNING
 SCOPE_SCHEDULING = ScopeName.SCHEDULING
 SCOPE_DATAFUSION = ScopeName.DATAFUSION
+SCOPE_EXECUTION = ScopeName.EXECUTION
 SCOPE_STORAGE = ScopeName.STORAGE
-SCOPE_HAMILTON = ScopeName.HAMILTON
+# Compatibility alias for pre-cutover callers; canonical scope is SCOPE_EXECUTION.
+SCOPE_HAMILTON = SCOPE_EXECUTION
 SCOPE_CPG = ScopeName.CPG
 SCOPE_OBS = ScopeName.OBS
 SCOPE_DIAGNOSTICS = ScopeName.DIAGNOSTICS
@@ -21,7 +23,7 @@ SCOPE_SEMANTICS = ScopeName.SEMANTICS
 _LAYER_SCOPE_MAP = {
     "inputs": SCOPE_EXTRACT,
     "plan": SCOPE_PLANNING,
-    "execution": SCOPE_HAMILTON,
+    "execution": SCOPE_EXECUTION,
     "storage": SCOPE_STORAGE,
     "outputs": SCOPE_PIPELINE,
     "quality": SCOPE_PIPELINE,
@@ -31,12 +33,12 @@ _LAYER_SCOPE_MAP = {
 
 
 def scope_for_layer(layer: str | None) -> str:
-    """Return the canonical scope for a tagged Hamilton layer.
+    """Return the canonical scope for a tagged pipeline layer.
 
     Parameters
     ----------
     layer
-        Hamilton node layer tag.
+        Pipeline node layer tag.
 
     Returns:
     -------
@@ -52,6 +54,7 @@ __all__ = [
     "SCOPE_CPG",
     "SCOPE_DATAFUSION",
     "SCOPE_DIAGNOSTICS",
+    "SCOPE_EXECUTION",
     "SCOPE_EXTRACT",
     "SCOPE_HAMILTON",
     "SCOPE_NORMALIZE",

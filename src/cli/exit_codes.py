@@ -102,7 +102,7 @@ def _exit_code_for_exception_module(exc: BaseException) -> ExitCode | None:
         (("extract",), ExitCode.EXTRACTION_ERROR),
         (("normalize", "semantics"), ExitCode.NORMALIZATION_ERROR),
         (("relspec", "schedule"), ExitCode.SCHEDULING_ERROR),
-        (("engine", "hamilton"), ExitCode.EXECUTION_ERROR),
+        (("engine", "execution"), ExitCode.EXECUTION_ERROR),
         (("datafusion",), ExitCode.DATAFUSION_ERROR),
         (("delta", "storage"), ExitCode.BACKEND_ERROR),
     )

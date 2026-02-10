@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field
 
 from runtime_models.base import RuntimeBase
+from runtime_models.engine import EngineConfigRuntime
 from runtime_models.otel import OtelConfigRuntime
 
 
@@ -152,6 +153,7 @@ class RootConfigRuntime(RuntimeBase):
     delta: DeltaConfigRuntime | None = None
     docstrings: DocstringsConfigRuntime | None = None
     otel: OtelConfigRuntime | None = None
+    engine: EngineConfigRuntime | None = None
 
 
 __all__ = [
@@ -165,6 +167,7 @@ __all__ = [
     "DiskCacheSettingsRuntime",
     "DocstringsConfigRuntime",
     "DocstringsPolicyConfigRuntime",
+    "EngineConfigRuntime",
     "IncrementalConfigRuntime",
     "PlanConfigRuntime",
     "RootConfigRuntime",

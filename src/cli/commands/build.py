@@ -671,7 +671,7 @@ def _apply_cli_config_overrides(
     if isinstance(incremental_section, dict):
         incremental_payload = dict(cast("Mapping[str, JsonValue]", incremental_section))
     else:
-        incremental_payload = dict[str, JsonValue]()
+        incremental_payload = {}
     incremental_payload["enabled"] = overrides.incremental
     resolved_state_dir = resolve_path(repo_root, overrides.incremental_state_dir)
     state_dir_value = str(resolved_state_dir) if resolved_state_dir is not None else None

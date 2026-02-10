@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -15,6 +16,8 @@ from core_types import JsonValue
 from runtime_models.adapters import ROOT_CONFIG_ADAPTER
 from runtime_models.root import RootConfigRuntime
 from serde_msgspec import validation_error_payload
+
+logger = logging.getLogger(__name__)
 
 
 def load_effective_config(config_file: str | None) -> dict[str, JsonValue]:
@@ -175,8 +178,9 @@ def _apply_config_values(
 
 
 def _decode_root_config(raw: Mapping[str, JsonValue], *, location: str) -> RootConfigSpec:
+    translated = _translate_deprecated_config(raw, location=location)
     try:
-        config = msgspec.convert(raw, type=RootConfigSpec, strict=True)
+        config = msgspec.convert(translated, type=RootConfigSpec, strict=True)
     except msgspec.ValidationError as exc:
         details = validation_error_payload(exc)
         msg = f"Config validation failed for {location}: {details}"
@@ -197,6 +201,45 @@ def _validate_root_runtime(config: RootConfigSpec, *, location: str) -> None:
     except Exception as exc:
         msg = f"Config validation failed for {location}: {exc}"
         raise ValueError(msg) from exc
+
+
+def _translate_deprecated_config(
+    raw: Mapping[str, JsonValue],
+    *,
+    location: str,
+) -> dict[str, JsonValue]:
+    """Translate deprecated config sections to canonical engine config.
+
+    Returns:
+    -------
+    dict[str, JsonValue]
+        Normalized config payload with deprecated sections translated when possible.
+    """
+    payload = dict(raw)
+    legacy_hamilton = payload.get("hamilton")
+    if "engine" in payload or not isinstance(legacy_hamilton, Mapping):
+        return payload
+    translated_engine: dict[str, JsonValue] = {}
+    key_map = {
+        "profile": "profile",
+        "rulepack_profile": "rulepack_profile",
+        "enable_compliance": "compliance_capture",
+        "enable_rule_tracing": "rule_tracing",
+        "enable_plan_preview": "plan_preview",
+        "tracing_preset": "tracing_preset",
+        "instrument_object_store": "instrument_object_store",
+    }
+    for old_key, new_key in key_map.items():
+        value = legacy_hamilton.get(old_key)
+        if value is not None:
+            translated_engine[new_key] = value
+    if translated_engine:
+        payload["engine"] = translated_engine
+        logger.warning(
+            "Deprecated [hamilton] config detected at %s; translated to [engine].",
+            location,
+        )
+    return payload
 
 
 def _resolve_explicit_payload(path: Path) -> tuple[Mapping[str, JsonValue], str]:

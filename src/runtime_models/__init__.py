@@ -8,6 +8,7 @@ from runtime_models.adapters import (
 )
 from runtime_models.base import RuntimeBase
 from runtime_models.compile import DataFusionCompileOptionsRuntime
+from runtime_models.engine import EngineConfigRuntime
 from runtime_models.otel import OtelConfigRuntime
 from runtime_models.root import RootConfigRuntime
 from runtime_models.semantic import SemanticConfigRuntime
@@ -18,6 +19,7 @@ __all__ = [
     "ROOT_CONFIG_ADAPTER",
     "SEMANTIC_CONFIG_ADAPTER",
     "DataFusionCompileOptionsRuntime",
+    "EngineConfigRuntime",
     "OtelConfigRuntime",
     "RootConfigRuntime",
     "RuntimeBase",

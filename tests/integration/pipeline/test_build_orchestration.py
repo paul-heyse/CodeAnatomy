@@ -6,13 +6,47 @@ heartbeat + signal handlers + build-phase diagnostics.
 
 from __future__ import annotations
 
-import contextlib
 import signal
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
+
+
+def _stub_build_result(repo_root: Path) -> object:
+    from engine.build_orchestrator import BuildResult
+
+    output_dir = repo_root / "build"
+
+    def _finalize_payload(name: str) -> dict[str, object]:
+        data_path = output_dir / name
+        return {
+            "path": str(data_path),
+            "rows": 0,
+            "error_rows": 0,
+            "paths": {
+                "data": str(data_path),
+                "errors": str(data_path / "_errors"),
+                "stats": str(data_path / "_stats"),
+                "alignment": str(data_path / "_alignment"),
+            },
+        }
+
+    return BuildResult(
+        cpg_outputs={
+            "cpg_nodes": _finalize_payload("cpg_nodes"),
+            "cpg_edges": _finalize_payload("cpg_edges"),
+            "cpg_props": _finalize_payload("cpg_props"),
+            "cpg_props_map": {"path": str(output_dir / "cpg_props_map"), "rows": 0},
+            "cpg_edges_by_src": {"path": str(output_dir / "cpg_edges_by_src"), "rows": 0},
+            "cpg_edges_by_dst": {"path": str(output_dir / "cpg_edges_by_dst"), "rows": 0},
+        },
+        auxiliary_outputs={},
+        run_result={},
+        extraction_timing={},
+        warnings=[],
+    )
 
 
 @pytest.fixture
@@ -279,15 +313,14 @@ def test_build_phase_start_and_end_events(
 
     monkeypatch.setattr("graph.product_build.emit_diagnostics_event", mock_emit)
 
-    def mock_execute_pipeline(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    def mock_orchestrate_build(*args: Any, **kwargs: Any) -> object:
         _ = (args, kwargs)
-        return {}
+        return _stub_build_result(minimal_python_repo)
 
-    monkeypatch.setattr("hamilton_pipeline.execute_pipeline", mock_execute_pipeline)
+    monkeypatch.setattr("engine.build_orchestrator.orchestrate_build", mock_orchestrate_build)
 
     request = GraphProductBuildRequest(repo_root=str(minimal_python_repo))
-    with contextlib.suppress(Exception):
-        build_graph_product(request)
+    build_graph_product(request)
 
     phase_events = [
         e
@@ -408,12 +441,7 @@ def test_build_success_records_diagnostics(
             cpg_edges_by_dst=TableDeltaReport(path=minimal_python_repo / "edges_by_dst", rows=0),
         )
 
-    def mock_execute_pipeline(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        _ = (args, kwargs)
-        return {}
-
     monkeypatch.setattr("graph.product_build._execute_build", mock_execute_build)
-    monkeypatch.setattr("hamilton_pipeline.execute_pipeline", mock_execute_pipeline)
 
     request = GraphProductBuildRequest(repo_root=str(minimal_python_repo))
     build_graph_product(request)

@@ -2,24 +2,166 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+from pathlib import Path
+
+import pyarrow as pa
 import pytest
 
+from extraction import orchestrator as orchestrator_mod
 
-@pytest.mark.skip(reason="Requires extraction infrastructure")
-class TestExtractionOrchestrator:
-    """Extraction orchestrator unit tests."""
 
-    def test_staged_execution_ordering(self) -> None:
-        """Verify stage 0 completes before stage 1."""
+def _sample_table(label: str) -> pa.Table:
+    return pa.table({"name": [label], "value": [1]})
 
-    def test_parallel_stage1_extractors(self) -> None:
-        """Verify stage 1 extractors run in parallel via ThreadPoolExecutor."""
 
-    def test_error_collection(self) -> None:
-        """Verify extraction errors are collected into ExtractionResult.errors."""
+def _wire_test_doubles(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    stage1_extractors: dict[str, object],
+    calls: list[str],
+    stage1_error: str | None = None,
+) -> None:
+    repo_scan_outputs = {
+        "repo_files_v1": _sample_table("repo"),
+        "file_line_index_v1": _sample_table("line_index"),
+    }
 
-    def test_delta_output_locations(self) -> None:
-        """Verify Delta output locations are returned in ExtractionResult.delta_locations."""
+    def _run_repo_scan(
+        _repo_root: Path, *, options: dict[str, object] | None
+    ) -> dict[str, pa.Table]:
+        _ = options
+        calls.append("repo_scan")
+        return repo_scan_outputs
 
-    def test_timing_recorded(self) -> None:
-        """Verify extraction timing is recorded in ExtractionResult.timing."""
+    def _build_stage1_extractors(**kwargs: object) -> dict[str, object]:
+        repo_files = kwargs.get("repo_files")
+        assert isinstance(repo_files, pa.Table)
+        return stage1_extractors
+
+    def _run_python_imports(_delta_locations: dict[str, str]) -> pa.Table:
+        calls.append("python_imports")
+        return _sample_table("python_imports")
+
+    def _run_python_external(_delta_locations: dict[str, str], _repo_root: Path) -> pa.Table:
+        calls.append("python_external")
+        return _sample_table("python_external")
+
+    def _write_delta(_table: pa.Table, location: Path, _name: str) -> str:
+        return str(location)
+
+    def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    def _stage_span(*_args: object, **_kwargs: object) -> object:
+        return nullcontext()
+
+    monkeypatch.setattr(orchestrator_mod, "_run_repo_scan", _run_repo_scan)
+    monkeypatch.setattr(orchestrator_mod, "_build_stage1_extractors", _build_stage1_extractors)
+    monkeypatch.setattr(orchestrator_mod, "_run_python_imports", _run_python_imports)
+    monkeypatch.setattr(orchestrator_mod, "_run_python_external", _run_python_external)
+    monkeypatch.setattr(orchestrator_mod, "_write_delta", _write_delta)
+    monkeypatch.setattr(orchestrator_mod, "stage_span", _stage_span)
+    monkeypatch.setattr(orchestrator_mod, "record_error", _noop)
+    monkeypatch.setattr(orchestrator_mod, "record_stage_duration", _noop)
+
+    if stage1_error is not None:
+        failing = stage1_extractors[stage1_error]
+
+        def _raise_error() -> pa.Table:
+            msg = "stage1 failure"
+            raise ValueError(msg)
+
+        stage1_extractors[stage1_error] = _raise_error
+        _ = failing
+
+
+def test_staged_execution_ordering(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    stage1_extractors: dict[str, object] = {
+        "ast_files": lambda: (calls.append("ast_files"), _sample_table("ast"))[1],
+        "libcst_files": lambda: (calls.append("libcst_files"), _sample_table("cst"))[1],
+    }
+    _wire_test_doubles(monkeypatch, stage1_extractors=stage1_extractors, calls=calls)
+
+    orchestrator_mod.run_extraction(repo_root=tmp_path, work_dir=tmp_path / "work")
+
+    assert calls.index("repo_scan") < calls.index("python_imports")
+    assert calls.index("repo_scan") < calls.index("ast_files")
+    assert calls.index("repo_scan") < calls.index("libcst_files")
+    assert calls.index("python_imports") < calls.index("python_external")
+
+
+def test_parallel_stage1_extractors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    stage1_extractors: dict[str, object] = {
+        "ast_files": lambda: (calls.append("ast_files"), _sample_table("ast"))[1],
+        "libcst_files": lambda: (calls.append("libcst_files"), _sample_table("cst"))[1],
+        "symtable_files_v1": lambda: (calls.append("symtable_files_v1"), _sample_table("sym"))[1],
+    }
+    _wire_test_doubles(monkeypatch, stage1_extractors=stage1_extractors, calls=calls)
+
+    result = orchestrator_mod.run_extraction(
+        repo_root=tmp_path,
+        work_dir=tmp_path / "work",
+        max_workers=4,
+    )
+
+    assert not result.errors
+    assert "ast_files" in result.delta_locations
+    assert "libcst_files" in result.delta_locations
+    assert "symtable_files_v1" in result.delta_locations
+
+
+def test_error_collection(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    stage1_extractors: dict[str, object] = {
+        "ast_files": lambda: (calls.append("ast_files"), _sample_table("ast"))[1],
+        "libcst_files": lambda: (calls.append("libcst_files"), _sample_table("cst"))[1],
+    }
+    _wire_test_doubles(
+        monkeypatch,
+        stage1_extractors=stage1_extractors,
+        calls=calls,
+        stage1_error="libcst_files",
+    )
+
+    result = orchestrator_mod.run_extraction(repo_root=tmp_path, work_dir=tmp_path / "work")
+
+    assert result.errors
+    first_error = result.errors[0]
+    assert first_error.get("extractor") == "libcst_files"
+    assert "stage1 failure" in str(first_error.get("error"))
+
+
+def test_delta_output_locations(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    stage1_extractors: dict[str, object] = {
+        "libcst_files": lambda: (calls.append("libcst_files"), _sample_table("cst"))[1],
+        "symtable_files_v1": lambda: (calls.append("symtable_files_v1"), _sample_table("sym"))[1],
+        "scip_index": lambda: (calls.append("scip_index"), _sample_table("scip"))[1],
+    }
+    _wire_test_doubles(monkeypatch, stage1_extractors=stage1_extractors, calls=calls)
+
+    result = orchestrator_mod.run_extraction(repo_root=tmp_path, work_dir=tmp_path / "work")
+
+    assert "repo_files_v1" in result.delta_locations
+    assert "repo_files" in result.delta_locations
+    assert "cst_imports" in result.semantic_input_locations
+    assert "symtable_scopes" in result.semantic_input_locations
+    assert "scip_occurrences" in result.semantic_input_locations
+
+
+def test_timing_recorded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    stage1_extractors: dict[str, object] = {
+        "ast_files": lambda: (calls.append("ast_files"), _sample_table("ast"))[1],
+    }
+    _wire_test_doubles(monkeypatch, stage1_extractors=stage1_extractors, calls=calls)
+
+    result = orchestrator_mod.run_extraction(repo_root=tmp_path, work_dir=tmp_path / "work")
+
+    assert "repo_scan" in result.timing
+    assert "ast_files" in result.timing
+    assert "python_imports" in result.timing
+    assert "python_external" in result.timing

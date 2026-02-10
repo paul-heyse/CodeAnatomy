@@ -15,7 +15,11 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from cpg.schemas import SCHEMA_VERSION
-from engine.output_contracts import ENGINE_CPG_OUTPUTS
+from engine.output_contracts import (
+    CPG_OUTPUT_CANONICAL_TO_LEGACY,
+    ENGINE_CPG_OUTPUTS,
+    output_aliases,
+)
 from obs.diagnostics_report import write_run_diagnostics_report
 from obs.otel import (
     OtelBootstrapOptions,
@@ -393,6 +397,7 @@ def _expected_outputs_for_request(request: GraphProductBuildRequest) -> set[str]
         Expected output keys for this request.
     """
     outputs = set(ENGINE_CPG_OUTPUTS)
+    outputs.update(CPG_OUTPUT_CANONICAL_TO_LEGACY.values())
     if request.include_extract_errors:
         outputs.add("write_extract_error_artifacts_delta")
     if request.include_manifest:
@@ -418,16 +423,17 @@ def _resolve_output_dir(repo_root: Path, output_dir: PathLike | None) -> Path:
     return resolved if resolved.is_absolute() else repo_root / resolved
 
 
-def _require(outputs: Mapping[str, JsonDict | None], key: str) -> JsonDict:
-    value = outputs.get(key)
-    if value is None:
-        msg = f"Missing required pipeline output {key!r}."
-        raise ValueError(msg)
-    return value
-
-
 def _optional(outputs: Mapping[str, JsonDict | None], key: str) -> JsonDict | None:
     return outputs.get(key)
+
+
+def _require_cpg_output(outputs: Mapping[str, JsonDict | None], key: str) -> JsonDict:
+    for alias in output_aliases(key):
+        value = outputs.get(alias)
+        if value is not None:
+            return value
+    msg = f"Missing required CPG output {key!r}."
+    raise ValueError(msg)
 
 
 def _int_field(report: JsonDict, key: str) -> int:
@@ -619,15 +625,15 @@ def _parse_build_result(
     GraphProductBuildResult
         Public API result type
     """
-    # Build result has cpg_outputs, auxiliary_outputs, run_result attributes
+    # Build result has cpg_outputs and auxiliary_outputs. Keep run_result out of the
+    # public output map to avoid schema collisions with named pipeline outputs.
     all_outputs = {
         **getattr(build_result, "cpg_outputs", {}),
         **getattr(build_result, "auxiliary_outputs", {}),
-        **getattr(build_result, "run_result", {}),
     }
 
-    # Parse CPG outputs (inline to reduce locals)
-    nodes_report = _parse_finalize(_require(all_outputs, "write_cpg_nodes_delta"))
+    # Parse CPG outputs from canonical names with legacy alias fallback.
+    nodes_report = _parse_finalize(_require_cpg_output(all_outputs, "cpg_nodes"))
 
     # Parse auxiliary outputs
     manifest_path, manifest_run_id = _parse_manifest_details(
@@ -648,11 +654,11 @@ def _parse_build_result(
         repo_root=repo_root,
         output_dir=nodes_report.paths.data.parent,
         cpg_nodes=nodes_report,
-        cpg_edges=_parse_finalize(_require(all_outputs, "write_cpg_edges_delta")),
-        cpg_props=_parse_finalize(_require(all_outputs, "write_cpg_props_delta")),
-        cpg_props_map=_parse_table(_require(all_outputs, "write_cpg_props_map_delta")),
-        cpg_edges_by_src=_parse_table(_require(all_outputs, "write_cpg_edges_by_src_delta")),
-        cpg_edges_by_dst=_parse_table(_require(all_outputs, "write_cpg_edges_by_dst_delta")),
+        cpg_edges=_parse_finalize(_require_cpg_output(all_outputs, "cpg_edges")),
+        cpg_props=_parse_finalize(_require_cpg_output(all_outputs, "cpg_props")),
+        cpg_props_map=_parse_table(_require_cpg_output(all_outputs, "cpg_props_map")),
+        cpg_edges_by_src=_parse_table(_require_cpg_output(all_outputs, "cpg_edges_by_src")),
+        cpg_edges_by_dst=_parse_table(_require_cpg_output(all_outputs, "cpg_edges_by_dst")),
         extract_error_artifacts=(
             _optional(all_outputs, "write_extract_error_artifacts_delta")
             if request.include_extract_errors

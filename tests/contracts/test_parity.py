@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from engine.output_contracts import (
+    CANONICAL_CPG_OUTPUTS,
     ENGINE_CPG_OUTPUTS,
     FULL_PIPELINE_OUTPUTS,
     ORCHESTRATOR_OUTPUTS,
@@ -29,10 +30,14 @@ class TestOutputContractParity:
         """Verify total 10 pipeline outputs."""
         assert len(FULL_PIPELINE_OUTPUTS) == 10
 
-    def test_all_cpg_outputs_have_delta_suffix(self) -> None:
-        """Verify all CPG outputs end with _delta."""
+    def test_all_cpg_outputs_use_cpg_prefix(self) -> None:
+        """Verify canonical CPG outputs use cpg_* naming."""
         for name in ENGINE_CPG_OUTPUTS:
-            assert name.endswith("_delta"), f"{name} missing _delta suffix"
+            assert name.startswith("cpg_"), f"{name} missing cpg_* prefix"
+
+    def test_engine_outputs_are_canonical(self) -> None:
+        """Verify ENGINE_CPG_OUTPUTS is the canonical CPG output set."""
+        assert ENGINE_CPG_OUTPUTS == CANONICAL_CPG_OUTPUTS
 
     def test_no_duplicate_output_names(self) -> None:
         """Verify no duplicate output names across all categories."""

@@ -415,6 +415,9 @@ def build_execution_spec(
     input_locations: Mapping[str, str],
     output_targets: Sequence[str],
     rulepack_profile: str = "default",
+    *,
+    runtime_config: RuntimeConfig | None = None,
+    output_locations: Mapping[str, str] | None = None,
 ) -> SemanticExecutionSpec:
     """Build a Rust-compatible execution spec from semantic IR.
 
@@ -423,16 +426,22 @@ def build_execution_spec(
         input_locations: Mapping of logical input names to Delta locations.
         output_targets: Output table names to materialize.
         rulepack_profile: Desired rulepack profile, case-insensitive.
+        runtime_config: Optional runtime controls passed through to the spec.
+        output_locations: Optional output target to Delta location mapping.
 
     Returns:
         Canonical SemanticExecutionSpec suitable for Rust deserialization.
 
     Raises:
-        ValueError: If output targets are requested but the IR has no views.
+        ValueError: If output targets are empty or IR has no views.
     """
     profile = _canonical_rulepack_profile(rulepack_profile)
     group_by_relationship, join_edges = _group_index(ir)
     view_names = {view.name for view in ir.views}
+
+    if not output_targets:
+        msg = "Execution spec must include at least one output target"
+        raise ValueError(msg)
 
     input_relations = tuple(
         InputRelation(logical_name=name, delta_location=location)
@@ -451,16 +460,17 @@ def build_execution_spec(
         )
         for view in ir.views
     )
-    if output_targets and not ir.views:
+    if not ir.views:
         msg = "Cannot build output targets without at least one IR view"
         raise ValueError(msg)
 
-    default_output_source = ir.views[-1].name if ir.views else ""
+    default_output_source = ir.views[-1].name
     output_specs = tuple(
         OutputTarget(
             table_name=target,
             source_view=target if target in view_names else default_output_source,
             columns=(),
+            delta_location=output_locations.get(target) if output_locations is not None else None,
             materialization_mode="Overwrite",
         )
         for target in output_targets
@@ -475,7 +485,7 @@ def build_execution_spec(
         rule_intents=_default_rule_intents(profile),
         rulepack_profile=profile,
         typed_parameters=(),
-        runtime=RuntimeConfig(),
+        runtime=runtime_config if runtime_config is not None else RuntimeConfig(),
     )
 
 
@@ -484,6 +494,9 @@ def build_spec_from_ir(
     input_locations: Mapping[str, str],
     output_targets: Sequence[str],
     rulepack_profile: str = "default",
+    *,
+    runtime_config: RuntimeConfig | None = None,
+    output_locations: Mapping[str, str] | None = None,
 ) -> SemanticExecutionSpec:
     """Build a SemanticExecutionSpec using the legacy helper name.
 
@@ -492,6 +505,8 @@ def build_spec_from_ir(
         input_locations: Mapping of logical input names to Delta locations.
         output_targets: Output table names to materialize.
         rulepack_profile: Desired rulepack profile, case-insensitive.
+        runtime_config: Optional runtime controls passed through to the spec.
+        output_locations: Optional output target to Delta location mapping.
 
     Returns:
         Canonical SemanticExecutionSpec suitable for Rust deserialization.
@@ -501,4 +516,6 @@ def build_spec_from_ir(
         input_locations=input_locations,
         output_targets=output_targets,
         rulepack_profile=rulepack_profile,
+        runtime_config=runtime_config,
+        output_locations=output_locations,
     )

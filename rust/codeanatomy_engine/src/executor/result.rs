@@ -42,6 +42,7 @@ pub struct RunResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterializationResult {
     pub table_name: String,
+    pub delta_location: Option<String>,
     pub rows_written: u64,
     pub partition_count: u32,
     pub delta_version: Option<i64>,

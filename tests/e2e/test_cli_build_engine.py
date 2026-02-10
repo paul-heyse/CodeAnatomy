@@ -63,7 +63,14 @@ def test_build_command_smoke_with_stubbed_orchestrator(
     exit_code = build_command(
         repo_root=repo_root,
         request=BuildRequestOptions(),
-        options=BuildOptions(engine_profile="small", enable_tree_sitter=False),
+        options=BuildOptions(
+            engine_profile="small",
+            enable_tree_sitter=False,
+            incremental=True,
+            git_base_ref="origin/main",
+            git_head_ref="HEAD",
+            git_changed_only=True,
+        ),
         run_context=RunContext(run_id="test-run", log_level="INFO", config_contents={}),
     )
 
@@ -71,4 +78,10 @@ def test_build_command_smoke_with_stubbed_orchestrator(
     assert observed["engine_profile"] == "small"
     extraction_config = observed["extraction_config"]
     assert isinstance(extraction_config, dict)
+    assert extraction_config["tree_sitter_enabled"] is False
     assert extraction_config["enable_tree_sitter"] is False
+    incremental_config = extraction_config["incremental_config"]
+    assert incremental_config is not None
+    assert incremental_config.git_base_ref == "origin/main"
+    assert incremental_config.git_head_ref == "HEAD"
+    assert incremental_config.git_changed_only is True

@@ -96,6 +96,13 @@ class _PlanPayloadOptions:
     output_format: Literal["text", "json", "dot"]
 
 
+@dataclass(frozen=True)
+class _PlanRuntimeMetadata:
+    engine_profile: str
+    runtime_profile_name: str
+    runtime_profile_hash: str
+
+
 def plan_command(
     repo_root: Annotated[
         Path,
@@ -128,7 +135,11 @@ def plan_command(
     from semantics.ir_pipeline import build_semantic_ir
 
     runtime_profile = resolve_runtime_profile(options.engine_profile)
-    _ = runtime_profile
+    runtime_metadata = _PlanRuntimeMetadata(
+        engine_profile=options.engine_profile,
+        runtime_profile_name=runtime_profile.name,
+        runtime_profile_hash=runtime_profile.runtime_profile_hash,
+    )
     ir = build_semantic_ir()
     output_targets = list(ENGINE_CPG_OUTPUTS)
     output_locations = {name: str(resolved_root / "build" / name) for name in output_targets}
@@ -149,6 +160,15 @@ def plan_command(
         )
         sys.stderr.write(f"Error: {msg}\n")
         return 1
+    try:
+        session_factory_cls = engine_module.SessionFactory
+        session_factory_cls.from_class(options.engine_profile)
+    except AttributeError as exc:
+        sys.stderr.write(f"Plan runtime initialization failed: {exc}\n")
+        return 1
+    except (TypeError, ValueError, RuntimeError) as exc:
+        sys.stderr.write(f"Plan runtime initialization failed: {exc}\n")
+        return 1
 
     import msgspec
 
@@ -164,6 +184,7 @@ def plan_command(
     payload = _build_payload(
         spec=spec,
         compiled=compiled,
+        runtime_metadata=runtime_metadata,
         options=_PlanPayloadOptions(
             show_graph=options.show_graph,
             show_schedule=options.show_schedule,
@@ -182,12 +203,13 @@ def _build_payload(
     *,
     spec: SemanticExecutionSpec,
     compiled: object,
+    runtime_metadata: _PlanRuntimeMetadata,
     options: _PlanPayloadOptions,
 ) -> object:
     if options.output_format == "dot":
         return _build_dot_output(spec)
 
-    payload = _build_payload_base(spec, compiled)
+    payload = _build_payload_base(spec, compiled, runtime_metadata)
     _maybe_add_tier2_features(payload, options)
 
     if options.output_format == "json":
@@ -196,7 +218,11 @@ def _build_payload(
     return _format_text(payload)
 
 
-def _build_payload_base(spec: SemanticExecutionSpec, compiled: object) -> dict[str, object]:
+def _build_payload_base(
+    spec: SemanticExecutionSpec,
+    compiled: object,
+    runtime_metadata: _PlanRuntimeMetadata,
+) -> dict[str, object]:
     return {
         "plan_signature": getattr(compiled, "spec_hash_hex", lambda: "unknown")(),
         "view_count": len(spec.view_definitions),
@@ -204,6 +230,9 @@ def _build_payload_base(spec: SemanticExecutionSpec, compiled: object) -> dict[s
         "rulepack_profile": spec.rulepack_profile,
         "input_relation_count": len(spec.input_relations),
         "join_edge_count": len(spec.join_graph.edges),
+        "engine_profile": runtime_metadata.engine_profile,
+        "runtime_profile_name": runtime_metadata.runtime_profile_name,
+        "runtime_profile_hash": runtime_metadata.runtime_profile_hash,
     }
 
 
@@ -262,6 +291,9 @@ def _format_base_lines(payload: dict[str, object]) -> list[str]:
         f"plan_signature: {payload.get('plan_signature')}",
         f"view_count: {payload.get('view_count')}",
         f"rulepack_profile: {payload.get('rulepack_profile')}",
+        f"engine_profile: {payload.get('engine_profile')}",
+        f"runtime_profile_name: {payload.get('runtime_profile_name')}",
+        f"runtime_profile_hash: {payload.get('runtime_profile_hash')}",
         f"input_relation_count: {payload.get('input_relation_count')}",
         f"join_edge_count: {payload.get('join_edge_count')}",
     ]

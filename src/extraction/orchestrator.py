@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from extraction.contracts import resolve_semantic_input_locations, with_compat_aliases
+from extraction.options import ExtractionRunOptions, normalize_extraction_options
 from obs.otel.metrics import record_error, record_stage_duration
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
@@ -47,7 +48,7 @@ def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
     scip_identity_overrides: object | None = None,
     tree_sitter_enabled: bool = True,
     max_workers: int = 6,
-    options: dict[str, object] | None = None,
+    options: ExtractionRunOptions | Mapping[str, object] | None = None,
 ) -> ExtractionResult:
     """Run the full extraction pipeline with staged execution.
 
@@ -84,6 +85,13 @@ def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
     timing: dict[str, float] = {}
     extract_dir = work_dir / "extract"
     extract_dir.mkdir(parents=True, exist_ok=True)
+    resolved_options = normalize_extraction_options(
+        options,
+        default_tree_sitter_enabled=tree_sitter_enabled,
+        default_max_workers=max_workers,
+    )
+    tree_sitter_enabled = resolved_options.tree_sitter_enabled
+    max_workers = resolved_options.max_workers
 
     # Track overall extraction phase timing
     extraction_start = time.monotonic()
@@ -97,7 +105,7 @@ def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "repo_scan"},
         ):
-            repo_scan_outputs = _run_repo_scan(repo_root, options=options)
+            repo_scan_outputs = _run_repo_scan(repo_root, options=resolved_options)
         timing["repo_scan"] = time.monotonic() - t0
         repo_files = _require_repo_scan_table(repo_scan_outputs, "repo_files_v1")
         for name, table in sorted(repo_scan_outputs.items()):
@@ -240,10 +248,10 @@ def _require_repo_scan_table(
     return table
 
 
-def _run_repo_scan(  # noqa: PLR0914
+def _run_repo_scan(
     repo_root: Path,
     *,
-    options: dict[str, object] | None,
+    options: ExtractionRunOptions,
 ) -> dict[str, pa.Table]:
     """Run repo scan extraction.
 
@@ -270,46 +278,22 @@ def _run_repo_scan(  # noqa: PLR0914
     engine_session = build_engine_session(runtime_spec=runtime_spec)
     extract_session = ExtractSession(engine_session=engine_session)
 
-    # Build scan options directly (no Hamilton dependency)
-    options_payload = options or {}
-
-    include_globs_raw = options_payload.get("include_globs")
-    include_globs = (
-        tuple(str(item) for item in include_globs_raw if isinstance(item, str))
-        if isinstance(include_globs_raw, (list, tuple))
-        else ()
-    )
-    exclude_globs_raw = options_payload.get("exclude_globs")
-    exclude_globs = (
-        tuple(str(item) for item in exclude_globs_raw if isinstance(item, str))
-        if isinstance(exclude_globs_raw, (list, tuple))
-        else ()
-    )
-    include_untracked_raw = options_payload.get("include_untracked", True)
-    include_untracked = include_untracked_raw if isinstance(include_untracked_raw, bool) else True
-    include_submodules_raw = options_payload.get("include_submodules", False)
-    include_submodules = (
-        include_submodules_raw if isinstance(include_submodules_raw, bool) else False
-    )
-    include_worktrees_raw = options_payload.get("include_worktrees", False)
-    include_worktrees = include_worktrees_raw if isinstance(include_worktrees_raw, bool) else False
-    follow_symlinks_raw = options_payload.get("follow_symlinks", False)
-    follow_symlinks = follow_symlinks_raw if isinstance(follow_symlinks_raw, bool) else False
-
     scope_policy = RepoScopeOptions(
         python_scope=PythonScopePolicy(),
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        include_untracked=include_untracked,
-        include_submodules=include_submodules,
-        include_worktrees=include_worktrees,
-        follow_symlinks=follow_symlinks,
+        include_globs=options.include_globs,
+        exclude_globs=options.exclude_globs,
+        include_untracked=options.include_untracked,
+        include_submodules=options.include_submodules,
+        include_worktrees=options.include_worktrees,
+        follow_symlinks=options.follow_symlinks,
     )
     scan_options = RepoScanOptions(
         repo_id="extraction_orchestrator",
         scope_policy=scope_policy,
         max_files=None,
-        changed_only=False,
+        diff_base_ref=options.diff_base_ref,
+        diff_head_ref=options.diff_head_ref,
+        changed_only=options.changed_only,
     )
 
     # Execute repo scan

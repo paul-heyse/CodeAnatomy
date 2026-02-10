@@ -134,6 +134,7 @@ def _run_extraction_phase(
     *,
     extraction_config: dict[str, object] | None,
 ) -> ExtractionResult:
+    from extraction.options import normalize_extraction_options
     from extraction.orchestrator import run_extraction
 
     with stage_span("extraction", stage="extraction", scope_name=SCOPE_PIPELINE):
@@ -142,24 +143,14 @@ def _run_extraction_phase(
         scip_overrides = (
             extraction_config.get("scip_identity_overrides") if extraction_config else None
         )
-        ts_raw = (
-            extraction_config.get("tree_sitter_enabled")
-            if extraction_config and "tree_sitter_enabled" in extraction_config
-            else extraction_config.get("enable_tree_sitter", True)
-            if extraction_config
-            else True
-        )
-        ts_enabled: bool = ts_raw if isinstance(ts_raw, bool) else True
-        mw_raw = extraction_config.get("max_workers", 6) if extraction_config else 6
-        max_workers: int = mw_raw if isinstance(mw_raw, int) else 6
-        run_options: dict[str, object] = extraction_config.copy() if extraction_config else {}
+        run_options = normalize_extraction_options(extraction_config)
         extraction_result = run_extraction(
             repo_root=repo_root,
             work_dir=work_dir,
             scip_index_config=scip_cfg,
             scip_identity_overrides=scip_overrides,
-            tree_sitter_enabled=ts_enabled,
-            max_workers=max_workers,
+            tree_sitter_enabled=run_options.tree_sitter_enabled,
+            max_workers=run_options.max_workers,
             options=run_options,
         )
         elapsed = time.monotonic() - t_start

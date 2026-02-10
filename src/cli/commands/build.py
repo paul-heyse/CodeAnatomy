@@ -596,6 +596,8 @@ def build_command(
         "include_worktrees": options.include_worktrees,
         "follow_symlinks": options.follow_symlinks,
         "external_interface_depth": options.external_interface_depth,
+        "tree_sitter_enabled": options.enable_tree_sitter,
+        # Compatibility alias retained for one migration window.
         "enable_tree_sitter": options.enable_tree_sitter,
     }
 

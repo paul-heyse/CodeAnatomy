@@ -9,6 +9,7 @@ import pyarrow as pa
 import pytest
 
 from extraction import orchestrator as orchestrator_mod
+from extraction.options import ExtractionRunOptions
 
 
 def _sample_table(label: str) -> pa.Table:
@@ -27,9 +28,7 @@ def _wire_test_doubles(
         "file_line_index_v1": _sample_table("line_index"),
     }
 
-    def _run_repo_scan(
-        _repo_root: Path, *, options: dict[str, object] | None
-    ) -> dict[str, pa.Table]:
+    def _run_repo_scan(_repo_root: Path, *, options: object) -> dict[str, pa.Table]:
         _ = options
         calls.append("repo_scan")
         return repo_scan_outputs
@@ -165,3 +164,50 @@ def test_timing_recorded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     assert "ast_files" in result.timing
     assert "python_imports" in result.timing
     assert "python_external" in result.timing
+
+
+def test_run_repo_scan_propagates_diff_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("engine.runtime_profile.resolve_runtime_profile", lambda _name: object())
+    monkeypatch.setattr("engine.session_factory.build_engine_session", lambda **_kwargs: object())
+
+    def _scan_repo_tables(
+        _repo_root: str,
+        *,
+        options: object,
+        context: object,
+        prefer_reader: bool,
+    ) -> dict[str, pa.Table]:
+        captured["options"] = options
+        captured["context"] = context
+        captured["prefer_reader"] = prefer_reader
+        return {
+            "repo_files_v1": _sample_table("repo"),
+            "file_line_index_v1": _sample_table("line_index"),
+        }
+
+    monkeypatch.setattr("extract.scanning.repo_scan.scan_repo_tables", _scan_repo_tables)
+
+    options = ExtractionRunOptions(
+        diff_base_ref="origin/main",
+        diff_head_ref="HEAD",
+        changed_only=True,
+        include_globs=("**/*.py",),
+        exclude_globs=("**/.venv/**",),
+    )
+
+    outputs = orchestrator_mod._run_repo_scan(  # noqa: SLF001
+        tmp_path,
+        options=options,
+    )
+
+    assert "repo_files_v1" in outputs
+    assert "file_line_index_v1" in outputs
+    scan_options = captured["options"]
+    assert getattr(scan_options, "diff_base_ref", None) == "origin/main"
+    assert getattr(scan_options, "diff_head_ref", None) == "HEAD"
+    assert getattr(scan_options, "changed_only", None) is True

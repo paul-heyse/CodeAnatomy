@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
+use codeanatomy_engine::spec::execution_spec::SPEC_SCHEMA_VERSION;
 
 /// Semantic plan compiler that validates and prepares execution specs.
 ///
@@ -67,6 +68,13 @@ impl SemanticPlanCompiler {
                     PyValueError::new_err(format!("Invalid spec JSON at '{path}': {inner}"))
                 }
             })?;
+
+        if spec.version < SPEC_SCHEMA_VERSION {
+            return Err(PyValueError::new_err(format!(
+                "Spec version {} is below minimum required version {}",
+                spec.version, SPEC_SCHEMA_VERSION
+            )));
+        }
 
         // Compute canonical hash
         spec.spec_hash = codeanatomy_engine::spec::hashing::hash_spec(&spec);

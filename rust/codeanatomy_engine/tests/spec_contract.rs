@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 fn test_spec_construction() {
     let spec = create_test_spec();
 
-    assert_eq!(spec.version, 1);
+    assert_eq!(spec.version, 3);
     assert_eq!(spec.input_relations.len(), 1);
     assert_eq!(spec.view_definitions.len(), 1);
     assert_eq!(spec.rulepack_profile, RulepackProfile::Default);
@@ -318,7 +318,7 @@ fn test_full_spec_integration() {
 #[test]
 fn test_spec_nested_unknown_fields_rejected() {
     let payload = serde_json::json!({
-        "version": 1,
+        "version": 3,
         "input_relations": [
             {
                 "logical_name": "input",
@@ -368,7 +368,7 @@ fn test_spec_nested_unknown_fields_rejected() {
 #[test]
 fn test_spec_enum_mismatch_rejected() {
     let payload = serde_json::json!({
-        "version": 1,
+        "version": 3,
         "input_relations": [],
         "view_definitions": [],
         "join_graph": { "edges": [], "constraints": [] },
@@ -384,7 +384,7 @@ fn test_spec_enum_mismatch_rejected() {
 #[test]
 fn test_spec_missing_required_field_rejected() {
     let payload = serde_json::json!({
-        "version": 1,
+        "version": 3,
         "input_relations": [],
         "join_graph": { "edges": [], "constraints": [] },
         "output_targets": [],
@@ -399,7 +399,7 @@ fn test_spec_missing_required_field_rejected() {
 #[test]
 fn test_spec_runtime_defaults_when_omitted() {
     let payload = serde_json::json!({
-        "version": 1,
+        "version": 3,
         "input_relations": [],
         "view_definitions": [],
         "join_graph": { "edges": [], "constraints": [] },
@@ -421,7 +421,7 @@ fn test_spec_runtime_defaults_when_omitted() {
 #[test]
 fn test_spec_runtime_unknown_field_ignored() {
     let payload = serde_json::json!({
-        "version": 1,
+        "version": 3,
         "input_relations": [],
         "view_definitions": [],
         "join_graph": { "edges": [], "constraints": [] },

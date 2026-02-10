@@ -205,6 +205,7 @@ async fn test_end_to_end_compile_and_materialize() {
 fn test_materialization_result_has_extended_fields() {
     let result = codeanatomy_engine::executor::result::MaterializationResult {
         table_name: "test".to_string(),
+        delta_location: Some("/tmp/test".to_string()),
         rows_written: 100,
         partition_count: 4,
         delta_version: Some(3),

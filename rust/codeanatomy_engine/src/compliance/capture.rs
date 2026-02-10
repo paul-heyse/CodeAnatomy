@@ -7,7 +7,7 @@ use arrow::array::Array;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::providers::pushdown_contract::PushdownProbe;
+use crate::providers::pushdown_contract::{PushdownContractReport, PushdownProbe};
 
 /// Compliance capture context — only active in strict/replay profiles.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +31,9 @@ pub struct ComplianceCapture {
     /// Per-table provider pushdown probes captured from spec filter predicates.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pushdown_probes: BTreeMap<String, PushdownProbe>,
+    /// Pushdown contract validation reports keyed by output/table.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pushdown_contract_reports: BTreeMap<String, PushdownContractReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +80,7 @@ impl ComplianceCapture {
             retention,
             lab_traces: BTreeMap::new(),
             pushdown_probes: BTreeMap::new(),
+            pushdown_contract_reports: BTreeMap::new(),
         }
     }
 
@@ -131,6 +135,16 @@ impl ComplianceCapture {
         self.pushdown_probes.insert(table_name.to_string(), probe);
     }
 
+    /// Record pushdown contract report for a table/output plan.
+    pub fn record_pushdown_contract_report(
+        &mut self,
+        table_name: &str,
+        report: PushdownContractReport,
+    ) {
+        self.pushdown_contract_reports
+            .insert(table_name.to_string(), report);
+    }
+
     /// Serialize to JSON for persistence.
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
@@ -143,6 +157,7 @@ impl ComplianceCapture {
             && self.config_snapshot.is_empty()
             && self.lab_traces.is_empty()
             && self.pushdown_probes.is_empty()
+            && self.pushdown_contract_reports.is_empty()
     }
 }
 

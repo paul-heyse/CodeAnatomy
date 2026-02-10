@@ -24,21 +24,37 @@
 //! - RunResult assembly with all artifacts and warnings
 
 use std::sync::Arc;
+use std::collections::BTreeMap;
 
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 
+use crate::compiler::cost_model::{
+    derive_task_costs, schedule_tasks_with_quality, CostModelConfig,
+};
+use crate::compiler::optimizer_pipeline::{
+    run_optimizer_compile_only, OptimizerPipelineConfig, RuleFailurePolicy,
+};
 use crate::compiler::plan_bundle::{self, PlanBundleArtifact};
 use crate::compiler::plan_compiler::SemanticPlanCompiler;
+use crate::compiler::pushdown_probe_extract::{
+    extract_input_filter_predicates, verify_pushdown_contracts,
+};
+use crate::compiler::scheduling::TaskGraph;
 use crate::executor::delta_writer::LineageContext;
 use crate::executor::maintenance;
 use crate::executor::metrics_collector::{self, CollectedMetrics, summarize_collected_metrics};
 use crate::executor::result::RunResult;
 use crate::executor::runner::execute_and_materialize_with_plans;
 use crate::executor::warnings::{warning_counts_by_code, RunWarning, WarningCode, WarningStage};
+use crate::providers::pushdown_contract::{
+    PushdownEnforcementMode as ContractEnforcementMode, PushdownProbe,
+};
+use crate::providers::registration::probe_provider_pushdown;
 use crate::session::envelope::SessionEnvelope;
 use crate::spec::execution_spec::SemanticExecutionSpec;
+use crate::spec::runtime::PushdownEnforcementMode;
 
 /// Outcome of the unified pipeline execution.
 ///
@@ -103,10 +119,64 @@ pub async fn execute_pipeline(
         .with_envelope_hash(envelope_hash)
         .with_rulepack_fingerprint(rulepack_fingerprint)
         .started_now();
+    let mut stats_quality_label: Option<String> = None;
 
     // 1. Compile spec into output DataFrames
     let compiler = SemanticPlanCompiler::new(ctx, spec);
-    let output_plans = compiler.compile().await?;
+    let compilation = compiler.compile_with_warnings().await?;
+    warnings.extend(compilation.warnings);
+    let output_plans = compilation.outputs;
+
+    let view_deps: Vec<(String, Vec<String>)> = spec
+        .view_definitions
+        .iter()
+        .map(|view| (view.name.clone(), view.view_dependencies.clone()))
+        .collect();
+    let scan_deps: Vec<(String, Vec<String>)> = spec
+        .input_relations
+        .iter()
+        .map(|input| (input.logical_name.clone(), Vec::new()))
+        .collect();
+    let output_deps: Vec<(String, Vec<String>)> = spec
+        .output_targets
+        .iter()
+        .map(|target| (target.table_name.clone(), vec![target.source_view.clone()]))
+        .collect();
+    if let Ok(task_graph) = TaskGraph::from_inferred_deps(&view_deps, &scan_deps, &output_deps) {
+        let cost_outcome = derive_task_costs(&task_graph, None, &CostModelConfig::default());
+        warnings.extend(cost_outcome.warnings.clone());
+        let schedule = schedule_tasks_with_quality(
+            &task_graph,
+            &cost_outcome.costs,
+            cost_outcome.stats_quality,
+        );
+        stats_quality_label = Some(format!("{:?}", cost_outcome.stats_quality));
+        builder = builder
+            .with_task_schedule(Some(schedule))
+            .with_stats_quality(Some(cost_outcome.stats_quality));
+    }
+
+    let mut pushdown_probe_map: BTreeMap<String, PushdownProbe> = BTreeMap::new();
+    let (pushdown_predicates, pushdown_warnings) = extract_input_filter_predicates(ctx, spec).await;
+    warnings.extend(pushdown_warnings);
+    for (table_name, filters) in pushdown_predicates {
+        if filters.is_empty() {
+            continue;
+        }
+        match probe_provider_pushdown(ctx, &table_name, &filters).await {
+            Ok(probe) => {
+                pushdown_probe_map.insert(table_name, probe);
+            }
+            Err(err) => warnings.push(
+                RunWarning::new(
+                    WarningCode::CompliancePushdownProbeFailed,
+                    WarningStage::Compliance,
+                    format!("Pushdown probe failed: {err}"),
+                )
+                .with_context("table_name", table_name),
+            ),
+        }
+    }
 
     // 2. Capture plan bundles before execution (when compliance_capture is true).
     //
@@ -118,12 +188,94 @@ pub async fn execute_pipeline(
         for (_target, df) in &output_plans {
             match plan_bundle::capture_plan_bundle_runtime(ctx, df).await {
                 Ok(runtime) => {
+                    let state = ctx.state();
+                    let state_config = state.config();
+                    let config_options = state_config.options();
+                    let optimizer_config = OptimizerPipelineConfig {
+                        max_passes: config_options.optimizer.max_passes,
+                        failure_policy: if config_options.optimizer.skip_failed_rules {
+                            RuleFailurePolicy::SkipFailed
+                        } else {
+                            RuleFailurePolicy::FailFast
+                        },
+                        capture_pass_traces: true,
+                        capture_plan_diffs: true,
+                    };
+                    let optimizer_report = run_optimizer_compile_only(
+                        ctx,
+                        runtime.p0_logical.clone(),
+                        &optimizer_config,
+                    )
+                    .await;
+                    let mut optimizer_traces = Vec::new();
+                    match optimizer_report {
+                        Ok(report) => {
+                            optimizer_traces = report.pass_traces;
+                            warnings.extend(report.warnings);
+                        }
+                        Err(err) => {
+                            warnings.push(RunWarning::new(
+                                WarningCode::ComplianceOptimizerLabFailed,
+                                WarningStage::Compilation,
+                                format!("Optimizer trace capture failed: {err}"),
+                            ));
+                        }
+                    }
+
+                    let pushdown_mode = map_pushdown_mode(spec.runtime.pushdown_enforcement_mode);
+                    let pushdown_report = if pushdown_probe_map.is_empty() {
+                        None
+                    } else {
+                        Some(verify_pushdown_contracts(
+                            &runtime.p1_optimized,
+                            &pushdown_probe_map,
+                            pushdown_mode.clone(),
+                        ))
+                    };
+                    if let Some(report) = &pushdown_report {
+                        for violation in &report.violations {
+                            match pushdown_mode {
+                                ContractEnforcementMode::Strict => {
+                                    return Err(DataFusionError::Plan(format!(
+                                        "Pushdown contract violation on table '{}': {}",
+                                        violation.table_name, violation.predicate_text
+                                    )));
+                                }
+                                ContractEnforcementMode::Warn => warnings.push(
+                                    RunWarning::new(
+                                        WarningCode::PushdownContractViolation,
+                                        WarningStage::Compilation,
+                                        format!(
+                                            "Pushdown contract violation on '{}': {}",
+                                            violation.table_name, violation.predicate_text
+                                        ),
+                                    )
+                                    .with_context("table_name", violation.table_name.clone())
+                                    .with_context(
+                                        "predicate",
+                                        violation.predicate_text.clone(),
+                                    ),
+                                ),
+                                ContractEnforcementMode::Disabled => {}
+                            }
+                        }
+                    }
+
                     match plan_bundle::build_plan_bundle_artifact_with_warnings(
                         plan_bundle::PlanBundleArtifactBuildRequest {
                             ctx,
                             runtime: &runtime,
                             rulepack_fingerprint,
                             provider_identities: provider_identities.clone(),
+                            optimizer_traces,
+                            pushdown_report,
+                            deterministic_inputs: spec
+                                .input_relations
+                                .iter()
+                                .all(|relation| relation.version_pin.is_some()),
+                            no_volatile_udfs: true,
+                            deterministic_optimizer: true,
+                            stats_quality: stats_quality_label.clone(),
                             capture_substrait: spec.runtime.capture_substrait,
                             capture_sql: false, // SQL text capture not enabled by default
                             capture_delta_codec: spec.runtime.capture_delta_codec,
@@ -234,6 +386,14 @@ pub async fn execute_pipeline(
         run_result,
         collected_metrics: collected,
     })
+}
+
+fn map_pushdown_mode(mode: PushdownEnforcementMode) -> ContractEnforcementMode {
+    match mode {
+        PushdownEnforcementMode::Warn => ContractEnforcementMode::Warn,
+        PushdownEnforcementMode::Strict => ContractEnforcementMode::Strict,
+        PushdownEnforcementMode::Disabled => ContractEnforcementMode::Disabled,
+    }
 }
 
 /// Aggregate physical metrics across all executed plan trees.

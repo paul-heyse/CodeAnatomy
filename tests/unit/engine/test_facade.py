@@ -58,7 +58,7 @@ class _FakeMaterializer:
 
 def _minimal_spec() -> SemanticExecutionSpec:
     return SemanticExecutionSpec(
-        version=1,
+        version=3,
         input_relations=(
             InputRelation(
                 logical_name="raw_nodes", delta_location="/tmp/old", requires_lineage=False
@@ -77,6 +77,7 @@ def _minimal_spec() -> SemanticExecutionSpec:
         output_targets=(
             OutputTarget(
                 table_name="nodes_view",
+                delta_location="/tmp/out_nodes",
                 source_view="nodes_view",
                 columns=(),
                 materialization_mode="Overwrite",

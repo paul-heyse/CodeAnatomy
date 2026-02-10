@@ -12,6 +12,26 @@ pub enum RuntimeTunerMode {
     Apply,
 }
 
+/// Pushdown contract enforcement policy.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PushdownEnforcementMode {
+    #[default]
+    Warn,
+    Strict,
+    Disabled,
+}
+
+/// Extension governance policy for planning-time registry mutations.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionGovernanceMode {
+    StrictAllowlist,
+    WarnOnUnregistered,
+    #[default]
+    Permissive,
+}
+
 /// Rule tracing verbosity mode for planner/rule instrumentation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum RuleTraceMode {
@@ -201,6 +221,12 @@ pub struct RuntimeConfig {
     /// When true, capture Delta extension-codec plan bytes in plan artifacts.
     #[serde(default)]
     pub capture_delta_codec: bool,
+    /// Pushdown contract enforcement policy.
+    #[serde(default)]
+    pub pushdown_enforcement_mode: PushdownEnforcementMode,
+    /// Planning extension governance policy.
+    #[serde(default)]
+    pub extension_governance_mode: ExtensionGovernanceMode,
 
     // -- WS-P13: OpenTelemetry tracing --
     /// Enable OpenTelemetry-native execution tracing (requires `tracing` feature).
@@ -377,6 +403,11 @@ mod tests {
         assert!(!runtime.capture_substrait);
         assert!(!runtime.capture_optimizer_lab);
         assert!(!runtime.capture_delta_codec);
+        assert_eq!(runtime.pushdown_enforcement_mode, PushdownEnforcementMode::Warn);
+        assert_eq!(
+            runtime.extension_governance_mode,
+            ExtensionGovernanceMode::Permissive
+        );
     }
 
     #[test]
@@ -384,12 +415,22 @@ mod tests {
         let payload = serde_json::json!({
             "capture_substrait": true,
             "capture_optimizer_lab": true,
-            "capture_delta_codec": true
+            "capture_delta_codec": true,
+            "pushdown_enforcement_mode": "strict",
+            "extension_governance_mode": "strict_allowlist"
         });
         let runtime: RuntimeConfig = serde_json::from_value(payload).expect("valid runtime config");
         assert!(runtime.capture_substrait);
         assert!(runtime.capture_optimizer_lab);
         assert!(runtime.capture_delta_codec);
+        assert_eq!(
+            runtime.pushdown_enforcement_mode,
+            PushdownEnforcementMode::Strict
+        );
+        assert_eq!(
+            runtime.extension_governance_mode,
+            ExtensionGovernanceMode::StrictAllowlist
+        );
     }
 
     #[test]

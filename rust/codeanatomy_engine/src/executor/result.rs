@@ -7,6 +7,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::compiler::cost_model::StatsQuality;
+use crate::compiler::scheduling::TaskSchedule;
 use crate::compiler::plan_bundle::PlanBundleArtifact;
 use crate::executor::maintenance::MaintenanceReport;
 use crate::executor::metrics_collector::{CollectedMetrics, TraceMetricsSummary};
@@ -22,6 +24,10 @@ pub struct RunResult {
     pub compliance_capture_json: Option<String>,
     pub tuner_hints: Vec<TuningHint>,
     pub plan_bundles: Vec<PlanBundleArtifact>,
+    /// Deterministic execution schedule metadata.
+    pub task_schedule: Option<TaskSchedule>,
+    /// Statistics quality grade used by cost/scheduling decisions.
+    pub stats_quality: Option<StatsQuality>,
     /// WS-P7: Real physical metrics collected from the executed plan tree.
     pub collected_metrics: Option<CollectedMetrics>,
     /// Stable summary metrics contract for observability consumers.
@@ -102,6 +108,8 @@ pub struct RunResultBuilder {
     compliance_capture_json: Option<String>,
     tuner_hints: Vec<TuningHint>,
     plan_bundles: Vec<PlanBundleArtifact>,
+    task_schedule: Option<TaskSchedule>,
+    stats_quality: Option<StatsQuality>,
     collected_metrics: Option<CollectedMetrics>,
     trace_metrics_summary: Option<TraceMetricsSummary>,
     maintenance_reports: Vec<MaintenanceReport>,
@@ -137,6 +145,16 @@ impl RunResultBuilder {
 
     pub fn with_plan_bundles(mut self, bundles: Vec<PlanBundleArtifact>) -> Self {
         self.plan_bundles = bundles;
+        self
+    }
+
+    pub fn with_task_schedule(mut self, schedule: Option<TaskSchedule>) -> Self {
+        self.task_schedule = schedule;
+        self
+    }
+
+    pub fn with_stats_quality(mut self, stats_quality: Option<StatsQuality>) -> Self {
+        self.stats_quality = stats_quality;
         self
     }
 
@@ -191,6 +209,8 @@ impl RunResultBuilder {
             compliance_capture_json: self.compliance_capture_json,
             tuner_hints: self.tuner_hints,
             plan_bundles: self.plan_bundles,
+            task_schedule: self.task_schedule,
+            stats_quality: self.stats_quality,
             collected_metrics: self.collected_metrics,
             trace_metrics_summary: self.trace_metrics_summary,
             maintenance_reports: self.maintenance_reports,

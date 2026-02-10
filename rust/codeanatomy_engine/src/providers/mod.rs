@@ -9,7 +9,10 @@ pub mod scan_config;
 pub mod snapshot;
 
 // Re-export key types for convenience
-pub use pushdown_contract::{probe_pushdown, FilterPushdownStatus, PushdownProbe};
+pub use pushdown_contract::{
+    probe_pushdown, FilterPushdownStatus, PushdownContractAssertion, PushdownContractReport,
+    PushdownContractResult, PushdownEnforcementMode, PushdownProbe,
+};
 pub use registration::{register_extraction_inputs, TableRegistration};
 pub use scan_config::{
     has_lineage_tracking, lineage_column_name, standard_scan_config, validate_scan_config,

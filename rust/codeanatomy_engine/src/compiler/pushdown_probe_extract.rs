@@ -8,10 +8,15 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{Expr, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 
 use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
+use crate::providers::pushdown_contract::{
+    FilterPushdownStatus, PushdownContractAssertion, PushdownContractReport,
+    PushdownContractResult, PushdownEnforcementMode, PushdownProbe,
+};
 use crate::spec::execution_spec::SemanticExecutionSpec;
 use crate::spec::relations::{ViewDefinition, ViewTransform};
 
@@ -271,4 +276,107 @@ pub async fn extract_input_filter_predicates(
     }
 
     (predicates, warnings)
+}
+
+/// Verify pushdown contracts against the optimized logical plan.
+///
+/// The check is conservative and deterministic:
+/// - table-scan pushed filters are collected from `TableScan.filters`
+/// - residual filters are collected from all `Filter` nodes
+/// - each probe predicate is validated against declared provider status
+pub fn verify_pushdown_contracts(
+    optimized_plan: &LogicalPlan,
+    pushdown_probes: &BTreeMap<String, PushdownProbe>,
+    mode: PushdownEnforcementMode,
+) -> PushdownContractReport {
+    let (scan_filters_by_table, residual_filters) = collect_filter_observations(optimized_plan);
+    let mut assertions = Vec::new();
+    let mut violations = Vec::new();
+
+    for (table_name, probe) in pushdown_probes {
+        for (predicate_text, declared_status) in
+            probe.filter_sql.iter().zip(probe.statuses.iter().copied())
+        {
+            let pushed = scan_filters_by_table
+                .get(table_name)
+                .map(|set| set.contains(predicate_text))
+                .unwrap_or(false);
+            let residual = residual_filters.contains(predicate_text);
+
+            let assertion_result = match declared_status {
+                FilterPushdownStatus::Inexact if !residual => {
+                    PushdownContractResult::InexactWithoutResidual {
+                        detail: format!(
+                            "Inexact pushdown requires residual filter but none was found for '{predicate_text}'"
+                        ),
+                    }
+                }
+                FilterPushdownStatus::Unsupported if !residual => {
+                    PushdownContractResult::UnsupportedPredicateLost {
+                        detail: format!(
+                            "Unsupported predicate must remain residual but '{predicate_text}' was not found"
+                        ),
+                    }
+                }
+                FilterPushdownStatus::Exact if residual => {
+                    PushdownContractResult::ExactWithRedundantResidual
+                }
+                _ => {
+                    let _ = pushed;
+                    PushdownContractResult::Satisfied
+                }
+            };
+
+            let assertion = PushdownContractAssertion {
+                table_name: table_name.clone(),
+                predicate_text: predicate_text.clone(),
+                declared_status,
+                residual_filter_present: residual,
+                assertion_result: assertion_result.clone(),
+            };
+            if matches!(
+                assertion_result,
+                PushdownContractResult::InexactWithoutResidual { .. }
+                    | PushdownContractResult::UnsupportedPredicateLost { .. }
+            ) {
+                violations.push(assertion.clone());
+            }
+            assertions.push(assertion);
+        }
+    }
+
+    PushdownContractReport {
+        assertions,
+        violations,
+        enforcement_mode: mode,
+    }
+}
+
+fn collect_filter_observations(
+    plan: &LogicalPlan,
+) -> (BTreeMap<String, HashSet<String>>, HashSet<String>) {
+    let mut scan_filters_by_table: BTreeMap<String, HashSet<String>> = BTreeMap::new();
+    let mut residual_filters: HashSet<String> = HashSet::new();
+    let mut stack = vec![plan.clone()];
+
+    while let Some(node) = stack.pop() {
+        match &node {
+            LogicalPlan::TableScan(scan) => {
+                let table_name = scan.table_name.to_string();
+                let entry = scan_filters_by_table.entry(table_name).or_default();
+                for filter in &scan.filters {
+                    entry.insert(filter.to_string());
+                }
+            }
+            LogicalPlan::Filter(filter) => {
+                residual_filters.insert(filter.predicate.to_string());
+            }
+            _ => {}
+        }
+        for input in node.inputs() {
+            stack.push((*input).clone());
+        }
+    }
+
+    (scan_filters_by_table, residual_filters)
 }

@@ -24,7 +24,7 @@ fn test_validate_scan_config_rejects_invalid_lineage_column_name() {
 
 #[test]
 fn test_registration_includes_capabilities() {
-    use codeanatomy_engine::providers::registration::TableRegistration;
+    use codeanatomy_engine::providers::registration::{DeltaCompatibilityFacts, TableRegistration};
     use codeanatomy_engine::providers::scan_config::ProviderCapabilities;
 
     let record = TableRegistration {
@@ -37,16 +37,29 @@ fn test_registration_includes_capabilities() {
             projection_pushdown: true,
             partition_pruning: false,
         },
+        compatibility: DeltaCompatibilityFacts {
+            min_reader_version: 1,
+            min_writer_version: 2,
+            reader_features: vec!["deletionVectors".to_string()],
+            writer_features: vec![],
+            column_mapping_mode: Some("name".to_string()),
+            partition_columns: vec!["bucket".to_string()],
+        },
     };
 
     let json = serde_json::to_string(&record).unwrap();
     assert!(json.contains("predicate_pushdown"));
     assert!(json.contains("projection_pushdown"));
     assert!(json.contains("partition_pruning"));
+    assert!(json.contains("column_mapping_mode"));
 
     let deserialized: TableRegistration = serde_json::from_str(&json).unwrap();
     assert!(deserialized.capabilities.predicate_pushdown);
     assert!(!deserialized.capabilities.partition_pruning);
+    assert_eq!(
+        deserialized.compatibility.column_mapping_mode.as_deref(),
+        Some("name")
+    );
 }
 
 #[test]

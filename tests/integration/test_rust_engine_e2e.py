@@ -20,7 +20,7 @@ def test_rust_engine_compile_and_materialize_boundary() -> None:
     typed_parameters: list[dict[str, object]] = []
 
     spec_payload = {
-        "version": 1,
+        "version": 3,
         "input_relations": input_relations,
         "view_definitions": [
             {
@@ -66,7 +66,7 @@ def test_rust_engine_exports_all_classes() -> None:
 
 def _successful_spec(input_location: str, output_location: str) -> dict[str, object]:
     return {
-        "version": 1,
+        "version": 3,
         "input_relations": [
             {
                 "logical_name": "input",

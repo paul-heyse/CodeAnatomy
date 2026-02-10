@@ -21,6 +21,17 @@ use crate::providers::scan_config::{infer_capabilities, standard_scan_config, va
 use crate::schema::introspection::hash_arrow_schema;
 use crate::spec::relations::InputRelation;
 
+/// Delta protocol and schema compatibility facts for a registered source.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeltaCompatibilityFacts {
+    pub min_reader_version: i32,
+    pub min_writer_version: i32,
+    pub reader_features: Vec<String>,
+    pub writer_features: Vec<String>,
+    pub column_mapping_mode: Option<String>,
+    pub partition_columns: Vec<String>,
+}
+
 /// Registration record for the session envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableRegistration {
@@ -29,6 +40,7 @@ pub struct TableRegistration {
     pub schema_hash: [u8; 32],
     pub provider_identity: [u8; 32],
     pub capabilities: crate::providers::scan_config::ProviderCapabilities,
+    pub compatibility: DeltaCompatibilityFacts,
 }
 
 fn provider_identity_key(
@@ -54,6 +66,22 @@ fn provider_identity_key(
         hasher.update(file_col.as_bytes());
     }
     *hasher.finalize().as_bytes()
+}
+
+fn compatibility_facts(
+    snapshot: &datafusion_ext::delta_protocol::DeltaSnapshotInfo,
+) -> DeltaCompatibilityFacts {
+    DeltaCompatibilityFacts {
+        min_reader_version: snapshot.min_reader_version,
+        min_writer_version: snapshot.min_writer_version,
+        reader_features: snapshot.reader_features.clone(),
+        writer_features: snapshot.writer_features.clone(),
+        column_mapping_mode: snapshot
+            .table_properties
+            .get("delta.columnMapping.mode")
+            .cloned(),
+        partition_columns: snapshot.partition_columns.clone(),
+    }
 }
 
 /// Register all extraction inputs as native Delta providers.
@@ -138,6 +166,7 @@ pub async fn register_extraction_inputs(
                 &resolved_scan_config,
             ),
             capabilities,
+            compatibility: compatibility_facts(&snapshot),
         });
     }
 
@@ -187,6 +216,14 @@ mod tests {
                 projection_pushdown: true,
                 partition_pruning: true,
             },
+            compatibility: DeltaCompatibilityFacts {
+                min_reader_version: 1,
+                min_writer_version: 2,
+                reader_features: vec![],
+                writer_features: vec![],
+                column_mapping_mode: None,
+                partition_columns: vec![],
+            },
         };
 
         // Test serde round-trip
@@ -197,6 +234,7 @@ mod tests {
         assert_eq!(record.schema_hash, deserialized.schema_hash);
         assert_eq!(record.provider_identity, deserialized.provider_identity);
         assert!(deserialized.capabilities.predicate_pushdown);
+        assert_eq!(deserialized.compatibility.min_reader_version, 1);
     }
 
     #[test]

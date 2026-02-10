@@ -5,7 +5,9 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 use codeanatomy_engine::compiler::plan_compiler::SemanticPlanCompiler;
-use codeanatomy_engine::compiler::pushdown_probe_extract::extract_input_filter_predicates;
+use codeanatomy_engine::compiler::pushdown_probe_extract::{
+    extract_input_filter_predicates, verify_pushdown_contracts,
+};
 use codeanatomy_engine::compliance::capture::{capture_explain_verbose, ComplianceCapture, RetentionPolicy, RulepackSnapshot};
 use codeanatomy_engine::executor::orchestration::prepare_execution_context;
 use codeanatomy_engine::executor::pipeline;
@@ -14,7 +16,9 @@ use codeanatomy_engine::executor::warnings::{RunWarning, WarningCode, WarningSta
 #[cfg(feature = "tracing")]
 use codeanatomy_engine::executor::warnings::warning_counts_by_code;
 use codeanatomy_engine::providers::registration::probe_provider_pushdown;
+use codeanatomy_engine::providers::pushdown_contract::PushdownEnforcementMode as ContractEnforcementMode;
 use codeanatomy_engine::rules::rulepack::RulepackFactory;
+use codeanatomy_engine::spec::runtime::PushdownEnforcementMode;
 use codeanatomy_engine::spec::runtime::RuntimeTunerMode;
 use codeanatomy_engine::stability::optimizer_lab::run_lab_from_ruleset;
 use codeanatomy_engine::tuner::adaptive::{AdaptiveTuner, ExecutionMetrics, TunerConfig};
@@ -292,12 +296,16 @@ impl CpgMaterializer {
                 let (pushdown_predicates, pushdown_warnings) =
                     extract_input_filter_predicates(&prepared.ctx, &spec).await;
                 py_warnings.extend(pushdown_warnings);
+                let mut pushdown_probes_by_table = BTreeMap::new();
                 for (table_name, filters) in pushdown_predicates {
                     if filters.is_empty() {
                         continue;
                     }
                     match probe_provider_pushdown(&prepared.ctx, &table_name, &filters).await {
-                        Ok(probe) => capture.record_pushdown_probe(&table_name, probe),
+                        Ok(probe) => {
+                            capture.record_pushdown_probe(&table_name, probe.clone());
+                            pushdown_probes_by_table.insert(table_name, probe);
+                        }
                         Err(err) => py_warnings.push(
                             RunWarning::new(
                                 WarningCode::CompliancePushdownProbeFailed,
@@ -306,6 +314,62 @@ impl CpgMaterializer {
                             )
                             .with_context("table_name", table_name.clone()),
                         ),
+                    }
+                }
+                if !pushdown_probes_by_table.is_empty() {
+                    let enforcement_mode = match runtime_config.pushdown_enforcement_mode {
+                        PushdownEnforcementMode::Warn => ContractEnforcementMode::Warn,
+                        PushdownEnforcementMode::Strict => ContractEnforcementMode::Strict,
+                        PushdownEnforcementMode::Disabled => ContractEnforcementMode::Disabled,
+                    };
+                    for (target, df) in &compliance_plans {
+                        let optimized_plan = match prepared.ctx.state().optimize(df.logical_plan()) {
+                            Ok(plan) => plan,
+                            Err(err) => {
+                                py_warnings.push(
+                                    RunWarning::new(
+                                        WarningCode::CompliancePushdownProbeFailed,
+                                        WarningStage::Compliance,
+                                        format!(
+                                            "Pushdown contract optimization failed for '{}': {err}",
+                                            target.table_name
+                                        ),
+                                    )
+                                    .with_context("table_name", target.table_name.clone()),
+                                );
+                                continue;
+                            }
+                        };
+                        let report = verify_pushdown_contracts(
+                            &optimized_plan,
+                            &pushdown_probes_by_table,
+                            enforcement_mode.clone(),
+                        );
+                        capture.record_pushdown_contract_report(&target.table_name, report.clone());
+                        if enforcement_mode == ContractEnforcementMode::Strict
+                            && !report.violations.is_empty()
+                        {
+                            return Err(PyRuntimeError::new_err(format!(
+                                "Pushdown contract violation in strict mode for '{}'",
+                                target.table_name
+                            )));
+                        }
+                        if enforcement_mode == ContractEnforcementMode::Warn {
+                            for violation in report.violations {
+                                py_warnings.push(
+                                    RunWarning::new(
+                                        WarningCode::PushdownContractViolation,
+                                        WarningStage::Compliance,
+                                        format!(
+                                            "Pushdown contract violation on '{}': {}",
+                                            violation.table_name, violation.predicate_text
+                                        ),
+                                    )
+                                    .with_context("table_name", violation.table_name)
+                                    .with_context("predicate", violation.predicate_text),
+                                );
+                            }
+                        }
                     }
                 }
 

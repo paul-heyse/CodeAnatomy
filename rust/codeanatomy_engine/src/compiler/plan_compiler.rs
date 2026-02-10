@@ -14,11 +14,13 @@ use std::collections::{HashMap, VecDeque};
 use crate::compiler::cache_boundaries;
 use crate::compiler::graph_validator;
 use crate::compiler::inline_policy::{compute_inline_policy, InlineDecision};
+use crate::compiler::semantic_validator::{self, SemanticValidationError, SemanticValidationWarning};
 use crate::compiler::join_builder;
 use crate::compiler::param_compiler;
 use crate::compiler::udtf_builder;
 use crate::compiler::union_builder;
 use crate::compiler::view_builder;
+use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use crate::spec::execution_spec::SemanticExecutionSpec;
 use crate::spec::outputs::OutputTarget;
 use crate::spec::relations::{ViewDefinition, ViewTransform};
@@ -29,6 +31,12 @@ pub struct PlanValidation {
     pub unoptimized_plan: String,
     pub physical_plan: String,
     pub explain_verbose: String,
+}
+
+/// Compilation output plus non-fatal warnings.
+pub struct CompilationOutcome {
+    pub outputs: Vec<(OutputTarget, DataFrame)>,
+    pub warnings: Vec<RunWarning>,
 }
 
 /// Central plan compiler for semantic execution specs.
@@ -55,8 +63,23 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// 5. Build output DataFrames
     /// 6. Apply typed parameters to outputs when configured
     pub async fn compile(&self) -> Result<Vec<(OutputTarget, DataFrame)>> {
+        let outcome = self.compile_with_warnings().await?;
+        Ok(outcome.outputs)
+    }
+
+    /// Compile full spec and return warnings emitted by semantic validation.
+    pub async fn compile_with_warnings(&self) -> Result<CompilationOutcome> {
         // 1. Validate graph
         graph_validator::validate_graph(self.spec)?;
+        let semantic = semantic_validator::validate_semantics(self.spec, self.ctx).await?;
+        if !semantic.is_clean() {
+            return Err(DataFusionError::Plan(render_semantic_errors(&semantic.errors)));
+        }
+        let semantic_warnings = semantic
+            .warnings
+            .iter()
+            .map(semantic_warning_to_run_warning)
+            .collect::<Vec<_>>();
 
         // 2. Topological sort
         let ordered = self.topological_sort()?;
@@ -124,7 +147,10 @@ impl<'a> SemanticPlanCompiler<'a> {
             outputs.push((target.clone(), final_df));
         }
 
-        Ok(outputs)
+        Ok(CompilationOutcome {
+            outputs,
+            warnings: semantic_warnings,
+        })
     }
 
     /// Topological sort of view definitions using Kahn's algorithm.
@@ -406,6 +432,72 @@ impl<'a> SemanticPlanCompiler<'a> {
             physical_plan,
             explain_verbose,
         })
+    }
+}
+
+fn render_semantic_errors(errors: &[SemanticValidationError]) -> String {
+    errors
+        .iter()
+        .map(|error| match error {
+            SemanticValidationError::UnsupportedTransformComposition { view_name, detail } => {
+                format!("Unsupported transform composition in view '{view_name}': {detail}")
+            }
+            SemanticValidationError::UnresolvedColumnReference {
+                view_name,
+                column,
+                context,
+            } => format!("Unresolved column '{column}' in view '{view_name}': {context}"),
+            SemanticValidationError::JoinKeyIncompatibility {
+                view_name,
+                left_key,
+                right_key,
+                left_type,
+                right_type,
+            } => format!(
+                "Join key incompatibility in view '{view_name}': {left_key} ({left_type}) vs {right_key} ({right_type})"
+            ),
+            SemanticValidationError::OutputContractViolation {
+                output_name,
+                expected_columns,
+                actual_columns,
+            } => format!(
+                "Output contract violation for '{output_name}': missing {:?}, actual columns {:?}",
+                expected_columns, actual_columns
+            ),
+            SemanticValidationError::AggregationInvariantViolation { view_name, detail } => {
+                format!("Aggregation invariant violation in view '{view_name}': {detail}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn semantic_warning_to_run_warning(warning: &SemanticValidationWarning) -> RunWarning {
+    match warning {
+        SemanticValidationWarning::ImplicitTypeCoercion {
+            view_name,
+            column,
+            from_type,
+            to_type,
+        } => RunWarning::new(
+            WarningCode::SemanticValidationWarning,
+            WarningStage::Compilation,
+            format!(
+                "Implicit type coercion in view '{view_name}' for column '{column}': {from_type} -> {to_type}"
+            ),
+        )
+        .with_context("view_name", view_name.clone())
+        .with_context("column", column.clone()),
+        SemanticValidationWarning::BroadProjection {
+            view_name,
+            column_count,
+        } => RunWarning::new(
+            WarningCode::SemanticValidationWarning,
+            WarningStage::Compilation,
+            format!("Broad projection in view '{view_name}': {column_count} columns"),
+        )
+        .with_context("view_name", view_name.clone())
+        .with_context("column_count", column_count.to_string()),
     }
 }
 

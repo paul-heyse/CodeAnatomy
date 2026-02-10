@@ -264,7 +264,7 @@ async fn test_apply_typed_parameters_exists_and_callable() {
 fn test_plan_bundle_artifact_has_required_scope4_fields() {
     // Construct a minimal PlanBundleArtifact to verify field presence.
     let artifact = PlanBundleArtifact {
-        artifact_version: 1,
+        artifact_version: 2,
         p0_digest: [0u8; 32],
         p1_digest: [0u8; 32],
         p2_digest: [0u8; 32],
@@ -278,6 +278,7 @@ fn test_plan_bundle_artifact_has_required_scope4_fields() {
             ProviderIdentity {
                 table_name: "test_table".to_string(),
                 identity_hash: [42u8; 32],
+                delta_compatibility: None,
             },
         ],
         schema_fingerprints: codeanatomy_engine::compiler::plan_bundle::SchemaFingerprints {
@@ -290,6 +291,12 @@ fn test_plan_bundle_artifact_has_required_scope4_fields() {
         sql_text: None,
         delta_codec_logical_bytes: None,
         delta_codec_physical_bytes: None,
+        optimizer_traces: vec![],
+        pushdown_report: None,
+        provider_lineage: vec![],
+        replay_flags: codeanatomy_engine::compiler::plan_bundle::ReplayCompatibilityFlags::default(),
+        portability: codeanatomy_engine::compiler::plan_bundle::PortableArtifactPolicy::default(),
+        stats_quality: None,
     };
 
     // Scope 4: provider_identities field exists and is populated.

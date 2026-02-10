@@ -16,7 +16,6 @@
 use std::sync::Arc;
 
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::optimizer::optimizer::{Optimizer, OptimizerContext};
 use datafusion::optimizer::OptimizerRule;
 use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
@@ -78,37 +77,23 @@ pub fn run_optimizer_lab(
     max_passes: usize,
     skip_failed_rules: bool,
 ) -> Result<LabResult> {
-    let optimizer = Optimizer::with_rules(rules);
-
-    // DataFusion 51 OptimizerContext::with_max_passes takes u8.
-    // Clamp to u8::MAX to avoid truncation surprises.
-    let clamped_passes: u8 = max_passes.min(u8::MAX as usize) as u8;
-
-    let config = OptimizerContext::new()
-        .with_max_passes(clamped_passes)
-        .with_skip_failing_rules(skip_failed_rules);
-
-    let mut steps: Vec<RuleStep> = Vec::new();
-    let mut prev_digest: Option<[u8; 32]> = None;
-    let mut change_count: usize = 0;
-
-    let optimized = optimizer.optimize(input, &config, |plan, rule| {
-        let plan_text = plan.display_indent().to_string();
-        let digest = *blake3::hash(plan_text.as_bytes()).as_bytes();
-
-        // Track whether this rule actually changed the plan.
-        let changed = prev_digest != Some(digest);
-        if changed {
-            change_count += 1;
-        }
-        prev_digest = Some(digest);
-
-        steps.push(RuleStep {
-            ordinal: steps.len(),
-            rule_name: rule.name().to_string(),
-            plan_digest: digest,
-        });
-    })?;
+    let (optimized, traces) = crate::compiler::optimizer_pipeline::optimize_with_rules(
+        input,
+        rules,
+        max_passes,
+        skip_failed_rules,
+        true,
+    )?;
+    let change_count = traces.iter().filter(|trace| trace.plan_changed).count();
+    let steps = traces
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, trace)| RuleStep {
+            ordinal,
+            rule_name: trace.rule_name,
+            plan_digest: trace.after_digest,
+        })
+        .collect();
 
     Ok(LabResult {
         optimized_plan: optimized,
@@ -162,6 +147,7 @@ pub fn diff_lab_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::optimizer::optimizer::Optimizer;
     use datafusion::prelude::*;
 
     #[test]

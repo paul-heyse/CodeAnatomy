@@ -4,24 +4,35 @@
 //! and serialization round-trip behavior.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use codeanatomy_engine::providers::pushdown_contract::{
-    FilterPushdownStatus, PushdownProbe, PushdownStatusCounts,
+    probe_pushdown, FilterPushdownStatus, PushdownProbe, PushdownStatusCounts,
 };
 use datafusion::catalog::Session;
 use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion::logical_expr::{col, Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 
 #[derive(Debug)]
 struct InexactPushdownProvider {
+    inner: Arc<dyn TableProvider>,
+}
+
+#[derive(Debug)]
+struct ProjectionAwareProvider {
+    inner: Arc<dyn TableProvider>,
+    projections: Arc<Mutex<Vec<Option<Vec<usize>>>>>,
+}
+
+#[derive(Debug)]
+struct MismatchedStatusProvider {
     inner: Arc<dyn TableProvider>,
 }
 
@@ -54,6 +65,74 @@ impl TableProvider for InexactPushdownProvider {
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+    }
+}
+
+#[async_trait]
+impl TableProvider for ProjectionAwareProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        self.inner.schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner.table_type()
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.projections
+            .lock()
+            .expect("projection lock")
+            .push(projection.cloned());
+        self.inner.scan(state, projection, filters, limit).await
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
+    }
+}
+
+#[async_trait]
+impl TableProvider for MismatchedStatusProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        self.inner.schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner.table_type()
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.inner.scan(state, projection, filters, limit).await
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        _filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(Vec::new())
     }
 }
 
@@ -208,5 +287,61 @@ async fn test_inexact_pushdown_preserves_residual_filter() {
             || optimized_text.contains("full_filters")
             || optimized_text.contains("filters=["),
         "table scan should include pushed filter metadata for inexact pushdown; plan=\n{optimized_text}"
+    );
+}
+
+/// Scope 14: Providers should receive projected column indices when possible.
+#[tokio::test]
+async fn test_projection_pushdown_reaches_provider_scan() {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("value", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3])),
+            Arc::new(Int64Array::from(vec![10, 20, 30])),
+        ],
+    )
+    .unwrap();
+    let inner = Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()) as Arc<dyn TableProvider>;
+    let projections = Arc::new(Mutex::new(Vec::<Option<Vec<usize>>>::new()));
+    let provider = Arc::new(ProjectionAwareProvider {
+        inner,
+        projections: Arc::clone(&projections),
+    });
+    ctx.register_table("proj_t", provider).unwrap();
+
+    let df = ctx.sql("SELECT id FROM proj_t").await.unwrap();
+    let batches = df.collect().await.unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_columns(), 1);
+
+    let recorded = projections.lock().expect("projection lock");
+    assert!(
+        recorded.iter().any(|projection| projection.is_some()),
+        "scan should receive projection indices when projection pushdown is active"
+    );
+}
+
+/// Scope 14: Providers returning mismatched pushdown status lengths are rejected.
+#[test]
+fn test_probe_pushdown_rejects_status_count_mismatch() {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+    )
+    .unwrap();
+    let inner = Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()) as Arc<dyn TableProvider>;
+    let provider = MismatchedStatusProvider { inner };
+    let filters = vec![col("id")];
+
+    let err = probe_pushdown("mismatch_t", &provider, &filters).unwrap_err();
+    assert!(
+        err.to_string().contains("returned 0 pushdown statuses for 1 filters"),
+        "unexpected error: {err}"
     );
 }

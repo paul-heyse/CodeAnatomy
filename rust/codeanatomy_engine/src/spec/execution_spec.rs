@@ -12,6 +12,9 @@ use crate::spec::relations::{InputRelation, ViewDefinition};
 use crate::spec::runtime::RuntimeConfig;
 use crate::spec::rule_intents::{RuleIntent, RulepackProfile};
 
+/// Current semantic spec schema version.
+pub const SPEC_SCHEMA_VERSION: u32 = 3;
+
 /// The root specification for semantic execution planning.
 ///
 /// This is the immutable contract between Python and Rust. Python builds it;
@@ -67,6 +70,7 @@ impl SemanticExecutionSpec {
         rule_intents: Vec<RuleIntent>,
         rulepack_profile: RulepackProfile,
     ) -> Self {
+        let version = version.max(SPEC_SCHEMA_VERSION);
         let mut spec = Self {
             version,
             input_relations,

@@ -8,6 +8,7 @@
 //! rewrites that lack a builder API in DataFusion 51.
 
 use std::sync::Arc;
+use std::collections::BTreeMap;
 
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
@@ -24,8 +25,11 @@ use crate::rules::registry::CpgRuleSet;
 use crate::spec::runtime::TracingConfig;
 
 use super::format_policy::{build_table_options, default_file_formats, FormatPolicySpec};
-use super::planning_manifest::{manifest_from_surface, PlanningSurfaceManifest};
-use super::planning_surface::{apply_to_builder, install_rewrites, PlanningSurfaceSpec};
+use super::planning_manifest::{manifest_from_surface_with_context, PlanningSurfaceManifest};
+use super::planning_surface::{
+    apply_to_builder, install_rewrites, ExtensionGovernancePolicy, PlanningSurfaceSpec,
+    TableFactoryEntry,
+};
 use super::profile_coverage::reserved_profile_warnings;
 use super::profiles::EnvironmentProfile;
 use super::runtime_profiles::RuntimeProfileSpec;
@@ -54,6 +58,7 @@ pub struct SessionBuildOverrides {
     pub enable_function_factory: bool,
     pub enable_domain_planner: bool,
     pub enable_delta_codec: bool,
+    pub extension_governance_policy: ExtensionGovernancePolicy,
 }
 
 impl SessionFactory {
@@ -245,7 +250,7 @@ impl SessionFactory {
         spec_hash: [u8; 32],
         tracing_config: Option<&TracingConfig>,
         overrides: SessionBuildOverrides,
-        build_warnings: Vec<RunWarning>,
+        mut build_warnings: Vec<RunWarning>,
     ) -> Result<SessionBuildState> {
         let tracing_config = tracing_config.cloned().unwrap_or_default();
         engine_tracing::init_otel_tracing(&tracing_config)?;
@@ -281,7 +286,9 @@ impl SessionFactory {
         engine_tracing::register_instrumented_file_store(&ctx, &tracing_config)?;
         install_rewrites(&ctx, &planning_surface.function_rewrites)?;
 
-        let planning_surface_manifest = manifest_from_surface(&planning_surface);
+        enforce_extension_governance(&planning_surface, &mut build_warnings)?;
+        let planning_surface_manifest =
+            manifest_from_surface_with_context(&planning_surface, &ctx).await?;
         let planning_surface_hash = planning_surface_manifest.hash();
         Ok(SessionBuildState {
             ctx,
@@ -308,6 +315,8 @@ impl SessionFactory {
             file_formats: default_file_formats(),
             table_options: Some(build_table_options(config, &format_policy)?),
             delta_codec_enabled: overrides.enable_delta_codec,
+            planning_config_keys: planning_config_snapshot(config),
+            extension_policy: overrides.extension_governance_policy,
             ..PlanningSurfaceSpec::default()
         };
 
@@ -326,8 +335,115 @@ impl SessionFactory {
             planning_surface.function_rewrites = datafusion_ext::domain_function_rewrites();
         }
 
+        planning_surface.table_factory_allowlist = planning_surface
+            .table_factories
+            .iter()
+            .map(|(_name, factory)| TableFactoryEntry {
+                factory_type: std::any::type_name_of_val(factory.as_ref()).to_string(),
+                identity_hash: *blake3::hash(
+                    std::any::type_name_of_val(factory.as_ref()).as_bytes(),
+                )
+                .as_bytes(),
+            })
+            .collect();
+
         Ok(planning_surface)
     }
+}
+
+fn planning_config_snapshot(config: &SessionConfig) -> BTreeMap<String, String> {
+    let options = config.options();
+    let mut snapshot = BTreeMap::new();
+    snapshot.insert(
+        "datafusion.catalog.default_catalog".to_string(),
+        "codeanatomy".to_string(),
+    );
+    snapshot.insert(
+        "datafusion.catalog.default_schema".to_string(),
+        "public".to_string(),
+    );
+    snapshot.insert(
+        "datafusion.sql_parser.enable_ident_normalization".to_string(),
+        options.sql_parser.enable_ident_normalization.to_string(),
+    );
+    snapshot.insert(
+        "datafusion.optimizer.max_passes".to_string(),
+        options.optimizer.max_passes.to_string(),
+    );
+    snapshot.insert(
+        "datafusion.optimizer.skip_failed_rules".to_string(),
+        options.optimizer.skip_failed_rules.to_string(),
+    );
+    snapshot.insert(
+        "datafusion.execution.target_partitions".to_string(),
+        config.target_partitions().to_string(),
+    );
+    snapshot.insert(
+        "datafusion.execution.parquet.pushdown_filters".to_string(),
+        options.execution.parquet.pushdown_filters.to_string(),
+    );
+    snapshot.insert(
+        "datafusion.execution.parquet.enable_page_index".to_string(),
+        options.execution.parquet.enable_page_index.to_string(),
+    );
+    snapshot.insert(
+        "datafusion.execution.collect_statistics".to_string(),
+        options.execution.collect_statistics.to_string(),
+    );
+    snapshot
+}
+
+fn enforce_extension_governance(
+    surface: &PlanningSurfaceSpec,
+    warnings: &mut Vec<RunWarning>,
+) -> Result<()> {
+    match surface.extension_policy {
+        ExtensionGovernancePolicy::Permissive => {}
+        ExtensionGovernancePolicy::WarnOnUnregistered | ExtensionGovernancePolicy::StrictAllowlist => {
+            let allowlist: BTreeMap<&str, [u8; 32]> = surface
+                .table_factory_allowlist
+                .iter()
+                .map(|entry| (entry.factory_type.as_str(), entry.identity_hash))
+                .collect();
+            for (_name, factory) in &surface.table_factories {
+                let factory_type = std::any::type_name_of_val(factory.as_ref());
+                let identity = *blake3::hash(factory_type.as_bytes()).as_bytes();
+                let allowed = allowlist
+                    .get(factory_type)
+                    .map(|hash| *hash == identity)
+                    .unwrap_or(false);
+                if !allowed {
+                    if matches!(
+                        surface.extension_policy,
+                        ExtensionGovernancePolicy::StrictAllowlist
+                    ) {
+                        return Err(datafusion_common::DataFusionError::Plan(format!(
+                            "Table factory '{factory_type}' is not present in strict allowlist"
+                        )));
+                    }
+                    warnings.push(
+                        RunWarning::new(
+                            crate::executor::warnings::WarningCode::ReservedProfileKnobIgnored,
+                            crate::executor::warnings::WarningStage::Preflight,
+                            format!(
+                                "Table factory '{factory_type}' is not present in planning-surface allowlist"
+                            ),
+                        )
+                        .with_context(
+                            "extension_policy",
+                            match surface.extension_policy {
+                                ExtensionGovernancePolicy::StrictAllowlist => "strict_allowlist",
+                                ExtensionGovernancePolicy::WarnOnUnregistered =>
+                                    "warn_on_unregistered",
+                                ExtensionGovernancePolicy::Permissive => "permissive",
+                            },
+                        ),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use std::fmt;
 
 use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::TableProviderFilterPushDown;
+use datafusion_common::DataFusionError;
 use datafusion_expr::Expr;
 use serde::{Deserialize, Serialize};
 
@@ -142,6 +143,40 @@ pub struct PushdownStatusCounts {
     pub exact: usize,
 }
 
+/// Contract assertion for a single predicate pushdown result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PushdownContractAssertion {
+    pub table_name: String,
+    pub predicate_text: String,
+    pub declared_status: FilterPushdownStatus,
+    pub residual_filter_present: bool,
+    pub assertion_result: PushdownContractResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PushdownContractResult {
+    Satisfied,
+    InexactWithoutResidual { detail: String },
+    ExactWithRedundantResidual,
+    UnsupportedPredicateLost { detail: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PushdownEnforcementMode {
+    #[default]
+    Warn,
+    Strict,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PushdownContractReport {
+    pub assertions: Vec<PushdownContractAssertion>,
+    pub violations: Vec<PushdownContractAssertion>,
+    pub enforcement_mode: PushdownEnforcementMode,
+}
+
 /// Probe a provider's filter pushdown capabilities.
 ///
 /// Invokes `supports_filters_pushdown` on the given provider with the supplied
@@ -165,6 +200,13 @@ pub fn probe_pushdown(
 ) -> datafusion_common::Result<PushdownProbe> {
     let refs: Vec<&Expr> = filters.iter().collect();
     let raw_statuses = provider.supports_filters_pushdown(&refs)?;
+    if raw_statuses.len() != filters.len() {
+        return Err(DataFusionError::Plan(format!(
+            "Provider '{provider_name}' returned {} pushdown statuses for {} filters",
+            raw_statuses.len(),
+            filters.len()
+        )));
+    }
     let statuses: Vec<FilterPushdownStatus> =
         raw_statuses.into_iter().map(Into::into).collect();
     Ok(PushdownProbe {

@@ -19,6 +19,8 @@ type RuleClass = Literal[
 ]
 type RulepackProfile = Literal["Default", "LowLatency", "Replay", "Strict"]
 type RuntimeTunerMode = Literal["Off", "Observe", "Apply"]
+type PushdownEnforcementMode = Literal["warn", "strict", "disabled"]
+type ExtensionGovernanceMode = Literal["strict_allowlist", "warn_on_unregistered", "permissive"]
 type RuleTraceMode = Literal["Disabled", "PhaseOnly", "Full"]
 type PreviewRedactionMode = Literal["None", "DenyList", "AllowList"]
 type OtlpProtocol = Literal["grpc", "http/protobuf", "http/json"]
@@ -241,6 +243,8 @@ class RuntimeConfig(msgspec.Struct, frozen=True):
     capture_substrait: bool = False
     capture_optimizer_lab: bool = False
     capture_delta_codec: bool = False
+    pushdown_enforcement_mode: PushdownEnforcementMode = "warn"
+    extension_governance_mode: ExtensionGovernanceMode = "permissive"
     enable_tracing: bool = False
     enable_rule_tracing: bool = False
     enable_plan_preview: bool = False
@@ -477,7 +481,7 @@ def build_execution_spec(
     )
 
     return SemanticExecutionSpec(
-        version=1,
+        version=3,
         input_relations=input_relations,
         view_definitions=view_definitions,
         join_graph=JoinGraph(edges=join_edges, constraints=()),

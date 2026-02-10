@@ -3,14 +3,16 @@
 use datafusion::execution::context::SessionContext;
 use datafusion_common::Result;
 
-use crate::compiler::plan_bundle::ProviderIdentity;
+use crate::compiler::plan_bundle::{DeltaProviderCompatibility, ProviderIdentity};
+use crate::compiler::graph_validator;
 use crate::executor::warnings::RunWarning;
 use crate::providers::registration::register_extraction_inputs;
 use crate::rules::registry::CpgRuleSet;
 use crate::session::envelope::SessionEnvelope;
 use crate::session::factory::{SessionBuildOverrides, SessionFactory};
+use crate::session::planning_surface::ExtensionGovernancePolicy;
 use crate::spec::execution_spec::SemanticExecutionSpec;
-use crate::spec::runtime::TracingConfig;
+use crate::spec::runtime::{ExtensionGovernanceMode, TracingConfig};
 
 /// Canonical pre-pipeline context shared by all execution entrypoints.
 pub struct PreparedExecutionContext {
@@ -31,6 +33,9 @@ pub async fn prepare_execution_context(
         enable_function_factory: spec.runtime.enable_function_factory,
         enable_domain_planner: spec.runtime.enable_domain_planner,
         enable_delta_codec: spec.runtime.capture_delta_codec,
+        extension_governance_policy: map_extension_governance(
+            spec.runtime.extension_governance_mode,
+        ),
     };
 
     let mut state = if let Some(profile) = &spec.runtime_profile {
@@ -50,11 +55,28 @@ pub async fn prepare_execution_context(
     };
 
     let registrations = register_extraction_inputs(&state.ctx, &spec.input_relations).await?;
+    for warning in graph_validator::validate_delta_compatibility(spec, &registrations)? {
+        state.build_warnings.push(
+            crate::executor::warnings::RunWarning::new(
+                crate::executor::warnings::WarningCode::DeltaCompatibilityDrift,
+                crate::executor::warnings::WarningStage::Preflight,
+                warning,
+            ),
+        );
+    }
     let mut provider_identities: Vec<ProviderIdentity> = registrations
         .iter()
         .map(|r| ProviderIdentity {
             table_name: r.name.clone(),
             identity_hash: r.provider_identity,
+            delta_compatibility: Some(DeltaProviderCompatibility {
+                min_reader_version: r.compatibility.min_reader_version,
+                min_writer_version: r.compatibility.min_writer_version,
+                reader_features: r.compatibility.reader_features.clone(),
+                writer_features: r.compatibility.writer_features.clone(),
+                column_mapping_mode: r.compatibility.column_mapping_mode.clone(),
+                partition_columns: r.compatibility.partition_columns.clone(),
+            }),
         })
         .collect();
     provider_identities.sort_by(|a, b| a.table_name.cmp(&b.table_name));
@@ -83,4 +105,14 @@ pub async fn prepare_execution_context(
         provider_identities,
         preflight_warnings: std::mem::take(&mut state.build_warnings),
     })
+}
+
+fn map_extension_governance(mode: ExtensionGovernanceMode) -> ExtensionGovernancePolicy {
+    match mode {
+        ExtensionGovernanceMode::StrictAllowlist => ExtensionGovernancePolicy::StrictAllowlist,
+        ExtensionGovernanceMode::WarnOnUnregistered => {
+            ExtensionGovernancePolicy::WarnOnUnregistered
+        }
+        ExtensionGovernanceMode::Permissive => ExtensionGovernancePolicy::Permissive,
+    }
 }

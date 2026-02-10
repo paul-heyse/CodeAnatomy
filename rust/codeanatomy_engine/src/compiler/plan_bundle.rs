@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
+use crate::compiler::optimizer_pipeline::OptimizerPassTrace;
+use crate::providers::pushdown_contract::PushdownContractReport;
 
 use super::substrait::try_substrait_encode;
 
@@ -45,6 +47,12 @@ pub struct PlanBundleArtifactBuildRequest<'a> {
     pub runtime: &'a PlanBundleRuntime,
     pub rulepack_fingerprint: [u8; 32],
     pub provider_identities: Vec<ProviderIdentity>,
+    pub optimizer_traces: Vec<OptimizerPassTrace>,
+    pub pushdown_report: Option<PushdownContractReport>,
+    pub deterministic_inputs: bool,
+    pub no_volatile_udfs: bool,
+    pub deterministic_optimizer: bool,
+    pub stats_quality: Option<String>,
     pub capture_substrait: bool,
     pub capture_sql: bool,
     pub capture_delta_codec: bool,
@@ -111,6 +119,62 @@ pub struct PlanBundleArtifact {
     pub delta_codec_logical_bytes: Option<Vec<u8>>,
     /// Delta extension-codec physical plan bytes.
     pub delta_codec_physical_bytes: Option<Vec<u8>>,
+    /// Optimizer pass traces captured for this plan compilation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optimizer_traces: Vec<OptimizerPassTrace>,
+    /// Pushdown contract validation report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushdown_report: Option<PushdownContractReport>,
+    /// Provider lineage mapping of scans to provider identities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_lineage: Vec<ProviderLineageEntry>,
+    /// Replay compatibility indicators.
+    #[serde(default)]
+    pub replay_flags: ReplayCompatibilityFlags,
+    /// Portable vs non-portable artifact policy markers.
+    #[serde(default)]
+    pub portability: PortableArtifactPolicy,
+    /// Stats quality grade for cost/scheduling reliability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats_quality: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ProviderLineageEntry {
+    pub scan_node_id: String,
+    pub provider_name: String,
+    pub provider_identity_hash: [u8; 32],
+    pub delta_version: Option<i64>,
+    pub file_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplayCompatibilityFlags {
+    pub deterministic_inputs: bool,
+    pub no_volatile_udfs: bool,
+    pub deterministic_optimizer: bool,
+}
+
+impl Default for ReplayCompatibilityFlags {
+    fn default() -> Self {
+        Self {
+            deterministic_inputs: false,
+            no_volatile_udfs: false,
+            deterministic_optimizer: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct PortableArtifactPolicy {
+    pub substrait_portable: bool,
+    pub physical_diagnostics_portable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portable_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portable_digest: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portable_schema_version: Option<u32>,
 }
 
 /// A single entry from EXPLAIN output.
@@ -129,6 +193,19 @@ pub struct ProviderIdentity {
     pub table_name: String,
     /// Blake3 identity hash covering provider configuration.
     pub identity_hash: [u8; 32],
+    /// Optional Delta compatibility facts captured at registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta_compatibility: Option<DeltaProviderCompatibility>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeltaProviderCompatibility {
+    pub min_reader_version: i32,
+    pub min_writer_version: i32,
+    pub reader_features: Vec<String>,
+    pub writer_features: Vec<String>,
+    pub column_mapping_mode: Option<String>,
+    pub partition_columns: Vec<String>,
 }
 
 /// Schema fingerprints at each plan boundary.
@@ -173,6 +250,16 @@ pub struct PlanDiff {
     pub delta_codec_logical_changed: bool,
     /// True if physical delta-codec bytes differ.
     pub delta_codec_physical_changed: bool,
+    /// True if optimizer trace payloads differ.
+    pub optimizer_traces_changed: bool,
+    /// True if pushdown reports differ.
+    pub pushdown_report_changed: bool,
+    /// True if provider lineage differs.
+    pub provider_lineage_changed: bool,
+    /// True if replay flags differ.
+    pub replay_flags_changed: bool,
+    /// True if portability policy differs.
+    pub portability_changed: bool,
     /// Digest summary for logical delta-codec payload in artifact A.
     pub delta_codec_logical_before: Option<CodecDigestSummary>,
     /// Digest summary for logical delta-codec payload in artifact B.
@@ -256,6 +343,12 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         runtime,
         rulepack_fingerprint,
         provider_identities,
+        optimizer_traces,
+        pushdown_report,
+        deterministic_inputs,
+        no_volatile_udfs,
+        deterministic_optimizer,
+        stats_quality,
         capture_substrait,
         capture_sql,
         capture_delta_codec,
@@ -328,8 +421,18 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         (None, None)
     };
 
+    let provider_lineage = extract_provider_lineage(&runtime.p1_optimized, &provider_identities);
+    let portability = PortableArtifactPolicy {
+        substrait_portable: substrait_bytes.is_some(),
+        physical_diagnostics_portable: false,
+        portable_format: substrait_bytes.as_ref().map(|_| "substrait".to_string()),
+        portable_digest: substrait_bytes
+            .as_ref()
+            .map(|payload| blake3_hash_bytes(payload)),
+        portable_schema_version: substrait_bytes.as_ref().map(|_| 1u32),
+    };
     Ok((PlanBundleArtifact {
-        artifact_version: 1,
+        artifact_version: 2,
         p0_digest: blake3_hash_bytes(p0_text.as_bytes()),
         p1_digest: blake3_hash_bytes(p1_text.as_bytes()),
         p2_digest: blake3_hash_bytes(p2_text.as_bytes()),
@@ -350,6 +453,16 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         sql_text,
         delta_codec_logical_bytes,
         delta_codec_physical_bytes,
+        optimizer_traces,
+        pushdown_report,
+        provider_lineage,
+        replay_flags: ReplayCompatibilityFlags {
+            deterministic_inputs,
+            no_volatile_udfs,
+            deterministic_optimizer,
+        },
+        portability,
+        stats_quality,
     }, warnings))
 }
 
@@ -375,6 +488,11 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
         a.delta_codec_logical_bytes != b.delta_codec_logical_bytes;
     let delta_codec_physical_changed =
         a.delta_codec_physical_bytes != b.delta_codec_physical_bytes;
+    let optimizer_traces_changed = a.optimizer_traces != b.optimizer_traces;
+    let pushdown_report_changed = a.pushdown_report != b.pushdown_report;
+    let provider_lineage_changed = a.provider_lineage != b.provider_lineage;
+    let replay_flags_changed = a.replay_flags != b.replay_flags;
+    let portability_changed = a.portability != b.portability;
     let delta_codec_logical_before =
         codec_digest_summary(a.delta_codec_logical_bytes.as_deref());
     let delta_codec_logical_after =
@@ -412,6 +530,21 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
     if delta_codec_physical_changed {
         summary.push("Delta codec physical payload changed".into());
     }
+    if optimizer_traces_changed {
+        summary.push("Optimizer traces changed".into());
+    }
+    if pushdown_report_changed {
+        summary.push("Pushdown report changed".into());
+    }
+    if provider_lineage_changed {
+        summary.push("Provider lineage changed".into());
+    }
+    if replay_flags_changed {
+        summary.push("Replay flags changed".into());
+    }
+    if portability_changed {
+        summary.push("Portability policy changed".into());
+    }
 
     PlanDiff {
         p0_changed,
@@ -423,6 +556,11 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
         planning_surface_changed,
         delta_codec_logical_changed,
         delta_codec_physical_changed,
+        optimizer_traces_changed,
+        pushdown_report_changed,
+        provider_lineage_changed,
+        replay_flags_changed,
+        portability_changed,
         delta_codec_logical_before,
         delta_codec_logical_after,
         delta_codec_physical_before,
@@ -488,6 +626,59 @@ fn codec_digest_summary(bytes: Option<&[u8]>) -> Option<CodecDigestSummary> {
         len: payload.len(),
         blake3: blake3_hash_bytes(payload),
     })
+}
+
+fn extract_provider_lineage(
+    optimized_plan: &LogicalPlan,
+    provider_identities: &[ProviderIdentity],
+) -> Vec<ProviderLineageEntry> {
+    let mut entries = Vec::new();
+    let mut stack = vec![optimized_plan.clone()];
+    let mut scan_index = 0usize;
+    while let Some(plan) = stack.pop() {
+        if let LogicalPlan::TableScan(scan) = &plan {
+            let table_name = scan.table_name.to_string();
+            if let Some(identity) = provider_identities
+                .iter()
+                .find(|provider| provider.table_name == table_name)
+            {
+                entries.push(ProviderLineageEntry {
+                    scan_node_id: format!("{table_name}:{scan_index}"),
+                    provider_name: identity.table_name.clone(),
+                    provider_identity_hash: identity.identity_hash,
+                    delta_version: None,
+                    file_count: None,
+                });
+                scan_index += 1;
+            }
+        }
+        for input in plan.inputs() {
+            stack.push((*input).clone());
+        }
+    }
+    entries.sort_by(|a, b| a.provider_name.cmp(&b.provider_name));
+    entries
+}
+
+/// Migrate plan artifacts across schema versions.
+pub fn migrate_artifact(artifact: &PlanBundleArtifact) -> Result<PlanBundleArtifact> {
+    match artifact.artifact_version {
+        2 => Ok(artifact.clone()),
+        1 => {
+            let mut upgraded = artifact.clone();
+            upgraded.artifact_version = 2;
+            upgraded.optimizer_traces = Vec::new();
+            upgraded.pushdown_report = None;
+            upgraded.provider_lineage = Vec::new();
+            upgraded.replay_flags = ReplayCompatibilityFlags::default();
+            upgraded.portability = PortableArtifactPolicy::default();
+            upgraded.stats_quality = None;
+            Ok(upgraded)
+        }
+        version => Err(datafusion_common::DataFusionError::Plan(format!(
+            "Unknown artifact version: {version}"
+        ))),
+    }
 }
 
 /// Capture EXPLAIN VERBOSE output for a logical plan.
@@ -604,6 +795,12 @@ mod tests {
             runtime: &runtime,
             rulepack_fingerprint: [0u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -616,7 +813,7 @@ mod tests {
         assert_ne!(artifact.p0_digest, [0u8; 32]);
         assert_ne!(artifact.p1_digest, [0u8; 32]);
         assert_ne!(artifact.p2_digest, [0u8; 32]);
-        assert_eq!(artifact.artifact_version, 1);
+        assert_eq!(artifact.artifact_version, 2);
     }
 
     #[tokio::test]
@@ -630,6 +827,12 @@ mod tests {
             runtime: &runtime1,
             rulepack_fingerprint: [0u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -645,6 +848,12 @@ mod tests {
             runtime: &runtime2,
             rulepack_fingerprint: [0u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -670,6 +879,12 @@ mod tests {
             runtime: &runtime,
             rulepack_fingerprint: [0u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -706,6 +921,12 @@ mod tests {
             runtime: &runtime,
             rulepack_fingerprint: [0u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -719,6 +940,12 @@ mod tests {
             runtime: &runtime,
             rulepack_fingerprint: [1u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -743,6 +970,12 @@ mod tests {
             runtime: &runtime,
             rulepack_fingerprint: [0u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -758,7 +991,14 @@ mod tests {
             provider_identities: vec![ProviderIdentity {
                 table_name: "test_table".into(),
                 identity_hash: [42u8; 32],
+                delta_compatibility: None,
             }],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -783,6 +1023,12 @@ mod tests {
             runtime: &runtime,
             rulepack_fingerprint: [0u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -817,6 +1063,12 @@ mod tests {
             runtime: &runtime,
             rulepack_fingerprint: [0u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: true, // capture SQL
             capture_delta_codec: false,
@@ -842,6 +1094,12 @@ mod tests {
             runtime: &runtime,
             rulepack_fingerprint: [0u8; 32],
             provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
             capture_substrait: false,
             capture_sql: false,
             capture_delta_codec: false,
@@ -869,6 +1127,12 @@ mod tests {
                 runtime: &runtime,
                 rulepack_fingerprint: [0u8; 32],
                 provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
                 capture_substrait: true,
                 capture_sql: false,
                 capture_delta_codec: false,
@@ -899,6 +1163,12 @@ mod tests {
                 runtime: &runtime,
                 rulepack_fingerprint: [0u8; 32],
                 provider_identities: vec![],
+            optimizer_traces: vec![],
+            pushdown_report: None,
+            deterministic_inputs: false,
+            no_volatile_udfs: true,
+            deterministic_optimizer: true,
+            stats_quality: None,
                 capture_substrait: false,
                 capture_sql: false,
                 capture_delta_codec: true,

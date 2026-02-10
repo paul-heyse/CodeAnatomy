@@ -94,5 +94,6 @@ pub fn provider_identity(table_name: &str, fill: u8) -> ProviderIdentity {
     ProviderIdentity {
         table_name: table_name.to_string(),
         identity_hash: [fill; 32],
+        delta_compatibility: None,
     }
 }

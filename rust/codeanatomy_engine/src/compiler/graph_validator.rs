@@ -3,10 +3,11 @@
 //! Ensures the view dependency graph is well-formed before attempting compilation.
 
 use datafusion_common::{DataFusionError, Result};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use crate::providers::registration::TableRegistration;
 use crate::spec::execution_spec::SemanticExecutionSpec;
-use crate::spec::relations::ViewTransform;
+use crate::spec::relations::{ViewDefinition, ViewTransform};
 
 /// Extract source references from a ViewTransform.
 fn extract_sources(transform: &ViewTransform) -> Vec<&str> {
@@ -94,9 +95,143 @@ pub fn validate_graph(spec: &SemanticExecutionSpec) -> Result<()> {
     Ok(())
 }
 
+fn view_index(spec: &SemanticExecutionSpec) -> BTreeMap<&str, &ViewDefinition> {
+    spec.view_definitions
+        .iter()
+        .map(|view| (view.name.as_str(), view))
+        .collect()
+}
+
+fn resolve_inputs_for_source(
+    source: &str,
+    input_names: &HashSet<&str>,
+    views: &BTreeMap<&str, &ViewDefinition>,
+    visiting: &mut HashSet<String>,
+    out: &mut BTreeSet<String>,
+) {
+    if input_names.contains(source) {
+        out.insert(source.to_string());
+        return;
+    }
+    let Some(view) = views.get(source) else {
+        return;
+    };
+    if !visiting.insert(view.name.clone()) {
+        return;
+    }
+    match &view.transform {
+        ViewTransform::Normalize { source, .. }
+        | ViewTransform::Project { source, .. }
+        | ViewTransform::Filter { source, .. }
+        | ViewTransform::Aggregate { source, .. }
+        | ViewTransform::IncrementalCdf { source, .. }
+        | ViewTransform::Metadata { source }
+        | ViewTransform::FileManifest { source } => {
+            resolve_inputs_for_source(source, input_names, views, visiting, out);
+        }
+        ViewTransform::Relate { left, right, .. } => {
+            resolve_inputs_for_source(left, input_names, views, visiting, out);
+            resolve_inputs_for_source(right, input_names, views, visiting, out);
+        }
+        ViewTransform::Union { sources, .. } => {
+            for item in sources {
+                resolve_inputs_for_source(item, input_names, views, visiting, out);
+            }
+        }
+    }
+    visiting.remove(&view.name);
+}
+
+/// Validate Delta protocol and column-mapping compatibility for join/union paths.
+///
+/// Returns non-fatal warning strings when protocol versions/features differ but
+/// compatibility remains possible. Hard-incompatible column mapping combinations
+/// are returned as planner errors.
+pub fn validate_delta_compatibility(
+    spec: &SemanticExecutionSpec,
+    registrations: &[TableRegistration],
+) -> Result<Vec<String>> {
+    let registration_by_name: BTreeMap<&str, &TableRegistration> = registrations
+        .iter()
+        .map(|registration| (registration.name.as_str(), registration))
+        .collect();
+    let input_names: HashSet<&str> = spec
+        .input_relations
+        .iter()
+        .map(|relation| relation.logical_name.as_str())
+        .collect();
+    let views = view_index(spec);
+
+    let mut warnings = Vec::new();
+    for view in &spec.view_definitions {
+        let sources = match &view.transform {
+            ViewTransform::Relate { left, right, .. } => vec![left.clone(), right.clone()],
+            ViewTransform::Union { sources, .. } if sources.len() > 1 => sources.clone(),
+            _ => continue,
+        };
+
+        let mut resolved_inputs = BTreeSet::new();
+        for source in sources {
+            resolve_inputs_for_source(
+                &source,
+                &input_names,
+                &views,
+                &mut HashSet::new(),
+                &mut resolved_inputs,
+            );
+        }
+        if resolved_inputs.len() < 2 {
+            continue;
+        }
+
+        let compat = resolved_inputs
+            .iter()
+            .filter_map(|name| registration_by_name.get(name.as_str()).copied())
+            .collect::<Vec<_>>();
+        if compat.len() < 2 {
+            continue;
+        }
+
+        let column_modes: BTreeSet<String> = compat
+            .iter()
+            .map(|registration| {
+                registration
+                    .compatibility
+                    .column_mapping_mode
+                    .clone()
+                    .unwrap_or_else(|| "none".to_string())
+            })
+            .collect();
+        if column_modes.len() > 1 {
+            return Err(DataFusionError::Plan(format!(
+                "Delta column mapping mode mismatch in view '{}': {:?}",
+                view.name, column_modes
+            )));
+        }
+
+        let reader_versions: BTreeSet<i32> = compat
+            .iter()
+            .map(|registration| registration.compatibility.min_reader_version)
+            .collect();
+        let writer_versions: BTreeSet<i32> = compat
+            .iter()
+            .map(|registration| registration.compatibility.min_writer_version)
+            .collect();
+        if reader_versions.len() > 1 || writer_versions.len() > 1 {
+            warnings.push(format!(
+                "Delta protocol version drift in view '{}': reader={:?} writer={:?}",
+                view.name, reader_versions, writer_versions
+            ));
+        }
+    }
+
+    Ok(warnings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::registration::{DeltaCompatibilityFacts, TableRegistration};
     use crate::spec::execution_spec::SemanticExecutionSpec;
     use crate::spec::join_graph::JoinGraph;
     use crate::spec::relations::{InputRelation, SchemaContract, ViewDefinition, ViewTransform};
@@ -336,5 +471,141 @@ mod tests {
 
         let spec = create_test_spec(inputs, views);
         assert!(validate_graph(&spec).is_ok());
+    }
+
+    #[test]
+    fn test_delta_compatibility_rejects_column_mapping_mismatch_for_join() {
+        let inputs = vec![
+            InputRelation {
+                logical_name: "left_input".to_string(),
+                delta_location: "/path/to/left".to_string(),
+                requires_lineage: false,
+                version_pin: None,
+            },
+            InputRelation {
+                logical_name: "right_input".to_string(),
+                delta_location: "/path/to/right".to_string(),
+                requires_lineage: false,
+                version_pin: None,
+            },
+        ];
+        let views = vec![ViewDefinition {
+            name: "joined".to_string(),
+            view_kind: "relate".to_string(),
+            view_dependencies: vec![],
+            transform: ViewTransform::Relate {
+                left: "left_input".to_string(),
+                right: "right_input".to_string(),
+                join_type: crate::spec::relations::JoinType::Inner,
+                join_keys: vec![],
+            },
+            output_schema: minimal_schema(),
+        }];
+        let spec = create_test_spec(inputs, views);
+        let registrations = vec![
+            TableRegistration {
+                name: "left_input".to_string(),
+                delta_version: 1,
+                schema_hash: [0u8; 32],
+                provider_identity: [1u8; 32],
+                capabilities: crate::providers::scan_config::ProviderCapabilities::default(),
+                compatibility: DeltaCompatibilityFacts {
+                    min_reader_version: 1,
+                    min_writer_version: 2,
+                    reader_features: vec![],
+                    writer_features: vec![],
+                    column_mapping_mode: Some("name".to_string()),
+                    partition_columns: vec![],
+                },
+            },
+            TableRegistration {
+                name: "right_input".to_string(),
+                delta_version: 1,
+                schema_hash: [0u8; 32],
+                provider_identity: [2u8; 32],
+                capabilities: crate::providers::scan_config::ProviderCapabilities::default(),
+                compatibility: DeltaCompatibilityFacts {
+                    min_reader_version: 1,
+                    min_writer_version: 2,
+                    reader_features: vec![],
+                    writer_features: vec![],
+                    column_mapping_mode: Some("id".to_string()),
+                    partition_columns: vec![],
+                },
+            },
+        ];
+
+        let result = validate_delta_compatibility(&spec, &registrations);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("column mapping mode mismatch"));
+    }
+
+    #[test]
+    fn test_delta_compatibility_emits_protocol_drift_warning_for_union() {
+        let inputs = vec![
+            InputRelation {
+                logical_name: "input1".to_string(),
+                delta_location: "/path/to/input1".to_string(),
+                requires_lineage: false,
+                version_pin: None,
+            },
+            InputRelation {
+                logical_name: "input2".to_string(),
+                delta_location: "/path/to/input2".to_string(),
+                requires_lineage: false,
+                version_pin: None,
+            },
+        ];
+        let views = vec![ViewDefinition {
+            name: "unioned".to_string(),
+            view_kind: "union".to_string(),
+            view_dependencies: vec![],
+            transform: ViewTransform::Union {
+                sources: vec!["input1".to_string(), "input2".to_string()],
+                discriminator_column: None,
+                distinct: false,
+            },
+            output_schema: minimal_schema(),
+        }];
+        let spec = create_test_spec(inputs, views);
+        let registrations = vec![
+            TableRegistration {
+                name: "input1".to_string(),
+                delta_version: 1,
+                schema_hash: [0u8; 32],
+                provider_identity: [1u8; 32],
+                capabilities: crate::providers::scan_config::ProviderCapabilities::default(),
+                compatibility: DeltaCompatibilityFacts {
+                    min_reader_version: 1,
+                    min_writer_version: 2,
+                    reader_features: vec![],
+                    writer_features: vec![],
+                    column_mapping_mode: None,
+                    partition_columns: vec![],
+                },
+            },
+            TableRegistration {
+                name: "input2".to_string(),
+                delta_version: 1,
+                schema_hash: [0u8; 32],
+                provider_identity: [2u8; 32],
+                capabilities: crate::providers::scan_config::ProviderCapabilities::default(),
+                compatibility: DeltaCompatibilityFacts {
+                    min_reader_version: 3,
+                    min_writer_version: 4,
+                    reader_features: vec![],
+                    writer_features: vec![],
+                    column_mapping_mode: None,
+                    partition_columns: vec![],
+                },
+            },
+        ];
+
+        let warnings = validate_delta_compatibility(&spec, &registrations).unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("protocol version drift"));
     }
 }

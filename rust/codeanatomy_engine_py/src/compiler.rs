@@ -4,8 +4,14 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
+use codeanatomy_engine::compiler::compile_contract::{
+    compile_request, compile_response_to_json, CompileRequest,
+};
+use codeanatomy_engine::rules::rulepack::RulepackFactory;
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::spec::execution_spec::SPEC_SCHEMA_VERSION;
+
+use super::session::SessionFactory as PySessionFactory;
 
 /// Semantic plan compiler that validates and prepares execution specs.
 ///
@@ -43,55 +49,101 @@ impl SemanticPlanCompiler {
     /// Raises:
     ///     ValueError: If JSON is malformed or spec is invalid
     fn compile(&self, spec_json: &str) -> PyResult<CompiledPlan> {
-        // Hard-cutover contract: reject legacy template mode payloads explicitly.
-        let payload: Value = serde_json::from_str(spec_json)
-            .map_err(|err| PyValueError::new_err(format!("Invalid spec JSON: {err}")))?;
-        if payload
-            .as_object()
-            .and_then(|obj| obj.get("parameter_templates"))
-            .is_some()
-        {
-            return Err(PyValueError::new_err(
-                "Legacy field 'parameter_templates' is no longer supported. Use typed_parameters.",
-            ));
-        }
-
-        // Parse and validate spec structure with field-path diagnostics.
-        let mut deserializer = serde_json::Deserializer::from_str(spec_json);
-        let mut spec: SemanticExecutionSpec = serde_path_to_error::deserialize(&mut deserializer)
-            .map_err(|err| {
-                let path = err.path().to_string();
-                let inner = err.into_inner();
-                if path.is_empty() {
-                    PyValueError::new_err(format!("Invalid spec JSON: {inner}"))
-                } else {
-                    PyValueError::new_err(format!("Invalid spec JSON at '{path}': {inner}"))
-                }
-            })?;
-
-        if spec.version < SPEC_SCHEMA_VERSION {
-            return Err(PyValueError::new_err(format!(
-                "Spec version {} is below minimum required version {}",
-                spec.version, SPEC_SCHEMA_VERSION
-            )));
-        }
-
-        // Compute canonical hash
-        spec.spec_hash = codeanatomy_engine::spec::hashing::hash_spec(&spec);
-
-        // Validate basic structure
-        if spec.view_definitions.is_empty() {
-            return Err(PyValueError::new_err("Spec must have at least one view definition"));
-        }
-        if spec.output_targets.is_empty() {
-            return Err(PyValueError::new_err("Spec must have at least one output target"));
-        }
-
+        let spec = parse_and_validate_spec(spec_json)?;
         Ok(CompiledPlan {
             spec_json: spec_json.to_string(),
             spec_hash: spec.spec_hash,
         })
     }
+
+    /// Compile a spec to deterministic compile metadata JSON without materialization.
+    ///
+    /// This runs session preparation + logical compilation + artifact capture
+    /// and returns a JSON-serialized compile contract payload.
+    fn compile_metadata_json(
+        &self,
+        session_factory: &PySessionFactory,
+        spec_json: &str,
+    ) -> PyResult<String> {
+        let spec = parse_and_validate_spec(spec_json)?;
+        let env_profile = session_factory.get_profile();
+        let ruleset = RulepackFactory::build_ruleset(
+            &spec.rulepack_profile,
+            &spec.rule_intents,
+            &env_profile,
+        );
+        let tracing = spec.runtime.effective_tracing();
+        self.runtime
+            .block_on(async {
+                let response = compile_request(CompileRequest {
+                    session_factory: session_factory.inner(),
+                    spec: &spec,
+                    ruleset: &ruleset,
+                    tracing_config: Some(&tracing),
+                })
+                .await
+                .map_err(|err| {
+                    PyRuntimeError::new_err(format!("Compile metadata capture failed: {err}"))
+                })?;
+                compile_response_to_json(&response)
+                    .map_err(|err| {
+                        PyRuntimeError::new_err(format!(
+                            "Failed to serialize compile metadata: {err}"
+                        ))
+                    })
+            })
+    }
+
+    fn __repr__(&self) -> String {
+        "SemanticPlanCompiler()".to_string()
+    }
+}
+
+fn parse_and_validate_spec(spec_json: &str) -> PyResult<SemanticExecutionSpec> {
+    // Hard-cutover contract: reject legacy template mode payloads explicitly.
+    let payload: Value = serde_json::from_str(spec_json)
+        .map_err(|err| PyValueError::new_err(format!("Invalid spec JSON: {err}")))?;
+    if payload
+        .as_object()
+        .and_then(|obj| obj.get("parameter_templates"))
+        .is_some()
+    {
+        return Err(PyValueError::new_err(
+            "Legacy field 'parameter_templates' is no longer supported. Use typed_parameters.",
+        ));
+    }
+
+    // Parse and validate spec structure with field-path diagnostics.
+    let mut deserializer = serde_json::Deserializer::from_str(spec_json);
+    let mut spec: SemanticExecutionSpec = serde_path_to_error::deserialize(&mut deserializer)
+        .map_err(|err| {
+            let path = err.path().to_string();
+            let inner = err.into_inner();
+            if path.is_empty() {
+                PyValueError::new_err(format!("Invalid spec JSON: {inner}"))
+            } else {
+                PyValueError::new_err(format!("Invalid spec JSON at '{path}': {inner}"))
+            }
+        })?;
+
+    if spec.version < SPEC_SCHEMA_VERSION {
+        return Err(PyValueError::new_err(format!(
+            "Spec version {} is below minimum required version {}",
+            spec.version, SPEC_SCHEMA_VERSION
+        )));
+    }
+
+    // Compute canonical hash
+    spec.spec_hash = codeanatomy_engine::spec::hashing::hash_spec(&spec);
+
+    // Validate basic structure
+    if spec.view_definitions.is_empty() {
+        return Err(PyValueError::new_err("Spec must have at least one view definition"));
+    }
+    if spec.output_targets.is_empty() {
+        return Err(PyValueError::new_err("Spec must have at least one output target"));
+    }
+    Ok(spec)
 }
 
 /// Compiled execution plan ready for materialization.

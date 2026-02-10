@@ -20,7 +20,7 @@ from arrow_utils.core.array_iter import iter_table_rows
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.extract.registry import dataset_query, normalize_options
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from extract.coordination.context import (
     ExtractExecutionContext,
     FileContext,
@@ -367,12 +367,12 @@ def scan_file_line_index_plan(
     *,
     options: LineIndexOptions,
     session: ExtractSession,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Build the plan for line index extraction.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         DataFusion plan bundle emitting line index rows.
     """
     normalize = ExtractNormalizeOptions(options=options, repo_id=options.repo_id)

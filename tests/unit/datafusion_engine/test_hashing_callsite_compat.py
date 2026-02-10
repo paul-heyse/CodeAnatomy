@@ -10,22 +10,22 @@ from typing import cast
 from datafusion_engine.delta.scan_config import delta_scan_identity_hash
 from datafusion_engine.lineage.scan import ScanUnit
 from datafusion_engine.plan.artifact_store import _plan_identity_payload
-from datafusion_engine.plan.bundle import (
-    DataFusionPlanBundle,
+from datafusion_engine.plan.bundle_artifact import (
+    DataFusionPlanArtifact,
     PlanFingerprintInputs,
     _hash_plan,
     _information_schema_hash,
     _planning_env_hash,
     _rulepack_hash,
 )
-from datafusion_engine.plan.bundle import (
+from datafusion_engine.plan.bundle_artifact import (
     _delta_protocol_payload as plan_delta_protocol_payload,
 )
 from datafusion_engine.views.artifacts import _delta_inputs_payload, _plan_task_signature
 from extract.infrastructure.cache_utils import CACHE_VERSION, stable_cache_key, stable_cache_label
 from extract.scanning.repo_scan import _sha256_path
-from relspec.execution_plan import _protocol_payload as exec_protocol_payload
-from relspec.execution_plan import _scan_unit_signature
+from relspec.execution_planning_runtime import _protocol_payload as exec_protocol_payload
+from relspec.execution_planning_runtime import _scan_unit_signature
 from serde_artifacts import DeltaInputPin, DeltaScanConfigSnapshot, PlanArtifacts
 from serde_msgspec import JSON_ENCODER, MSGPACK_ENCODER, to_builtins
 from tests.test_helpers.datafusion_runtime import df_profile
@@ -234,7 +234,7 @@ def test_plan_task_signature_matches_msgpack_encoder() -> None:
         required_rewrite_tags=("rewrite",),
         delta_inputs=delta_inputs,
     )
-    bundle = cast("DataFusionPlanBundle", bundle_stub)
+    bundle = cast("DataFusionPlanArtifact", bundle_stub)
     settings_items = tuple(sorted(artifacts.df_settings.items()))
     df_settings_hash = hashlib.sha256(MSGPACK_ENCODER.encode(settings_items)).hexdigest()
     payload = (
@@ -251,7 +251,7 @@ def test_plan_task_signature_matches_msgpack_encoder() -> None:
         ("df_settings_hash", df_settings_hash),
         ("required_udfs", ("udf",)),
         ("required_rewrite_tags", ("rewrite",)),
-        ("delta_inputs", _delta_inputs_payload(cast("DataFusionPlanBundle", bundle_stub))),
+        ("delta_inputs", _delta_inputs_payload(cast("DataFusionPlanArtifact", bundle_stub))),
     )
     expected = hashlib.sha256(MSGPACK_ENCODER.encode(payload)).hexdigest()
     assert _plan_task_signature(bundle, runtime_hash="runtime") == expected
@@ -303,7 +303,7 @@ def test_plan_identity_hash_matches_json_encoder() -> None:
     )
     scan_payload = ({"dataset_name": "dataset", "key": "scan_key"},)
     payload = _plan_identity_payload(
-        bundle=cast("DataFusionPlanBundle", bundle_stub),
+        bundle=cast("DataFusionPlanArtifact", bundle_stub),
         profile=df_profile(),
         delta_inputs_payload=delta_inputs_payload,
         scan_payload=scan_payload,

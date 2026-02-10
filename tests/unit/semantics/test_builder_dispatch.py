@@ -23,7 +23,7 @@ from semantics.view_kinds import ViewKindStr
 if TYPE_CHECKING:
     from datafusion import DataFrame, SessionContext
 
-    from datafusion_engine.plan.bundle import DataFrameBuilder
+    from datafusion_engine.plan.bundle_artifact import DataFrameBuilder
     from semantics.pipeline import _SemanticSpecContext
 
 

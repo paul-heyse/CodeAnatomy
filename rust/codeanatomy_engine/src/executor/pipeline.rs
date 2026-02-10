@@ -178,129 +178,106 @@ pub async fn execute_pipeline(
         }
     }
 
-    // 2. Capture plan bundles before execution (when compliance_capture is true).
+    // 2. Capture/evaluate plan bundles before execution.
     //
-    // Plan bundle capture must happen BEFORE the output_plans Vec is consumed by
-    // execute_and_materialize_with_plans, because the Vec is moved into that function.
-    // Failures are captured as warnings instead of being fatal.
+    // Pushdown contract enforcement is always evaluated regardless of
+    // compliance-capture settings. Plan-bundle artifact capture remains gated
+    // by `compliance_capture`.
     let mut plan_bundles: Vec<PlanBundleArtifact> = Vec::new();
-    if spec.runtime.compliance_capture {
-        for (_target, df) in &output_plans {
-            match plan_bundle::capture_plan_bundle_runtime(ctx, df).await {
-                Ok(runtime) => {
-                    let state = ctx.state();
-                    let state_config = state.config();
-                    let config_options = state_config.options();
-                    let optimizer_config = OptimizerPipelineConfig {
-                        max_passes: config_options.optimizer.max_passes,
-                        failure_policy: if config_options.optimizer.skip_failed_rules {
-                            RuleFailurePolicy::SkipFailed
-                        } else {
-                            RuleFailurePolicy::FailFast
-                        },
-                        capture_pass_traces: true,
-                        capture_plan_diffs: true,
-                    };
-                    let optimizer_report = run_optimizer_compile_only(
-                        ctx,
-                        runtime.p0_logical.clone(),
-                        &optimizer_config,
-                    )
-                    .await;
-                    let mut optimizer_traces = Vec::new();
-                    match optimizer_report {
-                        Ok(report) => {
-                            optimizer_traces = report.pass_traces;
-                            warnings.extend(report.warnings);
-                        }
-                        Err(err) => {
-                            warnings.push(RunWarning::new(
-                                WarningCode::ComplianceOptimizerLabFailed,
-                                WarningStage::Compilation,
-                                format!("Optimizer trace capture failed: {err}"),
-                            ));
-                        }
-                    }
+    for (target, df) in &output_plans {
+        match plan_bundle::capture_plan_bundle_runtime(ctx, df).await {
+            Ok(runtime) => {
+                let pushdown_mode = map_pushdown_mode(spec.runtime.pushdown_enforcement_mode);
+                let pushdown_report = if pushdown_probe_map.is_empty() {
+                    None
+                } else {
+                    Some(verify_pushdown_contracts(
+                        &runtime.p1_optimized,
+                        &pushdown_probe_map,
+                        pushdown_mode.clone(),
+                    ))
+                };
+                enforce_pushdown_contracts(
+                    target.table_name.as_str(),
+                    pushdown_mode,
+                    pushdown_report.as_ref(),
+                    &mut warnings,
+                )?;
 
-                    let pushdown_mode = map_pushdown_mode(spec.runtime.pushdown_enforcement_mode);
-                    let pushdown_report = if pushdown_probe_map.is_empty() {
-                        None
+                if !spec.runtime.compliance_capture {
+                    continue;
+                }
+
+                let state = ctx.state();
+                let state_config = state.config();
+                let config_options = state_config.options();
+                let optimizer_config = OptimizerPipelineConfig {
+                    max_passes: config_options.optimizer.max_passes,
+                    failure_policy: if config_options.optimizer.skip_failed_rules {
+                        RuleFailurePolicy::SkipFailed
                     } else {
-                        Some(verify_pushdown_contracts(
-                            &runtime.p1_optimized,
-                            &pushdown_probe_map,
-                            pushdown_mode.clone(),
-                        ))
-                    };
-                    if let Some(report) = &pushdown_report {
-                        for violation in &report.violations {
-                            match pushdown_mode {
-                                ContractEnforcementMode::Strict => {
-                                    return Err(DataFusionError::Plan(format!(
-                                        "Pushdown contract violation on table '{}': {}",
-                                        violation.table_name, violation.predicate_text
-                                    )));
-                                }
-                                ContractEnforcementMode::Warn => warnings.push(
-                                    RunWarning::new(
-                                        WarningCode::PushdownContractViolation,
-                                        WarningStage::Compilation,
-                                        format!(
-                                            "Pushdown contract violation on '{}': {}",
-                                            violation.table_name, violation.predicate_text
-                                        ),
-                                    )
-                                    .with_context("table_name", violation.table_name.clone())
-                                    .with_context(
-                                        "predicate",
-                                        violation.predicate_text.clone(),
-                                    ),
-                                ),
-                                ContractEnforcementMode::Disabled => {}
-                            }
-                        }
+                        RuleFailurePolicy::FailFast
+                    },
+                    capture_pass_traces: true,
+                    capture_plan_diffs: true,
+                };
+                let optimizer_report =
+                    run_optimizer_compile_only(ctx, runtime.p0_logical.clone(), &optimizer_config)
+                        .await;
+                let mut optimizer_traces = Vec::new();
+                match optimizer_report {
+                    Ok(report) => {
+                        optimizer_traces = report.pass_traces;
+                        warnings.extend(report.warnings);
                     }
-
-                    match plan_bundle::build_plan_bundle_artifact_with_warnings(
-                        plan_bundle::PlanBundleArtifactBuildRequest {
-                            ctx,
-                            runtime: &runtime,
-                            rulepack_fingerprint,
-                            provider_identities: provider_identities.clone(),
-                            optimizer_traces,
-                            pushdown_report,
-                            deterministic_inputs: spec
-                                .input_relations
-                                .iter()
-                                .all(|relation| relation.version_pin.is_some()),
-                            no_volatile_udfs: true,
-                            deterministic_optimizer: true,
-                            stats_quality: stats_quality_label.clone(),
-                            capture_substrait: spec.runtime.capture_substrait,
-                            capture_sql: false, // SQL text capture not enabled by default
-                            capture_delta_codec: spec.runtime.capture_delta_codec,
-                            planning_surface_hash,
-                        },
-                    )
-                    .await
-                    {
-                        Ok((artifact, capture_warnings)) => {
-                            plan_bundles.push(artifact);
-                            warnings.extend(capture_warnings);
-                        }
-                        Err(e) => warnings.push(RunWarning::new(
-                            WarningCode::PlanBundleArtifactBuildFailed,
-                            WarningStage::PlanBundle,
-                            format!("Plan bundle artifact construction failed: {e}"),
-                        )),
+                    Err(err) => {
+                        warnings.push(RunWarning::new(
+                            WarningCode::ComplianceOptimizerLabFailed,
+                            WarningStage::Compilation,
+                            format!("Optimizer trace capture failed: {err}"),
+                        ));
                     }
                 }
-                Err(e) => warnings.push(RunWarning::new(
-                    WarningCode::PlanBundleRuntimeCaptureFailed,
-                    WarningStage::PlanBundle,
-                    format!("Plan bundle runtime capture failed: {e}"),
-                )),
+
+                match plan_bundle::build_plan_bundle_artifact_with_warnings(
+                    plan_bundle::PlanBundleArtifactBuildRequest {
+                        ctx,
+                        runtime: &runtime,
+                        rulepack_fingerprint,
+                        provider_identities: provider_identities.clone(),
+                        optimizer_traces,
+                        pushdown_report,
+                        deterministic_inputs: spec
+                            .input_relations
+                            .iter()
+                            .all(|relation| relation.version_pin.is_some()),
+                        no_volatile_udfs: true,
+                        deterministic_optimizer: true,
+                        stats_quality: stats_quality_label.clone(),
+                        capture_substrait: spec.runtime.capture_substrait,
+                        capture_sql: false, // SQL text capture not enabled by default
+                        capture_delta_codec: spec.runtime.capture_delta_codec,
+                        planning_surface_hash,
+                    },
+                )
+                .await
+                {
+                    Ok((artifact, capture_warnings)) => {
+                        plan_bundles.push(artifact);
+                        warnings.extend(capture_warnings);
+                    }
+                    Err(e) => warnings.push(RunWarning::new(
+                        WarningCode::PlanBundleArtifactBuildFailed,
+                        WarningStage::PlanBundle,
+                        format!("Plan bundle artifact construction failed: {e}"),
+                    )),
+                }
             }
+            Err(e) => warnings.push(RunWarning::new(
+                WarningCode::PlanBundleRuntimeCaptureFailed,
+                WarningStage::PlanBundle,
+                format!("Plan bundle runtime capture failed: {e}"),
+            )),
         }
     }
     if !plan_bundles.is_empty() {
@@ -394,6 +371,41 @@ fn map_pushdown_mode(mode: PushdownEnforcementMode) -> ContractEnforcementMode {
         PushdownEnforcementMode::Strict => ContractEnforcementMode::Strict,
         PushdownEnforcementMode::Disabled => ContractEnforcementMode::Disabled,
     }
+}
+
+fn enforce_pushdown_contracts(
+    table_name: &str,
+    mode: ContractEnforcementMode,
+    report: Option<&crate::providers::pushdown_contract::PushdownContractReport>,
+    warnings: &mut Vec<RunWarning>,
+) -> Result<()> {
+    let Some(report) = report else {
+        return Ok(());
+    };
+    for violation in &report.violations {
+        match mode {
+            ContractEnforcementMode::Strict => {
+                return Err(DataFusionError::Plan(format!(
+                    "Pushdown contract violation on table '{}': {}",
+                    violation.table_name, violation.predicate_text
+                )));
+            }
+            ContractEnforcementMode::Warn => warnings.push(
+                RunWarning::new(
+                    WarningCode::PushdownContractViolation,
+                    WarningStage::Compilation,
+                    format!(
+                        "Pushdown contract violation on '{}': {}",
+                        violation.table_name, violation.predicate_text
+                    ),
+                )
+                .with_context("table_name", table_name.to_string())
+                .with_context("predicate", violation.predicate_text.clone()),
+            ),
+            ContractEnforcementMode::Disabled => {}
+        }
+    }
+    Ok(())
 }
 
 /// Aggregate physical metrics across all executed plan trees.

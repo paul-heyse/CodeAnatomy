@@ -29,7 +29,7 @@ from core_types import RowPermissive as Row
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.hashing import span_id
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.context import (
     ExtractExecutionContext,
@@ -955,12 +955,12 @@ def extract_ts_plans(
     *,
     options: TreeSitterExtractOptions | None = None,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, DataFusionPlanBundle]:
+) -> dict[str, DataFusionPlanArtifact]:
     """Extract tree-sitter plans for nested file records.
 
     Returns:
     -------
-    dict[str, DataFusionPlanBundle]
+    dict[str, DataFusionPlanArtifact]
         Plan bundle keyed by ``tree_sitter_files``.
     """
     normalized_options = normalize_options("tree_sitter", options, TreeSitterExtractOptions)
@@ -1438,7 +1438,7 @@ def _build_ts_plan(
     *,
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None,
     plan_context: _TreeSitterPlanContext,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     plan_options = ExtractPlanOptions(
         normalize=plan_context.normalize,
         evidence_plan=plan_context.evidence_plan,

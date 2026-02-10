@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.datafusion import LineageReport
     from datafusion_engine.lineage.scan import ScanUnit
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.program_manifest import ManifestDatasetResolver
 
@@ -102,7 +102,7 @@ class ViewNode:
         Optional schema contract builder.
     required_udfs : tuple[str, ...]
         Required UDF names for this view.
-    plan_bundle : DataFusionPlanBundle | None
+    plan_bundle : DataFusionPlanArtifact | None
         DataFusion plan bundle (preferred source of truth for lineage).
     cache_policy : CachePolicy
         Cache policy for view materialization. Legacy "memory" is treated
@@ -114,7 +114,7 @@ class ViewNode:
     builder: Callable[[SessionContext], DataFrame]
     contract_builder: Callable[[pa.Schema], SchemaContract] | None = None
     required_udfs: tuple[str, ...] = ()
-    plan_bundle: DataFusionPlanBundle | None = None
+    plan_bundle: DataFusionPlanArtifact | None = None
     cache_policy: CachePolicy = "none"
 
 
@@ -1228,12 +1228,12 @@ def _normalize_cache_policy(policy: str) -> CachePolicy:
     return "none"
 
 
-def _deps_from_plan_bundle(bundle: DataFusionPlanBundle) -> tuple[str, ...]:
+def _deps_from_plan_bundle(bundle: DataFusionPlanArtifact) -> tuple[str, ...]:
     """Extract dependencies from DataFusion plan bundle (preferred path).
 
     Parameters
     ----------
-    bundle : DataFusionPlanBundle
+    bundle : DataFusionPlanArtifact
         Plan bundle with optimized logical plan.
 
     Returns:
@@ -1248,7 +1248,7 @@ def _deps_from_plan_bundle(bundle: DataFusionPlanBundle) -> tuple[str, ...]:
 def _plan_scan_units_for_bundle(
     ctx: SessionContext,
     *,
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[ScanUnit, ...]:
     from datafusion_engine.lineage.scan import plan_scan_unit

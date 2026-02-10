@@ -44,15 +44,6 @@ if TYPE_CHECKING:
         DiagnosticsSink,
         InMemoryDiagnosticsSink,
     )
-    from datafusion_engine.plan.bundle import (
-        DataFusionPlanBundle,
-        build_plan_bundle,
-    )
-    from datafusion_engine.plan.execution import (
-        PlanExecutionOptions,
-        PlanExecutionResult,
-        execute_plan_bundle,
-    )
     from datafusion_engine.plan.udf_analysis import (
         derive_required_udfs_from_plans,
         ensure_plan_udfs_available,
@@ -117,7 +108,6 @@ __all__ = [
     "DataFusionExecutionFacade",
     "DataFusionIOAdapter",
     "DataFusionParamBindings",
-    "DataFusionPlanBundle",
     "DataFusionRuntimeProfile",
     "DataFusionSqlPolicy",
     "DeltaStorePolicy",
@@ -134,8 +124,6 @@ __all__ = [
     "IntrospectionSnapshot",
     "LineageReport",
     "MemoryPool",
-    "PlanExecutionOptions",
-    "PlanExecutionResult",
     "RegistryCatalogProvider",
     "RegistrySchemaProvider",
     "RustUdfPlatform",
@@ -154,10 +142,8 @@ __all__ = [
     "apply_bindings_to_context",
     "apply_execution_label",
     "apply_execution_policy",
-    "build_plan_bundle",
     "derive_required_udfs_from_plans",
     "ensure_plan_udfs_available",
-    "execute_plan_bundle",
     "extract_lineage",
     "extract_nested_dataset_names",
     "extract_nested_schema_names",
@@ -253,12 +239,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "SchemaContract": ("datafusion_engine.schema.contracts", "SchemaContract"),
     "ValidationViolation": ("datafusion_engine.schema.contracts", "ValidationViolation"),
     "ViolationType": ("datafusion_engine.schema.contracts", "ViolationType"),
-    # Plan Bundle and Lineage (DataFusion-native)
-    "DataFusionPlanBundle": ("datafusion_engine.plan.bundle", "DataFusionPlanBundle"),
-    "build_plan_bundle": ("datafusion_engine.plan.bundle", "build_plan_bundle"),
-    "PlanExecutionOptions": ("datafusion_engine.plan.execution", "PlanExecutionOptions"),
-    "PlanExecutionResult": ("datafusion_engine.plan.execution", "PlanExecutionResult"),
-    "execute_plan_bundle": ("datafusion_engine.plan.execution", "execute_plan_bundle"),
+    # Lineage (DataFusion-native)
     "LineageReport": ("datafusion_engine.lineage.datafusion", "LineageReport"),
     "ScanLineage": ("datafusion_engine.lineage.datafusion", "ScanLineage"),
     "extract_lineage": ("datafusion_engine.lineage.datafusion", "extract_lineage"),

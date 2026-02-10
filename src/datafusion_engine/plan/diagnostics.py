@@ -15,7 +15,7 @@ from obs.otel.tracing import set_span_attributes
 from serde_msgspec import StructBaseHotPath, to_builtins_mapping
 
 if TYPE_CHECKING:
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 
@@ -88,7 +88,7 @@ class PlanPhaseDiagnosticsPayload(StructBaseHotPath, frozen=True):
 
 def record_plan_bundle_diagnostics(
     *,
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     runtime_profile: DataFusionRuntimeProfile | None,
     plan_kind: str,
     stage: str,
@@ -135,7 +135,7 @@ def record_plan_bundle_diagnostics(
 class PlanExecutionDiagnostics:
     """Execution diagnostics payload for a plan bundle."""
 
-    bundle: DataFusionPlanBundle
+    bundle: DataFusionPlanArtifact
     runtime_profile: DataFusionRuntimeProfile | None
     view_name: str | None
     plan_kind: str
@@ -248,7 +248,7 @@ def record_plan_phase_diagnostics(*, request: PlanPhaseDiagnostics) -> None:
         )
 
 
-def _execution_stats_payload(bundle: DataFusionPlanBundle) -> PlanExecutionStats:
+def _execution_stats_payload(bundle: DataFusionPlanArtifact) -> PlanExecutionStats:
     from datafusion_engine.plan.signals import extract_plan_signals
 
     signals = extract_plan_signals(bundle)

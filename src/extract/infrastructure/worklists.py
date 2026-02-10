@@ -258,18 +258,18 @@ def _execute_expr_stream(
     *,
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> Iterator[_ArrowBatch]:
-    from datafusion_engine.plan.execution import (
+    from datafusion_engine.plan.execution_runtime import (
         PlanExecutionOptions,
         PlanScanOverrides,
     )
-    from datafusion_engine.plan.execution import (
-        execute_plan_bundle as execute_plan_bundle_helper,
+    from datafusion_engine.plan.execution_runtime import (
+        execute_plan_artifact as execute_plan_artifact_helper,
     )
     from datafusion_engine.session.facade import DataFusionExecutionFacade
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
     bundle = facade.compile_to_bundle(builder)
-    execution = execute_plan_bundle_helper(
+    execution = execute_plan_artifact_helper(
         ctx,
         bundle,
         options=PlanExecutionOptions(

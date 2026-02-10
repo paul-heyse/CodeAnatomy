@@ -15,9 +15,9 @@ from datafusion_engine.io.write import (
 from datafusion_engine.plan.signals import NormalizedPlanStats, PlanSignals
 
 if TYPE_CHECKING:
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 else:
-    DataFusionPlanBundle = object
+    DataFusionPlanArtifact = object
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ class TestAdaptiveFileSizeFromBundle:
             return PlanSignals(stats=NormalizedPlanStats(num_rows=100))
 
         monkeypatch.setattr(write_module, "extract_plan_signals", _fake)
-        bundle = cast("DataFusionPlanBundle", object())
+        bundle = cast("DataFusionPlanArtifact", object())
         target, decision = _adaptive_file_size_from_bundle(bundle, 64 * 1024 * 1024)
 
         assert target == 32 * 1024 * 1024
@@ -91,7 +91,7 @@ class TestAdaptiveFileSizeFromBundle:
             return PlanSignals(stats=NormalizedPlanStats(num_rows=2_000_000))
 
         monkeypatch.setattr(write_module, "extract_plan_signals", _fake)
-        bundle = cast("DataFusionPlanBundle", object())
+        bundle = cast("DataFusionPlanArtifact", object())
         target, decision = _adaptive_file_size_from_bundle(bundle, 64 * 1024 * 1024)
 
         assert target == 128 * 1024 * 1024
@@ -109,7 +109,7 @@ class TestAdaptiveFileSizeFromBundle:
             return PlanSignals(stats=NormalizedPlanStats(num_rows=500_000))
 
         monkeypatch.setattr(write_module, "extract_plan_signals", _fake)
-        bundle = cast("DataFusionPlanBundle", object())
+        bundle = cast("DataFusionPlanArtifact", object())
         base = 64 * 1024 * 1024
         target, decision = _adaptive_file_size_from_bundle(bundle, base)
 
@@ -126,7 +126,7 @@ class TestAdaptiveFileSizeFromBundle:
             return PlanSignals(stats=None)
 
         monkeypatch.setattr(write_module, "extract_plan_signals", _fake)
-        bundle = cast("DataFusionPlanBundle", object())
+        bundle = cast("DataFusionPlanArtifact", object())
         base = 64 * 1024 * 1024
         target, decision = _adaptive_file_size_from_bundle(bundle, base)
 
@@ -153,7 +153,7 @@ def test_delta_policy_context_uses_plan_signals_for_adaptive_target_file_size(
         options={"target_file_size": 64 * 1024 * 1024},
         dataset_location=None,
         request_partition_by=None,
-        plan_bundle=cast("DataFusionPlanBundle", object()),
+        plan_bundle=cast("DataFusionPlanArtifact", object()),
     )
 
     assert policy_context.target_file_size == 32 * 1024 * 1024
@@ -173,7 +173,7 @@ def test_delta_policy_context_keeps_target_file_size_when_stats_missing(
         options={"target_file_size": 64 * 1024 * 1024},
         dataset_location=None,
         request_partition_by=None,
-        plan_bundle=cast("DataFusionPlanBundle", object()),
+        plan_bundle=cast("DataFusionPlanArtifact", object()),
     )
 
     assert policy_context.target_file_size == 64 * 1024 * 1024
@@ -193,7 +193,7 @@ def test_delta_policy_context_carries_adaptive_decision(
         options={"target_file_size": 64 * 1024 * 1024},
         dataset_location=None,
         request_partition_by=None,
-        plan_bundle=cast("DataFusionPlanBundle", object()),
+        plan_bundle=cast("DataFusionPlanArtifact", object()),
     )
 
     decision = policy_context.adaptive_file_size_decision
@@ -230,7 +230,7 @@ def test_delta_policy_context_no_adaptive_decision_mid_range(
         options={"target_file_size": 64 * 1024 * 1024},
         dataset_location=None,
         request_partition_by=None,
-        plan_bundle=cast("DataFusionPlanBundle", object()),
+        plan_bundle=cast("DataFusionPlanArtifact", object()),
     )
 
     assert policy_context.adaptive_file_size_decision is None

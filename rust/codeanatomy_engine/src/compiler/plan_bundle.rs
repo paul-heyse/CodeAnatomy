@@ -8,12 +8,13 @@
 //! debug-string equality. This makes diffs deterministic and storage-efficient.
 
 use arrow::datatypes::Schema as ArrowSchema;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{Expr, LogicalPlan};
 use datafusion::physical_plan::displayable;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion_common::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
@@ -128,6 +129,12 @@ pub struct PlanBundleArtifact {
     /// Provider lineage mapping of scans to provider identities.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provider_lineage: Vec<ProviderLineageEntry>,
+    /// Referenced table names captured from optimized plan scans.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub referenced_tables: Vec<String>,
+    /// Scalar UDF names captured from optimized plan expressions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_udfs: Vec<String>,
     /// Replay compatibility indicators.
     #[serde(default)]
     pub replay_flags: ReplayCompatibilityFlags,
@@ -256,6 +263,10 @@ pub struct PlanDiff {
     pub pushdown_report_changed: bool,
     /// True if provider lineage differs.
     pub provider_lineage_changed: bool,
+    /// True if referenced table sets differ.
+    pub referenced_tables_changed: bool,
+    /// True if required UDF sets differ.
+    pub required_udfs_changed: bool,
     /// True if replay flags differ.
     pub replay_flags_changed: bool,
     /// True if portability policy differs.
@@ -422,6 +433,8 @@ pub async fn build_plan_bundle_artifact_with_warnings(
     };
 
     let provider_lineage = extract_provider_lineage(&runtime.p1_optimized, &provider_identities);
+    let referenced_tables = extract_referenced_tables(&provider_lineage);
+    let required_udfs = extract_required_udfs(&runtime.p1_optimized);
     let portability = PortableArtifactPolicy {
         substrait_portable: substrait_bytes.is_some(),
         physical_diagnostics_portable: false,
@@ -456,6 +469,8 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         optimizer_traces,
         pushdown_report,
         provider_lineage,
+        referenced_tables,
+        required_udfs,
         replay_flags: ReplayCompatibilityFlags {
             deterministic_inputs,
             no_volatile_udfs,
@@ -491,6 +506,8 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
     let optimizer_traces_changed = a.optimizer_traces != b.optimizer_traces;
     let pushdown_report_changed = a.pushdown_report != b.pushdown_report;
     let provider_lineage_changed = a.provider_lineage != b.provider_lineage;
+    let referenced_tables_changed = a.referenced_tables != b.referenced_tables;
+    let required_udfs_changed = a.required_udfs != b.required_udfs;
     let replay_flags_changed = a.replay_flags != b.replay_flags;
     let portability_changed = a.portability != b.portability;
     let delta_codec_logical_before =
@@ -539,6 +556,12 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
     if provider_lineage_changed {
         summary.push("Provider lineage changed".into());
     }
+    if referenced_tables_changed {
+        summary.push("Referenced tables changed".into());
+    }
+    if required_udfs_changed {
+        summary.push("Required UDF set changed".into());
+    }
     if replay_flags_changed {
         summary.push("Replay flags changed".into());
     }
@@ -559,6 +582,8 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
         optimizer_traces_changed,
         pushdown_report_changed,
         provider_lineage_changed,
+        referenced_tables_changed,
+        required_udfs_changed,
         replay_flags_changed,
         portability_changed,
         delta_codec_logical_before,
@@ -660,6 +685,37 @@ fn extract_provider_lineage(
     entries
 }
 
+fn extract_referenced_tables(provider_lineage: &[ProviderLineageEntry]) -> Vec<String> {
+    let mut names = provider_lineage
+        .iter()
+        .map(|entry| entry.provider_name.clone())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn extract_required_udfs(optimized_plan: &LogicalPlan) -> Vec<String> {
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    let mut stack = vec![optimized_plan.clone()];
+    while let Some(plan) = stack.pop() {
+        for expr in plan.expressions() {
+            let _ = expr.apply(|child_expr| {
+                if let Expr::ScalarFunction(func) = child_expr {
+                    names.insert(func.name().to_string());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            });
+        }
+        for input in plan.inputs() {
+            stack.push((*input).clone());
+        }
+    }
+    names.into_iter().collect()
+}
+
 /// Migrate plan artifacts across schema versions.
 pub fn migrate_artifact(artifact: &PlanBundleArtifact) -> Result<PlanBundleArtifact> {
     match artifact.artifact_version {
@@ -670,6 +726,8 @@ pub fn migrate_artifact(artifact: &PlanBundleArtifact) -> Result<PlanBundleArtif
             upgraded.optimizer_traces = Vec::new();
             upgraded.pushdown_report = None;
             upgraded.provider_lineage = Vec::new();
+            upgraded.referenced_tables = Vec::new();
+            upgraded.required_udfs = Vec::new();
             upgraded.replay_flags = ReplayCompatibilityFlags::default();
             upgraded.portability = PortableArtifactPolicy::default();
             upgraded.stats_quality = None;

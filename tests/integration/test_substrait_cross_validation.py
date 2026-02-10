@@ -5,8 +5,8 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
-from datafusion_engine.plan.execution import validate_substrait_plan
+from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
+from datafusion_engine.plan.execution_runtime import validate_substrait_plan
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.datafusion_runtime import df_profile
 
@@ -22,7 +22,7 @@ def test_substrait_cross_validation_match() -> None:
     register_arrow_table(ctx, name="input_table", value=table)
     sql = "SELECT * FROM input_table"
     df = ctx.sql(sql)
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         df,
         options=PlanBundleOptions(session_runtime=session_runtime),

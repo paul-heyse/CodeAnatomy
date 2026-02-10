@@ -21,7 +21,7 @@ from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.encoding.policy import encode_table
 from datafusion_engine.expr.span import ENC_UTF8, ENC_UTF16, ENC_UTF32
 from datafusion_engine.extract.registry import normalize_options
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from datafusion_engine.schema.alignment import align_table
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
@@ -1272,7 +1272,7 @@ def _build_scip_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     return extract_plan_from_row_batches(
         name,
         row_batches,

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, TypedDict, Unpack
 from arrow_utils.core.array_iter import iter_table_rows
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from extract.coordination.context import ExtractExecutionContext
 from extract.coordination.materialization import (
     ExtractMaterializeOptions,
@@ -91,7 +91,7 @@ def _build_python_imports_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     return extract_plan_from_rows(
         "python_imports_v1",
         rows,

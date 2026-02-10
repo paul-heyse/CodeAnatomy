@@ -42,7 +42,7 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     )
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.datafusion import extract_lineage
-    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+    from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
     from storage.deltalake import DeltaCdfOptions
 
     table_path = tmp_path / "cdf_table"
@@ -60,7 +60,7 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
         options=DatasetRegistrationOptions(runtime_profile=runtime),
     )
     df = ctx.sql("SELECT id FROM cdf_table WHERE id > 1")
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         df,
         options=PlanBundleOptions(

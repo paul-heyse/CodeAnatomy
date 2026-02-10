@@ -15,13 +15,13 @@ from datafusion_engine.io.ingest import datafusion_from_arrow
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
 from datafusion_engine.lineage.diagnostics import recorder_for_profile
 from datafusion_engine.materialize_policy import MaterializationPolicy
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
-from datafusion_engine.plan.execution import (
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
+from datafusion_engine.plan.execution_runtime import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan.execution import (
-    execute_plan_bundle as execute_plan_bundle_helper,
+from datafusion_engine.plan.execution_runtime import (
+    execute_plan_artifact as execute_plan_artifact_helper,
 )
 from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.session.runtime import (
@@ -236,15 +236,15 @@ def _plan_view_bundle(
     *,
     session_runtime: SessionRuntime,
     runtime_profile: DataFusionRuntimeProfile,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     ctx = session_runtime.ctx
     df = ctx.table(view_name)
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=runtime_profile)
-    return facade.build_plan_bundle(df)
+    return facade.build_plan_artifact(df)
 
 
 def _plan_view_scan_units(
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     *,
     runtime_profile: DataFusionRuntimeProfile,
     dataset_resolver: ManifestDatasetResolver | None = None,
@@ -356,7 +356,7 @@ def build_view_product(
     )
     stream: RecordBatchReaderLike | None = None
     table: TableLike | None = None
-    execution = execute_plan_bundle_helper(
+    execution = execute_plan_artifact_helper(
         session_runtime.ctx,
         bundle,
         options=PlanExecutionOptions(

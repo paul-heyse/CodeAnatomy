@@ -16,7 +16,7 @@ from datafusion_engine.arrow.metadata import (
     merge_metadata_specs,
     ordering_metadata_spec,
 )
-from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from datafusion_engine.schema.contracts import SchemaContract
 from datafusion_engine.udf.runtime import validate_rust_udf_snapshot
 from datafusion_engine.views.bundle_extraction import (
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.io.adapter import DataFusionIOAdapter
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.system import DatasetSpec
     from semantics.catalog.dataset_rows import SemanticDatasetRow
@@ -178,14 +178,14 @@ def _bundle_deps_and_udfs(
     *,
     label: str,
     runtime_profile: DataFusionRuntimeProfile | None = None,
-) -> tuple[DataFusionPlanBundle, tuple[str, ...], tuple[str, ...]]:
+) -> tuple[DataFusionPlanArtifact, tuple[str, ...], tuple[str, ...]]:
     df = builder(ctx)
     if runtime_profile is None:
         msg = f"Runtime profile is required for view planning: {label!r}."
         raise ValueError(msg)
     session_runtime = runtime_profile.session_runtime()
     try:
-        bundle = build_plan_bundle(
+        bundle = build_plan_artifact(
             ctx,
             df,
             options=PlanBundleOptions(
@@ -208,7 +208,7 @@ def _bundle_deps_and_udfs(
 
 
 def _deps_and_udfs_from_bundle(
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     snapshot: Mapping[str, object],
     *,
     label: str,

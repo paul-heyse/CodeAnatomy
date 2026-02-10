@@ -11,7 +11,7 @@ import pyarrow as pa
 import rustworkx as rx
 
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
-from datafusion_engine.plan.pipeline import plan_with_delta_pins
+from datafusion_engine.plan.pipeline_runtime import plan_with_delta_pins
 from datafusion_engine.plan.signals import PlanSignals, extract_plan_signals
 from relspec.evidence import (
     EvidenceCatalog,
@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
     from datafusion_engine.lineage.datafusion import LineageReport
     from datafusion_engine.lineage.scan import ScanUnit
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.schema.contracts import SchemaContract
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
@@ -460,7 +460,7 @@ def _plan_cost_context(
     return cost_context, plan_metrics, task_costs
 
 
-def compile_execution_plan(
+def compile_authority_plan(
     *,
     session_runtime: SessionRuntime,
     request: ExecutionPlanRequest,
@@ -1356,7 +1356,7 @@ def _validate_plan_bundle_compatibility(
 def _validate_bundle_udfs(
     task_name: str,
     *,
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     inferred: InferredDeps,
 ) -> None:
     from datafusion_engine.udf.runtime import udf_names_from_snapshot
@@ -1996,7 +1996,7 @@ __all__ = [
     "ExecutionPlanRequest",
     "TaskPlanMetrics",
     "bottom_level_costs",
-    "compile_execution_plan",
+    "compile_authority_plan",
     "dependency_map_from_inferred",
     "derive_task_costs_from_plan",
     "downstream_task_closure",

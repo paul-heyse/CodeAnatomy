@@ -39,6 +39,38 @@ impl PyRunResult {
         Ok(Some(dict.unbind()))
     }
 
+    /// Return the serialized plan bundles as Python dict objects.
+    fn plan_bundles(&self, py: Python<'_>) -> PyResult<Vec<Py<pyo3::types::PyAny>>> {
+        let value: Value = serde_json::from_str(&self.inner_json)
+            .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
+        let Some(plan_bundles) = value.get("plan_bundles") else {
+            return Ok(Vec::new());
+        };
+        let Some(items) = plan_bundles.as_array() else {
+            return Ok(Vec::new());
+        };
+        let json_module = py.import("json")?;
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let dumped = serde_json::to_string(item)
+                .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
+            let as_dict = json_module.call_method1("loads", (dumped,))?;
+            out.push(as_dict.unbind());
+        }
+        Ok(out)
+    }
+
+    /// Return the count of serialized plan bundles.
+    fn plan_bundle_count(&self) -> PyResult<usize> {
+        let value: Value = serde_json::from_str(&self.inner_json)
+            .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
+        let count = value
+            .get("plan_bundles")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        Ok(count)
+    }
+
     /// Return the task schedule critical path if present.
     fn critical_path(&self, py: Python<'_>) -> PyResult<Vec<String>> {
         let value: Value = serde_json::from_str(&self.inner_json)

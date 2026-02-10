@@ -294,6 +294,8 @@ fn test_plan_bundle_artifact_has_required_scope4_fields() {
         optimizer_traces: vec![],
         pushdown_report: None,
         provider_lineage: vec![],
+        referenced_tables: vec![],
+        required_udfs: vec![],
         replay_flags: codeanatomy_engine::compiler::plan_bundle::ReplayCompatibilityFlags::default(),
         portability: codeanatomy_engine::compiler::plan_bundle::PortableArtifactPolicy::default(),
         stats_quality: None,

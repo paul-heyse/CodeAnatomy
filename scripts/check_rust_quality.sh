@@ -17,16 +17,14 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-export PYO3_PYTHON="${PYO3_PYTHON:-$(uv run python -c 'import sys; print(sys.executable)')}"
-
 rust_dir="rust"
+
+bash scripts/check_no_legacy_planning_imports.sh --strict-tests
 
 (cd "${rust_dir}" && cargo test -p codeanatomy-engine)
 (cd "${rust_dir}" && cargo clippy -p codeanatomy-engine --all-targets --all-features --no-deps -- -D warnings)
 
-uv run maturin develop -m rust/codeanatomy_engine_py/Cargo.toml --release
-uv run python -c "import codeanatomy_engine; print(codeanatomy_engine.__doc__ or 'ok')"
-uv run pytest tests/integration/test_rust_engine_e2e.py -q
+bash scripts/check_bindings_lane.sh
 
 (cd "${rust_dir}" && cargo clippy -p codeanatomy_engine_py --all-targets --all-features -- -D warnings)
 

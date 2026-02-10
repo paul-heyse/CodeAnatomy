@@ -28,7 +28,7 @@ def test_infer_deps_from_plan_bundle() -> None:
     """Infer dependencies from DataFusion plan bundle."""
     import pyarrow as pa
 
-    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+    from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
     from tests.test_helpers.arrow_seed import register_arrow_table
 
     # Create a test DataFusion plan
@@ -40,7 +40,7 @@ def test_infer_deps_from_plan_bundle() -> None:
 
     # Build a simple query
     df = ctx.sql("SELECT a.x, b.y FROM table_a a JOIN table_b b ON a.id = b.id")
-    plan_bundle = build_plan_bundle(
+    plan_bundle = build_plan_artifact(
         ctx,
         df,
         options=PlanBundleOptions(session_runtime=session_runtime),

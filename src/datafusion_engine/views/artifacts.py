@@ -25,7 +25,7 @@ from utils.hashing import hash_msgpack_canonical, hash_settings
 CachePolicy = Literal["none", "delta_staging", "delta_output"]
 
 if TYPE_CHECKING:
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 
 
 def _coerce_payload_list(value: object, *, field: str) -> list[object]:
@@ -138,7 +138,7 @@ _PLAN_TASK_SIGNATURE_VERSION = 2
 
 
 def _delta_inputs_payload(
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
 ) -> tuple[tuple[str, int | None, str | None], ...]:
     payload: list[tuple[str, int | None, str | None]] = []
     for item in bundle.delta_inputs:
@@ -149,7 +149,7 @@ def _delta_inputs_payload(
     return tuple(sorted(payload, key=lambda entry: entry[0]))
 
 
-def _plan_task_signature(bundle: DataFusionPlanBundle, *, runtime_hash: str | None) -> str:
+def _plan_task_signature(bundle: DataFusionPlanArtifact, *, runtime_hash: str | None) -> str:
     artifacts = bundle.artifacts
     df_settings_hash = (
         hash_settings(artifacts.df_settings) if isinstance(artifacts.df_settings, Mapping) else ""
@@ -191,7 +191,7 @@ class ViewArtifactRequest(StructBaseStrict, frozen=True):
 
 
 def build_view_artifact_from_bundle(
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     *,
     request: ViewArtifactRequest,
 ) -> DataFusionViewArtifact:

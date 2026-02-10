@@ -58,7 +58,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
-    from datafusion_engine.plan.bundle import DataFrameBuilder, DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFrameBuilder, DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
     from semantics.compile_context import SemanticExecutionContext
@@ -295,19 +295,19 @@ def _bundle_for_builder(
     builder: DataFrameBuilder,
     view_name: str,
     semantic_ir: SemanticIR | None,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Build a plan bundle for a DataFrame builder.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         Plan bundle for the builder output.
     """
-    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+    from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 
     session_runtime = runtime_profile.session_runtime()
     df = builder(ctx)
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         df,
         options=PlanBundleOptions(
@@ -1393,7 +1393,7 @@ def _record_semantic_compile_artifacts(
     runtime_profile: DataFusionRuntimeProfile,
     semantic_ir: SemanticIR,
     requested_outputs: Collection[str] | None,
-    plan_bundles: Mapping[str, DataFusionPlanBundle] | None = None,
+    plan_bundles: Mapping[str, DataFusionPlanArtifact] | None = None,
 ) -> None:
     from datafusion_engine.identity import schema_identity_hash
     from datafusion_engine.lineage.diagnostics import record_artifact
@@ -1509,7 +1509,7 @@ def _record_semantic_compile_artifacts(
 def _view_plan_stats(
     semantic_ir: SemanticIR,
     *,
-    plan_bundles: Mapping[str, DataFusionPlanBundle] | None,
+    plan_bundles: Mapping[str, DataFusionPlanArtifact] | None,
 ) -> list[dict[str, object]]:
     if not plan_bundles:
         return []
@@ -1701,7 +1701,7 @@ def build_cpg(
                 validate_schema=resolved.validate_schema,
             ),
         )
-        plan_bundles: dict[str, DataFusionPlanBundle] = {
+        plan_bundles: dict[str, DataFusionPlanArtifact] = {
             node.name: node.plan_bundle for node in nodes if node.plan_bundle is not None
         }
         _record_semantic_compile_artifacts(

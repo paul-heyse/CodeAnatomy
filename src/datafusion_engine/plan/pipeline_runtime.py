@@ -18,7 +18,7 @@ from datafusion_engine.delta.scan_policy_inference import (
 )
 from datafusion_engine.lineage.datafusion import LineageReport
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_units
-from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from datafusion_engine.plan.diagnostics import record_plan_bundle_diagnostics
 from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.session.facade import DataFusionExecutionFacade
@@ -296,7 +296,7 @@ def _plan_view_nodes(
     planned: list[ViewNode] = []
     for node in view_nodes:
         df = node.builder(ctx)
-        bundle = build_plan_bundle(
+        bundle = build_plan_artifact(
             ctx,
             df,
             options=PlanBundleOptions(

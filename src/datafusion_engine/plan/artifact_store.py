@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.lineage.datafusion import LineageReport
     from datafusion_engine.lineage.scan import ScanUnit
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
     from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
@@ -614,7 +614,7 @@ class PlanArtifactBuildRequest:
     """Inputs for building plan artifact rows."""
 
     view_name: str
-    bundle: DataFusionPlanBundle
+    bundle: DataFusionPlanArtifact
     lineage: LineageReport | None = None
     scan_units: Sequence[ScanUnit] = ()
     scan_keys: Sequence[str] = ()
@@ -1493,7 +1493,7 @@ def _scan_units_payload(
     return tuple(payloads)
 
 
-def _delta_inputs_payload(bundle: DataFusionPlanBundle) -> tuple[dict[str, object], ...]:
+def _delta_inputs_payload(bundle: DataFusionPlanArtifact) -> tuple[dict[str, object], ...]:
     payloads: list[dict[str, object]] = [
         {
             "dataset_name": pin.dataset_name,
@@ -1535,7 +1535,7 @@ def _delta_protocol_payload(protocol: object | None) -> dict[str, object] | None
 
 def _plan_identity_payload(
     *,
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     profile: DataFusionRuntimeProfile,
     delta_inputs_payload: Sequence[Mapping[str, object]],
     scan_payload: Sequence[Mapping[str, object]],
@@ -1565,7 +1565,7 @@ def _plan_identity_payload(
 
 
 def _plan_details_payload(
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     *,
     delta_inputs_payload: Sequence[Mapping[str, object]],
     scan_payload: Sequence[Mapping[str, object]],
@@ -1581,7 +1581,7 @@ def _plan_details_payload(
 
 def _udf_compatibility(
     ctx: SessionContext,
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
 ) -> tuple[bool, Mapping[str, object]]:
     from datafusion_engine.udf.runtime import (
         rust_udf_snapshot,

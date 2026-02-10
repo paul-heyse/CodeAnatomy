@@ -11,7 +11,7 @@ import pyarrow as pa
 if TYPE_CHECKING:
     from datafusion_engine.lineage.datafusion import LineageReport
     from datafusion_engine.lineage.scan import ScanUnit
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 
 # Conservative per-predicate selectivity decay factor.  Each independent
 # pushed predicate is modeled as reducing candidate rows by this factor.
@@ -334,14 +334,14 @@ def _compute_projection_ratio(
 
 
 def extract_plan_signals(
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     *,
     scan_units: Sequence[ScanUnit] | None = None,
 ) -> PlanSignals:
     """Extract typed signals from a plan bundle.
 
     Reuse existing helpers for schema and lineage extraction. Do not add
-    methods to ``DataFusionPlanBundle``; keep signal derivation external.
+    methods to ``DataFusionPlanArtifact``; keep signal derivation external.
 
     Parameters
     ----------

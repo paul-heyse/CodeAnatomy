@@ -17,7 +17,11 @@ if TYPE_CHECKING:
         delta_vacuum,
     )
     from engine.diagnostics import EngineEventRecorder
-    from engine.facade import execute_cpg_build
+    from engine.facade import (
+        decode_run_result,
+        execute_cpg_build,
+        plan_bundles_from_run_result,
+    )
     from engine.materialize_pipeline import (
         build_view_product,
         resolve_materialization_cache_decision,
@@ -66,6 +70,8 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "detect_environment_class": ("engine.profile", "detect_environment_class"),
     "environment_class_from_env": ("engine.profile", "environment_class_from_env"),
     "execute_cpg_build": ("engine.facade", "execute_cpg_build"),
+    "decode_run_result": ("engine.facade", "decode_run_result"),
+    "plan_bundles_from_run_result": ("engine.facade", "plan_bundles_from_run_result"),
     "resolve_materialization_cache_decision": (
         "engine.materialize_pipeline",
         "resolve_materialization_cache_decision",
@@ -110,11 +116,13 @@ __all__ = [
     "build_engine_session",
     "build_spec_from_ir",
     "build_view_product",
+    "decode_run_result",
     "delta_history",
     "delta_vacuum",
     "detect_environment_class",
     "environment_class_from_env",
     "execute_cpg_build",
+    "plan_bundles_from_run_result",
     "resolve_materialization_cache_decision",
     "resolve_prefer_reader",
     "resolve_runtime_profile",

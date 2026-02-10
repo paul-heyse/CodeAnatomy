@@ -11,7 +11,7 @@ import pyarrow as pa
 from datafusion import DataFrameWriteOptions, SessionContext, col
 
 from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from datafusion_engine.plan.result_types import (
     PlanEmissionOptions,
     PlanExecutionOptions,
@@ -30,9 +30,9 @@ if TYPE_CHECKING:
 # re-exported via __all__ for backward compatibility.
 
 
-def execute_plan_bundle(
+def execute_plan_artifact(
     ctx: SessionContext,
-    plan_bundle: DataFusionPlanBundle,
+    plan_bundle: DataFusionPlanArtifact,
     *,
     options: PlanExecutionOptions | None = None,
 ) -> PlanExecutionResult:
@@ -78,7 +78,7 @@ def execute_plan_bundle(
     result = DataFusionExecutionFacade(
         ctx=ctx,
         runtime_profile=resolved_options.runtime_profile,
-    ).execute_plan_bundle(
+    ).execute_plan_artifact(
         plan_bundle,
         view_name=resolved_options.view_name,
         scan_units=resolved_units,
@@ -342,7 +342,7 @@ __all__ = [
     "PlanScanOverrides",
     "datafusion_to_async_batches",
     "datafusion_write_options",
-    "execute_plan_bundle",
+    "execute_plan_artifact",
     "replay_substrait_bytes",
     "validate_substrait_plan",
 ]

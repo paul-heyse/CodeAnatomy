@@ -12,7 +12,7 @@ from arrow_utils.core.array_iter import iter_table_rows
 from core_types import PathLike, ensure_path
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from extract.coordination.context import ExtractExecutionContext
 from extract.coordination.materialization import (
     ExtractMaterializeOptions,
@@ -130,7 +130,7 @@ def _build_external_interface_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     return extract_plan_from_rows(
         "python_external_interfaces_v1",
         rows,

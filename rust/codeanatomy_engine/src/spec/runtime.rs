@@ -72,6 +72,7 @@ pub enum TracingPreset {
 
 /// OpenTelemetry export throughput and sampling policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TraceExportPolicy {
     #[serde(default = "default_sampler")]
     pub traces_sampler: String,
@@ -102,6 +103,7 @@ impl Default for TraceExportPolicy {
 
 /// Tracing control plane.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TracingConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -203,6 +205,7 @@ impl TracingPreset {
 /// `enable_rule_tracing`, `enable_plan_preview`, `enable_function_factory`,
 /// `enable_domain_planner`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     /// Capture compliance diagnostics (EXPLAIN/rule impact) as side-channel output.
     #[serde(default)]

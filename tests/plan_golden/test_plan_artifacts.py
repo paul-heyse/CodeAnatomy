@@ -201,9 +201,9 @@ def _fixture_payload(
     info_snapshot = _information_schema_snapshot(ctx)
     info_hash = _info_schema_hash(info_snapshot)
     df = ctx.sql(_SQL)
-    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+    from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         df,
         options=PlanBundleOptions(session_runtime=session_runtime),
@@ -285,7 +285,7 @@ def test_plan_artifact_golden_fixture() -> None:
 
 def test_plan_manifest_payload_contract() -> None:
     """Ensure plan manifest payload remains deterministic across builds."""
-    from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+    from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
 
     profile = DataFusionRuntimeProfile(
@@ -303,12 +303,12 @@ def test_plan_manifest_payload_contract() -> None:
         name="events",
         value=pa.table({"id": [1, 2], "label": ["a", "b"]}),
     )
-    first = build_plan_bundle(
+    first = build_plan_artifact(
         ctx,
         ctx.sql(_SQL),
         options=PlanBundleOptions(session_runtime=session_runtime),
     )
-    second = build_plan_bundle(
+    second = build_plan_artifact(
         ctx,
         ctx.sql(_SQL),
         options=PlanBundleOptions(session_runtime=session_runtime),

@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.lineage.datafusion import LineageReport, extract_lineage
-from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_datafusion
 from tests.test_helpers.semantic_registry_runtime import semantic_registry_runtime
@@ -39,7 +39,7 @@ def _lineage_for_sql(
     sql: str,
 ) -> LineageReport:
     df = ctx.sql(sql)
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         df,
         options=PlanBundleOptions(session_runtime=session_runtime),
@@ -92,7 +92,7 @@ def test_lineage_handles_repartition_variants() -> None:
     ctx, session_runtime = _runtime_context()
     _register_base_tables(ctx)
     df = ctx.sql("SELECT id FROM events").repartition(2)
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         df,
         options=PlanBundleOptions(session_runtime=session_runtime),

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.lineage.datafusion import ScanLineage
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.schema.contracts import SchemaContract
     from datafusion_engine.views.graph import ViewNode
     from schema_spec.system import DatasetSpec
@@ -82,7 +82,7 @@ class InferredDepsInputs:
         Name of the task these dependencies apply to.
     output : str
         Output dataset name produced by the task.
-    plan_bundle : DataFusionPlanBundle
+    plan_bundle : DataFusionPlanArtifact
         DataFusion plan bundle for native lineage extraction.
     ctx : SessionContext | None
         Optional DataFusion context for resolving dataset specs.
@@ -94,7 +94,7 @@ class InferredDepsInputs:
 
     task_name: str
     output: str
-    plan_bundle: DataFusionPlanBundle
+    plan_bundle: DataFusionPlanArtifact
     ctx: SessionContext | None = None
     snapshot: Mapping[str, object] | None = None
     required_udfs: Sequence[str] | None = None

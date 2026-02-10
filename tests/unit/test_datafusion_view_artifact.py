@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.plan.bundle import DataFusionPlanBundle, PlanArtifacts
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact, PlanArtifacts
 from datafusion_engine.views.artifacts import (
     DataFusionViewArtifact,
     ViewArtifactLineage,
@@ -90,13 +90,13 @@ def test_datafusion_view_artifact_diagnostics_payload() -> None:
     assert payload["referenced_tables"] == []
 
 
-def test_build_view_artifact_from_bundle(mock_plan_bundle: DataFusionPlanBundle) -> None:
+def test_build_view_artifact_from_bundle(mock_plan_bundle: DataFusionPlanArtifact) -> None:
     """Test building DataFusionViewArtifact from a plan bundle.
 
     Parameters
     ----------
     mock_plan_bundle
-        Mock DataFusionPlanBundle fixture for testing.
+        Mock DataFusionPlanArtifact fixture for testing.
     """
     schema = pa.schema([pa.field("id", pa.int64())])
 
@@ -123,12 +123,12 @@ def test_build_view_artifact_from_bundle(mock_plan_bundle: DataFusionPlanBundle)
 
 
 @pytest.fixture
-def mock_plan_bundle() -> DataFusionPlanBundle:
-    """Create a mock DataFusionPlanBundle for testing.
+def mock_plan_bundle() -> DataFusionPlanArtifact:
+    """Create a mock DataFusionPlanArtifact for testing.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         Mock plan bundle with test fingerprint.
     """
     mock_df = Mock()
@@ -158,7 +158,7 @@ def mock_plan_bundle() -> DataFusionPlanBundle:
         udf_planner_snapshot=None,
     )
 
-    return DataFusionPlanBundle(
+    return DataFusionPlanArtifact(
         df=mock_df,
         logical_plan=mock_logical_plan,
         optimized_logical_plan=mock_optimized_plan,

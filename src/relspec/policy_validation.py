@@ -1,7 +1,7 @@
 """Structured policy validation for execution plan compilation.
 
 Validate runtime policy bundles against plan requirements at the
-execution-plan boundary. Run after ``compile_execution_plan()``,
+execution-plan boundary. Run after ``compile_authority_plan()``,
 NOT inside ``compile_semantic_program()`` which returns only
 ``SemanticProgramManifest`` and has no execution plan.
 """
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from datafusion_engine.plan.signals import PlanSignals
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from relspec.compiled_policy import CompiledExecutionPolicy
-    from relspec.execution_plan import ExecutionPlan
+    from relspec.execution_planning_runtime import ExecutionPlan
     from semantics.program_manifest import SemanticProgramManifest
 
 _SMALL_SCAN_ROW_THRESHOLD: int = 1000
@@ -170,7 +170,7 @@ def validate_policy_bundle(
 ) -> PolicyValidationResult:
     """Validate policy bundle against execution plan requirements.
 
-    Run at the execution-plan boundary after ``compile_execution_plan()``,
+    Run at the execution-plan boundary after ``compile_authority_plan()``,
     NOT inside ``compile_semantic_program()``.
 
     Parameters

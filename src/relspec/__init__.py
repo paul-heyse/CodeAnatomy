@@ -10,7 +10,7 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "EvidenceCatalog": ("relspec.evidence", "EvidenceCatalog"),
     "EvidenceNode": ("relspec.rustworkx_graph", "EvidenceNode"),
     "ExecutionAuthorityContext": ("relspec.execution_authority", "ExecutionAuthorityContext"),
-    "ExecutionPlan": ("relspec.execution_plan", "ExecutionPlan"),
+    "ExecutionPlan": ("relspec.execution_planning_runtime", "ExecutionPlan"),
     "GraphDiagnostics": ("relspec.rustworkx_graph", "GraphDiagnostics"),
     "GraphEdge": ("relspec.rustworkx_graph", "GraphEdge"),
     "GraphNode": ("relspec.rustworkx_graph", "GraphNode"),
@@ -21,15 +21,14 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "TaskValidationResult": ("relspec.graph_edge_validation", "TaskValidationResult"),
     "TaskGraph": ("relspec.rustworkx_graph", "TaskGraph"),
     "build_task_graph_from_views": ("relspec.rustworkx_graph", "build_task_graph_from_views"),
-    "bottom_level_costs": ("relspec.execution_plan", "bottom_level_costs"),
-    "compile_execution_plan": ("relspec.execution_plan", "compile_execution_plan"),
-    "dependency_map_from_inferred": ("relspec.execution_plan", "dependency_map_from_inferred"),
-    "downstream_task_closure": ("relspec.execution_plan", "downstream_task_closure"),
+    "bottom_level_costs": ("relspec.execution_planning_runtime", "bottom_level_costs"),
+    "dependency_map_from_inferred": ("relspec.execution_planning_runtime", "dependency_map_from_inferred"),
+    "downstream_task_closure": ("relspec.execution_planning_runtime", "downstream_task_closure"),
     "impacted_tasks": ("relspec.rustworkx_schedule", "impacted_tasks"),
     "impacted_tasks_for_evidence": ("relspec.rustworkx_schedule", "impacted_tasks_for_evidence"),
     "provenance_for_task": ("relspec.rustworkx_schedule", "provenance_for_task"),
-    "priority_for_task": ("relspec.execution_plan", "priority_for_task"),
-    "upstream_task_closure": ("relspec.execution_plan", "upstream_task_closure"),
+    "priority_for_task": ("relspec.execution_planning_runtime", "priority_for_task"),
+    "upstream_task_closure": ("relspec.execution_planning_runtime", "upstream_task_closure"),
     "ready_tasks_with_column_validation": (
         "relspec.graph_edge_validation",
         "ready_tasks_with_column_validation",
@@ -69,7 +68,6 @@ if TYPE_CHECKING:
     TaskGraph: Any
     build_task_graph_from_views: Any
     bottom_level_costs: Any
-    compile_execution_plan: Any
     dependency_map_from_inferred: Any
     downstream_task_closure: Any
     impacted_tasks: Any
@@ -124,7 +122,6 @@ __all__ = (
     "TaskValidationResult",
     "bottom_level_costs",
     "build_task_graph_from_views",
-    "compile_execution_plan",
     "dependency_map_from_inferred",
     "downstream_task_closure",
     "impacted_tasks",

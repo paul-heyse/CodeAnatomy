@@ -13,7 +13,7 @@ use crate::spec::runtime::RuntimeConfig;
 use crate::spec::rule_intents::{RuleIntent, RulepackProfile};
 
 /// Current semantic spec schema version.
-pub const SPEC_SCHEMA_VERSION: u32 = 3;
+pub const SPEC_SCHEMA_VERSION: u32 = 4;
 
 /// The root specification for semantic execution planning.
 ///

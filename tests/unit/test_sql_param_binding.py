@@ -30,7 +30,7 @@ def test_ast_execution_lane() -> None:
     ctx = profile.session_context()
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
     bundle = facade.compile_to_bundle(lambda session: session.sql("SELECT 1 AS val"))
-    result = facade.execute_plan_bundle(bundle)
+    result = facade.execute_plan_artifact(bundle)
     assert result.dataframe is not None
     table = result.dataframe.to_arrow_table()
     assert table.num_rows == 1

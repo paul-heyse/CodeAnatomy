@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 fn test_spec_construction() {
     let spec = create_test_spec();
 
-    assert_eq!(spec.version, 3);
+    assert_eq!(spec.version, 4);
     assert_eq!(spec.input_relations.len(), 1);
     assert_eq!(spec.view_definitions.len(), 1);
     assert_eq!(spec.rulepack_profile, RulepackProfile::Default);
@@ -318,7 +318,7 @@ fn test_full_spec_integration() {
 #[test]
 fn test_spec_nested_unknown_fields_rejected() {
     let payload = serde_json::json!({
-        "version": 3,
+        "version": 4,
         "input_relations": [
             {
                 "logical_name": "input",
@@ -368,7 +368,7 @@ fn test_spec_nested_unknown_fields_rejected() {
 #[test]
 fn test_spec_enum_mismatch_rejected() {
     let payload = serde_json::json!({
-        "version": 3,
+        "version": 4,
         "input_relations": [],
         "view_definitions": [],
         "join_graph": { "edges": [], "constraints": [] },
@@ -384,7 +384,7 @@ fn test_spec_enum_mismatch_rejected() {
 #[test]
 fn test_spec_missing_required_field_rejected() {
     let payload = serde_json::json!({
-        "version": 3,
+        "version": 4,
         "input_relations": [],
         "join_graph": { "edges": [], "constraints": [] },
         "output_targets": [],
@@ -399,7 +399,7 @@ fn test_spec_missing_required_field_rejected() {
 #[test]
 fn test_spec_runtime_defaults_when_omitted() {
     let payload = serde_json::json!({
-        "version": 3,
+        "version": 4,
         "input_relations": [],
         "view_definitions": [],
         "join_graph": { "edges": [], "constraints": [] },
@@ -412,16 +412,11 @@ fn test_spec_runtime_defaults_when_omitted() {
     assert_eq!(spec.runtime.tuner_mode, RuntimeTunerMode::Off);
 }
 
-/// Test 16: Runtime unknown fields are silently ignored.
-///
-/// RuntimeConfig no longer uses `#[serde(deny_unknown_fields)]` because
-/// new fields are added incrementally (Wave 3 integration) and old JSON
-/// payloads must remain forward-compatible. All new fields use
-/// `#[serde(default)]` so missing fields get sensible defaults.
+/// Test 16: Runtime unknown fields are rejected.
 #[test]
-fn test_spec_runtime_unknown_field_ignored() {
+fn test_spec_runtime_unknown_field_rejected() {
     let payload = serde_json::json!({
-        "version": 3,
+        "version": 4,
         "input_relations": [],
         "view_definitions": [],
         "join_graph": { "edges": [], "constraints": [] },
@@ -434,10 +429,54 @@ fn test_spec_runtime_unknown_field_ignored() {
             "unexpected": true
         }
     });
-    let spec: SemanticExecutionSpec = serde_json::from_value(payload)
-        .expect("RuntimeConfig should ignore unknown fields for forward compatibility");
-    assert!(spec.runtime.compliance_capture);
-    assert_eq!(spec.runtime.tuner_mode, RuntimeTunerMode::Observe);
+    let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
+    assert!(result.is_err());
+}
+
+/// Test 17: TracingConfig rejects unknown fields.
+#[test]
+fn test_spec_runtime_tracing_unknown_field_rejected() {
+    let payload = serde_json::json!({
+        "version": 4,
+        "input_relations": [],
+        "view_definitions": [],
+        "join_graph": { "edges": [], "constraints": [] },
+        "output_targets": [],
+        "rule_intents": [],
+        "rulepack_profile": "Default",
+        "runtime": {
+            "tracing": {
+                "enabled": true,
+                "unexpected_tracing_key": "boom"
+            }
+        }
+    });
+    let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
+    assert!(result.is_err());
+}
+
+/// Test 18: TraceExportPolicy rejects unknown fields.
+#[test]
+fn test_spec_runtime_export_policy_unknown_field_rejected() {
+    let payload = serde_json::json!({
+        "version": 4,
+        "input_relations": [],
+        "view_definitions": [],
+        "join_graph": { "edges": [], "constraints": [] },
+        "output_targets": [],
+        "rule_intents": [],
+        "rulepack_profile": "Default",
+        "runtime": {
+            "tracing": {
+                "export_policy": {
+                    "traces_sampler": "parentbased_always_on",
+                    "unknown_export_policy_field": 1
+                }
+            }
+        }
+    });
+    let result: Result<SemanticExecutionSpec, _> = serde_json::from_value(payload);
+    assert!(result.is_err());
 }
 
 // Helper: Create minimal test spec

@@ -20,10 +20,10 @@ from datafusion_engine.io.write import (
     WriteViewRequest,
 )
 from datafusion_engine.lineage.diagnostics import DiagnosticsRecorder, recorder_for_profile
-from datafusion_engine.plan.bundle import (
-    DataFusionPlanBundle,
+from datafusion_engine.plan.bundle_artifact import (
+    DataFusionPlanArtifact,
     PlanBundleOptions,
-    build_plan_bundle,
+    build_plan_artifact,
 )
 from datafusion_engine.plan.cache import PlanCacheEntry
 from datafusion_engine.plan.result_types import (
@@ -70,7 +70,7 @@ def _validate_required_rewrite_tags(
     )
 
 
-def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanBundle) -> None:
+def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanArtifact) -> None:
     """Fail fast when the execution UDF platform diverges from the plan bundle.
 
     Args:
@@ -109,7 +109,7 @@ def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanBundle)
 class _ExecutionArtifactRequest:
     """Execution artifact persistence input."""
 
-    bundle: DataFusionPlanBundle
+    bundle: DataFusionPlanArtifact
     view_name: str | None
     duration_ms: float
     status: str
@@ -240,15 +240,15 @@ class DataFusionExecutionFacade:
         builder: DataFrameBuilder,
         *,
         compute_execution_plan: bool = True,
-    ) -> DataFusionPlanBundle:
-        """Compile a DataFrame builder to a DataFusionPlanBundle.
+    ) -> DataFusionPlanArtifact:
+        """Compile a DataFrame builder to a DataFusionPlanArtifact.
 
         Args:
             builder: DataFrame builder callable.
             compute_execution_plan: Whether to include execution plan capture.
 
         Returns:
-            DataFusionPlanBundle: Result.
+            DataFusionPlanArtifact: Result.
 
         Raises:
             ValueError: If session runtime is unavailable.
@@ -272,7 +272,7 @@ class DataFusionExecutionFacade:
         ) as span:
             try:
                 df = builder(self.ctx)
-                bundle = build_plan_bundle(
+                bundle = build_plan_artifact(
                     self.ctx,
                     df,
                     options=PlanBundleOptions(
@@ -307,9 +307,9 @@ class DataFusionExecutionFacade:
             )
             return bundle
 
-    def execute_plan_bundle(
+    def execute_plan_artifact(
         self,
-        bundle: DataFusionPlanBundle,
+        bundle: DataFusionPlanArtifact,
         *,
         view_name: str | None = None,
         scan_units: Sequence[ScanUnit] = (),
@@ -484,7 +484,7 @@ class DataFusionExecutionFacade:
 
     def _substrait_first_df(
         self,
-        bundle: DataFusionPlanBundle,
+        bundle: DataFusionPlanArtifact,
     ) -> tuple[DataFrame, bool]:
         """Return DataFrame using Substrait-first execution.
 
@@ -505,7 +505,7 @@ class DataFusionExecutionFacade:
             source="substrait",
         )
         # Lazy import to avoid circular dependency with execution.py
-        from datafusion_engine.plan.execution import replay_substrait_bytes
+        from datafusion_engine.plan.execution_runtime import replay_substrait_bytes
 
         try:
             df = replay_substrait_bytes(self.ctx, substrait_bytes)
@@ -521,7 +521,7 @@ class DataFusionExecutionFacade:
 
     def _plan_cache_entry(
         self,
-        bundle: DataFusionPlanBundle,
+        bundle: DataFusionPlanArtifact,
     ) -> PlanCacheEntry | None:
         if self.runtime_profile is None:
             return None
@@ -538,7 +538,7 @@ class DataFusionExecutionFacade:
 
     def _rehydrate_from_proto(
         self,
-        bundle: DataFusionPlanBundle,
+        bundle: DataFusionPlanArtifact,
     ) -> DataFrame | None:
         cached_entry = self._plan_cache_entry(bundle)
         if cached_entry is None:
@@ -564,7 +564,7 @@ class DataFusionExecutionFacade:
 
     def _record_plan_cache_event(
         self,
-        bundle: DataFusionPlanBundle,
+        bundle: DataFusionPlanArtifact,
         *,
         status: str,
         source: str,
@@ -589,7 +589,7 @@ class DataFusionExecutionFacade:
 
     def _record_substrait_fallback(
         self,
-        bundle: DataFusionPlanBundle,
+        bundle: DataFusionPlanArtifact,
         *,
         view_name: str | None,
         reason: str,
@@ -885,13 +885,13 @@ class DataFusionExecutionFacade:
         )
         return SchemaIntrospector(self.ctx, sql_options=sql_options)
 
-    def build_plan_bundle(
+    def build_plan_artifact(
         self,
         df: DataFrame,
         *,
         compute_execution_plan: bool = True,
         compute_substrait: bool = True,
-    ) -> DataFusionPlanBundle:
+    ) -> DataFusionPlanArtifact:
         """Build a plan bundle from a DataFrame.
 
         Args:
@@ -900,7 +900,7 @@ class DataFusionExecutionFacade:
             compute_substrait: Whether to generate substrait bytes.
 
         Returns:
-            DataFusionPlanBundle: Result.
+            DataFusionPlanArtifact: Result.
 
         Raises:
             ValueError: If session runtime is unavailable.
@@ -909,7 +909,7 @@ class DataFusionExecutionFacade:
         if session_runtime is None:
             msg = "SessionRuntime is required to build plan bundles."
             raise ValueError(msg)
-        return build_plan_bundle(
+        return build_plan_artifact(
             self.ctx,
             df,
             options=PlanBundleOptions(

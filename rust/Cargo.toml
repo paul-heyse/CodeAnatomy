@@ -51,6 +51,7 @@ opentelemetry = "0.31.0"
 opentelemetry-otlp = { version = "0.31.0", features = ["trace", "http-proto", "http-json", "grpc-tonic"] }
 opentelemetry_sdk = "0.31.0"
 pyo3 = "0.26"
+pyo3-build-config = "0.26"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.49.0", features = ["rt-multi-thread"] }

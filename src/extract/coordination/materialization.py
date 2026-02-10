@@ -25,17 +25,17 @@ from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.expr.query_spec import apply_query_spec
 from datafusion_engine.extract.registry import dataset_query, dataset_schema, extract_metadata
 from datafusion_engine.io.ingest import datafusion_from_arrow
-from datafusion_engine.plan.bundle import (
-    DataFusionPlanBundle,
+from datafusion_engine.plan.bundle_artifact import (
+    DataFusionPlanArtifact,
     PlanBundleOptions,
-    build_plan_bundle,
+    build_plan_artifact,
 )
-from datafusion_engine.plan.execution import (
+from datafusion_engine.plan.execution_runtime import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan.execution import (
-    execute_plan_bundle as execute_plan_bundle_helper,
+from datafusion_engine.plan.execution_runtime import (
+    execute_plan_artifact as execute_plan_artifact_helper,
 )
 from datafusion_engine.schema.contracts import SchemaContract
 from datafusion_engine.schema.finalize import FinalizeContext, FinalizeOptions, normalize_only
@@ -136,7 +136,7 @@ class _StreamingMaterializeRequest:
 
     name: str
     df: DataFrame
-    plan: DataFusionPlanBundle
+    plan: DataFusionPlanArtifact
     runtime_profile: DataFusionRuntimeProfile
     determinism_tier: DeterminismTier
     normalization_ctx: _NormalizationContext
@@ -145,12 +145,12 @@ class _StreamingMaterializeRequest:
     dataset_resolver: ManifestDatasetResolver | None = None
 
 
-def _build_plan_bundle_from_df(
+def _build_plan_artifact_from_df(
     df: DataFrame,
     *,
     session_runtime: SessionRuntime,
-) -> DataFusionPlanBundle:
-    return build_plan_bundle(
+) -> DataFusionPlanArtifact:
+    return build_plan_artifact(
         session_runtime.ctx,
         df,
         options=PlanBundleOptions(
@@ -164,8 +164,8 @@ def _empty_plan_from_table(
     table: DataFrame,
     *,
     session_runtime: SessionRuntime,
-) -> DataFusionPlanBundle:
-    return _build_plan_bundle_from_df(
+) -> DataFusionPlanArtifact:
+    return _build_plan_artifact_from_df(
         table.limit(0),
         session_runtime=session_runtime,
     )
@@ -206,16 +206,16 @@ def datafusion_plan_from_reader(
     reader: RecordBatchReaderLike,
     *,
     session: ExtractSession,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Return a DataFusion plan bundle for a RecordBatchReader.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         DataFusion plan bundle backed by the registered reader.
     """
     df = datafusion_from_arrow(session.session_runtime.ctx, name=name, value=reader)
-    return _build_plan_bundle_from_df(df, session_runtime=session.session_runtime)
+    return _build_plan_artifact_from_df(df, session_runtime=session.session_runtime)
 
 
 def extract_plan_from_reader(
@@ -224,12 +224,12 @@ def extract_plan_from_reader(
     *,
     session: ExtractSession,
     options: ExtractPlanOptions | None = None,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Return an extract plan bundle for a RecordBatchReader.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         Extract plan bundle with registry query and evidence projection applied.
     """
     resolved = options or ExtractPlanOptions()
@@ -251,12 +251,12 @@ def raw_plan_from_rows(
     rows: Iterable[Mapping[str, object]],
     *,
     session: ExtractSession,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Return a raw plan bundle for a row iterator.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         Extract plan bundle without registry query or evidence projection applied.
     """
     reader = record_batch_reader_from_rows(name, rows)
@@ -269,12 +269,12 @@ def extract_plan_from_rows(
     *,
     session: ExtractSession,
     options: ExtractPlanOptions | None = None,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Return an extract plan bundle for a row iterator.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         Extract plan bundle with registry query and evidence projection applied.
     """
     reader = record_batch_reader_from_rows(name, rows)
@@ -292,12 +292,12 @@ def extract_plan_from_row_batches(
     *,
     session: ExtractSession,
     options: ExtractPlanOptions | None = None,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Return an extract plan bundle for row batches.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         Extract plan bundle with registry query and evidence projection applied.
     """
     reader = record_batch_reader_from_row_batches(name, row_batches)
@@ -334,12 +334,12 @@ def _stage_enabled(condition: str, execution: ExtractExecutionOptions) -> bool:
     return bool(value)
 
 
-def apply_query_and_project(request: _ExtractProjectionRequest) -> DataFusionPlanBundle:
+def apply_query_and_project(request: _ExtractProjectionRequest) -> DataFusionPlanArtifact:
     """Apply registry query and evidence projection to a DataFusion table.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         Plan bundle with query and evidence projection applied.
     """
     row = extract_metadata(request.name)
@@ -373,7 +373,7 @@ def apply_query_and_project(request: _ExtractProjectionRequest) -> DataFusionPla
         projection=projection if projection else None,
     )
     df = apply_query_spec(request.table, spec=spec)
-    return _build_plan_bundle_from_df(df, session_runtime=request.session.session_runtime)
+    return _build_plan_artifact_from_df(df, session_runtime=request.session.session_runtime)
 
 
 def _require_schema_policy(name: str, policy: SchemaPolicy | None) -> SchemaPolicy:
@@ -526,7 +526,7 @@ def _build_normalization_context(
 
 
 def _plan_scan_units_for_extract(
-    plan: DataFusionPlanBundle,
+    plan: DataFusionPlanArtifact,
     *,
     runtime_profile: DataFusionRuntimeProfile,
     dataset_resolver: ManifestDatasetResolver | None = None,
@@ -558,7 +558,7 @@ def _plan_scan_units_for_extract(
 
 def _execute_extract_plan_bundle(
     name: str,
-    plan: DataFusionPlanBundle,
+    plan: DataFusionPlanArtifact,
     *,
     runtime_profile: DataFusionRuntimeProfile,
     dataset_resolver: ManifestDatasetResolver | None = None,
@@ -569,7 +569,7 @@ def _execute_extract_plan_bundle(
         runtime_profile=runtime_profile,
         dataset_resolver=dataset_resolver,
     )
-    execution = execute_plan_bundle_helper(
+    execution = execute_plan_artifact_helper(
         session_runtime.ctx,
         plan,
         options=PlanExecutionOptions(
@@ -587,7 +587,7 @@ def _execute_extract_plan_bundle(
 
 def _write_and_record_extract_output(
     name: str,
-    plan: DataFusionPlanBundle,
+    plan: DataFusionPlanArtifact,
     output: TableLike | pa.RecordBatchReader,
     *,
     runtime_profile: DataFusionRuntimeProfile,
@@ -694,7 +694,7 @@ def _materialize_streaming_output(
 
 def materialize_extract_plan(
     name: str,
-    plan: DataFusionPlanBundle,
+    plan: DataFusionPlanArtifact,
     *,
     runtime_profile: DataFusionRuntimeProfile,
     determinism_tier: DeterminismTier,
@@ -784,7 +784,7 @@ def materialize_extract_plan(
 
 def materialize_extract_plan_table(
     name: str,
-    plan: DataFusionPlanBundle,
+    plan: DataFusionPlanArtifact,
     *,
     runtime_profile: DataFusionRuntimeProfile,
     determinism_tier: DeterminismTier,
@@ -814,7 +814,7 @@ def materialize_extract_plan_table(
 
 def materialize_extract_plan_reader(
     name: str,
-    plan: DataFusionPlanBundle,
+    plan: DataFusionPlanArtifact,
     *,
     runtime_profile: DataFusionRuntimeProfile,
     determinism_tier: DeterminismTier,
@@ -921,7 +921,7 @@ def _record_extract_execution(
 
 def _record_extract_compile(
     name: str,
-    plan: DataFusionPlanBundle,
+    plan: DataFusionPlanArtifact,
     *,
     runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
@@ -952,7 +952,7 @@ def _register_extract_view(name: str, *, runtime_profile: DataFusionRuntimeProfi
 
 def _record_extract_view_artifact(
     name: str,
-    plan: DataFusionPlanBundle,
+    plan: DataFusionPlanArtifact,
     *,
     schema: pa.Schema,
     runtime_profile: DataFusionRuntimeProfile,

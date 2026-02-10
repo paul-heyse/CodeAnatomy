@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
     from datafusion_engine.lineage.datafusion import LineageReport
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 
 
 def arrow_schema_from_df(df: DataFrame) -> pa.Schema:
@@ -40,7 +40,7 @@ def arrow_schema_from_df(df: DataFrame) -> pa.Schema:
     raise TypeError(msg)
 
 
-def extract_lineage_from_bundle(bundle: DataFusionPlanBundle) -> LineageReport:
+def extract_lineage_from_bundle(bundle: DataFusionPlanArtifact) -> LineageReport:
     """Extract a lineage report from a DataFusion plan bundle.
 
     Args:
@@ -62,7 +62,7 @@ def extract_lineage_from_bundle(bundle: DataFusionPlanBundle) -> LineageReport:
 
 
 def resolve_required_udfs_from_bundle(
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     *,
     snapshot: Mapping[str, object],
 ) -> tuple[str, ...]:

@@ -14,7 +14,7 @@ from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.extract.registry import dataset_query, normalize_options
 from datafusion_engine.hashing import stable_id
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from extract.coordination.context import ExtractExecutionContext
 from extract.coordination.materialization import (
     ExtractMaterializeOptions,
@@ -500,12 +500,12 @@ def scan_repo_plan(
     *,
     options: RepoScanOptions,
     session: ExtractSession,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Build the plan for repository scanning.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         DataFusion plan bundle emitting repo file metadata.
     """
     repo_root_path = ensure_path(repo_root).resolve()
@@ -558,12 +558,12 @@ def scan_repo_plans(
     *,
     options: RepoScanOptions,
     session: ExtractSession,
-) -> Mapping[str, DataFusionPlanBundle]:
+) -> Mapping[str, DataFusionPlanArtifact]:
     """Build plan bundles for repo scope datasets.
 
     Returns:
     -------
-    Mapping[str, DataFusionPlanBundle]
+    Mapping[str, DataFusionPlanArtifact]
         Mapping of dataset name to plan bundle.
     """
     repo_root_path = ensure_path(repo_root).resolve()
@@ -585,7 +585,7 @@ def scan_repo_plans(
         options=options,
         cache_options=cache_options,
     )
-    plans: dict[str, DataFusionPlanBundle] = {
+    plans: dict[str, DataFusionPlanArtifact] = {
         "repo_files_v1": extract_plan_from_rows(
             "repo_files_v1",
             bundle.repo_rows,

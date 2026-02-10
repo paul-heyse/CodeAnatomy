@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
-from datafusion_engine.plan.execution import validate_substrait_plan
+from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
+from datafusion_engine.plan.execution_runtime import validate_substrait_plan
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion
@@ -19,7 +19,7 @@ def test_validate_substrait_plan_round_trip_match() -> None:
     ctx = profile.session_context()
     register_arrow_table(ctx, name="events", value=pa.table({"id": [1, 2, 3]}))
     df = ctx.sql("SELECT id FROM events WHERE id > 1")
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         df,
         options=PlanBundleOptions(session_runtime=profile.session_runtime()),

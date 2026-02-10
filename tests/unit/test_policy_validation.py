@@ -12,7 +12,7 @@ from relspec.policy_validation import PolicyValidationIssue, validate_policy_bun
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from relspec.execution_plan import ExecutionPlan
+    from relspec.execution_planning_runtime import ExecutionPlan
     from semantics.program_manifest import SemanticProgramManifest
 
 

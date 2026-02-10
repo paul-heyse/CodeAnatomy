@@ -152,7 +152,7 @@ def resolve_sql_policy(
 class DataFusionCacheEvent:
     """Diagnostics payload for DataFusion cache decisions.
 
-    Uses plan_fingerprint from DataFusionPlanBundle.
+    Uses plan_fingerprint from DataFusionPlanArtifact.
     """
 
     cache_enabled: bool
@@ -167,7 +167,7 @@ class DataFusionCacheEvent:
 class DataFusionSubstraitFallbackEvent:
     """Diagnostics payload for Substrait fallback decisions.
 
-    Uses plan_fingerprint from DataFusionPlanBundle.
+    Uses plan_fingerprint from DataFusionPlanArtifact.
     """
 
     reason: str

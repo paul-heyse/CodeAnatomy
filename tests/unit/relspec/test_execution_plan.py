@@ -5,7 +5,7 @@ from __future__ import annotations
 import rustworkx as rx
 
 from relspec.evidence import EvidenceCatalog
-from relspec.execution_plan import (
+from relspec.execution_planning_runtime import (
     TaskPlanMetrics,
     bottom_level_costs,
     derive_task_costs_from_plan,

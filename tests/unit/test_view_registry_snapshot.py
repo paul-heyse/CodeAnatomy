@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from datafusion_engine.views.artifacts import (
     ViewArtifactLineage,
     ViewArtifactRequest,
@@ -48,12 +48,12 @@ def test_view_registry_snapshot_stable_for_repeated_registration() -> None:
     assert registry is not None
     alpha_df = ctx.sql("SELECT 1 AS value")
     beta_df = ctx.sql("SELECT 2 AS value")
-    alpha_bundle = build_plan_bundle(
+    alpha_bundle = build_plan_artifact(
         ctx,
         alpha_df,
         options=PlanBundleOptions(session_runtime=session_runtime),
     )
-    beta_bundle = build_plan_bundle(
+    beta_bundle = build_plan_artifact(
         ctx,
         beta_df,
         options=PlanBundleOptions(session_runtime=session_runtime),

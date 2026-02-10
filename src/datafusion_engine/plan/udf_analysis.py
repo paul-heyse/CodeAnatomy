@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 
 
 def extract_udfs_from_logical_plan(
@@ -53,7 +53,7 @@ def extract_udfs_from_dataframe(
     return extract_udfs_from_logical_plan(logical_plan, udf_snapshot=udf_snapshot)
 
 
-def extract_udfs_from_plan_bundle(bundle: DataFusionPlanBundle) -> frozenset[str]:
+def extract_udfs_from_plan_bundle(bundle: DataFusionPlanArtifact) -> frozenset[str]:
     """Extract UDF names from a plan bundle.
 
     Returns:
@@ -94,7 +94,7 @@ def validate_required_udfs_from_plan(
 
 
 def validate_required_udfs_from_bundle(
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     *,
     registry_snapshot: Mapping[str, object],
 ) -> None:

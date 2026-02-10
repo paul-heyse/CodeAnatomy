@@ -320,6 +320,11 @@ impl SessionFactory {
             ..PlanningSurfaceSpec::default()
         };
 
+        planning_surface.table_factories.push((
+            "delta".to_string(),
+            Arc::new(deltalake::delta_datafusion::DeltaTableFactory {}),
+        ));
+
         #[cfg(feature = "delta-planner")]
         {
             use deltalake::delta_datafusion::planner::DeltaPlanner;

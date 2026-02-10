@@ -90,7 +90,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.lineage.diagnostics import DiagnosticsRecorder
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.streaming import StreamingExecutionResult
     from obs.datafusion_runs import DataFusionRun
@@ -267,7 +267,7 @@ class _DeltaWriteSpecInputs:
     dataset_location: DatasetLocation | None
     schema_columns: tuple[str, ...] | None = None
     lineage_columns: tuple[str, ...] | None = None
-    plan_bundle: DataFusionPlanBundle | None = None
+    plan_bundle: DataFusionPlanArtifact | None = None
 
 
 _IDENTIFIER_RE = re.compile(IDENTIFIER_PATTERN)
@@ -335,7 +335,7 @@ class _AdaptiveFileSizeDecision:
 
 
 def _adaptive_file_size_from_bundle(
-    plan_bundle: DataFusionPlanBundle,
+    plan_bundle: DataFusionPlanArtifact,
     target_file_size: int,
 ) -> tuple[int, _AdaptiveFileSizeDecision | None]:
     """Apply plan-derived adaptive file sizing and return the decision.
@@ -376,7 +376,7 @@ def _delta_policy_context(
     request_partition_by: tuple[str, ...] | None,
     schema_columns: tuple[str, ...] | None = None,
     lineage_columns: tuple[str, ...] | None = None,
-    plan_bundle: DataFusionPlanBundle | None = None,
+    plan_bundle: DataFusionPlanArtifact | None = None,
 ) -> _DeltaPolicyContext:
     write_policy = _delta_write_policy_override(options)
     if write_policy is None:

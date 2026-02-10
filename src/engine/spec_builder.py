@@ -481,7 +481,7 @@ def build_execution_spec(
     )
 
     return SemanticExecutionSpec(
-        version=3,
+        version=4,
         input_relations=input_relations,
         view_definitions=view_definitions,
         join_graph=JoinGraph(edges=join_edges, constraints=()),

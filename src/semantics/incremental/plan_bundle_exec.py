@@ -8,45 +8,45 @@ import pyarrow as pa
 
 from datafusion_engine.lineage.datafusion import extract_lineage
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_unit
-from datafusion_engine.plan.execution import (
+from datafusion_engine.plan.execution_runtime import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan.execution import (
-    execute_plan_bundle as execute_plan_bundle_helper,
+from datafusion_engine.plan.execution_runtime import (
+    execute_plan_artifact as execute_plan_artifact_helper,
 )
 from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from semantics.incremental.runtime import IncrementalRuntime
 
 
-def build_plan_bundle_for_df(
+def build_plan_artifact_for_df(
     runtime: IncrementalRuntime,
     df: DataFrame,
     *,
     compute_execution_plan: bool = True,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Build a plan bundle from a DataFrame using the incremental runtime.
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         Plan bundle compiled from the provided DataFrame.
     """
     facade = _facade(runtime)
-    return facade.build_plan_bundle(
+    return facade.build_plan_artifact(
         df,
         compute_execution_plan=compute_execution_plan,
     )
 
 
-def execute_plan_bundle(
+def execute_plan_artifact(
     runtime: IncrementalRuntime,
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     *,
     view_name: str | None = None,
 ) -> ExecutionResult:
@@ -58,7 +58,7 @@ def execute_plan_bundle(
         Execution result for the plan bundle.
     """
     scan_units, scan_keys = _plan_scan_units(bundle, runtime)
-    execution = execute_plan_bundle_helper(
+    execution = execute_plan_artifact_helper(
         runtime.session_runtime().ctx,
         bundle,
         options=PlanExecutionOptions(
@@ -87,8 +87,8 @@ def execute_df_to_table(
     pyarrow.Table
         Materialized table derived from plan-bundle execution.
     """
-    bundle = build_plan_bundle_for_df(runtime, df)
-    result = execute_plan_bundle(runtime, bundle, view_name=view_name)
+    bundle = build_plan_artifact_for_df(runtime, df)
+    result = execute_plan_artifact(runtime, bundle, view_name=view_name)
     return result.require_dataframe().to_arrow_table()
 
 
@@ -100,7 +100,7 @@ def _facade(runtime: IncrementalRuntime) -> DataFusionExecutionFacade:
 
 
 def _plan_scan_units(
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     runtime: IncrementalRuntime,
 ) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
     session_runtime = runtime.session_runtime()
@@ -125,7 +125,7 @@ def _plan_scan_units(
 
 
 __all__ = [
-    "build_plan_bundle_for_df",
+    "build_plan_artifact_for_df",
     "execute_df_to_table",
-    "execute_plan_bundle",
+    "execute_plan_artifact",
 ]

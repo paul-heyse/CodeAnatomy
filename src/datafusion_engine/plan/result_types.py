@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.io.write import WriteResult
     from datafusion_engine.lineage.scan import ScanUnit
-    from datafusion_engine.plan.bundle import DataFusionPlanBundle
+    from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.program_manifest import ManifestDatasetResolver
     from serde_artifacts import PlanArtifacts
@@ -55,13 +55,13 @@ class ExecutionResult:
     table: TableLike | None = None
     reader: RecordBatchReaderLike | None = None
     write_result: WriteResult | None = None
-    plan_bundle: DataFusionPlanBundle | None = None
+    plan_bundle: DataFusionPlanArtifact | None = None
 
     @staticmethod
     def from_dataframe(
         df: DataFrame,
         *,
-        plan_bundle: DataFusionPlanBundle | None = None,
+        plan_bundle: DataFusionPlanArtifact | None = None,
     ) -> ExecutionResult:
         """Wrap a DataFusion DataFrame.
 
@@ -213,7 +213,7 @@ class PlanExecutionOptions:
 class PlanExecutionResult:
     """Result payload for plan-bundle execution."""
 
-    plan_bundle: DataFusionPlanBundle
+    plan_bundle: DataFusionPlanArtifact
     execution_result: ExecutionResult
     output: DataFrame | None
     artifacts: PlanArtifacts | None

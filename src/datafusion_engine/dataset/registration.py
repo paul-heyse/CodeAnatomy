@@ -92,7 +92,7 @@ from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
 from datafusion_engine.lineage.diagnostics import record_artifact
-from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from datafusion_engine.schema.contracts import (
     EvolutionPolicy,
     schema_contract_from_table_schema_contract,
@@ -2341,7 +2341,7 @@ def _record_projection_view_artifact(
 
     schema = arrow_schema_from_df(projected)
     session_runtime = runtime_profile.session_runtime()
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         projected,
         options=PlanBundleOptions(

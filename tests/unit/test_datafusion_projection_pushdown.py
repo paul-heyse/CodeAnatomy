@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion
@@ -29,7 +29,7 @@ def test_dynamic_projection_reduces_columns() -> None:
         ),
     )
     df = ctx.sql("SELECT events.id FROM events")
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         df,
         options=PlanBundleOptions(session_runtime=session_runtime),

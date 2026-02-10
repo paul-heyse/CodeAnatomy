@@ -5,6 +5,7 @@
 
 pub mod cache_boundaries;
 pub mod cache_policy;
+pub mod compile_contract;
 pub mod graph_validator;
 pub mod inline_policy;
 pub mod join_builder;

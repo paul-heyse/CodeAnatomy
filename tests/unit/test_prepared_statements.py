@@ -20,7 +20,7 @@ def test_parameterized_execution_matches_unprepared() -> None:
     bundle = facade.compile_to_bundle(
         lambda session: session.sql("SELECT id, name FROM t WHERE id = 2")
     )
-    result = facade.execute_plan_bundle(bundle)
+    result = facade.execute_plan_artifact(bundle)
     assert result.dataframe is not None
     prepared = result.dataframe.to_arrow_table()
     direct = ctx.sql("SELECT id, name FROM t WHERE id = 2").to_arrow_table()

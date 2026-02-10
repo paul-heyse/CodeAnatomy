@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.context import (
     ExtractExecutionContext,
@@ -753,7 +753,7 @@ def _build_symtable_file_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     return extract_plan_from_rows(
         "symtable_files_v1",
         rows,
@@ -820,12 +820,12 @@ def extract_symtable_plans(
     options: SymtableExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, DataFusionPlanBundle]:
+) -> dict[str, DataFusionPlanArtifact]:
     """Extract symbol table plans from repository files.
 
     Returns:
     -------
-    dict[str, DataFusionPlanBundle]
+    dict[str, DataFusionPlanArtifact]
         Plan bundle keyed by symtable outputs.
     """
     normalized_options = normalize_options("symtable", options, SymtableExtractOptions)

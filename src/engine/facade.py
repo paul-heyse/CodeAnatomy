@@ -8,6 +8,10 @@ from typing import TYPE_CHECKING, NoReturn
 import msgspec
 
 if TYPE_CHECKING:
+    from engine.rust_planning_contract import (
+        PlanBundleArtifactContract,
+        RunResultContract,
+    )
     from engine.spec_builder import SemanticExecutionSpec
 
 
@@ -196,3 +200,19 @@ def execute_cpg_build(
         _raise_engine_error(exc)
 
     return msgspec.json.decode(result.to_json(), type=dict[str, object])
+
+
+def decode_run_result(
+    run_result: dict[str, object] | str | bytes,
+) -> RunResultContract:
+    """Decode a Rust run result payload into typed planning artifacts."""
+    from engine.rust_planning_contract import decode_run_result_payload
+
+    return decode_run_result_payload(run_result)
+
+
+def plan_bundles_from_run_result(
+    run_result: dict[str, object] | str | bytes,
+) -> tuple[PlanBundleArtifactContract, ...]:
+    """Extract typed plan bundles from a Rust run result payload."""
+    return decode_run_result(run_result).plan_bundles

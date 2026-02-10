@@ -1,4 +1,4 @@
-"""Suite 3.1: Integration tests for compile_execution_plan end-to-end boundary."""
+"""Suite 3.1: Integration tests for compile_authority_plan end-to-end boundary."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from datafusion_engine.lineage.scan import ScanUnit
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from datafusion_engine.plan.perf_policy import (
     PerformancePolicy,
     PlanBundleComparisonPolicy,
@@ -20,10 +20,10 @@ from datafusion_engine.session.runtime import (
     SessionRuntime,
 )
 from datafusion_engine.views.graph import ViewNode
-from relspec.execution_plan import (
+from relspec.execution_planning_runtime import (
     ExecutionPlan,
     ExecutionPlanRequest,
-    compile_execution_plan,
+    compile_authority_plan,
 )
 from relspec.inferred_deps import InferredDeps
 from serde_artifacts import PlanArtifacts
@@ -113,7 +113,7 @@ def _view_node_with_plan_bundle(
         View node with plan bundle attached.
     """
     node = _minimal_view_node(name, deps)
-    bundle = DataFusionPlanBundle(
+    bundle = DataFusionPlanArtifact(
         df=node.builder(SessionContext()),
         logical_plan=object(),
         optimized_logical_plan=object(),
@@ -161,7 +161,7 @@ def session_runtime() -> SessionRuntime:
 @pytest.fixture(autouse=True)
 def _stub_plan_with_delta_pins(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace heavy planning bootstrap with deterministic in-memory planning."""
-    from datafusion_engine.plan.pipeline import PlanningPipelineResult
+    from datafusion_engine.plan.pipeline_runtime import PlanningPipelineResult
 
     def _stubbed_plan(
         _ctx: SessionContext,
@@ -196,10 +196,10 @@ def _stub_plan_with_delta_pins(monkeypatch: pytest.MonkeyPatch) -> None:
             session_runtime=None,
         )
 
-    monkeypatch.setattr("relspec.execution_plan.plan_with_delta_pins", _stubbed_plan)
-    monkeypatch.setattr("relspec.execution_plan.extract_inferred_deps", lambda: ())
+    monkeypatch.setattr("relspec.execution_planning_runtime.plan_with_delta_pins", _stubbed_plan)
+    monkeypatch.setattr("relspec.execution_planning_runtime.extract_inferred_deps", lambda: ())
     monkeypatch.setattr(
-        "relspec.execution_plan._validate_plan_bundle_compatibility",
+        "relspec.execution_planning_runtime._validate_plan_bundle_compatibility",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -240,7 +240,7 @@ def _stub_plan_with_delta_pins(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_compile_execution_plan_basic_roundtrip(session_runtime: SessionRuntime) -> None:
     """Compile with realistic view nodes that have plan bundles, verify ExecutionPlan structure.
 
-    Tests that compile_execution_plan successfully creates a full ExecutionPlan with
+    Tests that compile_authority_plan successfully creates a full ExecutionPlan with
     task_graph, task_schedule, and plan_signature populated for valid inputs.
     """
     view_nodes = [
@@ -268,7 +268,7 @@ def test_compile_execution_plan_basic_roundtrip(session_runtime: SessionRuntime)
         enable_metric_scheduling=True,
     )
 
-    plan = compile_execution_plan(session_runtime=session_runtime, request=request)
+    plan = compile_authority_plan(session_runtime=session_runtime, request=request)
 
     assert isinstance(plan, ExecutionPlan)
     assert plan.task_graph is not None
@@ -283,7 +283,7 @@ def test_compile_execution_plan_basic_roundtrip(session_runtime: SessionRuntime)
 def test_compile_determinism(session_runtime: SessionRuntime) -> None:
     """Compile same inputs twice, verify plan_signature and task_dependency_signature identical.
 
-    Tests that compile_execution_plan is deterministic - identical inputs produce
+    Tests that compile_authority_plan is deterministic - identical inputs produce
     identical signature values across multiple invocations.
     """
     view_nodes = [
@@ -300,8 +300,8 @@ def test_compile_determinism(session_runtime: SessionRuntime) -> None:
         enable_metric_scheduling=True,
     )
 
-    plan1 = compile_execution_plan(session_runtime=session_runtime, request=request)
-    plan2 = compile_execution_plan(session_runtime=session_runtime, request=request)
+    plan1 = compile_authority_plan(session_runtime=session_runtime, request=request)
+    plan2 = compile_authority_plan(session_runtime=session_runtime, request=request)
 
     assert plan1.plan_signature == plan2.plan_signature
     assert plan1.task_dependency_signature == plan2.task_dependency_signature
@@ -311,7 +311,7 @@ def test_compile_determinism(session_runtime: SessionRuntime) -> None:
 def test_runtime_profile_mismatch_raises(session_runtime: SessionRuntime) -> None:
     """Pass ExecutionPlanRequest.runtime_profile != session_runtime.profile, expect ValueError.
 
-    Tests that compile_execution_plan validates runtime profile consistency between
+    Tests that compile_authority_plan validates runtime profile consistency between
     the request and the session runtime.
     """
     different_profile = DataFusionRuntimeProfile()
@@ -330,14 +330,14 @@ def test_runtime_profile_mismatch_raises(session_runtime: SessionRuntime) -> Non
     )
 
     with pytest.raises(ValueError, match="runtime_profile must match"):
-        compile_execution_plan(session_runtime=session_runtime, request=request)
+        compile_authority_plan(session_runtime=session_runtime, request=request)
 
 
 @pytest.mark.integration
 def test_missing_plan_bundle_for_requested_task_raises(session_runtime: SessionRuntime) -> None:
     """Include task in requested_task_names whose view node lacks plan_bundle, expect ValueError.
 
-    Tests that compile_execution_plan validates that all requested tasks have
+    Tests that compile_authority_plan validates that all requested tasks have
     plan bundles attached to their view nodes.
     """
     view_nodes = [
@@ -355,14 +355,14 @@ def test_missing_plan_bundle_for_requested_task_raises(session_runtime: SessionR
     )
 
     with pytest.raises(ValueError, match="missing plan_bundle"):
-        compile_execution_plan(session_runtime=session_runtime, request=request)
+        compile_authority_plan(session_runtime=session_runtime, request=request)
 
 
 @pytest.mark.integration
 def test_no_plan_bundles_raises(session_runtime: SessionRuntime) -> None:
     """All view nodes have plan_bundle=None, expect ValueError.
 
-    Tests that compile_execution_plan requires at least one view node with a
+    Tests that compile_authority_plan requires at least one view node with a
     plan bundle to perform meaningful compilation.
     """
     view_nodes = [
@@ -381,14 +381,14 @@ def test_no_plan_bundles_raises(session_runtime: SessionRuntime) -> None:
     )
 
     with pytest.raises(ValueError, match="requires view nodes with plan_bundle"):
-        compile_execution_plan(session_runtime=session_runtime, request=request)
+        compile_authority_plan(session_runtime=session_runtime, request=request)
 
 
 @pytest.mark.integration
 def test_delta_pin_conflict_raises() -> None:
     """Two scan units for same dataset with different (delta_version, timestamp) tuples, expect ValueError.
 
-    Tests that compile_execution_plan detects conflicting Delta pins for the same
+    Tests that compile_authority_plan detects conflicting Delta pins for the same
     dataset and raises an appropriate error.
     """
     scan_units = [
@@ -436,7 +436,7 @@ def test_delta_pin_conflict_raises() -> None:
     # Note: We need to pass scan units through the compilation path
     # This may require modifying the request or using a different approach
     # For now, we'll test the _scan_unit_delta_pins function directly
-    from relspec.execution_plan import _scan_unit_delta_pins
+    from relspec.execution_planning_runtime import _scan_unit_delta_pins
 
     with pytest.raises(ValueError, match="Conflicting Delta pins"):
         _scan_unit_delta_pins(scan_units)
@@ -446,10 +446,10 @@ def test_delta_pin_conflict_raises() -> None:
 def test_delta_pin_conflict_same_version_ok() -> None:
     """Two scan units for same dataset with identical pin tuples, no error.
 
-    Tests that compile_execution_plan allows multiple scan units for the same
+    Tests that compile_authority_plan allows multiple scan units for the same
     dataset when they have identical Delta pin tuples.
     """
-    from relspec.execution_plan import _scan_unit_delta_pins
+    from relspec.execution_planning_runtime import _scan_unit_delta_pins
 
     scan_units = [
         ScanUnit(
@@ -502,7 +502,7 @@ def test_delta_pin_conflict_same_version_ok() -> None:
 def test_requested_task_filtering(session_runtime: SessionRuntime) -> None:
     """Set requested_task_names to subset, verify only those tasks in active plan.
 
-    Tests that compile_execution_plan correctly filters the task graph to include
+    Tests that compile_authority_plan correctly filters the task graph to include
     only the explicitly requested tasks when requested_task_names is provided.
     """
     view_nodes = [
@@ -521,7 +521,7 @@ def test_requested_task_filtering(session_runtime: SessionRuntime) -> None:
         enable_metric_scheduling=True,
     )
 
-    plan = compile_execution_plan(session_runtime=session_runtime, request=request)
+    plan = compile_authority_plan(session_runtime=session_runtime, request=request)
 
     assert plan.active_tasks == frozenset({"task_a", "task_b"})
     assert "task_c" not in plan.active_tasks
@@ -534,7 +534,7 @@ def test_plan_artifacts_store_failure_continues(
 ) -> None:
     """Mock persist_plan_artifacts_for_views to raise, verify compilation still succeeds.
 
-    Tests that compile_execution_plan continues execution gracefully when plan
+    Tests that compile_authority_plan continues execution gracefully when plan
     artifact storage fails, recording the failure in diagnostics.
     """
     view_nodes = [
@@ -567,7 +567,7 @@ def test_plan_artifacts_store_failure_continues(
     # _prepare_plan_context and recorded via record_artifact() to the runtime
     # profile's diagnostics sink, NOT to plan.diagnostics (which is GraphDiagnostics).
     # The failure doesn't block compilation.
-    plan = compile_execution_plan(session_runtime=session_runtime, request=request)
+    plan = compile_authority_plan(session_runtime=session_runtime, request=request)
 
     assert isinstance(plan, ExecutionPlan)
     # Verify compilation succeeded despite the failure - plan is valid and complete
@@ -621,14 +621,14 @@ def test_plan_artifacts_store_failure_raises_when_diff_gates_enabled(
     )
 
     with pytest.raises(RuntimeError, match="Artifact store unavailable"):
-        compile_execution_plan(session_runtime=runtime, request=request)
+        compile_authority_plan(session_runtime=runtime, request=request)
 
 
 @pytest.mark.integration
 def test_plan_signature_changes_with_runtime_config(session_runtime: SessionRuntime) -> None:
     """Compile with two different runtime profiles, verify plan_signature differs.
 
-    Tests that compile_execution_plan produces different plan signatures when
+    Tests that compile_authority_plan produces different plan signatures when
     runtime configuration changes, while task_dependency_signature remains stable.
     """
     view_nodes = [
@@ -668,8 +668,8 @@ def test_plan_signature_changes_with_runtime_config(session_runtime: SessionRunt
         enable_metric_scheduling=True,
     )
 
-    plan1 = compile_execution_plan(session_runtime=session_runtime, request=request1)
-    plan2 = compile_execution_plan(session_runtime=runtime2, request=request2)
+    plan1 = compile_authority_plan(session_runtime=session_runtime, request=request1)
+    plan2 = compile_authority_plan(session_runtime=runtime2, request=request2)
 
     # Plan signatures should differ due to different runtime configs
     assert plan1.plan_signature != plan2.plan_signature

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from datafusion_engine.plan.bundle import PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -35,7 +35,7 @@ def build_plan_manifest_for_sql(
     Raises:
         TypeError: If manifest payload conversion is invalid.
     """
-    bundle = build_plan_bundle(
+    bundle = build_plan_artifact(
         ctx,
         ctx.sql(sql),
         options=PlanBundleOptions(session_runtime=session_runtime),

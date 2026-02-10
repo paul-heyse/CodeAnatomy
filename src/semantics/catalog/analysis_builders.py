@@ -2,7 +2,7 @@
 
 This module provides DataFusion DataFrame-based view builders that produce
 normalized analysis outputs. These builders return DataFrame instances
-directly and support DataFusionPlanBundle-based lineage extraction.
+directly and support DataFusionPlanArtifact-based lineage extraction.
 
 Migrated from src/normalize/df_view_builders.py for unified semantic catalog
 access.

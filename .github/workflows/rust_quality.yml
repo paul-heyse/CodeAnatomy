@@ -5,6 +5,8 @@ on:
     paths:
       - "rust/**"
       - "scripts/check_rust_quality.sh"
+      - "scripts/check_bindings_lane.sh"
+      - "scripts/check_no_legacy_planning_imports.sh"
       - "scripts/build_datafusion_wheels.sh"
       - "scripts/rebuild_rust_artifacts.sh"
       - ".github/workflows/rust_quality.yml"
@@ -16,6 +18,8 @@ on:
     paths:
       - "rust/**"
       - "scripts/check_rust_quality.sh"
+      - "scripts/check_bindings_lane.sh"
+      - "scripts/check_no_legacy_planning_imports.sh"
       - "scripts/build_datafusion_wheels.sh"
       - "scripts/rebuild_rust_artifacts.sh"
       - ".github/workflows/rust_quality.yml"
@@ -46,6 +50,11 @@ jobs:
         run: |
           bash scripts/bootstrap_codex.sh
           uv sync
+
+      - name: Guardrail legacy imports
+        shell: bash
+        run: |
+          bash scripts/check_no_legacy_planning_imports.sh --strict-tests
 
       - name: Run core tests
         shell: bash
@@ -82,20 +91,16 @@ jobs:
           bash scripts/bootstrap_codex.sh
           uv sync
 
-      - name: Set PyO3 interpreter
+      - name: Guardrail legacy imports
         shell: bash
         run: |
-          echo "PYO3_PYTHON=$(uv run python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+          bash scripts/check_no_legacy_planning_imports.sh --strict-tests
 
-      - name: Build/install bindings
+      - name: Run bindings lane
         shell: bash
         run: |
-          uv run maturin develop -m rust/codeanatomy_engine_py/Cargo.toml --release
-
-      - name: Smoke import bindings
-        shell: bash
-        run: |
-          uv run python -c "import codeanatomy_engine; print(codeanatomy_engine.__doc__ or 'ok')"
+          mkdir -p .ci-logs
+          bash scripts/check_bindings_lane.sh 2>&1 | tee .ci-logs/bindings_lane_linux.log
 
       - name: Run bindings clippy
         shell: bash
@@ -103,10 +108,55 @@ jobs:
           cd rust
           cargo clippy -p codeanatomy_engine_py --all-targets --all-features -- -D warnings
 
-      - name: Run Python integration parity
+      - name: Upload bindings lane logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-lane-linux-logs
+          path: .ci-logs/bindings_lane_linux.log
+          if-no-files-found: ignore
+
+  engine-bindings-macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Bootstrap environment
         shell: bash
         run: |
-          uv run pytest tests/integration/test_rust_engine_e2e.py -q
+          bash scripts/bootstrap_codex.sh
+          uv sync
+
+      - name: Guardrail legacy imports
+        shell: bash
+        run: |
+          bash scripts/check_no_legacy_planning_imports.sh --strict-tests
+
+      - name: Run bindings lane
+        shell: bash
+        run: |
+          mkdir -p .ci-logs
+          bash scripts/check_bindings_lane.sh 2>&1 | tee .ci-logs/bindings_lane_macos.log
+
+      - name: Upload bindings lane logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-lane-macos-logs
+          path: .ci-logs/bindings_lane_macos.log
+          if-no-files-found: ignore
 
   datafusion-ext:
     runs-on: ubuntu-latest
@@ -130,6 +180,11 @@ jobs:
         run: |
           bash scripts/bootstrap_codex.sh
           uv sync
+
+      - name: Guardrail legacy imports
+        shell: bash
+        run: |
+          bash scripts/check_no_legacy_planning_imports.sh --strict-tests
 
       - name: Run datafusion_ext tests
         shell: bash

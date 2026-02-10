@@ -23,3 +23,7 @@ pub mod session;
 pub mod spec;
 pub mod stability;
 pub mod tuner;
+
+pub use compiler::compile_contract::{
+    compile_request, compile_response_to_json, CompilePlanArtifact, CompileRequest, CompileResponse,
+};

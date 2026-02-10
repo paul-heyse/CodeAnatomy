@@ -73,7 +73,7 @@ def test_runtime_tracing_contract_allows_new_preset_and_redaction_fields() -> No
     }
 
     payload = {
-        "version": 3,
+        "version": 4,
         "input_relations": (),
         "view_definitions": (),
         "join_graph": {"edges": (), "constraints": ()},

@@ -115,7 +115,7 @@ class PlanDetailInputs:
 
 
 @dataclass(frozen=True)
-class DataFusionPlanBundle:
+class DataFusionPlanArtifact:
     """Canonical plan artifact for all planning and scheduling.
 
     This is the single source of truth for DataFusion plan information,
@@ -283,12 +283,12 @@ def _delta_pin_state_from_pin(
     )
 
 
-def build_plan_bundle(
+def build_plan_artifact(
     ctx: SessionContext,
     df: DataFrame,
     *,
     options: PlanBundleOptions | None = None,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Build a canonical plan bundle from a DataFusion DataFrame.
 
     Args:
@@ -297,7 +297,7 @@ def build_plan_bundle(
         options: Optional plan-bundle options.
 
     Returns:
-        DataFusionPlanBundle: Result.
+        DataFusionPlanArtifact: Result.
 
     Raises:
         ValueError: If required bundle options are missing.
@@ -321,7 +321,7 @@ def build_plan_bundle(
             options=resolved,
         )
 
-        bundle = DataFusionPlanBundle(
+        bundle = DataFusionPlanArtifact(
             df=df,
             logical_plan=components.logical,
             optimized_logical_plan=components.optimized,
@@ -345,7 +345,7 @@ def build_plan_bundle(
 
 def _store_plan_cache_entry(
     *,
-    bundle: DataFusionPlanBundle,
+    bundle: DataFusionPlanArtifact,
     runtime_profile: DataFusionRuntimeProfile,
 ) -> None:
     cache = runtime_profile.plan_proto_cache
@@ -1631,7 +1631,7 @@ def _substrait_validation_payload(
     Raises:
         ValueError: If substrait validation reports mismatch.
     """
-    from datafusion_engine.plan.execution import validate_substrait_plan
+    from datafusion_engine.plan.execution_runtime import validate_substrait_plan
 
     validation = validate_substrait_plan(substrait_bytes, df=df, ctx=ctx)
     if validation is None:
@@ -2582,8 +2582,8 @@ def _required_udf_artifacts(
 
 __all__ = [
     "DataFrameBuilder",
-    "DataFusionPlanBundle",
+    "DataFusionPlanArtifact",
     "DeltaInputPin",
     "PlanArtifacts",
-    "build_plan_bundle",
+    "build_plan_artifact",
 ]

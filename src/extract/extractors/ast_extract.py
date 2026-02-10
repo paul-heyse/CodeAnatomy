@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, Required, TypedDict, Unpack, cast, ov
 
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import normalize_options
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.context import (
     ExtractExecutionContext,
@@ -1099,12 +1099,12 @@ def extract_ast_plans(
     options: AstExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, DataFusionPlanBundle]:
+) -> dict[str, DataFusionPlanArtifact]:
     """Extract AST plans for nested file records.
 
     Returns:
     -------
-    dict[str, DataFusionPlanBundle]
+    dict[str, DataFusionPlanArtifact]
         Plan bundle keyed by ``ast_files``.
     """
     normalized_options = normalize_options("ast", options, AstExtractOptions)
@@ -1256,7 +1256,7 @@ def _build_ast_plan(
     *,
     row_batches: Iterable[Sequence[Mapping[str, object]]] | None = None,
     plan_context: _AstPlanContext,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     plan_options = ExtractPlanOptions(
         normalize=plan_context.normalize,
         evidence_plan=plan_context.evidence_plan,

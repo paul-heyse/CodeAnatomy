@@ -32,7 +32,7 @@ from libcst.metadata import (
 from core_types import RowPermissive as Row
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import dataset_schema, normalize_options
-from datafusion_engine.plan.bundle import DataFusionPlanBundle
+from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from datafusion_engine.schema.introspection import find_struct_field_keys
 from datafusion_engine.schema.registry import default_attrs_value
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
@@ -1538,7 +1538,7 @@ def _build_cst_file_plan(
     normalize: ExtractNormalizeOptions,
     evidence_plan: EvidencePlan | None,
     session: ExtractSession,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     plan_options = ExtractPlanOptions(
         normalize=normalize,
         evidence_plan=evidence_plan,
@@ -1731,12 +1731,12 @@ def extract_cst_plans(
     options: CstExtractOptions | None = None,
     *,
     context: ExtractExecutionContext | None = None,
-) -> dict[str, DataFusionPlanBundle]:
+) -> dict[str, DataFusionPlanArtifact]:
     """Extract CST plans for nested file records.
 
     Returns:
     -------
-    dict[str, DataFusionPlanBundle]
+    dict[str, DataFusionPlanArtifact]
         Plan bundle keyed by ``libcst_files``.
     """
     normalized_options = normalize_options("cst", options, CstExtractOptions)

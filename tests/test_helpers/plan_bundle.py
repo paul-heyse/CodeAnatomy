@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.plan.bundle import DataFusionPlanBundle, PlanBundleOptions, build_plan_bundle
+from datafusion_engine.plan.bundle_artifact import (
+    DataFusionPlanArtifact,
+    PlanBundleOptions,
+    build_plan_artifact,
+)
 from tests.test_helpers.arrow_seed import register_arrow_table
 
 if TYPE_CHECKING:
@@ -21,7 +25,7 @@ def bundle_for_table(
     table: pa.Table,
     name: str,
     session_runtime: SessionRuntime,
-) -> DataFusionPlanBundle:
+) -> DataFusionPlanArtifact:
     """Build a plan bundle for a seeded table.
 
     Parameters
@@ -37,8 +41,8 @@ def bundle_for_table(
 
     Returns:
     -------
-    DataFusionPlanBundle
+    DataFusionPlanArtifact
         Built plan bundle for the provided table.
     """
     df = register_arrow_table(ctx, name=name, value=table)
-    return build_plan_bundle(ctx, df, options=PlanBundleOptions(session_runtime=session_runtime))
+    return build_plan_artifact(ctx, df, options=PlanBundleOptions(session_runtime=session_runtime))

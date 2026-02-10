@@ -1,7 +1,7 @@
 """Canonical graph product build entrypoints.
 
-This is the public API that callers should use. It intentionally hides Hamilton output node
-names and returns a typed result with stable fields.
+This is the public API that callers should use. It routes through the engine-native
+orchestration layer and returns a typed result with stable fields.
 """
 
 from __future__ import annotations
@@ -11,20 +11,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
-from core_types import DeterminismTier, JsonDict, JsonValue, PathLike, ensure_path
+from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from cpg.schemas import SCHEMA_VERSION
-from datafusion_engine.materialize_policy import WriterStrategy
-from hamilton_pipeline import PipelineExecutionOptions, execute_pipeline
-from hamilton_pipeline.execution import ImpactStrategy
-from hamilton_pipeline.types import (
-    ExecutionMode,
-    ExecutorConfig,
-    GraphAdapterConfig,
-    ScipIdentityOverrides,
-    ScipIndexConfig,
-)
+from engine.output_contracts import ENGINE_CPG_OUTPUTS
 from obs.diagnostics_report import write_run_diagnostics_report
 from obs.otel import (
     OtelBootstrapOptions,
@@ -34,10 +25,12 @@ from obs.otel import (
     start_build_heartbeat,
     write_run_diagnostics_bundle,
 )
-from obs.otel.run_context import get_run_id, reset_run_id, set_run_id
+from obs.otel.run_context import reset_run_id, set_run_id
 from obs.otel.tracing import record_exception, root_span, set_span_attributes
-from semantics.incremental import SemanticIncrementalConfig
 from utils.uuid_factory import uuid7_str
+
+if TYPE_CHECKING:
+    from engine.spec_builder import RuntimeConfig
 
 GraphProduct = Literal["cpg"]
 
@@ -96,40 +89,37 @@ class GraphProductBuildResult:
 
 @dataclass(frozen=True)
 class GraphProductBuildRequest:
-    """Specify inputs and options for a graph product build."""
+    """Specify inputs and options for a graph product build.
+
+    Routes through engine-native orchestration with engine profiles and
+    rulepack profiles replacing Hamilton execution modes.
+    """
 
     repo_root: PathLike
     product: GraphProduct = "cpg"
-    execution_mode: ExecutionMode = ExecutionMode.PLAN_PARALLEL
-    executor_config: ExecutorConfig | None = None
-    graph_adapter_config: GraphAdapterConfig | None = None
+
+    engine_profile: str = "medium"
+    rulepack_profile: str = "default"
+    runtime_config: RuntimeConfig | None = None
 
     output_dir: PathLike | None = None
     work_dir: PathLike | None = None
 
-    runtime_profile_name: str | None = None
-    determinism_override: DeterminismTier | None = None
-
-    scip_index_config: ScipIndexConfig | None = None
-    scip_identity_overrides: ScipIdentityOverrides | None = None
-
-    writer_strategy: WriterStrategy | None = None
-
-    incremental_config: SemanticIncrementalConfig | None = None
-    incremental_impact_strategy: ImpactStrategy | None = None
+    extraction_config: dict[str, object] | None = None
 
     include_extract_errors: bool = True
     include_manifest: bool = True
-    include_run_bundle: bool = True
+    include_run_bundle: bool = False
 
     config: Mapping[str, JsonValue] = field(default_factory=dict)
     overrides: Mapping[str, object] | None = None
     otel_options: OtelBootstrapOptions | None = None
-    use_materialize: bool = True
 
 
 def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildResult:
     """Build the requested graph product and return typed outputs.
+
+    Routes through engine-native orchestration with profiles and runtime config.
 
     Returns:
     -------
@@ -138,9 +128,8 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
     """
     repo_root_path = ensure_path(request.repo_root).resolve()
     resolved_output_dir = _resolve_output_dir(repo_root_path, request.output_dir)
-    overrides, run_id = _build_overrides(request)
-    outputs = _outputs_for_request(request)
-    options = _pipeline_options(request, outputs, overrides)
+    resolved_work_dir = _resolve_work_dir(repo_root_path, request.work_dir)
+    run_id = _resolve_run_id(request)
     _configure_otel(request, repo_root_path)
 
     run_token = set_run_id(run_id)
@@ -151,8 +140,8 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
             "repo_root": str(repo_root_path),
             "output_dir": str(resolved_output_dir),
             "product": request.product,
-            "execution_mode": request.execution_mode.value,
-            "outputs": list(outputs),
+            "engine_profile": request.engine_profile,
+            "rulepack_profile": request.rulepack_profile,
         },
         event_kind="event",
     )
@@ -163,7 +152,13 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
     handler = _signal_handler_for_build(run_id, fallback_bundle_dir, signal_triggered)
     previous_sigterm, previous_sigint = _install_signal_handlers(handler)
     try:
-        result = _execute_build(request, repo_root_path, outputs, options)
+        result = _execute_build(
+            request=request,
+            repo_root=repo_root_path,
+            output_dir=resolved_output_dir,
+            work_dir=resolved_work_dir,
+            run_id=run_id,
+        )
     except Exception as exc:
         emit_diagnostics_event(
             "build.failure",
@@ -194,46 +189,35 @@ def build_graph_product(request: GraphProductBuildRequest) -> GraphProductBuildR
         reset_run_id(run_token)
 
 
-def _apply_override(overrides: dict[str, object], key: str, value: object | None) -> None:
-    if value is not None:
-        overrides[key] = value
+def _resolve_run_id(request: GraphProductBuildRequest) -> str:
+    """Resolve run_id from overrides or generate a new one.
+
+    Returns:
+    -------
+    str
+        Run ID for this build.
+    """
+    if request.overrides:
+        run_id = request.overrides.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            return run_id
+    return uuid7_str()
 
 
-def _build_overrides(
-    request: GraphProductBuildRequest,
-) -> tuple[dict[str, object], str]:
-    overrides: dict[str, object] = dict(request.overrides or {})
-    _apply_override(overrides, "otel_options", request.otel_options)
-    _apply_override(overrides, "runtime_profile_name", request.runtime_profile_name)
-    _apply_override(overrides, "determinism_override", request.determinism_override)
-    _apply_override(overrides, "writer_strategy", request.writer_strategy)
-    run_id = overrides.get("run_id")
-    if not isinstance(run_id, str) or not run_id:
-        run_id = uuid7_str()
-        overrides["run_id"] = run_id
-    return overrides, run_id
+def _resolve_work_dir(repo_root: Path, work_dir: PathLike | None) -> Path:
+    """Resolve work directory for intermediate artifacts.
 
-
-def _pipeline_options(
-    request: GraphProductBuildRequest,
-    outputs: Sequence[str],
-    overrides: Mapping[str, object],
-) -> PipelineExecutionOptions:
-    return PipelineExecutionOptions(
-        output_dir=request.output_dir,
-        work_dir=request.work_dir,
-        scip_index_config=request.scip_index_config,
-        scip_identity_overrides=request.scip_identity_overrides,
-        incremental_config=request.incremental_config,
-        incremental_impact_strategy=request.incremental_impact_strategy,
-        execution_mode=request.execution_mode,
-        executor_config=request.executor_config,
-        graph_adapter_config=request.graph_adapter_config,
-        outputs=outputs,
-        config=request.config,
-        overrides=dict(overrides) or None,
-        use_materialize=request.use_materialize,
-    )
+    Returns:
+    -------
+    Path
+        Absolute work directory path.
+    """
+    if work_dir is None:
+        return repo_root / "work"
+    if isinstance(work_dir, str) and not work_dir:
+        return repo_root / "work"
+    resolved = ensure_path(work_dir)
+    return resolved if resolved.is_absolute() else repo_root / resolved
 
 
 def _configure_otel(request: GraphProductBuildRequest, repo_root: Path) -> None:
@@ -280,55 +264,83 @@ def _restore_signal_handlers(
 
 
 def _execute_build(
+    *,
     request: GraphProductBuildRequest,
     repo_root: Path,
-    outputs: Sequence[str],
-    options: PipelineExecutionOptions,
+    output_dir: Path,
+    work_dir: Path,
+    run_id: str,
 ) -> GraphProductBuildResult:
+    """Execute the build through engine-native orchestration.
+
+    Routes to orchestrate_build() with engine profiles and runtime config.
+
+    Returns:
+    -------
+    GraphProductBuildResult
+        Typed outputs for the requested graph product.
+    """
+    from engine.build_orchestrator import orchestrate_build
+
     with root_span(
         "graph_product.build",
         attributes={
             "codeanatomy.product": request.product,
-            "codeanatomy.execution_mode": request.execution_mode.value,
-            "codeanatomy.outputs": list(outputs),
+            "codeanatomy.engine_profile": request.engine_profile,
+            "codeanatomy.rulepack_profile": request.rulepack_profile,
         },
     ) as span:
         emit_diagnostics_event(
             "build.phase.start",
             payload={
-                "phase": "pipeline.execute",
-                "outputs": list(outputs),
-                "run_id": get_run_id(),
+                "phase": "orchestrate.build",
+                "engine_profile": request.engine_profile,
+                "rulepack_profile": request.rulepack_profile,
+                "run_id": run_id,
             },
             event_kind="event",
         )
         try:
-            raw = execute_pipeline(repo_root=repo_root, options=options)
+            build_result = orchestrate_build(
+                repo_root=repo_root,
+                work_dir=work_dir,
+                output_dir=output_dir,
+                engine_profile=request.engine_profile,
+                rulepack_profile=request.rulepack_profile,
+                runtime_config=request.runtime_config,
+                extraction_config=request.extraction_config,
+                include_errors=request.include_extract_errors,
+                include_manifest=request.include_manifest,
+                include_run_bundle=request.include_run_bundle,
+            )
         except Exception as exc:
             record_exception(span, exc)
             emit_diagnostics_event(
                 "build.phase.end",
                 payload={
-                    "phase": "pipeline.execute",
+                    "phase": "orchestrate.build",
                     "status": "error",
                     "error_type": type(exc).__name__,
                     "error": str(exc),
-                    "run_id": get_run_id(),
+                    "run_id": run_id,
                 },
                 event_kind="event",
             )
             raise
-        result = _parse_result(
+
+        # Map BuildResult to GraphProductBuildResult
+        result = _parse_build_result(
             request=request,
             repo_root=repo_root,
-            pipeline_outputs=raw,
+            build_result=build_result,
         )
+
         emit_diagnostics_event(
             "build.phase.end",
             payload={
-                "phase": "pipeline.execute",
+                "phase": "orchestrate.build",
                 "status": "ok",
-                "run_id": get_run_id(),
+                "run_id": run_id,
             },
             event_kind="event",
         )
@@ -372,21 +384,21 @@ def _finalize_build_bundle(
     _write_diagnostics_outputs(bundle_dir, run_id=run_id)
 
 
-def _outputs_for_request(request: GraphProductBuildRequest) -> Sequence[str]:
-    outputs: list[str] = [
-        "write_cpg_nodes_delta",
-        "write_cpg_edges_delta",
-        "write_cpg_props_delta",
-        "write_cpg_props_map_delta",
-        "write_cpg_edges_by_src_delta",
-        "write_cpg_edges_by_dst_delta",
-    ]
+def _expected_outputs_for_request(request: GraphProductBuildRequest) -> set[str]:
+    """Build set of expected output keys from engine contracts.
+
+    Returns:
+    -------
+    set[str]
+        Expected output keys for this request.
+    """
+    outputs = set(ENGINE_CPG_OUTPUTS)
     if request.include_extract_errors:
-        outputs.append("write_extract_error_artifacts_delta")
+        outputs.add("write_extract_error_artifacts_delta")
     if request.include_manifest:
-        outputs.append("write_run_manifest_delta")
+        outputs.add("write_run_manifest_delta")
     if request.include_run_bundle:
-        outputs.append("write_run_bundle_dir")
+        outputs.add("write_run_bundle_dir")
     return outputs
 
 
@@ -585,39 +597,48 @@ def _product_version(product: GraphProduct) -> str:
     return f"{product}_v{SCHEMA_VERSION}"
 
 
-def _parse_result(
+def _parse_build_result(
     *,
     request: GraphProductBuildRequest,
     repo_root: Path,
-    pipeline_outputs: Mapping[str, JsonDict | None],
+    build_result: object,
 ) -> GraphProductBuildResult:
-    nodes_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_nodes_delta"))
-    output_dir = nodes_report.paths.data.parent
+    """Map BuildResult from orchestrate_build to GraphProductBuildResult.
 
-    edges_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_edges_delta"))
-    props_report = _parse_finalize(_require(pipeline_outputs, "write_cpg_props_delta"))
-    props_map_report = _parse_table(_require(pipeline_outputs, "write_cpg_props_map_delta"))
-    edges_by_src_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_src_delta"))
-    edges_by_dst_report = _parse_table(_require(pipeline_outputs, "write_cpg_edges_by_dst_delta"))
+    Parameters:
+    ----------
+    request
+        Original build request
+    repo_root
+        Repository root path
+    build_result
+        BuildResult from orchestrate_build
 
+    Returns:
+    -------
+    GraphProductBuildResult
+        Public API result type
+    """
+    # Build result has cpg_outputs, auxiliary_outputs, run_result attributes
+    all_outputs = {
+        **getattr(build_result, "cpg_outputs", {}),
+        **getattr(build_result, "auxiliary_outputs", {}),
+        **getattr(build_result, "run_result", {}),
+    }
+
+    # Parse CPG outputs (inline to reduce locals)
+    nodes_report = _parse_finalize(_require(all_outputs, "write_cpg_nodes_delta"))
+
+    # Parse auxiliary outputs
     manifest_path, manifest_run_id = _parse_manifest_details(
-        pipeline_outputs,
+        all_outputs,
         include_manifest=request.include_manifest,
     )
     run_bundle_dir, run_id = _parse_run_bundle(
-        pipeline_outputs,
+        all_outputs,
         include_run_bundle=request.include_run_bundle,
     )
-    if run_id is None:
-        run_id = manifest_run_id
-    if run_id is None and run_bundle_dir is not None:
-        run_id = run_bundle_dir.name
-
-    extract_errors = (
-        _optional(pipeline_outputs, "write_extract_error_artifacts_delta")
-        if request.include_extract_errors
-        else None
-    )
+    run_id = run_id or manifest_run_id or (run_bundle_dir.name if run_bundle_dir else None)
 
     return GraphProductBuildResult(
         product=request.product,
@@ -625,38 +646,30 @@ def _parse_result(
         engine_versions=_engine_versions(),
         run_id=run_id,
         repo_root=repo_root,
-        output_dir=output_dir,
+        output_dir=nodes_report.paths.data.parent,
         cpg_nodes=nodes_report,
-        cpg_edges=edges_report,
-        cpg_props=props_report,
-        cpg_props_map=props_map_report,
-        cpg_edges_by_src=edges_by_src_report,
-        cpg_edges_by_dst=edges_by_dst_report,
-        extract_error_artifacts=extract_errors,
+        cpg_edges=_parse_finalize(_require(all_outputs, "write_cpg_edges_delta")),
+        cpg_props=_parse_finalize(_require(all_outputs, "write_cpg_props_delta")),
+        cpg_props_map=_parse_table(_require(all_outputs, "write_cpg_props_map_delta")),
+        cpg_edges_by_src=_parse_table(_require(all_outputs, "write_cpg_edges_by_src_delta")),
+        cpg_edges_by_dst=_parse_table(_require(all_outputs, "write_cpg_edges_by_dst_delta")),
+        extract_error_artifacts=(
+            _optional(all_outputs, "write_extract_error_artifacts_delta")
+            if request.include_extract_errors
+            else None
+        ),
         manifest_path=manifest_path,
         run_bundle_dir=run_bundle_dir,
-        pipeline_outputs=pipeline_outputs,
+        pipeline_outputs=all_outputs,
     )
 
 
 def _record_build_output_locations(result: GraphProductBuildResult) -> None:
-    from hamilton_pipeline.lifecycle import get_hamilton_diagnostics_collector
+    """Record build output locations for diagnostics.
 
-    collector = get_hamilton_diagnostics_collector()
-    if collector is None:
-        return
-    from serde_artifact_specs import BUILD_OUTPUT_LOCATIONS_SPEC
-
-    collector.record_artifact(
-        BUILD_OUTPUT_LOCATIONS_SPEC,
-        {
-            "run_id": result.run_id,
-            "output_dir": str(result.output_dir),
-            "run_bundle_dir": (
-                str(result.run_bundle_dir) if result.run_bundle_dir is not None else None
-            ),
-        },
-    )
+    Stub for compatibility - engine orchestrator handles diagnostics collection.
+    """
+    _ = result
 
 
 __all__ = [

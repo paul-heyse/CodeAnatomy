@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -182,48 +182,7 @@ def _decode_root_config(raw: Mapping[str, JsonValue], *, location: str) -> RootC
         msg = f"Config validation failed for {location}: {details}"
         raise ValueError(msg) from exc
     _validate_root_runtime(config, location=location)
-    _validate_json_payloads(config, location=location)
     return config
-
-
-def _validate_json_payloads(config: RootConfigSpec, *, location: str) -> None:
-    payloads: list[tuple[str, Mapping[str, object]]] = []
-    if config.graph_adapter is not None and config.graph_adapter.options is not None:
-        payloads.append(("graph_adapter.options", config.graph_adapter.options))
-    if config.hamilton is not None and config.hamilton.tags is not None:
-        payloads.append(("hamilton.tags", config.hamilton.tags))
-    for field, payload in payloads:
-        _validate_json_mapping(payload, path=field, location=location)
-
-
-def _validate_json_mapping(
-    payload: Mapping[str, object],
-    *,
-    path: str,
-    location: str,
-) -> None:
-    for key, value in payload.items():
-        if not isinstance(key, str):
-            msg = f"Config validation failed for {location}: {path} keys must be strings."
-            raise TypeError(msg)
-        _validate_json_value(value, path=f"{path}.{key}", location=location)
-
-
-def _validate_json_value(value: object, *, path: str, location: str) -> None:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return
-    if isinstance(value, Mapping):
-        _validate_json_mapping(value, path=path, location=location)
-        return
-    if isinstance(value, Sequence) and not isinstance(
-        value,
-        (str, bytes, bytearray, memoryview),
-    ):
-        for index, item in enumerate(value):
-            _validate_json_value(item, path=f"{path}[{index}]", location=location)
-        return
-    msg = f"Config validation failed for {location}: {path} must be JSON-compatible."
-    raise ValueError(msg)
 
 
 def _config_to_mapping(config: RootConfigSpec) -> dict[str, JsonValue]:

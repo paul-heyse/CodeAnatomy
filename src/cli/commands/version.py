@@ -36,7 +36,6 @@ def get_version_info() -> dict[str, object]:
             "cyclopts": _package_version("cyclopts"),
             "datafusion": _package_version("datafusion"),
             "datafusion_ext": _package_version("datafusion_ext"),
-            "rustworkx": _package_version("rustworkx"),
         },
     }
 

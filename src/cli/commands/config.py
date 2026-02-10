@@ -42,9 +42,14 @@ state_dir = "build/state"
 impact_strategy = "hybrid"
 git_changed_only = false
 
-# [graph_adapter]
-# kind = "threadpool"
-# options = {}
+# [engine]
+# profile = "medium"
+# rulepack_profile = "Default"
+# compliance_capture = false
+# rule_tracing = false
+# plan_preview = false
+# tracing_preset = "ProductionLean"
+# instrument_object_store = false
 
 # [delta.restore]
 # version = 0
@@ -67,18 +72,6 @@ git_changed_only = false
 # protocol = "grpc"
 # sampler = "parentbased_always_on"
 # sampler_arg = 1
-
-# [hamilton]
-# enable_tracker = false
-# enable_type_checker = false
-# enable_node_diagnostics = false
-# enable_structured_run_logs = false
-# enable_graph_snapshot = false
-# enable_cache_lineage = false
-# capture_data_statistics = false
-# max_list_length_capture = 256
-# max_dict_length_capture = 256
-# tags = {}
 """
 
 

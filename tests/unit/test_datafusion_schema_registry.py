@@ -13,12 +13,12 @@ from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.schema import registry as schema_registry
 from datafusion_engine.schema.registry import (
     AST_VIEW_NAMES,
-    DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA,
-    HAMILTON_PLAN_DRIFT_SCHEMA,
-    HAMILTON_TASK_EXPANSION_SCHEMA,
-    HAMILTON_TASK_GROUPING_SCHEMA,
-    HAMILTON_TASK_SUBMISSION_SCHEMA,
+    DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA,
     LIBCST_FILES_SCHEMA,
+    PIPELINE_PLAN_DRIFT_SCHEMA,
+    PIPELINE_TASK_EXPANSION_SCHEMA,
+    PIPELINE_TASK_GROUPING_SCHEMA,
+    PIPELINE_TASK_SUBMISSION_SCHEMA,
     SYMTABLE_FILES_SCHEMA,
     nested_view_spec,
     validate_ast_views,
@@ -127,7 +127,7 @@ def test_validate_ast_views_smoke() -> None:
 
 def test_hamilton_diagnostics_schemas_cover_plan_events() -> None:
     """Hamilton plan diagnostics schemas expose the expected contract fields."""
-    submission_fields = set(HAMILTON_TASK_SUBMISSION_SCHEMA.names)
+    submission_fields = set(PIPELINE_TASK_SUBMISSION_SCHEMA.names)
     assert {
         "run_id",
         "task_id",
@@ -135,18 +135,18 @@ def test_hamilton_diagnostics_schemas_cover_plan_events() -> None:
         "reduced_plan_signature",
         "task_facts",
     }.issubset(submission_fields)
-    grouping_fields = set(HAMILTON_TASK_GROUPING_SCHEMA.names)
+    grouping_fields = set(PIPELINE_TASK_GROUPING_SCHEMA.names)
     assert {"run_id", "task_ids", "task_count"}.issubset(grouping_fields)
-    expansion_fields = set(HAMILTON_TASK_EXPANSION_SCHEMA.names)
+    expansion_fields = set(PIPELINE_TASK_EXPANSION_SCHEMA.names)
     assert {"run_id", "task_id", "parameter_keys"}.issubset(expansion_fields)
-    drift_fields = set(HAMILTON_PLAN_DRIFT_SCHEMA.names)
+    drift_fields = set(PIPELINE_PLAN_DRIFT_SCHEMA.names)
     assert {
         "plan_task_count",
         "admitted_task_count",
         "missing_generations",
         "submission_event_count",
     }.issubset(drift_fields)
-    events_fields = set(DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA.names)
+    events_fields = set(DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA.names)
     assert {
         "event_time_unix_ms",
         "run_id",

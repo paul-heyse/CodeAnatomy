@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING
 from extract.extractors.scip.identity import ScipIdentity
 
 if TYPE_CHECKING:
+    from extract.extractors.scip.config import ScipIndexConfig
     from extract.extractors.scip.extract import SCIPIndexOptions
-    from hamilton_pipeline.types import ScipIndexConfig
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ infer-with-first-use = true
 untyped-def-behavior = "check-and-infer-return-type"
 permissive-ignores = false
 replace-imports-with-any = [
+    "codeanatomy_engine",
 ]
 ignore-errors-in-generated-code = false
 

@@ -12,23 +12,16 @@ from cli.context import RunContext
 from cli.converters import resolve_determinism_alias
 from cli.groups import (
     advanced_group,
-    execution_group,
-    graph_adapter_group,
     incremental_group,
     observability_group,
     output_group,
     repo_scope_group,
     scip_group,
 )
-from cli.kv_parser import parse_kv_pairs, parse_kv_pairs_json
 from cli.path_utils import resolve_path
-from hamilton_pipeline.types import (
-    ExecutionMode,
-    ExecutorConfig,
-    GraphAdapterConfig,
-    ScipIdentityOverrides,
-    ScipIndexConfig,
-)
+from engine.config import EngineProfile
+from engine.spec_builder import RulepackProfile, TracingPreset
+from extract.extractors.scip.config import ScipIdentityOverrides, ScipIndexConfig
 from semantics.incremental import SemanticIncrementalConfig
 
 if TYPE_CHECKING:
@@ -64,73 +57,6 @@ class _ScipPayload:
     scip_test_args: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class _PlanOverrides:
-    """Plan-level config overrides derived from CLI."""
-
-    plan_allow_partial: bool | None = None
-    plan_requested_tasks: tuple[str, ...] = ()
-    plan_impacted_tasks: tuple[str, ...] = ()
-    enable_metric_scheduling: bool | None = None
-    enable_plan_diagnostics: bool | None = None
-    enable_plan_task_submission_hook: bool | None = None
-    enable_plan_task_grouping_hook: bool | None = None
-    enforce_plan_task_submission: bool | None = None
-
-
-@dataclass(frozen=True)
-class _PlanOverrideRequest:
-    """Inputs for applying plan overrides."""
-
-    config_contents: Mapping[str, JsonValue]
-    overrides: _PlanOverrides
-
-
-@dataclass(frozen=True)
-class _PlanOverrideRule:
-    attr: str
-    key: str
-    listify: bool = False
-
-
-class _PlanOverrideApplier:
-    _RULES: tuple[_PlanOverrideRule, ...] = (
-        _PlanOverrideRule("plan_allow_partial", "allow_partial"),
-        _PlanOverrideRule("plan_requested_tasks", "requested_tasks", listify=True),
-        _PlanOverrideRule("plan_impacted_tasks", "impacted_tasks", listify=True),
-        _PlanOverrideRule("enable_metric_scheduling", "enable_metric_scheduling"),
-        _PlanOverrideRule("enable_plan_diagnostics", "enable_plan_diagnostics"),
-        _PlanOverrideRule("enable_plan_task_submission_hook", "enable_plan_task_submission_hook"),
-        _PlanOverrideRule("enable_plan_task_grouping_hook", "enable_plan_task_grouping_hook"),
-        _PlanOverrideRule("enforce_plan_task_submission", "enforce_plan_task_submission"),
-    )
-
-    @classmethod
-    def apply(cls, request: _PlanOverrideRequest) -> dict[str, JsonValue]:
-        payload = dict(request.config_contents)
-        plan_payload, updated = _plan_payload_from_config(payload)
-        for rule in cls._RULES:
-            value = getattr(request.overrides, rule.attr)
-            if value is None:
-                continue
-            if rule.listify and not value:
-                continue
-            plan_payload[rule.key] = list(value) if rule.listify else value
-            updated = True
-        if updated:
-            payload["plan"] = plan_payload
-        return payload
-
-
-def _plan_payload_from_config(
-    payload: Mapping[str, JsonValue],
-) -> tuple[dict[str, JsonValue], bool]:
-    plan_section = payload.get("plan")
-    if isinstance(plan_section, dict):
-        return dict(cast("Mapping[str, JsonValue]", plan_section)), True
-    return {}, False
-
-
 _DEFAULT_SCIP_PYTHON = "scip-python"
 
 
@@ -148,7 +74,7 @@ DeterminismTierChoice = Literal[
 
 @dataclass(frozen=True)
 class BuildRequestOptions:
-    """CLI options that map directly to GraphProductBuildRequest."""
+    """CLI options that map directly to build orchestrator inputs."""
 
     output_dir: Annotated[
         Path | None,
@@ -192,18 +118,6 @@ class BuildRequestOptions:
             group=output_group,
         ),
     ] = True
-    execution_mode: Annotated[
-        ExecutionMode,
-        Parameter(
-            name="--execution-mode",
-            help=(
-                "Pipeline execution strategy: deterministic_serial, plan_parallel, "
-                "plan_parallel_remote."
-            ),
-            env_var="CODEANATOMY_EXECUTION_MODE",
-            group=execution_group,
-        ),
-    ] = ExecutionMode.PLAN_PARALLEL
     determinism_tier: Annotated[
         DeterminismTierChoice | None,
         Parameter(
@@ -213,7 +127,7 @@ class BuildRequestOptions:
                 "best_effort/tier0/fast."
             ),
             env_var="CODEANATOMY_DETERMINISM_TIER",
-            group=execution_group,
+            group=advanced_group,
         ),
     ] = None
     runtime_profile_name: Annotated[
@@ -222,15 +136,7 @@ class BuildRequestOptions:
             name="--runtime-profile",
             help="Named runtime profile from configuration.",
             env_var="CODEANATOMY_RUNTIME_PROFILE",
-            group=execution_group,
-        ),
-    ] = None
-    writer_strategy: Annotated[
-        Literal["arrow", "datafusion"] | None,
-        Parameter(
-            name="--writer-strategy",
-            help="Writer strategy for materialization.",
-            group=execution_group,
+            group=advanced_group,
         ),
     ] = None
 
@@ -239,49 +145,64 @@ class BuildRequestOptions:
 class BuildOptions:
     """CLI options for build command (non-request fields)."""
 
-    executor_kind: Annotated[
-        Literal["threadpool", "multiprocessing", "dask", "ray"] | None,
+    engine_profile: Annotated[
+        EngineProfile,
         Parameter(
-            name="--executor-kind",
-            help="Primary executor backend for parallel execution.",
-            group=execution_group,
+            name="--engine-profile",
+            help="Engine execution profile: small, medium, large.",
+            env_var="CODEANATOMY_ENGINE_PROFILE",
+            group=advanced_group,
+        ),
+    ] = "medium"
+    rulepack_profile: Annotated[
+        RulepackProfile,
+        Parameter(
+            name="--rulepack-profile",
+            help="Rulepack profile: Default, LowLatency, Replay, Strict.",
+            env_var="CODEANATOMY_RULEPACK_PROFILE",
+            group=advanced_group,
+        ),
+    ] = "Default"
+    enable_compliance: Annotated[
+        bool,
+        Parameter(
+            name="--enable-compliance",
+            help="Enable compliance capture mode.",
+            group=observability_group,
+        ),
+    ] = False
+    enable_rule_tracing: Annotated[
+        bool,
+        Parameter(
+            name="--enable-rule-tracing",
+            help="Enable rule tracing for diagnostics.",
+            group=observability_group,
+        ),
+    ] = False
+    enable_plan_preview: Annotated[
+        bool,
+        Parameter(
+            name="--enable-plan-preview",
+            help="Enable plan preview generation.",
+            group=observability_group,
+        ),
+    ] = False
+    tracing_preset: Annotated[
+        TracingPreset | None,
+        Parameter(
+            name="--tracing-preset",
+            help="Tracing preset: Maximal, MaximalNoData, ProductionLean.",
+            group=observability_group,
         ),
     ] = None
-    executor_max_tasks: Annotated[
-        int | None,
+    instrument_object_store: Annotated[
+        bool,
         Parameter(
-            name="--executor-max-tasks",
-            help="Maximum concurrent tasks for primary executor.",
-            validator=validators.Number(gte=1),
-            group=execution_group,
+            name="--instrument-object-store",
+            help="Instrument object store operations.",
+            group=observability_group,
         ),
-    ] = None
-    executor_remote_kind: Annotated[
-        Literal["threadpool", "multiprocessing", "dask", "ray"] | None,
-        Parameter(
-            name="--executor-remote-kind",
-            help="Remote executor backend for scan/high-cost tasks.",
-            group=execution_group,
-        ),
-    ] = None
-    executor_remote_max_tasks: Annotated[
-        int | None,
-        Parameter(
-            name="--executor-remote-max-tasks",
-            help="Maximum concurrent tasks for remote executor.",
-            validator=validators.Number(gte=1),
-            group=execution_group,
-        ),
-    ] = None
-    executor_cost_threshold: Annotated[
-        float | None,
-        Parameter(
-            name="--executor-cost-threshold",
-            help="Cost threshold for routing tasks to remote executor.",
-            validator=validators.Number(gt=0.0),
-            group=execution_group,
-        ),
-    ] = None
+    ] = False
     disable_scip: Annotated[
         bool,
         Parameter(
@@ -508,30 +429,6 @@ class BuildOptions:
             group=repo_scope_group,
         ),
     ] = "metadata"
-    graph_adapter_kind: Annotated[
-        Literal["threadpool", "dask", "ray"] | None,
-        Parameter(
-            name="--graph-adapter-kind",
-            help="Hamilton graph adapter backend (non-dynamic execution).",
-            group=graph_adapter_group,
-        ),
-    ] = None
-    graph_adapter_option: Annotated[
-        tuple[str, ...],
-        Parameter(
-            name="--graph-adapter-option",
-            help="Graph adapter option key=value (repeatable).",
-            group=graph_adapter_group,
-        ),
-    ] = ()
-    graph_adapter_option_json: Annotated[
-        tuple[str, ...],
-        Parameter(
-            name="--graph-adapter-option-json",
-            help="Graph adapter option key=json (repeatable; JSON values).",
-            group=graph_adapter_group,
-        ),
-    ] = ()
     enable_tree_sitter: Annotated[
         bool,
         Parameter(
@@ -540,145 +437,6 @@ class BuildOptions:
             group=advanced_group,
         ),
     ] = True
-    plan_allow_partial: Annotated[
-        bool | None,
-        Parameter(
-            name="--plan-allow-partial",
-            help="Allow partial execution plans (advanced).",
-            group=advanced_group,
-        ),
-    ] = None
-    plan_requested_task: Annotated[
-        tuple[str, ...],
-        Parameter(
-            name="--plan-requested-task",
-            help="Explicit task names to request in plan compilation (repeatable).",
-            group=advanced_group,
-        ),
-    ] = ()
-    plan_impacted_task: Annotated[
-        tuple[str, ...],
-        Parameter(
-            name="--plan-impacted-task",
-            help="Explicit task names to mark as impacted in plan compilation (repeatable).",
-            group=advanced_group,
-        ),
-    ] = ()
-    enable_metric_scheduling: Annotated[
-        bool | None,
-        Parameter(
-            name="--enable-metric-scheduling",
-            help="Enable metric-based scheduling in plan compilation (advanced).",
-            group=advanced_group,
-        ),
-    ] = None
-    enable_plan_diagnostics: Annotated[
-        bool | None,
-        Parameter(
-            name="--enable-plan-diagnostics",
-            help="Enable plan diagnostics emission (advanced).",
-            group=advanced_group,
-        ),
-    ] = None
-    enable_plan_task_submission_hook: Annotated[
-        bool | None,
-        Parameter(
-            name="--enable-plan-task-submission-hook",
-            help="Enable plan task submission hook (advanced).",
-            group=advanced_group,
-        ),
-    ] = None
-    enable_plan_task_grouping_hook: Annotated[
-        bool | None,
-        Parameter(
-            name="--enable-plan-task-grouping-hook",
-            help="Enable plan task grouping hook (advanced).",
-            group=advanced_group,
-        ),
-    ] = None
-    enforce_plan_task_submission: Annotated[
-        bool | None,
-        Parameter(
-            name="--enforce-plan-task-submission",
-            help="Enforce plan task submission policy (advanced).",
-            group=advanced_group,
-        ),
-    ] = None
-    enable_hamilton_tracker: Annotated[
-        bool | None,
-        Parameter(
-            name="--enable-hamilton-tracker",
-            help="Enable Hamilton UI tracker integration.",
-            group=observability_group,
-        ),
-    ] = None
-    hamilton_project_id: Annotated[
-        int | None,
-        Parameter(
-            name="--hamilton-project-id",
-            help="Hamilton tracker project id.",
-            validator=validators.Number(gte=1),
-            group=observability_group,
-        ),
-    ] = None
-    hamilton_username: Annotated[
-        str | None,
-        Parameter(
-            name="--hamilton-username",
-            help="Hamilton tracker username.",
-            group=observability_group,
-        ),
-    ] = None
-    hamilton_dag_name: Annotated[
-        str | None,
-        Parameter(
-            name="--hamilton-dag-name",
-            help="Hamilton DAG name override.",
-            group=observability_group,
-        ),
-    ] = None
-    hamilton_api_url: Annotated[
-        str | None,
-        Parameter(
-            name="--hamilton-api-url",
-            help="Hamilton tracker API URL override.",
-            group=observability_group,
-        ),
-    ] = None
-    hamilton_ui_url: Annotated[
-        str | None,
-        Parameter(
-            name="--hamilton-ui-url",
-            help="Hamilton tracker UI URL override.",
-            group=observability_group,
-        ),
-    ] = None
-    hamilton_capture_data_statistics: Annotated[
-        bool | None,
-        Parameter(
-            name="--hamilton-capture-data-statistics",
-            help="Enable Hamilton data statistics capture.",
-            group=observability_group,
-        ),
-    ] = None
-    hamilton_max_list_length_capture: Annotated[
-        int | None,
-        Parameter(
-            name="--hamilton-max-list-length-capture",
-            help="Maximum list length to capture in Hamilton telemetry.",
-            validator=validators.Number(gte=0),
-            group=observability_group,
-        ),
-    ] = None
-    hamilton_max_dict_length_capture: Annotated[
-        int | None,
-        Parameter(
-            name="--hamilton-max-dict-length-capture",
-            help="Maximum dict length to capture in Hamilton telemetry.",
-            validator=validators.Number(gte=0),
-            group=observability_group,
-        ),
-    ] = None
 
 
 _DEFAULT_BUILD_REQUEST = BuildRequestOptions()
@@ -696,15 +454,6 @@ class _CliConfigOverrides:
     git_base_ref: str | None
     git_head_ref: str | None
     git_changed_only: bool
-    enable_hamilton_tracker: bool | None
-    hamilton_project_id: int | None
-    hamilton_username: str | None
-    hamilton_dag_name: str | None
-    hamilton_api_url: str | None
-    hamilton_ui_url: str | None
-    hamilton_capture_data_statistics: bool | None
-    hamilton_max_list_length_capture: int | None
-    hamilton_max_dict_length_capture: int | None
 
 
 @dataclass(frozen=True)
@@ -750,10 +499,16 @@ def build_command(
     -------
     int
         Exit status code.
+
+    Raises:
+    ------
+    ValueError
+        If engine execution fails.
     """
     import logging
 
-    from graph import GraphProductBuildRequest, build_graph_product
+    from engine.build_orchestrator import orchestrate_build
+    from engine.spec_builder import RuntimeConfig, TracingConfig
 
     logger = logging.getLogger("codeanatomy.pipeline")
     resolved_repo_root = repo_root.resolve()
@@ -765,22 +520,9 @@ def build_command(
     else:
         config_contents = dict(run_context.config_contents)
     config_contents["repo_root"] = str(resolved_repo_root)
-    otel_options = run_context.otel_options if run_context else None
 
     resolved_tier = resolve_determinism_alias(request.determinism_tier)
 
-    plan_overrides = _PlanOverrides(
-        plan_allow_partial=options.plan_allow_partial,
-        plan_requested_tasks=options.plan_requested_task,
-        plan_impacted_tasks=options.plan_impacted_task,
-        enable_metric_scheduling=options.enable_metric_scheduling,
-        enable_plan_diagnostics=options.enable_plan_diagnostics,
-        enable_plan_task_submission_hook=options.enable_plan_task_submission_hook,
-        enable_plan_task_grouping_hook=options.enable_plan_task_grouping_hook,
-        enforce_plan_task_submission=options.enforce_plan_task_submission,
-    )
-
-    config_contents = _apply_plan_overrides(config_contents, plan_overrides)
     cli_overrides = _CliConfigOverrides(
         runtime_profile_name=request.runtime_profile_name,
         determinism_override=resolved_tier,
@@ -791,15 +533,6 @@ def build_command(
         git_base_ref=options.git_base_ref,
         git_head_ref=options.git_head_ref,
         git_changed_only=options.git_changed_only,
-        enable_hamilton_tracker=options.enable_hamilton_tracker,
-        hamilton_project_id=options.hamilton_project_id,
-        hamilton_username=options.hamilton_username,
-        hamilton_dag_name=options.hamilton_dag_name,
-        hamilton_api_url=options.hamilton_api_url,
-        hamilton_ui_url=options.hamilton_ui_url,
-        hamilton_capture_data_statistics=options.hamilton_capture_data_statistics,
-        hamilton_max_list_length_capture=options.hamilton_max_list_length_capture,
-        hamilton_max_dict_length_capture=options.hamilton_max_dict_length_capture,
     )
     config_contents = _apply_cli_config_overrides(
         config_contents,
@@ -831,18 +564,12 @@ def build_command(
             project_namespace_override=options.scip_project_namespace,
         )
 
-    executor_config = _build_executor_config(
-        executor_kind=options.executor_kind,
-        executor_max_tasks=options.executor_max_tasks,
-        executor_remote_kind=options.executor_remote_kind,
-        executor_remote_max_tasks=options.executor_remote_max_tasks,
-        executor_cost_threshold=options.executor_cost_threshold,
-    )
-
-    graph_adapter_config = _build_graph_adapter_config(
-        graph_adapter_kind=options.graph_adapter_kind,
-        graph_adapter_option=options.graph_adapter_option,
-        graph_adapter_option_json=options.graph_adapter_option_json,
+    runtime_config = RuntimeConfig(
+        compliance_capture=options.enable_compliance,
+        enable_rule_tracing=options.enable_rule_tracing,
+        enable_plan_preview=options.enable_plan_preview,
+        tracing_preset=options.tracing_preset,
+        tracing=TracingConfig(instrument_object_store=options.instrument_object_store),
     )
 
     incremental_config = _build_incremental_config(
@@ -858,66 +585,44 @@ def build_command(
         ),
     )
 
-    overrides: dict[str, object] = {}
-    if run_context:
-        overrides["run_id"] = run_context.run_id
-    overrides.update(
-        {
-            "include_globs": list(options.include_globs),
-            "exclude_globs": list(options.exclude_globs),
-            "include_untracked": options.include_untracked,
-            "include_submodules": options.include_submodules,
-            "include_worktrees": options.include_worktrees,
-            "follow_symlinks": options.follow_symlinks,
-            "external_interface_depth": options.external_interface_depth,
-            "enable_tree_sitter": options.enable_tree_sitter,
-        }
-    )
+    extraction_config: dict[str, object] = {
+        "scip_index_config": scip_config,
+        "scip_identity_overrides": scip_identity,
+        "incremental_config": incremental_config,
+        "include_globs": list(options.include_globs),
+        "exclude_globs": list(options.exclude_globs),
+        "include_untracked": options.include_untracked,
+        "include_submodules": options.include_submodules,
+        "include_worktrees": options.include_worktrees,
+        "follow_symlinks": options.follow_symlinks,
+        "external_interface_depth": options.external_interface_depth,
+        "enable_tree_sitter": options.enable_tree_sitter,
+    }
 
-    build_request = GraphProductBuildRequest(
+    resolved_output_dir = request.output_dir or resolved_repo_root / "build"
+    resolved_work_dir = request.work_dir or resolved_repo_root / ".codeanatomy"
+
+    result = orchestrate_build(
         repo_root=resolved_repo_root,
-        output_dir=request.output_dir,
-        work_dir=request.work_dir,
-        execution_mode=request.execution_mode,
-        executor_config=executor_config,
-        graph_adapter_config=graph_adapter_config,
-        scip_index_config=scip_config,
-        scip_identity_overrides=scip_identity,
-        runtime_profile_name=request.runtime_profile_name,
-        determinism_override=resolved_tier,
-        writer_strategy=request.writer_strategy,
-        incremental_config=incremental_config,
-        incremental_impact_strategy=options.incremental_impact_strategy,
-        include_extract_errors=request.include_extract_errors,
+        work_dir=resolved_work_dir,
+        output_dir=resolved_output_dir,
+        engine_profile=options.engine_profile,
+        rulepack_profile=options.rulepack_profile,
+        runtime_config=runtime_config,
+        extraction_config=extraction_config,
+        include_errors=request.include_extract_errors,
         include_manifest=request.include_manifest,
         include_run_bundle=request.include_run_bundle,
-        config=config_contents,
-        overrides=overrides or None,
-        otel_options=otel_options,
     )
-
-    result = build_graph_product(build_request)
 
     logger.info(
-        "Build complete. Output dir=%s bundle=%s",
-        result.output_dir,
-        result.run_bundle_dir,
+        "Build complete. CPG outputs=%d, auxiliary outputs=%d",
+        len(result.cpg_outputs),
+        len(result.auxiliary_outputs),
     )
-    logger.info("Pipeline outputs: %s", sorted(result.pipeline_outputs))
+    logger.info("CPG tables: %s", sorted(result.cpg_outputs))
 
     return 0
-
-
-def _apply_plan_overrides(
-    config_contents: Mapping[str, JsonValue],
-    overrides: _PlanOverrides,
-) -> dict[str, JsonValue]:
-    return _PlanOverrideApplier.apply(
-        _PlanOverrideRequest(
-            config_contents=config_contents,
-            overrides=overrides,
-        )
-    )
 
 
 def _apply_optional_value(
@@ -997,110 +702,7 @@ def _apply_cli_config_overrides(
     )
     incremental_payload["git_changed_only"] = overrides.git_changed_only
     payload["incremental"] = incremental_payload
-    hamilton_section = payload.get("hamilton")
-    hamilton_payload: dict[str, JsonValue]
-    if isinstance(hamilton_section, dict):
-        hamilton_payload = dict(cast("Mapping[str, JsonValue]", hamilton_section))
-    else:
-        hamilton_payload = dict[str, JsonValue]()
-    _apply_optional_value(
-        hamilton_payload,
-        key="enable_tracker",
-        value=overrides.enable_hamilton_tracker,
-    )
-    _apply_optional_value(
-        hamilton_payload,
-        key="project_id",
-        value=overrides.hamilton_project_id,
-    )
-    _apply_optional_str(
-        hamilton_payload,
-        key="username",
-        value=overrides.hamilton_username,
-    )
-    _apply_optional_str(
-        hamilton_payload,
-        key="dag_name",
-        value=overrides.hamilton_dag_name,
-    )
-    _apply_optional_str(
-        hamilton_payload,
-        key="api_url",
-        value=overrides.hamilton_api_url,
-    )
-    _apply_optional_str(
-        hamilton_payload,
-        key="ui_url",
-        value=overrides.hamilton_ui_url,
-    )
-    _apply_optional_value(
-        hamilton_payload,
-        key="capture_data_statistics",
-        value=overrides.hamilton_capture_data_statistics,
-    )
-    _apply_optional_value(
-        hamilton_payload,
-        key="max_list_length_capture",
-        value=overrides.hamilton_max_list_length_capture,
-    )
-    _apply_optional_value(
-        hamilton_payload,
-        key="max_dict_length_capture",
-        value=overrides.hamilton_max_dict_length_capture,
-    )
-    payload["hamilton"] = hamilton_payload
     return payload
-
-
-def _build_executor_config(
-    *,
-    executor_kind: Literal["threadpool", "multiprocessing", "dask", "ray"] | None,
-    executor_max_tasks: int | None,
-    executor_remote_kind: Literal["threadpool", "multiprocessing", "dask", "ray"] | None,
-    executor_remote_max_tasks: int | None,
-    executor_cost_threshold: float | None,
-) -> ExecutorConfig | None:
-    if (
-        executor_kind is None
-        and executor_max_tasks is None
-        and executor_remote_kind is None
-        and executor_remote_max_tasks is None
-        and executor_cost_threshold is None
-    ):
-        return None
-    return ExecutorConfig(
-        kind=executor_kind or "multiprocessing",
-        max_tasks=executor_max_tasks or 4,
-        remote_kind=executor_remote_kind,
-        remote_max_tasks=executor_remote_max_tasks,
-        cost_threshold=executor_cost_threshold,
-    )
-
-
-def _build_graph_adapter_config(
-    *,
-    graph_adapter_kind: Literal["threadpool", "dask", "ray"] | None,
-    graph_adapter_option: tuple[str, ...],
-    graph_adapter_option_json: tuple[str, ...],
-) -> GraphAdapterConfig | None:
-    if graph_adapter_kind is None:
-        return None
-    adapter_options: dict[str, JsonValue] = (
-        {
-            key: cast("JsonValue", value)
-            for key, value in parse_kv_pairs(graph_adapter_option).items()
-        }
-        if graph_adapter_option
-        else {}
-    )
-    adapter_options_json: dict[str, JsonValue] = (
-        dict(parse_kv_pairs_json(graph_adapter_option_json)) if graph_adapter_option_json else {}
-    )
-    combined: dict[str, JsonValue] = {**adapter_options, **adapter_options_json}
-    return GraphAdapterConfig(
-        kind=graph_adapter_kind,
-        options=combined or None,
-    )
 
 
 def _build_incremental_config(

@@ -8,7 +8,7 @@ from typing import Literal
 import msgspec
 
 from core.config_base import config_fingerprint
-from hamilton_pipeline.types import GraphAdapterConfig
+from engine.config import EngineConfigSpec
 from obs.otel.config import OtelConfigSpec
 from serde_msgspec import StructBaseStrict
 
@@ -174,44 +174,17 @@ class DocstringsConfigSpec(StructBaseStrict, frozen=True):
     policy: DocstringsPolicyConfigSpec | None = None
 
 
-class HamiltonConfigSpec(StructBaseStrict, frozen=True):
-    """Hamilton-related configuration values."""
-
-    enable_tracker: bool | None = None
-    enable_type_checker: bool | None = None
-    enable_node_diagnostics: bool | None = None
-    enable_structured_run_logs: bool | None = None
-    structured_log_path: str | None = None
-    run_log_path: str | None = None
-    enable_graph_snapshot: bool | None = None
-    graph_snapshot_path: str | None = None
-    graph_snapshot_hamilton_path: str | None = None
-    enable_cache_lineage: bool | None = None
-    cache_lineage_path: str | None = None
-    capture_data_statistics: bool | None = None
-    max_list_length_capture: int | None = None
-    max_dict_length_capture: int | None = None
-    tags: dict[str, object] | None = None
-    project_id: int | None = None
-    username: str | None = None
-    dag_name: str | None = None
-    api_url: str | None = None
-    ui_url: str | None = None
-    telemetry_profile: str | None = None
-
-
 class RootConfigSpec(StructBaseStrict, frozen=True):
     """Root configuration payload for CodeAnatomy."""
 
     plan: PlanConfigSpec | None = None
     cache: CacheConfigSpec | None = None
     datafusion_cache: DataFusionCacheConfigSpec | None = None
-    graph_adapter: GraphAdapterConfig | None = None
     incremental: IncrementalConfigSpec | None = None
     delta: DeltaConfigSpec | None = None
     docstrings: DocstringsConfigSpec | None = None
     otel: OtelConfigSpec | None = None
-    hamilton: HamiltonConfigSpec | None = None
+    engine: EngineConfigSpec | None = None
 
 
 __all__ = [
@@ -225,8 +198,6 @@ __all__ = [
     "DiskCacheSettingsSpec",
     "DocstringsConfigSpec",
     "DocstringsPolicyConfigSpec",
-    "GraphAdapterConfig",
-    "HamiltonConfigSpec",
     "IncrementalConfigSpec",
     "OtelConfigSpec",
     "PlanConfigSpec",

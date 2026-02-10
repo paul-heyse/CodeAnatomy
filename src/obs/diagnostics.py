@@ -27,7 +27,6 @@ from serde_artifact_specs import (
     DATAFRAME_VALIDATION_ERRORS_SPEC,
     DATAFUSION_PREPARED_STATEMENTS_SPEC,
     DATAFUSION_VIEW_ARTIFACTS_SPEC,
-    HAMILTON_CACHE_LINEAGE_SPEC,
     RUST_UDF_SNAPSHOT_SPEC,
     SEMANTIC_QUALITY_ARTIFACT_SPEC,
     VIEW_CONTRACT_VIOLATIONS_SPEC,
@@ -317,25 +316,11 @@ def record_view_artifact(sink: DiagnosticsCollector, *, artifact: DataFusionView
     )
 
 
-def record_cache_lineage(
-    sink: DiagnosticsCollector,
-    *,
-    payload: Mapping[str, object],
-    rows: Sequence[Mapping[str, object]] | None = None,
-) -> None:
-    """Record cache lineage artifacts and optional per-node rows."""
-    recorder_sink = ensure_recorder_sink(sink, session_id=_OBS_SESSION_ID)
-    recorder_sink.record_artifact(HAMILTON_CACHE_LINEAGE_SPEC, payload)
-    if rows:
-        recorder_sink.record_events("hamilton_cache_lineage_nodes_v1", rows)
-
-
 __all__ = [
     "DiagnosticsCollector",
     "PreparedStatementSpec",
     "SemanticQualityArtifact",
     "prepared_statement_hook",
-    "record_cache_lineage",
     "record_dataframe_validation_error",
     "record_rust_udf_snapshot",
     "record_semantic_quality_artifact",

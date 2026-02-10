@@ -22,13 +22,6 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     psutil = None
 
-try:
-    from hamilton.execution import graph_functions as hamilton_graph_functions
-except ImportError:  # pragma: no cover - optional dependency
-    hamilton_graph_functions = None
-
-os.environ.setdefault("HAMILTON_TELEMETRY_ENABLED", "true")
-
 _DIAG_DIR = Path("build/test-results")
 _ENV_PATH = _DIAG_DIR / "diagnostics_env.json"
 _VERSIONS_PATH = _DIAG_DIR / "diagnostics_versions.json"
@@ -57,7 +50,6 @@ def _collect_env() -> dict[str, Any]:
                 "LD_",
                 "ARROW",
                 "DATAFUSION",
-                "HAMILTON",
                 "CODEANATOMY",
             )
         ),
@@ -71,7 +63,6 @@ def _collect_versions() -> dict[str, str]:
         "pyarrow",
         "datafusion",
         "libcst",
-        "hamilton",
         "numpy",
         "pytest",
         "ruff",
@@ -126,18 +117,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         return
 
 
-def _patch_hamilton_input_string() -> None:
-    graph_functions = hamilton_graph_functions
-    if graph_functions is None:
-        return
-
-    def _safe_input_string(kwargs: dict[str, object]) -> str:
-        _ = kwargs
-        return "<node inputs elided>"
-
-    graph_functions.create_input_string = _safe_input_string
-
-
 def pytest_addoption(parser: pytest.Parser) -> None:
     """Register shared command-line options for test suites."""
     parser.addoption(
@@ -151,7 +130,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_sessionstart(session: object) -> None:
     """Initialize diagnostic capture for the pytest session."""
     _DIAG_DIR.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("HAMILTON_TELEMETRY_ENABLED", "true")
     if os.environ.get("CODEANATOMY_PLUGIN_STUB", "").lower() in {"1", "true", "yes"}:
         from test_support import datafusion_ext_stub
 
@@ -164,7 +142,6 @@ def pytest_sessionstart(session: object) -> None:
     if "ARROWDSL_PLAN_SCHEMA_LOG_PATH" not in os.environ:
         os.environ["ARROWDSL_PLAN_SCHEMA_LOG_PATH"] = str(_PLAN_SCHEMA_LOG_PATH)
     _setup_faulthandler()
-    _patch_hamilton_input_string()
     _ = session
 
 

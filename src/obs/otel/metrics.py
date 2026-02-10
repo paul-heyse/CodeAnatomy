@@ -100,18 +100,25 @@ class GaugeStore:
 class MetricsRegistry:
     """Registry for CodeAnatomy metric instruments."""
 
+    # Core execution metrics (engine-native sources)
     stage_duration: metrics.Histogram
     task_duration: metrics.Histogram
     datafusion_duration: metrics.Histogram
     write_duration: metrics.Histogram
     artifact_count: metrics.Counter
     error_count: metrics.Counter
+
+    # Dataset metrics (engine-native sources)
     dataset_rows: GaugeStore
     dataset_columns: GaugeStore
     scan_row_groups: GaugeStore
     scan_fragments: GaugeStore
+
+    # Cache metrics (deprecated - pending engine cache metrics)
     cache_operation_count: metrics.Counter
     cache_operation_duration: metrics.Histogram
+
+    # Storage metrics (engine-native sources)
     storage_operation_count: metrics.Counter
     storage_operation_duration: metrics.Histogram
     dataset_rows_gauge: metrics.ObservableGauge
@@ -329,22 +336,22 @@ def _registry() -> MetricsRegistry:
         stage_duration=meter.create_histogram(
             _STAGE_DURATION,
             unit="s",
-            description="Stage execution duration (seconds).",
+            description="Stage execution duration (seconds). Sourced from Rust elapsed_compute_nanos + Python extraction spans.",
         ),
         task_duration=meter.create_histogram(
             _TASK_DURATION,
             unit="s",
-            description="Hamilton task execution duration (seconds).",
+            description="Task execution duration (seconds). Sourced from engine RunResult.collected_metrics.operator_metrics.",
         ),
         datafusion_duration=meter.create_histogram(
             _DATAFUSION_DURATION,
             unit="s",
-            description="DataFusion execution duration (seconds).",
+            description="DataFusion execution duration (seconds). Sourced from engine-native execution metrics.",
         ),
         write_duration=meter.create_histogram(
             _WRITE_DURATION,
             unit="s",
-            description="DataFusion write duration (seconds).",
+            description="DataFusion write duration (seconds). Sourced from engine-native write operations.",
         ),
         artifact_count=meter.create_counter(
             _ARTIFACT_COUNT,
@@ -363,12 +370,12 @@ def _registry() -> MetricsRegistry:
         cache_operation_count=meter.create_counter(
             _CACHE_OPERATION_COUNT,
             unit="1",
-            description="Cache operation count by policy/scope/result.",
+            description="Cache operation count by policy/scope/result. DEPRECATED: pending engine-native cache metrics.",
         ),
         cache_operation_duration=meter.create_histogram(
             _CACHE_OPERATION_DURATION,
             unit="s",
-            description="Cache operation duration by policy/scope/result.",
+            description="Cache operation duration by policy/scope/result. DEPRECATED: pending engine-native cache metrics.",
         ),
         storage_operation_count=meter.create_counter(
             _STORAGE_OPERATION_COUNT,

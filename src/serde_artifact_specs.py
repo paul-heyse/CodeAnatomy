@@ -238,10 +238,10 @@ VIEW_FINGERPRINTS_SPEC = register_artifact_spec(
     )
 )
 
-HAMILTON_CACHE_LINEAGE_SPEC = register_artifact_spec(
+PIPELINE_CACHE_LINEAGE_SPEC = register_artifact_spec(
     ArtifactSpec(
-        canonical_name="hamilton_cache_lineage_v2",
-        description="Hamilton cache lineage summary with per-node facts.",
+        canonical_name="pipeline_cache_lineage_v2",
+        description="Pipeline cache lineage summary with per-node facts.",
     )
 )
 
@@ -1016,55 +1016,55 @@ DATAFRAME_VALIDATION_ERRORS_SPEC = register_artifact_spec(
 )
 
 # ---------------------------------------------------------------------------
-# Hamilton Pipeline
+# Pipeline Events
 # ---------------------------------------------------------------------------
 
-HAMILTON_EVENTS_STORE_SPEC = register_artifact_spec(
+PIPELINE_EVENTS_STORE_SPEC = register_artifact_spec(
     ArtifactSpec(
-        canonical_name="hamilton_events_store_v2",
-        description="Hamilton pipeline event store diagnostics.",
+        canonical_name="pipeline_events_store_v2",
+        description="Pipeline event store diagnostics.",
     )
 )
 
-HAMILTON_EVENTS_STORE_FAILED_SPEC = register_artifact_spec(
+PIPELINE_EVENTS_STORE_FAILED_SPEC = register_artifact_spec(
     ArtifactSpec(
-        canonical_name="hamilton_events_store_failed_v2",
-        description="Hamilton pipeline event store write failure diagnostic.",
+        canonical_name="pipeline_events_store_failed_v2",
+        description="Pipeline event store write failure diagnostic.",
     )
 )
 
-DATAFUSION_HAMILTON_EVENTS_SPEC = register_artifact_spec(
+DATAFUSION_PIPELINE_EVENTS_SPEC = register_artifact_spec(
     ArtifactSpec(
-        canonical_name="datafusion_hamilton_events_v2",
-        description="DataFusion Hamilton event row diagnostics.",
+        canonical_name="datafusion_pipeline_events_v2",
+        description="DataFusion pipeline event row diagnostics.",
     )
 )
 
-HAMILTON_GRAPH_SNAPSHOT_SPEC = register_artifact_spec(
+PIPELINE_GRAPH_SNAPSHOT_SPEC = register_artifact_spec(
     ArtifactSpec(
-        canonical_name="hamilton_graph_snapshot_v1",
-        description="Hamilton DAG graph structure snapshot.",
+        canonical_name="pipeline_graph_snapshot_v1",
+        description="Pipeline DAG graph structure snapshot.",
     )
 )
 
-HAMILTON_PLAN_DRIFT_SPEC = register_artifact_spec(
+PIPELINE_PLAN_DRIFT_SPEC = register_artifact_spec(
     ArtifactSpec(
-        canonical_name="hamilton_plan_drift_v1",
-        description="Hamilton plan drift detection between expected and actual DAG shapes.",
+        canonical_name="pipeline_plan_drift_v1",
+        description="Pipeline plan drift detection between expected and actual DAG shapes.",
     )
 )
 
-HAMILTON_PLAN_EVENTS_SPEC = register_artifact_spec(
+PIPELINE_PLAN_EVENTS_SPEC = register_artifact_spec(
     ArtifactSpec(
-        canonical_name="hamilton_plan_events_v1",
-        description="Hamilton plan-level event diagnostics.",
+        canonical_name="pipeline_plan_events_v1",
+        description="Pipeline plan-level event diagnostics.",
     )
 )
 
-HAMILTON_RUN_LOG_SPEC = register_artifact_spec(
+PIPELINE_RUN_LOG_SPEC = register_artifact_spec(
     ArtifactSpec(
-        canonical_name="hamilton_run_log_v1",
-        description="Hamilton pipeline run log summary.",
+        canonical_name="pipeline_run_log_v1",
+        description="Pipeline run log summary.",
     )
 )
 
@@ -1358,10 +1358,10 @@ __all__ = [
     "DATAFUSION_EXTENSION_PARITY_SPEC",
     "DATAFUSION_EXTRACT_OUTPUT_WRITES_SPEC",
     "DATAFUSION_FUNCTION_FACTORY_SPEC",
-    "DATAFUSION_HAMILTON_EVENTS_SPEC",
     "DATAFUSION_INPUT_PLUGINS_SPEC",
     "DATAFUSION_LISTING_REFRESH_SPEC",
     "DATAFUSION_NAMESPACE_ACTIONS_SPEC",
+    "DATAFUSION_PIPELINE_EVENTS_SPEC",
     "DATAFUSION_PLAN_ARTIFACTS_SPEC",
     "DATAFUSION_PLAN_BUNDLE_SPEC",
     "DATAFUSION_PLAN_EXECUTION_SPEC",
@@ -1416,13 +1416,6 @@ __all__ = [
     "EXTRACT_PLAN_EXECUTE_SPEC",
     "EXTRACT_UDF_PARITY_SPEC",
     "FALLBACK_QUARANTINE_SPEC",
-    "HAMILTON_CACHE_LINEAGE_SPEC",
-    "HAMILTON_EVENTS_STORE_FAILED_SPEC",
-    "HAMILTON_EVENTS_STORE_SPEC",
-    "HAMILTON_GRAPH_SNAPSHOT_SPEC",
-    "HAMILTON_PLAN_DRIFT_SPEC",
-    "HAMILTON_PLAN_EVENTS_SPEC",
-    "HAMILTON_RUN_LOG_SPEC",
     "INCREMENTAL_CDF_READ_SPEC",
     "INCREMENTAL_METADATA_SPEC",
     "INCREMENTAL_STREAMING_WRITES_SPEC",
@@ -1431,6 +1424,13 @@ __all__ = [
     "MISSING_DATASET_LOCATION_SPEC",
     "NORMALIZE_OUTPUTS_SPEC",
     "OBJECT_STORE_REGISTERED_SPEC",
+    "PIPELINE_CACHE_LINEAGE_SPEC",
+    "PIPELINE_EVENTS_STORE_FAILED_SPEC",
+    "PIPELINE_EVENTS_STORE_SPEC",
+    "PIPELINE_GRAPH_SNAPSHOT_SPEC",
+    "PIPELINE_PLAN_DRIFT_SPEC",
+    "PIPELINE_PLAN_EVENTS_SPEC",
+    "PIPELINE_RUN_LOG_SPEC",
     "PLAN_ARTIFACTS_EXECUTION_FAILED_SPEC",
     "PLAN_ARTIFACTS_STORE_FAILED_SPEC",
     "PLAN_ARTIFACTS_STORE_SPEC",

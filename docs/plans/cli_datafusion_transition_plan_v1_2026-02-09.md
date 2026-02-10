@@ -291,7 +291,10 @@ directly to engine-native types with no shims or deprecation period.
 
 4. **Replace `_outputs_for_request()`** (line 375):
    - Current: Returns Hamilton output node names (`write_cpg_nodes_delta`, etc.)
-   - Target: Not needed - the Rust engine produces all outputs as part of its RunResult
+   - Target: Replace with an engine-native output contract resolver:
+     - Rust engine `RunResult` drives core CPG Delta outputs
+     - Python orchestration emits auxiliary outputs (`normalize_outputs`,
+       `extract_error_artifacts`, `run_manifest`) and optional `run_bundle_dir`
 
 5. **Replace `_pipeline_options()`** (line 217):
    - Current: Builds `PipelineExecutionOptions` for Hamilton
@@ -521,7 +524,7 @@ payload includes warning counters and code map (`metrics_collector.rs:29-30`).
 ```
 Rust RunResult.warnings: Vec<RunWarning>
   ├─ Each RunWarning has: code, severity, message, context
-  ├─ Aggregated in TraceMetricsSummary: warning_count_by_code: HashMap<String, u64>
+  ├─ Aggregated in TraceMetricsSummary: warning_counts_by_code: BTreeMap<String, u64>
   └─ Available in CollectedMetrics.operator_metrics for per-operator warnings
 ```
 
@@ -530,7 +533,7 @@ Rust RunResult.warnings: Vec<RunWarning>
 | Rust Field | Python Target | Description |
 |-----------|--------------|-------------|
 | `RunResult.warnings` | OTel warning events + diagnostics artifacts | Structured warnings with codes |
-| `trace_metrics_summary.warning_count_by_code` | `src/obs/otel/metrics.py` warning counters | Warning counts by code for metrics |
+| `trace_metrics_summary.warning_counts_by_code` | `src/obs/otel/metrics.py` warning counters | Warning counts by code for metrics |
 | `collected_metrics.operator_metrics` | Per-operator diagnostic analysis | Operator-level warning detail |
 
 Map these directly to `src/obs/otel/metrics.py` and diagnostics report sections.
@@ -592,23 +595,24 @@ excludes `write_normalize_outputs_delta`.
 
 **CORRECTION (from review §2.1):** The previous version of this table listed output names
 (`write_semantic_normalize_delta`, `write_semantic_relate_delta`, `write_evidence_summary_delta`)
-that are NOT current Hamilton outputs. The table below uses actual live keys from
-`FULL_PIPELINE_OUTPUTS`.
+that are NOT current Hamilton outputs. The table below is fully re-baselined to the
+actual live keys in `FULL_PIPELINE_OUTPUTS`.
 
 | Hamilton Output Node | Rust-Producible | Notes |
 |---------------------|----------------|-------|
 | `write_cpg_nodes_delta` | YES | Core CPG output |
 | `write_cpg_edges_delta` | YES | Core CPG output |
-| `write_cpg_properties_delta` | YES | Core CPG output |
+| `write_cpg_props_delta` | YES | Core CPG output |
+| `write_cpg_props_map_delta` | YES | Core CPG output |
+| `write_cpg_edges_by_src_delta` | YES | Core CPG output |
+| `write_cpg_edges_by_dst_delta` | YES | Core CPG output |
 | `write_normalize_outputs_delta` | **NO** | Python-side normalization state tracking (currently excluded from `_outputs_for_request`) |
 | `write_extract_error_artifacts_delta` | **NO** | Python-side extraction error collection |
 | `write_run_manifest_delta` | **NO** | Hamilton datasaver output node with Delta writes |
+| `write_run_bundle_dir` | N/A (orchestrator) | Filesystem/run-bundle orchestration concern (Python-side) |
 
-**NOTE:** Additional output keys exist in `FULL_PIPELINE_OUTPUTS` that should be
-verified against the current codebase before implementation. The exact set must be
-confirmed by reading `execution.py:36` at implementation time.
-
-**Impact:** The 3 non-Rust-producible outputs need Python-side handling:
+**Impact:** The Rust engine does not independently emit 3 artifact outputs and 1
+orchestration-path output. These need Python-side handling:
 
 1. **`write_normalize_outputs_delta`** - Can be produced by the Python semantic compiler
    as a side-effect of `build_cpg()`, written to Delta before Rust engine invocation.
@@ -618,9 +622,11 @@ confirmed by reading `execution.py:36` at implementation time.
    step that constructs the manifest from the Rust engine's `RunResult` envelope combined
    with extraction metadata. The current Hamilton manifest is a full datasaver output node
    with Delta writes that cannot be replicated by the Rust engine.
+4. **`write_run_bundle_dir`** - Emitted by Python orchestration when `include_run_bundle`
+   is enabled; this is not a Rust materialization output.
 
 **Recommendation:** Phase 2 (Build Command Rewrite) must include auxiliary output handling
-for these 3 outputs. They should be produced by the Python orchestration layer alongside
+for these outputs. They should be produced by the Python orchestration layer alongside
 the Rust engine execution.
 
 ### 6.6 Determinism Model Clarification
@@ -900,6 +906,8 @@ must be resolved before Phase 4 (Hamilton Removal) can complete.
 | File | Hamilton Coupling | Required Action |
 |------|------------------|-----------------|
 | `src/datafusion_engine/lineage/diagnostics.py:656,673` | Hamilton-specific diagnostics lineage recording | **Replace** with engine-native diagnostic events |
+| `src/datafusion_engine/plan/artifact_store.py:52` | `HAMILTON_EVENTS_TABLE_NAME = "datafusion_hamilton_events_v2"` naming and persistence surface | **Rename/re-scope** to engine-native events table + APIs |
+| `src/datafusion_engine/schema/registry.py:1455,1489,1502,1515,1547` | Hamilton-named diagnostics/event schemas | **Replace/rename** to engine-native schema keys and update callers |
 
 ### 7a.3 Artifact Spec Registry Coupling
 
@@ -937,6 +945,8 @@ FORBIDDEN_PATTERNS = [
     r"import hamilton",
     r"from hamilton_pipeline",
     r"import hamilton_pipeline",
+    r"datafusion_hamilton_events",
+    r"hamilton_events_",
     r"rustworkx",
     r"OtelNodeHook",
     r"OtelPlanHook",
@@ -1029,10 +1039,11 @@ Wire structured warnings and trace metrics into obs pipeline.
    - Direct orchestrator flow: extraction → spec build → Rust engine
    - Preserve OTel span structure (root_span, heartbeat, diagnostics)
    - Wire structured `RunWarning` payloads to obs pipeline (see §6.3)
-5. Handle 3 auxiliary outputs not producible by Rust engine (see §6.5):
+5. Handle Python-side outputs not emitted by Rust materialization (see §6.5):
    - `write_normalize_outputs_delta` → Produce from Python semantic compiler side-effect
    - `write_extract_error_artifacts_delta` → Collect during extraction phase, write from orchestrator
    - `write_run_manifest_delta` → Construct from RunResult envelope + extraction metadata
+   - `write_run_bundle_dir` → Emit from orchestrator when `include_run_bundle=true`
 
 **Exit criteria:**
 - Engine produces correct CPG outputs (nodes, edges, props) validated against contract tests
@@ -1444,7 +1455,7 @@ instrument_object_store = false
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | Extraction output schema drift | Rust engine rejects inputs | Schema contract tests between extraction Delta outputs and SemanticExecutionSpec input_relations |
-| 3 auxiliary outputs not Rust-producible | Missing normalize_outputs, extract_errors, manifest | Python-side handling in orchestrator (see §6.5) |
+| Auxiliary/orchestration outputs not Rust-producible | Missing normalize_outputs, extract_errors, manifest, run_bundle_dir | Python-side handling in orchestrator (see §6.5) |
 | Determinism tier semantic mismatch | Users expect tier guarantees engine can't provide | Python-side validation wrapper around 2-hash model (see §6.6) |
 | Deletion scope wider than `cli` + `obs` | Hidden Hamilton coupling blocks deletion | Cross-scope deletion workstream (see §7a) + preflight scanner (see §7a.6) |
 | Plan command parity gap | `plan` features require Rust APIs that don't exist yet | Tiered parity approach - only promise Tier 1 until APIs exist (see §3.2.2) |
@@ -1597,11 +1608,10 @@ All original open questions have been resolved through targeted code validation:
    touchpoints identified (`config_models.py`, `runtime_models/root.py`, `config.py`
    template, `config_loader.py` validation).
 
-8. **Rust engine compilation issues:** Pre-existing type mismatch in
-   `rust/codeanatomy_engine/src/executor/pipeline.rs:202` (`Vec<RunWarning>` vs
-   `Vec<String>`) and `result.rs:169`. These should be fixed before Phase 3.5
-   observability work, as they affect the `RunResult` envelope that the metrics bridge
-   depends on.
+8. **Rust warning envelope status: RESOLVED**
+   `RunResult.warnings` is already aligned to `Vec<RunWarning>` in current code
+   (`result.rs:36,169`; `pipeline.rs:96,227`). No compile blocker remains from the
+   previously suspected `Vec<RunWarning>` vs `Vec<String>` mismatch.
 
 9. **Rust plan introspection API scope:** Plan command Tier 2/3 parity requires
    PyO3-exported plan summary/schedule/validation metadata from the Rust engine
@@ -1648,7 +1658,7 @@ The net result is a **significant reduction** in codebase complexity:
 - ~3 additional cross-scope files cleaned up (engine/telemetry, artifact specs, lineage)
 - ~24 test files migrated or deleted
 - ~28 CLI options removed, ~7 added
-- 3 auxiliary outputs reimplemented as Python-side orchestrator outputs
+- 3 auxiliary artifact outputs + 1 orchestrator path output reimplemented on Python side
 - 4 metrics instruments repointed from Hamilton hooks to Rust engine data
 - 8 Hamilton event types deleted, replaced by Rust compliance capture + execution spans
 - 3 rustworkx plan artifacts replaced by engine plan summary artifacts

@@ -10,6 +10,7 @@ This script replaces text-grep heuristics with deterministic AST checks for:
 5. ViewKind sole authority
 6. Builder dispatch coverage
 7. Entity registry derivation
+8. Hamilton/rustworkx residual detection
 
 Usage:
     scripts/check_drift_surfaces.py
@@ -26,6 +27,9 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+# Import Hamilton residual scanner
+from check_hamilton_residuals import scan_directory as scan_hamilton_residuals
 
 _ALLOWED_COMPILE_CONTEXT_PATH = "src/semantics/compile_context.py"
 _ALLOWED_CANONICAL_WITHOUT_MANIFEST: set[tuple[str, str]] = {
@@ -569,6 +573,47 @@ def _check_entity_registry_derivation(
     return _sorted_violations(violations)
 
 
+def _check_hamilton_residuals(
+    repo_root: Path,
+) -> tuple[Violation, ...]:
+    """Verify no Hamilton/rustworkx residuals outside hamilton_pipeline/.
+
+    Scan src/ for leftover Hamilton/rustworkx imports and references
+    that should have been migrated to engine-native equivalents.
+
+    Returns:
+        Violations for each residual found.
+    """
+    src_dir = repo_root / "src"
+    if not src_dir.exists():
+        return (
+            Violation(
+                path="src",
+                line=0,
+                scope="<module>",
+                detail="src/ directory not found",
+            ),
+        )
+
+    scan_result = scan_hamilton_residuals(
+        root=repo_root,
+        scan_dir=src_dir,
+        exclude_dirs=("hamilton_pipeline",),
+    )
+
+    violations: list[Violation] = [
+        Violation(
+            path=residual.file,
+            line=residual.line_number,
+            scope="<module>",
+            detail=f"[{residual.pattern_name}] {residual.line_text}",
+        )
+        for residual in scan_result.residuals
+    ]
+
+    return _sorted_violations(violations)
+
+
 def _aggregate_visitor_violations(
     visitors: list[_DriftVisitor],
 ) -> dict[str, list[Violation]]:
@@ -653,6 +698,7 @@ def run_audit(repo_root: Path) -> AuditReport:
     viewkind_authority_violations = _check_viewkind_sole_authority(src_root, repo_root)
     builder_dispatch_violations = _check_builder_dispatch_coverage(repo_root)
     entity_registry_violations = _check_entity_registry_derivation(repo_root)
+    hamilton_residual_violations = _check_hamilton_residuals(repo_root)
 
     checks = (
         _check_result(
@@ -720,6 +766,12 @@ def run_audit(repo_root: Path) -> AuditReport:
             title="SEMANTIC_TABLE_SPECS derives from entity_registry",
             target=0,
             violations=entity_registry_violations,
+        ),
+        _check_result(
+            check_id="programmatic.hamilton_rustworkx_residuals",
+            title="No Hamilton/rustworkx residuals outside hamilton_pipeline/",
+            target=0,
+            violations=hamilton_residual_violations,
         ),
     )
 

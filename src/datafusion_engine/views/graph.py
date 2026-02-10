@@ -1402,34 +1402,25 @@ def _schema_from_table(ctx: SessionContext, name: str) -> pa.Schema:
 
 
 def _topo_sort_nodes(nodes: Sequence[ViewNode]) -> tuple[ViewNode, ...]:
+    """Topologically sort view nodes using Kahn's algorithm.
+
+    Parameters
+    ----------
+    nodes
+        View nodes to sort.
+
+    Returns:
+    -------
+    tuple[ViewNode, ...]
+        Topologically sorted view nodes.
+
+    Raises:
+    ------
+    ValueError
+        If a dependency cycle is detected.
+    """
     node_map = {node.name: node for node in nodes}
-    ordered = _topo_sort_nodes_rx(node_map, nodes)
-    if ordered is not None:
-        return ordered
     return _topo_sort_nodes_kahn(node_map, nodes)
-
-
-def _topo_sort_nodes_rx(
-    node_map: Mapping[str, ViewNode],
-    nodes: Sequence[ViewNode],
-) -> tuple[ViewNode, ...] | None:
-    try:
-        import rustworkx as rx
-    except ImportError:
-        return None
-    graph = rx.PyDiGraph()
-    index_by_name: dict[str, int] = {}
-    for name in sorted(node_map):
-        index_by_name[name] = graph.add_node(name)
-    for node in nodes:
-        dst_idx = index_by_name[node.name]
-        for dep in node.deps:
-            src_idx = index_by_name.get(dep)
-            if src_idx is None:
-                continue
-            graph.add_edge(src_idx, dst_idx, None)
-    ordered_names = rx.lexicographical_topological_sort(graph, key=lambda name: name)
-    return tuple(node_map[name] for name in ordered_names)
 
 
 def _topo_sort_nodes_kahn(

@@ -735,10 +735,19 @@ def _plan_execution_diff_from_tasks(
     logs: Sequence[Mapping[str, object]],
     dataset_readiness: Mapping[str, object],
 ) -> dict[str, object]:
-    expected_rows = _event_rows(logs, "plan_expected_tasks_v1")
-    task_rows = _event_rows(logs, "task_execution_v1")
-    expected_tasks = _expected_tasks_from_logs(expected_rows)
-    executed_tasks, status_counts = _executed_tasks_from_logs(task_rows)
+    """Derive plan vs execution diff from engine-native sources.
+
+    Expected tasks are sourced from engine spec view definitions.
+    Executed tasks are sourced from engine run result outputs.
+    This replaces the legacy Hamilton task tracking approach.
+
+    Returns:
+    -------
+    dict[str, object]
+        Plan execution diff summary with expected/executed task counts.
+    """
+    expected_tasks = _expected_tasks_from_engine_spec(logs)
+    executed_tasks = _executed_tasks_from_engine_outputs(logs)
     missing = sorted(expected_tasks - executed_tasks)
     unexpected = sorted(executed_tasks - expected_tasks)
     blocked_by = dataset_readiness.get("issue_datasets")
@@ -749,36 +758,52 @@ def _plan_execution_diff_from_tasks(
         "unexpected_task_count": len(unexpected),
         "missing_tasks": missing,
         "unexpected_tasks": unexpected,
-        "execution_status_counts": status_counts,
         "blocked_datasets": blocked_by if isinstance(blocked_by, list) else [],
         "blocked_scan_units": [],
     }
 
 
-def _expected_tasks_from_logs(expected_rows: Sequence[Mapping[str, object]]) -> set[str]:
-    if not expected_rows:
+def _expected_tasks_from_engine_spec(logs: Sequence[Mapping[str, object]]) -> set[str]:
+    """Extract expected task names from engine spec view definitions.
+
+    Searches for engine_spec_summary_v1 events and extracts view definition names
+    as the expected task set. This replaces legacy Hamilton plan_expected_tasks_v1.
+
+    Returns:
+    -------
+    set[str]
+        Expected task names from engine spec view definitions.
+    """
+    spec_rows = _event_rows(logs, "engine_spec_summary_v1")
+    if not spec_rows:
         return set()
-    latest = expected_rows[-1]
-    tasks = latest.get("tasks")
-    if isinstance(tasks, Sequence) and not isinstance(tasks, (str, bytes, bytearray)):
-        return {task for task in tasks if isinstance(task, str)}
+    latest = spec_rows[-1]
+    view_count = latest.get("view_count")
+    if isinstance(view_count, int) and view_count > 0:
+        view_names = latest.get("view_names")
+        if isinstance(view_names, Sequence) and not isinstance(view_names, (str, bytes, bytearray)):
+            return {name for name in view_names if isinstance(name, str)}
     return set()
 
 
-def _executed_tasks_from_logs(
-    task_rows: Sequence[Mapping[str, object]],
-) -> tuple[set[str], dict[str, int]]:
+def _executed_tasks_from_engine_outputs(logs: Sequence[Mapping[str, object]]) -> set[str]:
+    """Extract executed task names from engine run result outputs.
+
+    Searches for engine_output_v1 events and extracts table names as the executed
+    task set. This replaces legacy Hamilton task_execution_v1 tracking.
+
+    Returns:
+    -------
+    set[str]
+        Executed task names from engine run result outputs.
+    """
+    output_rows = _event_rows(logs, "engine_output_v1")
     executed_tasks: set[str] = set()
-    status_counts: dict[str, int] = {}
-    for row in task_rows:
-        name = row.get("task_name")
-        if not isinstance(name, str):
-            continue
-        executed_tasks.add(name)
-        status = row.get("status")
-        if isinstance(status, str):
-            status_counts[status] = status_counts.get(status, 0) + 1
-    return executed_tasks, status_counts
+    for row in output_rows:
+        table_name = row.get("table_name")
+        if isinstance(table_name, str):
+            executed_tasks.add(table_name)
+    return executed_tasks
 
 
 def _coerce_str_list(value: object) -> list[str]:

@@ -1441,7 +1441,7 @@ DATAFUSION_VIEW_ARTIFACTS_SCHEMA = _schema_with_metadata(
     ),
 )
 
-HAMILTON_TASK_FACT_STRUCT = pa.struct(
+PIPELINE_TASK_FACT_STRUCT = pa.struct(
     [
         task_name_field(),
         pa.field("bottom_level_cost", pa.float64(), nullable=False),
@@ -1451,8 +1451,8 @@ HAMILTON_TASK_FACT_STRUCT = pa.struct(
     ]
 )
 
-HAMILTON_TASK_SUBMISSION_SCHEMA = _schema_with_metadata(
-    "hamilton_task_submission_v1",
+PIPELINE_TASK_SUBMISSION_SCHEMA = _schema_with_metadata(
+    "pipeline_task_submission_v1",
     pa.schema(
         [
             pa.field("run_id", pa.string(), nullable=False),
@@ -1476,7 +1476,7 @@ HAMILTON_TASK_SUBMISSION_SCHEMA = _schema_with_metadata(
             ),
             pa.field(
                 "task_facts",
-                pa.list_(HAMILTON_TASK_FACT_STRUCT),
+                pa.list_(PIPELINE_TASK_FACT_STRUCT),
                 nullable=False,
             ),
             pa.field("reduction_edge_count", pa.int64(), nullable=False),
@@ -1485,8 +1485,8 @@ HAMILTON_TASK_SUBMISSION_SCHEMA = _schema_with_metadata(
     ),
 )
 
-HAMILTON_TASK_GROUPING_SCHEMA = _schema_with_metadata(
-    "hamilton_task_grouping_v1",
+PIPELINE_TASK_GROUPING_SCHEMA = _schema_with_metadata(
+    "pipeline_task_grouping_v1",
     pa.schema(
         [
             pa.field("run_id", pa.string(), nullable=False),
@@ -1498,8 +1498,8 @@ HAMILTON_TASK_GROUPING_SCHEMA = _schema_with_metadata(
     ),
 )
 
-HAMILTON_TASK_EXPANSION_SCHEMA = _schema_with_metadata(
-    "hamilton_task_expansion_v1",
+PIPELINE_TASK_EXPANSION_SCHEMA = _schema_with_metadata(
+    "pipeline_task_expansion_v1",
     pa.schema(
         [
             pa.field("run_id", pa.string(), nullable=False),
@@ -1511,8 +1511,8 @@ HAMILTON_TASK_EXPANSION_SCHEMA = _schema_with_metadata(
     ),
 )
 
-HAMILTON_PLAN_DRIFT_SCHEMA = _schema_with_metadata(
-    "hamilton_plan_drift_v1",
+PIPELINE_PLAN_DRIFT_SCHEMA = _schema_with_metadata(
+    "pipeline_plan_drift_v1",
     pa.schema(
         [
             pa.field("run_id", pa.string(), nullable=False),
@@ -1543,8 +1543,8 @@ HAMILTON_PLAN_DRIFT_SCHEMA = _schema_with_metadata(
     ),
 )
 
-DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA = _schema_with_metadata(
-    "datafusion_hamilton_events_v2",
+DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA = _schema_with_metadata(
+    "datafusion_pipeline_events_v2",
     pa.schema(
         [
             pa.field("event_time_unix_ms", pa.int64(), nullable=False),
@@ -4068,7 +4068,7 @@ __all__ = [
     "BYTECODE_FILES_SCHEMA",
     "BYTECODE_VIEW_NAMES",
     "CST_VIEW_NAMES",
-    "DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA",
+    "DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA",
     "DATAFUSION_PLAN_ARTIFACTS_SCHEMA",
     "DATAFUSION_RUNS_SCHEMA",
     "DATAFUSION_SQL_INGEST_SCHEMA",
@@ -4076,12 +4076,12 @@ __all__ = [
     "DIAG_DETAILS_TYPE",
     "DIAG_DETAIL_STRUCT",
     "DIAG_TAGS_TYPE",
-    "HAMILTON_PLAN_DRIFT_SCHEMA",
-    "HAMILTON_TASK_EXPANSION_SCHEMA",
-    "HAMILTON_TASK_GROUPING_SCHEMA",
-    "HAMILTON_TASK_SUBMISSION_SCHEMA",
     "LIBCST_FILES_SCHEMA",
     "NESTED_DATASET_INDEX",
+    "PIPELINE_PLAN_DRIFT_SCHEMA",
+    "PIPELINE_TASK_EXPANSION_SCHEMA",
+    "PIPELINE_TASK_GROUPING_SCHEMA",
+    "PIPELINE_TASK_SUBMISSION_SCHEMA",
     "RELATIONSHIP_SCHEMA_BY_NAME",
     "REL_CALLSITE_SYMBOL_SCHEMA",
     "REL_DEF_SYMBOL_SCHEMA",

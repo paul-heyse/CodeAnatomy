@@ -12,15 +12,9 @@ from cyclopts import Parameter, validators
 
 from cli.context import RunContext
 from cli.groups import execution_group
-from hamilton_pipeline.types import ExecutionMode
-from serde_msgspec import to_builtins
-from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
-    from hamilton_pipeline.plan_artifacts import PlanArtifactBundle
-    from relspec.execution_plan import ExecutionPlan
-
-_TASKS_PREVIEW_LIMIT = 10
+    from engine.spec_builder import SemanticExecutionSpec
 
 
 @dataclass(frozen=True)
@@ -29,23 +23,31 @@ class PlanOptions:
 
     show_graph: Annotated[
         bool,
-        Parameter(help="Display task dependency graph."),
+        Parameter(help="Display task dependency graph (Tier 2: requires Rust introspection API)."),
     ] = False
     show_schedule: Annotated[
         bool,
-        Parameter(help="Display computed execution schedule."),
+        Parameter(
+            help="Display computed execution schedule (Tier 2: requires Rust introspection API)."
+        ),
     ] = False
     show_inferred_deps: Annotated[
         bool,
-        Parameter(help="Display inferred task dependencies."),
+        Parameter(
+            help="Display inferred task dependencies (Tier 2: requires Rust introspection API)."
+        ),
     ] = False
     show_task_graph: Annotated[
         bool,
-        Parameter(help="Display task graph structure with edges."),
+        Parameter(
+            help="Display task graph structure with edges (Tier 3: requires Rust introspection API)."
+        ),
     ] = False
     validate: Annotated[
         bool,
-        Parameter(help="Validate plan consistency and report issues."),
+        Parameter(
+            help="Validate plan consistency and report issues (Tier 3: requires Rust introspection API)."
+        ),
     ] = False
     output_format: Annotated[
         Literal["text", "json", "dot"],
@@ -62,14 +64,22 @@ class PlanOptions:
             env_var="CODEANATOMY_PLAN_OUTPUT_FILE",
         ),
     ] = None
-    execution_mode: Annotated[
-        ExecutionMode,
+    engine_profile: Annotated[
+        Literal["small", "medium", "large"],
         Parameter(
-            name="--execution-mode",
-            help="Execution mode to use when compiling the plan.",
+            name="--engine-profile",
+            help="Engine resource profile (affects plan shape).",
             group=execution_group,
         ),
-    ] = ExecutionMode.PLAN_PARALLEL
+    ] = "medium"
+    rulepack_profile: Annotated[
+        Literal["Default", "LowLatency", "Replay", "Strict"],
+        Parameter(
+            name="--rulepack-profile",
+            help="Rulepack profile for plan compilation.",
+            group=execution_group,
+        ),
+    ] = "Default"
 
 
 _DEFAULT_PLAN_OPTIONS = PlanOptions()
@@ -96,6 +106,12 @@ def plan_command(
 ) -> int:
     """Show the computed execution plan without running it.
 
+    Tier 1 parity (available now):
+      - Spec hash, view count, output target list, high-level graph summary
+
+    Tier 2/3 features (require Rust introspection API):
+      - show_graph, show_schedule, show_inferred_deps, show_task_graph, validate
+
     Returns:
     -------
     int
@@ -105,25 +121,41 @@ def plan_command(
     config_contents = dict(run_context.config_contents) if run_context else {}
     config_contents.setdefault("repo_root", str(resolved_root))
 
-    from hamilton_pipeline.driver_factory import DriverBuildRequest, build_plan_context
-    from hamilton_pipeline.plan_artifacts import build_plan_artifact_bundle
+    from engine.spec_builder import build_execution_spec
+    from semantics.ir_pipeline import build_semantic_ir
 
-    plan_ctx = build_plan_context(
-        request=DriverBuildRequest(
-            config=config_contents,
-            execution_mode=options.execution_mode,
-            executor_config=None,
-            graph_adapter_config=None,
-        )
+    ir = build_semantic_ir()
+    spec = build_execution_spec(
+        ir=ir,
+        input_locations={},
+        output_targets=[],
+        rulepack_profile=options.rulepack_profile,
     )
-    plan: ExecutionPlan = plan_ctx.plan
 
-    run_id = run_context.run_id if run_context else uuid7_str()
-    plan_bundle: PlanArtifactBundle = build_plan_artifact_bundle(plan=plan, run_id=run_id)
+    try:
+        import codeanatomy_engine
+    except ImportError:
+        msg = (
+            "codeanatomy_engine Rust extension not built. "
+            "Run: bash scripts/rebuild_rust_artifacts.sh"
+        )
+        sys.stderr.write(f"Error: {msg}\n")
+        return 1
+
+    import msgspec
+
+    spec_json = msgspec.json.encode(spec).decode()
+    compiler = codeanatomy_engine.SemanticPlanCompiler()
+
+    try:
+        compiled = compiler.compile(spec_json)
+    except (ValueError, RuntimeError) as exc:
+        sys.stderr.write(f"Plan compilation failed: {exc}\n")
+        return 1
 
     payload = _build_payload(
-        plan=plan,
-        plan_bundle=plan_bundle,
+        spec=spec,
+        compiled=compiled,
         options=_PlanPayloadOptions(
             show_graph=options.show_graph,
             show_schedule=options.show_schedule,
@@ -140,19 +172,15 @@ def plan_command(
 
 def _build_payload(
     *,
-    plan: ExecutionPlan,
-    plan_bundle: PlanArtifactBundle,
+    spec: SemanticExecutionSpec,
+    compiled: object,
     options: _PlanPayloadOptions,
 ) -> object:
     if options.output_format == "dot":
-        return plan.diagnostics.dot
+        return _build_dot_output(spec)
 
-    payload = _build_payload_base(plan)
-    _maybe_add_graph(payload, plan, options)
-    _maybe_add_schedule(payload, plan_bundle, options)
-    _maybe_add_validation(payload, plan_bundle, options)
-    _maybe_add_inferred_deps(payload, plan, options)
-    _maybe_add_task_graph(payload, plan, options)
+    payload = _build_payload_base(spec, compiled)
+    _maybe_add_tier2_features(payload, options)
 
     if options.output_format == "json":
         return payload
@@ -160,141 +188,88 @@ def _build_payload(
     return _format_text(payload)
 
 
-def _build_payload_base(plan: ExecutionPlan) -> dict[str, object]:
+def _build_payload_base(spec: SemanticExecutionSpec, compiled: object) -> dict[str, object]:
     return {
-        "plan_signature": plan.plan_signature,
-        "reduced_plan_signature": plan.reduced_task_dependency_signature,
-        "task_count": len(plan.active_tasks),
+        "plan_signature": getattr(compiled, "spec_hash_hex", lambda: "unknown")(),
+        "view_count": len(spec.view_definitions),
+        "output_targets": [target.table_name for target in spec.output_targets],
+        "rulepack_profile": spec.rulepack_profile,
+        "input_relation_count": len(spec.input_relations),
+        "join_edge_count": len(spec.join_graph.edges),
     }
 
 
-def _maybe_add_graph(
+def _build_dot_output(spec: SemanticExecutionSpec) -> str:
+    """Build DOT graph from view definitions and join edges (Tier 1 approximation).
+
+    Returns:
+    -------
+    str
+        DOT format graph representation of the execution plan.
+    """
+    lines = ["digraph execution_plan {", "  rankdir=LR;", ""]
+    lines.extend(
+        f'  "{view.name}" [label="{view.name}\\n({view.view_kind})"];'
+        for view in spec.view_definitions
+    )
+    lines.append("")
+    for view in spec.view_definitions:
+        lines.extend(f'  "{dep}" -> "{view.name}";' for dep in view.view_dependencies)
+    lines.extend(
+        f'  "{edge.left_relation}" -> "{edge.right_relation}" [style=dashed];'
+        for edge in spec.join_graph.edges
+    )
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _maybe_add_tier2_features(
     payload: dict[str, object],
-    plan: ExecutionPlan,
     options: _PlanPayloadOptions,
 ) -> None:
-    if not options.show_graph:
-        return
-    payload["graph"] = {
-        "dot": plan.diagnostics.dot,
-        "critical_path": list(plan.critical_path_task_names),
-        "critical_path_length": plan.critical_path_length_weighted,
-    }
-
-
-def _maybe_add_schedule(
-    payload: dict[str, object],
-    plan_bundle: PlanArtifactBundle,
-    options: _PlanPayloadOptions,
-) -> None:
-    if not options.show_schedule:
-        return
-    payload["schedule"] = to_builtins(plan_bundle.schedule_envelope)
-
-
-def _maybe_add_validation(
-    payload: dict[str, object],
-    plan_bundle: PlanArtifactBundle,
-    options: _PlanPayloadOptions,
-) -> None:
-    if not options.validate:
-        return
-    payload["validation"] = to_builtins(plan_bundle.validation_envelope)
-
-
-def _maybe_add_inferred_deps(
-    payload: dict[str, object],
-    plan: ExecutionPlan,
-    options: _PlanPayloadOptions,
-) -> None:
-    if not options.show_inferred_deps:
-        return
-    inferred_deps: dict[str, list[str]] = {}
-    for task_name in plan.active_tasks:
-        deps = plan.dependency_map.get(task_name, ())
-        if deps:
-            inferred_deps[task_name] = list(deps)
-    payload["inferred_deps"] = inferred_deps
-
-
-def _maybe_add_task_graph(
-    payload: dict[str, object],
-    plan: ExecutionPlan,
-    options: _PlanPayloadOptions,
-) -> None:
-    if not options.show_task_graph:
-        return
-    nodes = sorted(plan.active_tasks)
-    edges: list[list[str]] = []
-    for task_name in nodes:
-        deps = plan.dependency_map.get(task_name, ())
-        edges.extend([[dep, task_name] for dep in deps])
-    payload["task_graph"] = {
-        "nodes": nodes,
-        "edges": edges,
-    }
+    """Add Tier 2/3 features that require Rust introspection API (currently unavailable)."""
+    tier2_or_3_requested = (
+        options.show_graph
+        or options.show_schedule
+        or options.show_inferred_deps
+        or options.show_task_graph
+        or options.validate
+    )
+    if tier2_or_3_requested:
+        payload["tier2_3_notice"] = (
+            "Tier 2/3 features (show_graph, show_schedule, show_inferred_deps, "
+            "show_task_graph, validate) require Rust introspection API not yet available. "
+            "Current implementation provides Tier 1 parity only (spec hash, view count, output targets)."
+        )
 
 
 def _format_text(payload: dict[str, object]) -> str:
     lines = _format_base_lines(payload)
-    _append_graph_lines(lines, payload)
-    _append_validation_lines(lines, payload)
-    _append_inferred_deps_lines(lines, payload)
-    _append_task_graph_lines(lines, payload)
+    _append_tier2_notice(lines, payload)
     return "\n".join(lines)
 
 
 def _format_base_lines(payload: dict[str, object]) -> list[str]:
-    return [
+    lines = [
         f"plan_signature: {payload.get('plan_signature')}",
-        f"reduced_plan_signature: {payload.get('reduced_plan_signature')}",
-        f"task_count: {payload.get('task_count')}",
+        f"view_count: {payload.get('view_count')}",
+        f"rulepack_profile: {payload.get('rulepack_profile')}",
+        f"input_relation_count: {payload.get('input_relation_count')}",
+        f"join_edge_count: {payload.get('join_edge_count')}",
     ]
+    output_targets = payload.get("output_targets")
+    if isinstance(output_targets, list) and output_targets:
+        lines.append(f"output_targets: {', '.join(output_targets)}")
+    else:
+        lines.append("output_targets: (none)")
+    return lines
 
 
-def _append_graph_lines(lines: list[str], payload: dict[str, object]) -> None:
-    graph = payload.get("graph")
-    if not isinstance(graph, dict):
-        return
-    lines.append("graph:")
-    lines.append(f"  critical_path_length: {graph.get('critical_path_length')}")
-    critical_path = graph.get("critical_path")
-    if isinstance(critical_path, list):
-        lines.append(f"  critical_path_tasks: {', '.join(critical_path)}")
-
-
-def _append_validation_lines(lines: list[str], payload: dict[str, object]) -> None:
-    if "schedule" in payload:
-        lines.append("schedule: <included>")
-    if "validation" in payload:
-        lines.append("validation: <included>")
-
-
-def _append_inferred_deps_lines(lines: list[str], payload: dict[str, object]) -> None:
-    inferred_deps = payload.get("inferred_deps")
-    if not isinstance(inferred_deps, dict) or not inferred_deps:
-        return
-    lines.append("inferred_deps:")
-    for task_name, deps in sorted(inferred_deps.items()):
-        if isinstance(deps, list):
-            lines.append(f"  {task_name}: {', '.join(deps)}")
-
-
-def _append_task_graph_lines(lines: list[str], payload: dict[str, object]) -> None:
-    task_graph = payload.get("task_graph")
-    if not isinstance(task_graph, dict):
-        return
-    lines.append("task_graph:")
-    nodes = task_graph.get("nodes")
-    edges = task_graph.get("edges")
-    if isinstance(nodes, list):
-        lines.append(f"  node_count: {len(nodes)}")
-        if nodes:
-            preview = ", ".join(nodes[:_TASKS_PREVIEW_LIMIT])
-            suffix = "..." if len(nodes) > _TASKS_PREVIEW_LIMIT else ""
-            lines.append(f"  sample_nodes: {preview}{suffix}")
-    if isinstance(edges, list):
-        lines.append(f"  edge_count: {len(edges)}")
+def _append_tier2_notice(lines: list[str], payload: dict[str, object]) -> None:
+    notice = payload.get("tier2_3_notice")
+    if isinstance(notice, str):
+        lines.append("")
+        lines.append(f"Note: {notice}")
 
 
 def _write_payload(payload: object, output_file: Path | None, output_format: str) -> None:

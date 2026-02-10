@@ -6,7 +6,6 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 
-from hamilton_pipeline.types import GraphAdapterConfig
 from runtime_models.base import RuntimeBase
 from runtime_models.otel import OtelConfigRuntime
 
@@ -135,32 +134,6 @@ class DocstringsConfigRuntime(RuntimeBase):
     policy: DocstringsPolicyConfigRuntime | None = None
 
 
-class HamiltonConfigRuntime(RuntimeBase):
-    """Validated Hamilton config."""
-
-    enable_tracker: bool | None = None
-    enable_type_checker: bool | None = None
-    enable_node_diagnostics: bool | None = None
-    enable_structured_run_logs: bool | None = None
-    structured_log_path: str | None = None
-    run_log_path: str | None = None
-    enable_graph_snapshot: bool | None = None
-    graph_snapshot_path: str | None = None
-    graph_snapshot_hamilton_path: str | None = None
-    enable_cache_lineage: bool | None = None
-    cache_lineage_path: str | None = None
-    capture_data_statistics: bool | None = None
-    max_list_length_capture: int | None = Field(default=None, ge=0)
-    max_dict_length_capture: int | None = Field(default=None, ge=0)
-    tags: dict[str, object] | None = None
-    project_id: int | None = None
-    username: str | None = None
-    dag_name: str | None = None
-    api_url: str | None = None
-    ui_url: str | None = None
-    telemetry_profile: str | None = None
-
-
 class RootConfigRuntime(RuntimeBase):
     """Validated root configuration payload."""
 
@@ -175,12 +148,10 @@ class RootConfigRuntime(RuntimeBase):
     plan: PlanConfigRuntime | None = None
     cache: CacheConfigRuntime | None = None
     datafusion_cache: DataFusionCacheConfigRuntime | None = None
-    graph_adapter: GraphAdapterConfig | None = None
     incremental: IncrementalConfigRuntime | None = None
     delta: DeltaConfigRuntime | None = None
     docstrings: DocstringsConfigRuntime | None = None
     otel: OtelConfigRuntime | None = None
-    hamilton: HamiltonConfigRuntime | None = None
 
 
 __all__ = [
@@ -194,7 +165,6 @@ __all__ = [
     "DiskCacheSettingsRuntime",
     "DocstringsConfigRuntime",
     "DocstringsPolicyConfigRuntime",
-    "HamiltonConfigRuntime",
     "IncrementalConfigRuntime",
     "PlanConfigRuntime",
     "RootConfigRuntime",

@@ -9,13 +9,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from semantics.incremental.cdf_joins import CDFMergeStrategy
 from semantics.incremental.cdf_types import CdfFilterPolicy
 
-if TYPE_CHECKING:
-    from hamilton_pipeline.types.incremental import IncrementalRunConfig
+
+@dataclass(frozen=True)
+class IncrementalRunSnapshot:
+    """Incremental run configuration snapshot for manifests.
+
+    This is a standalone type used for serializing incremental configuration
+    to manifests and build artifacts. It contains only the essential fields
+    needed for reproducibility tracking.
+    """
+
+    enabled: bool
+    state_dir: str | None
+    repo_id: str | None
+    git_base_ref: str | None = None
+    git_head_ref: str | None = None
+    git_changed_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -163,7 +177,7 @@ class SemanticIncrementalConfig:
             impact_strategy=impact_strategy,
         )
 
-    def to_run_snapshot(self) -> IncrementalRunConfig:
+    def to_run_snapshot(self) -> IncrementalRunSnapshot:
         """Return a run snapshot for manifests and artifacts.
 
         Convert the incremental config to a serializable run configuration
@@ -172,17 +186,10 @@ class SemanticIncrementalConfig:
 
         Returns:
         -------
-        IncrementalRunConfig
+        IncrementalRunSnapshot
             Snapshot suitable for manifest storage.
-
-        Notes:
-        -----
-        This method lazily imports ``IncrementalRunConfig`` to avoid circular
-        imports, as the Hamilton pipeline types may reference semantic types.
         """
-        from hamilton_pipeline.types.incremental import IncrementalRunConfig
-
-        return IncrementalRunConfig(
+        return IncrementalRunSnapshot(
             enabled=self.enabled,
             state_dir=str(self.state_dir) if self.state_dir is not None else None,
             repo_id=self.repo_id,
@@ -192,4 +199,4 @@ class SemanticIncrementalConfig:
         )
 
 
-__all__ = ["SemanticIncrementalConfig"]
+__all__ = ["IncrementalRunSnapshot", "SemanticIncrementalConfig"]

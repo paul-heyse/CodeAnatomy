@@ -670,13 +670,13 @@ def record_cache_lineage(
     rows : Sequence[Mapping[str, object]]
         Per-node cache lineage rows to emit as events.
     """
-    from serde_artifact_specs import HAMILTON_CACHE_LINEAGE_SPEC
+    from serde_artifact_specs import PIPELINE_CACHE_LINEAGE_SPEC
 
     summary_payload = dict(summary)
-    record_artifact(profile, HAMILTON_CACHE_LINEAGE_SPEC, summary_payload)
+    record_artifact(profile, PIPELINE_CACHE_LINEAGE_SPEC, summary_payload)
     node_rows = [_normalize_diagnostics_row(row) for row in rows]
     if node_rows:
-        record_events(profile, "hamilton_cache_lineage_nodes_v1", node_rows)
+        record_events(profile, "pipeline_cache_lineage_nodes_v1", node_rows)
 
 
 def _normalize_diagnostics_row(row: Mapping[str, object]) -> dict[str, Any]:

@@ -14,7 +14,6 @@ dependencies = [
     "protobuf>=6.33.2",
     "grpcio-tools>=1.76.0",
     "grpcio>=1.76.0",
-    "sf-hamilton[dask,pandera,ray,rich,sdk,tqdm,ui]>=1.89.0",
     "tqdm>=4.67.1",
     "pytest-asyncio>=1.3.0",
     "pytest-anyio>=0.0.0",

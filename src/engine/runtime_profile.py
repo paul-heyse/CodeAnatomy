@@ -14,7 +14,6 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 from core_types import DeterminismTier
 from datafusion_engine.arrow.schema import version_field
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
-from engine.telemetry.hamilton import HamiltonTelemetryProfile, HamiltonTrackerConfig
 from serde_artifacts import RuntimeProfileSnapshot
 from serde_msgspec import StructBaseStrict, coalesce_unset, dumps_msgpack, to_builtins
 from storage.ipc_utils import payload_hash
@@ -45,8 +44,6 @@ class RuntimeProfileSpec(StructBaseStrict, frozen=True):
     name: str
     datafusion: DataFusionRuntimeProfile
     determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
-    tracker_config: HamiltonTrackerConfig | None = None
-    hamilton_telemetry: HamiltonTelemetryProfile | None = None
 
     @property
     def datafusion_settings_hash(self) -> str:
@@ -469,14 +466,10 @@ def resolve_runtime_profile(
     df_profile = _apply_named_profile_overrides(profile, df_profile)
     df_profile = _apply_memory_overrides(profile, df_profile, df_profile.settings_payload())
     df_profile = _apply_env_overrides(df_profile)
-    tracker_config = HamiltonTrackerConfig.from_env()
-    telemetry_profile = HamiltonTelemetryProfile.resolve()
     return RuntimeProfileSpec(
         name=profile,
         datafusion=df_profile,
         determinism_tier=determinism or DeterminismTier.BEST_EFFORT,
-        tracker_config=tracker_config,
-        hamilton_telemetry=telemetry_profile,
     )
 
 
@@ -498,8 +491,6 @@ def runtime_profile_snapshot_payload(profile: DataFusionRuntimeProfile) -> dict[
 
 
 __all__ = [
-    "HamiltonTelemetryProfile",
-    "HamiltonTrackerConfig",
     "RuntimeProfileSnapshot",
     "RuntimeProfileSpec",
     "engine_runtime_artifact",

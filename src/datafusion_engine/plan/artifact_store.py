@@ -49,10 +49,10 @@ if TYPE_CHECKING:
 
 PLAN_ARTIFACTS_TABLE_NAME = "datafusion_plan_artifacts_v10"
 WRITE_ARTIFACTS_TABLE_NAME = "datafusion_write_artifacts_v2"
-HAMILTON_EVENTS_TABLE_NAME = "datafusion_hamilton_events_v2"
+PIPELINE_EVENTS_TABLE_NAME = "datafusion_pipeline_events_v2"
 _ARTIFACTS_DIRNAME = PLAN_ARTIFACTS_TABLE_NAME
 _WRITE_ARTIFACTS_DIRNAME = WRITE_ARTIFACTS_TABLE_NAME
-_HAMILTON_EVENTS_DIRNAME = HAMILTON_EVENTS_TABLE_NAME
+_PIPELINE_EVENTS_DIRNAME = PIPELINE_EVENTS_TABLE_NAME
 _LOCAL_ARTIFACTS_DIRNAME = "artifacts"
 _PLAN_EVENT_KIND = "plan"
 _EXECUTION_EVENT_KIND = "execution"
@@ -104,8 +104,8 @@ class _DeterminismRow(StructBaseCompat, frozen=True):
 
 
 @dataclass(frozen=True)
-class HamiltonEventRow:
-    """Serializable Hamilton event row persisted to the Delta store."""
+class PipelineEventRow:
+    """Serializable pipeline event row persisted to the Delta store."""
 
     event_time_unix_ms: int
     profile_name: str | None
@@ -136,8 +136,8 @@ class HamiltonEventRow:
         }
 
 
-class HamiltonEventLine(StructBaseCompat, frozen=True):
-    """Typed line entry for NDJSON Hamilton event ingestion."""
+class PipelineEventLine(StructBaseCompat, frozen=True):
+    """Typed line entry for NDJSON pipeline event ingestion."""
 
     event_name: str
     payload: object
@@ -180,18 +180,18 @@ def ensure_plan_artifacts_table(
     return location
 
 
-def ensure_hamilton_events_table(
+def ensure_pipeline_events_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
 ) -> DatasetLocation | None:
-    """Ensure the Hamilton events table exists and is registered.
+    """Ensure the pipeline events table exists and is registered.
 
     Returns:
     -------
     DatasetLocation | None
-        Location for the Hamilton events table when enabled.
+        Location for the pipeline events table when enabled.
     """
-    location = _hamilton_events_location(profile)
+    location = _pipeline_events_location(profile)
     if location is None:
         return None
     table_path = Path(location.path)
@@ -201,19 +201,19 @@ def ensure_hamilton_events_table(
             _reset_artifacts_table_path(
                 profile,
                 table_path,
-                table_name=HAMILTON_EVENTS_TABLE_NAME,
+                table_name=PIPELINE_EVENTS_TABLE_NAME,
                 reason="delta_table_version_unavailable",
             )
-        _bootstrap_hamilton_events_table(ctx, profile, table_path)
+        _bootstrap_pipeline_events_table(ctx, profile, table_path)
     elif not _delta_schema_available(location, profile=profile):
         _reset_artifacts_table_path(
             profile,
             table_path,
-            table_name=HAMILTON_EVENTS_TABLE_NAME,
+            table_name=PIPELINE_EVENTS_TABLE_NAME,
             reason="delta_schema_unavailable",
         )
-        _bootstrap_hamilton_events_table(ctx, profile, table_path)
-    _refresh_hamilton_events_registration(ctx, profile, location)
+        _bootstrap_pipeline_events_table(ctx, profile, table_path)
+    _refresh_pipeline_events_registration(ctx, profile, location)
     return location
 
 
@@ -228,8 +228,8 @@ class PlanArtifactsForViewsRequest:
 
 
 @dataclass(frozen=True)
-class HamiltonEventsRequest:
-    """Inputs for persisting Hamilton lifecycle events."""
+class PipelineEventsRequest:
+    """Inputs for persisting pipeline lifecycle events."""
 
     run_id: str
     plan_signature: str
@@ -854,25 +854,25 @@ def persist_plan_artifact_rows(
     return tuple(rows)
 
 
-def persist_hamilton_events(
+def persist_pipeline_events(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     *,
-    request: HamiltonEventsRequest,
-) -> tuple[HamiltonEventRow, ...]:
-    """Persist Hamilton lifecycle events to the Delta-backed artifact store.
+    request: PipelineEventsRequest,
+) -> tuple[PipelineEventRow, ...]:
+    """Persist pipeline lifecycle events to the Delta-backed artifact store.
 
     Returns:
     -------
-    tuple[HamiltonEventRow, ...]
-        Persisted Hamilton event rows.
+    tuple[PipelineEventRow, ...]
+        Persisted pipeline event rows.
     """
-    location = ensure_hamilton_events_table(ctx, profile)
+    location = ensure_pipeline_events_table(ctx, profile)
     if location is None:
         return ()
     events_snapshot = _events_snapshot_as_lists(request.events_snapshot)
     if request.events_ndjson is not None:
-        decoded = decode_json_lines(request.events_ndjson, target_type=HamiltonEventLine)
+        decoded = decode_json_lines(request.events_ndjson, target_type=PipelineEventLine)
         for line in decoded:
             events_snapshot.setdefault(line.event_name, []).append(line.payload)
     names = (
@@ -880,7 +880,7 @@ def persist_hamilton_events(
         if request.event_names is not None
         else tuple(sorted(events_snapshot))
     )
-    rows: list[HamiltonEventRow] = []
+    rows: list[PipelineEventRow] = []
     for event_name in names:
         rows_for_event = events_snapshot.get(event_name, ())
         if not rows_for_event:
@@ -891,7 +891,7 @@ def persist_hamilton_events(
             payload_msgpack = _event_payload_msgpack(normalized)
             payload_hash = hash_sha256_hex(payload_msgpack)
             rows.append(
-                HamiltonEventRow(
+                PipelineEventRow(
                     event_time_unix_ms=event_time_unix_ms,
                     profile_name=_profile_name(profile),
                     run_id=request.run_id,
@@ -904,41 +904,41 @@ def persist_hamilton_events(
             )
     if not rows:
         return ()
-    return persist_hamilton_event_rows(ctx, profile, rows=rows, location=location)
+    return persist_pipeline_event_rows(ctx, profile, rows=rows, location=location)
 
 
-def persist_hamilton_event_rows(
+def persist_pipeline_event_rows(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     *,
-    rows: Sequence[HamiltonEventRow],
+    rows: Sequence[PipelineEventRow],
     location: DatasetLocation | None = None,
-) -> tuple[HamiltonEventRow, ...]:
-    """Persist Hamilton event rows to the Delta-backed artifact store.
+) -> tuple[PipelineEventRow, ...]:
+    """Persist pipeline event rows to the Delta-backed artifact store.
 
     Args:
         ctx: DataFusion session context.
         profile: Active runtime profile.
-        rows: Hamilton event rows to persist.
+        rows: Pipeline event rows to persist.
         location: Optional pre-resolved artifact location.
 
     Returns:
-        tuple[HamiltonEventRow, ...]: Result.
+        tuple[PipelineEventRow, ...]: Result.
 
     Raises:
         RuntimeError: If the resulting Delta version cannot be resolved.
     """
     if not rows:
         return ()
-    resolved_location = location or ensure_hamilton_events_table(ctx, profile)
+    resolved_location = location or ensure_pipeline_events_table(ctx, profile)
     if resolved_location is None:
         return ()
     table_path = Path(resolved_location.path)
     arrow_table = pa.Table.from_pylist(
         [row.to_row() for row in rows],
-        schema=_hamilton_events_schema(),
+        schema=_pipeline_events_schema(),
     )
-    commit_metadata = _commit_metadata_for_hamilton_events(rows)
+    commit_metadata = _commit_metadata_for_pipeline_events(rows)
     final_version = _write_artifact_table(
         ctx,
         profile,
@@ -948,14 +948,14 @@ def persist_hamilton_event_rows(
             commit_metadata=commit_metadata,
             mode="append",
             schema_mode="merge",
-            operation_id="hamilton_events_store",
+            operation_id="pipeline_events_store",
         ),
     )
     if final_version is None:
-        msg = f"Failed to resolve Delta version for Hamilton events: {table_path}."
+        msg = f"Failed to resolve Delta version for pipeline events: {table_path}."
         raise RuntimeError(msg)
-    _refresh_hamilton_events_registration(ctx, profile, resolved_location)
-    _record_hamilton_events_summary(profile, rows=rows, path=str(table_path), version=final_version)
+    _refresh_pipeline_events_registration(ctx, profile, resolved_location)
+    _record_pipeline_events_summary(profile, rows=rows, path=str(table_path), version=final_version)
     return tuple(rows)
 
 
@@ -1071,16 +1071,16 @@ def _plan_artifacts_location(profile: DataFusionRuntimeProfile) -> DatasetLocati
     return _with_delta_settings(location)
 
 
-def _hamilton_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
+def _pipeline_events_location(profile: DataFusionRuntimeProfile) -> DatasetLocation | None:
     root = _plan_artifacts_root(profile)
     if root is None:
         return None
     dataset_spec = dataset_spec_from_schema(
-        HAMILTON_EVENTS_TABLE_NAME,
-        _hamilton_events_schema(),
+        PIPELINE_EVENTS_TABLE_NAME,
+        _pipeline_events_schema(),
     )
     location = DatasetLocation(
-        path=str(root / _HAMILTON_EVENTS_DIRNAME),
+        path=str(root / _PIPELINE_EVENTS_DIRNAME),
         format="delta",
         storage_options={},
         delta_log_storage_options={},
@@ -1265,26 +1265,26 @@ def _record_plan_artifact_summary(
         record_artifact(profile, DATAFUSION_PLAN_ARTIFACTS_SPEC, row.to_row())
 
 
-def _hamilton_events_schema() -> pa.Schema:
-    from datafusion_engine.schema.registry import DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA
+def _pipeline_events_schema() -> pa.Schema:
+    from datafusion_engine.schema.registry import DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA
 
-    schema = DATAFUSION_HAMILTON_EVENTS_V2_SCHEMA
+    schema = DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA
     if isinstance(schema, pa.Schema):
         return schema
     return pa.schema(schema)
 
 
-def _bootstrap_hamilton_events_table(
+def _bootstrap_pipeline_events_table(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     table_path: Path,
 ) -> None:
-    schema = _hamilton_events_schema()
+    schema = _pipeline_events_schema()
     empty_table = pa.Table.from_pylist([], schema=schema)
     commit_metadata = {
-        "codeanatomy_operation": "hamilton_events_bootstrap",
+        "codeanatomy_operation": "pipeline_events_bootstrap",
         "codeanatomy_mode": "overwrite",
-        "codeanatomy_table": HAMILTON_EVENTS_TABLE_NAME,
+        "codeanatomy_table": PIPELINE_EVENTS_TABLE_NAME,
     }
     _write_artifact_table(
         ctx,
@@ -1295,12 +1295,12 @@ def _bootstrap_hamilton_events_table(
             commit_metadata=commit_metadata,
             mode="overwrite",
             schema_mode="overwrite",
-            operation_id="hamilton_events_bootstrap",
+            operation_id="pipeline_events_bootstrap",
         ),
     )
 
 
-def _refresh_hamilton_events_registration(
+def _refresh_pipeline_events_registration(
     ctx: SessionContext,
     profile: DataFusionRuntimeProfile,
     location: DatasetLocation,
@@ -1310,37 +1310,37 @@ def _refresh_hamilton_events_registration(
     from datafusion_engine.session.facade import DataFusionExecutionFacade
 
     adapter = DataFusionIOAdapter(ctx=ctx, profile=profile)
-    if ctx.table_exist(HAMILTON_EVENTS_TABLE_NAME):
+    if ctx.table_exist(PIPELINE_EVENTS_TABLE_NAME):
         with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-            adapter.deregister_table(HAMILTON_EVENTS_TABLE_NAME)
+            adapter.deregister_table(PIPELINE_EVENTS_TABLE_NAME)
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
     facade.register_dataset(
-        name=HAMILTON_EVENTS_TABLE_NAME,
+        name=PIPELINE_EVENTS_TABLE_NAME,
         location=location,
         cache_policy=DataFusionCachePolicy(enabled=False, max_columns=None),
     )
 
 
-def _record_hamilton_events_summary(
+def _record_pipeline_events_summary(
     profile: DataFusionRuntimeProfile,
     *,
-    rows: Sequence[HamiltonEventRow],
+    rows: Sequence[PipelineEventRow],
     path: str,
     version: int,
 ) -> None:
     payload = {
-        "table": HAMILTON_EVENTS_TABLE_NAME,
+        "table": PIPELINE_EVENTS_TABLE_NAME,
         "path": path,
         "row_count": len(rows),
         "event_names": sorted({row.event_name for row in rows}),
         "run_ids": sorted({row.run_id for row in rows}),
         "delta_version": version,
     }
-    from serde_artifact_specs import DATAFUSION_HAMILTON_EVENTS_SPEC, HAMILTON_EVENTS_STORE_SPEC
+    from serde_artifact_specs import DATAFUSION_PIPELINE_EVENTS_SPEC, PIPELINE_EVENTS_STORE_SPEC
 
-    record_artifact(profile, HAMILTON_EVENTS_STORE_SPEC, payload)
+    record_artifact(profile, PIPELINE_EVENTS_STORE_SPEC, payload)
     for row in rows:
-        record_artifact(profile, DATAFUSION_HAMILTON_EVENTS_SPEC, row.to_row())
+        record_artifact(profile, DATAFUSION_PIPELINE_EVENTS_SPEC, row.to_row())
 
 
 def _commit_metadata_for_rows(rows: Sequence[PlanArtifactRow]) -> dict[str, str]:
@@ -1358,11 +1358,11 @@ def _commit_metadata_for_rows(rows: Sequence[PlanArtifactRow]) -> dict[str, str]
     return metadata
 
 
-def _commit_metadata_for_hamilton_events(rows: Sequence[HamiltonEventRow]) -> dict[str, str]:
+def _commit_metadata_for_pipeline_events(rows: Sequence[PipelineEventRow]) -> dict[str, str]:
     event_names = sorted({row.event_name for row in rows})
     run_ids = sorted({row.run_id for row in rows})
     metadata: dict[str, str] = {
-        "codeanatomy_operation": "hamilton_events_store",
+        "codeanatomy_operation": "pipeline_events_store",
         "codeanatomy_mode": "append",
         "codeanatomy_row_count": str(len(rows)),
         "codeanatomy_event_name_count": str(len(event_names)),
@@ -1632,21 +1632,21 @@ def _msgpack_or_none(payload: object | None) -> bytes | None:
 
 
 __all__ = [
-    "HAMILTON_EVENTS_TABLE_NAME",
+    "PIPELINE_EVENTS_TABLE_NAME",
     "PLAN_ARTIFACTS_TABLE_NAME",
     "WRITE_ARTIFACTS_TABLE_NAME",
     "DeterminismValidationResult",
-    "HamiltonEventRow",
-    "HamiltonEventsRequest",
+    "PipelineEventRow",
+    "PipelineEventsRequest",
     "PlanArtifactRow",
     "PlanArtifactsForViewsRequest",
     "WriteArtifactRow",
     "build_plan_artifact_row",
-    "ensure_hamilton_events_table",
+    "ensure_pipeline_events_table",
     "ensure_plan_artifacts_table",
     "persist_execution_artifact",
-    "persist_hamilton_event_rows",
-    "persist_hamilton_events",
+    "persist_pipeline_event_rows",
+    "persist_pipeline_events",
     "persist_plan_artifact_rows",
     "persist_plan_artifacts_for_views",
     "persist_write_artifact",

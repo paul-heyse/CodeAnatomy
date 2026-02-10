@@ -22,7 +22,6 @@ from cli.config_models import (
     DiskCacheSettingsSpec,
     DocstringsConfigSpec,
     DocstringsPolicyConfigSpec,
-    HamiltonConfigSpec,
     IncrementalConfigSpec,
     PlanConfigSpec,
     RootConfigSpec,
@@ -231,7 +230,6 @@ _SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
     DeltaConfigSpec,
     DocstringsPolicyConfigSpec,
     DocstringsConfigSpec,
-    HamiltonConfigSpec,
     RootConfigSpec,
     # Delta control-plane contracts
     DeltaTableRef,

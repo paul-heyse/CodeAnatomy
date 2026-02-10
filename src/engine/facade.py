@@ -14,24 +14,65 @@ if TYPE_CHECKING:
 class EngineError(RuntimeError):
     """Base error for Rust engine execution failures."""
 
+    exit_code: int = 1
+
 
 class EngineValidationError(EngineError):
     """Spec validation or contract mismatch failure."""
+
+    exit_code: int = 2
 
 
 class EngineCompileError(EngineError):
     """Logical plan compilation failure."""
 
+    exit_code: int = 3
+
 
 class EngineRuleViolationError(EngineError):
     """Rulepack validation or policy rule violation."""
+
+    exit_code: int = 4
 
 
 class EngineRuntimeError(EngineError):
     """Runtime execution or materialization failure."""
 
+    exit_code: int = 5
+
+
+_ERROR_STAGE_MAP: dict[str, type[EngineError]] = {
+    "validation": EngineValidationError,
+    "compilation": EngineCompileError,
+    "rule_violation": EngineRuleViolationError,
+    "runtime": EngineRuntimeError,
+    "materialization": EngineRuntimeError,
+}
+
 
 def _raise_engine_error(exc: Exception) -> NoReturn:
+    """Classify and raise a typed EngineError from a Rust engine exception.
+
+    Prioritizes structured error codes from Rust when available, falling back
+    to pattern-based classification for backward compatibility.
+
+    Args:
+        exc: The caught exception from Rust engine boundary.
+
+    Raises:
+        EngineValidationError: Spec validation or contract mismatch failure.
+        EngineCompileError: Logical plan compilation failure.
+        EngineRuleViolationError: Rulepack validation or policy rule violation.
+        EngineRuntimeError: Runtime execution or materialization failure.
+        EngineError: Generic engine failure (fallback).
+    """
+    # Structured error code path (future Rust error codes)
+    error_stage = getattr(exc, "error_stage", None)
+    if isinstance(error_stage, str) and error_stage in _ERROR_STAGE_MAP:
+        error_cls = _ERROR_STAGE_MAP[error_stage]
+        raise error_cls(str(exc)) from exc
+
+    # Pattern-based fallback (current behavior, preserved)
     message = str(exc)
     lowered = message.lower()
     if "invalid spec json" in lowered or "failed to parse spec" in lowered:

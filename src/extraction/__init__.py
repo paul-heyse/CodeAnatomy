@@ -1,4 +1,4 @@
-"""Engine telemetry configuration modules."""
+"""Standalone extraction orchestration."""
 
 from __future__ import annotations
 

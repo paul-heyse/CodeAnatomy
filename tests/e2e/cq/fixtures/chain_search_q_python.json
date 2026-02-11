@@ -1,0 +1,89 @@
+{
+  "anchors": [
+    "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
+    "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+    "./tests/e2e/cq/_golden_workspace/python_project/app/services.py",
+    "tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+    "tests/e2e/cq/_golden_workspace/python_project/app/models.py",
+    "tests/e2e/cq/_golden_workspace/python_project/app/services.py"
+  ],
+  "key_findings": [
+    "function: resolve",
+    "function: resolve",
+    "function: resolve",
+    "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
+    "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+    "build_pipeline (./tests/e2e/cq/_golden_workspace/python_project/app/api.py)",
+    "AsyncService (./tests/e2e/cq/_golden_workspace/python_project/app/services.py)"
+  ],
+  "sections": [
+    {
+      "count": 4,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
+        "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+        "build_pipeline (./tests/e2e/cq/_golden_workspace/python_project/app/api.py)",
+        "AsyncService (./tests/e2e/cq/_golden_workspace/python_project/app/services.py)"
+      ],
+      "title": "search_0: Top Contexts"
+    },
+    {
+      "count": 2,
+      "messages": [
+        "From import",
+        "From import"
+      ],
+      "title": "search_0: Imports"
+    },
+    {
+      "count": 4,
+      "messages": [
+        "from_import: 2",
+        "reference: 2",
+        "annotation: 1",
+        "string_match: 1"
+      ],
+      "title": "search_0: Uses by Kind"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Match in string literal"
+      ],
+      "title": "search_0: Non-Code Matches (Strings / Comments / Docstrings)"
+    },
+    {
+      "count": 3,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/python_project/app/api.py: 3 matches",
+        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py: 2 matches",
+        "./tests/e2e/cq/_golden_workspace/python_project/app/services.py: 1 matches"
+      ],
+      "title": "search_0: Hot Files"
+    }
+  ],
+  "summary": {
+    "enable_lsp": null,
+    "lang_scope": "auto",
+    "language_order": [
+      "python",
+      "rust"
+    ],
+    "mode": "run",
+    "plan_version": 1,
+    "query": "multi-step plan (2 steps)",
+    "steps": [
+      "q_1",
+      "search_0"
+    ],
+    "target": null,
+    "target_file": null,
+    "target_name": null,
+    "target_resolution_kind": null,
+    "top_k": null,
+    "total_diagnostics": null,
+    "total_edges": null,
+    "total_nodes": null,
+    "total_slices": null
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "anchors": [
+    "tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
+  ],
+  "key_findings": [
+    "function: compile_target"
+  ],
+  "sections": [],
+  "summary": {
+    "enable_lsp": null,
+    "lang_scope": "rust",
+    "language_order": [
+      "rust"
+    ],
+    "mode": "entity",
+    "plan_version": null,
+    "query": "entity=function name=compile_target lang=rust in=tests/e2e/cq/_golden_workspace/rust_workspace",
+    "steps": null,
+    "target": null,
+    "target_file": null,
+    "target_name": null,
+    "target_resolution_kind": null,
+    "top_k": null,
+    "total_diagnostics": null,
+    "total_edges": null,
+    "total_nodes": null,
+    "total_slices": null
+  }
+}

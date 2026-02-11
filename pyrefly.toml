@@ -3,6 +3,7 @@ project-excludes = [
     "**/.venv/**",
     "**/__pycache__/**",
     "**/tests/fixtures/heuristics/**",
+    "**/tests/e2e/cq/_golden_workspace/**",
 ]
 search-path = ["src", "."]
 python-version = "3.13.12"

@@ -1,0 +1,6 @@
+{
+  "min_findings": 1,
+  "required_messages": ["forwarding_adapter"],
+  "required_files": ["tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py"],
+  "required_section_titles": ["Neighborhood Summary", "Provenance"]
+}

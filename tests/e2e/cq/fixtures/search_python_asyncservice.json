@@ -1,0 +1,79 @@
+{
+  "anchors": [
+    "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
+    "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+    "./tests/e2e/cq/_golden_workspace/python_project/app/services.py"
+  ],
+  "key_findings": [
+    "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
+    "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+    "build_pipeline (./tests/e2e/cq/_golden_workspace/python_project/app/api.py)",
+    "AsyncService (./tests/e2e/cq/_golden_workspace/python_project/app/services.py)"
+  ],
+  "sections": [
+    {
+      "count": 4,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
+        "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+        "build_pipeline (./tests/e2e/cq/_golden_workspace/python_project/app/api.py)",
+        "AsyncService (./tests/e2e/cq/_golden_workspace/python_project/app/services.py)"
+      ],
+      "title": "Top Contexts"
+    },
+    {
+      "count": 2,
+      "messages": [
+        "From import",
+        "From import"
+      ],
+      "title": "Imports"
+    },
+    {
+      "count": 4,
+      "messages": [
+        "from_import: 2",
+        "reference: 2",
+        "annotation: 1",
+        "string_match: 1"
+      ],
+      "title": "Uses by Kind"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Match in string literal"
+      ],
+      "title": "Non-Code Matches (Strings / Comments / Docstrings)"
+    },
+    {
+      "count": 3,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/python_project/app/api.py: 3 matches",
+        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py: 2 matches",
+        "./tests/e2e/cq/_golden_workspace/python_project/app/services.py: 1 matches"
+      ],
+      "title": "Hot Files"
+    }
+  ],
+  "summary": {
+    "enable_lsp": null,
+    "lang_scope": "python",
+    "language_order": [
+      "python"
+    ],
+    "mode": "identifier",
+    "plan_version": null,
+    "query": "AsyncService",
+    "steps": null,
+    "target": null,
+    "target_file": null,
+    "target_name": null,
+    "target_resolution_kind": null,
+    "top_k": null,
+    "total_diagnostics": null,
+    "total_edges": null,
+    "total_nodes": null,
+    "total_slices": null
+  }
+}

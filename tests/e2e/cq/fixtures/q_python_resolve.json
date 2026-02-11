@@ -1,0 +1,34 @@
+{
+  "anchors": [
+    "tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+    "tests/e2e/cq/_golden_workspace/python_project/app/models.py",
+    "tests/e2e/cq/_golden_workspace/python_project/app/services.py"
+  ],
+  "key_findings": [
+    "function: resolve",
+    "function: resolve",
+    "function: resolve"
+  ],
+  "sections": [],
+  "summary": {
+    "enable_lsp": null,
+    "lang_scope": "auto",
+    "language_order": [
+      "python",
+      "rust"
+    ],
+    "mode": "entity",
+    "plan_version": null,
+    "query": "entity=function name=resolve in=tests/e2e/cq/_golden_workspace/python_project/app",
+    "steps": null,
+    "target": null,
+    "target_file": null,
+    "target_name": null,
+    "target_resolution_kind": null,
+    "top_k": null,
+    "total_diagnostics": null,
+    "total_edges": null,
+    "total_nodes": null,
+    "total_slices": null
+  }
+}

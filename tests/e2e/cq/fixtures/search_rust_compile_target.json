@@ -1,0 +1,61 @@
+{
+  "anchors": [
+    "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs",
+    "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
+  ],
+  "key_findings": [
+    "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs",
+    "run_pipeline (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs)",
+    "compile_target (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)",
+    "tests (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)",
+    "smoke_compile_target (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)"
+  ],
+  "sections": [
+    {
+      "count": 5,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs",
+        "run_pipeline (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs)",
+        "compile_target (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)",
+        "tests (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)",
+        "smoke_compile_target (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)"
+      ],
+      "title": "Top Contexts"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "reference: 5"
+      ],
+      "title": "Uses by Kind"
+    },
+    {
+      "count": 2,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs: 3 matches",
+        "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs: 2 matches"
+      ],
+      "title": "Hot Files"
+    }
+  ],
+  "summary": {
+    "enable_lsp": null,
+    "lang_scope": "rust",
+    "language_order": [
+      "rust"
+    ],
+    "mode": "identifier",
+    "plan_version": null,
+    "query": "compile_target",
+    "steps": null,
+    "target": null,
+    "target_file": null,
+    "target_name": null,
+    "target_resolution_kind": null,
+    "top_k": null,
+    "total_diagnostics": null,
+    "total_edges": null,
+    "total_nodes": null,
+    "total_slices": null
+  }
+}

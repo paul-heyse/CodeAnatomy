@@ -1,0 +1,70 @@
+{
+  "anchors": [],
+  "key_findings": [
+    "Symbol: lib",
+    "Kind: unknown",
+    "File: tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
+  ],
+  "sections": [
+    {
+      "count": 3,
+      "messages": [
+        "**Nodes:** 0",
+        "**Edges:** 0",
+        "**Diagnostics:** 1 errors, 2 warnings"
+      ],
+      "title": "neighborhood_0: Neighborhood Summary"
+    },
+    {
+      "count": 3,
+      "messages": [
+        "\u26a0\ufe0f **target_resolution** (not_found): No definition found for anchor tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:9; falling back to file-only resolution",
+        "\u26a0\ufe0f **structural.target_resolution** (not_found): No anchor match for tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:9; trying name-based resolution",
+        "\u274c **structural.target_resolution** (not_found): Target definition 'lib' not found in tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
+      ],
+      "title": "neighborhood_0: Diagnostics"
+    },
+    {
+      "count": 2,
+      "messages": [
+        "**Investigate errors:**",
+        "- structural.target_resolution: Target definition 'lib' not found in tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
+      ],
+      "title": "neighborhood_0: Suggested Follow-ups"
+    },
+    {
+      "count": 5,
+      "messages": [
+        "**Tool:** cq",
+        "**Workspace:** <repo_root>",
+        "**Created:** <duration_ms>",
+        "**Schema:** cq.snb.v1",
+        "**Bundle ID:** 7887db8c81d8c4a2"
+      ],
+      "title": "neighborhood_0: Provenance"
+    }
+  ],
+  "summary": {
+    "enable_lsp": null,
+    "lang_scope": "auto",
+    "language_order": [
+      "python",
+      "rust"
+    ],
+    "mode": "run",
+    "plan_version": 1,
+    "query": "multi-step plan (1 step)",
+    "steps": [
+      "neighborhood_0"
+    ],
+    "target": null,
+    "target_file": null,
+    "target_name": null,
+    "target_resolution_kind": null,
+    "top_k": null,
+    "total_diagnostics": null,
+    "total_edges": null,
+    "total_nodes": null,
+    "total_slices": null
+  }
+}

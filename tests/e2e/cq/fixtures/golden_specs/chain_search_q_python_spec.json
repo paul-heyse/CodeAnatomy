@@ -1,0 +1,7 @@
+{
+  "summary_mode": "run",
+  "summary_lang_scope": "auto",
+  "min_findings": 2,
+  "required_messages": ["resolve", "AsyncService"],
+  "required_files": ["tests/e2e/cq/_golden_workspace/python_project"]
+}

@@ -1,0 +1,8 @@
+{
+  "summary_mode": "entity",
+  "summary_lang_scope": "rust",
+  "min_findings": 1,
+  "required_messages": ["compile_target"],
+  "required_files": ["tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"],
+  "required_categories": ["definition"]
+}

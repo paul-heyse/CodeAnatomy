@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/corelib", "crates/app"]
+resolver = "2"

@@ -44,7 +44,25 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
 │  commands/run.py → run command                                    │
 │  commands/chain.py → chain command                                │
 │  commands/report.py → report command                              │
+│  commands/neighborhood.py → neighborhood/nb command               │
+│  commands/ldmd.py → ldmd index/get/search/neighbors              │
 │  commands/admin.py → index (deprecated), cache (deprecated), schema │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     Neighborhood Layer                            │
+│  neighborhood/target_resolution.py → parse + resolve targets      │
+│  neighborhood/bundle_builder.py → structural + LSP slice assembly │
+│  neighborhood/snb_renderer.py → CqResult rendering                │
+│  neighborhood/scan_snapshot.py → in-memory scan index             │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                         LDMD Layer                                │
+│  ldmd/format.py → marker parser, indexer, section extraction      │
+│  ldmd/writer.py → CqResult → LDMD marker generation              │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -96,8 +114,8 @@ CQ uses frozen `msgspec.Struct` request objects to define clean input contracts 
 | `PythonNodeEnrichmentRequest` | `search/requests.py` | Node-anchored Python enrichment input |
 | `PythonByteRangeEnrichmentRequest` | `search/requests.py` | Byte-range Python enrichment input |
 | `RustEnrichmentRequest` | `search/requests.py` | Rust enrichment input |
-| `SummaryBuildRequest` | `core/requests.py` | Summary construction with telemetry |
-| `MergeResultsRequest` | `core/requests.py` | Multi-language result merge input |
+| `SummaryBuildRequest` | `core/requests.py` | Multi-language summary assembly with `lang_scope`, `languages`, `language_order`, `cross_language_diagnostics`, `language_capabilities`, `enrichment_telemetry` |
+| `MergeResultsRequest` | `core/requests.py` | Multi-language result merge with per-language `CqResult` instances, `diagnostic_payloads`, and `language_capabilities` |
 
 All request objects are frozen (immutable) and use `CqStruct` as their base class for consistent serialization behavior.
 
@@ -140,6 +158,7 @@ All cq commands accept these global options, handled by the meta-app launcher.
 | `mermaid` | Mermaid flowchart syntax | Call graph visualization |
 | `mermaid-class` | Mermaid class diagram syntax | Class hierarchy visualization |
 | `dot` | Graphviz DOT syntax | Complex graph export |
+| `ldmd` | LDMD marker-preserving markdown | Progressive disclosure for long outputs |
 
 ### Configuration Precedence
 
@@ -156,7 +175,7 @@ Create `.cq.toml` in your repository root:
 
 ```toml
 [cq]
-# Output format (md, json, both, summary, mermaid, mermaid-class, dot)
+# Output format (md, json, both, summary, mermaid, mermaid-class, dot, ldmd)
 format = "md"
 
 # Verbosity level (0-3)
@@ -211,7 +230,7 @@ Individual analysis findings:
 | `message` | `str` | Human-readable description |
 | `anchor` | `Anchor \| None` | Source location: `file:line[:col]` |
 | `severity` | `str` | One of: "error", "warning", "info" |
-| `details` | `dict[str, Any]` | Structured metadata including scoring |
+| `details` | `DetailPayload` | Structured metadata including scoring |
 
 ### Anchor
 
@@ -224,6 +243,30 @@ Source code location:
 | `col` | `int \| None` | 0-indexed column offset |
 | `end_line` | `int \| None` | End line for spans |
 | `end_col` | `int \| None` | End column for spans |
+
+### ScoreDetails
+
+Structured scoring metadata attached to findings via `DetailPayload`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `impact_score` | `float \| None` | Computed impact score (0.0-1.0) |
+| `impact_bucket` | `str \| None` | Bucket label: "high", "med", or "low" |
+| `confidence_score` | `float \| None` | Computed confidence score (0.0-1.0) |
+| `confidence_bucket` | `str \| None` | Bucket label: "high", "med", or "low" |
+| `evidence_kind` | `str \| None` | Evidence type backing the finding |
+
+### DetailPayload
+
+Structured details payload for findings (replaces legacy `dict[str, Any]`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `kind` | `str \| None` | Finding detail kind (e.g., "call_site", "import") |
+| `score` | `ScoreDetails \| None` | Structured scoring metadata |
+| `data` | `dict[str, object]` | Arbitrary additional data fields |
+
+`DetailPayload` supports mapping-style access (`get`, `__getitem__`, `__contains__`) and provides `from_legacy()` for backward-compatible conversion from unstructured dicts. Score fields (`impact_score`, `confidence_score`, etc.) are transparently delegated to the nested `ScoreDetails`.
 
 ---
 
@@ -253,8 +296,6 @@ Based on evidence quality:
 | Evidence Kind | Score | Description |
 |---------------|-------|-------------|
 | `resolved_ast` | 0.95 | Full AST analysis with symbol resolution |
-| `resolved_ast_bytecode` | 0.92 | AST resolution with bytecode enrichment |
-| `resolved_ast_closure` | 0.90 | AST resolution with closure detection |
 | `bytecode` | 0.90 | Bytecode inspection |
 | `resolved_ast_heuristic` | 0.75 | AST with heuristic matching |
 | `bytecode_heuristic` | 0.75 | Bytecode with heuristics |
@@ -429,6 +470,115 @@ Sessions are keyed by content hash with a maximum cache of 64 entries. When mult
 |----------|---------|-------------|
 | `CQ_PY_ENRICHMENT_CROSSCHECK` | `0` | Emit Python cross-source mismatch payloads when set to `1` |
 | `CQ_RUST_ENRICHMENT_CROSSCHECK` | `0` | Emit Rust ast-grep/tree-sitter mismatch payloads when set to `1` |
+
+---
+
+## Advanced LSP Enrichment Planes
+
+CQ includes implemented advanced enrichment planes under `tools/cq/search/` that provide deeper semantic analysis via LSP servers. All planes are capability-gated and fail-open: they enrich outputs without blocking core search/query/run execution.
+
+### Semantic Overlays (`semantic_overlays.py`)
+
+Normalized semantic tokens and inlay hints from LSP servers.
+
+| Type | Description |
+|------|-------------|
+| `SemanticTokenSpanV1` | Decoded token with resolved type/modifier names: `line`, `start_char`, `length`, `token_type`, `modifiers` |
+| `SemanticTokenBundleV1` | Atomic bundle: position encoding, server legend (token types/modifiers), raw data stream, decoded token rows |
+| `InlayHintV1` | Type/parameter hints from LSP inlay hint responses |
+
+### Diagnostics Pull (`diagnostics_pull.py`)
+
+Shared pull-diagnostics helpers for `textDocument/diagnostic` and `workspace/diagnostic`.
+
+| Function | Description |
+|----------|-------------|
+| `pull_text_document_diagnostics()` | Pull per-file diagnostics via `textDocument/diagnostic` |
+| `pull_workspace_diagnostics()` | Workspace-level diagnostics via `workspace/diagnostic` |
+
+Both functions are capability-gated (check `_supports_method()`) and return `None` when the server does not support the protocol.
+
+### Refactor Actions (`refactor_actions.py`)
+
+Code action bridge for diagnostics + resolve/execute workflows.
+
+| Type | Description |
+|------|-------------|
+| `PrepareRenameResultV1` | Result of `textDocument/prepareRename`: rename range + placeholder + `can_rename` flag |
+| `DiagnosticItemV1` | Normalized diagnostic with action-bridge fidelity fields: URI, message, severity, range, code, source |
+
+### Rust Extensions (`rust_extensions.py`)
+
+Rust-analyzer specific extensions with fail-open behavior.
+
+| Type | Description |
+|------|-------------|
+| `RustMacroExpansionV1` | Result of `rust-analyzer/expandMacro`: name, expanded text, byte length |
+| `RustRunnableV1` | Normalized runnable from `rust-analyzer/runnables`: label, kind (cargo/test/bench), args, location |
+
+---
+
+## Pyrefly LSP Integration
+
+CQ integrates with Pyrefly (Python type checker) for symbol grounding, call graph, and type contract enrichment.
+
+**Architecture modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `search/pyrefly_lsp.py` | Pyrefly LSP session management and enrichment orchestration |
+| `search/pyrefly_contracts.py` | Typed contract structs for Pyrefly enrichment payloads |
+| `search/pyrefly_capability_gates.py` | Capability gating for Pyrefly features |
+
+**Key contract types:**
+
+| Type | Description |
+|------|-------------|
+| `PyreflyTarget` | Location target row: kind, uri, file, line, col |
+| `PyreflySymbolGrounding` | Grounding targets for one anchor: definition, declaration, type definition, implementation targets |
+| `PyreflyTypeContract` | Resolved type/call signature: resolved type, callable signature, parameters, return type, generics, async/generator flags |
+| `PyreflyCallGraphEdge` | Incoming/outgoing call graph row: symbol, file, line, col |
+| `PyreflyOverview` | Aggregate summary for code-overview rendering: primary symbol, caller/callee counts, implementations, diagnostics |
+| `PyreflyTelemetry` | Execution telemetry: attempted, applied, failed, skipped, timed out counts |
+
+---
+
+## Rust LSP Integration
+
+CQ integrates with rust-analyzer for Rust symbol grounding, call/type hierarchies, document symbols, and diagnostics.
+
+**Architecture modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `search/rust_lsp.py` | Rust-analyzer LSP session management and enrichment |
+| `search/rust_lsp_contracts.py` | Typed contract structs for Rust LSP payloads |
+
+**Key contract types:**
+
+| Type | Description |
+|------|-------------|
+| `LspCapabilitySnapshotV1` | Typed capability snapshot: server, client, and experimental capabilities |
+| `LspSessionEnvV1` | LSP session envelope: server name/version, position encoding, capabilities, health, quiescent state |
+| `RustDiagnosticV1` | Normalized LSP diagnostic: URI, range, severity, code, source, message, related info, data passthrough |
+| `RustSymbolGrounding` | Symbol grounding bundle: definitions, type definitions, implementations, references |
+| `RustCallGraph` | Call graph bundle: incoming callers + outgoing callees |
+| `RustTypeHierarchy` | Type hierarchy bundle: supertypes + subtypes |
+| `RustLspEnrichmentPayload` | Unified Rust LSP enrichment payload: session env, grounding, call graph, type hierarchy, document symbols, diagnostics, hover text |
+
+---
+
+## Enrichment Contracts
+
+Typed enrichment contracts shared across Python and Rust pipelines (`search/enrichment/contracts.py`):
+
+| Type | Description |
+|------|-------------|
+| `EnrichmentMeta` | Common metadata: language, status (`applied`/`degraded`/`skipped`/`error`), sources, degrade reason, payload size hint, dropped/truncated fields |
+| `PythonEnrichmentPayload` | Typed Python enrichment wrapper: `meta: EnrichmentMeta` + `data: dict[str, object]` |
+| `RustEnrichmentPayload` | Typed Rust enrichment wrapper: `meta: EnrichmentMeta` + `data: dict[str, object]` |
+
+These contracts ensure consistent enrichment metadata across language boundaries while allowing flexible data payloads.
 
 ---
 
@@ -874,6 +1024,197 @@ Default: `globals,attrs,constants`
 
 ---
 
+### neighborhood / nb - Semantic Neighborhood Analysis
+
+Builds a semantic neighborhood around a target location or symbol and returns structural plus LSP-backed slices.
+
+```bash
+/cq neighborhood <TARGET> [--lang python|rust] [--top-k N] [--no-lsp]
+/cq nb <TARGET> [--lang python|rust] [--top-k N] [--no-lsp]
+```
+
+**Target Formats:**
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| `file:line` | `src/foo.py:120` | File with line number |
+| `file:line:col` | `src/foo.py:120:4` | File with line and column |
+| `symbol` | `build_graph_product` | Symbol name (resolved via scan snapshot) |
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--lang` | `python` | Query language (`python` or `rust`) |
+| `--top-k` | `10` | Maximum items per slice |
+| `--no-lsp` | `false` | Disable LSP enrichment |
+
+**How it works:**
+
+1. **Scan**: ast-grep scans the repository to build a `ScanSnapshot` (in-memory index)
+2. **Resolve**: `parse_target_spec()` + `resolve_target()` determine the anchor location
+   - File:line targets resolve directly
+   - Symbol targets use scan snapshot with deterministic fallback
+3. **Bundle Build**: `build_neighborhood_bundle()` assembles slices:
+   - **Structural slices**: definitions, references, call sites, imports from scan snapshot
+   - **LSP slices** (when enabled): references, implementations, supertypes, subtypes via LSP adapters
+4. **Render**: `render_snb_result()` converts `SemanticNeighborhoodBundleV1` to `CqResult`
+
+**Resolution Cascade:**
+
+The target resolver follows a deterministic cascade:
+1. Parse target spec (file:line:col or symbol)
+2. For file targets: validate file exists, resolve line/col
+3. For symbol targets: search scan snapshot, apply tie-breaking (prefer definitions over references)
+4. Record degrade events when resolution requires fallback
+
+**Structural Slice Kinds:**
+
+| Kind | Description |
+|------|-------------|
+| `definitions` | Symbol definitions near the target |
+| `references` | References to/from the target symbol |
+| `call_sites` | Call expressions involving the target |
+| `imports` | Import statements related to the target |
+
+**LSP Slice Kinds (capability-gated):**
+
+| Kind | Python (Pyrefly) | Rust (rust-analyzer) |
+|------|-------------------|---------------------|
+| `references` | Yes | Yes |
+| `implementations` | Yes | Yes |
+| `supertypes` | Yes | Yes (type hierarchy) |
+| `subtypes` | Yes | Yes (type hierarchy) |
+| `hover` | No | Yes |
+| `diagnostics` | No | Yes |
+
+**Run Step Format:**
+
+```json
+{"type": "neighborhood", "target": "src/foo.py:120:4", "lang": "python", "top_k": 10, "no_lsp": false}
+```
+
+**Examples:**
+
+```bash
+# Analyze neighborhood of a specific line
+/cq neighborhood tools/cq/search/rust_lsp.py:745:1
+
+# Symbol-first resolution
+/cq nb build_graph_product
+
+# Rust target with LSP disabled
+/cq neighborhood rust/src/lib.rs:50 --lang rust --no-lsp
+
+# In a run plan
+/cq run --steps '[{"type":"neighborhood","target":"src/foo.py:120:4","top_k":8}]'
+```
+
+---
+
+### ldmd - Progressive Disclosure Protocol
+
+LDMD (LLM-friendly Markdown) provides progressive section retrieval for large CQ output artifacts. It uses structured markers to index, search, and extract sections with depth and mode controls.
+
+```bash
+/cq ldmd <subcommand> <PATH> [options]
+```
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| `index` | Index an LDMD document and return section metadata |
+| `get` | Extract content from a section by ID |
+| `search` | Search within LDMD sections |
+| `neighbors` | Get neighboring sections for navigation |
+
+**LDMD Marker Grammar:**
+
+LDMD documents use HTML comment markers to define sections:
+
+```
+<!--LDMD:BEGIN id="section_id" title="Human Title" level="1" parent="parent_id" tags="tag1,tag2"-->
+section content...
+<!--LDMD:END id="section_id"-->
+```
+
+The parser validates:
+- BEGIN/END nesting (stack-based)
+- No duplicate section IDs
+- Correct parent/child relationships
+
+#### ldmd index
+
+```bash
+/cq ldmd index <PATH>
+```
+
+Returns JSON with section metadata:
+
+```json
+{
+  "sections": [
+    {"id": "root", "start_offset": 0, "end_offset": 1024, "depth": 0, "collapsed": false}
+  ],
+  "total_bytes": 1024
+}
+```
+
+#### ldmd get
+
+```bash
+/cq ldmd get <PATH> --id <SECTION_ID> [--mode full|preview|tldr] [--depth N] [--limit-bytes N]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--id` | (required) | Section ID to extract |
+| `--mode` | `full` | Extraction mode: `full`, `preview` (abbreviated), or `tldr` (summary) |
+| `--depth` | `0` | Include nested sections up to this depth (0 = section only) |
+| `--limit-bytes` | `0` | Maximum bytes to return (0 = unlimited) |
+
+#### ldmd search
+
+```bash
+/cq ldmd search <PATH> --query <TEXT>
+```
+
+Returns JSON with section matches containing the query text.
+
+#### ldmd neighbors
+
+```bash
+/cq ldmd neighbors <PATH> --id <SECTION_ID>
+```
+
+Returns JSON with prev/next section IDs for navigation.
+
+**Core Types:**
+
+| Type | Module | Description |
+|------|--------|-------------|
+| `LdmdIndex` | `ldmd/format.py` | Section metadata with byte offsets and nesting depth |
+| `SectionMeta` | `ldmd/format.py` | Individual section: id, start/end offset, depth, collapsed |
+
+**Examples:**
+
+```bash
+# Index a document
+/cq ldmd index .cq/artifacts/analysis_output.ldmd
+
+# Get preview of a section
+/cq ldmd get .cq/artifacts/analysis_output.ldmd --id summary --mode preview --depth 1
+
+# Search for a term
+/cq ldmd search .cq/artifacts/analysis_output.ldmd --query "build_graph"
+
+# Navigate to next section
+/cq ldmd neighbors .cq/artifacts/analysis_output.ldmd --id summary
+```
+
+---
+
 ### run - Multi-Step Execution
 
 Execute multiple cq commands with shared scanning for improved performance.
@@ -931,12 +1272,12 @@ function = "build_graph"
 {"type": "q", "query": "entity=function name=foo", "id": "my_step"}
 ```
 
-**Available Step Types (10 total):**
+**Available Step Types (11 total):**
 
 | Type | Required Fields | Optional Fields |
 |------|-----------------|-----------------|
 | `q` | `query` | `id` |
-| `search` | `query` | `regex`, `literal`, `include_strings`, `in_dir`, `id` |
+| `search` | `query` | `regex`, `literal`, `include_strings`, `in_dir`, `lang_scope`, `id` |
 | `calls` | `function` | `id` |
 | `impact` | `function`, `param` | `depth`, `id` |
 | `imports` | — | `cycles`, `module`, `id` |
@@ -945,6 +1286,7 @@ function = "build_graph"
 | `side-effects` | — | `max_files`, `id` |
 | `scopes` | `target` | `max_files`, `id` |
 | `bytecode-surface` | `target` | `show`, `max_files`, `id` |
+| `neighborhood` | `target` | `lang`, `top_k`, `no_lsp`, `id` |
 
 **Performance:**
 
@@ -994,7 +1336,7 @@ Execute multiple commands with delimiter-based syntax, sharing a single scan.
 
 **Supported Commands:**
 
-All 10 step types: `q`, `search`, `calls`, `impact`, `imports`, `exceptions`, `sig-impact`, `side-effects`, `scopes`, `bytecode-surface`
+All 11 step types: `q`, `search`, `calls`, `impact`, `imports`, `exceptions`, `sig-impact`, `side-effects`, `scopes`, `bytecode-surface`, `neighborhood`
 
 **Examples:**
 
@@ -1246,6 +1588,7 @@ All commands support these filtering options:
 | `--format json` | Full JSON - for programmatic use |
 | `--format both` | Markdown followed by JSON |
 | `--format summary` | Condensed single-line - for CI integration |
+| `--format ldmd` | LDMD marker-preserving - for progressive disclosure |
 
 ### Summary Format
 

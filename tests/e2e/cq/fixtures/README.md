@@ -1,6 +1,6 @@
 # E2E Test Fixtures
 
-This directory contains golden snapshot files for E2E tests.
+This directory contains golden snapshot files and spec fixtures for CQ E2E tests.
 
 ## Golden Snapshot Pattern
 
@@ -41,6 +41,31 @@ uv run pytest tests/e2e/cq/ --update-golden
 ```
 
 This will regenerate all golden files with current outputs.
+
+For command-matrix snapshots, use:
+
+```bash
+bash scripts/update_cq_goldens.sh
+```
+
+## Golden Specs
+
+`fixtures/golden_specs/*.json` contains declarative assertions used by command-level
+tests (minimum findings, required files/messages/categories, required section titles).
+
+These specs are intentionally less brittle than full snapshots and are used alongside
+JSON snapshots.
+
+## Hermetic Workspaces
+
+CQ command goldens rely on stable fixture workspaces under:
+
+- `tests/e2e/cq/_golden_workspace/python_project`
+- `tests/e2e/cq/_golden_workspace/rust_workspace`
+- `tests/e2e/cq/_golden_workspace/mixed_workspace`
+
+These workspaces are the canonical dataset for Python/Rust command-level goldens and
+should be preferred over repository-source-dependent snapshots.
 
 ### Best Practices
 

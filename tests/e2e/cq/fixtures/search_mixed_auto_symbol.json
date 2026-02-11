@@ -1,0 +1,76 @@
+{
+  "anchors": [
+    "./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs",
+    "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py",
+    "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py"
+  ],
+  "key_findings": [
+    "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py",
+    "mixed_symbol (./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py)",
+    "mixed_symbol (./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs)"
+  ],
+  "sections": [
+    {
+      "count": 3,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py",
+        "mixed_symbol (./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py)",
+        "mixed_symbol (./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs)"
+      ],
+      "title": "Top Contexts"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "From import"
+      ],
+      "title": "Imports"
+    },
+    {
+      "count": 3,
+      "messages": [
+        "reference: 2",
+        "from_import: 1",
+        "string_match: 1"
+      ],
+      "title": "Uses by Kind"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Match in string literal"
+      ],
+      "title": "Non-Code Matches (Strings / Comments / Docstrings)"
+    },
+    {
+      "count": 3,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py: 2 matches",
+        "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py: 1 matches",
+        "./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs: 1 matches"
+      ],
+      "title": "Hot Files"
+    }
+  ],
+  "summary": {
+    "enable_lsp": null,
+    "lang_scope": "auto",
+    "language_order": [
+      "python",
+      "rust"
+    ],
+    "mode": "identifier",
+    "plan_version": null,
+    "query": "mixed_symbol",
+    "steps": null,
+    "target": null,
+    "target_file": null,
+    "target_name": null,
+    "target_resolution_kind": null,
+    "top_k": null,
+    "total_diagnostics": null,
+    "total_edges": null,
+    "total_nodes": null,
+    "total_slices": null
+  }
+}

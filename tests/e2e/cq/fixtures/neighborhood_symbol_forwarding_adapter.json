@@ -1,0 +1,73 @@
+{
+  "anchors": [],
+  "key_findings": [
+    "Symbol: forwarding_adapter",
+    "Kind: function",
+    "File: tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py"
+  ],
+  "sections": [
+    {
+      "count": 4,
+      "messages": [
+        "**Nodes:** 5",
+        "**Edges:** 1",
+        "**Slices:** 2",
+        "**Relationships:** siblings (4), callees (1)"
+      ],
+      "title": "Neighborhood Summary"
+    },
+    {
+      "count": 4,
+      "messages": [
+        "- **__init__** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
+        "- **__init__** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
+        "- **dispatch** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
+        "- **op_direct** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+      ],
+      "title": "Sibling Definitions"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "- **dispatch** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+      ],
+      "title": "Functions Called"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "No specific follow-ups suggested."
+      ],
+      "title": "Suggested Follow-ups"
+    },
+    {
+      "count": 5,
+      "messages": [
+        "**Tool:** cq",
+        "**Workspace:** <repo_root>",
+        "**Created:** <duration_ms>",
+        "**Schema:** cq.snb.v1",
+        "**Bundle ID:** d32e1fb281b25dee"
+      ],
+      "title": "Provenance"
+    }
+  ],
+  "summary": {
+    "enable_lsp": false,
+    "lang_scope": null,
+    "language_order": null,
+    "mode": null,
+    "plan_version": null,
+    "query": null,
+    "steps": null,
+    "target": "forwarding_adapter",
+    "target_file": "tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py",
+    "target_name": "forwarding_adapter",
+    "target_resolution_kind": "symbol_fallback",
+    "top_k": 5,
+    "total_diagnostics": 0,
+    "total_edges": 1,
+    "total_nodes": 5,
+    "total_slices": 2
+  }
+}

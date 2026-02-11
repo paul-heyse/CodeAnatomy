@@ -1,0 +1,6 @@
+{
+  "required_section_ids": ["run_meta", "summary", "key_findings"],
+  "min_total_bytes": 500,
+  "required_search_hits": 1,
+  "run_meta_contains": ["search", "Root"]
+}

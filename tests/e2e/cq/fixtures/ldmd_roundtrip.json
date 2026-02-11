@@ -1,0 +1,32 @@
+{
+  "index_section_ids": [
+    "run_meta",
+    "summary",
+    "key_findings_tldr",
+    "key_findings",
+    "section_0_tldr",
+    "section_0",
+    "section_1_tldr",
+    "section_1",
+    "section_2_tldr",
+    "section_2",
+    "section_3_tldr",
+    "section_3",
+    "section_4_tldr",
+    "section_4"
+  ],
+  "neighbors": {
+    "next": "key_findings_tldr",
+    "prev": "run_meta",
+    "section_id": "summary"
+  },
+  "run_meta_slice_prefix": [
+    "<!--LDMD:BEGIN id=\"run_meta\" title=\"Run\" level=\"1\"-->",
+    "## search",
+    "**Root:** <repo_root>",
+    "**Elapsed:** <duration_ms>",
+    "<!--LDMD:END id=\"run_meta\"-->",
+    ""
+  ],
+  "search_match_count": 7
+}

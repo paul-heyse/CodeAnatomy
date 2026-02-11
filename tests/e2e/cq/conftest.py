@@ -1,3 +1,4 @@
+# ruff: noqa: DOC201, TRY004
 """Pytest fixtures and utilities for cq E2E tests.
 
 Provides reusable test infrastructure for end-to-end cq command testing.
@@ -5,11 +6,12 @@ Provides reusable test infrastructure for end-to-end cq command testing.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import msgspec
 import pytest
@@ -171,6 +173,80 @@ def run_command(repo_root: Path) -> Callable[[list[str]], subprocess.CompletedPr
 
 
 @pytest.fixture
+def run_cq_command(
+    repo_root: Path,
+) -> Callable[[list[str], Path | None], subprocess.CompletedProcess[str]]:
+    """Run the CQ CLI with optional working directory override."""
+
+    def _run(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        command = ["./cq", *args]
+        return subprocess.run(
+            command,
+            cwd=cwd or repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=180,
+        )
+
+    return _run
+
+
+@pytest.fixture
+def run_cq_json(
+    run_cq_command: Callable[[list[str], Path | None], subprocess.CompletedProcess[str]],
+) -> Callable[[list[str], Path | None], dict[str, Any]]:
+    """Run CQ CLI and decode a JSON payload from stdout."""
+
+    def _run(args: list[str], cwd: Path | None = None) -> dict[str, Any]:
+        proc = run_cq_command(args, cwd)
+        if proc.returncode != 0:
+            msg = f"CQ command failed with code {proc.returncode}: {proc.stderr}\nargs={args!r}"
+            raise RuntimeError(msg)
+        data = json.loads(proc.stdout)
+        if not isinstance(data, dict):
+            msg = f"Expected JSON object payload, got: {type(data).__name__}"
+            raise RuntimeError(msg)
+        return data
+
+    return _run
+
+
+@pytest.fixture
+def run_cq_result(
+    run_cq_command: Callable[[list[str], Path | None], subprocess.CompletedProcess[str]],
+) -> Callable[[list[str], Path | None], CqResult]:
+    """Run CQ CLI and decode CqResult JSON payload."""
+
+    def _run(args: list[str], cwd: Path | None = None) -> CqResult:
+        from tools.cq.core.schema import CqResult
+
+        proc = run_cq_command(args, cwd)
+        if proc.returncode != 0:
+            msg = f"CQ command failed with code {proc.returncode}: {proc.stderr}\nargs={args!r}"
+            raise RuntimeError(msg)
+        return msgspec.json.decode(proc.stdout.encode("utf-8"), type=CqResult)
+
+    return _run
+
+
+@pytest.fixture
+def run_cq_text(
+    run_cq_command: Callable[[list[str], Path | None], subprocess.CompletedProcess[str]],
+) -> Callable[[list[str], Path | None], str]:
+    """Run CQ CLI and return stdout text with command failure surfaced."""
+
+    def _run(args: list[str], cwd: Path | None = None) -> str:
+        proc = run_cq_command(args, cwd)
+        if proc.returncode != 0:
+            msg = f"CQ command failed with code {proc.returncode}: {proc.stderr}\nargs={args!r}"
+            raise RuntimeError(msg)
+        return proc.stdout
+
+    return _run
+
+
+@pytest.fixture
 def run_query(
     run_command: Callable[[list[str]], subprocess.CompletedProcess[str]],
 ) -> Callable[[str], CqResult]:
@@ -232,6 +308,30 @@ def run_query(
             raise RuntimeError(msg) from e
 
     return _query
+
+
+@pytest.fixture(scope="session")
+def golden_workspace_root(repo_root: Path) -> Path:
+    """Root path for hermetic CQ golden workspaces."""
+    return repo_root / "tests" / "e2e" / "cq" / "_golden_workspace"
+
+
+@pytest.fixture(scope="session")
+def python_golden_workspace(golden_workspace_root: Path) -> Path:
+    """Python golden workspace fixture path."""
+    return golden_workspace_root / "python_project"
+
+
+@pytest.fixture(scope="session")
+def rust_golden_workspace(golden_workspace_root: Path) -> Path:
+    """Rust golden workspace fixture path."""
+    return golden_workspace_root / "rust_workspace"
+
+
+@pytest.fixture(scope="session")
+def mixed_golden_workspace(golden_workspace_root: Path) -> Path:
+    """Mixed-language golden workspace fixture path."""
+    return golden_workspace_root / "mixed_workspace"
 
 
 @pytest.fixture

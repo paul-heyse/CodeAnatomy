@@ -85,12 +85,53 @@ Known-good command matrix:
 - Rust LSP slices: references, implementations, and hover/signature/diagnostic context via rust-analyzer session probes.
 - Rendering path: canonical `SemanticNeighborhoodBundleV1` -> `CqResult` rendering.
 
+**Resolution Cascade:**
+1. Parse target spec (`file:line[:col]` or symbol name)
+2. For file targets: validate existence, resolve line/col directly
+3. For symbol targets: search `ScanSnapshot`, apply deterministic tie-breaking (prefer definitions over references)
+4. Record degrade events when resolution requires fallback
+
+**Structural Slice Kinds:** definitions, references, call sites, imports (from scan snapshot).
+
+**LSP Slice Kinds (capability-gated):**
+
+| Kind | Python (Pyrefly) | Rust (rust-analyzer) |
+|------|-------------------|---------------------|
+| references | Yes | Yes |
+| implementations | Yes | Yes |
+| supertypes | Yes | Yes (type hierarchy) |
+| subtypes | Yes | Yes (type hierarchy) |
+| hover | No | Yes |
+| diagnostics | No | Yes |
+
+**Key Types:** `BundleBuildRequest`, `SemanticNeighborhoodBundleV1`, `ScanSnapshot`, `TargetSpec`, `ResolvedTarget`.
+
 `ldmd` provides progressive disclosure tooling over marker-structured CQ output:
 
 - `ldmd index` for section metadata
 - `ldmd search` for section-level search
 - `ldmd get` with `--mode full|preview|tldr` and `--depth`
 - `ldmd neighbors` for adjacent-section traversal
+
+**LDMD Marker Grammar:**
+
+```
+<!--LDMD:BEGIN id="section_id" title="Human Title" level="1" parent="parent_id" tags="tag1,tag2"-->
+content...
+<!--LDMD:END id="section_id"-->
+```
+
+The parser validates BEGIN/END nesting (stack-based), prevents duplicate IDs, and enforces parent/child relationships.
+
+**Get Modes:**
+
+| Mode | Description |
+|------|-------------|
+| `full` | Complete section content |
+| `preview` | Abbreviated preview (limited to 5 items) |
+| `tldr` | Brief summary |
+
+**Core Types:** `LdmdIndex` (section metadata with byte offsets and depth), `SectionMeta` (per-section: id, start/end offset, depth, collapsed).
 
 ## Advanced LSP Enrichment Planes (Implemented)
 
@@ -102,6 +143,46 @@ The following CQ enrichment planes are implemented under `tools/cq/search` and u
 - `rust_extensions.py`: rust-analyzer extensions (`expandMacro`, `runnables`) with fail-open behavior.
 
 All advanced planes are capability-gated and on-demand. They must not block base CQ commands when unavailable.
+
+**Per-plane key types:**
+
+| Plane | Key Types |
+|-------|-----------|
+| Semantic Overlays | `SemanticTokenSpanV1` (decoded token: line, start_char, length, token_type, modifiers), `SemanticTokenBundleV1` (legend + encoding + raw data + decoded rows), `InlayHintV1` |
+| Diagnostics Pull | `pull_text_document_diagnostics()`, `pull_workspace_diagnostics()` (both capability-gated, return `None` when unsupported) |
+| Refactor Actions | `PrepareRenameResultV1` (rename range + placeholder + can_rename), `DiagnosticItemV1` (normalized diagnostic with action-bridge fields) |
+| Rust Extensions | `RustMacroExpansionV1` (macro name + expanded text + byte length), `RustRunnableV1` (label, kind, args, location) |
+
+### Pyrefly LSP Contract Types
+
+| Type | Description |
+|------|-------------|
+| `PyreflyTarget` | Location target: kind, uri, file, line, col |
+| `PyreflySymbolGrounding` | Grounding: definition, declaration, type definition, implementation targets |
+| `PyreflyTypeContract` | Resolved type/signature: resolved type, callable signature, parameters, return type, generics, async/generator flags |
+| `PyreflyOverview` | Summary: primary symbol, caller/callee counts, implementations, diagnostics, matches enriched |
+| `PyreflyTelemetry` | Execution telemetry: attempted, applied, failed, skipped, timed out |
+
+### Rust LSP Contract Types
+
+| Type | Description |
+|------|-------------|
+| `LspCapabilitySnapshotV1` | Server/client/experimental capability snapshot for gating decisions |
+| `LspSessionEnvV1` | Session envelope: server name/version, position encoding, health, quiescent state |
+| `RustDiagnosticV1` | Normalized diagnostic: URI, range, severity, code, source, message, data passthrough |
+| `RustSymbolGrounding` | Grounding bundle: definitions, type definitions, implementations, references |
+| `RustCallGraph` | Call graph: incoming callers + outgoing callees |
+| `RustLspEnrichmentPayload` | Unified payload: session env, grounding, call graph, type hierarchy, symbols, diagnostics, hover |
+
+### Enrichment Contracts
+
+Shared across Python and Rust pipelines (`search/enrichment/contracts.py`):
+
+| Type | Description |
+|------|-------------|
+| `EnrichmentMeta` | Common metadata: language, status, sources, degrade reason, payload size hint, dropped/truncated fields |
+| `PythonEnrichmentPayload` | Python wrapper: `meta: EnrichmentMeta` + `data: dict[str, object]` |
+| `RustEnrichmentPayload` | Rust wrapper: `meta: EnrichmentMeta` + `data: dict[str, object]` |
 
 ## Rust Language Support
 
@@ -1184,11 +1265,14 @@ Weighted formula:
 ### Confidence Score (0.0-1.0)
 
 Based on evidence quality:
-- `resolved_ast` = 0.95 (full AST)
-- `bytecode` = 0.90
-- `heuristic` = 0.60
-- `rg_only` = 0.45
-- `unresolved` = 0.30
+- `resolved_ast` = 0.95 (full AST with symbol resolution)
+- `bytecode` = 0.90 (bytecode inspection)
+- `resolved_ast_heuristic` = 0.75 (AST with heuristic matching)
+- `bytecode_heuristic` = 0.75 (bytecode with heuristics)
+- `cross_file_taint` = 0.70 (multi-file taint propagation)
+- `heuristic` = 0.60 (pattern matching only)
+- `rg_only` = 0.45 (ripgrep text search only)
+- `unresolved` = 0.30 (unverified/fallback)
 
 ### Buckets
 
@@ -1197,6 +1281,18 @@ Based on evidence quality:
 | high | >= 0.7 |
 | med | >= 0.4 |
 | low | < 0.4 |
+
+### DetailPayload
+
+`Finding.details` is now a structured `DetailPayload` (not `dict[str, Any]`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `kind` | `str \| None` | Finding detail kind |
+| `score` | `ScoreDetails \| None` | Nested scoring metadata (`impact_score`, `impact_bucket`, `confidence_score`, `confidence_bucket`, `evidence_kind`) |
+| `data` | `dict[str, object]` | Arbitrary additional data |
+
+`DetailPayload` supports mapping-style access and `from_legacy()` for backward-compatible conversion from unstructured dicts.
 
 ## When to Use
 

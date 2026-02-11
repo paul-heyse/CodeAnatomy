@@ -360,6 +360,51 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             ),
         ),
     ),
+    FactClusterSpec(
+        title="Neighborhood Bundle",
+        fields=(
+            FactFieldSpec(
+                label="Bundle ID",
+                paths=(
+                    ("neighborhood_bundle", "bundle_id"),
+                    ("bundle_id",),
+                ),
+            ),
+            FactFieldSpec(
+                label="Slice Count",
+                paths=(
+                    ("neighborhood_bundle", "slice_count"),
+                    ("slice_count",),
+                ),
+            ),
+            FactFieldSpec(
+                label="Diagnostics Count",
+                paths=(
+                    ("neighborhood_bundle", "diagnostic_count"),
+                    ("diagnostic_count",),
+                ),
+            ),
+            FactFieldSpec(
+                label="Degrade Events",
+                paths=(
+                    ("degrade_events",),
+                    ("diagnostics",),
+                ),
+            ),
+            FactFieldSpec(
+                label="LSP Health",
+                paths=(("lsp_health",),),
+            ),
+            FactFieldSpec(
+                label="LSP Quiescent",
+                paths=(("lsp_quiescent",),),
+            ),
+            FactFieldSpec(
+                label="Position Encoding",
+                paths=(("lsp_position_encoding",),),
+            ),
+        ),
+    ),
 )
 
 

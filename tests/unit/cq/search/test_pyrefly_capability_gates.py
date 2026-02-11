@@ -9,6 +9,14 @@ from tools.cq.search.pyrefly_capability_gates import (
     gate_workspace_symbols,
 )
 
+_EMPTY_TOKEN_TYPES: list[str] = []
+_EMPTY_TOKEN_MODIFIERS: list[str] = []
+_EMPTY_LEGEND: dict[str, list[str]] = {
+    "tokenTypes": _EMPTY_TOKEN_TYPES,
+    "tokenModifiers": _EMPTY_TOKEN_MODIFIERS,
+}
+_EMPTY_DICT: dict[str, object] = {}
+
 
 class TestDocumentSymbolsGate:
     """Test documentSymbol capability gating."""
@@ -92,7 +100,7 @@ class TestSemanticTokensGate:
         server_caps = {
             "semanticTokensProvider": {
                 "full": {"delta": True},
-                "legend": {"tokenTypes": [], "tokenModifiers": []},
+                "legend": dict(_EMPTY_LEGEND),
             }
         }
         result = gate_semantic_tokens(server_caps)
@@ -118,9 +126,7 @@ class TestSemanticTokensGate:
 
     def test_full_missing_returns_degrade_event(self) -> None:
         """When semanticTokensProvider.full is missing, gate returns DegradeEventV1."""
-        server_caps = {
-            "semanticTokensProvider": {"legend": {"tokenTypes": [], "tokenModifiers": []}}
-        }
+        server_caps = {"semanticTokensProvider": {"legend": dict(_EMPTY_LEGEND)}}
         result = gate_semantic_tokens(server_caps)
         assert isinstance(result, DegradeEventV1)
         assert result.category == "unavailable"
@@ -131,7 +137,7 @@ class TestSemanticTokensGate:
         server_caps = {
             "semanticTokensProvider": {
                 "full": False,
-                "legend": {"tokenTypes": [], "tokenModifiers": []},
+                "legend": dict(_EMPTY_LEGEND),
             }
         }
         result = gate_semantic_tokens(server_caps)
@@ -149,7 +155,7 @@ class TestCapabilityVariations:
             "workspaceSymbolProvider": True,
             "semanticTokensProvider": {
                 "full": True,
-                "legend": {"tokenTypes": [], "tokenModifiers": []},
+                "legend": dict(_EMPTY_LEGEND),
             },
         }
         assert gate_document_symbols(server_caps) is None
@@ -167,7 +173,7 @@ class TestCapabilityVariations:
         """When some capabilities are present, gates return appropriate results."""
         server_caps = {
             "documentSymbolProvider": True,
-            "semanticTokensProvider": {"full": True, "legend": {}},
+            "semanticTokensProvider": {"full": True, "legend": dict(_EMPTY_DICT)},
         }
         assert gate_document_symbols(server_caps) is None
         assert isinstance(gate_workspace_symbols(server_caps), DegradeEventV1)

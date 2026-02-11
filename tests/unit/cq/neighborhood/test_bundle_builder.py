@@ -71,9 +71,7 @@ def test_build_bundle_with_structural_only() -> None:
 
 def test_build_bundle_with_lsp_enabled_produces_degrades() -> None:
     """Test that LSP enabled produces degrade events (stub implementation)."""
-    def_records = (
-        _def_record("function", "test.py", 1, 3, "def target():\n    pass"),
-    )
+    def_records = (_def_record("function", "test.py", 1, 3, "def target():\n    pass"),)
 
     snapshot = ScanSnapshot(def_records=def_records)
 
@@ -95,9 +93,7 @@ def test_build_bundle_with_lsp_enabled_produces_degrades() -> None:
 
 def test_artifact_storage_only_when_overflow() -> None:
     """Test that artifacts are only stored when total > preview count."""
-    def_records = (
-        _def_record("function", "test.py", 1, 3, "def target():\n    pass"),
-    )
+    def_records = (_def_record("function", "test.py", 1, 3, "def target():\n    pass"),)
 
     snapshot = ScanSnapshot(def_records=def_records)
 
@@ -120,9 +116,7 @@ def test_artifact_storage_only_when_overflow() -> None:
 
 def test_deterministic_bundle_id() -> None:
     """Test that bundle ID is deterministic based on target."""
-    def_records = (
-        _def_record("function", "test.py", 1, 3, "def target():\n    pass"),
-    )
+    def_records = (_def_record("function", "test.py", 1, 3, "def target():\n    pass"),)
 
     snapshot = ScanSnapshot(def_records=def_records)
 
@@ -149,7 +143,7 @@ def test_deterministic_bundle_id() -> None:
 
 
 def test_plan_feasible_slices_returns_degrades() -> None:
-    """Test that plan_feasible_slices returns degrade events for stub."""
+    """Test capability planning degrades unsupported slices."""
     requested = ("references", "implementations")
     capabilities: dict[str, object] = {}
 
@@ -161,7 +155,7 @@ def test_plan_feasible_slices_returns_degrades() -> None:
     for degrade in degrades:
         assert degrade.stage == "lsp.planning"
         assert degrade.severity == "info"
-        assert degrade.category == "not_implemented"
+        assert degrade.category == "unavailable"
 
 
 def test_graph_summary_aggregates_slices() -> None:
@@ -191,9 +185,7 @@ def test_graph_summary_aggregates_slices() -> None:
 
 def test_metadata_includes_timing() -> None:
     """Test that metadata includes timing information."""
-    def_records = (
-        _def_record("function", "test.py", 1, 3, "def target():\n    pass"),
-    )
+    def_records = (_def_record("function", "test.py", 1, 3, "def target():\n    pass"),)
 
     snapshot = ScanSnapshot(def_records=def_records)
 
@@ -295,9 +287,7 @@ def test_preview_limit_applied_to_slices() -> None:
 
 def test_workspace_root_in_metadata() -> None:
     """Test that workspace root is captured in metadata."""
-    def_records = (
-        _def_record("function", "test.py", 1, 3, "def target():\n    pass"),
-    )
+    def_records = (_def_record("function", "test.py", 1, 3, "def target():\n    pass"),)
 
     snapshot = ScanSnapshot(def_records=def_records)
 

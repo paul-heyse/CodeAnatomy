@@ -1,7 +1,7 @@
 # CQ Enhancement Implementation Plan v2
 
 **Date:** 2026-02-11
-**Status:** Draft
+**Status:** Audited (Partially Implemented)
 **Purpose:** Semantic Neighborhood Bundle (SNB) enhancement with integrated corrections from v1 review
 
 This plan integrates all blocking corrections, optimizations, and scope expansions identified in the v1 review document. It establishes progressive disclosure output format (LDMD) plus Rust LSP and Pyrefly LSP enrichment capabilities with typed contracts, capability gating, and graceful degradation.
@@ -10,17 +10,17 @@ This plan integrates all blocking corrections, optimizations, and scope expansio
 
 ## Scope Overview
 
-| Scope | Title | Depends On | Est. Files |
-|-------|-------|------------|------------|
-| R0 | Correctness Alignment Patch | — | 0 new, 5 edit |
-| R1 | Contract Foundation (SNB Schema + Typed Registry + Degrade Model) | R0 | 4 new, 2 edit |
-| R2 | Rust LSP Session Foundation + Environment Envelope | — | 4 new, 2 edit |
-| R3 | Pyrefly Expansion Alignment + Capability Gates | R1 | 2 new, 2 edit |
-| R4 | Structural Collector + Scan Snapshot Adapter | R1 | 4 new, 2 edit |
-| R5 | SNB Assembler + Deterministic Layout | R1, R2, R3, R4 | 3 new, 3 edit |
-| R6 | LDMD Services (Strict Parser + Protocol Commands) | — | 5 new, 1 edit |
-| R7 | CLI + Run Integration (CliResult Pattern) | R5, R6 | 3 new, 4 edit |
-| R8 | Advanced Evidence Planes (On-Demand) | R2, R3 | 4 new, 2 edit |
+| Scope | Title | Depends On | Est. Files | Audit Status (2026-02-11) |
+|-------|-------|------------|------------|----------------------------|
+| R0 | Correctness Alignment Patch | — | 0 new, 5 edit | Mostly complete |
+| R1 | Contract Foundation (SNB Schema + Typed Registry + Degrade Model) | R0 | 4 new, 2 edit | Partial |
+| R2 | Rust LSP Session Foundation + Environment Envelope | — | 4 new, 2 edit | Partial (session transport/integration incomplete) |
+| R3 | Pyrefly Expansion Alignment + Capability Gates | R1 | 2 new, 2 edit | Partial (not wired into neighborhood assembly) |
+| R4 | Structural Collector + Scan Snapshot Adapter | R1 | 4 new, 2 edit | Partial (interface/behavior drift) |
+| R5 | SNB Assembler + Deterministic Layout | R1, R2, R3, R4 | 3 new, 3 edit | Partial (LSP phases stubbed) |
+| R6 | LDMD Services (Strict Parser + Protocol Commands) | — | 5 new, 1 edit | Partial |
+| R7 | CLI + Run Integration (CliResult Pattern) | R5, R6 | 3 new, 4 edit | Mostly complete with behavior gaps |
+| R8 | Advanced Evidence Planes (On-Demand) | R2, R3 | 4 new, 2 edit | Scaffold only |
 
 **Implementation Order:** R0 → R1 → (R2 || R3) → R4 → R5 → R6 → R7 → R8
 
@@ -29,6 +29,43 @@ This plan integrates all blocking corrections, optimizations, and scope expansio
 - All LSP integration requires mock transcript tests
 - All CLI changes require golden snapshot updates
 - Full quality gate after each scope: `uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright && uv run pytest -q`
+
+## Implementation Audit Update (2026-02-11)
+
+This section records an implementation-vs-plan audit of the current codebase.
+
+### Verified Implemented Scope
+
+- R0 core wiring landed: `OutputFormat.ldmd` and LDMD dispatch are present in `tools/cq/cli_app/types.py:26` and `tools/cq/cli_app/result.py:100`.
+- R1 contract artifacts exist with tests: `tools/cq/core/snb_schema.py`, `tools/cq/core/snb_registry.py`, `tests/unit/cq/core/test_snb_schema.py`, `tests/msgspec_contract/test_snb_contracts.py`.
+- R6 parser + protocol command baseline exists: `tools/cq/ldmd/format.py`, `tools/cq/cli_app/commands/ldmd.py`, `tools/cq/cli_app/context.py:135`, `tools/cq/cli_app/app.py:321`.
+- R7 run-step registration exists: `tools/cq/run/spec.py:106`, `tools/cq/run/runner.py:710`, `tools/cq/run/runner.py:1062`.
+
+### Partial / Incorrect Scope (Needs Follow-up)
+
+- R1 integration gap: SNB fields were not added to enrichment facts (`neighborhood_bundle` / `degrade_events` absent from `tools/cq/core/enrichment_facts.py`).
+- R2 Rust LSP session is structurally present but transport and request execution are stubbed (`tools/cq/search/rust_lsp.py:64`, `tools/cq/search/rust_lsp.py:334`, `tools/cq/search/rust_lsp.py:390`, `tools/cq/search/rust_lsp.py:420`), and no production integration path exists from search/enrichment pipelines.
+- R3 capability gates exist only as standalone helpers (`tools/cq/search/pyrefly_capability_gates.py`) with dict-based checks, not the planned shared typed snapshot gating; neighborhood adapter modules in planned paths are missing (`tools/cq/neighborhood/capability_gates.py`, `tools/cq/neighborhood/pyrefly_adapter.py`).
+- R4 collector contract drift: implementation is target-name/file based (`tools/cq/neighborhood/structural_collector.py:52`) rather than anchor/span based as planned; language-extension filtering and separate sibling/child limits are not implemented.
+- R5 assembler phases 2/3 are stubbed for LSP planning/collection (`tools/cq/neighborhood/bundle_builder.py:148`, `tools/cq/neighborhood/bundle_builder.py:220`); `tools/cq/neighborhood/snb_renderer.py` is missing.
+- R6 writer coverage and depth/mode behavior are incomplete: `tools/cq/ldmd/writer.py` exists, but `tests/unit/cq/ldmd/test_writer.py` is missing and `tools/cq/ldmd/format.py:229` still contains TODO depth filtering.
+- R7 behavior drift: target resolution does not implement smart-search fallback in command/run paths (`tools/cq/cli_app/commands/neighborhood.py:114`, `tools/cq/run/runner.py:953`), so symbol-only targets degrade instead of resolving to definitions.
+- R8 is mostly schema/stub scaffolding (`tools/cq/search/semantic_overlays.py`, `tools/cq/search/refactor_actions.py`, `tools/cq/search/rust_extensions.py`); planned `tools/cq/search/diagnostics_pull.py` is missing.
+
+### Scope Not Implemented
+
+- Planned module `tools/cq/neighborhood/snb_renderer.py` not present.
+- Planned module `tools/cq/neighborhood/capability_gates.py` not present.
+- Planned module `tools/cq/neighborhood/pyrefly_adapter.py` not present.
+- Planned module `tools/cq/search/diagnostics_pull.py` not present.
+- Planned test file `tests/unit/cq/ldmd/test_writer.py` not present.
+- Planned test coverage for CLI `ldmd` commands, `--format ldmd` dispatch, and run-step end-to-end neighborhood execution not present.
+
+### Audit Validation Run
+
+- Executed targeted test suite:
+  - `uv run pytest -q tests/unit/cq/neighborhood tests/unit/cq/ldmd tests/unit/cq/search/test_rust_lsp_contracts.py tests/unit/cq/search/test_rust_lsp_session.py tests/unit/cq/search/test_pyrefly_capability_gates.py tests/unit/cq/search/test_advanced_planes.py tests/msgspec_contract/test_snb_contracts.py`
+  - Result: 149 passed.
 
 ---
 

@@ -1,3 +1,4 @@
+# ruff: noqa: DOC201,DOC501,TRY003,EM102,PGH003,TRY300
 """LDMD strict parser with stack validation and byte-offset correctness."""
 
 from __future__ import annotations
@@ -212,28 +213,79 @@ def get_slice(
     LdmdParseError
         If section_id is not found.
     """
-    # Find target section
-    section = None
-    for s in index.sections:
-        if s.id == section_id:
-            section = s
-            break
+    if mode not in {"full", "preview", "tldr"}:
+        raise LdmdParseError(f"Unsupported mode: {mode}")
 
+    section = next((s for s in index.sections if s.id == section_id), None)
     if section is None:
         raise LdmdParseError(f"Section not found: {section_id}")
 
-    # Extract slice
     slice_data = content[section.start_offset : section.end_offset]
 
-    # Apply depth filter (strip nested sections deeper than depth)
-    # For now, simple implementation - just extract the range
-    # TODO: Implement depth filtering if needed
+    if mode == "tldr":
+        tldr_id = f"{section_id}_tldr"
+        try:
+            local_index = build_index(slice_data)
+            tldr_section = next((s for s in local_index.sections if s.id == tldr_id), None)
+            if tldr_section is not None:
+                slice_data = slice_data[tldr_section.start_offset : tldr_section.end_offset]
+                depth = 0
+            else:
+                mode = "preview"
+        except LdmdParseError:
+            mode = "preview"
 
-    # Apply byte limit with safe UTF-8 truncation
+    if mode == "preview":
+        depth = max(0, min(depth if depth > 0 else 1, 1))
+        if limit_bytes <= 0:
+            limit_bytes = 4096
+
+    slice_data = _apply_depth_filter(slice_data, max_depth=max(0, depth))
+
     if limit_bytes > 0:
         slice_data = _safe_utf8_truncate(slice_data, limit_bytes)
 
     return slice_data
+
+
+def _apply_depth_filter(content: bytes, *, max_depth: int) -> bytes:
+    """Filter LDMD content to include markers/content up to max nested depth.
+
+    Depth is relative to the first section marker in the provided slice:
+    - depth 0 keeps only the target section body
+    - depth 1 includes direct child sections
+    """
+    if max_depth < 0:
+        return b""
+
+    lines = content.splitlines(keepends=True)
+    stack: list[str] = []
+    kept: list[bytes] = []
+
+    for raw_line in lines:
+        line = raw_line.rstrip(b"\r\n").decode("utf-8", errors="replace")
+        begin_match = _BEGIN_RE.match(line)
+        if begin_match:
+            relative_depth = max(0, len(stack) - 1)
+            if relative_depth <= max_depth:
+                kept.append(raw_line)
+            stack.append(begin_match.group(1))
+            continue
+
+        end_match = _END_RE.match(line)
+        if end_match:
+            relative_depth = max(0, len(stack) - 1)
+            if relative_depth <= max_depth:
+                kept.append(raw_line)
+            if stack and stack[-1] == end_match.group(1):
+                stack.pop()
+            continue
+
+        relative_depth = max(0, len(stack) - 1)
+        if relative_depth <= max_depth:
+            kept.append(raw_line)
+
+    return b"".join(kept)
 
 
 def search_sections(
@@ -241,7 +293,7 @@ def search_sections(
     index: LdmdIndex,
     *,
     query: str,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Search within LDMD sections for text matching query.
 
     Parameters
@@ -258,7 +310,7 @@ def search_sections(
     list[dict]
         List of matches with section_id and match context.
     """
-    matches: list[dict] = []
+    matches: list[dict[str, object]] = []
     query_lower = query.lower()
 
     for section in index.sections:
@@ -285,7 +337,7 @@ def get_neighbors(
     index: LdmdIndex,
     *,
     section_id: str,
-) -> dict:
+) -> dict[str, str | None]:
     """Get neighboring sections for navigation.
 
     Parameters

@@ -40,7 +40,7 @@ def test_plan_feasible_slices_returns_degrades() -> None:
     assert len(feasible) == 0
     assert len(degrades) == 2
     assert all(d.severity == "info" for d in degrades)
-    assert all(d.category == "not_implemented" for d in degrades)
+    assert all(d.category == "unavailable" for d in degrades)
 
 
 def test_materialize_section_layout_produces_valid_view() -> None:

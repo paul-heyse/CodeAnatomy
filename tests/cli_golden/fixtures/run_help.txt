@@ -21,7 +21,7 @@ Execute a multi-step CQ run plan.
 │ --root                                    Repository root [env var: CQ_RUN_ROOT]                                     │
 │ --verbose -v                              Verbosity level [env var: CQ_RUN_VERBOSE] [default: 0]                     │
 │ --format                                  Output format [choices: md, json, both, summary, mermaid, mermaid-class,   │
-│                                           dot] [env var: CQ_RUN_FORMAT] [default: md]                                │
+│                                           dot, ldmd] [env var: CQ_RUN_FORMAT] [default: md]                          │
 │ --artifact-dir                            Artifact directory [env var: CQ_RUN_ARTIFACT_DIR]                          │
 │ --no-save-artifact --no-no-save-artifact  Don't save artifact [env var: CQ_RUN_NO_SAVE_ARTIFACT] [default: False]    │
 │ --config                                  Config file path [env var: CQ_RUN_CONFIG]                                  │

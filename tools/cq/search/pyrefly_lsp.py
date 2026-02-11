@@ -77,6 +77,7 @@ class _PyreflyLspSession:
         self._buffer = bytearray()
         self._next_id = 0
         self._position_encoding = "utf-16"
+        self._server_capabilities: dict[str, object] = {}
         self._docs: dict[str, _SessionDocState] = {}
         self._diagnostics_by_uri: dict[str, list[dict[str, object]]] = {}
 
@@ -97,6 +98,7 @@ class _PyreflyLspSession:
         self._buffer = bytearray()
         self._docs.clear()
         self._diagnostics_by_uri.clear()
+        self._server_capabilities = {}
         if selector is not None:
             with contextlib.suppress(OSError):
                 selector.close()
@@ -301,10 +303,15 @@ class _PyreflyLspSession:
         if isinstance(result, Mapping):
             capabilities = result.get("capabilities")
             if isinstance(capabilities, Mapping):
+                self._server_capabilities = dict(capabilities)
                 position_encoding = capabilities.get("positionEncoding")
                 if isinstance(position_encoding, str) and position_encoding:
                     self._position_encoding = position_encoding
         self._notify("initialized", {})
+
+    def capabilities_snapshot(self) -> dict[str, object]:
+        """Return negotiated server capabilities for this session."""
+        return dict(self._server_capabilities)
 
     def _open_or_update_document(self, file_path: Path) -> str:
         proc = self._proc
@@ -928,6 +935,22 @@ def enrich_with_pyrefly_lsp(request: PyreflyLspRequest) -> dict[str, object] | N
     return pyrefly_payload_to_dict(typed_payload)
 
 
+def get_pyrefly_lsp_capabilities(
+    root: Path,
+    *,
+    startup_timeout_seconds: float = _DEFAULT_STARTUP_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    """Return negotiated Pyrefly server capabilities for the workspace."""
+    try:
+        session = _session_for_root(
+            root,
+            startup_timeout_seconds=startup_timeout_seconds,
+        )
+    except Exception:  # noqa: BLE001 - fail-open by design
+        return {}
+    return session.capabilities_snapshot()
+
+
 def close_pyrefly_lsp_sessions() -> None:
     """Close all cached Pyrefly LSP sessions (used by tests)."""
     with _SESSION_LOCK:
@@ -944,4 +967,5 @@ __all__ = [
     "PyreflyLspRequest",
     "close_pyrefly_lsp_sessions",
     "enrich_with_pyrefly_lsp",
+    "get_pyrefly_lsp_capabilities",
 ]

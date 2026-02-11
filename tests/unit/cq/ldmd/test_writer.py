@@ -1,0 +1,52 @@
+"""Tests for LDMD writer output contracts."""
+
+from __future__ import annotations
+
+from tools.cq.core.schema import CqResult, Finding, Section, mk_result, mk_runmeta
+from tools.cq.ldmd.writer import render_ldmd_from_cq_result
+
+
+def _sample_result() -> CqResult:
+    run = mk_runmeta(
+        macro="search",
+        argv=["cq", "search", "foo"],
+        root="/repo",
+        started_ms=0.0,
+        toolchain={"python": "3.13"},
+    )
+    result = mk_result(run)
+    result.summary["query"] = "foo"
+    result.key_findings = [
+        Finding(category="definition", message=f"finding-{index}") for index in range(1, 8)
+    ]
+    result.sections = [
+        Section(
+            title="Top Contexts",
+            findings=[
+                Finding(category="context", message=f"context-{index}") for index in range(1, 8)
+            ],
+        )
+    ]
+    return result
+
+
+def test_render_ldmd_from_cq_result_has_balanced_markers() -> None:
+    content = render_ldmd_from_cq_result(_sample_result())
+    begin_count = content.count("<!--LDMD:BEGIN")
+    end_count = content.count("<!--LDMD:END")
+    assert begin_count > 0
+    assert begin_count == end_count
+
+
+def test_render_ldmd_from_cq_result_preview_body_split() -> None:
+    content = render_ldmd_from_cq_result(_sample_result())
+    assert '<!--LDMD:BEGIN id="key_findings_tldr"' in content
+    assert '<!--LDMD:BEGIN id="key_findings_body"' in content
+    assert "finding-6" in content
+
+
+def test_render_ldmd_from_cq_result_has_stable_section_ids() -> None:
+    content = render_ldmd_from_cq_result(_sample_result())
+    assert '<!--LDMD:BEGIN id="section_0"' in content
+    assert '<!--LDMD:BEGIN id="section_0_tldr"' in content
+    assert '<!--LDMD:BEGIN id="section_0_body"' in content

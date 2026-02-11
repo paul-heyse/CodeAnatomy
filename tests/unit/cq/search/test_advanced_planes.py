@@ -1,6 +1,9 @@
+# ruff: noqa: D102,TRY003,EM102,ARG001
 """Tests for advanced evidence plane structures and stubs."""
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 import msgspec
 from tools.cq.search.refactor_actions import (
@@ -336,3 +339,175 @@ class TestStubFunctions:
             uri="file:///lib.rs",
         )
         assert result == ()
+
+
+class TestImplementedFunctions:
+    """Test implemented happy-path behavior with mocked LSP sessions."""
+
+    def test_fetch_semantic_tokens_range_decodes_tokens(self) -> None:
+        def request(method: str, params: object) -> object:
+            assert method == "textDocument/semanticTokens/full"
+            assert isinstance(params, dict)
+            return {"data": [0, 1, 3, 0, 1]}  # one token at line 0 col 1
+
+        session = SimpleNamespace(
+            _send_request=request,
+            _session_env=SimpleNamespace(
+                position_encoding="utf-16",
+                capabilities=SimpleNamespace(
+                    server_caps=SimpleNamespace(
+                        semantic_tokens_provider_raw={
+                            "full": True,
+                            "legend": {
+                                "tokenTypes": ["function"],
+                                "tokenModifiers": ["declaration"],
+                            },
+                        },
+                        semantic_tokens_provider=True,
+                        inlay_hint_provider=False,
+                    )
+                ),
+            ),
+        )
+        tokens = fetch_semantic_tokens_range(session, "file:///test.py", 0, 10)
+        assert tokens is not None
+        assert len(tokens) == 1
+        assert tokens[0].token_type == "function"
+        assert tokens[0].modifiers == ("declaration",)
+
+    def test_fetch_inlay_hints_range_resolve_path(self) -> None:
+        def request(method: str, params: object) -> object:
+            if method == "textDocument/inlayHint":
+                return [
+                    {
+                        "position": {"line": 1, "character": 3},
+                        "label": [{"value": ": i32"}],
+                        "data": {"id": 1},
+                    }
+                ]
+            if method == "inlayHint/resolve":
+                assert isinstance(params, dict)
+                return {
+                    "position": {"line": 1, "character": 3},
+                    "label": ": i32",
+                    "paddingLeft": True,
+                    "paddingRight": False,
+                }
+            raise AssertionError(f"Unexpected method: {method}")
+
+        session = SimpleNamespace(
+            _send_request=request,
+            _session_env=SimpleNamespace(
+                position_encoding="utf-16",
+                capabilities=SimpleNamespace(
+                    server_caps=SimpleNamespace(
+                        semantic_tokens_provider_raw=None,
+                        semantic_tokens_provider=False,
+                        inlay_hint_provider={"resolveProvider": True},
+                    )
+                ),
+            ),
+        )
+        hints = fetch_inlay_hints_range(session, "file:///test.py", 0, 20)
+        assert hints is not None
+        assert len(hints) == 1
+        assert hints[0].label == ": i32"
+        assert hints[0].padding_left is True
+
+    def test_refactor_actions_document_diagnostics_and_resolve(self) -> None:
+        empty_changes: dict[str, object] = {}
+        empty_diagnostics: list[dict[str, object]] = []
+        code_action_payload = {
+            "title": "Apply fix",
+            "kind": "quickfix",
+            "isPreferred": True,
+            "edit": {"changes": empty_changes},
+            "command": {"command": "editor.action.apply"},
+            "diagnostics": empty_diagnostics,
+        }
+
+        def request(method: str, params: object) -> object:
+            if method == "textDocument/diagnostic":
+                return {
+                    "items": [
+                        {
+                            "uri": "file:///test.py",
+                            "diagnostics": [
+                                {
+                                    "range": {
+                                        "start": {"line": 2, "character": 4},
+                                        "end": {"line": 2, "character": 7},
+                                    },
+                                    "severity": 2,
+                                    "code": "W0001",
+                                    "message": "warning",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            if method == "codeAction/resolve":
+                return dict(code_action_payload)
+            if method == "workspace/executeCommand":
+                success: dict[str, object] = {}
+                return success
+            raise AssertionError(f"Unexpected method: {method}")
+
+        session = SimpleNamespace(
+            _send_request=request,
+            _session_env=SimpleNamespace(
+                capabilities=SimpleNamespace(
+                    server_caps=SimpleNamespace(
+                        code_action_provider=True,
+                        code_action_provider_raw={"resolveProvider": True},
+                    )
+                )
+            ),
+        )
+
+        diagnostics = pull_document_diagnostics(session, "file:///test.py")
+        assert diagnostics is not None
+        assert len(diagnostics) == 1
+        assert diagnostics[0].message == "warning"
+
+        action = CodeActionV1(
+            title="Apply fix",
+            is_resolvable=True,
+            raw_payload={"title": "Apply fix"},
+            command_id="editor.action.apply",
+            has_command=True,
+        )
+        resolved = resolve_code_action(session, action)
+        assert resolved is not None
+        assert resolved.kind == "quickfix"
+        assert execute_code_action_command(session, resolved) is True
+
+    def test_rust_extensions_return_normalized_values(self) -> None:
+        def request(method: str, params: object) -> object:
+            if method == "rust-analyzer/expandMacro":
+                return {"name": "vec!", "expansion": "Vec::new()"}
+            if method == "experimental/runnables":
+                return [
+                    {
+                        "label": "test my_test",
+                        "kind": "test",
+                        "args": {"cargoArgs": ["test", "my_test"]},
+                        "location": {
+                            "target": {
+                                "uri": "file:///src/lib.rs",
+                                "range": {"start": {"line": 42, "character": 0}},
+                            }
+                        },
+                    }
+                ]
+            raise AssertionError(f"Unexpected method: {method}")
+
+        session = SimpleNamespace(_send_request=request)
+        macro = expand_macro(session, "file:///src/lib.rs", 1, 1)
+        assert macro is not None
+        assert macro.name == "vec!"
+        assert macro.expansion == "Vec::new()"
+
+        runnables = get_runnables(session, "file:///src/lib.rs")
+        assert len(runnables) == 1
+        assert runnables[0].label == "test my_test"

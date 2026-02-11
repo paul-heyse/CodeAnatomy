@@ -1,0 +1,372 @@
+# ruff: noqa: DOC201,PLR2004,C901
+"""Target parsing and resolution for neighborhood assembly.
+
+Provides one canonical resolver used by both CLI command execution and run-plan
+neighborhood steps.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from tools.cq.astgrep.sgpy_scanner import SgRecord
+from tools.cq.core.snb_schema import DegradeEventV1
+from tools.cq.core.structs import CqStruct
+from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
+
+
+class TargetSpec(CqStruct, frozen=True):
+    """Parsed neighborhood target spec."""
+
+    raw: str
+    target_name: str | None = None
+    target_file: str | None = None
+    target_line: int | None = None
+    target_col: int | None = None
+
+
+class ResolvedTarget(CqStruct, frozen=True):
+    """Resolved target used for bundle assembly."""
+
+    target_name: str
+    target_file: str
+    target_line: int | None = None
+    target_col: int | None = None
+    target_uri: str | None = None
+    symbol_hint: str | None = None
+    resolution_kind: str = "unresolved"
+    degrade_events: tuple[DegradeEventV1, ...] = ()
+
+
+def parse_target_spec(target: str) -> TargetSpec:
+    """Parse target string into target spec.
+
+    Supports:
+    - `path/to/file.py:line`
+    - `path/to/file.py:line:col`
+    - `symbol_name`
+    """
+    text = target.strip()
+    if not text:
+        return TargetSpec(raw=target)
+
+    parts = text.split(":")
+    if len(parts) >= 3 and parts[-1].isdigit() and parts[-2].isdigit():
+        file_part = ":".join(parts[:-2]).strip()
+        if file_part:
+            return TargetSpec(
+                raw=target,
+                target_file=file_part,
+                target_line=max(1, int(parts[-2])),
+                target_col=max(0, int(parts[-1])),
+            )
+
+    if len(parts) >= 2 and parts[-1].isdigit():
+        file_part = ":".join(parts[:-1]).strip()
+        if file_part:
+            return TargetSpec(
+                raw=target,
+                target_file=file_part,
+                target_line=max(1, int(parts[-1])),
+            )
+
+    return TargetSpec(raw=target, target_name=text)
+
+
+def resolve_target(  # noqa: PLR0912
+    spec: TargetSpec,
+    snapshot: ScanSnapshot,
+    *,
+    root: Path | None = None,
+    allow_symbol_fallback: bool = True,
+) -> ResolvedTarget:
+    """Resolve a parsed target to file/name/anchor coordinates."""
+    degrades: list[DegradeEventV1] = []
+    def_records = tuple(snapshot.def_records)
+
+    # Anchor-based targeting (preferred).
+    if spec.target_file and spec.target_line is not None:
+        anchor_candidates = _anchor_candidates(
+            def_records=def_records,
+            target_file=spec.target_file,
+            line=spec.target_line,
+            col=spec.target_col,
+        )
+        if anchor_candidates:
+            if len(anchor_candidates) > 1:
+                degrades.append(
+                    DegradeEventV1(
+                        stage="target_resolution",
+                        severity="warning",
+                        category="ambiguous",
+                        message=(
+                            f"Anchor {spec.target_file}:{spec.target_line} matched "
+                            f"{len(anchor_candidates)} definitions; choosing innermost"
+                        ),
+                    )
+                )
+            chosen = anchor_candidates[0]
+            name = _extract_name_from_text(chosen.text) or spec.target_name or spec.raw
+            file_path = chosen.file
+            return ResolvedTarget(
+                target_name=name,
+                target_file=file_path,
+                target_line=spec.target_line,
+                target_col=spec.target_col,
+                target_uri=_to_uri(root, file_path),
+                symbol_hint=spec.target_name or name,
+                resolution_kind="anchor",
+                degrade_events=tuple(degrades),
+            )
+
+        degrades.append(
+            DegradeEventV1(
+                stage="target_resolution",
+                severity="warning",
+                category="not_found",
+                message=(
+                    f"No definition found for anchor {spec.target_file}:{spec.target_line}; "
+                    "falling back to file-only resolution"
+                ),
+            )
+        )
+        if spec.target_name:
+            # Continue below with name+file resolution.
+            pass
+        else:
+            fallback_name = Path(spec.target_file).stem
+            return ResolvedTarget(
+                target_name=fallback_name,
+                target_file=spec.target_file,
+                target_line=spec.target_line,
+                target_col=spec.target_col,
+                target_uri=_to_uri(root, spec.target_file),
+                symbol_hint=fallback_name,
+                resolution_kind="file_anchor_unresolved",
+                degrade_events=tuple(degrades),
+            )
+
+    # Name + file targeting.
+    if spec.target_name and spec.target_file:
+        file_candidates = _name_candidates(
+            def_records=def_records,
+            name=spec.target_name,
+            target_file=spec.target_file,
+        )
+        if file_candidates:
+            if len(file_candidates) > 1:
+                degrades.append(
+                    DegradeEventV1(
+                        stage="target_resolution",
+                        severity="warning",
+                        category="ambiguous",
+                        message=(
+                            f"Multiple definitions for '{spec.target_name}' in "
+                            f"{spec.target_file}; choosing first by source order"
+                        ),
+                    )
+                )
+            chosen = file_candidates[0]
+            return ResolvedTarget(
+                target_name=spec.target_name,
+                target_file=chosen.file,
+                target_line=chosen.start_line,
+                target_col=chosen.start_col,
+                target_uri=_to_uri(root, chosen.file),
+                symbol_hint=spec.target_name,
+                resolution_kind="file_symbol",
+                degrade_events=tuple(degrades),
+            )
+
+        degrades.append(
+            DegradeEventV1(
+                stage="target_resolution",
+                severity="warning",
+                category="not_found",
+                message=(
+                    f"Definition '{spec.target_name}' not found in {spec.target_file}; "
+                    "falling back to symbol-only resolution"
+                ),
+            )
+        )
+
+    # Symbol-only targeting.
+    symbol_name = spec.target_name
+    if symbol_name is None:
+        symbol_name = Path(spec.target_file or spec.raw).stem
+
+    if allow_symbol_fallback and symbol_name:
+        symbol_candidates = _name_candidates(
+            def_records=def_records, name=symbol_name, target_file=None
+        )
+        if symbol_candidates:
+            chosen = symbol_candidates[0]
+            if len(symbol_candidates) > 1:
+                degrades.append(
+                    DegradeEventV1(
+                        stage="target_resolution",
+                        severity="warning",
+                        category="ambiguous",
+                        message=(
+                            f"Symbol '{symbol_name}' matched {len(symbol_candidates)} definitions; "
+                            "using deterministic first match"
+                        ),
+                    )
+                )
+            return ResolvedTarget(
+                target_name=symbol_name,
+                target_file=chosen.file,
+                target_line=chosen.start_line,
+                target_col=chosen.start_col,
+                target_uri=_to_uri(root, chosen.file),
+                symbol_hint=symbol_name,
+                resolution_kind="symbol_fallback",
+                degrade_events=tuple(degrades),
+            )
+
+    if symbol_name:
+        degrades.append(
+            DegradeEventV1(
+                stage="target_resolution",
+                severity="error",
+                category="not_found",
+                message=f"Unable to resolve target '{symbol_name}'",
+            )
+        )
+        return ResolvedTarget(
+            target_name=symbol_name,
+            target_file=spec.target_file or "",
+            target_line=spec.target_line,
+            target_col=spec.target_col,
+            target_uri=_to_uri(root, spec.target_file) if spec.target_file else None,
+            symbol_hint=symbol_name,
+            resolution_kind="unresolved",
+            degrade_events=tuple(degrades),
+        )
+
+    degrades.append(
+        DegradeEventV1(
+            stage="target_resolution",
+            severity="error",
+            category="invalid_target",
+            message=f"Invalid target specification: {spec.raw!r}",
+        )
+    )
+    return ResolvedTarget(
+        target_name=spec.raw,
+        target_file=spec.target_file or "",
+        target_line=spec.target_line,
+        target_col=spec.target_col,
+        target_uri=_to_uri(root, spec.target_file) if spec.target_file else None,
+        symbol_hint=spec.target_name,
+        resolution_kind="invalid",
+        degrade_events=tuple(degrades),
+    )
+
+
+def _anchor_candidates(
+    *,
+    def_records: tuple[SgRecord, ...],
+    target_file: str,
+    line: int,
+    col: int | None,
+) -> list[SgRecord]:
+    candidates = []
+    for record in def_records:
+        file_value = getattr(record, "file", None)
+        if file_value != target_file:
+            continue
+        start_line = _as_int(getattr(record, "start_line", None), 0)
+        end_line = _as_int(getattr(record, "end_line", None), 0)
+        if not (start_line <= line <= end_line):
+            continue
+        if col is not None:
+            start_col = _as_int(getattr(record, "start_col", None), 0)
+            end_col = _as_int(getattr(record, "end_col", None), 10_000)
+            if line == start_line and col < start_col:
+                continue
+            if line == end_line and col > end_col:
+                continue
+        candidates.append(record)
+    candidates.sort(key=_anchor_sort_key)
+    return candidates
+
+
+def _name_candidates(
+    *,
+    def_records: tuple[SgRecord, ...],
+    name: str,
+    target_file: str | None,
+) -> list[SgRecord]:
+    candidates: list[SgRecord] = []
+    for record in def_records:
+        file_value = getattr(record, "file", None)
+        if target_file is not None and file_value != target_file:
+            continue
+        if _extract_name_from_text(str(getattr(record, "text", ""))) != name:
+            continue
+        candidates.append(record)
+    candidates.sort(key=_deterministic_record_key)
+    return candidates
+
+
+def _anchor_sort_key(record: SgRecord) -> tuple[int, int, int, str]:
+    start_line = record.start_line
+    end_line = record.end_line
+    span = max(0, end_line - start_line)
+    return (
+        span,
+        start_line,
+        record.start_col,
+        record.text,
+    )
+
+
+def _deterministic_record_key(record: SgRecord) -> tuple[str, int, int, str]:
+    return (
+        record.file,
+        record.start_line,
+        record.start_col,
+        record.text,
+    )
+
+
+def _extract_name_from_text(text: str) -> str:
+    raw = text.strip()
+    if raw.startswith(("def ", "class ")):
+        head = raw.split("(", 1)[0].strip()
+        return head.split()[-1] if head else raw
+    if "(" in raw:
+        call_head = raw.split("(", 1)[0].strip()
+        if "." in call_head:
+            return call_head.split(".")[-1]
+        return call_head
+    return raw
+
+
+def _as_int(value: object, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    return default
+
+
+def _to_uri(root: Path | None, file_path: str | None) -> str | None:
+    if not file_path:
+        return None
+    candidate = Path(file_path)
+    if root is not None and not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        return candidate.resolve().as_uri()
+    except ValueError:
+        return None
+
+
+__all__ = [
+    "ResolvedTarget",
+    "TargetSpec",
+    "parse_target_spec",
+    "resolve_target",
+]

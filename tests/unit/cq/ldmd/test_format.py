@@ -165,6 +165,40 @@ This is a long section with lots of content that should be truncated.
     slice_data.decode("utf-8")
 
 
+def test_get_slice_preview_mode_uses_depth_filter() -> None:
+    content = b"""<!--LDMD:BEGIN id=\"root\"-->
+Root line
+<!--LDMD:BEGIN id=\"child\" parent=\"root\"-->
+Child line
+<!--LDMD:BEGIN id=\"grandchild\" parent=\"child\"-->
+Grandchild line
+<!--LDMD:END id=\"grandchild\"-->
+<!--LDMD:END id=\"child\"-->
+<!--LDMD:END id=\"root\"-->
+"""
+    index = build_index(content)
+    preview = get_slice(content, index, section_id="root", mode="preview", depth=0)
+    assert b"Root line" in preview
+    assert b"Child line" in preview
+    assert b"Grandchild line" not in preview
+
+
+def test_get_slice_tldr_mode_prefers_tldr_child() -> None:
+    content = b"""<!--LDMD:BEGIN id=\"section\"-->
+<!--LDMD:BEGIN id=\"section_tldr\" parent=\"section\"-->
+TLDR text
+<!--LDMD:END id=\"section_tldr\"-->
+<!--LDMD:BEGIN id=\"section_body\" parent=\"section\"-->
+Body text
+<!--LDMD:END id=\"section_body\"-->
+<!--LDMD:END id=\"section\"-->
+"""
+    index = build_index(content)
+    tldr = get_slice(content, index, section_id="section", mode="tldr")
+    assert b"TLDR text" in tldr
+    assert b"Body text" not in tldr
+
+
 def test_search_sections_finds_text() -> None:
     """Test that search_sections finds text within sections."""
     content = b"""<!--LDMD:BEGIN id="section1"-->

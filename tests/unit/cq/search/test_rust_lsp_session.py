@@ -1,3 +1,4 @@
+# ruff: noqa: DOC201,SLF001,SIM117
 """Tests for Rust LSP session behavior and tiered gating."""
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ def test_session_initialization(session: _RustLspSession, mock_repo_root: Path) 
 
 def test_handle_diagnostics_notification_valid(session: _RustLspSession) -> None:
     """Test diagnostic notification processing with valid data."""
-    notif = {
+    notif: dict[str, object] = {
         "method": "textDocument/publishDiagnostics",
         "params": {
             "uri": "file:///path/to/file.rs",
@@ -74,7 +75,7 @@ def test_handle_diagnostics_notification_valid(session: _RustLspSession) -> None
 
 def test_handle_diagnostics_notification_with_related_info(session: _RustLspSession) -> None:
     """Test diagnostic notification processing with related information."""
-    notif = {
+    notif: dict[str, object] = {
         "method": "textDocument/publishDiagnostics",
         "params": {
             "uri": "file:///path/to/file.rs",
@@ -109,17 +110,24 @@ def test_handle_diagnostics_notification_with_related_info(session: _RustLspSess
 def test_handle_diagnostics_notification_malformed(session: _RustLspSession) -> None:
     """Test diagnostic notification processing handles malformed data gracefully."""
     # Missing params
-    notif1 = {"method": "textDocument/publishDiagnostics"}
+    notif1: dict[str, object] = {"method": "textDocument/publishDiagnostics"}
     session._handle_diagnostics_notification(notif1)
     assert len(session._diagnostics_by_uri) == 0
 
     # Non-dict params
-    notif2 = {"method": "textDocument/publishDiagnostics", "params": "not a dict"}
+    notif2: dict[str, object] = {
+        "method": "textDocument/publishDiagnostics",
+        "params": "not a dict",
+    }
     session._handle_diagnostics_notification(notif2)
     assert len(session._diagnostics_by_uri) == 0
 
     # Missing uri
-    notif3 = {"method": "textDocument/publishDiagnostics", "params": {"diagnostics": []}}
+    empty_diagnostics: list[dict[str, object]] = []
+    notif3: dict[str, object] = {
+        "method": "textDocument/publishDiagnostics",
+        "params": {"diagnostics": empty_diagnostics},
+    }
     session._handle_diagnostics_notification(notif3)
     assert len(session._diagnostics_by_uri) == 0
 

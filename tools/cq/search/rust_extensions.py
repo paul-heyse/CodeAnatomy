@@ -1,3 +1,4 @@
+# ruff: noqa: ANN202
 """Rust-analyzer deep extension plane for CQ enrichment.
 
 This module provides typed structures and stub functions for rust-analyzer
@@ -77,6 +78,34 @@ def expand_macro(
     RustMacroExpansionV1 | None
         Expanded macro, or None if unavailable or not a macro position.
     """
+    request = _request_fn(session)
+    if request is None:
+        return None
+
+    params = {
+        "textDocument": {"uri": uri},
+        "position": {"line": max(0, line), "character": max(0, col)},
+    }
+
+    response = None
+    for method in ("rust-analyzer/expandMacro", "experimental/expandMacro"):
+        try:
+            response = request(method, params)
+            break
+        except Exception:  # noqa: BLE001 - fail-open by design
+            continue
+
+    if not isinstance(response, dict):
+        return None
+    name = response.get("name")
+    expansion = response.get("expansion")
+    if not isinstance(expansion, str):
+        return None
+    macro_name = name if isinstance(name, str) and name else "<macro>"
+    expansion_bytes = len(expansion.encode("utf-8", errors="replace"))
+    return RustMacroExpansionV1(
+        name=macro_name, expansion=expansion, expansion_byte_len=expansion_bytes
+    )
 
 
 def get_runnables(
@@ -97,9 +126,76 @@ def get_runnables(
     tuple[RustRunnableV1, ...]
         Runnables for the file, or empty tuple if unavailable.
     """
-    _ = session
-    _ = uri
-    return ()
+    request = _request_fn(session)
+    if request is None:
+        return ()
+
+    params = {"textDocument": {"uri": uri}}
+    response = None
+    for method in ("experimental/runnables", "rust-analyzer/runnables"):
+        try:
+            response = request(method, params)
+            break
+        except Exception:  # noqa: BLE001 - fail-open by design
+            continue
+
+    if not isinstance(response, list):
+        return ()
+
+    runnables: list[RustRunnableV1] = []
+    for item in response:
+        if not isinstance(item, dict):
+            continue
+        normalized = _normalize_runnable(item)
+        if normalized is not None:
+            runnables.append(normalized)
+    return tuple(runnables)
+
+
+def _request_fn(session: object):
+    request = getattr(session, "_send_request", None)
+    if callable(request):
+        return request
+    return None
+
+
+def _normalize_runnable(item: dict[str, object]) -> RustRunnableV1 | None:
+    label = item.get("label")
+    kind = item.get("kind")
+    if not isinstance(label, str) or not isinstance(kind, str):
+        return None
+
+    args: tuple[str, ...] = ()
+    cargo_args = item.get("args")
+    if isinstance(cargo_args, dict):
+        cargo = cargo_args.get("cargoArgs")
+        if isinstance(cargo, list):
+            args = tuple(arg for arg in cargo if isinstance(arg, str))
+
+    location_uri = None
+    location_line = 0
+    location = item.get("location")
+    if isinstance(location, dict):
+        target = location.get("target")
+        if isinstance(target, dict):
+            uri = target.get("uri")
+            if isinstance(uri, str):
+                location_uri = uri
+            range_data = target.get("range")
+            if isinstance(range_data, dict):
+                start = range_data.get("start")
+                if isinstance(start, dict):
+                    line_value = start.get("line")
+                    if isinstance(line_value, int):
+                        location_line = line_value
+
+    return RustRunnableV1(
+        label=label,
+        kind=kind,
+        args=args,
+        location_uri=location_uri,
+        location_line=location_line,
+    )
 
 
 __all__ = [

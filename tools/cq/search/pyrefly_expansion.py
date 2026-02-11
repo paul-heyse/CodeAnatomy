@@ -1,3 +1,4 @@
+# ruff: noqa: C901,BLE001
 """Extended Pyrefly enrichment surfaces with capability gating.
 
 This module provides optional LSP enrichment surfaces that are capability-gated.
@@ -8,6 +9,7 @@ results or degrade events when capabilities are unavailable.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from tools.cq.core.snb_schema import DegradeEventV1
 from tools.cq.core.structs import CqStruct
@@ -125,8 +127,8 @@ class PyreflyExpansionPayload(CqStruct, frozen=True):
 
 def fetch_document_symbols(
     server_caps: dict[str, object],
-    lsp_request_fn: object,  # noqa: ARG001 - Reserved for future LSP request integration
-    uri: str,  # noqa: ARG001 - Reserved for future LSP request integration
+    lsp_request_fn: object,
+    uri: str,
 ) -> tuple[PyreflyDocumentSymbol, ...] | DegradeEventV1:
     """Fetch document symbols with capability gating.
 
@@ -148,13 +150,37 @@ def fetch_document_symbols(
     if gate_result is not None:
         return gate_result
 
-    return ()
+    try:
+        result = _invoke_lsp_request(
+            lsp_request_fn,
+            "textDocument/documentSymbol",
+            {"textDocument": {"uri": uri}},
+        )
+    except Exception as exc:
+        return DegradeEventV1(
+            stage="lsp.pyrefly.expansion",
+            severity="warning",
+            category="request_failed",
+            message=f"textDocument/documentSymbol failed: {type(exc).__name__}",
+        )
+
+    if not isinstance(result, Sequence):
+        return ()
+
+    symbols: list[PyreflyDocumentSymbol] = []
+    for item in result:
+        if not isinstance(item, Mapping):
+            continue
+        normalized = _normalize_document_symbol(cast("Mapping[str, object]", item))
+        if normalized is not None:
+            symbols.append(normalized)
+    return tuple(symbols)
 
 
 def fetch_workspace_symbols(
     server_caps: dict[str, object],
-    lsp_request_fn: object,  # noqa: ARG001 - Reserved for future LSP request integration
-    query: str = "",  # noqa: ARG001 - Reserved for future LSP request integration
+    lsp_request_fn: object,
+    query: str = "",
 ) -> tuple[PyreflyWorkspaceSymbol, ...] | DegradeEventV1:
     """Fetch workspace symbols with capability gating.
 
@@ -176,13 +202,60 @@ def fetch_workspace_symbols(
     if gate_result is not None:
         return gate_result
 
-    return ()
+    try:
+        result = _invoke_lsp_request(
+            lsp_request_fn,
+            "workspace/symbol",
+            {"query": query},
+        )
+    except Exception as exc:
+        return DegradeEventV1(
+            stage="lsp.pyrefly.expansion",
+            severity="warning",
+            category="request_failed",
+            message=f"workspace/symbol failed: {type(exc).__name__}",
+        )
+
+    if not isinstance(result, Sequence):
+        return ()
+
+    provider = server_caps.get("workspaceSymbolProvider")
+    supports_resolve = isinstance(provider, Mapping) and bool(provider.get("resolveProvider"))
+
+    symbols: list[PyreflyWorkspaceSymbol] = []
+    for item in result:
+        if not isinstance(item, Mapping):
+            continue
+        item_mapping = cast("Mapping[str, object]", item)
+        normalized = _normalize_workspace_symbol(item_mapping)
+        if normalized is None:
+            continue
+
+        if supports_resolve and (normalized.uri is None or normalized.line <= 0):
+            try:
+                resolved_item = _invoke_lsp_request(
+                    lsp_request_fn,
+                    "workspaceSymbol/resolve",
+                    dict(item_mapping),
+                )
+                if isinstance(resolved_item, Mapping):
+                    resolved_normalized = _normalize_workspace_symbol(
+                        cast("Mapping[str, object]", resolved_item)
+                    )
+                    if resolved_normalized is not None:
+                        normalized = resolved_normalized
+            except Exception:
+                # Keep unresolved symbol row as-is for fail-open behavior.
+                pass
+
+        symbols.append(normalized)
+    return tuple(symbols)
 
 
 def fetch_semantic_tokens(
     server_caps: dict[str, object],
-    lsp_request_fn: object,  # noqa: ARG001 - Reserved for future LSP request integration
-    uri: str,  # noqa: ARG001 - Reserved for future LSP request integration
+    lsp_request_fn: object,
+    uri: str,
 ) -> tuple[PyreflySemanticToken, ...] | DegradeEventV1:
     """Fetch semantic tokens with capability gating.
 
@@ -204,7 +277,54 @@ def fetch_semantic_tokens(
     if gate_result is not None:
         return gate_result
 
-    return ()
+    try:
+        result = _invoke_lsp_request(
+            lsp_request_fn,
+            "textDocument/semanticTokens/full",
+            {"textDocument": {"uri": uri}},
+        )
+    except Exception as exc:
+        return DegradeEventV1(
+            stage="lsp.pyrefly.expansion",
+            severity="warning",
+            category="request_failed",
+            message=f"textDocument/semanticTokens/full failed: {type(exc).__name__}",
+        )
+
+    if not isinstance(result, Mapping):
+        return ()
+    token_data = result.get("data")
+    if not isinstance(token_data, Sequence):
+        return ()
+    int_data = [item for item in token_data if isinstance(item, int)]
+    if len(int_data) != len(token_data):
+        return ()
+
+    semantic_tokens_caps = server_caps.get("semanticTokensProvider")
+    token_types: Sequence[str] = ()
+    token_modifiers: Sequence[str] = ()
+    if isinstance(semantic_tokens_caps, Mapping):
+        legend = semantic_tokens_caps.get("legend")
+        if isinstance(legend, Mapping):
+            types_value = legend.get("tokenTypes")
+            modifiers_value = legend.get("tokenModifiers")
+            if isinstance(types_value, Sequence):
+                token_types = [item for item in types_value if isinstance(item, str)]
+            if isinstance(modifiers_value, Sequence):
+                token_modifiers = [item for item in modifiers_value if isinstance(item, str)]
+
+    return _normalize_semantic_tokens(int_data, token_types, token_modifiers)
+
+
+def _invoke_lsp_request(
+    lsp_request_fn: object,
+    method: str,
+    params: dict[str, object],
+) -> object:
+    if callable(lsp_request_fn):
+        return lsp_request_fn(method, params)
+    msg = "LSP request function is not callable"
+    raise TypeError(msg)
 
 
 def _normalize_document_symbol(

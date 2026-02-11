@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from datafusion_engine.delta.scan_policy_inference import ScanPolicyOverride
-from datafusion_engine.plan import pipeline
+from datafusion_engine.plan import pipeline_runtime as pipeline
 from datafusion_engine.plan.signals import PlanSignals
 from schema_spec.system import DeltaScanPolicyDefaults, ScanPolicyConfig, ScanPolicyDefaults
 

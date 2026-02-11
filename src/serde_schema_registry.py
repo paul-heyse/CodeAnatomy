@@ -64,24 +64,7 @@ from datafusion_engine.schema.alignment import SchemaEvolutionSpec
 from datafusion_engine.schema.validation import ArrowValidationOptions
 from datafusion_engine.udf.catalog import DataFusionUdfSpecSnapshot, UdfCatalogSnapshot
 from obs.otel.config import OtelConfigSpec
-from relspec.extract_plan import ExtractOutputTask, ExtractTaskSpec
-from relspec.graph_edge_validation import (
-    EdgeValidationResult,
-    GraphValidationSummary,
-    TaskValidationResult,
-)
 from relspec.inferred_deps import InferredDeps
-from relspec.rustworkx_graph import (
-    EvidenceNode,
-    GraphDiagnostics,
-    GraphEdge,
-    TaskDependencySnapshot,
-    TaskEdgeRequirements,
-    TaskGraphSnapshot,
-    TaskNode,
-)
-from relspec.rustworkx_schedule import TaskSchedule
-from relspec.schedule_events import TaskScheduleMetadata
 from schema_spec.arrow_types import (
     ArrowDecimalSpec,
     ArrowDictionarySpec,
@@ -272,21 +255,7 @@ _SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
     PropFieldSpec,
     CpgOutputSpec,
     CpgPropOptions,
-    ExtractTaskSpec,
-    ExtractOutputTask,
     InferredDeps,
-    EvidenceNode,
-    TaskNode,
-    GraphEdge,
-    TaskEdgeRequirements,
-    TaskGraphSnapshot,
-    TaskDependencySnapshot,
-    GraphDiagnostics,
-    TaskScheduleMetadata,
-    TaskSchedule,
-    EdgeValidationResult,
-    TaskValidationResult,
-    GraphValidationSummary,
 )
 
 _SCHEMA_TAGS: dict[type[msgspec.Struct], dict[str, object]] = {

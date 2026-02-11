@@ -92,25 +92,6 @@ def _evidence_requirement() -> object:
     return EvidenceRequirement(name="test_ds", required_columns=("col_a",))
 
 
-def _graph_node() -> object:
-    from relspec.rustworkx_graph import EvidenceNode, GraphNode
-
-    return GraphNode(kind="evidence", payload=EvidenceNode(name="ev1"))
-
-
-def _task_node() -> object:
-    from relspec.rustworkx_graph import TaskNode
-
-    return TaskNode(
-        name="t1",
-        output="out1",
-        inputs=("ev1",),
-        sources=("src1",),
-        priority=0,
-        task_kind="extract",
-    )
-
-
 def _extract_execution_options() -> object:
     from extract.coordination.spec_helpers import ExtractExecutionOptions
 
@@ -208,26 +189,6 @@ _CASES: tuple[tuple[str, _MutationCase], ...] = (
             attempted_value="other",
             expected_exception=FrozenInstanceError,
             expected_value="test_ds",
-        ),
-    ),
-    (
-        "graph_node.kind",
-        _MutationCase(
-            factory=_graph_node,
-            attribute="kind",
-            attempted_value="task",
-            expected_exception=AttributeError,
-            expected_value="evidence",
-        ),
-    ),
-    (
-        "task_node.priority",
-        _MutationCase(
-            factory=_task_node,
-            attribute="priority",
-            attempted_value=10,
-            expected_exception=AttributeError,
-            expected_value=0,
         ),
     ),
     (

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.plan import bundle as plan_bundle
+from datafusion_engine.plan import bundle_artifact as plan_bundle
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
 
 

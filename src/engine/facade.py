@@ -205,7 +205,13 @@ def execute_cpg_build(
 def decode_run_result(
     run_result: dict[str, object] | str | bytes,
 ) -> RunResultContract:
-    """Decode a Rust run result payload into typed planning artifacts."""
+    """Decode a Rust run result payload into typed planning artifacts.
+
+    Returns:
+    -------
+    RunResultContract
+        Typed run-result contract decoded from the payload.
+    """
     from engine.rust_planning_contract import decode_run_result_payload
 
     return decode_run_result_payload(run_result)
@@ -214,5 +220,11 @@ def decode_run_result(
 def plan_bundles_from_run_result(
     run_result: dict[str, object] | str | bytes,
 ) -> tuple[PlanBundleArtifactContract, ...]:
-    """Extract typed plan bundles from a Rust run result payload."""
+    """Extract typed plan bundles from a Rust run result payload.
+
+    Returns:
+    -------
+    tuple[PlanBundleArtifactContract, ...]
+        Typed plan bundle contracts from the decoded run result.
+    """
     return decode_run_result(run_result).plan_bundles

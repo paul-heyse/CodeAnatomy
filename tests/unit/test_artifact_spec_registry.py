@@ -471,7 +471,7 @@ class TestNewArtifactSpecs:
             "view_contract_violations_v1",
             "view_udf_parity_v1",
             "view_fingerprints_v1",
-            "hamilton_cache_lineage_v2",
+            "pipeline_cache_lineage_v2",
             "dataset_readiness_v1",
             "semantic_quality_artifact_v1",
             "datafusion_delta_commit_v1",

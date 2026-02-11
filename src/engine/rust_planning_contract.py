@@ -38,12 +38,16 @@ def _digest_to_hex(value: object) -> str | None:
 
 @dataclass(frozen=True)
 class ProviderIdentityContract:
+    """Provider identity tuple decoded from Rust planning artifacts."""
+
     table_name: str
     identity_hash_hex: str | None
 
 
 @dataclass(frozen=True)
 class ProviderLineageEntryContract:
+    """Lineage details for a provider scan node."""
+
     scan_node_id: str
     provider_name: str
     provider_identity_hash_hex: str | None
@@ -53,6 +57,8 @@ class ProviderLineageEntryContract:
 
 @dataclass(frozen=True)
 class PlanBundleArtifactContract:
+    """Typed projection of a Rust plan-bundle artifact payload."""
+
     p0_digest_hex: str | None
     p1_digest_hex: str | None
     p2_digest_hex: str | None
@@ -66,6 +72,8 @@ class PlanBundleArtifactContract:
 
 @dataclass(frozen=True)
 class RunResultContract:
+    """Typed top-level run-result payload consumed by Python callers."""
+
     spec_hash_hex: str | None
     envelope_hash_hex: str | None
     warnings: tuple[dict[str, object], ...]
@@ -92,6 +100,13 @@ def _provider_lineage_from_payload(payload: Mapping[str, object]) -> ProviderLin
 
 
 def plan_bundle_from_payload(payload: Mapping[str, object]) -> PlanBundleArtifactContract:
+    """Convert a raw plan-bundle payload into a typed contract object.
+
+    Returns:
+    -------
+    PlanBundleArtifactContract
+        Typed plan bundle contract decoded from payload content.
+    """
     provider_identities_raw = payload.get("provider_identities")
     provider_lineage_raw = payload.get("provider_lineage")
     referenced_tables_raw = payload.get("referenced_tables")
@@ -103,20 +118,16 @@ def plan_bundle_from_payload(payload: Mapping[str, object]) -> PlanBundleArtifac
         p2_digest_hex=_digest_to_hex(payload.get("p2_digest")),
         planning_surface_hash_hex=_digest_to_hex(payload.get("planning_surface_hash")),
         provider_identities=tuple(
-            _provider_identity_from_payload(_mapping(item))
-            for item in provider_identities_raw
+            _provider_identity_from_payload(_mapping(item)) for item in provider_identities_raw
         )
         if isinstance(provider_identities_raw, Sequence)
         else (),
         provider_lineage=tuple(
-            _provider_lineage_from_payload(_mapping(item))
-            for item in provider_lineage_raw
+            _provider_lineage_from_payload(_mapping(item)) for item in provider_lineage_raw
         )
         if isinstance(provider_lineage_raw, Sequence)
         else (),
-        referenced_tables=tuple(
-            item for item in referenced_tables_raw if isinstance(item, str)
-        )
+        referenced_tables=tuple(item for item in referenced_tables_raw if isinstance(item, str))
         if isinstance(referenced_tables_raw, Sequence)
         else (),
         required_udfs=tuple(item for item in required_udfs_raw if isinstance(item, str))
@@ -127,26 +138,35 @@ def plan_bundle_from_payload(payload: Mapping[str, object]) -> PlanBundleArtifac
 
 
 def run_result_from_payload(payload: Mapping[str, object]) -> RunResultContract:
+    """Convert a raw run-result mapping into a typed contract object.
+
+    Returns:
+    -------
+    RunResultContract
+        Typed run-result contract with decoded plan bundles and warnings.
+    """
     plan_bundles_raw = payload.get("plan_bundles")
     warnings_raw = payload.get("warnings")
     return RunResultContract(
         spec_hash_hex=_digest_to_hex(payload.get("spec_hash")),
         envelope_hash_hex=_digest_to_hex(payload.get("envelope_hash")),
-        warnings=tuple(
-            dict(item) for item in warnings_raw if isinstance(item, Mapping)
-        )
+        warnings=tuple(dict(item) for item in warnings_raw if isinstance(item, Mapping))
         if isinstance(warnings_raw, Sequence)
         else (),
-        plan_bundles=tuple(
-            plan_bundle_from_payload(_mapping(item))
-            for item in plan_bundles_raw
-        )
+        plan_bundles=tuple(plan_bundle_from_payload(_mapping(item)) for item in plan_bundles_raw)
         if isinstance(plan_bundles_raw, Sequence)
         else (),
     )
 
 
 def decode_run_result_payload(payload: dict[str, object] | str | bytes) -> RunResultContract:
+    """Decode JSON-compatible run-result payload into typed contract data.
+
+    Returns:
+    -------
+    RunResultContract
+        Typed run-result contract decoded from dict, bytes, or JSON string input.
+    """
     data: dict[str, object]
     if isinstance(payload, dict):
         data = payload

@@ -425,7 +425,7 @@ dependencies = [
     { name = "datafusion" },
 ]
 wheels = [
-    { filename = "datafusion_ext-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:09691642e5646922db69ca303faf0e458ca2a0e3b89a09e2608d07b25c948aa9" },
+    { filename = "datafusion_ext-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:43f9cb00194d8be131ec23ee689336c525187832c0fb383d9411f984bac8aa67" },
 ]
 
 [package.metadata]

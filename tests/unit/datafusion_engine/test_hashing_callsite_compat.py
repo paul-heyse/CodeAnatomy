@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import cast
 
 from datafusion_engine.delta.scan_config import delta_scan_identity_hash
-from datafusion_engine.lineage.scan import ScanUnit
 from datafusion_engine.plan.artifact_store import _plan_identity_payload
 from datafusion_engine.plan.bundle_artifact import (
     DataFusionPlanArtifact,
@@ -24,8 +23,6 @@ from datafusion_engine.plan.bundle_artifact import (
 from datafusion_engine.views.artifacts import _delta_inputs_payload, _plan_task_signature
 from extract.infrastructure.cache_utils import CACHE_VERSION, stable_cache_key, stable_cache_label
 from extract.scanning.repo_scan import _sha256_path
-from relspec.execution_planning_runtime import _protocol_payload as exec_protocol_payload
-from relspec.execution_planning_runtime import _scan_unit_signature
 from serde_artifacts import DeltaInputPin, DeltaScanConfigSnapshot, PlanArtifacts
 from serde_msgspec import JSON_ENCODER, MSGPACK_ENCODER, to_builtins
 from tests.test_helpers.datafusion_runtime import df_profile
@@ -145,48 +142,6 @@ def test_extract_repo_scan_sha256_path(tmp_path: Path) -> None:
     path.write_text("hash-me", encoding="utf-8")
     expected = hashlib.sha256(path.read_bytes()).hexdigest()
     assert _sha256_path(path) == expected
-
-
-def test_scan_unit_signature_matches_msgpack_encoder() -> None:
-    """Hash scan unit signatures with canonical msgpack encoding."""
-    scan_unit = ScanUnit(
-        key="scan_key",
-        dataset_name="dataset",
-        delta_version=3,
-        delta_timestamp="456",
-        snapshot_timestamp=789,
-        delta_protocol=None,
-        delta_scan_config=None,
-        delta_scan_config_hash="scan_hash",
-        datafusion_provider=None,
-        protocol_compatible=None,
-        protocol_compatibility=None,
-        total_files=10,
-        candidate_file_count=3,
-        pruned_file_count=7,
-        candidate_files=(Path("a.parquet"), Path("b.parquet")),
-        pushed_filters=("col = 1",),
-        projected_columns=("col",),
-    )
-    candidate_files = tuple(sorted(str(path) for path in scan_unit.candidate_files))
-    payload = (
-        ("version", 1),
-        ("runtime_hash", "runtime"),
-        ("scan_key", scan_unit.key),
-        ("dataset_name", scan_unit.dataset_name),
-        ("delta_version", scan_unit.delta_version),
-        ("delta_timestamp", scan_unit.delta_timestamp),
-        ("snapshot_timestamp", scan_unit.snapshot_timestamp),
-        ("delta_protocol", exec_protocol_payload(scan_unit.delta_protocol)),
-        ("total_files", scan_unit.total_files),
-        ("candidate_file_count", scan_unit.candidate_file_count),
-        ("pruned_file_count", scan_unit.pruned_file_count),
-        ("candidate_files", candidate_files),
-        ("pushed_filters", tuple(sorted(scan_unit.pushed_filters))),
-        ("projected_columns", tuple(sorted(scan_unit.projected_columns))),
-    )
-    expected = hashlib.sha256(MSGPACK_ENCODER.encode(payload)).hexdigest()
-    assert _scan_unit_signature(scan_unit, runtime_hash="runtime") == expected
 
 
 def test_plan_task_signature_matches_msgpack_encoder() -> None:

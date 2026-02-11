@@ -3182,13 +3182,23 @@ def validate_schema_metadata(schema: pa.Schema) -> None:
 
 def validate_nested_types(ctx: SessionContext, name: str) -> None:
     """Validate nested dataset types using DataFusion arrow_typeof."""
+    if name not in NESTED_DATASET_INDEX:
+        return
     try:
         df = ctx.table(name)
     except (RuntimeError, TypeError, ValueError, pa.ArrowInvalid) as exc:
         _LOGGER.warning("Nested type validation skipped for %s: %s", name, exc)
         return
     expected: pa.Schema
-    expected = extract_schema_for(name)
+    try:
+        expected = extract_schema_for(name)
+    except KeyError as exc:
+        _LOGGER.warning(
+            "Nested type validation skipped for %s: no derived schema authority (%s)",
+            name,
+            exc,
+        )
+        return
     from datafusion_engine.arrow.coercion import storage_type
 
     actual = df.schema()

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from relspec.compiled_policy import CompiledExecutionPolicy
 from serde_msgspec import to_builtins
@@ -21,8 +21,17 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
     from relspec.pipeline_policy import DiagnosticsPolicy
-    from relspec.rustworkx_graph import TaskGraph
     from semantics.ir import SemanticIR
+
+
+class _OutDegreeGraph(Protocol):
+    def out_degree(self, node_idx: object) -> int: ...
+
+
+class _TaskGraphLike(Protocol):
+    task_idx: Mapping[str, object]
+    graph: _OutDegreeGraph
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,7 +42,7 @@ _HIGH_FANOUT_THRESHOLD = 2
 
 def compile_execution_policy(  # noqa: PLR0913
     *,
-    task_graph: TaskGraph,
+    task_graph: _TaskGraphLike,
     output_locations: Mapping[str, DatasetLocation],
     runtime_profile: DataFusionRuntimeProfile,
     view_nodes: Sequence[ViewNode] | None = None,
@@ -124,7 +133,7 @@ def compile_execution_policy(  # noqa: PLR0913
 
 
 def _derive_cache_policies(
-    task_graph: TaskGraph,
+    task_graph: _TaskGraphLike,
     output_locations: Mapping[str, object],
     *,
     cache_overrides: Mapping[str, str] | None = None,
@@ -300,7 +309,7 @@ def _scan_overrides_to_mapping(
 
 def _derive_udf_requirements(
     *,
-    task_graph: TaskGraph,
+    task_graph: _TaskGraphLike,
     view_nodes: Sequence[ViewNode] | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Extract per-task UDF requirements from task graph node payloads.

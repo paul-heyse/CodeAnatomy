@@ -44,6 +44,10 @@ jobs:
         shell: bash
         run: uv run python scripts/check_drift_surfaces.py --strict
 
+      - name: Enforce relspec decommission import guard
+        shell: bash
+        run: uv run python scripts/check_relspec_decommission_imports.py
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 

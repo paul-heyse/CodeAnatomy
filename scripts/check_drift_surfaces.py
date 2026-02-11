@@ -28,6 +28,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+# Ensure sibling scripts are importable when this module is loaded via spec_from_file_location.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
 # Import Hamilton residual scanner
 from check_hamilton_residuals import scan_directory as scan_hamilton_residuals
 

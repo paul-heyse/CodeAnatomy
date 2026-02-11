@@ -239,7 +239,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "SchemaContract": ("datafusion_engine.schema.contracts", "SchemaContract"),
     "ValidationViolation": ("datafusion_engine.schema.contracts", "ValidationViolation"),
     "ViolationType": ("datafusion_engine.schema.contracts", "ViolationType"),
-    # Lineage (DataFusion-native)
+    # Lineage.
     "LineageReport": ("datafusion_engine.lineage.datafusion", "LineageReport"),
     "ScanLineage": ("datafusion_engine.lineage.datafusion", "ScanLineage"),
     "extract_lineage": ("datafusion_engine.lineage.datafusion", "extract_lineage"),

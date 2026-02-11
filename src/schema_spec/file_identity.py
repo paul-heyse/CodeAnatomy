@@ -33,14 +33,9 @@ For schema_spec bundles, use the bundle helper::
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import pyarrow as pa
 
 from schema_spec.field_spec import FieldSpec
-
-if TYPE_CHECKING:
-    from datafusion_engine.arrow.interop import DataTypeLike, SchemaLike
 
 # ---------------------------------------------------------------------------
 # Canonical field definitions as pyarrow.Field tuples
@@ -77,101 +72,6 @@ FILE_IDENTITY_FIELDS_FOR_NESTING: tuple[pa.Field, ...] = (
     pa.field("file_id", pa.string(), nullable=True),
     pa.field("path", pa.string(), nullable=True),
 )
-
-
-# ---------------------------------------------------------------------------
-# Field accessor functions
-# ---------------------------------------------------------------------------
-
-
-def file_identity_fields(
-    *,
-    include_repo: bool = True,
-    include_sha256: bool = True,
-) -> tuple[pa.Field, ...]:
-    """Return file identity fields with optional components.
-
-    Parameters
-    ----------
-    include_repo
-        Include the repo field. Default True.
-    include_sha256
-        Include the file_sha256 field. Default True.
-
-    Returns:
-    -------
-    tuple[pa.Field, ...]
-        Tuple of pyarrow.Field objects for file identity.
-    """
-    fields: list[pa.Field] = []
-    if include_repo:
-        fields.append(REPO_FIELD)
-    fields.append(PATH_FIELD)
-    fields.append(FILE_ID_FIELD)
-    if include_sha256:
-        fields.append(FILE_SHA256_FIELD)
-    return tuple(fields)
-
-
-def file_identity_struct(
-    *,
-    include_repo: bool = False,
-    include_sha256: bool = False,
-) -> DataTypeLike:
-    """Return a struct type for file identity.
-
-    Parameters
-    ----------
-    include_repo
-        Include the repo field in the struct. Default False.
-    include_sha256
-        Include the file_sha256 field in the struct. Default False.
-
-    Returns:
-    -------
-    pa.StructType
-        Struct type containing file identity fields.
-    """
-    return pa.struct(file_identity_fields(include_repo=include_repo, include_sha256=include_sha256))
-
-
-def file_identity_fields_for_nesting() -> tuple[pa.Field, ...]:
-    """Return nullable file identity fields suitable for nested structs.
-
-    Use for file identity fields embedded in outer-join results or optional
-    nested structures where nullability is required.
-
-    Returns:
-    -------
-    tuple[pa.Field, ...]
-        Tuple of nullable file_id and path fields.
-    """
-    return FILE_IDENTITY_FIELDS_FOR_NESTING
-
-
-def schema_with_file_identity(
-    *additional_fields: pa.Field,
-    include_repo: bool = True,
-    include_sha256: bool = True,
-) -> SchemaLike:
-    """Build a schema with file identity fields prepended.
-
-    Parameters
-    ----------
-    *additional_fields
-        Additional fields to include after file identity fields.
-    include_repo
-        Include the repo field. Default True.
-    include_sha256
-        Include the file_sha256 field. Default True.
-
-    Returns:
-    -------
-    pa.Schema
-        Schema with file identity fields followed by additional fields.
-    """
-    identity = file_identity_fields(include_repo=include_repo, include_sha256=include_sha256)
-    return pa.schema([*identity, *additional_fields])
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +122,4 @@ __all__ = [
     "PATH_FIELD",
     "REPO_FIELD",
     "file_identity_field_specs",
-    "file_identity_fields",
-    "file_identity_fields_for_nesting",
-    "file_identity_struct",
-    "schema_with_file_identity",
 ]

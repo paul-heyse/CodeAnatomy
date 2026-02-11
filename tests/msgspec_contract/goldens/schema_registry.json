@@ -8093,7 +8093,7 @@
     },
     "RelationshipData": {
       "additionalProperties": false,
-      "description": "Minimal data defining a relationship - everything else is derived.\n\nAttributes:\n----------\nname\n    Short relationship name without version suffix (e.g., \"rel_name_symbol\").\ntable_name\n    Full table name with version suffix (e.g., \"rel_name_symbol\").\nentity_id_col\n    Primary entity identifier column (e.g., \"entity_id\").\ndedupe_keys\n    Complete dedupe key tuple (overrides standard pattern if provided).\nextra_sort_keys\n    Additional canonical sort keys beyond the standard pattern.",
+      "description": "Serializable relationship contract descriptor.\n\nAttributes:\n----------\nname\n    Logical relationship name.\ntable_name\n    Physical table name for relationship rows.\nentity_id_col\n    Primary relationship entity identifier column.\ndedupe_keys\n    Optional dedupe key override.\nextra_sort_keys\n    Optional additional sort keys.",
       "properties": {
         "dedupe_keys": {
           "anyOf": [

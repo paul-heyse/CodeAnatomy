@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
@@ -314,33 +313,10 @@ def _normalize_dataset_spec(name: str, *, ctx: SessionContext | None = None) -> 
         return None
 
 
-def _relationship_dataset_spec(
-    name: str,
-    *,
-    ctx: SessionContext | None = None,
-) -> DatasetSpec | None:
-    relationship_dataset_specs = _optional_module_attr(
-        "schema_spec.relationship_specs",
-        "relationship_dataset_specs",
-    )
-    if not callable(relationship_dataset_specs):
-        return None
-    relationship_dataset_specs = cast(
-        "Callable[..., Sequence[DatasetSpec]]",
-        relationship_dataset_specs,
-    )
-    with contextlib.suppress(KeyError, RuntimeError, TypeError, ValueError):
-        for spec in relationship_dataset_specs(ctx=ctx):
-            if dataset_spec_name(spec) == name:
-                return spec
-    return None
-
-
 def _dataset_spec_for_table(name: str, *, ctx: SessionContext | None = None) -> DatasetSpec | None:
     resolvers = (
         _extract_dataset_spec,
         lambda table_name: _normalize_dataset_spec(table_name, ctx=ctx),
-        lambda table_name: _relationship_dataset_spec(table_name, ctx=ctx),
     )
     for resolver in resolvers:
         spec = resolver(name)
@@ -359,7 +335,6 @@ def _schema_contract_for_table(
         from datafusion_engine.schema.contracts import schema_contract_from_dataset_spec
     except (ImportError, RuntimeError, TypeError, ValueError):
         return None
-    from schema_spec.dataset_spec_ops import dataset_spec_name
 
     return schema_contract_from_dataset_spec(name=dataset_spec_name(spec), spec=spec)
 

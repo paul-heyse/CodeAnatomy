@@ -2,24 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING
-
 import msgspec
 
 from arrow_utils.core.ordering import Ordering, OrderingLevel
 from datafusion_engine.arrow.encoding import EncodingPolicy
-from datafusion_engine.arrow.interop import SchemaLike, TableLike
+from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.arrow.metadata import (
     encoding_policy_from_spec,
     merge_metadata_specs,
     ordering_metadata_spec,
 )
 from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
-from datafusion_engine.schema.alignment import CastErrorPolicy
-from datafusion_engine.schema.finalize import Contract, FinalizeContext
-from datafusion_engine.schema.policy import SchemaPolicyOptions, schema_policy_factory
-from datafusion_engine.schema.validation import ArrowValidationOptions
+from datafusion_engine.schema.finalize import Contract
 from schema_spec.system import (
     ContractSpec,
     DataFusionScanOptions,
@@ -31,13 +25,9 @@ from schema_spec.system import (
     DeltaScanOptions,
     DeltaSchemaPolicy,
     DeltaWritePolicy,
-    ValidationPolicySpec,
     ViewSpec,
     _ordering_metadata_spec,
 )
-
-if TYPE_CHECKING:
-    from schema_spec.dataset_handle import DatasetHandle
 
 
 def dataset_spec_name(spec: DatasetSpec) -> str:
@@ -175,28 +165,6 @@ def dataset_spec_delta_constraints(spec: DatasetSpec) -> tuple[str, ...]:
     return spec.policies.delta.constraints
 
 
-def dataset_spec_validation(spec: DatasetSpec) -> ArrowValidationOptions | None:
-    """Return Arrow validation options from policy bundle.
-
-    Returns:
-    -------
-    ArrowValidationOptions | None
-        Arrow validation options when configured.
-    """
-    return spec.policies.validation
-
-
-def dataset_spec_dataframe_validation(spec: DatasetSpec) -> ValidationPolicySpec | None:
-    """Return DataFrame validation policy from policy bundle.
-
-    Returns:
-    -------
-    ValidationPolicySpec | None
-        DataFrame validation policy when configured.
-    """
-    return spec.policies.dataframe_validation
-
-
 def dataset_spec_strict_schema_validation(spec: DatasetSpec) -> bool | None:
     """Return strict schema-divergence validation mode from policy bundle.
 
@@ -297,19 +265,6 @@ def dataset_spec_contract(spec: DatasetSpec) -> Contract:
     return dataset_spec_contract_spec_or_default(spec).to_contract()
 
 
-def dataset_spec_handle(spec: DatasetSpec) -> DatasetHandle:
-    """Return a DatasetHandle for this dataset spec.
-
-    Returns:
-    -------
-    DatasetHandle
-        Dataset handle for the dataset spec.
-    """
-    from schema_spec.dataset_handle import DatasetHandle
-
-    return DatasetHandle(spec=spec)
-
-
 def dataset_spec_resolved_view_specs(spec: DatasetSpec) -> tuple[ViewSpec, ...]:
     """Return the merged view specs for this dataset.
 
@@ -334,65 +289,6 @@ def dataset_spec_resolved_view_specs(spec: DatasetSpec) -> tuple[ViewSpec, ...]:
     return tuple(specs)
 
 
-def dataset_spec_is_streaming(spec: DatasetSpec) -> bool:
-    """Return True if this dataset represents a streaming source.
-
-    Returns:
-    -------
-    bool
-        ``True`` when the dataset is configured as unbounded.
-    """
-    if spec.policies.datafusion_scan is not None:
-        return spec.policies.datafusion_scan.unbounded
-    return False
-
-
-def dataset_spec_finalize_context(spec: DatasetSpec) -> FinalizeContext:
-    """Return a FinalizeContext for this dataset spec.
-
-    Returns:
-    -------
-    FinalizeContext
-        Finalize context with contract and schema policy.
-    """
-    contract = dataset_spec_contract(spec)
-    ordering = _ordering_metadata_spec(spec.contract_spec, spec.table_spec)
-    metadata = merge_metadata_specs(spec.metadata_spec, ordering)
-    policy = schema_policy_factory(
-        spec.table_spec,
-        options=SchemaPolicyOptions(
-            schema=contract.with_versioned_schema(),
-            encoding=dataset_spec_encoding_policy(spec),
-            metadata=metadata,
-            validation=contract.validation,
-        ),
-    )
-    return FinalizeContext(contract=contract, schema_policy=policy)
-
-
-def dataset_spec_unify_tables(
-    spec: DatasetSpec,
-    tables: Sequence[TableLike],
-    *,
-    safe_cast: bool = True,
-    keep_extra_columns: bool = False,
-) -> TableLike:
-    """Unify table schemas using the evolution spec and execution context.
-
-    Returns:
-    -------
-    TableLike
-        Unified table with aligned schema.
-    """
-    on_error: CastErrorPolicy = "unsafe" if safe_cast else "raise"
-    return spec.evolution_spec.unify_and_cast(
-        tables,
-        safe_cast=safe_cast,
-        on_error=on_error,
-        keep_extra_columns=keep_extra_columns,
-    )
-
-
 def dataset_spec_encoding_policy(spec: DatasetSpec) -> EncodingPolicy | None:
     """Return an encoding policy derived from the schema spec.
 
@@ -410,7 +306,6 @@ def dataset_spec_encoding_policy(spec: DatasetSpec) -> EncodingPolicy | None:
 __all__ = [
     "dataset_spec_contract",
     "dataset_spec_contract_spec_or_default",
-    "dataset_spec_dataframe_validation",
     "dataset_spec_datafusion_scan",
     "dataset_spec_delta_cdf_policy",
     "dataset_spec_delta_constraints",
@@ -420,15 +315,10 @@ __all__ = [
     "dataset_spec_delta_schema_policy",
     "dataset_spec_delta_write_policy",
     "dataset_spec_encoding_policy",
-    "dataset_spec_finalize_context",
-    "dataset_spec_handle",
-    "dataset_spec_is_streaming",
     "dataset_spec_name",
     "dataset_spec_ordering",
     "dataset_spec_query",
     "dataset_spec_resolved_view_specs",
     "dataset_spec_schema",
     "dataset_spec_strict_schema_validation",
-    "dataset_spec_unify_tables",
-    "dataset_spec_validation",
 ]

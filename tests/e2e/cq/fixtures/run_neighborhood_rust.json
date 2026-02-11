@@ -39,7 +39,7 @@
         "**Workspace:** <repo_root>",
         "**Created:** <duration_ms>",
         "**Schema:** cq.snb.v1",
-        "**Bundle ID:** 7887db8c81d8c4a2"
+        "**Bundle ID:** <bundle_id>"
       ],
       "title": "neighborhood_0: Provenance"
     }

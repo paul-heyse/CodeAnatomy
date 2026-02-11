@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from cpg.constants import ROLE_FLAG_SPECS
 from cpg.kind_catalog import EntityKind
 from cpg.specs import (
     TRANSFORM_FLAG_TO_BOOL,
@@ -17,6 +16,12 @@ from cpg.specs import (
 if TYPE_CHECKING:
     from semantics.cpg_entity_specs import CpgEntitySpec
     from semantics.registry import SemanticModel
+
+ROLE_FLAG_SPECS: tuple[tuple[str, int, str], ...] = (
+    ("generated", 16, "scip_role_generated"),
+    ("test", 32, "scip_role_test"),
+    ("forward_definition", 64, "scip_role_forward_definition"),
+)
 
 
 def _entity_specs(model: SemanticModel) -> tuple[CpgEntitySpec, ...]:

@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
-
-if TYPE_CHECKING:
-    from cpg.specs import PropValueType
+from typing import Literal
 
 PropPrimitive = Literal["string", "int", "float", "bool", "json"]
 
@@ -359,50 +356,6 @@ PROP_BUNDLES: dict[str, tuple[str, ...]] = {
 }
 
 
-def prop_value_type(key: str) -> PropValueType:
-    """Return the value type for a property key.
-
-    Args:
-        key: Description.
-
-    Raises:
-        ValueError: If the operation cannot be completed.
-    """
-    spec = PROP_SPECS.get(key)
-    if spec is None:
-        msg = f"Unknown prop key {key!r} in catalog."
-        raise ValueError(msg)
-    return spec.type
-
-
-def resolve_prop_specs(
-    keys: Sequence[str],
-    *,
-    overrides: Mapping[str, PropSpec] | None = None,
-) -> dict[str, PropSpec]:
-    """Return prop specs for the requested keys.
-
-    Args:
-        keys: Description.
-        overrides: Description.
-
-    Raises:
-        ValueError: If the operation cannot be completed.
-    """
-    out: dict[str, PropSpec] = {}
-    override_map: dict[str, PropSpec] = dict(overrides) if overrides else {}
-    for key in keys:
-        if key in override_map:
-            out[key] = override_map[key]
-            continue
-        spec = PROP_SPECS.get(key)
-        if spec is None:
-            msg = f"Unknown prop key {key!r} in registry catalog."
-            raise ValueError(msg)
-        out[key] = spec
-    return out
-
-
 __all__ = [
     "PROP_BUNDLES",
     "PROP_ENUMS",
@@ -414,6 +367,4 @@ __all__ = [
     "p_int",
     "p_json",
     "p_str",
-    "prop_value_type",
-    "resolve_prop_specs",
 ]

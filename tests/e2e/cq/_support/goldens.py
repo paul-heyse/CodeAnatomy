@@ -96,6 +96,7 @@ _ABS_PATH_PATTERNS = (
     re.compile(r"[A-Za-z]:\\\\[^\\s]+CodeAnatomy"),
 )
 _DURATION_PATTERN = re.compile(r"(\*\*(?:Created|Elapsed):\*\*)\s+[0-9]+(?:\.[0-9]+)?ms")
+_BUNDLE_ID_PATTERN = re.compile(r"(\*\*Bundle ID:\*\*)\s+[0-9a-fA-F]+")
 
 
 def _scrub_text_paths(text: str) -> str:
@@ -103,6 +104,7 @@ def _scrub_text_paths(text: str) -> str:
     for pattern in _ABS_PATH_PATTERNS:
         normalized = pattern.sub("<repo_root>", normalized)
     normalized = _DURATION_PATTERN.sub(r"\1 <duration_ms>", normalized)
+    normalized = _BUNDLE_ID_PATTERN.sub(r"\1 <bundle_id>", normalized)
     return normalized
 
 

@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
-from cpg.schemas import SCHEMA_VERSION
 from obs.diagnostics_report import write_run_diagnostics_report
 from obs.otel import (
     OtelBootstrapOptions,
@@ -37,6 +36,7 @@ if TYPE_CHECKING:
     from planning_engine.spec_contracts import RuntimeConfig
 
 GraphProduct = Literal["cpg"]
+CPG_PRODUCT_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -599,8 +599,8 @@ def _engine_versions() -> dict[str, str]:
 
 def _product_version(product: GraphProduct) -> str:
     if product == "cpg":
-        return f"cpg_ultimate_v{SCHEMA_VERSION}"
-    return f"{product}_v{SCHEMA_VERSION}"
+        return f"cpg_ultimate_v{CPG_PRODUCT_SCHEMA_VERSION}"
+    return f"{product}_v{CPG_PRODUCT_SCHEMA_VERSION}"
 
 
 def _parse_build_result(

@@ -22,7 +22,6 @@ from datafusion_engine.arrow.metadata import (
 from datafusion_engine.arrow.semantic import SPAN_STORAGE
 from schema_spec.arrow_types import arrow_type_from_pyarrow
 from schema_spec.field_spec import FieldSpec
-from schema_spec.registration import DatasetRegistration, register_dataset
 from schema_spec.specs import (
     FieldBundle,
     file_identity_bundle,
@@ -35,6 +34,7 @@ from schema_spec.system import (
     TableSpecConstraints,
     ValidationPolicySpec,
     make_contract_spec,
+    make_dataset_spec,
     make_table_spec,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
@@ -418,7 +418,8 @@ def build_dataset_spec(row: SemanticDatasetRow) -> DatasetSpec:
     table_spec = _build_table_spec(row)
     contract_spec = make_contract_spec(table_spec=table_spec)
     materialization = _effective_materialization(row)
-    registration = DatasetRegistration(
+    return make_dataset_spec(
+        table_spec=table_spec,
         contract_spec=contract_spec,
         delta_cdf_policy=_semantic_cdf_policy(row),
         delta_maintenance_policy=_semantic_maintenance_policy(row),
@@ -430,7 +431,6 @@ def build_dataset_spec(row: SemanticDatasetRow) -> DatasetSpec:
         metadata_spec=_build_metadata_spec(row),
         dataframe_validation=_SEMANTIC_VALIDATION_POLICY,
     )
-    return register_dataset(table_spec=table_spec, registration=registration)
 
 
 __all__ = [

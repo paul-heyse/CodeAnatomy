@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from cpg.node_families import (
+from schema_spec.field_spec import FieldSpec
+from schema_spec.specs import FieldBundle
+from semantics.cpg.node_families import (
     NODE_FAMILY_DEFAULTS,
     NodeFamily,
     NodeSpecOptions,
@@ -11,8 +13,6 @@ from cpg.node_families import (
     node_family_defaults,
     node_spec_with_family,
 )
-from schema_spec.field_spec import FieldSpec
-from schema_spec.specs import FieldBundle
 
 
 class TestNodeFamily:
@@ -238,7 +238,7 @@ class TestCpgEntitySpecIntegration:
 
     def test_cpg_entity_spec_uses_family_defaults(self) -> None:
         """Verify CpgEntitySpec resolves columns from family."""
-        from cpg.kind_catalog import NODE_KIND_PY_FILE
+        from semantics.cpg.kind_catalog import NODE_KIND_PY_FILE
         from semantics.cpg_entity_specs import CpgEntitySpec
 
         spec = CpgEntitySpec(
@@ -255,7 +255,7 @@ class TestCpgEntitySpecIntegration:
 
     def test_cpg_entity_spec_explicit_overrides_family(self) -> None:
         """Verify explicit column values override family defaults."""
-        from cpg.kind_catalog import NODE_KIND_CST_CALLSITE
+        from semantics.cpg.kind_catalog import NODE_KIND_CST_CALLSITE
         from semantics.cpg_entity_specs import CpgEntitySpec
 
         spec = CpgEntitySpec(
@@ -276,7 +276,7 @@ class TestCpgEntitySpecIntegration:
 
     def test_cpg_entity_spec_no_family_uses_empty(self) -> None:
         """Verify no family falls back to empty tuples."""
-        from cpg.kind_catalog import NODE_KIND_PY_FILE
+        from semantics.cpg.kind_catalog import NODE_KIND_PY_FILE
         from semantics.cpg_entity_specs import CpgEntitySpec
 
         spec = CpgEntitySpec(
@@ -293,7 +293,7 @@ class TestCpgEntitySpecIntegration:
 
     def test_cpg_entity_spec_scip_family(self) -> None:
         """Verify SCIP family has no anchoring columns."""
-        from cpg.kind_catalog import NODE_KIND_SCIP_SYMBOL
+        from semantics.cpg.kind_catalog import NODE_KIND_SCIP_SYMBOL
         from semantics.cpg_entity_specs import CpgEntitySpec
 
         spec = CpgEntitySpec(
@@ -310,7 +310,7 @@ class TestCpgEntitySpecIntegration:
 
     def test_cpg_entity_spec_treesitter_family(self) -> None:
         """Verify TREESITTER family uses start_byte/end_byte."""
-        from cpg.kind_catalog import NODE_KIND_TS_NODE
+        from semantics.cpg.kind_catalog import NODE_KIND_TS_NODE
         from semantics.cpg_entity_specs import CpgEntitySpec
 
         spec = CpgEntitySpec(
@@ -332,7 +332,7 @@ class TestCpgEntitySpecIntegration:
 
     def test_node_plan_uses_resolved_cols(self) -> None:
         """Verify to_node_plan uses resolved column values."""
-        from cpg.kind_catalog import NODE_KIND_CST_CALLSITE
+        from semantics.cpg.kind_catalog import NODE_KIND_CST_CALLSITE
         from semantics.cpg_entity_specs import CpgEntitySpec
 
         spec = CpgEntitySpec(

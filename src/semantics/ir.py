@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING, Literal
 from semantics.view_kinds import ViewKindStr
 
 if TYPE_CHECKING:
-    from cpg.specs import NodePlanSpec, PropTableSpec
     from datafusion_engine.views.artifacts import CachePolicy
     from relspec.inference_confidence import InferenceConfidence
     from semantics.catalog.dataset_rows import SemanticDatasetRow
+    from semantics.cpg.specs import NodePlanSpec, PropTableSpec
     from semantics.quality import JoinHow
 
 GraphPosition = Literal[

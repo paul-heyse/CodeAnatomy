@@ -323,6 +323,18 @@ fn map_join_type(raw: &str) -> &'static str {
     }
 }
 
+fn cpg_output_kind_for_view(name: &str) -> Option<&'static str> {
+    match name {
+        "cpg_nodes" => Some("Nodes"),
+        "cpg_edges" => Some("Edges"),
+        "cpg_props" => Some("Props"),
+        "cpg_props_map" => Some("PropsMap"),
+        "cpg_edges_by_src" => Some("EdgesBySrc"),
+        "cpg_edges_by_dst" => Some("EdgesByDst"),
+        _ => None,
+    }
+}
+
 fn default_rule_intents(profile: &str) -> Vec<Value> {
     let mut baseline = vec![
         json!({"name": "semantic_integrity", "class": "SemanticIntegrity", "params": {}}),
@@ -404,6 +416,13 @@ fn build_transform(
     view: &SemanticIrViewPayload,
     by_relationship: &BTreeMap<String, SemanticIrJoinGroupPayload>,
 ) -> PyResult<Value> {
+    if let Some(output_kind) = cpg_output_kind_for_view(&view.name) {
+        return Ok(json!({
+            "kind": "CpgEmit",
+            "output_kind": output_kind,
+            "sources": view.inputs,
+        }));
+    }
     if view.kind == "relate" {
         return build_relate_transform(view, by_relationship);
     }

@@ -41,7 +41,7 @@ def dataset_contract_spec(name: str) -> ContractSpec:
     ContractSpec
         Contract specification for the dataset.
     """
-    from schema_spec.dataset_spec_ops import dataset_spec_contract_spec_or_default
+    from schema_spec.system import dataset_spec_contract_spec_or_default
 
     return dataset_spec_contract_spec_or_default(dataset_spec_from_context(name))
 

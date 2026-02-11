@@ -13,7 +13,6 @@ from datafusion_engine.dataset.registry import (
     resolve_dataset_policies,
 )
 from schema_spec.arrow_types import arrow_type_from_pyarrow
-from schema_spec.dataset_spec_ops import dataset_spec_schema
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
 from schema_spec.system import (
@@ -23,6 +22,7 @@ from schema_spec.system import (
     DeltaScanPolicyDefaults,
     ScanPolicyConfig,
     ScanPolicyDefaults,
+    dataset_spec_schema,
 )
 from storage.deltalake.config import DeltaSchemaPolicy
 

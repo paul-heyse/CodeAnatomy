@@ -24,7 +24,8 @@ def _register_semantic_outputs(
     catalog: DatasetCatalog,
     semantic_output_root: str,
 ) -> None:
-    from schema_spec.dataset_spec_ops import (
+    from schema_spec.system import (
+        DeltaPolicyBundle,
         dataset_spec_delta_cdf_policy,
         dataset_spec_delta_constraints,
         dataset_spec_delta_feature_gate,
@@ -32,7 +33,6 @@ def _register_semantic_outputs(
         dataset_spec_delta_schema_policy,
         dataset_spec_delta_write_policy,
     )
-    from schema_spec.system import DeltaPolicyBundle
 
     semantic_root = Path(semantic_output_root)
     for row in get_all_dataset_rows():
@@ -155,7 +155,8 @@ def semantic_dataset_location(
     Raises:
         KeyError: If the operation cannot be completed.
     """
-    from schema_spec.dataset_spec_ops import (
+    from schema_spec.system import (
+        DeltaPolicyBundle,
         dataset_spec_delta_cdf_policy,
         dataset_spec_delta_constraints,
         dataset_spec_delta_feature_gate,
@@ -163,7 +164,6 @@ def semantic_dataset_location(
         dataset_spec_delta_schema_policy,
         dataset_spec_delta_write_policy,
     )
-    from schema_spec.system import DeltaPolicyBundle
     from semantics.catalog.dataset_rows import dataset_row
 
     row = dataset_row(name, strict=False)

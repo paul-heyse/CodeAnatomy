@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
     from datafusion_engine.plan.bundle_artifact import DataFrameBuilder, DataFusionPlanArtifact
-    from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
     from semantics.compile_context import SemanticExecutionContext
     from semantics.config import SemanticConfig
@@ -473,7 +473,7 @@ def _finalize_df_to_contract(
     from datafusion import col, lit
 
     from datafusion_engine.expr.cast import safe_cast
-    from schema_spec.dataset_spec_ops import dataset_spec_contract
+    from schema_spec.system import dataset_spec_contract
     from semantics.catalog.dataset_specs import dataset_spec
 
     _ = ctx
@@ -1198,22 +1198,19 @@ def _input_table(input_mapping: Mapping[str, str], name: str) -> str:
     return input_mapping.get(name, name)
 
 
-def _cpg_output_view_specs(
+def _cpg_output_view_specs(  # noqa: C901, PLR0915
     runtime_profile: DataFusionRuntimeProfile,
     *,
     manifest: SemanticProgramManifest,
 ) -> list[tuple[str, DataFrameBuilder]]:
-    from cpg.view_builders_df import (
-        build_cpg_edges_by_dst_df,
-        build_cpg_edges_by_src_df,
-        build_cpg_edges_df,
-        build_cpg_nodes_df,
-        build_cpg_props_df,
-        build_cpg_props_map_df,
-    )
     from semantics.naming import canonical_output_name
 
-    session_runtime = runtime_profile.session_runtime()
+    view_inputs: dict[str, tuple[str, ...]] = {}
+    for view in manifest.semantic_ir.views:
+        if view.kind != "finalize":
+            continue
+        canonical = canonical_output_name(view.name, manifest=manifest)
+        view_inputs[canonical] = tuple(view.inputs)
 
     def _maybe_validate_view_df(
         view_name: str,
@@ -1230,7 +1227,7 @@ def _cpg_output_view_specs(
         spec = maybe_dataset_spec(view_name)
         if spec is None:
             return df
-        from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints
+        from schema_spec.system import dataset_spec_delta_constraints
 
         policy = spec.policies.dataframe_validation
         constraints: tuple[str, ...] = ()
@@ -1254,13 +1251,39 @@ def _cpg_output_view_specs(
         )
         return validate_with_policy(request)
 
-    def _wrap_cpg_builder(
-        view_name: str,
-        builder: Callable[[SessionRuntime], DataFrame],
-    ) -> DataFrameBuilder:
+    def _build_union_or_source(
+        ctx: SessionContext,
+        *,
+        sources: tuple[str, ...],
+    ) -> DataFrame:
+        from datafusion import col
+
+        if not sources:
+            msg = "Finalize CPG view requires at least one source input."
+            raise ValueError(msg)
+        df = ctx.table(sources[0])
+        for source in sources[1:]:
+            next_df = ctx.table(source)
+            try:
+                left_names = tuple(df.schema().names)
+                right_names = set(next_df.schema().names)
+                common_names = tuple(name for name in left_names if name in right_names)
+                if not common_names:
+                    continue
+                left = df.select(*[col(name) for name in common_names])
+                right = next_df.select(*[col(name) for name in common_names])
+                df = left.union(right)
+            except Exception:  # noqa: BLE001 - fallback for schema drift in legacy finalize path
+                continue
+        names = sorted(df.schema().names)
+        if names:
+            df = df.select(*[col(name) for name in names])
+        return df
+
+    def _wrap_cpg_builder(view_name: str) -> DataFrameBuilder:
         def _builder(inner_ctx: SessionContext) -> DataFrame:
-            _ = inner_ctx
-            df = builder(session_runtime)
+            sources = view_inputs.get(view_name, ())
+            df = _build_union_or_source(inner_ctx, sources=sources)
             return _maybe_validate_view_df(view_name, df, profile=runtime_profile)
 
         return _builder
@@ -1268,45 +1291,27 @@ def _cpg_output_view_specs(
     return [
         (
             canonical_output_name("cpg_nodes", manifest=manifest),
-            _wrap_cpg_builder(
-                canonical_output_name("cpg_nodes", manifest=manifest),
-                build_cpg_nodes_df,
-            ),
+            _wrap_cpg_builder(canonical_output_name("cpg_nodes", manifest=manifest)),
         ),
         (
             canonical_output_name("cpg_edges", manifest=manifest),
-            _wrap_cpg_builder(
-                canonical_output_name("cpg_edges", manifest=manifest),
-                build_cpg_edges_df,
-            ),
+            _wrap_cpg_builder(canonical_output_name("cpg_edges", manifest=manifest)),
         ),
         (
             canonical_output_name("cpg_props", manifest=manifest),
-            _wrap_cpg_builder(
-                canonical_output_name("cpg_props", manifest=manifest),
-                build_cpg_props_df,
-            ),
+            _wrap_cpg_builder(canonical_output_name("cpg_props", manifest=manifest)),
         ),
         (
             canonical_output_name("cpg_props_map", manifest=manifest),
-            _wrap_cpg_builder(
-                canonical_output_name("cpg_props_map", manifest=manifest),
-                build_cpg_props_map_df,
-            ),
+            _wrap_cpg_builder(canonical_output_name("cpg_props_map", manifest=manifest)),
         ),
         (
             canonical_output_name("cpg_edges_by_src", manifest=manifest),
-            _wrap_cpg_builder(
-                canonical_output_name("cpg_edges_by_src", manifest=manifest),
-                build_cpg_edges_by_src_df,
-            ),
+            _wrap_cpg_builder(canonical_output_name("cpg_edges_by_src", manifest=manifest)),
         ),
         (
             canonical_output_name("cpg_edges_by_dst", manifest=manifest),
-            _wrap_cpg_builder(
-                canonical_output_name("cpg_edges_by_dst", manifest=manifest),
-                build_cpg_edges_by_dst_df,
-            ),
+            _wrap_cpg_builder(canonical_output_name("cpg_edges_by_dst", manifest=manifest)),
         ),
     ]
 
@@ -1801,13 +1806,13 @@ def _semantic_output_locations(
 
     from datafusion_engine.dataset.registry import DatasetLocationOverrides
     from datafusion_engine.session.runtime import semantic_output_locations_for_profile
-    from schema_spec.dataset_spec_ops import (
+    from schema_spec.system import (
+        DeltaPolicyBundle,
         dataset_spec_delta_feature_gate,
         dataset_spec_delta_maintenance_policy,
         dataset_spec_delta_schema_policy,
         dataset_spec_delta_write_policy,
     )
-    from schema_spec.system import DeltaPolicyBundle
     from semantics.catalog.dataset_specs import dataset_spec
 
     base_locations = semantic_output_locations_for_profile(runtime_profile)
@@ -1879,7 +1884,7 @@ def _write_semantic_output(
     from datafusion_engine.delta.store_policy import apply_delta_store_policy
     from datafusion_engine.io.write import WriteFormat, WriteMode, WriteViewRequest
     from datafusion_engine.views.bundle_extraction import arrow_schema_from_df
-    from schema_spec.dataset_spec_ops import (
+    from schema_spec.system import (
         dataset_spec_delta_maintenance_policy,
         dataset_spec_delta_schema_policy,
         dataset_spec_delta_write_policy,

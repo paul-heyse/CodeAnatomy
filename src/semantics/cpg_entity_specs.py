@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
-from cpg import kind_catalog
-from cpg.kind_catalog import NodeKindId
-from cpg.node_families import NODE_FAMILY_DEFAULTS, NodeFamily
-from cpg.prop_catalog import PROP_SPECS, PropSpec
-from cpg.specs import (
+from semantics.cpg import kind_catalog
+from semantics.cpg.kind_catalog import NodeKindId
+from semantics.cpg.node_families import NODE_FAMILY_DEFAULTS, NodeFamily
+from semantics.cpg.prop_catalog import PROP_SPECS, PropSpec
+from semantics.cpg.specs import (
     INCLUDE_HEAVY_JSON,
     TRANSFORM_EXPR_CONTEXT,
     NodeEmitSpec,

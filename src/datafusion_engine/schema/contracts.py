@@ -373,7 +373,7 @@ def table_constraints_from_location(
     if resolved.delta_constraints:
         resolved_checks = merge_constraint_expressions(resolved.delta_constraints, extra_checks)
     elif dataset_spec is not None:
-        from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints
+        from schema_spec.system import dataset_spec_delta_constraints
 
         resolved_checks = merge_constraint_expressions(
             dataset_spec_delta_constraints(dataset_spec),
@@ -1115,7 +1115,7 @@ def schema_contract_from_dataset_spec(
     SchemaContract
         Schema contract derived from the dataset specification.
     """
-    from schema_spec.dataset_spec_ops import dataset_spec_datafusion_scan, dataset_spec_schema
+    from schema_spec.system import dataset_spec_datafusion_scan, dataset_spec_schema
 
     table_schema = cast("pa.Schema", dataset_spec_schema(spec))
     partition_cols = ()

@@ -16,13 +16,13 @@ from datafusion_engine.expr.query_spec import QuerySpec
 from datafusion_engine.extract.metadata import ExtractMetadata, extract_metadata_by_name
 from datafusion_engine.extract.templates import config
 from datafusion_engine.schema.policy import SchemaPolicy, SchemaPolicyOptions, schema_policy_factory
-from schema_spec.dataset_spec_ops import dataset_spec_encoding_policy
 from schema_spec.system import (
     DatasetSpec,
     DeltaCdfPolicy,
     DeltaMaintenancePolicy,
     DeltaPolicyBundle,
     ValidationPolicySpec,
+    dataset_spec_encoding_policy,
     dataset_spec_from_schema,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy

@@ -20,7 +20,7 @@ from datafusion_engine.schema.finalize import FinalizeContext, FinalizeResult, F
 from datafusion_engine.schema.introspection import SchemaIntrospector
 from datafusion_engine.schema.policy import SchemaPolicy
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, sql_options_for_profile
-from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints
+from schema_spec.system import dataset_spec_delta_constraints
 
 
 def schema_policy_for_dataset(
@@ -173,7 +173,7 @@ def finalize_context_for_dataset(
         runtime_profile=runtime_profile,
         normalize=normalize,
     )
-    from schema_spec.dataset_spec_ops import dataset_spec_contract
+    from schema_spec.system import dataset_spec_contract
 
     contract = dataset_spec_contract(dataset_spec(name))
     return FinalizeContext(contract=contract, schema_policy=policy)

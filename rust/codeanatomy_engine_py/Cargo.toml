@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 codeanatomy-engine = { path = "../codeanatomy_engine" }
 pyo3 = { workspace = true, features = ["extension-module", "abi3-py313"] }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_path_to_error = "0.1"
 hex = "0.4"

@@ -12,6 +12,7 @@ use datafusion_common::{DataFusionError, Result};
 use std::collections::{HashMap, VecDeque};
 
 use crate::compiler::cache_boundaries;
+use crate::compiler::cpg_builder;
 use crate::compiler::graph_validator;
 use crate::compiler::inline_policy::{compute_inline_policy, InlineDecision};
 use crate::compiler::semantic_validator::{self, SemanticValidationError, SemanticValidationWarning};
@@ -332,6 +333,14 @@ impl<'a> SemanticPlanCompiler<'a> {
 
             ViewTransform::FileManifest { source } => {
                 udtf_builder::build_file_manifest(self.ctx, source).await
+            }
+
+            ViewTransform::CpgEmit { output_kind, sources } => {
+                let mut resolved_sources = Vec::with_capacity(sources.len());
+                for source in sources {
+                    resolved_sources.push(self.resolve_source_name(source, inline_cache).await?);
+                }
+                cpg_builder::build_cpg_emit(self.ctx, *output_kind, resolved_sources.as_slice()).await
             }
         }
     }

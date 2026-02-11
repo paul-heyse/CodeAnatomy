@@ -205,7 +205,7 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Dataset schema with metadata.
     """
-    from schema_spec.dataset_spec_ops import dataset_spec_schema
+    from schema_spec.system import dataset_spec_schema
 
     spec = dataset_spec(name)
     return dataset_spec_schema(spec)
@@ -296,7 +296,7 @@ def dataset_contract(
     ContractSpec
         Contract specification for the dataset.
     """
-    from schema_spec.dataset_spec_ops import dataset_spec_contract_spec_or_default
+    from schema_spec.system import dataset_spec_contract_spec_or_default
 
     spec = dataset_spec(name, ctx=ctx)
     return dataset_spec_contract_spec_or_default(spec)

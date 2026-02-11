@@ -540,7 +540,7 @@ def build_schema_anomalies_view(ctx: SessionContext) -> DataFrame:
 
     rows: list[dict[str, object]] = []
     for spec in dataset_specs():
-        from schema_spec.dataset_spec_ops import dataset_spec_name
+        from schema_spec.system import dataset_spec_name
 
         name = dataset_spec_name(spec)
         if not _table_exists(ctx, name):

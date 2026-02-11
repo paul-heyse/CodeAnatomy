@@ -10,6 +10,7 @@ pub mod compiler;
 pub mod errors;
 pub mod materializer;
 pub mod result;
+pub mod schema;
 pub mod session;
 
 #[pyfunction]
@@ -138,6 +139,7 @@ fn codeanatomy_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<compiler::CompiledPlan>()?;
     m.add_class::<materializer::CpgMaterializer>()?;
     m.add_class::<result::PyRunResult>()?;
+    m.add_class::<schema::SchemaRuntime>()?;
     m.add_function(wrap_pyfunction!(run_build, m)?)?;
     Ok(())
 }

@@ -26,8 +26,6 @@ from cli.config_models import (
     PlanConfigSpec,
     RootConfigSpec,
 )
-from cpg.emit_specs import CpgOutputSpec, CpgPropOptions
-from cpg.specs import EdgeEmitSpec, NodeEmitSpec, NodePlanSpec, PropFieldSpec
 from datafusion_engine.arrow.metadata import SchemaMetadataSpec
 from datafusion_engine.compile.options import DataFusionCompileOptionsSpec
 from datafusion_engine.delta.control_plane import (
@@ -95,6 +93,8 @@ from schema_spec.system import (
 )
 from schema_spec.view_specs import ViewSpec
 from semantics.config import SemanticConfigSpec, SemanticTypePatternSpec
+from semantics.cpg.emit_specs import CpgOutputSpec, CpgPropOptions
+from semantics.cpg.specs import EdgeEmitSpec, NodeEmitSpec, NodePlanSpec, PropFieldSpec
 from semantics.specs import (
     ForeignKeyDerivation,
     IdDerivation,

@@ -99,6 +99,27 @@ pub enum ViewTransform {
         /// Delta table location.
         source: String,
     },
+
+    /// Canonical CPG output transform routed through Rust execution authority.
+    ///
+    /// This variant replaces Python-side CPG finalize builders by encoding
+    /// the output family and upstream source views directly in the execution spec.
+    CpgEmit {
+        output_kind: CpgOutputKind,
+        #[serde(default)]
+        sources: Vec<String>,
+    },
+}
+
+/// Canonical CPG output families.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CpgOutputKind {
+    Nodes,
+    Edges,
+    Props,
+    PropsMap,
+    EdgesBySrc,
+    EdgesByDst,
 }
 
 /// Join key pair for relate transformations.

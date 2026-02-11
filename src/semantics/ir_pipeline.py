@@ -485,7 +485,7 @@ def _build_export_rows() -> tuple[SemanticDatasetRow, ...]:
 
 
 def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
-    from cpg.emit_specs import cpg_output_specs
+    from semantics.cpg.emit_specs import cpg_output_specs
 
     rows: list[SemanticDatasetRow] = []
     for spec in cpg_output_specs():

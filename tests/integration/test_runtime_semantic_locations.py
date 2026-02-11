@@ -12,7 +12,7 @@ from datafusion_engine.session.runtime import (
     SemanticOutputConfig,
     normalize_dataset_locations_for_profile,
 )
-from schema_spec.dataset_spec_ops import dataset_spec_name, dataset_spec_schema
+from schema_spec.system import dataset_spec_name, dataset_spec_schema
 from semantics.catalog.dataset_specs import dataset_spec
 from semantics.compile_context import build_semantic_execution_context
 from semantics.incremental.runtime import IncrementalRuntime, IncrementalRuntimeBuildRequest

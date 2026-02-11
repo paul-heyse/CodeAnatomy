@@ -13,14 +13,14 @@ from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationO
 from datafusion_engine.delta.schema_guard import SchemaEvolutionPolicy
 from datafusion_engine.io.write import WriteViewRequest
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, FeatureGatesConfig
-from schema_spec.dataset_spec_ops import (
+from schema_spec.system import (
+    DeltaPolicyBundle,
     dataset_spec_delta_constraints,
     dataset_spec_delta_feature_gate,
     dataset_spec_delta_maintenance_policy,
     dataset_spec_delta_schema_policy,
     dataset_spec_delta_write_policy,
 )
-from schema_spec.system import DeltaPolicyBundle
 from semantics.catalog.dataset_specs import dataset_spec
 from semantics.pipeline import SemanticOutputWriteContext, _write_semantic_output
 

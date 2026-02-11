@@ -736,7 +736,7 @@ def _normalize_dataset_locations_for_root(
     if normalize_root is None:
         return {}
     root = Path(normalize_root)
-    from schema_spec.dataset_spec_ops import dataset_spec_name
+    from schema_spec.system import dataset_spec_name
     from semantics.catalog.dataset_specs import dataset_specs
 
     locations: dict[str, DatasetLocation] = {}

@@ -19,8 +19,8 @@ from utils.registry_protocol import MappingRegistryAdapter
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from cpg.specs import NodePlanSpec, PropTableSpec
     from semantics.catalog.dataset_rows import SemanticDatasetRow
+    from semantics.cpg.specs import NodePlanSpec, PropTableSpec
     from semantics.cpg_entity_specs import CpgEntitySpec
 
 
@@ -293,7 +293,7 @@ class SemanticModel:
         tuple[NodePlanSpec, ...]
             CPG node plan specs.
         """
-        from cpg.spec_registry import build_node_plan_specs
+        from semantics.cpg.spec_registry import build_node_plan_specs
 
         return build_node_plan_specs(self)
 
@@ -314,7 +314,7 @@ class SemanticModel:
         tuple[PropTableSpec, ...]
             CPG prop table specs.
         """
-        from cpg.spec_registry import build_prop_table_specs
+        from semantics.cpg.spec_registry import build_prop_table_specs
 
         return build_prop_table_specs(self, source_columns_lookup=source_columns_lookup)
 

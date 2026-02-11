@@ -21,6 +21,7 @@ fn extract_sources(transform: &ViewTransform) -> Vec<&str> {
         ViewTransform::IncrementalCdf { source, .. } => vec![source.as_str()],
         ViewTransform::Metadata { source } => vec![source.as_str()],
         ViewTransform::FileManifest { source } => vec![source.as_str()],
+        ViewTransform::CpgEmit { sources, .. } => sources.iter().map(|s| s.as_str()).collect(),
     }
 }
 
@@ -128,6 +129,11 @@ fn resolve_inputs_for_source(
         | ViewTransform::Metadata { source }
         | ViewTransform::FileManifest { source } => {
             resolve_inputs_for_source(source, input_names, views, visiting, out);
+        }
+        ViewTransform::CpgEmit { sources, .. } => {
+            for source in sources {
+                resolve_inputs_for_source(source, input_names, views, visiting, out);
+            }
         }
         ViewTransform::Relate { left, right, .. } => {
             resolve_inputs_for_source(left, input_names, views, visiting, out);

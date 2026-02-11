@@ -292,7 +292,8 @@ pub async fn validate_semantics(
             }
             ViewTransform::IncrementalCdf { .. }
             | ViewTransform::Metadata { .. }
-            | ViewTransform::FileManifest { .. } => {}
+            | ViewTransform::FileManifest { .. }
+            | ViewTransform::CpgEmit { .. } => {}
         }
     }
 

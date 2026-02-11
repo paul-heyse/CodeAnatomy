@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from datafusion_engine.lineage.datafusion import ScanLineage
-from schema_spec.dataset_spec_ops import dataset_spec_name
+from schema_spec.system import dataset_spec_name
 from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
@@ -253,7 +253,7 @@ def _required_metadata_for_tables(
         spec = _dataset_spec_for_table(table_name, ctx=ctx)
         if spec is None:
             continue
-        from schema_spec.dataset_spec_ops import dataset_spec_schema
+        from schema_spec.system import dataset_spec_schema
 
         metadata = dataset_spec_schema(spec).metadata
         if metadata:

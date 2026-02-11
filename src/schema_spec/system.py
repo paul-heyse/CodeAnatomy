@@ -15,24 +15,28 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Literal, TypedDict, Unpack, cast
+from functools import lru_cache
+from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, Unpack, cast
 
 import msgspec
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-from arrow_utils.core.ordering import OrderingLevel
+from arrow_utils.core.ordering import Ordering, OrderingLevel
 from core.config_base import config_fingerprint
 from core_types import IdentifierStr, NonNegativeInt
 from datafusion_engine.arrow.build import register_schema_extensions
+from datafusion_engine.arrow.encoding import EncodingPolicy
 from datafusion_engine.arrow.interop import SchemaLike, TableLike
 from datafusion_engine.arrow.metadata import (
     SchemaMetadataSpec,
+    encoding_policy_from_spec,
+    merge_metadata_specs,
     metadata_spec_from_schema,
     ordering_metadata_spec,
 )
 from datafusion_engine.delta.protocol import DeltaFeatureGate
-from datafusion_engine.expr.query_spec import QuerySpec
+from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
 from datafusion_engine.expr.spec import ExprSpec
 from datafusion_engine.kernels import DedupeSpec, SortKey
 from datafusion_engine.schema.alignment import SchemaEvolutionSpec
@@ -63,6 +67,14 @@ from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+
+
+class _SchemaRuntime(Protocol):
+    """Runtime protocol for Rust schema-policy bridge methods."""
+
+    def apply_scan_policy_json(self, scan_policy_json: str, defaults_json: str) -> str: ...
+
+    def apply_delta_scan_policy_json(self, delta_scan_json: str, defaults_json: str) -> str: ...
 
 
 def validate_arrow_table(
@@ -536,6 +548,19 @@ class ScanPolicyConfig(StructBaseStrict, frozen=True):
         return config_fingerprint(self.fingerprint_payload())
 
 
+@lru_cache(maxsize=1)
+def _schema_runtime() -> _SchemaRuntime | None:
+    """Return a cached SchemaRuntime bridge when the Rust extension is available."""
+    try:
+        module = importlib.import_module("codeanatomy_engine")
+        runtime_cls = getattr(module, "SchemaRuntime", None)
+        if runtime_cls is None:
+            return None
+        return cast("_SchemaRuntime", runtime_cls())
+    except (AttributeError, ImportError, TypeError, ValueError):
+        return None
+
+
 def apply_scan_policy(
     options: DataFusionScanOptions | None,
     *,
@@ -555,7 +580,18 @@ def apply_scan_policy(
     if options is None and not defaults.has_any():
         return None
     base = options or DataFusionScanOptions()
-    return defaults.apply(base)
+    runtime = _schema_runtime()
+    if runtime is None:
+        return defaults.apply(base)
+    try:
+        defaults_payload = defaults.apply(DataFusionScanOptions())
+        merged_json = runtime.apply_scan_policy_json(
+            msgspec.json.encode(base).decode("utf-8"),
+            msgspec.json.encode(defaults_payload).decode("utf-8"),
+        )
+        return msgspec.json.decode(merged_json, type=DataFusionScanOptions)
+    except (AttributeError, RuntimeError, TypeError, ValueError, msgspec.DecodeError):
+        return defaults.apply(base)
 
 
 def apply_delta_scan_policy(
@@ -576,7 +612,18 @@ def apply_delta_scan_policy(
     if options is None and not defaults.has_any():
         return None
     base = options or DeltaScanOptions()
-    return defaults.apply(base)
+    runtime = _schema_runtime()
+    if runtime is None:
+        return defaults.apply(base)
+    try:
+        defaults_payload = defaults.apply(DeltaScanOptions())
+        merged_json = runtime.apply_delta_scan_policy_json(
+            msgspec.json.encode(base).decode("utf-8"),
+            msgspec.json.encode(defaults_payload).decode("utf-8"),
+        )
+        return msgspec.json.decode(merged_json, type=DeltaScanOptions)
+    except (AttributeError, RuntimeError, TypeError, ValueError, msgspec.DecodeError):
+        return defaults.apply(base)
 
 
 class DeltaScanOptions(StructBaseStrict, frozen=True):
@@ -1240,6 +1287,178 @@ def dataset_spec_from_contract(contract: Contract) -> DatasetSpec:
     )
 
 
+def dataset_spec_name(spec: DatasetSpec) -> str:
+    """Return the dataset name."""
+    return spec.table_spec.name
+
+
+def dataset_spec_datafusion_scan(spec: DatasetSpec) -> DataFusionScanOptions | None:
+    """Return DataFusion scan options from the policy bundle."""
+    return spec.policies.datafusion_scan
+
+
+def dataset_spec_delta_scan(spec: DatasetSpec) -> DeltaScanOptions | None:
+    """Return Delta scan options from the policy bundle."""
+    delta = spec.policies.delta
+    if delta is None:
+        return None
+    return delta.scan
+
+
+def dataset_spec_delta_cdf_policy(spec: DatasetSpec) -> DeltaCdfPolicy | None:
+    """Return Delta CDF policy from the policy bundle."""
+    delta = spec.policies.delta
+    if delta is None:
+        return None
+    return delta.cdf_policy
+
+
+def dataset_spec_delta_maintenance_policy(spec: DatasetSpec) -> DeltaMaintenancePolicy | None:
+    """Return Delta maintenance policy from the policy bundle."""
+    delta = spec.policies.delta
+    if delta is None:
+        return None
+    return delta.maintenance_policy
+
+
+def dataset_spec_with_delta_maintenance(
+    spec: DatasetSpec,
+    maintenance_policy: DeltaMaintenancePolicy | None,
+) -> DatasetSpec:
+    """Return a dataset spec with updated Delta maintenance policy."""
+    if maintenance_policy is None:
+        return spec
+    delta = spec.policies.delta
+    if delta is None:
+        delta = DeltaPolicyBundle(maintenance_policy=maintenance_policy)
+    else:
+        delta = msgspec.structs.replace(delta, maintenance_policy=maintenance_policy)
+    policies = msgspec.structs.replace(spec.policies, delta=delta)
+    return msgspec.structs.replace(spec, policies=policies)
+
+
+def dataset_spec_delta_write_policy(spec: DatasetSpec) -> DeltaWritePolicy | None:
+    """Return Delta write policy from the policy bundle."""
+    delta = spec.policies.delta
+    if delta is None:
+        return None
+    return delta.write_policy
+
+
+def dataset_spec_delta_schema_policy(spec: DatasetSpec) -> DeltaSchemaPolicy | None:
+    """Return Delta schema policy from the policy bundle."""
+    delta = spec.policies.delta
+    if delta is None:
+        return None
+    return delta.schema_policy
+
+
+def dataset_spec_delta_feature_gate(spec: DatasetSpec) -> DeltaFeatureGate | None:
+    """Return Delta feature gate from the policy bundle."""
+    delta = spec.policies.delta
+    if delta is None:
+        return None
+    return delta.feature_gate
+
+
+def dataset_spec_delta_constraints(spec: DatasetSpec) -> tuple[str, ...]:
+    """Return declared Delta constraints from the policy bundle."""
+    delta = spec.policies.delta
+    if delta is None:
+        return ()
+    return delta.constraints
+
+
+def dataset_spec_strict_schema_validation(spec: DatasetSpec) -> bool | None:
+    """Return strict schema validation preference from the policy bundle."""
+    return spec.policies.strict_schema_validation
+
+
+def dataset_spec_schema(spec: DatasetSpec) -> SchemaLike:
+    """Return the Arrow schema with dataset metadata and ordering applied."""
+    ordering = _ordering_metadata_spec(spec.contract_spec, spec.table_spec)
+    delta_policy = spec.policies.delta
+    if (
+        ordering is None
+        and delta_policy is not None
+        and delta_policy.write_policy is not None
+        and delta_policy.write_policy.zorder_by
+    ):
+        keys = tuple((name, "ascending") for name in delta_policy.write_policy.zorder_by)
+        ordering = ordering_metadata_spec(OrderingLevel.EXPLICIT, keys=keys)
+    merged = merge_metadata_specs(spec.metadata_spec, ordering)
+    return merged.apply(spec.table_spec.to_arrow_schema())
+
+
+def dataset_spec_ordering(spec: DatasetSpec) -> Ordering:
+    """Return ordering metadata derived from contract and key fields."""
+    if spec.contract_spec is not None and spec.contract_spec.canonical_sort:
+        keys = tuple((key.column, key.order) for key in spec.contract_spec.canonical_sort)
+        return Ordering.explicit(keys)
+    if spec.table_spec.key_fields:
+        return Ordering.implicit()
+    return Ordering.unordered()
+
+
+def dataset_spec_query(spec: DatasetSpec) -> QuerySpec:
+    """Return query spec, deriving projection from schema fields when absent."""
+    if spec.query_spec is not None:
+        return spec.query_spec
+    cols = tuple(field.name for field in spec.table_spec.fields)
+    derived = {field_spec.name: field_spec.expr for field_spec in spec.derived_fields}
+    return QuerySpec(
+        projection=ProjectionSpec(base=cols, derived=derived),
+        predicate=spec.predicate,
+        pushdown_predicate=spec.pushdown_predicate,
+    )
+
+
+def dataset_spec_contract_spec_or_default(spec: DatasetSpec) -> ContractSpec:
+    """Return contract spec with policy validation defaulted when missing."""
+    if spec.contract_spec is not None:
+        validation = spec.policies.validation
+        if validation is None or spec.contract_spec.validation is not None:
+            return spec.contract_spec
+        return msgspec.structs.replace(spec.contract_spec, validation=validation)
+    return ContractSpec(
+        name=spec.table_spec.name,
+        table_schema=spec.table_spec,
+        version=spec.table_spec.version,
+        validation=spec.policies.validation,
+    )
+
+
+def dataset_spec_contract(spec: DatasetSpec) -> Contract:
+    """Return runtime Contract derived from DatasetSpec."""
+    return dataset_spec_contract_spec_or_default(spec).to_contract()
+
+
+def dataset_spec_resolved_view_specs(spec: DatasetSpec) -> tuple[ViewSpec, ...]:
+    """Return merged view specs with contract-level views taking precedence."""
+    specs: list[ViewSpec] = []
+    seen: set[str] = set()
+    if spec.contract_spec is not None:
+        for view in spec.contract_spec.view_specs:
+            if view.name in seen:
+                continue
+            specs.append(view)
+            seen.add(view.name)
+    for view in spec.view_specs:
+        if view.name in seen:
+            continue
+        specs.append(view)
+        seen.add(view.name)
+    return tuple(specs)
+
+
+def dataset_spec_encoding_policy(spec: DatasetSpec) -> EncodingPolicy | None:
+    """Return encoding policy derived from the dataset schema spec."""
+    policy = encoding_policy_from_spec(spec.table_spec)
+    if not policy.specs:
+        return None
+    return policy
+
+
 def ddl_fingerprint_from_definition(ddl: str) -> str:
     """Return a stable fingerprint for a CREATE TABLE statement.
 
@@ -1550,10 +1769,28 @@ __all__ = [
     "VirtualFieldSpec",
     "apply_delta_scan_policy",
     "apply_scan_policy",
+    "dataset_spec_contract",
+    "dataset_spec_contract_spec_or_default",
+    "dataset_spec_datafusion_scan",
+    "dataset_spec_delta_cdf_policy",
+    "dataset_spec_delta_constraints",
+    "dataset_spec_delta_feature_gate",
+    "dataset_spec_delta_maintenance_policy",
+    "dataset_spec_delta_scan",
+    "dataset_spec_delta_schema_policy",
+    "dataset_spec_delta_write_policy",
+    "dataset_spec_encoding_policy",
     "dataset_spec_from_contract",
     "dataset_spec_from_dataset",
     "dataset_spec_from_path",
     "dataset_spec_from_schema",
+    "dataset_spec_name",
+    "dataset_spec_ordering",
+    "dataset_spec_query",
+    "dataset_spec_resolved_view_specs",
+    "dataset_spec_schema",
+    "dataset_spec_strict_schema_validation",
+    "dataset_spec_with_delta_maintenance",
     "dataset_table_column_defaults",
     "dataset_table_constraints",
     "dataset_table_ddl_fingerprint",

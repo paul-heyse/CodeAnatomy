@@ -62,8 +62,11 @@ from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import delta_constraints_for_location
 from datafusion_engine.sql.options import sql_options_for_profile
 from relspec.table_size_tiers import TableSizeTier, classify_table_size
-from schema_spec.dataset_spec_ops import dataset_spec_delta_constraints, dataset_spec_name
-from schema_spec.system import DeltaMaintenancePolicy
+from schema_spec.system import (
+    DeltaMaintenancePolicy,
+    dataset_spec_delta_constraints,
+    dataset_spec_name,
+)
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
 from serde_msgspec import convert, convert_from_attributes
 from storage.deltalake import (

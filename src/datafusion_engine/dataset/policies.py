@@ -123,7 +123,7 @@ def resolve_datafusion_scan_options(
     DataFusionScanOptions | None
         Resolved DataFusion scan options.
     """
-    from schema_spec.dataset_spec_ops import dataset_spec_datafusion_scan, dataset_spec_ordering
+    from schema_spec.system import dataset_spec_datafusion_scan, dataset_spec_ordering
 
     scan = override or (
         dataset_spec_datafusion_scan(dataset_spec) if dataset_spec is not None else None
@@ -206,7 +206,7 @@ def resolve_delta_scan_options(
         return None
     base = _DEFAULT_DELTA_SCAN
     if dataset_spec is not None:
-        from schema_spec.dataset_spec_ops import dataset_spec_delta_scan
+        from schema_spec.system import dataset_spec_delta_scan
 
         delta_scan = dataset_spec_delta_scan(dataset_spec)
         if delta_scan is not None:

@@ -25,8 +25,8 @@ from obs.otel.tracing import stage_span
 if TYPE_CHECKING:
     import pyarrow as pa
 
-    from engine.runtime_profile import RuntimeProfileSpec
     from extract.session import ExtractSession
+    from planning_engine.runtime_profile import RuntimeProfileSpec
 
 logger = logging.getLogger(__name__)
 
@@ -265,13 +265,13 @@ def _run_repo_scan(
     dict[str, pa.Table]
         Repo scan tables keyed by dataset name.
     """
-    from engine.runtime_profile import resolve_runtime_profile
-    from engine.session_factory import build_engine_session
     from extract.coordination.context import ExtractExecutionContext
     from extract.python.scope import PythonScopePolicy
     from extract.scanning.repo_scan import RepoScanOptions, scan_repo_tables
     from extract.scanning.repo_scope import RepoScopeOptions
     from extract.session import ExtractSession
+    from planning_engine.runtime_profile import resolve_runtime_profile
+    from planning_engine.session_factory import build_engine_session
 
     # Build runtime profile and session
     runtime_spec = resolve_runtime_profile("default")
@@ -340,9 +340,9 @@ def _build_stage1_extractors(
     dict[str, Callable[[], pa.Table]]
         Mapping of extractor name to callable.
     """
-    from engine.runtime_profile import resolve_runtime_profile
-    from engine.session_factory import build_engine_session
     from extract.session import ExtractSession
+    from planning_engine.runtime_profile import resolve_runtime_profile
+    from planning_engine.session_factory import build_engine_session
 
     # Build session properly
     runtime_spec = resolve_runtime_profile("default")
@@ -643,10 +643,10 @@ def _run_python_imports(delta_locations: dict[str, str]) -> pa.Table:
     Raises:
         ValueError: If extraction produces no output.
     """
-    from engine.runtime_profile import resolve_runtime_profile
-    from engine.session_factory import build_engine_session
     from extract.extractors.imports_extract import extract_python_imports_tables
     from extract.session import ExtractSession
+    from planning_engine.runtime_profile import resolve_runtime_profile
+    from planning_engine.session_factory import build_engine_session
 
     # Load inputs from Delta locations (adapter-normalized dataset keys)
     ast_imports = _load_delta_table(delta_locations.get("ast_files"))
@@ -693,10 +693,10 @@ def _run_python_external(delta_locations: dict[str, str], repo_root: Path) -> pa
     Raises:
         ValueError: If python_imports table is missing or extraction produces no output.
     """
-    from engine.runtime_profile import resolve_runtime_profile
-    from engine.session_factory import build_engine_session
     from extract.extractors.external_scope import extract_python_external_tables
     from extract.session import ExtractSession
+    from planning_engine.runtime_profile import resolve_runtime_profile
+    from planning_engine.session_factory import build_engine_session
 
     # Load python_imports from Delta location
     python_imports_table = _load_delta_table(delta_locations.get("python_imports"))

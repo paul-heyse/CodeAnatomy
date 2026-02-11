@@ -15,11 +15,6 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from core_types import JsonDict, JsonValue, PathLike, ensure_path
 from cpg.schemas import SCHEMA_VERSION
-from engine.output_contracts import (
-    CPG_OUTPUT_CANONICAL_TO_LEGACY,
-    ENGINE_CPG_OUTPUTS,
-    output_aliases,
-)
 from obs.diagnostics_report import write_run_diagnostics_report
 from obs.otel import (
     OtelBootstrapOptions,
@@ -31,10 +26,15 @@ from obs.otel import (
 )
 from obs.otel.run_context import reset_run_id, set_run_id
 from obs.otel.tracing import record_exception, root_span, set_span_attributes
+from planning_engine.output_contracts import (
+    CPG_OUTPUT_CANONICAL_TO_LEGACY,
+    ENGINE_CPG_OUTPUTS,
+    output_aliases,
+)
 from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
-    from engine.spec_builder import RuntimeConfig
+    from planning_engine.spec_builder import RuntimeConfig
 
 GraphProduct = Literal["cpg"]
 
@@ -284,7 +284,7 @@ def _execute_build(
     GraphProductBuildResult
         Typed outputs for the requested graph product.
     """
-    from engine.build_orchestrator import orchestrate_build
+    from planning_engine.build_orchestrator import orchestrate_build
 
     with root_span(
         "graph_product.build",

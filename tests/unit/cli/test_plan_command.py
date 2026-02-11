@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from cli.commands.plan import PlanOptions, plan_command
-from engine.spec_builder import (
+from planning_engine.spec_builder import (
     FilterTransform,
     JoinGraph,
     OutputTarget,
@@ -66,7 +66,7 @@ def _configure_plan_test_doubles(
         return SimpleNamespace(name="resolved_profile", runtime_profile_hash="hash_123")
 
     monkeypatch.setattr(
-        "engine.runtime_profile.resolve_runtime_profile",
+        "planning_engine.runtime_profile.resolve_runtime_profile",
         _resolve_runtime_profile_stub,
     )
 
@@ -91,7 +91,9 @@ def _configure_plan_test_doubles(
             rulepack_profile=rulepack_profile,
         )
 
-    monkeypatch.setattr("engine.spec_builder.build_execution_spec", _build_execution_spec_stub)
+    monkeypatch.setattr(
+        "planning_engine.spec_builder.build_execution_spec", _build_execution_spec_stub
+    )
 
     class _FakeSessionFactory:
         last_profile: str | None = None
@@ -113,6 +115,18 @@ def _configure_plan_test_doubles(
         def compile(self, spec_json: str) -> object:
             _ = spec_json
             return _FakeCompiledPlan()
+
+        def compile_metadata_json(self, _session_factory: object, _spec_json: str) -> str:
+            return json.dumps(
+                {
+                    "spec_hash": "abc123",
+                    "dependency_map": {"cpg_nodes_view": []},
+                    "task_schedule": {
+                        "execution_order": ["cpg_nodes_view"],
+                        "critical_path": ["cpg_nodes_view"],
+                    },
+                }
+            )
 
     engine_module = SimpleNamespace(
         SessionFactory=_FakeSessionFactory,
@@ -143,8 +157,8 @@ def test_plan_command_uses_engine_profile_and_emits_runtime_metadata(
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["engine_profile"] == "small"
-    assert payload["runtime_profile_name"] == "resolved_profile"
-    assert payload["runtime_profile_hash"] == "hash_123"
+    assert payload["runtime_profile_name"] == "small"
+    assert payload["runtime_profile_hash"] == "rust_session_factory"
 
 
 def test_plan_command_fails_when_session_initialization_fails(

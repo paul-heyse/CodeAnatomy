@@ -24,8 +24,6 @@ from datafusion_engine.extract.registry import normalize_options
 from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 from datafusion_engine.schema.alignment import align_table
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
-from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.coordination import (
     ExtractMaterializeOptions,
     ExtractPlanOptions,
@@ -38,6 +36,8 @@ from extract.infrastructure.string_utils import normalize_string_items
 from extract.session import ExtractSession, build_extract_session
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
+from planning_engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
+from planning_engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 
 if TYPE_CHECKING:
     from datafusion_engine.schema.policy import SchemaPolicy

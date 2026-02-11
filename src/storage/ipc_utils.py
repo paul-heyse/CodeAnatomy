@@ -11,7 +11,7 @@ import pyarrow.ipc as pa_ipc
 
 from core_types import JsonDict, PathLike, ensure_path
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
-from engine.plan_product import PlanProduct
+from planning_engine.plan_product import PlanProduct
 from utils.hashing import hash_sha256_hex
 
 type IpcWriteInput = TableLike | RecordBatchReaderLike | PlanProduct

@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from extract.coordination.evidence_plan import EvidencePlan
 from extract.session import ExtractSession, build_extract_session
+from planning_engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from serde_msgspec import (
     StructBaseCompat,
     convert,

@@ -15,7 +15,7 @@ from cli.context import RunContext
 from cli.groups import execution_group
 
 if TYPE_CHECKING:
-    from engine.spec_builder import SemanticExecutionSpec
+    from planning_engine.spec_builder import SemanticExecutionSpec
 
 
 @dataclass(frozen=True)
@@ -103,7 +103,7 @@ class _PlanRuntimeMetadata:
     runtime_profile_hash: str
 
 
-def plan_command(
+def plan_command(  # noqa: PLR0914
     repo_root: Annotated[
         Path,
         Parameter(validator=validators.Path(exists=True, dir_okay=True)),
@@ -129,16 +129,14 @@ def plan_command(
     config_contents = dict(run_context.config_contents) if run_context else {}
     config_contents.setdefault("repo_root", str(resolved_root))
 
-    from engine.output_contracts import ENGINE_CPG_OUTPUTS
-    from engine.runtime_profile import resolve_runtime_profile
-    from engine.spec_builder import build_execution_spec
+    from planning_engine.output_contracts import ENGINE_CPG_OUTPUTS
+    from planning_engine.spec_builder import build_execution_spec
     from semantics.ir_pipeline import build_semantic_ir
 
-    runtime_profile = resolve_runtime_profile(options.engine_profile)
     runtime_metadata = _PlanRuntimeMetadata(
         engine_profile=options.engine_profile,
-        runtime_profile_name=runtime_profile.name,
-        runtime_profile_hash=runtime_profile.runtime_profile_hash,
+        runtime_profile_name=options.engine_profile,
+        runtime_profile_hash="rust_session_factory",
     )
     ir = build_semantic_ir()
     output_targets = list(ENGINE_CPG_OUTPUTS)
@@ -162,7 +160,7 @@ def plan_command(
         return 1
     try:
         session_factory_cls = engine_module.SessionFactory
-        session_factory_cls.from_class(options.engine_profile)
+        session_factory = session_factory_cls.from_class(options.engine_profile)
     except AttributeError as exc:
         sys.stderr.write(f"Plan runtime initialization failed: {exc}\n")
         return 1
@@ -177,6 +175,7 @@ def plan_command(
 
     try:
         compiled = compiler.compile(spec_json)
+        compile_metadata = json.loads(compiler.compile_metadata_json(session_factory, spec_json))
     except (ValueError, RuntimeError) as exc:
         sys.stderr.write(f"Plan compilation failed: {exc}\n")
         return 1
@@ -184,6 +183,7 @@ def plan_command(
     payload = _build_payload(
         spec=spec,
         compiled=compiled,
+        compile_metadata=compile_metadata,
         runtime_metadata=runtime_metadata,
         options=_PlanPayloadOptions(
             show_graph=options.show_graph,
@@ -203,13 +203,14 @@ def _build_payload(
     *,
     spec: SemanticExecutionSpec,
     compiled: object,
+    compile_metadata: dict[str, object],
     runtime_metadata: _PlanRuntimeMetadata,
     options: _PlanPayloadOptions,
 ) -> object:
     if options.output_format == "dot":
         return _build_dot_output(spec)
 
-    payload = _build_payload_base(spec, compiled, runtime_metadata)
+    payload = _build_payload_base(spec, compiled, compile_metadata, runtime_metadata)
     _maybe_add_tier2_features(payload, options)
 
     if options.output_format == "json":
@@ -221,15 +222,23 @@ def _build_payload(
 def _build_payload_base(
     spec: SemanticExecutionSpec,
     compiled: object,
+    compile_metadata: dict[str, object],
     runtime_metadata: _PlanRuntimeMetadata,
 ) -> dict[str, object]:
+    task_schedule = compile_metadata.get("task_schedule")
+    dependency_map = compile_metadata.get("dependency_map")
     return {
-        "plan_signature": getattr(compiled, "spec_hash_hex", lambda: "unknown")(),
+        "plan_signature": compile_metadata.get(
+            "spec_hash",
+            getattr(compiled, "spec_hash_hex", lambda: "unknown")(),
+        ),
         "view_count": len(spec.view_definitions),
         "output_targets": [target.table_name for target in spec.output_targets],
         "rulepack_profile": spec.rulepack_profile,
         "input_relation_count": len(spec.input_relations),
         "join_edge_count": len(spec.join_graph.edges),
+        "dependency_map": dependency_map if isinstance(dependency_map, dict) else {},
+        "task_schedule": task_schedule if isinstance(task_schedule, dict) else None,
         "engine_profile": runtime_metadata.engine_profile,
         "runtime_profile_name": runtime_metadata.runtime_profile_name,
         "runtime_profile_hash": runtime_metadata.runtime_profile_hash,
@@ -302,6 +311,17 @@ def _format_base_lines(payload: dict[str, object]) -> list[str]:
         lines.append(f"output_targets: {', '.join(output_targets)}")
     else:
         lines.append("output_targets: (none)")
+    dependency_map = payload.get("dependency_map")
+    if isinstance(dependency_map, dict):
+        lines.append(f"dependency_map_entries: {len(dependency_map)}")
+    task_schedule = payload.get("task_schedule")
+    if isinstance(task_schedule, dict):
+        execution_order = task_schedule.get("execution_order")
+        critical_path = task_schedule.get("critical_path")
+        if isinstance(execution_order, list):
+            lines.append(f"task_schedule.execution_order_count: {len(execution_order)}")
+        if isinstance(critical_path, list):
+            lines.append(f"task_schedule.critical_path_count: {len(critical_path)}")
     return lines
 
 

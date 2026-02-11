@@ -6,8 +6,8 @@ import msgspec
 import pytest
 
 from datafusion_engine.dataset.registry import DatasetLocation
-from engine.runtime_profile import resolve_runtime_profile
-from engine.session_factory import build_engine_session
+from planning_engine.runtime_profile import resolve_runtime_profile
+from planning_engine.session_factory import build_engine_session
 from semantics.compile_context import build_semantic_execution_context
 
 

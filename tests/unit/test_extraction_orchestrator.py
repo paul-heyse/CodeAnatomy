@@ -172,8 +172,12 @@ def test_run_repo_scan_propagates_diff_options(
 ) -> None:
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("engine.runtime_profile.resolve_runtime_profile", lambda _name: object())
-    monkeypatch.setattr("engine.session_factory.build_engine_session", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        "planning_engine.runtime_profile.resolve_runtime_profile", lambda _name: object()
+    )
+    monkeypatch.setattr(
+        "planning_engine.session_factory.build_engine_session", lambda **_kwargs: object()
+    )
 
     def _scan_repo_tables(
         _repo_root: str,

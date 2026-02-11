@@ -36,7 +36,7 @@ def extract_session() -> ExtractSession:
     ExtractSession
         Extract session configured for tests.
     """
-    from engine.runtime_profile import RuntimeProfileSpec
+    from planning_engine.runtime_profile import RuntimeProfileSpec
 
     runtime_spec = RuntimeProfileSpec(
         name="test_extract",
@@ -196,7 +196,7 @@ def test_artifact_emissions(
     reader = record_batch_reader_from_rows("repo_files_v1", rows)
 
     # Build extract session with diagnostics-enabled runtime profile
-    from engine.runtime_profile import RuntimeProfileSpec
+    from planning_engine.runtime_profile import RuntimeProfileSpec
 
     runtime_spec = RuntimeProfileSpec(name="test_extract_diag", datafusion=runtime_profile)
     diag_session = build_extract_session(runtime_spec=runtime_spec)

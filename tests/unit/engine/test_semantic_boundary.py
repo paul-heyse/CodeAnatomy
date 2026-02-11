@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from datafusion import SessionContext
 
-from engine.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
+from planning_engine.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
 from semantics.registry import SEMANTIC_MODEL
 
 

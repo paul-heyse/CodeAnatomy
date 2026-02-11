@@ -8,8 +8,8 @@ from typing import Literal
 import msgspec
 
 from core.config_base import config_fingerprint
-from engine.config import EngineConfigSpec
 from obs.otel.config import OtelConfigSpec
+from planning_engine.config import EngineConfigSpec
 from serde_msgspec import StructBaseStrict
 
 

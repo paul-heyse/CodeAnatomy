@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import msgspec
 
-from engine.spec_builder import SemanticExecutionSpec, build_spec_from_ir
+from planning_engine.spec_builder import SemanticExecutionSpec, build_spec_from_ir
 from semantics.ir import SemanticIR, SemanticIRJoinGroup, SemanticIRView
 
 

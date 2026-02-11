@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datafusion_engine.materialize_policy import MaterializationPolicy
-from engine.materialize_pipeline import resolve_materialization_cache_decision
+from planning_engine.materialize_pipeline import resolve_materialization_cache_decision
 
 
 def test_semantic_cache_policy_overrides_engine_policy() -> None:

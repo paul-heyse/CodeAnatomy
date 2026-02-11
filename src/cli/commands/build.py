@@ -19,9 +19,9 @@ from cli.groups import (
     scip_group,
 )
 from cli.path_utils import resolve_path
-from engine.config import EngineProfile
-from engine.spec_builder import RulepackProfile, TracingPreset
 from extract.extractors.scip.config import ScipIdentityOverrides, ScipIndexConfig
+from planning_engine.config import EngineProfile
+from planning_engine.spec_builder import RulepackProfile, TracingPreset
 from semantics.incremental import SemanticIncrementalConfig
 
 if TYPE_CHECKING:
@@ -507,8 +507,8 @@ def build_command(
     """
     import logging
 
-    from engine.build_orchestrator import orchestrate_build
-    from engine.spec_builder import RuntimeConfig, TracingConfig
+    from planning_engine.build_orchestrator import orchestrate_build
+    from planning_engine.spec_builder import RuntimeConfig, TracingConfig
 
     logger = logging.getLogger("codeanatomy.pipeline")
     resolved_repo_root = repo_root.resolve()

@@ -11,7 +11,7 @@ class TestEngineFacade:
     """Spec to engine to valid RunResult integration tests."""
 
     def test_spec_to_run_result(self) -> None:
-        """Verify SemanticExecutionSpec produces valid RunResult from engine."""
+        """Verify SemanticExecutionSpec produces valid RunResult from planning_engine."""
 
     def test_run_result_has_outputs(self) -> None:
         """Verify RunResult contains output entries."""

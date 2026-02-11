@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from cli.commands.plan import PlanOptions, plan_command
-from engine.output_contracts import ENGINE_CPG_OUTPUTS
-from engine.spec_builder import (
+from planning_engine.output_contracts import ENGINE_CPG_OUTPUTS
+from planning_engine.spec_builder import (
     FilterTransform,
     JoinGraph,
     OutputTarget,
@@ -70,7 +70,7 @@ def _wire_plan_command_stubs(
         return SimpleNamespace(name="stub_profile", runtime_profile_hash="stub_hash")
 
     monkeypatch.setattr(
-        "engine.runtime_profile.resolve_runtime_profile",
+        "planning_engine.runtime_profile.resolve_runtime_profile",
         _resolve_runtime_profile_stub,
     )
 
@@ -91,7 +91,9 @@ def _wire_plan_command_stubs(
         _ = (ir, input_locations, output_targets, output_locations, runtime_config)
         return _spec_fixture(repo_root, rulepack_profile)
 
-    monkeypatch.setattr("engine.spec_builder.build_execution_spec", _build_execution_spec_stub)
+    monkeypatch.setattr(
+        "planning_engine.spec_builder.build_execution_spec", _build_execution_spec_stub
+    )
 
     class _FakeSessionFactory:
         @staticmethod
@@ -106,6 +108,18 @@ def _wire_plan_command_stubs(
     class _FakeSemanticPlanCompiler:
         def compile(self, _spec_json: str) -> object:
             return _FakeCompiledPlan()
+
+        def compile_metadata_json(self, _session_factory: object, _spec_json: str) -> str:
+            return json.dumps(
+                {
+                    "spec_hash": "feedbeef",
+                    "dependency_map": {"cpg_edges_view": ["cpg_nodes_view"]},
+                    "task_schedule": {
+                        "execution_order": ["cpg_nodes_view", "cpg_edges_view"],
+                        "critical_path": ["cpg_nodes_view", "cpg_edges_view"],
+                    },
+                }
+            )
 
     engine_module = SimpleNamespace(
         SessionFactory=_FakeSessionFactory,
@@ -133,7 +147,8 @@ def test_plan_text_output(
     output = capsys.readouterr().out
     assert "plan_signature: feedbeef" in output
     assert "engine_profile: small" in output
-    assert "runtime_profile_name: stub_profile" in output
+    assert "runtime_profile_name: small" in output
+    assert "runtime_profile_hash: rust_session_factory" in output
 
 
 @pytest.mark.e2e
@@ -151,8 +166,8 @@ def test_plan_json_output(
     payload = json.loads(capsys.readouterr().out)
     assert payload["plan_signature"] == "feedbeef"
     assert payload["engine_profile"] == "medium"
-    assert payload["runtime_profile_name"] == "stub_profile"
-    assert payload["runtime_profile_hash"] == "stub_hash"
+    assert payload["runtime_profile_name"] == "medium"
+    assert payload["runtime_profile_hash"] == "rust_session_factory"
     assert payload["output_targets"] == list(ENGINE_CPG_OUTPUTS)
 
 

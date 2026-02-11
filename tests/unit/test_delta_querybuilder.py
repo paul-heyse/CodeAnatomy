@@ -18,7 +18,7 @@ require_delta_extension()
 def test_delta_query_runtime_path(tmp_path: Path) -> None:
     """Ensure delta_query executes through SessionContext table registration."""
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from engine.delta_tools import DeltaQueryRequest, delta_query
+    from planning_engine.delta_tools import DeltaQueryRequest, delta_query
 
     table = pa.table({"id": [1, 2, 3], "value": ["a", "b", "c"]})
     _, _, table_path = write_delta_table(

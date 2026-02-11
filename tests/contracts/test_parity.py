@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from engine.output_contracts import (
+from planning_engine.output_contracts import (
     CANONICAL_CPG_OUTPUTS,
     ENGINE_CPG_OUTPUTS,
     FULL_PIPELINE_OUTPUTS,

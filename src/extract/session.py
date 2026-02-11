@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 
 from datafusion import SessionContext
 
-from engine.runtime_profile import RuntimeProfileSpec
-from engine.session import EngineSession
-from engine.session_factory import build_engine_session
+from planning_engine.runtime_profile import RuntimeProfileSpec
+from planning_engine.session import EngineSession
+from planning_engine.session_factory import build_engine_session
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import SessionRuntime

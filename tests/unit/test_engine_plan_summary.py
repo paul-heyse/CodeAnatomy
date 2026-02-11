@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from engine.spec_builder import (
+from obs.engine_artifacts import record_engine_execution_summary, record_engine_plan_summary
+from planning_engine.spec_builder import (
     FilterTransform,
     InputRelation,
     JoinGraph,
@@ -15,7 +16,6 @@ from engine.spec_builder import (
     SemanticExecutionSpec,
     ViewDefinition,
 )
-from obs.engine_artifacts import record_engine_execution_summary, record_engine_plan_summary
 
 
 def _spec_fixture() -> SemanticExecutionSpec:

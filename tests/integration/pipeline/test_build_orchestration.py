@@ -15,7 +15,7 @@ import pytest
 
 
 def _stub_build_result(repo_root: Path) -> object:
-    from engine.build_orchestrator import BuildResult
+    from planning_engine.build_orchestrator import BuildResult
 
     output_dir = repo_root / "build"
 
@@ -317,7 +317,9 @@ def test_build_phase_start_and_end_events(
         _ = (args, kwargs)
         return _stub_build_result(minimal_python_repo)
 
-    monkeypatch.setattr("engine.build_orchestrator.orchestrate_build", mock_orchestrate_build)
+    monkeypatch.setattr(
+        "planning_engine.build_orchestrator.orchestrate_build", mock_orchestrate_build
+    )
 
     request = GraphProductBuildRequest(repo_root=str(minimal_python_repo))
     build_graph_product(request)

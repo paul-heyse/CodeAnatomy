@@ -9,7 +9,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, WriteRequest
-from engine.delta_tools import DeltaQueryRequest, delta_query
+from planning_engine.delta_tools import DeltaQueryRequest, delta_query
 from tests.harness.plan_bundle import build_plan_manifest_for_sql, persist_plan_artifacts
 from tests.harness.profiles import conformance_profile_with_sink
 from tests.test_helpers.arrow_seed import register_arrow_table

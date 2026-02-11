@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-from engine.runtime import build_engine_runtime
+from planning_engine.runtime import build_engine_runtime
 from relspec.pipeline_policy import DiagnosticsPolicy
 
 

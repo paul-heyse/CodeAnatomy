@@ -43,7 +43,6 @@ from datafusion_engine.schema.policy import SchemaPolicy
 from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.views.graph import _validate_schema_contract
-from engine.materialize_pipeline import write_extract_outputs
 from extract.coordination.evidence_plan import EvidencePlan
 from extract.coordination.schema_ops import (
     ExtractNormalizeOptions,
@@ -57,6 +56,7 @@ from extract.coordination.spec_helpers import (
     rule_execution_options,
 )
 from extract.session import ExtractSession
+from planning_engine.materialize_pipeline import write_extract_outputs
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
@@ -603,7 +603,7 @@ def _write_and_record_extract_output(
         runtime_profile=runtime_profile,
         dataset_resolver=resolved_dataset_resolver,
     )
-    from engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
+    from planning_engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
 
     recorder = EngineEventRecorder(runtime_profile)
     try:

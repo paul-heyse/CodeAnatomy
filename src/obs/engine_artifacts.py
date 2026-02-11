@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
-    from engine.spec_builder import SemanticExecutionSpec
+    from planning_engine.spec_builder import SemanticExecutionSpec
 
 
 class EnginePlanSummaryArtifact(StructBaseStrict, frozen=True):

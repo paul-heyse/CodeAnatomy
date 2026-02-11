@@ -7,8 +7,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from engine.build_orchestrator import BuildResult
-from engine.output_contracts import (
+from graph.product_build import GraphProductBuildRequest, _parse_build_result
+from obs.engine_artifacts import record_engine_execution_summary, record_engine_plan_summary
+from planning_engine.build_orchestrator import BuildResult
+from planning_engine.output_contracts import (
     CANONICAL_CPG_OUTPUTS,
     ENGINE_CPG_OUTPUTS,
     FULL_PIPELINE_OUTPUTS,
@@ -20,7 +22,7 @@ from engine.output_contracts import (
     canonical_cpg_output_name,
     legacy_cpg_output_name,
 )
-from engine.spec_builder import (
+from planning_engine.spec_builder import (
     FilterTransform,
     InputRelation,
     JoinGraph,
@@ -31,8 +33,6 @@ from engine.spec_builder import (
     SemanticExecutionSpec,
     ViewDefinition,
 )
-from graph.product_build import GraphProductBuildRequest, _parse_build_result
-from obs.engine_artifacts import record_engine_execution_summary, record_engine_plan_summary
 
 
 class TestOutputContractConstants:

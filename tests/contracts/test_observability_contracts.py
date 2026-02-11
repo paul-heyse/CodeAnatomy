@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from engine.spec_builder import (
+from obs.diagnostics_report import build_diagnostics_report
+from planning_engine.spec_builder import (
     FilterTransform,
     InputRelation,
     JoinGraph,
@@ -15,7 +16,6 @@ from engine.spec_builder import (
     SemanticExecutionSpec,
     ViewDefinition,
 )
-from obs.diagnostics_report import build_diagnostics_report
 
 
 def _spec_fixture() -> SemanticExecutionSpec:
@@ -89,7 +89,7 @@ def _run_result_fixture() -> dict[str, object]:
 def test_record_observability_emits_required_engine_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from engine import build_orchestrator as orchestrator_mod
+    from planning_engine import build_orchestrator as orchestrator_mod
 
     events: list[tuple[str, dict[str, object], str]] = []
 

@@ -34,37 +34,97 @@ Critical dependency order:
 
 ---
 
-## 1A) Implementation Status Checkpoint (2026-02-11)
+## 1A) Implementation Status Checkpoint (2026-02-11, post-cutover audit)
 
-This checkpoint reflects the repository state after the current in-flight decommission branch updates.
+This checkpoint reflects the current branch state after the latest Rust-first cutover work.
+
+Important: the detailed scope sections below were authored before the hard cutover and still
+reference `src/engine/*` paths. The implementation has already moved to
+`src/planning_engine/*`, `src/extraction/*`, and `src/graph/build_pipeline.py`.
+Treat this checkpoint as the authoritative current-state tracker.
 
 ### Scope status matrix
 
 | Scope | Current status | Evidence in repo | Remaining work |
 |---|---|---|---|
-| A: Rust/Python boundary hardening | Partially complete | `src/engine/facade.py` and `src/engine/rust_planning_contract.py` are deleted; `rust/codeanatomy_engine_py/src/result.rs` exposes `task_schedule()`; `src/planning_engine/build_orchestrator.py` now invokes Rust compiler/materializer directly. | Replace Python-side heuristic error classification in `src/planning_engine/build_orchestrator.py` with Rust-originated typed stage/code errors; remove Python `result.to_json()` decoding at callsites by exposing a typed dict payload helper from Rust bindings. |
-| B: Spec compilation authority to Rust | Partially complete | `src/cli/commands/plan.py` now consumes `compile_metadata_json(...)`; Rust binding exists in `rust/codeanatomy_engine_py/src/compiler.rs`. | Python `src/planning_engine/spec_builder.py` is still authoritative and widely imported; transform/spec derivation is not yet Rust-owned; CLI/build/graph still depend on Python spec construction. |
-| C: Runtime profile + session authority move | Partially complete | Legacy `src/engine/runtime*.py` and session modules are deleted from old package namespace; runtime/session consumers were moved to `planning_engine.*` imports. | Runtime/session authority is still Python in `src/planning_engine/runtime_profile.py`, `src/planning_engine/runtime.py`, `src/planning_engine/session.py`, and `src/planning_engine/session_factory.py`; extraction callsites still construct sessions through these Python wrappers. |
-| D: Materialization + Delta maintenance authority move | Partially complete | Old `src/engine/materialize_pipeline.py`, `src/engine/delta_tools.py`, `src/engine/semantic_boundary.py`, and `src/engine/plan_product.py` are deleted from the old package namespace. | Their functionality remains Python-owned in `src/planning_engine/materialize_pipeline.py`, `src/planning_engine/delta_tools.py`, `src/planning_engine/semantic_boundary.py`, and `src/planning_engine/plan_product.py`; extraction/materialization callsites still use these modules. |
-| E: Top-level build orchestration move | Partially complete | `src/cli/commands/build.py` and `src/graph/product_build.py` moved off `engine.*` imports and now call `planning_engine.build_orchestrator.orchestrate_build(...)`. | No Rust `run_build` entrypoint exists yet in `rust/codeanatomy_engine_py/src/lib.rs`; orchestration remains Python-owned in `src/planning_engine/build_orchestrator.py`, including auxiliary output writing. |
-| F: Python surface cleanup + export removal | Largely complete (hard-cut variant) | Entire tracked `src/engine` Python surface was deleted; migration guard updated in `scripts/check_no_legacy_planning_imports.sh`; CI already invokes guard (`.github/workflows/rust_quality.yml`). | If compatibility stubs are required, reintroduce a minimal compatibility policy explicitly; otherwise complete documentation updates and ensure no lingering references in docs/goldens. |
-| G: Tests/goldens/docs realignment | Partially complete | `tests/unit/engine/test_facade.py` and `tests/unit/test_engine_error_taxonomy.py` deleted; msgspec goldens updated to `planning_engine.config.EngineConfigSpec`; Rust boundary tests for `compile_metadata_json` and `RunResult.task_schedule()` exist in `tests/integration/test_rust_engine_e2e.py`; plan-command test doubles were updated for `compile_metadata_json`. | Broad test realignment is not complete yet; Python-internal `planning_engine` tests remain; full `pytest -q` is not yet passing on this branch and still requires failure-cluster remediation and golden alignment. |
+| A: Rust/Python boundary hardening | Mostly complete | `rust/codeanatomy_engine_py/src/errors.rs` defines typed `EngineExecutionError`; `rust/codeanatomy_engine_py/src/result.rs` exposes `to_payload()`/`to_dict()`/`task_schedule()`; Python string-matching classifier path was removed with `src/planning_engine/build_orchestrator.py` deletion and `src/graph/build_pipeline.py` adoption. | Preserve typed boundary errors end-to-end (avoid re-wrapping into generic `RuntimeError` in `src/graph/build_pipeline.py`); migrate remaining tests to assert typed `stage`/`code` semantics. |
+| B: Spec compilation authority to Rust | Mostly complete | `src/planning_engine/spec_builder.py` is deleted; `rust/codeanatomy_engine_py/src/compiler.rs` exposes `build_spec_json(...)`; `src/cli/commands/plan.py` and `src/graph/build_pipeline.py` now build spec payloads through Rust bindings. | Harden compatibility behavior when Rust extension is unavailable in test/dev environments; complete parity validation for deterministic spec hash/signature across plan/build paths. |
+| C: Runtime profile + session authority move | Mostly complete | `src/planning_engine/runtime_profile.py`, `src/planning_engine/runtime.py`, `src/planning_engine/session.py`, `src/planning_engine/session_factory.py` are deleted; legacy `src/extract/runtime_profile.py`, `src/extract/engine_runtime.py`, `src/extract/engine_session.py`, and `src/extract/engine_session_factory.py` are now deleted; active adapters live in `src/extraction/runtime_profile.py`, `src/extraction/engine_runtime.py`, `src/extraction/engine_session.py`, `src/extraction/engine_session_factory.py`; Rust `SessionFactory` exposes `profile_json()`, `profile_hash()`, and `settings_hash()`. | Runtime/session adapter logic is still Python-owned in `src/extraction/*`; further Rust-side profile/config authority can be folded into PyO3 session APIs over time. |
+| D: Materialization + Delta maintenance authority move | Mostly complete | `src/planning_engine/materialize_pipeline.py`, `src/planning_engine/delta_tools.py`, `src/planning_engine/semantic_boundary.py`, `src/planning_engine/plan_product.py`, `src/planning_engine/diagnostics.py` are deleted; legacy `src/extract/materialize_pipeline.py`, `src/extract/delta_tools.py`, `src/extract/semantic_boundary.py`, `src/extract/plan_product.py`, and `src/extract/diagnostics.py` are now deleted; active adapters live in `src/extraction/materialize_pipeline.py`, `src/extraction/delta_tools.py`, `src/extraction/semantic_boundary.py`, `src/extraction/plan_product.py`, `src/extraction/diagnostics.py`; Rust maintenance path exists in `rust/codeanatomy_engine/src/executor/maintenance.rs`. | Python still owns extract materialization and Delta helper execution paths; adding PyO3 maintenance/query entrypoints is the remaining step for full Rust runtime authority. |
+| E: Top-level build orchestration move | Partially complete | `rust/codeanatomy_engine_py/src/lib.rs` now exports `run_build(request_json)`; `src/planning_engine/build_orchestrator.py` is deleted; `src/graph/build_pipeline.py` invokes `codeanatomy_engine.run_build(...)`; `src/cli/commands/build.py` and `src/graph/product_build.py` route through `graph.build_pipeline.orchestrate_build`. | `run_build` currently accepts prebuilt `spec_json` and does not absorb extraction + auxiliary artifact orchestration; Python still owns extraction, auxiliary writers, and some observability wiring; extension-import fallback behavior needs stabilization for non-Rust test paths. |
+| F: Python surface cleanup + export removal | Mostly complete | No `src/engine/` package remains; `src/planning_engine/` is reduced to `config.py`, `output_contracts.py`, `spec_contracts.py`; `scripts/check_no_legacy_planning_imports.sh` now blocks deleted `planning_engine` authority imports and direct `engine` imports. | Decide final disposition of `src/planning_engine/config.py` (keep vs fold into CLI-owned config models) and complete documentation cleanup that still describes pre-cutover module locations. |
+| G: Tests/goldens/docs realignment | Partially complete | Key tests were rewritten to new module paths (for example `tests/integration/test_rust_engine_e2e.py`, `tests/integration/pipeline/test_build_orchestration.py`, `tests/contracts/test_output_contracts.py`); obsolete `planning_engine` authority tests were removed. | Full suite is not green yet; remaining work includes functional regression fixes plus golden updates (CLI help snapshots, CQ query goldens, extraction/integration parity tests), then final full quality gate rerun. |
 
 ### Completed scope elements (branch-level)
 
-1. Hard decommission of tracked `src/engine` modules.
-2. Replacement namespace `src/planning_engine` created and wired into `src/` + `tests/`.
-3. Legacy import guard tightened to include direct `engine` import patterns.
-4. Plan command migrated to Rust compile metadata contract (`compile_metadata_json`).
-5. Contract goldens updated to new module path for engine config contract class.
+1. Hard decommission of the legacy Python execution-authority surface (`src/engine/*` no longer exists).
+2. Decommission of the transitional `src/planning_engine` authority modules (`build_orchestrator`, `spec_builder`, runtime/session/materialization/delta/diagnostics stack).
+3. Rust binding additions for typed errors, spec construction, run-result typed payload access, session hashes, and `run_build`.
+4. Primary CLI/graph orchestration paths rewired to `src/graph/build_pipeline.py` and Rust `run_build`.
+5. Legacy-import guard expanded to prevent reintroduction of deleted authority modules.
 
 ### Open decommission-critical work
 
-1. Rust-first replacement of Python `spec_builder` authority (`src/planning_engine/spec_builder.py`).
-2. Rust-first replacement of Python runtime/session wrappers (`src/planning_engine/runtime_profile.py`, `src/planning_engine/session_factory.py`).
-3. Rust-first replacement of Python materialization and Delta helpers (`src/planning_engine/materialize_pipeline.py`, `src/planning_engine/delta_tools.py`).
-4. Rust `run_build` orchestration boundary plus CLI/graph cutover to that API.
-5. Test/golden/doc closure to green full quality gate.
+1. Finish true Rust authority cutover for runtime/session and materialization/delta logic that still lives in `src/extraction/*`.
+2. Make typed Rust boundary exceptions the preserved public contract (remove generic re-wrap points in Python orchestration).
+3. Expand `run_build` contract from compile/execute-only to full orchestration boundary if desired end-state requires Rust-owned extraction/materialization flow.
+4. Complete compatibility behavior for environments where `codeanatomy_engine` extension is unavailable.
+5. Resolve remaining test/golden failures and rerun full gate (`ruff`, `pyrefly`, `pyright`, `pytest`).
+
+### Contract Freeze (Wave 0 hard-cut baseline)
+
+#### `run_build` v2 request contract
+
+```json
+{
+  "engine_profile": "small|medium|large",
+  "spec_json": "{...serialized SemanticExecutionSpec...}",
+  "runtime": {
+    "compliance_capture": false,
+    "rule_tracing": false,
+    "plan_preview": false,
+    "tracing_preset": "ProductionLean"
+  },
+  "orchestration": {
+    "include_manifest": true,
+    "include_run_bundle": false,
+    "emit_auxiliary_outputs": true
+  }
+}
+```
+
+#### `run_build` v2 response contract
+
+```json
+{
+  "run_result": {
+    "spec_hash": "...",
+    "envelope_hash": "...",
+    "outputs": [],
+    "warnings": []
+  },
+  "outputs": [],
+  "warnings": [],
+  "diagnostics": {
+    "events": [],
+    "artifacts": []
+  },
+  "artifacts": {
+    "manifest_path": null,
+    "run_bundle_dir": null
+  }
+}
+```
+
+#### Typed error taxonomy (canonical at Python boundary)
+
+`EngineExecutionError(stage, code, message, details)` is the only runtime boundary exception.
+
+Stage groups and codes:
+1. `validation`: `INVALID_RUN_BUILD_REQUEST`, `RUN_BUILD_REQUEST_MISSING_SPEC_JSON`, `INVALID_SPEC_JSON`, `SPEC_VERSION_UNSUPPORTED`, `SPEC_MISSING_VIEW_DEFINITIONS`, `SPEC_MISSING_OUTPUT_TARGETS`, `INVALID_SEMANTIC_IR_JSON`, `INVALID_BUILD_SPEC_REQUEST`.
+2. `compilation`: `COMPILE_METADATA_CAPTURE_FAILED`, `COMPILE_METADATA_SERIALIZE_FAILED`, `COMPLIANCE_COMPILE_FAILED`.
+3. `runtime`: `TOKIO_RUNTIME_INIT_FAILED`, `TRACING_INIT_FAILED`, `PREPARE_EXECUTION_CONTEXT_FAILED`, `RUN_BUILD_RESULT_PARSE_FAILED`.
+4. `materialization`: materializer execution and write failures that surface via `engine_execution_error(...)` in PyO3 materializer bindings.
 
 ---
 

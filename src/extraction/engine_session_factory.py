@@ -11,15 +11,15 @@ from datafusion_engine.dataset.registration import dataset_input_plugin, input_p
 from datafusion_engine.dataset.registry import DatasetCatalog, registry_snapshot
 from datafusion_engine.materialize_policy import MaterializationPolicy
 from datafusion_engine.session.runtime import feature_state_snapshot
-from obs.diagnostics import DiagnosticsCollector
-from obs.otel import OtelBootstrapOptions, configure_otel
-from planning_engine.runtime import build_engine_runtime
-from planning_engine.runtime_profile import (
+from extraction.engine_runtime import build_engine_runtime
+from extraction.engine_session import EngineSession
+from extraction.runtime_profile import (
     RuntimeProfileSpec,
     engine_runtime_artifact,
     runtime_profile_snapshot,
 )
-from planning_engine.session import EngineSession
+from obs.diagnostics import DiagnosticsCollector
+from obs.otel import OtelBootstrapOptions, configure_otel
 from relspec.pipeline_policy import DiagnosticsPolicy
 
 

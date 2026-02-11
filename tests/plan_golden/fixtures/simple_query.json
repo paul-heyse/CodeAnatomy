@@ -1,12 +1,12 @@
 {
   "determinism_audit": {
-    "df_settings_hash": "bdd5a76f410eeac66db97cc10dfb8610ba96a75f4afcbc5d1259cc0d082f1762",
+    "df_settings_hash": "0644dbfd4e4f866310cfd549864d2e311962a49117574b3638020f03b3dbc9f5",
     "function_registry_hash": "1783517f0bab14432ad73da4c3a5256bcf92dd2aa0559e6fe8eddf1412f15164",
-    "information_schema_hash": "660f81d56de55aa3e5987a3193dfd7c2f6b16d84a3bcbe95eec3181b34650238",
-    "plan_fingerprint": "db48e21a1a92018719e60918568f34a78c6ef2b85e1759654d869da24442ed8c",
+    "information_schema_hash": "5f5c7a9e8de80f346541050663b3e8f604f8be51118288abd601b8d155b804fc",
+    "plan_fingerprint": "837f24aea0be62748f12ddfebfd0933d2d88e6fd5d7d0219b9ab5064bc8feeae",
     "planning_env_hash": "78916891870ff7f11b1697ea495dad31f7b0ac603d972ad6046d24b17071e8a3",
     "rulepack_hash": "6a4a9f47d0de119c5a184c627e41a58d81f5b84c1024ec64ee3218606d82225e",
-    "schema_contract_hash": "26156c86eeef7484b6b895a287b2e5b5f8aeb11cdce7e0e8f3a6d42f5e9ce927",
+    "schema_contract_hash": "afe59f80dd517576bd8847fa0ea8042481b31becfeb6f21cd90bc87d885a7312",
     "udf_snapshot_hash": "718930fbb46c1822e2613966115770163d2b9529ab555a0d8f275c1aad05df60"
   },
   "df_settings": {
@@ -71,7 +71,7 @@
     "datafusion.execution.sort_spill_reservation_bytes": "10485760",
     "datafusion.execution.spill_compression": "uncompressed",
     "datafusion.execution.split_file_groups_by_statistics": "false",
-    "datafusion.execution.target_partitions": "32",
+    "datafusion.execution.target_partitions": "10",
     "datafusion.execution.time_zone": "UTC",
     "datafusion.execution.use_row_number_estimates_to_optimize_partitioning": "false",
     "datafusion.explain.analyze_level": "dev",
@@ -433,7 +433,7 @@
     }
   ],
   "explain_verbose_rows": [],
-  "information_schema_hash": "97e1a7b9dd8260a710b6057d6196d3572c392646e3f6c1eb71d41ec4452ea21c",
+  "information_schema_hash": "7befbcd8e2482733244b3262e26382dfb345d7f89ed8dbcff8d16c8e36e7d444",
   "information_schema_snapshot": {
     "columns": [
       {
@@ -533,7 +533,7 @@
       "datafusion.execution.sort_spill_reservation_bytes": "10485760",
       "datafusion.execution.spill_compression": "uncompressed",
       "datafusion.execution.split_file_groups_by_statistics": "false",
-      "datafusion.execution.target_partitions": "32",
+      "datafusion.execution.target_partitions": "10",
       "datafusion.execution.time_zone": "UTC",
       "datafusion.execution.use_row_number_estimates_to_optimize_partitioning": "false",
       "datafusion.explain.analyze_level": "dev",
@@ -42527,7 +42527,7 @@
       {
         "description": "Number of partitions for query execution. Increasing partitions can increase concurrency. Defaults to the number of CPU cores on the system",
         "name": "datafusion.execution.target_partitions",
-        "value": "32"
+        "value": "10"
       },
       {
         "description": "Number of times that the optimizer will attempt to optimize the plan",

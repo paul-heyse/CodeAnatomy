@@ -2,6 +2,16 @@ Usage: codeanatomy build REPO-ROOT [ARGS]
 
 Build the Code Property Graph for a repository.
 
+Returns:
+-------
+int
+    Exit status code.
+
+Raises:
+------
+ValueError
+    If engine execution fails.
+
 ╭─ Parameters ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ *  REPO-ROOT --repo-root  Root directory of the repository to analyze. [required]                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
@@ -26,31 +36,6 @@ Build the Code Property Graph for a repository.
 │   --no-include-manifest                                                                                              │
 │ INCLUDE-RUN-BUNDLE --include-run-bundle  Include run bundle directory. [default: True]                               │
 │   --no-include-run-bundle                                                                                            │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ Execution ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Control pipeline execution strategy and parallelism.                                                                 │
-│                                                                                                                      │
-│ EXECUTION-MODE --execution-mode          Pipeline execution strategy: deterministic_serial, plan_parallel,           │
-│                                          plan_parallel_remote. [choices: deterministic-serial, plan-parallel,        │
-│                                          plan-parallel-remote] [env var: CODEANATOMY_EXECUTION_MODE] [default:       │
-│                                          plan-parallel]                                                              │
-│ DETERMINISM-TIER --determinism-tier      Determinism level: canonical/tier2, stable_set/tier1/stable,                │
-│                                          best_effort/tier0/fast. [choices: tier2, canonical, tier1, stable,          │
-│                                          stable_set, tier0, fast, best_effort] [env var:                             │
-│                                          CODEANATOMY_DETERMINISM_TIER] [default: None]                               │
-│ RUNTIME-PROFILE --runtime-profile        Named runtime profile from configuration. [env var:                         │
-│                                          CODEANATOMY_RUNTIME_PROFILE] [default: None]                                │
-│ WRITER-STRATEGY --writer-strategy        Writer strategy for materialization. [choices: arrow, datafusion] [default: │
-│                                          None]                                                                       │
-│ EXECUTOR-KIND --executor-kind            Primary executor backend for parallel execution. [choices: threadpool,      │
-│                                          multiprocessing, dask, ray] [default: None]                                 │
-│ EXECUTOR-MAX-TASKS --executor-max-tasks  Maximum concurrent tasks for primary executor. [default: None]              │
-│ EXECUTOR-REMOTE-KIND                     Remote executor backend for scan/high-cost tasks. [choices: threadpool,     │
-│   --executor-remote-kind                 multiprocessing, dask, ray] [default: None]                                 │
-│ EXECUTOR-REMOTE-MAX-TASKS                Maximum concurrent tasks for remote executor. [default: None]               │
-│   --executor-remote-max-tasks                                                                                        │
-│ EXECUTOR-COST-THRESHOLD                  Cost threshold for routing tasks to remote executor. [default: None]        │
-│   --executor-cost-threshold                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ SCIP Configuration ─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Configure SCIP semantic index extraction.                                                                            │
@@ -112,44 +97,22 @@ Build the Code Property Graph for a repository.
 │ EXTERNAL-INTERFACE-DEPTH                 Depth for external interface extraction. [choices: metadata, full]          │
 │   --external-interface-depth             [default: metadata]                                                         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ Graph Adapter ──────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Configure Hamilton graph adapter backend.                                                                            │
-│                                                                                                                      │
-│ GRAPH-ADAPTER-KIND --graph-adapter-kind  Hamilton graph adapter backend (non-dynamic execution). [choices:           │
-│                                          threadpool, dask, ray] [default: None]                                      │
-│ GRAPH-ADAPTER-OPTION                     Graph adapter option key=value (repeatable). [default: ()]                  │
-│   --graph-adapter-option                                                                                             │
-│   --empty-graph-adapter-option                                                                                       │
-│ GRAPH-ADAPTER-OPTION-JSON                Graph adapter option key=json (repeatable; JSON values). [default: ()]      │
-│   --graph-adapter-option-json                                                                                        │
-│   --empty-graph-adapter-option-json                                                                                  │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Advanced ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Advanced configuration options (most set via config file).                                                           │
 │                                                                                                                      │
-│ ENABLE-TREE-SITTER --enable-tree-sitter    Enable tree-sitter extraction for syntax nodes. [default: True]           │
+│ DETERMINISM-TIER --determinism-tier      Determinism level: canonical/tier2, stable_set/tier1/stable,                │
+│                                          best_effort/tier0/fast. [choices: tier2, canonical, tier1, stable,          │
+│                                          stable_set, tier0, fast, best_effort] [env var:                             │
+│                                          CODEANATOMY_DETERMINISM_TIER] [default: None]                               │
+│ RUNTIME-PROFILE --runtime-profile        Named runtime profile from configuration. [env var:                         │
+│                                          CODEANATOMY_RUNTIME_PROFILE] [default: None]                                │
+│ ENGINE-PROFILE --engine-profile          Engine execution profile: small, medium, large. [choices: small, medium,    │
+│                                          large] [env var: CODEANATOMY_ENGINE_PROFILE] [default: medium]              │
+│ RULEPACK-PROFILE --rulepack-profile      Rulepack profile: Default, LowLatency, Replay, Strict. [choices: Default,   │
+│                                          LowLatency, Replay, Strict] [env var: CODEANATOMY_RULEPACK_PROFILE]         │
+│                                          [default: Default]                                                          │
+│ ENABLE-TREE-SITTER --enable-tree-sitter  Enable tree-sitter extraction for syntax nodes. [default: True]             │
 │   --no-enable-tree-sitter                                                                                            │
-│ PLAN-ALLOW-PARTIAL --plan-allow-partial    Allow partial execution plans (advanced). [default: None]                 │
-│   --no-plan-allow-partial                                                                                            │
-│ PLAN-REQUESTED-TASK --plan-requested-task  Explicit task names to request in plan compilation (repeatable).          │
-│   --empty-plan-requested-task              [default: ()]                                                             │
-│ PLAN-IMPACTED-TASK --plan-impacted-task    Explicit task names to mark as impacted in plan compilation (repeatable). │
-│   --empty-plan-impacted-task               [default: ()]                                                             │
-│ ENABLE-METRIC-SCHEDULING                   Enable metric-based scheduling in plan compilation (advanced). [default:  │
-│   --enable-metric-scheduling               None]                                                                     │
-│   --no-enable-metric-scheduling                                                                                      │
-│ ENABLE-PLAN-DIAGNOSTICS                    Enable plan diagnostics emission (advanced). [default: None]              │
-│   --enable-plan-diagnostics                                                                                          │
-│   --no-enable-plan-diagnostics                                                                                       │
-│ ENABLE-PLAN-TASK-SUBMISSION-HOOK           Enable plan task submission hook (advanced). [default: None]              │
-│   --enable-plan-task-submission-hook                                                                                 │
-│   --no-enable-plan-task-submission-hook                                                                              │
-│ ENABLE-PLAN-TASK-GROUPING-HOOK             Enable plan task grouping hook (advanced). [default: None]                │
-│   --enable-plan-task-grouping-hook                                                                                   │
-│   --no-enable-plan-task-grouping-hook                                                                                │
-│ ENFORCE-PLAN-TASK-SUBMISSION               Enforce plan task submission policy (advanced). [default: None]           │
-│   --enforce-plan-task-submission                                                                                     │
-│   --no-enforce-plan-task-submission                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Observability ──────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Configure OpenTelemetry tracing, metrics, and logging.                                                               │
@@ -182,21 +145,17 @@ Build the Code Property Graph for a repository.
 │                                            None]                                                                     │
 │ --otel-test-mode --no-otel-test-mode       Use in-memory exporters for OpenTelemetry (for testing). [env var:        │
 │                                            CODEANATOMY_OTEL_TEST_MODE] [default: None]                               │
-│ ENABLE-HAMILTON-TRACKER                    Enable Hamilton UI tracker integration. [default: None]                   │
-│   --enable-hamilton-tracker                                                                                          │
-│   --no-enable-hamilton-tracker                                                                                       │
-│ HAMILTON-PROJECT-ID --hamilton-project-id  Hamilton tracker project id. [default: None]                              │
-│ HAMILTON-USERNAME --hamilton-username      Hamilton tracker username. [default: None]                                │
-│ HAMILTON-DAG-NAME --hamilton-dag-name      Hamilton DAG name override. [default: None]                               │
-│ HAMILTON-API-URL --hamilton-api-url        Hamilton tracker API URL override. [default: None]                        │
-│ HAMILTON-UI-URL --hamilton-ui-url          Hamilton tracker UI URL override. [default: None]                         │
-│ HAMILTON-CAPTURE-DATA-STATISTICS           Enable Hamilton data statistics capture. [default: None]                  │
-│   --hamilton-capture-data-statistics                                                                                 │
-│   --no-hamilton-capture-data-statistics                                                                              │
-│ HAMILTON-MAX-LIST-LENGTH-CAPTURE           Maximum list length to capture in Hamilton telemetry. [default: None]     │
-│   --hamilton-max-list-length-capture                                                                                 │
-│ HAMILTON-MAX-DICT-LENGTH-CAPTURE           Maximum dict length to capture in Hamilton telemetry. [default: None]     │
-│   --hamilton-max-dict-length-capture                                                                                 │
+│ ENABLE-COMPLIANCE --enable-compliance      Enable compliance capture mode. [default: False]                          │
+│   --no-enable-compliance                                                                                             │
+│ ENABLE-RULE-TRACING --enable-rule-tracing  Enable rule tracing for diagnostics. [default: False]                     │
+│   --no-enable-rule-tracing                                                                                           │
+│ ENABLE-PLAN-PREVIEW --enable-plan-preview  Enable plan preview generation. [default: False]                          │
+│   --no-enable-plan-preview                                                                                           │
+│ TRACING-PRESET --tracing-preset            Tracing preset: Maximal, MaximalNoData, ProductionLean. [choices:         │
+│                                            Maximal, MaximalNoData, ProductionLean] [default: None]                   │
+│ INSTRUMENT-OBJECT-STORE                    Instrument object store operations. [default: False]                      │
+│   --instrument-object-store                                                                                          │
+│   --no-instrument-object-store                                                                                       │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 

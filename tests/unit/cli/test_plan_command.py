@@ -6,16 +6,15 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import msgspec
 import pytest
 
 from cli.commands.plan import PlanOptions, plan_command
-from planning_engine.spec_builder import (
-    FilterTransform,
+from planning_engine.spec_contracts import (
     JoinGraph,
     OutputTarget,
     RulepackProfile,
     RuntimeConfig,
-    SchemaContract,
     SemanticExecutionSpec,
     ViewDefinition,
 )
@@ -35,8 +34,8 @@ def _spec_fixture(
                 name="cpg_nodes_view",
                 view_kind="filter",
                 view_dependencies=(),
-                transform=FilterTransform(source="repo_files_v1", predicate="TRUE"),
-                output_schema=SchemaContract(),
+                transform={"kind": "Filter", "source": "repo_files_v1", "predicate": "TRUE"},
+                output_schema={"columns": {}},
             ),
         ),
         join_graph=JoinGraph(edges=(), constraints=()),
@@ -62,38 +61,16 @@ def _configure_plan_test_doubles(
     *,
     fail_session: bool = False,
 ) -> type:
-    def _resolve_runtime_profile_stub(_profile: str) -> SimpleNamespace:
-        return SimpleNamespace(name="resolved_profile", runtime_profile_hash="hash_123")
-
-    monkeypatch.setattr(
-        "planning_engine.runtime_profile.resolve_runtime_profile",
-        _resolve_runtime_profile_stub,
-    )
-
     def _build_semantic_ir_stub() -> object:
-        return object()
+        join_groups: list[dict[str, object]] = []
+        return {
+            "views": [
+                {"name": "cpg_nodes_view", "kind": "filter", "inputs": ["repo_files_v1"]},
+            ],
+            "join_groups": join_groups,
+        }
 
     monkeypatch.setattr("semantics.ir_pipeline.build_semantic_ir", _build_semantic_ir_stub)
-
-    def _build_execution_spec_stub(
-        *,
-        ir: object,
-        input_locations: dict[str, str],
-        output_targets: list[str],
-        rulepack_profile: RulepackProfile,
-        output_locations: dict[str, str],
-        runtime_config: RuntimeConfig | None = None,
-    ) -> SemanticExecutionSpec:
-        _ = (ir, input_locations, runtime_config)
-        return _spec_fixture(
-            output_targets=tuple(output_targets),
-            output_locations=output_locations,
-            rulepack_profile=rulepack_profile,
-        )
-
-    monkeypatch.setattr(
-        "planning_engine.spec_builder.build_execution_spec", _build_execution_spec_stub
-    )
 
     class _FakeSessionFactory:
         last_profile: str | None = None
@@ -112,6 +89,15 @@ def _configure_plan_test_doubles(
             return "abc123"
 
     class _FakeSemanticPlanCompiler:
+        def build_spec_json(self, _semantic_ir_json: str, _request_json: str) -> str:
+            targets = ("cpg_nodes", "cpg_edges", "cpg_symbols", "cpg_spans", "cpg_diagnostics")
+            spec = _spec_fixture(
+                output_targets=targets,
+                output_locations={target: f"/tmp/{target}" for target in targets},
+                rulepack_profile="Default",
+            )
+            return msgspec.json.encode(spec).decode()
+
         def compile(self, spec_json: str) -> object:
             _ = spec_json
             return _FakeCompiledPlan()

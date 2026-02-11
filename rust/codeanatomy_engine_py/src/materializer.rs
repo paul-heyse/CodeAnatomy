@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::exceptions::PyRuntimeError;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -26,6 +26,7 @@ use codeanatomy_engine::tuner::adaptive::{AdaptiveTuner, ExecutionMetrics, Tuner
 use codeanatomy_engine::executor::tracing as engine_tracing;
 
 use super::compiler::CompiledPlan;
+use super::errors::engine_execution_error;
 use super::result::PyRunResult;
 use super::session::SessionFactory as PySessionFactory;
 
@@ -76,8 +77,14 @@ fn resolve_tuner_mode(default: RuntimeTunerMode) -> RuntimeTunerMode {
 impl CpgMaterializer {
     #[new]
     fn new() -> PyResult<Self> {
-        let runtime = Runtime::new()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {e}")))?;
+        let runtime = Runtime::new().map_err(|e| {
+            engine_execution_error(
+                "runtime",
+                "TOKIO_RUNTIME_INIT_FAILED",
+                format!("Failed to create Tokio runtime: {e}"),
+                None,
+            )
+        })?;
         Ok(Self {
             runtime: Arc::new(runtime),
         })
@@ -111,7 +118,14 @@ impl CpgMaterializer {
             // Parse spec from compiled plan
             let spec = compiled_plan
                 .parse_spec()
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to parse spec: {e}")))?;
+                .map_err(|e| {
+                    engine_execution_error(
+                        "validation",
+                        "PARSE_COMPILED_SPEC_FAILED",
+                        format!("Failed to parse spec: {e}"),
+                        None,
+                    )
+                })?;
 
             // Get environment profile for rule compilation
             let env_profile = session_factory.get_profile();
@@ -125,7 +139,14 @@ impl CpgMaterializer {
             let tracing_config = spec.runtime.effective_tracing();
             #[cfg(feature = "tracing")]
             engine_tracing::init_otel_tracing(&tracing_config)
-                .map_err(|e| PyRuntimeError::new_err(format!("Failed to initialize tracing: {e}")))?;
+                .map_err(|e| {
+                    engine_execution_error(
+                        "runtime",
+                        "TRACING_INIT_FAILED",
+                        format!("Failed to initialize tracing: {e}"),
+                        None,
+                    )
+                })?;
 
             #[cfg(feature = "tracing")]
             let execution_span = {
@@ -154,7 +175,14 @@ impl CpgMaterializer {
                 Some(&tracing_config),
             )
             .await
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to prepare execution context: {e}")))?;
+            .map_err(|e| {
+                engine_execution_error(
+                    "runtime",
+                    "PREPARE_EXECUTION_CONTEXT_FAILED",
+                    format!("Failed to prepare execution context: {e}"),
+                    None,
+                )
+            })?;
 
             #[cfg(feature = "tracing")]
             {
@@ -174,9 +202,12 @@ impl CpgMaterializer {
                     &locations,
                 )
                 .map_err(|e| {
-                    PyRuntimeError::new_err(format!(
-                        "Failed to register instrumented object stores: {e}"
-                    ))
+                    engine_execution_error(
+                        "runtime",
+                        "REGISTER_INSTRUMENTED_OBJECT_STORES_FAILED",
+                        format!("Failed to register instrumented object stores: {e}"),
+                        None,
+                    )
                 })?;
             }
 
@@ -203,7 +234,14 @@ impl CpgMaterializer {
                 let compliance_plans = compliance_compiler
                     .compile()
                     .await
-                    .map_err(|e| PyRuntimeError::new_err(format!("Failed to compile plans for compliance: {e}")))?;
+                    .map_err(|e| {
+                        engine_execution_error(
+                            "compilation",
+                            "COMPLIANCE_COMPILE_FAILED",
+                            format!("Failed to compile plans for compliance: {e}"),
+                            None,
+                        )
+                    })?;
 
                 let mut capture = ComplianceCapture::new(RetentionPolicy::Short);
                 capture.capture_rulepack(RulepackSnapshot {
@@ -349,10 +387,18 @@ impl CpgMaterializer {
                         if enforcement_mode == ContractEnforcementMode::Strict
                             && !report.violations.is_empty()
                         {
-                            return Err(PyRuntimeError::new_err(format!(
-                                "Pushdown contract violation in strict mode for '{}'",
-                                target.table_name
-                            )));
+                            return Err(engine_execution_error(
+                                "compliance",
+                                "PUSHDOWN_CONTRACT_VIOLATION",
+                                format!(
+                                    "Pushdown contract violation in strict mode for '{}'",
+                                    target.table_name
+                                ),
+                                Some(json!({
+                                    "table_name": target.table_name,
+                                    "violation_count": report.violations.len()
+                                })),
+                            ));
                         }
                         if enforcement_mode == ContractEnforcementMode::Warn {
                             for violation in report.violations {
@@ -406,7 +452,14 @@ impl CpgMaterializer {
                 prepared.preflight_warnings.clone(),
             )
             .await
-            .map_err(|e| PyRuntimeError::new_err(format!("Pipeline execution failed: {e}")))?;
+            .map_err(|e| {
+                engine_execution_error(
+                    "runtime",
+                    "PIPELINE_EXECUTION_FAILED",
+                    format!("Pipeline execution failed: {e}"),
+                    None,
+                )
+            })?;
 
             let collected = outcome.collected_metrics;
             let mut run_result = outcome.run_result;
@@ -492,7 +545,12 @@ impl CpgMaterializer {
             #[cfg(feature = "tracing")]
             if tracing_config.enabled {
                 engine_tracing::flush_otel_tracing().map_err(|e| {
-                    PyRuntimeError::new_err(format!("Failed to flush tracing provider: {e}"))
+                    engine_execution_error(
+                        "runtime",
+                        "TRACING_FLUSH_FAILED",
+                        format!("Failed to flush tracing provider: {e}"),
+                        None,
+                    )
                 })?;
             }
 
@@ -502,6 +560,18 @@ impl CpgMaterializer {
 }
 
 impl CpgMaterializer {
+    pub(crate) fn new_internal() -> PyResult<Self> {
+        Self::new()
+    }
+
+    pub(crate) fn execute_internal(
+        &self,
+        session_factory: &PySessionFactory,
+        compiled_plan: &CompiledPlan,
+    ) -> PyResult<PyRunResult> {
+        self.execute(session_factory, compiled_plan)
+    }
+
     /// Get a reference to the internal runtime for advanced use cases.
     #[allow(dead_code)]
     pub(crate) fn runtime(&self) -> &Runtime {

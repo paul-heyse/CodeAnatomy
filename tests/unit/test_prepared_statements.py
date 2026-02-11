@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pyarrow as pa
 
 from datafusion_engine.arrow.build import rows_from_table
@@ -13,16 +15,17 @@ def test_parameterized_execution_matches_unprepared() -> None:
     """Match DataFusion builder output to direct SQL."""
     profile = df_profile()
     ctx = profile.session_context()
+    table_name = f"t_{uuid4().hex}"
     table = pa.table({"id": [1, 2], "name": ["a", "b"]})
-    ctx.from_arrow(table, name="t")
+    ctx.from_arrow(table, name=table_name)
 
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
     bundle = facade.compile_to_bundle(
-        lambda session: session.sql("SELECT id, name FROM t WHERE id = 2")
+        lambda session: session.sql(f"SELECT id, name FROM {table_name} WHERE id = 2")
     )
     result = facade.execute_plan_artifact(bundle)
     assert result.dataframe is not None
     prepared = result.dataframe.to_arrow_table()
-    direct = ctx.sql("SELECT id, name FROM t WHERE id = 2").to_arrow_table()
+    direct = ctx.sql(f"SELECT id, name FROM {table_name} WHERE id = 2").to_arrow_table()
 
     assert rows_from_table(prepared) == rows_from_table(direct)

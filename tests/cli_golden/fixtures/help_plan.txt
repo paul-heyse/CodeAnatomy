@@ -2,16 +2,24 @@ Usage: codeanatomy plan REPO-ROOT [ARGS]
 
 Show the computed execution plan without running it.
 
+Tier 1 parity (available now):
+  - Spec hash, view count, output target list, high-level graph summary
+
+Tier 2/3 features (require Rust introspection API):
+  - show_graph, show_schedule, show_inferred_deps, show_task_graph, validate
+
 ╭─ Parameters ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ *  REPO-ROOT --repo-root                    [required]                                                               │
-│    SHOW-GRAPH --show-graph --no-show-graph  Display task dependency graph. [default: False]                          │
-│    SHOW-SCHEDULE --show-schedule            Display computed execution schedule. [default: False]                    │
-│      --no-show-schedule                                                                                              │
-│    SHOW-INFERRED-DEPS --show-inferred-deps  Display inferred task dependencies. [default: False]                     │
-│      --no-show-inferred-deps                                                                                         │
-│    SHOW-TASK-GRAPH --show-task-graph        Display task graph structure with edges. [default: False]                │
-│      --no-show-task-graph                                                                                            │
-│    VALIDATE --validate --no-validate        Validate plan consistency and report issues. [default: False]            │
+│    SHOW-GRAPH --show-graph --no-show-graph  Display task dependency graph (Tier 2: requires Rust introspection API). │
+│                                             [default: False]                                                         │
+│    SHOW-SCHEDULE --show-schedule            Display computed execution schedule (Tier 2: requires Rust introspection │
+│      --no-show-schedule                     API). [default: False]                                                   │
+│    SHOW-INFERRED-DEPS --show-inferred-deps  Display inferred task dependencies (Tier 2: requires Rust introspection  │
+│      --no-show-inferred-deps                API). [default: False]                                                   │
+│    SHOW-TASK-GRAPH --show-task-graph        Display task graph structure with edges (Tier 3: requires Rust           │
+│      --no-show-task-graph                   introspection API). [default: False]                                     │
+│    VALIDATE --validate --no-validate        Validate plan consistency and report issues (Tier 3: requires Rust       │
+│                                             introspection API). [default: False]                                     │
 │    OUTPUT-FORMAT --output-format            Output format for plan display. [choices: text, json, dot] [env var:     │
 │                                             CODEANATOMY_PLAN_OUTPUT_FORMAT] [default: text]                          │
 │    O -o                                     Write plan to file instead of stdout. [env var:                          │
@@ -28,8 +36,10 @@ Show the computed execution plan without running it.
 ╭─ Execution ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Control pipeline execution strategy and parallelism.                                                                 │
 │                                                                                                                      │
-│ EXECUTION-MODE --execution-mode  Execution mode to use when compiling the plan. [choices: deterministic-serial,      │
-│                                  plan-parallel, plan-parallel-remote] [default: plan-parallel]                       │
+│ ENGINE-PROFILE --engine-profile      Engine resource profile (affects plan shape). [choices: small, medium, large]   │
+│                                      [default: medium]                                                               │
+│ RULEPACK-PROFILE --rulepack-profile  Rulepack profile for plan compilation. [choices: Default, LowLatency, Replay,   │
+│                                      Strict] [default: Default]                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Observability ──────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Configure OpenTelemetry tracing, metrics, and logging.                                                               │

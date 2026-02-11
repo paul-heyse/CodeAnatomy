@@ -189,18 +189,22 @@ class TestSemanticPipelineIntegration:
         register_arrow_table(
             datafusion_session,
             name="scip_occurrences",
-            value=_table(
-                (
-                    "path",
-                    "symbol",
-                    "start_line",
-                    "end_line",
-                    "start_char",
-                    "end_char",
-                    "line_base",
-                    "col_unit",
-                )
-            ),
+            value=empty_table_for_schema(dataset_schema("scip_occurrences")),
+        )
+        register_arrow_table(
+            datafusion_session,
+            name="scip_diagnostics",
+            value=empty_table_for_schema(dataset_schema("scip_diagnostics")),
+        )
+        register_arrow_table(
+            datafusion_session,
+            name="symtable_scopes",
+            value=empty_table_for_schema(dataset_schema("symtable_scopes")),
+        )
+        register_arrow_table(
+            datafusion_session,
+            name="symtable_symbols",
+            value=empty_table_for_schema(dataset_schema("symtable_symbols")),
         )
         register_arrow_table(
             datafusion_session,

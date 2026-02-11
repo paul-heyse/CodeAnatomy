@@ -10,9 +10,9 @@ from typing import Literal
 
 import msgspec
 
-from planning_engine.spec_builder import RulepackProfile, TracingPreset
-
 type EngineProfile = Literal["small", "medium", "large"]
+type RulepackProfile = Literal["Default", "LowLatency", "Replay", "Strict"]
+type TracingPreset = Literal["Maximal", "MaximalNoData", "ProductionLean"]
 
 
 class EngineConfigSpec(msgspec.Struct, frozen=True):

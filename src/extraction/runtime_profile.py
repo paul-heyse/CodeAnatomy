@@ -44,10 +44,14 @@ class RuntimeProfileSpec(StructBaseStrict, frozen=True):
     name: str
     datafusion: DataFusionRuntimeProfile
     determinism_tier: DeterminismTier = DeterminismTier.BEST_EFFORT
+    rust_profile_hash: str | None = None
+    rust_settings_hash: str | None = None
 
     @property
     def datafusion_settings_hash(self) -> str:
         """Return DataFusion settings hash when configured."""
+        if self.rust_settings_hash is not None:
+            return self.rust_settings_hash
         return self.datafusion.settings_hash()
 
     def runtime_profile_snapshot(self) -> RuntimeProfileSnapshot:
@@ -463,6 +467,63 @@ def resolve_runtime_profile(
     df_profile = DataFusionRuntimeProfile(
         policies=PolicyBundleConfig(config_policy_name=profile),
     )
+    rust_profile_hash: str | None = None
+    rust_settings_hash: str | None = None
+    try:
+        import importlib
+
+        profile_class = _session_factory_class(profile)
+        engine_module = importlib.import_module("codeanatomy_engine")
+        rust_factory = engine_module.SessionFactory.from_class(profile_class)
+        rust_profile_hash_value = getattr(rust_factory, "profile_hash", None)
+        if callable(rust_profile_hash_value):
+            candidate = rust_profile_hash_value()
+            if isinstance(candidate, str) and candidate:
+                rust_profile_hash = candidate
+        rust_settings_hash_value = getattr(rust_factory, "settings_hash", None)
+        if callable(rust_settings_hash_value):
+            candidate = rust_settings_hash_value()
+            if isinstance(candidate, str) and candidate:
+                rust_settings_hash = candidate
+        raw_profile_json = rust_factory.profile_json()
+        raw_profile_payload = msgspec.json.decode(raw_profile_json)
+        profile_payload = (
+            cast("dict[str, object]", raw_profile_payload)
+            if isinstance(raw_profile_payload, dict)
+            else {}
+        )
+        target_partitions = profile_payload.get("target_partitions")
+        batch_size = profile_payload.get("batch_size")
+        memory_pool_bytes = profile_payload.get("memory_pool_bytes")
+        df_profile = msgspec.structs.replace(
+            df_profile,
+            execution=msgspec.structs.replace(
+                df_profile.execution,
+                target_partitions=(
+                    int(target_partitions)
+                    if isinstance(target_partitions, (int, float))
+                    else df_profile.execution.target_partitions
+                ),
+                batch_size=(
+                    int(batch_size)
+                    if isinstance(batch_size, (int, float))
+                    else df_profile.execution.batch_size
+                ),
+                memory_limit_bytes=(
+                    int(memory_pool_bytes)
+                    if isinstance(memory_pool_bytes, (int, float))
+                    else df_profile.execution.memory_limit_bytes
+                ),
+                memory_pool=(
+                    "fair"
+                    if isinstance(memory_pool_bytes, (int, float))
+                    else df_profile.execution.memory_pool
+                ),
+            ),
+        )
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+        rust_profile_hash = None
+        rust_settings_hash = None
     df_profile = _apply_named_profile_overrides(profile, df_profile)
     df_profile = _apply_memory_overrides(profile, df_profile, df_profile.settings_payload())
     df_profile = _apply_env_overrides(df_profile)
@@ -470,7 +531,16 @@ def resolve_runtime_profile(
         name=profile,
         datafusion=df_profile,
         determinism_tier=determinism or DeterminismTier.BEST_EFFORT,
+        rust_profile_hash=rust_profile_hash,
+        rust_settings_hash=rust_settings_hash,
     )
+
+
+def _session_factory_class(profile: str) -> str:
+    normalized = profile.strip().lower()
+    if normalized in {"small", "medium", "large"}:
+        return normalized
+    return "medium"
 
 
 def runtime_profile_snapshot_payload(profile: DataFusionRuntimeProfile) -> dict[str, object]:

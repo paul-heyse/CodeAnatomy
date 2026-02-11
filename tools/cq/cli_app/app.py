@@ -317,3 +317,14 @@ app.command("tools.cq.cli_app.commands.admin:schema", group=admin_group)
 # Run/chain commands
 app.command("tools.cq.cli_app.commands.run:run", group=analysis_group)
 app.command("tools.cq.cli_app.commands.chain:chain", group=analysis_group)
+
+# LDMD protocol commands
+from tools.cq.cli_app.commands.ldmd import ldmd_app
+
+app.command(ldmd_app)
+
+# Neighborhood command
+from tools.cq.cli_app.commands.neighborhood import nb_app, neighborhood_app
+
+app.command(neighborhood_app)
+app.command(nb_app)

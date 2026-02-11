@@ -5,8 +5,8 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from planning_engine.runtime_profile import resolve_runtime_profile
-from planning_engine.session_factory import build_engine_session
+from extraction.engine_session_factory import build_engine_session
+from extraction.runtime_profile import resolve_runtime_profile
 from tests.test_helpers.arrow_seed import register_arrow_table
 
 EXPECTED_ROWS = 2

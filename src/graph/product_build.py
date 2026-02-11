@@ -34,7 +34,7 @@ from planning_engine.output_contracts import (
 from utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
-    from planning_engine.spec_builder import RuntimeConfig
+    from planning_engine.spec_contracts import RuntimeConfig
 
 GraphProduct = Literal["cpg"]
 
@@ -284,7 +284,7 @@ def _execute_build(
     GraphProductBuildResult
         Typed outputs for the requested graph product.
     """
-    from planning_engine.build_orchestrator import orchestrate_build
+    from graph.build_pipeline import orchestrate_build
 
     with root_span(
         "graph_product.build",

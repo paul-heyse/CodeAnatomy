@@ -216,6 +216,12 @@ def _translate_deprecated_config(
         Normalized config payload with deprecated sections translated when possible.
     """
     payload = dict(raw)
+    legacy_graph_adapter = payload.pop("graph_adapter", None)
+    if isinstance(legacy_graph_adapter, Mapping):
+        logger.warning(
+            "Deprecated [graph_adapter] config detected at %s; section is ignored in Rust-first execution mode.",
+            location,
+        )
     legacy_hamilton = payload.get("hamilton")
     if "engine" in payload or not isinstance(legacy_hamilton, Mapping):
         return payload

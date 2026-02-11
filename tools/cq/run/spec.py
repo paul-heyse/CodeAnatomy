@@ -103,6 +103,15 @@ class BytecodeSurfaceStep(RunStepBase, tag="bytecode-surface", frozen=True):
     max_files: int = 500
 
 
+class NeighborhoodStep(RunStepBase, tag="neighborhood", frozen=True):
+    """Run step describing a neighborhood query."""
+
+    target: str
+    lang: str = "python"
+    top_k: int = 10
+    no_lsp: bool = False
+
+
 RunStep = (
     QStep
     | SearchStep
@@ -114,6 +123,7 @@ RunStep = (
     | SideEffectsStep
     | ScopesStep
     | BytecodeSurfaceStep
+    | NeighborhoodStep
 )
 
 RUN_STEP_TYPES: tuple[type[RunStep], ...] = (
@@ -127,6 +137,7 @@ RUN_STEP_TYPES: tuple[type[RunStep], ...] = (
     SideEffectsStep,
     ScopesStep,
     BytecodeSurfaceStep,
+    NeighborhoodStep,
 )
 
 
@@ -152,6 +163,7 @@ _STEP_TAGS: dict[type[RunStep], str] = {
     SideEffectsStep: "side-effects",
     ScopesStep: "scopes",
     BytecodeSurfaceStep: "bytecode-surface",
+    NeighborhoodStep: "neighborhood",
 }
 
 
@@ -196,6 +208,7 @@ __all__ = [
     "ExceptionsStep",
     "ImpactStep",
     "ImportsStep",
+    "NeighborhoodStep",
     "QStep",
     "RunPlan",
     "RunStep",

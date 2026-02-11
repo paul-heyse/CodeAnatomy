@@ -14,7 +14,7 @@ from datafusion_engine.materialize_policy import WriterStrategy
 if TYPE_CHECKING:
     from datafusion_engine.session.facade import ExecutionResult
     from datafusion_engine.views.artifacts import DataFusionViewArtifact
-    from planning_engine.materialize_pipeline import MaterializationCacheDecision
+    from extraction.materialize_pipeline import MaterializationCacheDecision
 
 
 @dataclass(frozen=True)

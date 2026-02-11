@@ -11,7 +11,7 @@ import importlib
 import logging
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING
 
 import msgspec
 from opentelemetry import trace
@@ -27,40 +27,11 @@ from planning_engine.output_contracts import (
 
 if TYPE_CHECKING:
     from extraction.orchestrator import ExtractionResult
-    from planning_engine.spec_builder import SemanticExecutionSpec
+    from planning_engine.spec_contracts import SemanticExecutionSpec
     from semantics.compile_context import SemanticExecutionContext
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
-
-
-class _EngineError(RuntimeError):
-    """Base error for Rust engine execution failures."""
-
-
-class _EngineValidationError(_EngineError):
-    """Spec validation or contract mismatch failure."""
-
-
-class _EngineCompileError(_EngineError):
-    """Logical plan compilation failure."""
-
-
-class _EngineRuleViolationError(_EngineError):
-    """Rulepack validation or policy rule violation."""
-
-
-class _EngineRuntimeError(_EngineError):
-    """Runtime execution or materialization failure."""
-
-
-_ERROR_STAGE_MAP: dict[str, type[_EngineError]] = {
-    "validation": _EngineValidationError,
-    "compilation": _EngineCompileError,
-    "rule_violation": _EngineRuleViolationError,
-    "runtime": _EngineRuntimeError,
-    "materialization": _EngineRuntimeError,
-}
 
 
 class BuildResult(msgspec.Struct, frozen=True):
@@ -73,36 +44,17 @@ class BuildResult(msgspec.Struct, frozen=True):
     warnings: list[dict[str, object]]
 
 
-def _raise_engine_error(exc: Exception) -> NoReturn:
-    """Classify and raise a typed local engine error from Rust exceptions.
+def _raise_typed_engine_boundary_error(exc: Exception) -> None:
+    """Preserve typed Rust boundary errors and normalize unknown failures.
 
     Raises:
-        _EngineValidationError: For spec parsing/validation failures.
-        _EngineCompileError: For compile-stage failures.
-        _EngineRuleViolationError: For policy/rule violations.
-        _EngineRuntimeError: For runtime/materialization failures.
-        _EngineError: Fallback for unmapped engine exceptions.
+        RuntimeError: If the exception does not expose typed engine fields.
     """
-    error_stage = getattr(exc, "error_stage", None)
-    if isinstance(error_stage, str) and error_stage in _ERROR_STAGE_MAP:
-        error_cls = _ERROR_STAGE_MAP[error_stage]
-        raise error_cls(str(exc)) from exc
-
-    message = str(exc)
-    lowered = message.lower()
-    if "invalid spec json" in lowered or "failed to parse spec" in lowered:
-        raise _EngineValidationError(message) from exc
-    if "failed to compile plans" in lowered:
-        if "rule" in lowered or "policy" in lowered or "safety" in lowered:
-            raise _EngineRuleViolationError(message) from exc
-        raise _EngineCompileError(message) from exc
-    if "failed to build session" in lowered or "failed to register inputs" in lowered:
-        raise _EngineRuntimeError(message) from exc
-    if "materialization failed" in lowered:
-        raise _EngineRuntimeError(message) from exc
-    if isinstance(exc, ValueError):
-        raise _EngineValidationError(message) from exc
-    raise _EngineError(message) from exc
+    stage = getattr(exc, "stage", None)
+    code = getattr(exc, "code", None)
+    if isinstance(stage, str) and isinstance(code, str):
+        raise exc
+    raise RuntimeError(str(exc)) from exc
 
 
 def _spec_payload_with_input_overrides(
@@ -146,7 +98,7 @@ def _validate_output_targets(semantic_spec: SemanticExecutionSpec) -> None:
     output_targets = semantic_spec.output_targets
     if not output_targets:
         msg = "SemanticExecutionSpec must define at least one output target."
-        raise _EngineValidationError(msg)
+        raise ValueError(msg)
     missing_locations = [
         target.table_name
         for target in output_targets
@@ -155,7 +107,7 @@ def _validate_output_targets(semantic_spec: SemanticExecutionSpec) -> None:
     if missing_locations:
         joined = ", ".join(sorted(missing_locations))
         msg = f"Missing output delta locations for targets: {joined}"
-        raise _EngineValidationError(msg)
+        raise ValueError(msg)
 
 
 def orchestrate_build(  # noqa: PLR0913
@@ -280,7 +232,7 @@ def _run_extraction_phase(
     return extraction_result
 
 
-def _compile_semantic_phase(
+def _compile_semantic_phase(  # noqa: PLR0914
     semantic_input_locations: dict[str, str],
     engine_profile: str,
     rulepack_profile: str,
@@ -288,9 +240,10 @@ def _compile_semantic_phase(
     output_dir: Path,
     runtime_config: object | None,
 ) -> tuple[SemanticExecutionContext, SemanticExecutionSpec]:
-    from planning_engine.runtime_profile import resolve_runtime_profile
-    from planning_engine.spec_builder import RuntimeConfig, build_execution_spec
+    from extraction.runtime_profile import resolve_runtime_profile
+    from planning_engine.spec_contracts import RuntimeConfig, SemanticExecutionSpec
     from semantics.compile_context import build_semantic_execution_context
+    from serde_msgspec import to_builtins
 
     with stage_span("semantic_ir_compile", stage="semantic", scope_name=SCOPE_PIPELINE):
         t_ir_start = time.monotonic()
@@ -314,18 +267,35 @@ def _compile_semantic_phase(
 
     with stage_span("spec_build", stage="semantic", scope_name=SCOPE_PIPELINE):
         t_spec_start = time.monotonic()
+        try:
+            engine_module = importlib.import_module("codeanatomy_engine")
+        except ImportError:
+            msg = (
+                "codeanatomy_engine Rust extension not built. "
+                "Run: bash scripts/rebuild_rust_artifacts.sh"
+            )
+            raise ImportError(msg) from None
         semantic_ir = execution_context.manifest.semantic_ir
         output_targets = _resolve_output_targets()
         output_locations = _resolve_output_locations(output_dir, output_targets)
         resolved_runtime = runtime_config if isinstance(runtime_config, RuntimeConfig) else None
-        spec = build_execution_spec(
-            ir=semantic_ir,
-            input_locations=semantic_input_locations,
-            output_targets=output_targets,
-            rulepack_profile=rulepack_profile,
-            runtime_config=resolved_runtime,
-            output_locations=output_locations,
+        request_payload: dict[str, object] = {
+            "input_locations": semantic_input_locations,
+            "output_targets": output_targets,
+            "rulepack_profile": rulepack_profile,
+            "output_locations": output_locations,
+            "runtime": (
+                to_builtins(resolved_runtime, str_keys=True)
+                if resolved_runtime is not None
+                else None
+            ),
+        }
+        compiler = engine_module.SemanticPlanCompiler()
+        spec_json = compiler.build_spec_json(
+            msgspec.json.encode(to_builtins(semantic_ir, str_keys=True)).decode(),
+            msgspec.json.encode(request_payload).decode(),
         )
+        spec = msgspec.json.decode(spec_json, type=SemanticExecutionSpec)
         spec_elapsed = time.monotonic() - t_spec_start
         logger.info("Execution spec built in %.2fs", spec_elapsed)
 
@@ -347,29 +317,34 @@ def _execute_engine_phase(
                 "Run: bash scripts/rebuild_rust_artifacts.sh"
             )
             raise ImportError(msg) from None
-        session_factory_cls = engine_module.SessionFactory
-        semantic_plan_compiler_cls = engine_module.SemanticPlanCompiler
-        cpg_materializer_cls = engine_module.CpgMaterializer
-
         _validate_output_targets(spec)
         spec_payload = _spec_payload_with_input_overrides(
             semantic_spec=spec,
             extraction_inputs=semantic_input_locations,
         )
         spec_json = msgspec.json.encode(spec_payload).decode()
-        factory = session_factory_cls.from_class(engine_profile)
-        compiler = semantic_plan_compiler_cls()
+        runtime_payload = spec_payload.get("runtime")
+        request_payload = {
+            "engine_profile": engine_profile,
+            "spec_json": spec_json,
+            "runtime": runtime_payload if isinstance(runtime_payload, dict) else None,
+            "orchestration": {
+                "include_manifest": True,
+                "include_run_bundle": False,
+                "emit_auxiliary_outputs": True,
+            },
+        }
+        response: object | None = None
         try:
-            compiled = compiler.compile(spec_json)
+            response = engine_module.run_build(msgspec.json.encode(request_payload).decode())
         except Exception as exc:  # noqa: BLE001 - normalize engine boundary errors
-            _raise_engine_error(exc)
-
-        materializer = cpg_materializer_cls()
-        try:
-            result = materializer.execute(factory, compiled)
-        except Exception as exc:  # noqa: BLE001 - normalize engine boundary errors
-            _raise_engine_error(exc)
-        run_result = msgspec.json.decode(result.to_json(), type=dict[str, object])
+            _raise_typed_engine_boundary_error(exc)
+        if response is None:
+            msg = "Rust run_build returned no response payload"
+            raise RuntimeError(msg)
+        response_payload = response if isinstance(response, dict) else {}
+        run_payload = response_payload.get("run_result")
+        run_result = run_payload if isinstance(run_payload, dict) else {}
         elapsed = time.monotonic() - t_start
         logger.info("Rust engine execution complete in %.2fs", elapsed)
     return run_result

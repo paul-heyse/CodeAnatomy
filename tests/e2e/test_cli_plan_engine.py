@@ -6,17 +6,16 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import msgspec
 import pytest
 
 from cli.commands.plan import PlanOptions, plan_command
 from planning_engine.output_contracts import ENGINE_CPG_OUTPUTS
-from planning_engine.spec_builder import (
-    FilterTransform,
+from planning_engine.spec_contracts import (
     JoinGraph,
     OutputTarget,
     RulepackProfile,
     RuntimeConfig,
-    SchemaContract,
     SemanticExecutionSpec,
     ViewDefinition,
 )
@@ -32,15 +31,15 @@ def _spec_fixture(repo_root: Path, rulepack_profile: RulepackProfile) -> Semanti
                 name="cpg_nodes_view",
                 view_kind="filter",
                 view_dependencies=(),
-                transform=FilterTransform(source="repo_files_v1", predicate="TRUE"),
-                output_schema=SchemaContract(),
+                transform={"kind": "Filter", "source": "repo_files_v1", "predicate": "TRUE"},
+                output_schema={"columns": {}},
             ),
             ViewDefinition(
                 name="cpg_edges_view",
                 view_kind="filter",
                 view_dependencies=("cpg_nodes_view",),
-                transform=FilterTransform(source="repo_files_v1", predicate="TRUE"),
-                output_schema=SchemaContract(),
+                transform={"kind": "Filter", "source": "repo_files_v1", "predicate": "TRUE"},
+                output_schema={"columns": {}},
             ),
         ),
         join_graph=JoinGraph(edges=(), constraints=()),
@@ -66,34 +65,21 @@ def _wire_plan_command_stubs(
     *,
     repo_root: Path,
 ) -> None:
-    def _resolve_runtime_profile_stub(_profile: str) -> SimpleNamespace:
-        return SimpleNamespace(name="stub_profile", runtime_profile_hash="stub_hash")
-
-    monkeypatch.setattr(
-        "planning_engine.runtime_profile.resolve_runtime_profile",
-        _resolve_runtime_profile_stub,
-    )
-
     def _build_semantic_ir_stub() -> object:
-        return object()
+        join_groups: list[dict[str, object]] = []
+        return {
+            "views": [
+                {"name": "cpg_nodes_view", "kind": "filter", "inputs": ["repo_files_v1"]},
+                {
+                    "name": "cpg_edges_view",
+                    "kind": "filter",
+                    "inputs": ["repo_files_v1", "cpg_nodes_view"],
+                },
+            ],
+            "join_groups": join_groups,
+        }
 
     monkeypatch.setattr("semantics.ir_pipeline.build_semantic_ir", _build_semantic_ir_stub)
-
-    def _build_execution_spec_stub(
-        *,
-        ir: object,
-        input_locations: dict[str, str],
-        output_targets: list[str],
-        rulepack_profile: RulepackProfile,
-        output_locations: dict[str, str],
-        runtime_config: RuntimeConfig | None = None,
-    ) -> SemanticExecutionSpec:
-        _ = (ir, input_locations, output_targets, output_locations, runtime_config)
-        return _spec_fixture(repo_root, rulepack_profile)
-
-    monkeypatch.setattr(
-        "planning_engine.spec_builder.build_execution_spec", _build_execution_spec_stub
-    )
 
     class _FakeSessionFactory:
         @staticmethod
@@ -106,6 +92,10 @@ def _wire_plan_command_stubs(
             return "feedbeef"
 
     class _FakeSemanticPlanCompiler:
+        def build_spec_json(self, _semantic_ir_json: str, _request_json: str) -> str:
+            spec = _spec_fixture(repo_root, "Default")
+            return msgspec.json.encode(spec).decode()
+
         def compile(self, _spec_json: str) -> object:
             return _FakeCompiledPlan()
 

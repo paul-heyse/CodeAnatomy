@@ -45,6 +45,7 @@ from tools.cq.run.spec import (
     ExceptionsStep,
     ImpactStep,
     ImportsStep,
+    NeighborhoodStep,
     QStep,
     RunPlan,
     RunStep,
@@ -709,26 +710,13 @@ def _collapse_parent_q_results(
 def _execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext) -> CqResult:
     if isinstance(step, SearchStep):
         return _execute_search_step(step, plan, ctx)
-    if isinstance(step, CallsStep):
-        result = _execute_calls(step, ctx)
-    elif isinstance(step, ImpactStep):
-        result = _execute_impact(step, ctx)
-    elif isinstance(step, ImportsStep):
-        result = _execute_imports(step, ctx)
-    elif isinstance(step, ExceptionsStep):
-        result = _execute_exceptions(step, ctx)
-    elif isinstance(step, SigImpactStep):
-        result = _execute_sig_impact(step, ctx)
-    elif isinstance(step, SideEffectsStep):
-        result = _execute_side_effects(step, ctx)
-    elif isinstance(step, ScopesStep):
-        result = _execute_scopes(step, ctx)
-    elif isinstance(step, BytecodeSurfaceStep):
-        result = _execute_bytecode_surface(step, ctx)
-    else:
+
+    executor = _NON_SEARCH_DISPATCH.get(type(step))
+    if executor is None:
         msg = f"Unsupported step type: {type(step)!r}"
         raise TypeError(msg)
 
+    result = executor(step, ctx)
     return _apply_run_scope_filter(result, ctx.root, plan.in_dir, plan.exclude)
 
 
@@ -880,6 +868,208 @@ def _execute_bytecode_surface(step: BytecodeSurfaceStep, ctx: CliContext) -> CqR
         max_files=step.max_files,
     )
     return cmd_bytecode_surface(request)
+
+
+_MIN_PARTS_WITH_LINE = 2
+
+
+def _execute_neighborhood_step(step: NeighborhoodStep, ctx: CliContext) -> CqResult:
+    """Execute a neighborhood step.
+
+    Parameters
+    ----------
+    step : NeighborhoodStep
+        Neighborhood step configuration.
+    ctx : CliContext
+        CLI context.
+
+    Returns:
+    -------
+    CqResult
+        Neighborhood analysis result.
+    """
+    from tools.cq.core.schema import mk_result, mk_runmeta, ms
+    from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
+    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
+    from tools.cq.neighborhood.section_layout import materialize_section_layout
+    from tools.cq.query.sg_parser import sg_scan
+
+    started = ms()
+
+    # Parse target
+    target_info = _parse_neighborhood_target(step.target)
+    file_or_symbol, symbol_hint, line = target_info
+
+    # Determine target name and file
+    if line is not None:
+        target_file = file_or_symbol
+        target_name = symbol_hint or f"{file_or_symbol}:{line}"
+    else:
+        target_name = file_or_symbol
+        target_file = ""
+        symbol_hint = file_or_symbol
+
+    # Build scan snapshot
+    records = sg_scan(
+        paths=[ctx.root],
+        lang=step.lang if step.lang in {"python", "rust"} else "python",  # type: ignore[arg-type]
+        root=ctx.root,
+    )
+    snapshot = ScanSnapshot.from_records(records)
+
+    # Build neighborhood bundle
+    request = BundleBuildRequest(
+        target_name=target_name,
+        target_file=target_file,
+        root=ctx.root,
+        snapshot=snapshot,
+        language=step.lang,
+        symbol_hint=symbol_hint,
+        top_k=step.top_k,
+        enable_lsp=not step.no_lsp,
+        artifact_dir=ctx.artifact_dir,
+    )
+
+    bundle = build_neighborhood_bundle(request)
+    view = materialize_section_layout(bundle)
+
+    # Create RunMeta
+    run = mk_runmeta(
+        macro="neighborhood",
+        argv=ctx.argv,
+        root=str(ctx.root),
+        started_ms=started,
+        toolchain=ctx.toolchain.to_dict(),
+    )
+
+    # Create CqResult
+    result = mk_result(run)
+    _populate_neighborhood_summary(result, target_name, target_file, step, bundle)
+    _populate_neighborhood_findings(result, view)
+
+    return result
+
+
+def _parse_neighborhood_target(target: str) -> tuple[str, str | None, int | None]:
+    """Parse neighborhood target string.
+
+    Parameters
+    ----------
+    target : str
+        Target string.
+
+    Returns:
+    -------
+    tuple[str, str | None, int | None]
+        (file_or_symbol, symbol_hint, line).
+    """
+    if ":" not in target:
+        return target, target, None
+
+    parts = target.split(":")
+    if len(parts) >= _MIN_PARTS_WITH_LINE:
+        file_path = parts[0]
+        try:
+            line = int(parts[1])
+        except ValueError:
+            return target, target, None
+        else:
+            return file_path, None, line
+
+    return target, target, None
+
+
+def _populate_neighborhood_summary(
+    result: CqResult,
+    target_name: str,
+    target_file: str,
+    step: NeighborhoodStep,
+    bundle: object,
+) -> None:
+    """Populate neighborhood result summary.
+
+    Parameters
+    ----------
+    result : CqResult
+        Result to populate.
+    target_name : str
+        Target name.
+    target_file : str
+        Target file.
+    step : NeighborhoodStep
+        Step configuration.
+    bundle : object
+        Bundle with graph metadata.
+    """
+    from tools.cq.core.snb_schema import SemanticNeighborhoodBundleV1
+
+    result.summary["target"] = target_name
+    result.summary["target_file"] = target_file
+    result.summary["language"] = step.lang
+    result.summary["top_k"] = step.top_k
+    result.summary["enable_lsp"] = not step.no_lsp
+
+    if isinstance(bundle, SemanticNeighborhoodBundleV1):
+        result.summary["total_slices"] = len(bundle.slices)
+        if bundle.graph:
+            result.summary["total_nodes"] = bundle.graph.node_count
+            result.summary["total_edges"] = bundle.graph.edge_count
+
+
+def _populate_neighborhood_findings(result: CqResult, view: object) -> None:
+    """Populate neighborhood findings from view.
+
+    Parameters
+    ----------
+    result : CqResult
+        Result to populate.
+    view : object
+        Bundle view.
+    """
+    from tools.cq.core.schema import Finding, Section
+    from tools.cq.neighborhood.section_layout import BundleViewV1
+
+    if not isinstance(view, BundleViewV1):
+        return
+
+    for finding_v1 in view.key_findings:
+        result.key_findings.append(
+            Finding(
+                category=finding_v1.category,
+                message=f"{finding_v1.label}: {finding_v1.value}",
+            )
+        )
+
+    for section_v1 in view.sections:
+        findings = [
+            Finding(
+                category="neighborhood",
+                message=item,
+            )
+            for item in section_v1.items
+        ]
+        result.sections.append(
+            Section(
+                title=section_v1.title,
+                findings=findings,
+                collapsed=section_v1.collapsed,
+            )
+        )
+
+
+# Dispatch table for non-q, non-search step types.
+# Defined after all executor functions to avoid forward reference issues.
+_NON_SEARCH_DISPATCH: dict[type, Callable[..., CqResult]] = {
+    CallsStep: _execute_calls,
+    ImpactStep: _execute_impact,
+    ImportsStep: _execute_imports,
+    ExceptionsStep: _execute_exceptions,
+    SigImpactStep: _execute_sig_impact,
+    SideEffectsStep: _execute_side_effects,
+    ScopesStep: _execute_scopes,
+    BytecodeSurfaceStep: _execute_bytecode_surface,
+    NeighborhoodStep: _execute_neighborhood_step,
+}
 
 
 def _apply_run_scope_filter(

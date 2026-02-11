@@ -132,6 +132,21 @@ class CliContext(CqStruct, frozen=True):
 FilterConfig = CommonFilters
 
 
+class CliTextResult(CqStruct, frozen=True):
+    """Text payload for non-analysis protocol commands.
+
+    Parameters
+    ----------
+    text
+        The text content to output.
+    media_type
+        MIME type of the content (default: text/plain).
+    """
+
+    text: str
+    media_type: str = "text/plain"
+
+
 class CliResult(CqStruct, frozen=True):
     """Result from a CLI command execution.
 

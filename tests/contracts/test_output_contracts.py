@@ -7,9 +7,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from graph.build_pipeline import BuildResult
 from graph.product_build import GraphProductBuildRequest, _parse_build_result
 from obs.engine_artifacts import record_engine_execution_summary, record_engine_plan_summary
-from planning_engine.build_orchestrator import BuildResult
 from planning_engine.output_contracts import (
     CANONICAL_CPG_OUTPUTS,
     ENGINE_CPG_OUTPUTS,
@@ -22,14 +24,12 @@ from planning_engine.output_contracts import (
     canonical_cpg_output_name,
     legacy_cpg_output_name,
 )
-from planning_engine.spec_builder import (
-    FilterTransform,
+from planning_engine.spec_contracts import (
     InputRelation,
     JoinGraph,
     OutputTarget,
     RuleIntent,
     RuntimeConfig,
-    SchemaContract,
     SemanticExecutionSpec,
     ViewDefinition,
 )
@@ -145,8 +145,8 @@ def _spec_fixture() -> SemanticExecutionSpec:
                 name="cpg_nodes_view",
                 view_kind="filter",
                 view_dependencies=(),
-                transform=FilterTransform(source="repo_files_v1", predicate="TRUE"),
-                output_schema=SchemaContract(),
+                transform={"kind": "Filter", "source": "repo_files_v1", "predicate": "TRUE"},
+                output_schema={"columns": {}},
             ),
         ),
         join_graph=JoinGraph(edges=(), constraints=()),
@@ -192,6 +192,70 @@ class TestRunResultMapping:
         fixture = _build_result_fixture("/tmp/build")
         for key in ENGINE_CPG_OUTPUTS:
             assert key in fixture.cpg_outputs
+
+
+class TestRustBoundaryContracts:
+    """Boundary behavior contracts for graph.build_pipeline."""
+
+    def test_execute_engine_phase_preserves_typed_engine_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Typed boundary errors propagate without Python re-wrapping."""
+        from graph import build_pipeline as build_pipeline_mod
+
+        class _TypedEngineError(Exception):
+            def __init__(self) -> None:
+                super().__init__("typed failure")
+                self.stage = "runtime"
+                self.code = "RUN_BUILD_EXECUTION_FAILED"
+                self.details = {"cause": "unit-test"}
+
+        class _FakeEngineModule:
+            @staticmethod
+            def run_build(_request_json: str) -> dict[str, object]:
+                raise _TypedEngineError
+
+        monkeypatch.setattr(
+            build_pipeline_mod.importlib,
+            "import_module",
+            lambda _name: _FakeEngineModule(),
+        )
+
+        with pytest.raises(_TypedEngineError) as exc_info:
+            build_pipeline_mod._execute_engine_phase(  # noqa: SLF001
+                semantic_input_locations={},
+                spec=_spec_fixture(),
+                engine_profile="small",
+            )
+        assert exc_info.value.stage == "runtime"
+        assert exc_info.value.code == "RUN_BUILD_EXECUTION_FAILED"
+
+    def test_execute_engine_phase_uses_dict_native_run_payload(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Engine response contracts are consumed from dict-native payloads."""
+        from graph import build_pipeline as build_pipeline_mod
+
+        class _FakeEngineModule:
+            @staticmethod
+            def run_build(_request_json: str) -> dict[str, object]:
+                return {"run_result": {"spec_hash": "abc123", "outputs": []}}
+
+        monkeypatch.setattr(
+            build_pipeline_mod.importlib,
+            "import_module",
+            lambda _name: _FakeEngineModule(),
+        )
+
+        payload = build_pipeline_mod._execute_engine_phase(  # noqa: SLF001
+            semantic_input_locations={},
+            spec=_spec_fixture(),
+            engine_profile="small",
+        )
+        assert payload["spec_hash"] == "abc123"
+        assert payload["outputs"] == []
 
 
 class TestCLIOutputContracts:

@@ -12,7 +12,7 @@ import pytest
 
 @pytest.mark.integration
 def test_rust_engine_compile_and_materialize_boundary() -> None:
-    """Rust API can compile spec JSON and returns runtime errors with typed boundaries."""
+    """Rust API returns typed stage/code boundary errors on execution failures."""
     codeanatomy_engine = pytest.importorskip("codeanatomy_engine")
     input_relations: list[dict[str, object]] = []
     view_dependencies: list[str] = []
@@ -52,9 +52,13 @@ def test_rust_engine_compile_and_materialize_boundary() -> None:
     compiler = codeanatomy_engine.SemanticPlanCompiler()
     compiled = compiler.compile(spec_json)
     materializer = codeanatomy_engine.CpgMaterializer()
+    engine_error = codeanatomy_engine.EngineExecutionError
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(engine_error) as exc_info:
         materializer.execute(factory, compiled)
+    exc = exc_info.value
+    assert isinstance(getattr(exc, "stage", None), str)
+    assert isinstance(getattr(exc, "code", None), str)
 
 
 @pytest.mark.integration

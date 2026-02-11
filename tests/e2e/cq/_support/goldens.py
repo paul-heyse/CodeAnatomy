@@ -35,6 +35,12 @@ def _normalize_result_for_snapshot(result: CqResult) -> dict[str, Any]:
         result_dict["run"].pop("started_ms", None)
         result_dict["run"].pop("elapsed_ms", None)
         result_dict["run"].pop("run_id", None)
+        root = result_dict["run"].get("root")
+        if isinstance(root, str):
+            result_dict["run"]["root"] = "<repo_root>"
+        toolchain = result_dict["run"].get("toolchain")
+        if isinstance(toolchain, dict) and isinstance(toolchain.get("rg"), str):
+            toolchain["rg"] = "<ripgrep>"
 
     summary = result_dict.get("summary")
     if isinstance(summary, dict):

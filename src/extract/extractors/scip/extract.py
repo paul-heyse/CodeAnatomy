@@ -34,10 +34,10 @@ from extract.coordination.schema_ops import ExtractNormalizeOptions, schema_poli
 from extract.infrastructure import BatchOptions
 from extract.infrastructure.string_utils import normalize_string_items
 from extract.session import ExtractSession, build_extract_session
+from extraction.diagnostics import EngineEventRecorder, ExtractQualityEvent
+from extraction.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 from obs.otel.scopes import SCOPE_EXTRACT
 from obs.otel.tracing import stage_span
-from planning_engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
-from planning_engine.runtime_profile import RuntimeProfileSpec, resolve_runtime_profile
 
 if TYPE_CHECKING:
     from datafusion_engine.schema.policy import SchemaPolicy

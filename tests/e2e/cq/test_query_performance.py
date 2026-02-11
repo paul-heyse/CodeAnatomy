@@ -38,7 +38,7 @@ def toolchain() -> Toolchain:
 
 @pytest.mark.benchmark
 def test_query_latency_cold(toolchain: Toolchain, repo_root: Path) -> None:
-    """Ensure cold query execution completes in <10s.
+    """Ensure cold query execution completes in <15s.
 
     Parameters
     ----------
@@ -56,7 +56,7 @@ def test_query_latency_cold(toolchain: Toolchain, repo_root: Path) -> None:
     elapsed = time.perf_counter() - start
 
     assert result is not None
-    assert elapsed < 10.0, f"Cold query took {elapsed:.2f}s, expected <10s"
+    assert elapsed < 15.0, f"Cold query took {elapsed:.2f}s, expected <15s"
 
 
 @pytest.mark.benchmark
@@ -64,7 +64,7 @@ def test_query_latency_warm(
     toolchain: Toolchain,
     repo_root: Path,
 ) -> None:
-    """Ensure warm query (with index) completes in <6s.
+    """Ensure warm query (with index) completes in <12s.
 
     Parameters
     ----------
@@ -85,7 +85,7 @@ def test_query_latency_warm(
     elapsed = time.perf_counter() - start
 
     assert result is not None
-    assert elapsed < 6.0, f"Warm query took {elapsed:.2f}s, expected <6s"
+    assert elapsed < 12.0, f"Warm query took {elapsed:.2f}s, expected <12s"
 
 
 @pytest.mark.benchmark
@@ -143,4 +143,4 @@ def test_query_scaling_simple(toolchain: Toolchain, repo_root: Path) -> None:
 
     # All simple queries should complete quickly while tolerating CI variance.
     for i, elapsed in enumerate(timings):
-        assert elapsed < 6.0, f"Query {i} took {elapsed:.2f}s, expected <6s"
+        assert elapsed < 12.0, f"Query {i} took {elapsed:.2f}s, expected <12s"

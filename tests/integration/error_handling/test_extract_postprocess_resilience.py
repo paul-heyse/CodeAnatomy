@@ -63,7 +63,7 @@ class TestExtractPostprocessResilience:
 
     def test_extract_quality_event_structure(self) -> None:
         """Verify ExtractQualityEvent has expected fields."""
-        from planning_engine.diagnostics import ExtractQualityEvent
+        from extraction.diagnostics import ExtractQualityEvent
 
         event = ExtractQualityEvent(
             dataset="test_ds",
@@ -81,7 +81,7 @@ class TestExtractPostprocessResilience:
 
     def test_register_view_failed_taxonomy(self) -> None:
         """Verify register_view_failed event uses canonical taxonomy."""
-        from planning_engine.diagnostics import ExtractQualityEvent
+        from extraction.diagnostics import ExtractQualityEvent
 
         event = ExtractQualityEvent(
             dataset="test_ds",
@@ -96,7 +96,7 @@ class TestExtractPostprocessResilience:
 
     def test_view_artifact_failed_taxonomy(self) -> None:
         """Verify view_artifact_failed event uses canonical taxonomy."""
-        from planning_engine.diagnostics import ExtractQualityEvent
+        from extraction.diagnostics import ExtractQualityEvent
 
         event = ExtractQualityEvent(
             dataset="test_ds",
@@ -111,7 +111,7 @@ class TestExtractPostprocessResilience:
 
     def test_schema_contract_failed_taxonomy(self) -> None:
         """Verify schema_contract_failed event uses canonical taxonomy."""
-        from planning_engine.diagnostics import ExtractQualityEvent
+        from extraction.diagnostics import ExtractQualityEvent
 
         event = ExtractQualityEvent(
             dataset="test_ds",
@@ -126,7 +126,7 @@ class TestExtractPostprocessResilience:
 
     def test_extract_quality_event_to_payload(self) -> None:
         """Verify ExtractQualityEvent.to_payload() returns dict."""
-        from planning_engine.diagnostics import ExtractQualityEvent
+        from extraction.diagnostics import ExtractQualityEvent
 
         event = ExtractQualityEvent(
             dataset="test_ds",
@@ -145,7 +145,7 @@ class TestExtractPostprocessResilience:
 
     def test_extract_quality_event_optional_fields(self) -> None:
         """Verify ExtractQualityEvent handles optional fields correctly."""
-        from planning_engine.diagnostics import ExtractQualityEvent
+        from extraction.diagnostics import ExtractQualityEvent
 
         event = ExtractQualityEvent(
             dataset="test_ds",
@@ -163,7 +163,7 @@ class TestExtractPostprocessResilience:
 
     def test_engine_event_recorder_exists(self) -> None:
         """Verify EngineEventRecorder can be instantiated."""
-        from planning_engine.diagnostics import EngineEventRecorder
+        from extraction.diagnostics import EngineEventRecorder
         from tests.test_helpers.datafusion_runtime import df_profile
 
         profile = df_profile()

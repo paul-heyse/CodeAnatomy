@@ -18,8 +18,8 @@ from datafusion_engine.session.runtime import (
     PolicyBundleConfig,
     ZeroRowBootstrapConfig,
 )
+from extraction.runtime_profile import PROFILE_HASH_VERSION, runtime_profile_snapshot
 from obs.diagnostics import DiagnosticsCollector
-from planning_engine.runtime_profile import PROFILE_HASH_VERSION, runtime_profile_snapshot
 from tests.test_helpers.datafusion_runtime import df_profile
 
 HASH_LENGTH: int = 64

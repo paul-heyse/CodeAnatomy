@@ -27,11 +27,11 @@
   "run": {
     "argv": [],
     "macro": "q",
-    "root": "/home/paul/CodeAnatomy",
+    "root": "<repo_root>",
     "schema_version": "cq.v2",
     "toolchain": {
       "python": "3.13.12",
-      "rg": "ripgrep 14.1.0",
+      "rg": "<ripgrep>",
       "sgpy": "0.40.5"
     }
   },

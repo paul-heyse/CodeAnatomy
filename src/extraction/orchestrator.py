@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
     from extract.session import ExtractSession
-    from planning_engine.runtime_profile import RuntimeProfileSpec
+    from extraction.runtime_profile import RuntimeProfileSpec
 
 logger = logging.getLogger(__name__)
 
@@ -270,8 +270,8 @@ def _run_repo_scan(
     from extract.scanning.repo_scan import RepoScanOptions, scan_repo_tables
     from extract.scanning.repo_scope import RepoScopeOptions
     from extract.session import ExtractSession
-    from planning_engine.runtime_profile import resolve_runtime_profile
-    from planning_engine.session_factory import build_engine_session
+    from extraction.engine_session_factory import build_engine_session
+    from extraction.runtime_profile import resolve_runtime_profile
 
     # Build runtime profile and session
     runtime_spec = resolve_runtime_profile("default")
@@ -341,8 +341,8 @@ def _build_stage1_extractors(
         Mapping of extractor name to callable.
     """
     from extract.session import ExtractSession
-    from planning_engine.runtime_profile import resolve_runtime_profile
-    from planning_engine.session_factory import build_engine_session
+    from extraction.engine_session_factory import build_engine_session
+    from extraction.runtime_profile import resolve_runtime_profile
 
     # Build session properly
     runtime_spec = resolve_runtime_profile("default")
@@ -645,8 +645,8 @@ def _run_python_imports(delta_locations: dict[str, str]) -> pa.Table:
     """
     from extract.extractors.imports_extract import extract_python_imports_tables
     from extract.session import ExtractSession
-    from planning_engine.runtime_profile import resolve_runtime_profile
-    from planning_engine.session_factory import build_engine_session
+    from extraction.engine_session_factory import build_engine_session
+    from extraction.runtime_profile import resolve_runtime_profile
 
     # Load inputs from Delta locations (adapter-normalized dataset keys)
     ast_imports = _load_delta_table(delta_locations.get("ast_files"))
@@ -695,8 +695,8 @@ def _run_python_external(delta_locations: dict[str, str], repo_root: Path) -> pa
     """
     from extract.extractors.external_scope import extract_python_external_tables
     from extract.session import ExtractSession
-    from planning_engine.runtime_profile import resolve_runtime_profile
-    from planning_engine.session_factory import build_engine_session
+    from extraction.engine_session_factory import build_engine_session
+    from extraction.runtime_profile import resolve_runtime_profile
 
     # Load python_imports from Delta location
     python_imports_table = _load_delta_table(delta_locations.get("python_imports"))

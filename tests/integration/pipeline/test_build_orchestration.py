@@ -15,7 +15,7 @@ import pytest
 
 
 def _stub_build_result(repo_root: Path) -> object:
-    from planning_engine.build_orchestrator import BuildResult
+    from graph.build_pipeline import BuildResult
 
     output_dir = repo_root / "build"
 
@@ -317,9 +317,7 @@ def test_build_phase_start_and_end_events(
         _ = (args, kwargs)
         return _stub_build_result(minimal_python_repo)
 
-    monkeypatch.setattr(
-        "planning_engine.build_orchestrator.orchestrate_build", mock_orchestrate_build
-    )
+    monkeypatch.setattr("graph.build_pipeline.orchestrate_build", mock_orchestrate_build)
 
     request = GraphProductBuildRequest(repo_root=str(minimal_python_repo))
     build_graph_product(request)
@@ -454,3 +452,70 @@ def test_build_success_records_diagnostics(
     payload = success_events[0]["payload"]
     assert "run_id" in payload, "Should include run_id"
     assert "output_dir" in payload, "Should include output_dir"
+
+
+@pytest.mark.integration
+def test_engine_boundary_error_preserves_typed_stage_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """build_pipeline should not re-wrap typed EngineExecutionError-like exceptions."""
+    from graph import build_pipeline as build_pipeline_mod
+    from planning_engine.spec_contracts import (
+        JoinGraph,
+        OutputTarget,
+        RuleIntent,
+        RuntimeConfig,
+        SemanticExecutionSpec,
+        ViewDefinition,
+    )
+
+    class _TypedEngineError(Exception):
+        def __init__(self) -> None:
+            super().__init__("typed boundary failure")
+            self.stage = "runtime"
+            self.code = "RUN_BUILD_EXECUTION_FAILED"
+            self.details = {"origin": "test"}
+
+    class _FakeEngineModule:
+        @staticmethod
+        def run_build(_request_json: str) -> dict[str, object]:
+            raise _TypedEngineError
+
+    monkeypatch.setattr(
+        build_pipeline_mod.importlib,
+        "import_module",
+        lambda _name: _FakeEngineModule(),
+    )
+
+    spec = SemanticExecutionSpec(
+        version=1,
+        input_relations=(),
+        view_definitions=(
+            ViewDefinition(
+                name="v1",
+                view_kind="project",
+                view_dependencies=(),
+                transform={"kind": "Project", "source": "input", "columns": []},
+                output_schema={"columns": {}},
+            ),
+        ),
+        join_graph=JoinGraph(edges=(), constraints=()),
+        output_targets=(
+            OutputTarget(
+                table_name="cpg_nodes",
+                source_view="v1",
+                columns=(),
+                delta_location="/tmp/cpg_nodes",
+            ),
+        ),
+        rule_intents=(RuleIntent(name="semantic_integrity", rule_class="SemanticIntegrity"),),
+        rulepack_profile="Default",
+        typed_parameters=(),
+        runtime=RuntimeConfig(),
+        spec_hash=b"",
+    )
+
+    with pytest.raises(_TypedEngineError) as exc_info:
+        build_pipeline_mod._execute_engine_phase({}, spec, "small")  # noqa: SLF001
+    assert exc_info.value.stage == "runtime"
+    assert exc_info.value.code == "RUN_BUILD_EXECUTION_FAILED"

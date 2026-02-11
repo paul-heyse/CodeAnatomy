@@ -56,7 +56,8 @@ from extract.coordination.spec_helpers import (
     rule_execution_options,
 )
 from extract.session import ExtractSession
-from planning_engine.materialize_pipeline import write_extract_outputs
+from extraction.diagnostics import EngineEventRecorder, ExtractQualityEvent
+from extraction.materialize_pipeline import write_extract_outputs
 from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
@@ -603,8 +604,6 @@ def _write_and_record_extract_output(
         runtime_profile=runtime_profile,
         dataset_resolver=resolved_dataset_resolver,
     )
-    from planning_engine.diagnostics import EngineEventRecorder, ExtractQualityEvent
-
     recorder = EngineEventRecorder(runtime_profile)
     try:
         _register_extract_view(name, runtime_profile=runtime_profile)

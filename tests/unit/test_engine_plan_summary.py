@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 from obs.engine_artifacts import record_engine_execution_summary, record_engine_plan_summary
-from planning_engine.spec_builder import (
-    FilterTransform,
+from planning_engine.spec_contracts import (
     InputRelation,
+    JoinEdge,
     JoinGraph,
-    JoinKeyPair,
     OutputTarget,
-    RelateTransform,
     RuleIntent,
     RuntimeConfig,
-    SchemaContract,
     SemanticExecutionSpec,
     ViewDefinition,
 )
@@ -27,30 +24,42 @@ def _spec_fixture() -> SemanticExecutionSpec:
                 name="left_view",
                 view_kind="filter",
                 view_dependencies=(),
-                transform=FilterTransform(source="repo_files_v1", predicate="TRUE"),
-                output_schema=SchemaContract(),
+                transform={"kind": "Filter", "source": "repo_files_v1", "predicate": "TRUE"},
+                output_schema={"columns": {}},
             ),
             ViewDefinition(
                 name="right_view",
                 view_kind="filter",
                 view_dependencies=(),
-                transform=FilterTransform(source="repo_files_v1", predicate="TRUE"),
-                output_schema=SchemaContract(),
+                transform={"kind": "Filter", "source": "repo_files_v1", "predicate": "TRUE"},
+                output_schema={"columns": {}},
             ),
             ViewDefinition(
                 name="joined_view",
                 view_kind="relate",
                 view_dependencies=("left_view", "right_view"),
-                transform=RelateTransform(
-                    left="left_view",
-                    right="right_view",
-                    join_type="Inner",
-                    join_keys=(JoinKeyPair(left_key="id", right_key="id"),),
-                ),
-                output_schema=SchemaContract(),
+                transform={
+                    "kind": "Relate",
+                    "left": "left_view",
+                    "right": "right_view",
+                    "join_type": "Inner",
+                    "join_keys": [{"left_key": "id", "right_key": "id"}],
+                },
+                output_schema={"columns": {}},
             ),
         ),
-        join_graph=JoinGraph(edges=(), constraints=()),
+        join_graph=JoinGraph(
+            edges=(
+                JoinEdge(
+                    left_relation="left_view",
+                    right_relation="right_view",
+                    join_type="Inner",
+                    left_keys=("id",),
+                    right_keys=("id",),
+                ),
+            ),
+            constraints=(),
+        ),
         output_targets=(
             OutputTarget(
                 table_name="cpg_nodes",

@@ -9,7 +9,7 @@ from datafusion import SessionContext
 
 from datafusion_engine.materialize_policy import MaterializationPolicy
 from datafusion_engine.session.facade import DataFusionExecutionFacade
-from planning_engine.runtime import EngineRuntime
+from extraction.engine_runtime import EngineRuntime
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime

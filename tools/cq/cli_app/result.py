@@ -96,6 +96,13 @@ def render_result(
         "mermaid-class": render_mermaid_class_diagram,
         "dot": render_dot,
     }
+
+    # LDMD format uses lazy import (implemented in R6)
+    if format_value == "ldmd":
+        from tools.cq.ldmd.writer import render_ldmd_from_cq_result
+
+        return render_ldmd_from_cq_result(result)
+
     renderer = renderers.get(format_value, render_markdown)
     return renderer(result)
 
@@ -119,11 +126,13 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
     int
         Exit code (0 for success).
     """
-    from tools.cq.cli_app.context import FilterConfig
+    from tools.cq.cli_app.context import CliTextResult, FilterConfig
     from tools.cq.cli_app.types import OutputFormat
 
-    # For non-CqResult (e.g., admin command with int exit code)
+    # For non-CqResult (e.g., admin command with int exit code, or CliTextResult)
     if not cli_result.is_cq_result:
+        if isinstance(cli_result.result, CliTextResult):
+            sys.stdout.write(f"{cli_result.result.text}\n")
         return cli_result.get_exit_code()
 
     ctx = cli_result.context

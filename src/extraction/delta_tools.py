@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 from datafusion_engine.arrow.interop import RecordBatchReaderLike
 from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.session.facade import DataFusionExecutionFacade
-from planning_engine.diagnostics import EngineEventRecorder
+from extraction.diagnostics import EngineEventRecorder
 from storage.deltalake import DeltaVacuumOptions, StorageOptions
 
 _DELTA_MIN_RETENTION_HOURS = 168

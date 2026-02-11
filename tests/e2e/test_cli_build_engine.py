@@ -9,7 +9,7 @@ import pytest
 
 from cli.commands.build import BuildOptions, BuildRequestOptions, build_command
 from cli.context import RunContext
-from planning_engine.build_orchestrator import BuildResult
+from graph.build_pipeline import BuildResult
 
 
 def _stub_build_result(output_dir: Path) -> BuildResult:
@@ -58,9 +58,7 @@ def test_build_command_smoke_with_stubbed_orchestrator(
         observed.update(kwargs)
         return _stub_build_result(kwargs["output_dir"])
 
-    monkeypatch.setattr(
-        "planning_engine.build_orchestrator.orchestrate_build", _orchestrate_build_stub
-    )
+    monkeypatch.setattr("graph.build_pipeline.orchestrate_build", _orchestrate_build_stub)
 
     exit_code = build_command(
         repo_root=repo_root,

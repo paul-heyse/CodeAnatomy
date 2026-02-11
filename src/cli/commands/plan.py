@@ -15,7 +15,7 @@ from cli.context import RunContext
 from cli.groups import execution_group
 
 if TYPE_CHECKING:
-    from planning_engine.spec_builder import SemanticExecutionSpec
+    from planning_engine.spec_contracts import SemanticExecutionSpec
 
 
 @dataclass(frozen=True)
@@ -130,8 +130,9 @@ def plan_command(  # noqa: PLR0914
     config_contents.setdefault("repo_root", str(resolved_root))
 
     from planning_engine.output_contracts import ENGINE_CPG_OUTPUTS
-    from planning_engine.spec_builder import build_execution_spec
+    from planning_engine.spec_contracts import SemanticExecutionSpec
     from semantics.ir_pipeline import build_semantic_ir
+    from serde_msgspec import to_builtins
 
     runtime_metadata = _PlanRuntimeMetadata(
         engine_profile=options.engine_profile,
@@ -141,14 +142,6 @@ def plan_command(  # noqa: PLR0914
     ir = build_semantic_ir()
     output_targets = list(ENGINE_CPG_OUTPUTS)
     output_locations = {name: str(resolved_root / "build" / name) for name in output_targets}
-    spec = build_execution_spec(
-        ir=ir,
-        input_locations={},
-        output_targets=output_targets,
-        rulepack_profile=options.rulepack_profile,
-        output_locations=output_locations,
-    )
-
     try:
         engine_module = importlib.import_module("codeanatomy_engine")
     except ImportError:
@@ -170,10 +163,21 @@ def plan_command(  # noqa: PLR0914
 
     import msgspec
 
-    spec_json = msgspec.json.encode(spec).decode()
     compiler = engine_module.SemanticPlanCompiler()
+    build_request: dict[str, object] = {
+        "input_locations": {},
+        "output_targets": output_targets,
+        "rulepack_profile": options.rulepack_profile,
+        "output_locations": output_locations,
+        "runtime": None,
+    }
 
     try:
+        spec_json = compiler.build_spec_json(
+            msgspec.json.encode(to_builtins(ir, str_keys=True)).decode(),
+            msgspec.json.encode(build_request).decode(),
+        )
+        spec = msgspec.json.decode(spec_json, type=SemanticExecutionSpec)
         compiled = compiler.compile(spec_json)
         compile_metadata = json.loads(compiler.compile_metadata_json(session_factory, spec_json))
     except (ValueError, RuntimeError) as exc:

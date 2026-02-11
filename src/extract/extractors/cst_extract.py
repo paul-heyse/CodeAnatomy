@@ -101,12 +101,18 @@ class CstExtractOptions(RepoOptions, WorklistQueueOptions, ParallelOptions):
 
 
 _QNAME_FIELD_NAMES: tuple[str, ...] = ("qnames", "callee_qnames")
+_DEFAULT_QNAME_KEYS: tuple[str, str] = ("name", "source")
 
 
 @cache
 def _qname_keys() -> tuple[str, ...]:
     schema = dataset_schema("libcst_files_v1")
-    return find_struct_field_keys(schema, field_names=_QNAME_FIELD_NAMES)
+    try:
+        return find_struct_field_keys(schema, field_names=_QNAME_FIELD_NAMES)
+    except KeyError:
+        # Derived schema authority can omit nested qname structs in some
+        # extraction-only contexts. Keep row shape deterministic.
+        return _DEFAULT_QNAME_KEYS
 
 
 @dataclass(frozen=True)

@@ -13,6 +13,8 @@ from deltalake import DeltaTable
 
 from graph import GraphProductBuildRequest, build_graph_product
 
+pytest.importorskip("codeanatomy_engine")
+
 
 @pytest.fixture
 def minimal_python_repo(tmp_path: Path) -> Path:

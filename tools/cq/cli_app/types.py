@@ -23,6 +23,7 @@ class OutputFormat(StrEnum):
     mermaid = "mermaid"
     mermaid_class = "mermaid-class"
     dot = "dot"
+    ldmd = "ldmd"  # LLM-friendly progressive disclosure markdown
 
     def __str__(self) -> str:
         """Return the CLI token.

@@ -5,14 +5,12 @@ from __future__ import annotations
 import pytest
 
 from obs.diagnostics_report import build_diagnostics_report
-from planning_engine.spec_builder import (
-    FilterTransform,
+from planning_engine.spec_contracts import (
     InputRelation,
     JoinGraph,
     OutputTarget,
     RuleIntent,
     RuntimeConfig,
-    SchemaContract,
     SemanticExecutionSpec,
     ViewDefinition,
 )
@@ -27,15 +25,15 @@ def _spec_fixture() -> SemanticExecutionSpec:
                 name="cpg_nodes_view",
                 view_kind="filter",
                 view_dependencies=(),
-                transform=FilterTransform(source="repo_files_v1", predicate="TRUE"),
-                output_schema=SchemaContract(),
+                transform={"kind": "Filter", "source": "repo_files_v1", "predicate": "TRUE"},
+                output_schema={"columns": {}},
             ),
             ViewDefinition(
                 name="cpg_edges_view",
                 view_kind="filter",
                 view_dependencies=(),
-                transform=FilterTransform(source="repo_files_v1", predicate="TRUE"),
-                output_schema=SchemaContract(),
+                transform={"kind": "Filter", "source": "repo_files_v1", "predicate": "TRUE"},
+                output_schema={"columns": {}},
             ),
         ),
         join_graph=JoinGraph(edges=(), constraints=()),
@@ -89,7 +87,7 @@ def _run_result_fixture() -> dict[str, object]:
 def test_record_observability_emits_required_engine_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from planning_engine import build_orchestrator as orchestrator_mod
+    from graph import build_pipeline as orchestrator_mod
 
     events: list[tuple[str, dict[str, object], str]] = []
 

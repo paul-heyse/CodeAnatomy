@@ -56,6 +56,43 @@ impl SessionFactory {
     ///     >>> factory = SessionFactory.from_class("medium")
     #[staticmethod]
     fn from_class(environment_class: &str) -> PyResult<Self> {
+        Self::from_class_name(environment_class)
+    }
+
+    /// Get the profile configuration as JSON string.
+    fn profile_json(&self) -> PyResult<String> {
+        serde_json::to_string(self.inner.profile())
+            .map_err(|e| PyValueError::new_err(format!("Failed to encode profile: {e}")))
+    }
+
+    /// Return a stable hash for the full Rust profile payload.
+    fn profile_hash(&self) -> PyResult<String> {
+        let profile_json = serde_json::to_string(self.inner.profile())
+            .map_err(|e| PyValueError::new_err(format!("Failed to encode profile: {e}")))?;
+        Ok(blake3::hash(profile_json.as_bytes()).to_hex().to_string())
+    }
+
+    /// Return a stable hash for core execution settings consumed by Python adapters.
+    fn settings_hash(&self) -> PyResult<String> {
+        let profile = self.inner.profile();
+        let payload = serde_json::json!({
+            "target_partitions": profile.target_partitions,
+            "batch_size": profile.batch_size,
+            "memory_pool_bytes": profile.memory_pool_bytes,
+        });
+        let encoded = serde_json::to_string(&payload).map_err(|e| {
+            PyValueError::new_err(format!("Failed to encode settings payload: {e}"))
+        })?;
+        Ok(blake3::hash(encoded.as_bytes()).to_hex().to_string())
+    }
+
+    fn __repr__(&self) -> String {
+        "SessionFactory(...)".to_string()
+    }
+}
+
+impl SessionFactory {
+    pub(crate) fn from_class_name(environment_class: &str) -> PyResult<Self> {
         let class = match environment_class.to_lowercase().as_str() {
             "small" => EnvironmentClass::Small,
             "medium" => EnvironmentClass::Medium,
@@ -71,19 +108,6 @@ impl SessionFactory {
             inner: codeanatomy_engine::session::factory::SessionFactory::new(profile),
         })
     }
-
-    /// Get the profile configuration as JSON string.
-    fn profile_json(&self) -> PyResult<String> {
-        serde_json::to_string(self.inner.profile())
-            .map_err(|e| PyValueError::new_err(format!("Failed to encode profile: {e}")))
-    }
-
-    fn __repr__(&self) -> String {
-        "SessionFactory(...)".to_string()
-    }
-}
-
-impl SessionFactory {
     /// Internal accessor for the Rust SessionFactory.
     pub(crate) fn inner(&self) -> &codeanatomy_engine::session::factory::SessionFactory {
         &self.inner

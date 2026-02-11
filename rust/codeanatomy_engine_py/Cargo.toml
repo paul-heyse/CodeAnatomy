@@ -20,6 +20,7 @@ serde_path_to_error = "0.1"
 hex = "0.4"
 tokio = { workspace = true }
 chrono = { workspace = true }
+blake3 = "1"
 
 [build-dependencies]
 pyo3-build-config = { workspace = true }

@@ -102,6 +102,13 @@ jobs:
           mkdir -p .ci-logs
           bash scripts/check_bindings_lane.sh 2>&1 | tee .ci-logs/bindings_lane_linux.log
 
+      - name: Run Rust boundary smoke tests
+        shell: bash
+        run: |
+          uv run pytest -q \
+            tests/integration/test_rust_engine_e2e.py::test_rust_engine_exports_all_classes \
+            tests/integration/test_rust_engine_e2e.py::test_rust_engine_compile_and_materialize_boundary
+
       - name: Run bindings clippy
         shell: bash
         run: |

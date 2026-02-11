@@ -30,10 +30,10 @@ from datafusion_engine.session.runtime import (
 )
 from datafusion_engine.session.streaming import StreamingExecutionResult
 from datafusion_engine.tables.param import resolve_param_bindings, scalar_param_signature
+from extraction.diagnostics import EngineEventRecorder, ExtractQualityEvent, ExtractWriteEvent
+from extraction.plan_product import PlanProduct
+from extraction.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
 from obs.otel import OtelBootstrapOptions, configure_otel
-from planning_engine.diagnostics import EngineEventRecorder, ExtractQualityEvent, ExtractWriteEvent
-from planning_engine.plan_product import PlanProduct
-from planning_engine.semantic_boundary import ensure_semantic_views_registered, is_semantic_view
 from utils.uuid_factory import uuid7_hex
 from utils.value_coercion import coerce_to_recordbatch_reader
 

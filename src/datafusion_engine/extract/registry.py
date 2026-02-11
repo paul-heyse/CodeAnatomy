@@ -60,9 +60,13 @@ _EXTRACT_ZORDER_CANDIDATES: tuple[str, ...] = (
     "edge_id",
     "span_id",
 )
-_LEGACY_DATASET_ALIASES: dict[str, str] = {
-    "scip_occurrences": "scip_index_v1",
-}
+_LEGACY_DATASET_ALIASES: dict[str, str] = {}
+_FILE_IDENTITY_QUERY_COLUMNS: tuple[str, ...] = (
+    "repo",
+    "path",
+    "file_id",
+    "file_sha256",
+)
 
 _REPO_FILE_BLOBS_SCHEMA = pa.schema(
     [
@@ -97,6 +101,30 @@ _TYPED_SCHEMA_OVERRIDES: dict[str, pa.Schema] = {
 }
 
 
+def _static_root_extract_schema(name: str) -> pa.Schema | None:
+    """Return static typed schemas for core root extract datasets."""
+    from datafusion_engine.schema.registry import (
+        AST_FILES_SCHEMA,
+        BYTECODE_FILES_SCHEMA,
+        LIBCST_FILES_SCHEMA,
+        REPO_FILES_SCHEMA,
+        SCIP_INDEX_SCHEMA,
+        SYMTABLE_FILES_SCHEMA,
+        TREE_SITTER_FILES_SCHEMA,
+    )
+
+    static_schemas: dict[str, pa.Schema] = {
+        "repo_files_v1": REPO_FILES_SCHEMA,
+        "libcst_files_v1": LIBCST_FILES_SCHEMA,
+        "ast_files_v1": AST_FILES_SCHEMA,
+        "symtable_files_v1": SYMTABLE_FILES_SCHEMA,
+        "tree_sitter_files_v1": TREE_SITTER_FILES_SCHEMA,
+        "bytecode_files_v1": BYTECODE_FILES_SCHEMA,
+        "scip_index_v1": SCIP_INDEX_SCHEMA,
+    }
+    return static_schemas.get(name)
+
+
 def extract_metadata(name: str) -> ExtractMetadata:
     """Return extract metadata for a dataset name.
 
@@ -121,6 +149,9 @@ def dataset_schema(name: str) -> SchemaLike:
     resolved_name = _LEGACY_DATASET_ALIASES.get(name, name)
     if resolved_name in _TYPED_SCHEMA_OVERRIDES:
         return _TYPED_SCHEMA_OVERRIDES[resolved_name]
+    static_schema = _static_root_extract_schema(resolved_name)
+    if static_schema is not None:
+        return static_schema
     try:
         from datafusion_engine.schema.registry import extract_schema_for
 
@@ -251,14 +282,28 @@ def dataset_query(
     """
     _ = repo_id
     row = extract_metadata(name)
+    schema = dataset_schema(name)
+    columns = _base_dataset_query_columns(row, schema)
+    if projection:
+        columns = _projected_dataset_query_columns(schema, projection, fallback=columns)
+    return QuerySpec.simple(*columns)
+
+
+def _base_dataset_query_columns(row: ExtractMetadata, schema: SchemaLike) -> list[str]:
     columns: list[str] = []
     seen: set[str] = set()
+    schema_fields = {field.name for field in schema}
 
     def _append_column(column: str) -> None:
         if column in seen:
             return
         columns.append(column)
         seen.add(column)
+
+    # Preserve root file-identity columns when present in the dataset schema.
+    for identity_column in _FILE_IDENTITY_QUERY_COLUMNS:
+        if identity_column in schema_fields:
+            _append_column(identity_column)
 
     if row.bundles:
         from datafusion_engine.extract.bundles import bundle as _bundle
@@ -270,13 +315,18 @@ def dataset_query(
         _append_column(field_name)
     for derived in row.derived:
         _append_column(derived.name)
-    if projection:
-        projection_set = set(projection)
-        schema = dataset_schema(name)
-        filtered = [field.name for field in schema if field.name in projection_set]
-        if filtered:
-            columns = filtered
-    return QuerySpec.simple(*columns)
+    return columns
+
+
+def _projected_dataset_query_columns(
+    schema: SchemaLike,
+    projection: Sequence[str],
+    *,
+    fallback: list[str],
+) -> list[str]:
+    projection_set = set(projection)
+    filtered = [field.name for field in schema if field.name in projection_set]
+    return filtered if filtered else fallback
 
 
 def normalize_options[T](name: str, options: object | None, options_type: type[T]) -> T:

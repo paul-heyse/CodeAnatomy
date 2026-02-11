@@ -203,6 +203,20 @@ class TestRunCommandParsing:
         opts = bound.kwargs["opts"]
         assert opts.step
 
+    def test_run_with_neighborhood_step(self) -> None:
+        """Test parsing run command with a neighborhood --step payload."""
+        _cmd, bound, _extra = app.parse_args(
+            [
+                "run",
+                "--step",
+                '{"type":"neighborhood","target":"tools/cq/search/python_analysis_session.py:1"}',
+            ],
+            exit_on_error=False,
+            print_error=False,
+        )
+        opts = bound.kwargs["opts"]
+        assert opts.step
+
 
 class TestChainCommandParsing:
     """Tests for chain command parsing."""

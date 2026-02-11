@@ -25,7 +25,10 @@ Canonical CQ behavior/output semantics are documented in
 | `/cq q "all=..." / "any=..."` | Combined/alternative patterns | Logical composition of queries |
 | `/cq q "pattern='eval(\$X)'"` | Security pattern review | Identify security-sensitive constructs |
 | `/cq q --format mermaid` | Understanding code flow | Visual call graphs and class diagrams |
+| `/cq neighborhood` / `/cq nb` | Targeted semantic neighborhood analysis | Anchor/symbol resolution + structural/LSP neighborhood slices |
 | `/cq run` | Multi-step execution with shared scan | Batch analysis workflows |
+| `/cq run` with `type="neighborhood"` | Neighborhood in automation plans | Parity with CLI neighborhood behavior |
+| `/cq ldmd` | Progressive disclosure of LDMD artifacts | Index/search/get/neighbors for long outputs |
 | `/cq chain` | Command chaining frontend | Quick multi-command analysis |
 | `/ast-grep` | Structural search/rewrites (not regex) | Pattern-based code transformation |
 | `/dfdl_ref` | DataFusion + DeltaLake operations (query engine, storage, UDFs) | Don't guess APIs - probe versions |
@@ -37,6 +40,32 @@ Canonical CQ behavior/output semantics are documented in
 **Before searching Rust code:** Use `/cq search <query> --lang rust` to narrow scope to Rust files. Use `/cq q "entity=... lang=rust"` for Rust entity queries. Scope is extension-authoritative (`python` => `.py/.pyi`, `rust` => `.rs`).
 
 CQ parallel worker pools use multiprocessing `spawn` context (not `fork`) and fail open to sequential execution on worker errors.
+
+**Before deep localized analysis:** Use `/cq neighborhood <target>` (or `/cq nb <target>`) with `target` as `file.py:line[:col]` or `symbol`. Resolution is deterministic and shared between CLI and run-plan execution.
+
+**Validated reliability baseline (2026-02-11):**
+- `cq run --step` and `cq run --steps` accept `type="neighborhood"` JSON payloads.
+- `cq search --in <dir>` works reliably for `src/`, `tools/`, and `rust/` directory scopes.
+- Directory include-glob constraining remains language-safe.
+
+Known-good commands:
+```bash
+/cq run --step '{"type":"neighborhood","target":"tools/cq/search/python_analysis_session.py:1"}' --format summary
+/cq run --steps '[{"type":"neighborhood","target":"tools/cq/search/python_analysis_session.py:1"}]' --format summary
+/cq search PythonAnalysisSession --in tools/cq --format summary
+/cq search compile --in rust --lang rust --format summary
+/cq search RuntimeProfile --in src --format summary
+```
+
+**Before processing long CQ markdown artifacts:** Use `/cq ldmd index|get|neighbors|search` for progressive section retrieval, with `get` controls `--mode full|preview|tldr` and `--depth`.
+
+**For LSP-rich evidence collection:** CQ now includes implemented advanced planes under `tools/cq/search`:
+- semantic tokens + inlay hints overlays (`semantic_overlays.py`)
+- pull diagnostics normalization (`diagnostics_pull.py`)
+- code-action resolve/execute bridge (`refactor_actions.py`)
+- rust-analyzer macro/runnables extensions (`rust_extensions.py`)
+
+These planes are capability-gated and fail-open; they enrich outputs without blocking core search/query/run execution.
 
 **Before modifying a function:** Run `/cq calls <function>` to find all call sites.
 
@@ -113,7 +142,9 @@ Use `--format mermaid`, `--format mermaid-class`, or `--format dot` to visualize
 All `/cq` commands support `--format` for output control:
 - `md` (default) - Markdown for Claude context
 - `json` - Structured JSON
-- `mermaid` / `mermaid-class` - Visual diagrams
+- `both` / `summary` - Combined or compact output
+- `mermaid` / `mermaid-class` / `dot` - Visual diagrams
+- `ldmd` - LDMD marker-preserving output for progressive disclosure tools
 
 Config via `.cq.toml` or `CQ_*` environment variables. See `tools/cq/README.md` for full options.
 

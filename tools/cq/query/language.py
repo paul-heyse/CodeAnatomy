@@ -211,9 +211,9 @@ def _constrain_single_include_glob(glob: str, suffixes: tuple[str, ...]) -> list
         else:
             constrained = _expand_directory_glob(normalized, suffixes)
     elif normalized.endswith("/**"):
-        constrained = [f"{normalized[:-3]}**/*{suffix}" for suffix in suffixes]
+        constrained = _expand_directory_glob(normalized[:-3], suffixes)
     elif normalized.endswith("**"):
-        constrained = [f"{normalized[:-2]}**/*{suffix}" for suffix in suffixes]
+        constrained = _expand_directory_glob(normalized[:-2], suffixes)
     else:
         constrained = [normalized]
     return constrained

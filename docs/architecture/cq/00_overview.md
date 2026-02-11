@@ -1,6 +1,6 @@
 # CQ Architecture Overview
 
-This document provides a fully integrated architectural review of the CQ tool (`tools/cq/`, version 0.3.0), a multi-language code query and analysis system. It synthesizes the seven subsystem documents in this directory into a coherent picture of the system's design, data flow, cross-cutting concerns, and primary vectors for architectural improvement.
+This document provides a fully integrated architectural review of the CQ tool (`tools/cq/`, version 0.3.0), a multi-language code query and analysis system. It synthesizes the nine subsystem documents in this directory into a coherent picture of the system's design, data flow, cross-cutting concerns, and primary vectors for architectural improvement.
 
 **Target audience:** Advanced LLM programmers with deep Python expertise, seeking to propose architectural improvements.
 
@@ -12,9 +12,11 @@ This document provides a fully integrated architectural review of the CQ tool (`
 | [02_search_subsystem.md](02_search_subsystem.md) | Smart search, 3-tier classification, 5-stage enrichment, parallel pools, Pyrefly LSP, cross-source agreement | 1819 |
 | [03_query_subsystem.md](03_query_subsystem.md) | Query DSL grammar, IR, parser, planner, executor, batch spans, metavariables, multi-language | 1242 |
 | [04_analysis_commands.md](04_analysis_commands.md) | 8 macro commands (calls, impact, sig-impact, scopes, bytecode, side-effects, imports, exceptions), DefIndex, scoring | 803 |
-| [05_multi_step_execution.md](05_multi_step_execution.md) | RunPlan model, 10 step types, TOML/JSON plans, shared scan, chain command, result merging, provenance | 846 |
+| [05_multi_step_execution.md](05_multi_step_execution.md) | RunPlan model, 11 step types, TOML/JSON plans, shared scan, chain command, result merging, provenance | 846 |
 | [06_data_models.md](06_data_models.md) | Contract architecture, CqStruct, schema types, enrichment facts, serialization codecs, boundary protocol | 1161 |
 | [07_ast_grep_and_formatting.md](07_ast_grep_and_formatting.md) | ast-grep-py integration, rule system, output renderers, file scanning, gitignore, shared scan context | 1124 |
+| [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) | Semantic neighborhood assembly, SNB schema, 4-phase pipeline, capability gating, section layout, CLI/run integration | 1957 |
+| [09_ldmd_format.md](09_ldmd_format.md) | LDMD progressive disclosure format, parser/writer architecture, protocol commands, OutputFormat integration | 1505 |
 
 ---
 
@@ -27,6 +29,7 @@ CQ is a code query tool that occupies a specific niche: **AST-aware code analysi
 - Enrichment depth: Multi-source evidence (ast-grep, Python AST, LibCST, tree-sitter, symtable, bytecode, Pyrefly LSP) with cross-source agreement tracking
 - Impact awareness: Call graph traversal, data flow taint analysis, and signature change simulation
 - Workflow composition: Multi-step execution with shared scan infrastructure
+- Contextual neighborhoods: Semantic neighborhood assembly with capability-gated LSP enrichment and progressive disclosure via LDMD
 
 **Technology stack:**
 - CLI: cyclopts for command routing
@@ -35,27 +38,28 @@ CQ is a code query tool that occupies a specific niche: **AST-aware code analysi
 - Text search: ripgrep for fast candidate generation
 - Parallelism: multiprocessing with `spawn` context (not `fork`)
 - Type enrichment: Pyrefly LSP for semantic hover data
+- Progressive disclosure: LDMD format for long document navigation
 
 ---
 
 ## 2. Architectural Topology
 
-CQ is organized as a layered system with three execution tiers and a shared infrastructure layer.
+CQ is organized as a layered system with four execution tiers and a shared infrastructure layer.
 
 ```
                           CLI Layer (cyclopts)
                     config / context / rendering
                               |
-         +--------------------+--------------------+
-         |                    |                    |
-    Search (rg +         Query (DSL +         Analysis
-    enrichment)          ast-grep)          (macros)
-         |                    |                    |
-         +--------------------+--------------------+
+         +--------------------+--------------------+-------------------+
+         |                    |                    |                   |
+    Search (rg +         Query (DSL +         Analysis          Neighborhood
+    enrichment)          ast-grep)          (macros)          (SNB assembly)
+         |                    |                    |                   |
+         +--------------------+--------------------+-------------------+
                               |
                     Shared Infrastructure
               (ast-grep, DefIndex, scoring,
-               multi-lang, serialization)
+               multi-lang, serialization, LDMD)
                               |
                     Multi-Step Execution
                   (run / chain / batch)
@@ -72,9 +76,12 @@ Declarative code queries via a token-based DSL. Follows classic compiler archite
 **Tier 3: Analysis** (`tools/cq/macros/`)
 Pre-built analysis commands: `calls` (call site census), `impact` (taint/data flow), `sig-impact` (signature change simulation), `scopes` (closure capture), `bytecode` (bytecode surface), `side-effects` (import-time effects), `imports` (structure/cycles), `exceptions` (handling patterns). Each uses two-stage collection (fast ripgrep pre-filter -> precise AST parse).
 
+**Tier 4: Neighborhood** (`tools/cq/neighborhood/`)
+Targeted semantic neighborhood analysis around code anchors. A 4-phase pipeline resolves a target (file:line:col or symbol), collects structural AST neighbors, enriches with LSP evidence (capability-gated), and emits a typed `SemanticNeighborhoodBundleV1`. Output is rendered to markdown with a deterministic 17-slot section layout or to LDMD for progressive disclosure.
+
 ### 2.2 Multi-Step Composition
 
-The `run` and `chain` subsystems (`tools/cq/run/`) compose tiers into workflows. A `RunPlan` contains ordered steps that can mix search, query, and analysis commands. Multiple Q-steps sharing the same language scope are batched into a single ast-grep scan via `BatchEntityQuerySession`, avoiding redundant file I/O.
+The `run` and `chain` subsystems (`tools/cq/run/`) compose tiers into workflows. A `RunPlan` contains ordered steps that can mix search, query, analysis, and neighborhood commands (11 step types total). Multiple Q-steps sharing the same language scope are batched into a single ast-grep scan via `BatchEntityQuerySession`, avoiding redundant file I/O. NeighborhoodStep is the newest addition, enabling targeted semantic neighborhood analysis within automated workflows.
 
 ---
 
@@ -298,6 +305,7 @@ The `run` subsystem can invoke any other subsystem via `RunStep` types:
 | `ImportsStep` | Analysis (imports) | No |
 | `ExceptionsStep` | Analysis (exceptions) | No |
 | `SideEffectsStep` | Analysis (side-effects) | No |
+| `NeighborhoodStep` | Neighborhood | No |
 
 Only Q-steps benefit from shared scan optimization. Analysis and search steps are executed independently, each rebuilding their own indexes and candidate sets. This is the most significant performance opportunity in the multi-step system.
 
@@ -310,6 +318,10 @@ ast-grep-py is consumed by three subsystems:
 3. **Analysis macros**: Entity scanning via `sg_scan()` for definition/call records
 
 The `RuleSpec` system (`tools/cq/astgrep/sgpy_scanner.py`) provides the canonical rule representation. Language-dispatched rule loading (`rules.py` -> `rules_py.py` / `rules_rust.py`) selects rules per language. Python has 23 rules covering 6 record types; Rust has 8 rules.
+
+### 6.5 LDMD as Progressive Disclosure Infrastructure
+
+LDMD (`tools/cq/ldmd/`) provides progressive disclosure markdown format for long outputs, with byte-offset indexing, stack-validated parsing, and a 4-command protocol (index/get/search/neighbors). It enables large documents (e.g., neighborhood outputs) to be navigated section-by-section rather than as monolithic text blocks. The LDMD format is integrated into the output rendering pipeline via `OutputFormat.LDMD`, allowing any CQ command to emit LDMD-formatted artifacts for subsequent exploration.
 
 ---
 
@@ -547,6 +559,11 @@ For someone planning architectural improvements, the recommended reading order d
 1. [04_analysis_commands.md](04_analysis_commands.md) - Macro architecture, scoring, taint analysis
 2. [03_query_subsystem.md](03_query_subsystem.md) - Query IR, relational constraints
 3. [06_data_models.md](06_data_models.md) - Scoring models, confidence signals
+
+**For contextual analysis and progressive disclosure:**
+1. [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) - Semantic neighborhood assembly, 4-phase pipeline, LSP enrichment
+2. [09_ldmd_format.md](09_ldmd_format.md) - LDMD format specification, parser architecture, protocol commands
+3. [01_core_infrastructure.md](01_core_infrastructure.md) - OutputFormat integration, rendering pipeline
 
 ---
 

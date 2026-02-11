@@ -1,6 +1,6 @@
 ---
 name: cq
-description: High-signal code queries for Python and Rust (impact, calls, imports, exceptions, sig-impact, side-effects, scopes, bytecode-surface, pattern queries, scope filtering, visualization)
+description: High-signal code queries for Python and Rust (search/q macros, neighborhood assembly, run/chain workflows, LDMD progressive disclosure, and LSP-backed enrichment planes)
 allowed-tools: Bash
 ---
 
@@ -23,9 +23,13 @@ Canonical behavior and output semantics are documented in
 | Trace parameter | `/cq impact <fn> --param <p>` |
 | Check signature change | `/cq sig-impact <fn> --to "<sig>"` |
 | Report bundle | `/cq report refactor-impact --target function:foo` |
+| Neighborhood analysis | `/cq neighborhood src/foo.py:120:4` |
+| Neighborhood alias | `/cq nb build_graph_product` |
 | Multi-step run | `/cq run --steps '[{"type":"q","query":"entity=function name=foo"},{"type":"calls","function":"foo"}]'` |
+| Run neighborhood step | `/cq run --steps '[{"type":"neighborhood","target":"src/foo.py:120:4"}]'` |
 | Plan file execution | `/cq run --plan analysis.toml` |
 | Command chaining | `/cq chain q "entity=function name=foo" AND calls foo` |
+| LDMD index/search/get | `/cq ldmd get path/to/output.ldmd --id root --mode preview --depth 1` |
 | Pattern search (AST) | `/cq q "pattern='getattr(\$X, \$Y)'"` |
 | Entity query | `/cq q "entity=function name=<name>"` |
 | Rust entity query | `/cq q "entity=function name=<name> lang=rust"` |
@@ -42,6 +46,62 @@ Use CQ first for code discovery and structural analysis:
 - Use `/cq calls` or `/cq impact` before refactors.
 - Use `/cq run` for multi-step workflows to avoid repeated scans.
 - Use `rg` only for non-Python/non-Rust assets or explicit raw text needs.
+
+## Validated CQ Behavior (2026-02-11)
+
+The following behaviors are validated and should be treated as current contract:
+
+- `cq run --step` and `cq run --steps` accept `type="neighborhood"` payloads.
+- `cq search --in <dir>` is reliable across `src/`, `tools/`, and `rust/` scopes.
+- Directory include globs are language-constrained without malformed paths.
+
+Known-good command matrix:
+
+```bash
+# Inline neighborhood run step
+/cq run --step '{"type":"neighborhood","target":"tools/cq/search/python_analysis_session.py:1"}' --format summary
+
+# Neighborhood step array
+/cq run --steps '[{"type":"neighborhood","target":"tools/cq/search/python_analysis_session.py:1"}]' --format summary
+
+# Scoped search in tools
+/cq search PythonAnalysisSession --in tools/cq --format summary
+
+# Scoped rust search
+/cq search compile --in rust --lang rust --format summary
+
+# Scoped search in src
+/cq search RuntimeProfile --in src --format summary
+```
+
+## Neighborhood + LDMD (Implemented)
+
+`neighborhood` is now a first-class CQ macro (alias: `nb`) and run-step type.
+
+- Target formats: `file.py:line`, `file.py:line:col`, or `symbol_name`.
+- Resolution behavior: shared resolver for CLI + run plans with deterministic tie-breaks and explicit degrade events.
+- Assembly behavior: deterministic merge of structural slices plus capability-gated LSP slices.
+- Python LSP slices: references, implementations, supertypes, subtypes via pyrefly adapters.
+- Rust LSP slices: references, implementations, and hover/signature/diagnostic context via rust-analyzer session probes.
+- Rendering path: canonical `SemanticNeighborhoodBundleV1` -> `CqResult` rendering.
+
+`ldmd` provides progressive disclosure tooling over marker-structured CQ output:
+
+- `ldmd index` for section metadata
+- `ldmd search` for section-level search
+- `ldmd get` with `--mode full|preview|tldr` and `--depth`
+- `ldmd neighbors` for adjacent-section traversal
+
+## Advanced LSP Enrichment Planes (Implemented)
+
+The following CQ enrichment planes are implemented under `tools/cq/search` and used by higher-level CQ flows:
+
+- `semantic_overlays.py`: range semantic tokens + inlay hints normalization.
+- `diagnostics_pull.py`: shared pull-diagnostics helpers for `textDocument/diagnostic` and `workspace/diagnostic`.
+- `refactor_actions.py`: diagnostic item bridging plus code-action resolve/execute helpers.
+- `rust_extensions.py`: rust-analyzer extensions (`expandMacro`, `runnables`) with fail-open behavior.
+
+All advanced planes are capability-gated and on-demand. They must not block base CQ commands when unavailable.
 
 ## Rust Language Support
 
@@ -76,6 +136,7 @@ Scope is extension-authoritative:
 | `q` (entity) | Yes | `lang=rust` in query string |
 | `q` (pattern) | Yes | `lang=rust` in query string |
 | `run` / `chain` | Yes | `lang` field in step specs |
+| `neighborhood` / `nb` | Yes | `--lang rust` with `file.rs:line[:col]` or symbol target |
 | `calls` | No | Python-only (AST/symtable) |
 | `impact` | No | Python-only (AST/symtable) |
 | `sig-impact` | No | Python-only (AST/symtable) |
@@ -137,6 +198,7 @@ Scope is extension-authoritative:
 | entity=decorator | Full | None | Rust has no decorators |
 | Pattern queries | Full | Full | |
 | Relational constraints | Full | Full | |
+| neighborhood macro | Full | Full | Anchor/symbol target resolution with capability-gated LSP slices |
 | Scope filtering | Full | None | Python symtable only |
 | Bytecode queries | Full | None | Python dis only |
 | calls macro | Full | Partial | Rust: location only |
@@ -144,6 +206,7 @@ Scope is extension-authoritative:
 | imports/exceptions | Full | None | Python only |
 | side-effects/scopes | Full | None | Python only |
 | bytecode-surface | Full | None | Python only |
+| ldmd protocol | Full | Full | Output/post-processing protocol, language-agnostic |
 
 ## Smart Search (Default for Code Discovery)
 
@@ -294,6 +357,9 @@ Execute multiple queries with a single repo scan for improved performance.
 
 # Mixed: plan + inline steps
 /cq run --plan base.toml --step '{"type":"impact","function":"foo","param":"x"}'
+
+# Neighborhood step (anchor target)
+/cq run --steps '[{"type":"neighborhood","target":"tools/cq/search/rust_lsp.py:745:1","lang":"python","top_k":8}]'
 ```
 
 ### cq chain (Command Chaining)
@@ -320,6 +386,7 @@ Execute multiple queries with a single repo scan for improved performance.
 | `side-effects` | — | `max_files`, `id` |
 | `scopes` | `target` | `max_files`, `id` |
 | `bytecode-surface` | `target` | `show`, `max_files`, `id` |
+| `neighborhood` | `target` | `lang`, `top_k`, `no_lsp`, `id` |
 
 ### When to Use Multi-Step
 
@@ -387,6 +454,7 @@ All commands support these global options:
 | `mermaid` | Mermaid flowchart - call graphs |
 | `mermaid-class` | Mermaid class diagram |
 | `dot` | Graphviz DOT format |
+| `ldmd` | LDMD marker format for progressive disclosure |
 
 ### Examples with Global Options
 
@@ -457,9 +525,11 @@ For detailed information on architecture, scoring, filtering, and troubleshootin
 | `side-effects` | Detect import-time side effects | `/cq side-effects` |
 | `scopes` | Analyze closure captures | `/cq scopes path/to/file.py` |
 | `bytecode-surface` | Analyze bytecode dependencies | `/cq bytecode-surface file.py` |
+| `neighborhood` / `nb` | Analyze semantic neighborhood around anchor/symbol target | `/cq neighborhood tools/cq/search/rust_lsp.py:745:1` |
 | `q` | Declarative entity queries | `/cq q "entity=import name=Path"` |
 | `run` | Multi-step execution (shared scan) | `/cq run --steps '[{"type":"q","query":"entity=function name=foo"},{"type":"calls","function":"foo"}]'` |
 | `chain` | Command chaining frontend | `/cq chain q "entity=function name=foo" AND calls foo` |
+| `ldmd` | Progressive disclosure protocol for LDMD docs | `/cq ldmd get path/to/output.ldmd --id root --mode preview --depth 1` |
 
 ## Command Details
 
@@ -559,6 +629,38 @@ Results: !`./scripts/cq bytecode-surface "$1" --root .`
 Usage: /cq bytecode-surface <FILE_OR_SYMBOL> [--show <globals,attrs,constants,opcodes>]
 
 Example: /cq bytecode-surface tools/cq/macros/calls.py --show globals,attrs
+
+### neighborhood / nb - Semantic Neighborhood Analysis
+
+Builds a semantic neighborhood around a target and returns structural plus LSP-backed slices.
+
+Results: !`./scripts/cq neighborhood "$1" --root .`
+Usage: /cq neighborhood <TARGET> [--lang python|rust] [--top-k N] [--no-lsp]
+
+Target formats:
+- `path/to/file.py:line`
+- `path/to/file.py:line:col`
+- `symbol_name`
+
+Example: /cq neighborhood tools/cq/search/rust_lsp.py:745:1 --lang python
+Example: /cq nb enrich_with_rust_lsp --lang python
+
+Run-step equivalent:
+```json
+{"type":"neighborhood","target":"tools/cq/search/rust_lsp.py:745:1","lang":"python","top_k":10}
+```
+
+### ldmd - Progressive Disclosure Protocol
+
+LDMD commands operate on marker-structured CQ output and support depth/mode retrieval.
+
+Usage:
+- `/cq ldmd index <PATH>`
+- `/cq ldmd search <PATH> --query "<text>"`
+- `/cq ldmd get <PATH> --id <SECTION_ID> --mode full|preview|tldr --depth N`
+- `/cq ldmd neighbors <PATH> --id <SECTION_ID>`
+
+Example: /cq ldmd get path/to/output.ldmd --id root --mode preview --depth 1
 
 ### Bytecode Queries (dis Module Integration)
 
@@ -1045,7 +1147,12 @@ Summary keys are ordered by priority: core metrics first, then classification br
 |--------|------|----------|
 | Markdown | `--format md` | Claude context (default) |
 | JSON | `--format json` | Programmatic use |
+| Both | `--format both` | Markdown + JSON in one response |
 | Summary | `--format summary` | CI integration |
+| Mermaid | `--format mermaid` | Flow/call graph output |
+| Mermaid Class | `--format mermaid-class` | Class hierarchy output |
+| DOT | `--format dot` | Graphviz pipelines |
+| LDMD | `--format ldmd` | Marker-preserving output for progressive disclosure |
 
 ### Filtering Examples
 
@@ -1103,6 +1210,7 @@ Based on evidence quality:
 | Test isolation issues | `/cq side-effects` |
 | Extracting nested functions | `/cq scopes <file>` |
 | Finding hidden deps | `/cq bytecode-surface <file>` |
+| Exploring local impact around anchor/symbol | `/cq neighborhood <file:line[:col] \| symbol>` |
 | Finding specific imports | `/cq q "entity=import name=pandas"` |
 | Finding functions by pattern | `/cq q "entity=function name=~^test_"` |
 | Quick entity census | `/cq q "entity=class in=src"` |
@@ -1115,6 +1223,7 @@ Based on evidence quality:
 | Searching Rust code | `/cq search <query> --lang rust` |
 | Finding Rust entities | `/cq q "entity=function lang=rust"` |
 | Rust structural patterns | `/cq q "pattern='impl \$T' lang=rust"` |
+| Progressive retrieval of long CQ output | `/cq ldmd get <path> --id <section> --mode preview --depth 1` |
 
 ## Artifacts
 

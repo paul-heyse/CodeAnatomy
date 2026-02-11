@@ -108,6 +108,18 @@ class BytecodeSurfaceStepCli:
     max_files: int = 500
 
 
+@dataclass(frozen=True)
+class NeighborhoodStepCli:
+    """CLI payload for a neighborhood step."""
+
+    type: Literal["neighborhood"] = "neighborhood"
+    id: str | None = None
+    target: str | None = None
+    lang: str = "python"
+    top_k: int = 10
+    no_lsp: bool = False
+
+
 RunStepCli = (
     QStepCli
     | SearchStepCli
@@ -119,6 +131,7 @@ RunStepCli = (
     | SideEffectsStepCli
     | ScopesStepCli
     | BytecodeSurfaceStepCli
+    | NeighborhoodStepCli
 )
 
 
@@ -128,6 +141,7 @@ __all__ = [
     "ExceptionsStepCli",
     "ImpactStepCli",
     "ImportsStepCli",
+    "NeighborhoodStepCli",
     "QStepCli",
     "RunStepCli",
     "ScopesStepCli",

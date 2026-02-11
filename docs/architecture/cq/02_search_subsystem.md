@@ -42,6 +42,14 @@ The CQ search subsystem (`tools/cq/search/`) provides semantically-enriched code
 | `contracts.py` | ~488 | Multi-language summary contracts and telemetry |
 | `timeout.py` | ~108 | Async/sync timeout wrappers with fallback semantics |
 | `pyrefly_lsp.py` | ~341 | Pyrefly LSP integration for hover/diagnostic enrichment |
+| `rust_lsp_contracts.py` | ~680 | Rust LSP contract structs (LspCapabilitySnapshotV1, LspSessionEnvV1, RustDiagnosticV1) |
+| `rust_lsp.py` | ~1107 | Rust LSP session management with rust-analyzer |
+| `pyrefly_capability_gates.py` | ~133 | Pyrefly capability gate functions for optional enrichment surfaces |
+| `pyrefly_expansion.py` | ~525 | Pyrefly expansion structs (DocumentSymbol, WorkspaceSymbol, SemanticToken) |
+| `semantic_overlays.py` | ~366 | Semantic token and inlay hint overlays |
+| `refactor_actions.py` | ~388 | Code-action resolve/execute bridge and diagnostics |
+| `rust_extensions.py` | ~206 | Rust-analyzer macro expansion and runnables extensions |
+| `diagnostics_pull.py` | ~190 | Pull diagnostics normalization (textDocument/diagnostic, workspace/diagnostic) |
 
 ### Enrichment Sub-Modules
 
@@ -1099,7 +1107,883 @@ def enrich_with_pyrefly_lsp(
 
 ---
 
-## 14. Result Assembly
+## 14. Rust LSP Integration
+
+**Purpose:** Enrich Rust code search results with LSP data from rust-analyzer.
+
+### Rust LSP Contract Structs
+
+**Location:** `rust_lsp_contracts.py`
+
+The Rust LSP integration uses a tiered capability gating system with explicit contract structs for session management and enrichment payloads.
+
+#### LspCapabilitySnapshotV1
+
+**Structure:**
+```python
+class LspCapabilitySnapshotV1(CqStruct, frozen=True):
+    server_caps: LspServerCapabilitySnapshotV1
+    client_caps: LspClientCapabilitySnapshotV1
+    experimental_caps: LspExperimentalCapabilitySnapshotV1
+```
+
+**Server capability projection:**
+```python
+class LspServerCapabilitySnapshotV1(CqStruct, frozen=True):
+    definition_provider: bool = False
+    type_definition_provider: bool = False
+    implementation_provider: bool = False
+    references_provider: bool = False
+    document_symbol_provider: bool = False
+    call_hierarchy_provider: bool = False
+    type_hierarchy_provider: bool = False
+    hover_provider: bool = False
+    workspace_symbol_provider: bool = False
+    rename_provider: bool = False
+    code_action_provider: bool = False
+    semantic_tokens_provider: bool = False
+    inlay_hint_provider: bool = False
+
+    # Rich provider payloads for advanced-plane precision gates
+    semantic_tokens_provider_raw: dict[str, object] | None = None
+    code_action_provider_raw: object | None = None
+    workspace_symbol_provider_raw: object | None = None
+```
+
+**Purpose:** Stores negotiated server capabilities using PROVIDER field naming for correct capability checking. Retains rich provider payloads for advanced-plane precision gates.
+
+#### LspSessionEnvV1
+
+**Structure:**
+```python
+class LspSessionEnvV1(CqStruct, frozen=True):
+    server_name: str | None = None
+    server_version: str | None = None
+    position_encoding: str = "utf-16"  # utf-8, utf-16, utf-32
+    capabilities: LspCapabilitySnapshotV1
+    workspace_health: Literal["ok", "warning", "error", "unknown"] = "unknown"
+    quiescent: bool = False
+    config_fingerprint: str | None = None
+    refresh_events: tuple[str, ...] = ()
+```
+
+**Purpose:** Shared LSP session/environment envelope for quality gating. Captures negotiated capabilities, server health, and configuration to enable reproducible enrichment and capability-based slice planning.
+
+#### RustDiagnosticV1
+
+**Structure:**
+```python
+class RustDiagnosticV1(CqStruct, frozen=True):
+    uri: str
+    range_start_line: int = 0
+    range_start_col: int = 0
+    range_end_line: int = 0
+    range_end_col: int = 0
+    severity: int = 0  # 1=Error, 2=Warning, 3=Info, 4=Hint
+    code: str | None = None
+    source: str | None = None
+    message: str = ""
+    related_info: tuple[dict[str, object], ...] = ()
+    data: dict[str, object] | None = None  # Passthrough for code-action bridging
+```
+
+**Purpose:** Normalized LSP diagnostic from publishDiagnostics notification. Bridges LSP diagnostics to CQ enrichment pipeline with full span normalization and code-action passthrough.
+
+#### Tiered Capability Gating
+
+**Tier A (Definition/Hover):**
+- `textDocument/definition`
+- `textDocument/typeDefinition`
+- `textDocument/hover`
+
+**Tier B (References/Symbols):**
+- `textDocument/references` (workspace_health: ok/warning)
+- `textDocument/documentSymbol` (workspace_health: ok/warning)
+
+**Tier C (Hierarchies):**
+- `textDocument/prepareCallHierarchy` (quiescent: true)
+- `callHierarchy/incomingCalls`
+- `callHierarchy/outgoingCalls`
+- `textDocument/prepareTypeHierarchy` (quiescent: true)
+- `typeHierarchy/supertypes`
+- `typeHierarchy/subtypes`
+
+**Degradation strategy:** Each tier has independent error handling. Failed requests append degrade events rather than failing the entire enrichment.
+
+#### Coercion Pattern
+
+**Function:** `coerce_rust_lsp_payload()` (line 601-639)
+
+**Purpose:** Normalize loose Rust LSP payload to typed contracts. Mirrors `coerce_pyrefly_payload()` pattern exactly. Guarantees type-safe `RustLspEnrichmentPayload` even with partial data.
+
+**Strategy:**
+```python
+def coerce_rust_lsp_payload(
+    payload: Mapping[str, object] | None,
+) -> RustLspEnrichmentPayload:
+    if payload is None:
+        return RustLspEnrichmentPayload()
+
+    # Extract and normalize each section
+    session_env = _coerce_session_env(payload.get("session_env"))
+    symbol_grounding = _coerce_symbol_grounding(payload.get("symbol_grounding"))
+    call_graph = _coerce_call_graph(payload.get("call_graph"))
+    type_hierarchy = _coerce_type_hierarchy(payload.get("type_hierarchy"))
+    document_symbols = _coerce_document_symbols(payload.get("document_symbols"))
+    diagnostics = _coerce_diagnostics(payload.get("diagnostics"))
+    hover_text = payload.get("hover_text")
+
+    return RustLspEnrichmentPayload(...)
+```
+
+**Helper functions:**
+- `_coerce_session_env()` - Normalizes session environment data to `LspSessionEnvV1`
+- `_coerce_symbol_grounding()` - Normalizes definitions/references/implementations
+- `_coerce_call_graph()` - Normalizes incoming callers and outgoing callees
+- `_coerce_type_hierarchy()` - Normalizes supertypes and subtypes
+- `_coerce_document_symbols()` - Normalizes document symbol hierarchy
+- `_coerce_diagnostics()` - Normalizes publishDiagnostics notifications
+
+### Rust LSP Session Management
+
+**Location:** `rust_lsp.py`
+
+**Purpose:** Manage persistent rust-analyzer LSP sessions with health checking and connection handling.
+
+#### _RustLspSession
+
+**Lifecycle management:**
+```python
+class _RustLspSession:
+    def __init__(self, repo_root: Path) -> None:
+        self.repo_root = repo_root.resolve()
+        self._process: subprocess.Popen[bytes] | None = None
+        self._selector: selectors.BaseSelector | None = None
+        self._buffer = bytearray()
+        self._next_id = 0
+        self._session_env = LspSessionEnvV1()
+        self._diagnostics_by_uri: dict[str, list[RustDiagnosticV1]] = {}
+        self._docs: dict[str, _SessionDocState] = {}
+
+    def ensure_started(self, *, timeout_seconds: float) -> None:
+        """Start session if not running."""
+
+    def probe(self, request: RustLspRequest) -> RustLspEnrichmentPayload | None:
+        """Query LSP for enrichment data at position."""
+
+    def shutdown(self) -> None:
+        """Gracefully shut down LSP server."""
+```
+
+**Session initialization:**
+1. Spawn `rust-analyzer` subprocess
+2. Send `initialize` request with client capabilities
+3. Negotiate server capabilities (position encoding, features)
+4. Send `initialized` notification
+5. Wait for quiescence (ready state)
+
+**Health checking:**
+- Workspace health tracked via `experimental/serverStatus` notifications
+- Quiescent flag indicates ready-for-queries state
+- Health values: `"ok"`, `"warning"`, `"error"`, `"unknown"`
+
+**Connection handling:**
+- Uses `selectors` for non-blocking I/O
+- Parses LSP JSON-RPC protocol (Content-Length headers)
+- Handles streaming notifications during request/response cycles
+- Automatic reconnection on failure (fail-open session restart)
+
+#### Global Session Cache
+
+**Function:** `_session_for_root()` (line 696-714)
+
+**Purpose:** Maintain singleton LSP sessions per repository root.
+
+**Strategy:**
+```python
+_SESSION_LOCK = threading.Lock()
+_SESSIONS: dict[str, _RustLspSession] = {}
+
+def _session_for_root(
+    root: Path,
+    *,
+    startup_timeout_seconds: float = _DEFAULT_STARTUP_TIMEOUT_SECONDS,
+) -> _RustLspSession:
+    root_key = str(root.resolve())
+    with _SESSION_LOCK:
+        session = _SESSIONS.get(root_key)
+        if session is None:
+            session = _RustLspSession(root)
+            _SESSIONS[root_key] = session
+        try:
+            session.ensure_started(timeout_seconds=startup_timeout_seconds)
+        except Exception:  # Fail-open session restart
+            session.close()
+            session = _RustLspSession(root)
+            _SESSIONS[root_key] = session
+            session.ensure_started(timeout_seconds=startup_timeout_seconds)
+        return session
+```
+
+**Session cleanup:**
+```python
+def close_rust_lsp_sessions() -> None:
+    """Close all cached Rust LSP sessions."""
+    with _SESSION_LOCK:
+        sessions = list(_SESSIONS.values())
+        _SESSIONS.clear()
+    for session in sessions:
+        session.close()
+
+atexit.register(close_rust_lsp_sessions)
+```
+
+#### Public API
+
+**Function:** `enrich_with_rust_lsp()` (line 745-763)
+
+**Signature:**
+```python
+def enrich_with_rust_lsp(
+    request: RustLspRequest,
+    *,
+    root: Path | None = None,
+    startup_timeout_seconds: float = _DEFAULT_STARTUP_TIMEOUT_SECONDS,
+) -> dict[str, object] | None:
+    """Fetch Rust LSP enrichment for one file anchor.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Enrichment payload with session_env, symbol_grounding, call_graph,
+        type_hierarchy, document_symbols, diagnostics, hover_text.
+    """
+```
+
+**Fail-open behavior:** All exceptions are caught and return `None` to prevent enrichment failures from blocking search results.
+
+---
+
+## 15. Pyrefly Capability Gates and Expansion
+
+**Purpose:** Provide capability-gated optional enrichment surfaces for Pyrefly LSP.
+
+### Capability Gate Functions
+
+**Location:** `pyrefly_capability_gates.py`
+
+**Purpose:** Check Pyrefly LSP capabilities before making requests and return degrade events when unavailable.
+
+#### Gate Functions
+
+**Function signatures:**
+```python
+def gate_document_symbols(
+    server_caps: dict[str, object] | Mapping[str, object] | LspCapabilitySnapshotV1,
+) -> DegradeEventV1 | None:
+    """Check if documentSymbol capability is available."""
+
+def gate_workspace_symbols(
+    server_caps: dict[str, object] | Mapping[str, object] | LspCapabilitySnapshotV1,
+) -> DegradeEventV1 | None:
+    """Check if workspace/symbol capability is available."""
+
+def gate_semantic_tokens(
+    server_caps: dict[str, object] | Mapping[str, object] | LspCapabilitySnapshotV1,
+) -> DegradeEventV1 | None:
+    """Check if semantic tokens capability is available."""
+```
+
+**Return semantics:**
+- Returns `None` if capability is available (proceed with request)
+- Returns `DegradeEventV1` if capability is unavailable (skip request gracefully)
+
+**Example usage:**
+```python
+gate_result = gate_document_symbols(server_caps)
+if gate_result is not None:
+    # Capability unavailable - return degrade event
+    return gate_result
+
+# Capability available - proceed with LSP request
+try:
+    result = lsp_request("textDocument/documentSymbol", params)
+except Exception as exc:
+    # Request failed - return degrade event
+    return DegradeEventV1(
+        stage="lsp.pyrefly.expansion",
+        severity="warning",
+        category="request_failed",
+        message=f"textDocument/documentSymbol failed: {type(exc).__name__}",
+    )
+```
+
+**Semantic tokens gate details:**
+
+Checks both capability presence and `full` support:
+```python
+semantic_tokens_caps = caps.get("semanticTokensProvider")
+if not semantic_tokens_caps:
+    return DegradeEventV1(...)
+
+if not isinstance(semantic_tokens_caps, dict):
+    return DegradeEventV1(...)
+
+if not semantic_tokens_caps.get("full"):
+    return DegradeEventV1(
+        stage="lsp.pyrefly",
+        severity="info",
+        category="unavailable",
+        message="semanticTokens/full not supported by server",
+    )
+```
+
+### Expansion Structs
+
+**Location:** `pyrefly_expansion.py`
+
+**Purpose:** Typed structures for Pyrefly LSP expansion surfaces (document symbols, workspace symbols, semantic tokens).
+
+#### PyreflyDocumentSymbol
+
+**Structure:**
+```python
+class PyreflyDocumentSymbol(CqStruct, frozen=True):
+    name: str
+    kind: str = ""
+    range_start_line: int = 0
+    range_start_col: int = 0
+    range_end_line: int = 0
+    range_end_col: int = 0
+    children: tuple[PyreflyDocumentSymbol, ...] = ()
+```
+
+**Purpose:** Document symbol descriptor from `textDocument/documentSymbol` with hierarchical children.
+
+**Fetch function:**
+```python
+def fetch_document_symbols(
+    server_caps: dict[str, object],
+    lsp_request_fn: object,
+    uri: str,
+) -> tuple[PyreflyDocumentSymbol, ...] | DegradeEventV1:
+    """Fetch document symbols with capability gating."""
+```
+
+#### PyreflyWorkspaceSymbol
+
+**Structure:**
+```python
+class PyreflyWorkspaceSymbol(CqStruct, frozen=True):
+    name: str
+    kind: str = ""
+    container_name: str | None = None
+    uri: str | None = None
+    file: str | None = None
+    line: int = 0  # 1-indexed
+    col: int = 0   # 0-indexed
+```
+
+**Purpose:** Workspace symbol descriptor from `workspace/symbol` with optional location resolution.
+
+**Fetch function:**
+```python
+def fetch_workspace_symbols(
+    server_caps: dict[str, object],
+    lsp_request_fn: object,
+    query: str = "",
+) -> tuple[PyreflyWorkspaceSymbol, ...] | DegradeEventV1:
+    """Fetch workspace symbols with capability gating."""
+```
+
+**Resolve support:** If server supports `workspaceSymbol/resolve`, attempts to resolve symbols with missing location data:
+```python
+supports_resolve = isinstance(provider, Mapping) and bool(provider.get("resolveProvider"))
+if supports_resolve and (normalized.uri is None or normalized.line <= 0):
+    try:
+        resolved_item = _invoke_lsp_request(
+            lsp_request_fn,
+            "workspaceSymbol/resolve",
+            dict(item_mapping),
+        )
+        if isinstance(resolved_item, Mapping):
+            resolved_normalized = _normalize_workspace_symbol(resolved_item)
+            if resolved_normalized is not None:
+                normalized = resolved_normalized
+    except Exception:
+        pass  # Keep unresolved symbol for fail-open behavior
+```
+
+#### PyreflySemanticToken
+
+**Structure:**
+```python
+class PyreflySemanticToken(CqStruct, frozen=True):
+    line: int
+    start_col: int
+    length: int
+    token_type: str = ""
+    token_modifiers: tuple[str, ...] = ()
+```
+
+**Purpose:** Semantic token descriptor from `textDocument/semanticTokens/full` with resolved type/modifier names.
+
+**Fetch function:**
+```python
+def fetch_semantic_tokens(
+    server_caps: dict[str, object],
+    lsp_request_fn: object,
+    uri: str,
+) -> tuple[PyreflySemanticToken, ...] | DegradeEventV1:
+    """Fetch semantic tokens with capability gating."""
+```
+
+**Decoding:** Semantic tokens are delta-encoded arrays. The decoder:
+1. Extracts token type and modifier legends from server capabilities
+2. Decodes delta-encoded data (5 integers per token: line, startChar, length, tokenType, tokenModifiers)
+3. Resolves token type indices to strings via legend
+4. Resolves token modifier bitfields to string tuples via legend
+
+**Delta decoding algorithm:**
+```python
+current_line = 0
+current_col = 0
+
+for i in range(0, len(data), 5):
+    delta_line = data[i]
+    delta_col = data[i + 1]
+    length = data[i + 2]
+    token_type_idx = data[i + 3]
+    token_modifiers_bits = data[i + 4]
+
+    if delta_line != 0:
+        current_line += delta_line
+        current_col = delta_col
+    else:
+        current_col += delta_col
+
+    token_type = token_types[token_type_idx] if 0 <= token_type_idx < len(token_types) else ""
+    modifiers = [
+        token_modifiers[bit_idx]
+        for bit_idx in range(32)
+        if token_modifiers_bits & (1 << bit_idx) and bit_idx < len(token_modifiers)
+    ]
+```
+
+#### PyreflyExpansionPayload
+
+**Structure:**
+```python
+class PyreflyExpansionPayload(CqStruct, frozen=True):
+    document_symbols: tuple[PyreflyDocumentSymbol, ...] = ()
+    workspace_symbols: tuple[PyreflyWorkspaceSymbol, ...] = ()
+    semantic_tokens: tuple[PyreflySemanticToken, ...] = ()
+    degrade_events: tuple[DegradeEventV1, ...] = ()
+```
+
+**Purpose:** Extended enrichment payload with capability-gated surfaces. Aggregates all expansion data with degradation tracking.
+
+### Integration with Enrichment Pipeline
+
+The capability gates and expansion structs integrate with the neighborhood assembly pipeline (see [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md)) to provide optional LSP enrichment when capabilities are available.
+
+**Pipeline flow:**
+1. Check capability via gate function
+2. If gate returns `None`, fetch data via expansion function
+3. If gate returns `DegradeEventV1`, accumulate in degrade events
+4. If fetch fails, append degrade event and continue
+5. Return typed expansion payload or degrade event
+
+---
+
+## 16. Advanced Evidence Planes (R8)
+
+**Purpose:** Provide LSP-rich evidence collection for semantic overlays, refactor actions, and Rust-specific extensions.
+
+All advanced evidence planes are **capability-gated and fail-open**—they enrich outputs without blocking core search/query/run execution.
+
+### Semantic Token Overlays
+
+**Location:** `semantic_overlays.py`
+
+**Purpose:** Collect and normalize semantic tokens and inlay hints from LSP servers.
+
+#### SemanticTokenSpanV1
+
+**Structure:**
+```python
+class SemanticTokenSpanV1(CqStruct, frozen=True):
+    line: int
+    start_char: int
+    length: int
+    token_type: str
+    modifiers: tuple[str, ...] = ()
+```
+
+**Purpose:** Normalized semantic token with resolved type/modifier names from legend.
+
+#### SemanticTokenBundleV1
+
+**Structure:**
+```python
+class SemanticTokenBundleV1(CqStruct, frozen=True):
+    position_encoding: str = "utf-16"
+    legend_token_types: tuple[str, ...] = ()
+    legend_token_modifiers: tuple[str, ...] = ()
+    result_id: str | None = None
+    previous_result_id: str | None = None
+    tokens: tuple[SemanticTokenSpanV1, ...] = ()
+    raw_data: tuple[int, ...] | None = None
+```
+
+**Purpose:** Atomic semantic token bundle with legend and encoding metadata. Must always store negotiated position encoding, server legend (token types and modifiers arrays), raw data stream (or delta edits), and decoded rows with resolved names.
+
+**Rationale:** Semantic tokens require legend + encoding to decode (referenced in `rust_lsp.md` and `pyrefly_lsp_data.md`).
+
+#### InlayHintV1
+
+**Structure:**
+```python
+class InlayHintV1(CqStruct, frozen=True):
+    line: int
+    character: int
+    label: str
+    kind: str | None = None  # "type", "parameter", or None
+    padding_left: bool = False
+    padding_right: bool = False
+```
+
+**Purpose:** Normalized inlay hint from LSP server for type annotations and parameter names.
+
+#### Fetch Functions
+
+**Semantic tokens:**
+```python
+def fetch_semantic_tokens_range(
+    session: object,
+    uri: str,
+    start_line: int,
+    end_line: int,
+) -> tuple[SemanticTokenSpanV1, ...] | None:
+    """Fetch semantic tokens for a range. Fail-open. Capability-gated."""
+```
+
+**Inlay hints:**
+```python
+def fetch_inlay_hints_range(
+    session: object,
+    uri: str,
+    start_line: int,
+    end_line: int,
+) -> tuple[InlayHintV1, ...] | None:
+    """Fetch inlay hints for a range. Fail-open. Capability-gated."""
+```
+
+**Fail-open behavior:** Returns `None` if capability unavailable or request fails. Supports both Pyrefly and Rust LSP sessions via duck-typed `_request_fn(session)` and `_server_caps(session)` helpers.
+
+**Inlay hint resolve support:**
+```python
+supports_resolve = isinstance(inlay_caps, dict) and bool(inlay_caps.get("resolveProvider"))
+if supports_resolve and mapping.get("data") is not None:
+    try:
+        resolved = request("inlayHint/resolve", mapping)
+        if isinstance(resolved, dict):
+            mapping = resolved
+    except Exception:
+        pass  # Keep unresolved hint for fail-open behavior
+```
+
+### Code Action Bridge
+
+**Location:** `refactor_actions.py`
+
+**Purpose:** Bridge LSP code actions, diagnostics, and workspace edits to CQ enrichment pipeline.
+
+#### DiagnosticItemV1
+
+**Structure:**
+```python
+class DiagnosticItemV1(CqStruct, frozen=True):
+    uri: str
+    message: str
+    severity: int = 0  # 1=Error, 2=Warning, 3=Info, 4=Hint
+    code: str | None = None
+    code_description_href: str | None = None
+    tags: tuple[int, ...] = ()  # 1=Unnecessary, 2=Deprecated
+    version: int | None = None
+    related_information: tuple[dict[str, object], ...] = ()
+    data: dict[str, object] | None = None  # Passthrough for code-action bridging
+```
+
+**Purpose:** Normalized diagnostic with action-bridge fidelity fields for code action resolution.
+
+#### CodeActionV1
+
+**Structure:**
+```python
+class CodeActionV1(CqStruct, frozen=True):
+    title: str
+    kind: str | None = None  # "quickfix", "refactor.extract", etc.
+    is_preferred: bool = False
+    diagnostics: tuple[dict[str, object], ...] = ()
+    disabled_reason: str | None = None
+    is_resolvable: bool = False
+    has_edit: bool = False
+    has_command: bool = False
+    command_id: str | None = None
+    has_snippet_text_edits: bool = False  # Rust-analyzer extension
+    raw_payload: dict[str, object] | None = None
+```
+
+**Purpose:** Normalized code action from LSP server with metadata for resolve/execute workflows.
+
+#### WorkspaceEditV1
+
+**Structure:**
+```python
+class WorkspaceEditV1(CqStruct, frozen=True):
+    document_changes: tuple[DocumentChangeV1, ...] = ()
+    change_count: int = 0
+
+class DocumentChangeV1(CqStruct, frozen=True):
+    uri: str
+    kind: str = "edit"  # "edit", "create", "rename", "delete"
+    edit_count: int = 0
+```
+
+**Purpose:** Normalized workspace edit from code action or refactor operation.
+
+#### Pull Diagnostics Functions
+
+**textDocument/diagnostic:**
+```python
+def pull_document_diagnostics(
+    session: object,
+    uri: str,
+) -> tuple[DiagnosticItemV1, ...] | None:
+    """Fetch diagnostics via textDocument/diagnostic when supported."""
+```
+
+**workspace/diagnostic:**
+```python
+def pull_workspace_diagnostics(session: object) -> tuple[DiagnosticItemV1, ...] | None:
+    """Fetch diagnostics via workspace/diagnostic when supported."""
+```
+
+**Integration:** Uses shared `diagnostics_pull.py` module for normalization across both `textDocument/diagnostic` and `workspace/diagnostic` responses.
+
+#### Code Action Workflows
+
+**Resolve deferred actions:**
+```python
+def resolve_code_action(session: object, action: CodeActionV1) -> CodeActionV1 | None:
+    """Resolve deferred code action payloads via codeAction/resolve."""
+```
+
+**Execute bound commands:**
+```python
+def execute_code_action_command(session: object, action: CodeActionV1) -> bool:
+    """Execute bound command via workspace/executeCommand."""
+```
+
+**Typical workflow:**
+1. Pull diagnostics via `pull_document_diagnostics()`
+2. Request code actions for diagnostic range
+3. Filter actions by `is_preferred` or `kind`
+4. If `is_resolvable`, call `resolve_code_action()` to fetch full payload
+5. If action has command, call `execute_code_action_command()` to apply
+6. If action has edit, apply `WorkspaceEditV1` via custom handler
+
+### Rust Extensions
+
+**Location:** `rust_extensions.py`
+
+**Purpose:** Rust-analyzer specific extensions for macro expansion and runnables.
+
+#### RustMacroExpansionV1
+
+**Structure:**
+```python
+class RustMacroExpansionV1(CqStruct, frozen=True):
+    name: str
+    expansion: str
+    expansion_byte_len: int = 0
+```
+
+**Purpose:** Result of `rust-analyzer/expandMacro` request for macro expansion at cursor position.
+
+**Fetch function:**
+```python
+def expand_macro(
+    session: object,
+    uri: str,
+    line: int,
+    col: int,
+) -> RustMacroExpansionV1 | None:
+    """Expand macro at position. Fail-open. Rust-analyzer specific."""
+```
+
+**Method fallback:** Tries both `rust-analyzer/expandMacro` and `experimental/expandMacro` for compatibility:
+```python
+response = None
+for method in ("rust-analyzer/expandMacro", "experimental/expandMacro"):
+    try:
+        response = request(method, params)
+        break
+    except Exception:
+        continue
+```
+
+#### RustRunnableV1
+
+**Structure:**
+```python
+class RustRunnableV1(CqStruct, frozen=True):
+    label: str
+    kind: str  # "cargo", "test", "bench"
+    args: tuple[str, ...] = ()
+    location_uri: str | None = None
+    location_line: int = 0
+```
+
+**Purpose:** Normalized runnable from `rust-analyzer/runnables` request for test/bench targets.
+
+**Fetch function:**
+```python
+def get_runnables(
+    session: object,
+    uri: str,
+) -> tuple[RustRunnableV1, ...]:
+    """Get runnables for a file. Fail-open. Rust-analyzer specific."""
+```
+
+**Method fallback:** Tries both `experimental/runnables` and `rust-analyzer/runnables`:
+```python
+response = None
+for method in ("experimental/runnables", "rust-analyzer/runnables"):
+    try:
+        response = request(method, params)
+        break
+    except Exception:
+        continue
+```
+
+### Diagnostics Pull Normalization
+
+**Location:** `diagnostics_pull.py`
+
+**Purpose:** Shared diagnostics pull helpers for LSP clients with unified normalization across `textDocument/diagnostic` and `workspace/diagnostic` responses.
+
+#### Pull Functions
+
+**textDocument/diagnostic:**
+```python
+def pull_text_document_diagnostics(
+    session: object,
+    *,
+    uri: str,
+) -> tuple[dict[str, object], ...] | None:
+    """Pull diagnostics via textDocument/diagnostic when available."""
+```
+
+**workspace/diagnostic:**
+```python
+def pull_workspace_diagnostics(
+    session: object,
+) -> tuple[dict[str, object], ...] | None:
+    """Pull diagnostics via workspace/diagnostic when available."""
+```
+
+#### Normalization Strategy
+
+**Response format handling:**
+
+Handles multiple response shapes:
+- Direct `items` array
+- `relatedDocuments` mapping of URI to diagnostic reports
+- Single diagnostic report (fallback)
+- Array of diagnostic reports (workspace/diagnostic)
+
+**Normalization algorithm:**
+```python
+def _normalize_diagnostic_response(
+    response: object,
+    *,
+    default_uri: str | None,
+) -> tuple[dict[str, object], ...]:
+    rows: list[dict[str, object]] = []
+
+    # Handle items array
+    if isinstance(response, Mapping):
+        items = response.get("items")
+        if isinstance(items, Sequence):
+            for item in items:
+                rows.extend(_diagnostic_rows_from_report(item))
+
+        # Handle relatedDocuments mapping
+        related_documents = response.get("relatedDocuments")
+        if isinstance(related_documents, Mapping):
+            for uri, report in related_documents.items():
+                rows.extend(_diagnostic_rows_from_report(report, uri=uri))
+
+    # Handle array of reports
+    if isinstance(response, Sequence):
+        for item in response:
+            rows.extend(_diagnostic_rows_from_report(item, uri=default_uri))
+
+    return tuple(rows)
+```
+
+**Diagnostic row extraction:**
+```python
+def _diagnostic_rows_from_report(
+    report: Mapping[str, object],
+    *,
+    uri: str | None = None,
+) -> list[dict[str, object]]:
+    report_uri = report.get("uri")
+    uri_value = report_uri if isinstance(report_uri, str) else uri
+
+    diagnostics_raw = report.get("diagnostics")
+    version_value = report.get("version")
+
+    rows: list[dict[str, object]] = []
+    for diagnostic in diagnostics_raw:
+        # Extract range, code, message, severity, tags, relatedInformation, data
+        rows.append({
+            "uri": uri_value or "",
+            "message": ...,
+            "severity": ...,
+            "code": ...,
+            "code_description_href": ...,
+            "tags": ...,
+            "version": version_value,
+            "related_information": ...,
+            "data": ...,
+            "line": ...,
+            "col": ...,
+        })
+    return rows
+```
+
+**Field normalization:**
+- `codeDescription.href` extracted to `code_description_href`
+- `tags` array normalized to int tuple
+- `relatedInformation` array normalized to dict tuple
+- `data` field preserved for code-action bridging
+- `version` field from report propagated to all diagnostics
+
+### Cross-Reference to Neighborhood Doc
+
+All advanced evidence planes follow the same capability-gating patterns documented in [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md):
+- Tiered capability checks (Tier A/B/C)
+- Fail-open error handling
+- Degrade event accumulation
+- Session-based LSP request routing
+
+---
+
+## 17. Result Assembly
 
 **Function:** `_assemble_smart_search_result()` (line 2371-2467)
 

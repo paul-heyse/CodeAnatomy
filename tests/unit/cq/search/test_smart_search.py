@@ -693,6 +693,115 @@ class TestSmartSearch:  # noqa: PLR0904
             if finding.anchor:
                 assert finding.anchor.file.startswith("src/") or "src" in finding.anchor.file
 
+    def test_smart_search_with_tools_scope_glob(self, tmp_path: Path) -> None:
+        """Directory include globs should match files under tools/ recursively."""
+        target = tmp_path / "tools" / "cq" / "search"
+        target.mkdir(parents=True)
+        (target / "python_analysis_session.py").write_text(
+            "class PythonAnalysisSession:\n    pass\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "src").mkdir(parents=True)
+        (tmp_path / "src" / "python_analysis_session.py").write_text(
+            "class PythonAnalysisSession:\n    pass\n",
+            encoding="utf-8",
+        )
+
+        clear_caches()
+        result = smart_search(
+            tmp_path,
+            "PythonAnalysisSession",
+            lang_scope="python",
+            include_globs=["tools/**"],
+        )
+        assert result.evidence
+        for finding in result.evidence:
+            if finding.anchor:
+                assert finding.anchor.file.removeprefix("./").startswith("tools/")
+
+    def test_smart_search_with_rust_scope_glob(self, tmp_path: Path) -> None:
+        """Rust directory include globs should match Rust files recursively."""
+        rust_src = tmp_path / "rust" / "codeanatomy_engine_py" / "src"
+        rust_src.mkdir(parents=True)
+        (rust_src / "compiler.rs").write_text(
+            "pub fn compile_target() -> i32 { 1 }\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "src").mkdir(parents=True)
+        (tmp_path / "src" / "compiler.py").write_text(
+            "def compile_target() -> int:\n    return 1\n",
+            encoding="utf-8",
+        )
+
+        clear_caches()
+        result = smart_search(
+            tmp_path,
+            "compile_target",
+            lang_scope="rust",
+            include_globs=["rust/**"],
+        )
+        assert result.evidence
+        for finding in result.evidence:
+            if finding.anchor:
+                assert finding.anchor.file.removeprefix("./").startswith("rust/")
+
+    def test_smart_search_with_tools_cq_scope_glob(self, tmp_path: Path) -> None:
+        """Nested directory include globs should remain reliable for tools/cq."""
+        target = tmp_path / "tools" / "cq" / "search"
+        target.mkdir(parents=True)
+        (target / "python_analysis_session.py").write_text(
+            "class PythonAnalysisSession:\n    pass\n",
+            encoding="utf-8",
+        )
+
+        clear_caches()
+        result = smart_search(
+            tmp_path,
+            "PythonAnalysisSession",
+            lang_scope="python",
+            include_globs=["tools/cq/**"],
+        )
+        assert result.evidence
+        for finding in result.evidence:
+            if finding.anchor:
+                assert finding.anchor.file.removeprefix("./").startswith("tools/cq/")
+
+    def test_python_query_under_rust_include_glob_returns_no_evidence(self, tmp_path: Path) -> None:
+        """Python searches constrained to rust/** should remain empty."""
+        rust_src = tmp_path / "rust" / "codeanatomy_engine_py" / "src"
+        rust_src.mkdir(parents=True)
+        (rust_src / "compiler.rs").write_text(
+            "pub fn compile_target() -> i32 { 1 }\n",
+            encoding="utf-8",
+        )
+
+        clear_caches()
+        result = smart_search(
+            tmp_path,
+            "compile_target",
+            lang_scope="python",
+            include_globs=["rust/**"],
+        )
+        assert not result.evidence
+
+    def test_rust_query_under_python_include_glob_returns_no_evidence(self, tmp_path: Path) -> None:
+        """Rust searches constrained to tools/** with only Python files should remain empty."""
+        target = tmp_path / "tools" / "cq" / "search"
+        target.mkdir(parents=True)
+        (target / "python_analysis_session.py").write_text(
+            "class PythonAnalysisSession:\n    pass\n",
+            encoding="utf-8",
+        )
+
+        clear_caches()
+        result = smart_search(
+            tmp_path,
+            "PythonAnalysisSession",
+            lang_scope="rust",
+            include_globs=["tools/**"],
+        )
+        assert not result.evidence
+
     def test_smart_search_sections_present(self, sample_repo: Path) -> None:
         """Test that sections are present in result."""
         clear_caches()

@@ -49,9 +49,13 @@ For canonical CQ behavior/output semantics, use
 | `/cq q "not=..."` | Pattern exclusion | `/cq q "entity=function not.has='pass'"` |
 | `/cq q "pattern='eval(\$X)'"` | Security pattern scan | `/cq q "pattern='eval(\$X)'"` |
 | `/cq q --format mermaid` | Visualize code structure | `/cq q "entity=function expand=callers" --format mermaid` |
+| `/cq neighborhood` | Targeted semantic neighborhood analysis | `/cq neighborhood src/foo.py:120:4` |
+| `/cq neighborhood` | Symbol-first neighborhood with deterministic fallback | `/cq neighborhood build_graph_product` |
 | `/cq run` | Multi-step execution (shared scan) | `/cq run --steps '[{"type":"q",...},{"type":"calls",...}]'` |
 | `/cq run` | Plan file execution | `/cq run --plan analysis.toml` |
+| `/cq run` | Neighborhood in run plans | `/cq run --steps '[{"type":"neighborhood","target":"src/foo.py:120:4"}]'` |
 | `/cq chain` | Command chaining | `/cq chain q "..." AND calls foo AND search foo` |
+| `/cq ldmd` | Progressive-disclosure retrieval for long CQ artifacts | `/cq ldmd get path/to/output.ldmd --id root --mode preview --depth 1` |
 | `/ast-grep` | Structural search/rewrite | `/ast-grep pattern 'def $F($_): ...'` |
 | `/dfdl_ref` | DataFusion + DeltaLake operations (query engine, storage, UDFs) | `/dfdl_ref` |
 
@@ -141,6 +145,24 @@ imports, comments, etc.
 
 # Rust search (Rust-only scope)
 /cq search register_udf --lang rust
+```
+
+### Validated CQ Reliability (2026-02-11)
+
+Treat these as current expected behavior:
+
+- `cq run --step` and `cq run --steps` both accept `type="neighborhood"` payloads.
+- `cq search --in <dir>` is reliable for `src/`, `tools/`, and `rust/` scopes.
+- Directory include globs are language-constrained correctly (no malformed `path**/*.ext` outputs).
+
+Known-good matrix:
+
+```bash
+/cq run --step '{"type":"neighborhood","target":"tools/cq/search/python_analysis_session.py:1"}' --format summary
+/cq run --steps '[{"type":"neighborhood","target":"tools/cq/search/python_analysis_session.py:1"}]' --format summary
+/cq search PythonAnalysisSession --in tools/cq --format summary
+/cq search compile --in rust --lang rust --format summary
+/cq search RuntimeProfile --in src --format summary
 ```
 
 **Output structure:**
@@ -310,13 +332,29 @@ For complex analysis requiring multiple queries, use `cq run` or `cq chain`:
 
 **Performance:** Multiple `q` steps share a single scan for better performance.
 
+### Neighborhood + LDMD Workflows
+
+- Use `/cq neighborhood <target>` (or `/cq nb <target>`) for anchor-aware semantic neighborhoods.
+- Target formats: `file.py:line`, `file.py:line:col`, or `symbol_name`; resolver is shared by CLI and run steps.
+- `neighborhood` run-step is supported via `type="neighborhood"` with `target`, `lang`, `top_k`, and `no_lsp`.
+- Use `/cq ldmd index|get|neighbors|search` for progressive disclosure over LDMD artifacts.
+- LDMD `get` supports `--mode full|preview|tldr` and `--depth` for bounded extraction.
+
+### Advanced LSP Evidence Planes (Implemented)
+
+- Semantic overlays: normalized semantic tokens + inlay hints (`tools/cq/search/semantic_overlays.py`).
+- Diagnostics pull: shared `textDocument/diagnostic` + `workspace/diagnostic` normalization (`tools/cq/search/diagnostics_pull.py`).
+- Refactor bridge: diagnostics + code-action resolve/execute helpers (`tools/cq/search/refactor_actions.py`).
+- Rust extensions: macro expansion + runnables (`tools/cq/search/rust_extensions.py`).
+- All planes are capability-gated and fail-open (base search/query/run behavior remains non-blocking).
+
 ### Global Options (All cq Commands)
 
 All `/cq` commands support global options:
 
 | Option | Env Var | Description |
 |--------|---------|-------------|
-| `--format` | `CQ_FORMAT` | Output format (md, json, mermaid, mermaid-class, dot) |
+| `--format` | `CQ_FORMAT` | Output format (md, json, both, summary, mermaid, mermaid-class, dot, ldmd) |
 | `--root` | `CQ_ROOT` | Repository root path |
 | `--verbose` | `CQ_VERBOSE` | Verbosity level (0-3) |
 
@@ -340,7 +378,8 @@ The `cq index` and `cq cache` admin commands are deprecated stubs that print dep
 - **Scope filtering** - Identify closures before extraction
 - **Visualization** - Call graphs and class diagrams via `--format mermaid` / `mermaid-class`
 - **Bytecode analysis** - Query opcodes, analyze stack effects
-- **Pattern queries** - Structural search without string/comment false positives
+- **Neighborhood assembly** - Anchor/symbol resolution plus deterministic structural + LSP slice merging
+- **LDMD protocol** - Progressive section indexing/search/retrieval with depth and mode controls
 
 ---
 

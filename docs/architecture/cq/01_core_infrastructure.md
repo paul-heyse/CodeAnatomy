@@ -45,6 +45,8 @@ tools/cq/
 │       ├── admin.py        # Deprecated admin commands (index, cache)
 │       ├── analysis.py     # Analysis macro commands (calls, impact, etc.)
 │       ├── chain.py        # Chain command entry
+│       ├── ldmd.py         # LDMD protocol commands (index, get, search, neighbors)
+│       ├── neighborhood.py # Neighborhood CLI command
 │       ├── query.py        # Query (q) command entry
 │       ├── report.py       # Report command
 │       ├── run.py          # Run command entry
@@ -128,6 +130,20 @@ tools/cq/
 │   ├── rust_enrichment.py  # Rust enrichment (2 stages)
 │   ├── smart_search.py     # Main search orchestration (2514 lines)
 │   └── timeout.py          # Timeout wrappers
+├── neighborhood/           # Semantic neighborhood assembly (R0-R4)
+│   ├── __init__.py
+│   ├── bundle_builder.py   # 4-phase assembly orchestration
+│   ├── structural_collector.py  # AST-based neighborhood collection
+│   ├── section_layout.py   # 17-slot SECTION_ORDER, dynamic collapse
+│   ├── capability_gates.py # LSP capability gating
+│   ├── scan_snapshot.py    # ScanSnapshot adapter
+│   ├── target_resolution.py # Target symbol resolution
+│   ├── snb_renderer.py     # SNB markdown rendering
+│   └── pyrefly_adapter.py  # Pyrefly integration for type data
+├── ldmd/                   # LDMD progressive disclosure format (R6)
+│   ├── __init__.py
+│   ├── format.py           # Strict parser with stack validation
+│   └── writer.py           # Document writer, preview/body split
 └── utils/                  # Shared utilities
     └── __init__.py
 ```
@@ -140,6 +156,8 @@ tools/cq/
 - `query/`: Declarative query DSL (entity queries, pattern queries, relational constraints)
 - `run/`: Multi-step workflow execution (shared scan, step composition)
 - `search/`: Smart search (ripgrep integration, classification, enrichment)
+- `neighborhood/`: Semantic neighborhood assembly (4-phase orchestration, LSP integration)
+- `ldmd/`: LDMD progressive disclosure format (strict parsing, preview/body split)
 - `astgrep/`: AST pattern matching via ast-grep-py (Python and Rust rules)
 
 ## CLI Architecture
@@ -172,9 +190,22 @@ def main(
 **Global Options:**
 - `--root`: Repository root path (default: cwd)
 - `--verbose`: Verbosity level 0-3 (default: 0)
-- `--format`: Output format (md, json, summary, mermaid, mermaid-class, dot)
+- `--format`: Output format (md, json, summary, mermaid, mermaid-class, dot, ldmd)
 - `--artifact-dir`: Directory for saved artifacts (default: .cq/artifacts)
 - `--no-save-artifact`: Disable artifact persistence
+
+**Output Formats:**
+```python
+class OutputFormat(StrEnum):
+    md = "md"                    # Markdown (default)
+    json = "json"                # JSON
+    both = "both"                # JSON + Markdown
+    summary = "summary"          # Compact summary
+    mermaid = "mermaid"          # Mermaid flowchart
+    mermaid_class = "mermaid-class"  # Mermaid class diagram
+    dot = "dot"                  # Graphviz DOT
+    ldmd = "ldmd"                # LLM-friendly progressive disclosure markdown
+```
 
 ### Config Resolution Chain
 
@@ -243,6 +274,33 @@ def search(
 - `exceptions`: Exception pattern analysis
 - `run`: Multi-step workflow execution
 - `chain`: Command chaining frontend
+- `neighborhood` / `nb`: Semantic neighborhood assembly (anchor/symbol resolution + LSP slices)
+- `ldmd`: LDMD progressive disclosure protocol (index, get, search, neighbors)
+
+### Neighborhood Command Registration
+
+**Location:** `cli_app/app.py:326-330`
+
+```python
+# Neighborhood command
+from tools.cq.cli_app.commands.neighborhood import nb_app, neighborhood_app
+
+app.command(neighborhood_app)
+app.command(nb_app)
+```
+
+Two apps are registered for the same handler: `neighborhood` (full name) and `nb` (alias). Both route to the same `neighborhood()` function, allowing users to use the shorter `nb` form for quick invocations.
+
+### LDMD Command Registration
+
+**Location:** `cli_app/app.py:323-324`
+
+```python
+from tools.cq.cli_app.commands.ldmd import ldmd_app
+app.command(ldmd_app)
+```
+
+Registers the `ldmd` subcommand group with sub-commands: `index`, `get`, `search`, `neighbors`. These commands implement progressive disclosure operations over LDMD-formatted artifacts, allowing tools like Claude to retrieve specific sections without loading entire documents.
 
 ### CliContext Injection
 
@@ -261,6 +319,30 @@ class CliContext(CqStruct, frozen=True):
 ```
 
 Context constructed at app entry and passed to all commands.
+
+### CliTextResult
+
+**Location:** `cli_app/context.py:135-147`
+
+Text payload for non-analysis protocol commands (e.g., LDMD index/get/search/neighbors):
+
+```python
+class CliTextResult(CqStruct, frozen=True):
+    text: str
+    media_type: str = "text/plain"
+```
+
+Used by protocol commands that return raw text or JSON rather than `CqResult`:
+
+```python
+# In result.py handle_result()
+if not cli_result.is_cq_result:
+    if isinstance(cli_result.result, CliTextResult):
+        sys.stdout.write(f"{cli_result.result.text}\n")
+    return cli_result.get_exit_code()
+```
+
+This enables LDMD commands to return structured text outputs without forcing them into the `CqResult` schema, maintaining clean separation between analysis results and protocol responses.
 
 ### Architectural Observations for Improvement Proposals
 
@@ -423,6 +505,22 @@ def render_result(result: CqResult, format: OutputFormat) -> str:
 - `render_mermaid_flowchart`: Call graph visualization
 - `render_mermaid_class_diagram`: Class hierarchy visualization
 - `render_dot`: Graphviz DOT format for complex graphs
+- `render_ldmd_from_cq_result`: LDMD progressive disclosure format (lazy import)
+
+### LDMD Renderer Dispatch
+
+**Location:** `cli_app/result.py:100-104`
+
+LDMD uses a lazy import pattern separate from the main renderer dict:
+
+```python
+# LDMD format uses lazy import (implemented in R6)
+if format_value == "ldmd":
+    from tools.cq.ldmd.writer import render_ldmd_from_cq_result
+    return render_ldmd_from_cq_result(result)
+```
+
+**Rationale:** Lazy import prevents circular dependencies and allows the LDMD subsystem (R6) to evolve independently of the core renderer dispatch. The LDMD writer depends on neighborhood infrastructure that may not be needed for standard CQ operations.
 
 ### Markdown Rendering Structure
 
@@ -1058,10 +1156,19 @@ def enumerate_files(root: Path, language_scope: LanguageScope) -> list[Path]:
 
 ## Conclusion
 
-The CQ core infrastructure provides a robust foundation for multi-language code analysis with fail-open semantics and extensible output formats. The architecture exhibits several areas of coupling and rigidity that present opportunities for improvement:
+The CQ core infrastructure provides a robust foundation for multi-language code analysis with fail-open semantics and extensible output formats. Recent additions (R0-R8) introduce semantic neighborhood assembly and progressive disclosure capabilities via LDMD format.
+
+**Core Capabilities:**
+1. Multi-language analysis (Python, Rust) with deterministic scope enforcement
+2. Fail-open architecture with granular degradation tracking
+3. Multiple output formats including visual diagrams and progressive disclosure
+4. Semantic neighborhood assembly with LSP integration (R0-R4)
+5. LDMD progressive disclosure protocol for large artifacts (R6)
+
+The architecture exhibits several areas of coupling and rigidity that present opportunities for improvement:
 
 1. **Configuration and CLI coupling**: Config resolution chain and command registration could be more declarative
-2. **Result schema rigidity**: Monolithic CqResult struct limits extensibility
+2. **Result schema rigidity**: Monolithic CqResult struct limits extensibility (partially addressed by CliTextResult for protocol commands)
 3. **Language scope limitations**: Hard-coded two-language support without plugin mechanism
 4. **Index scalability**: Full rebuild on every invocation without persistent caching
 5. **Error handling opacity**: Flat string-based degradation tracking without structured errors
@@ -1075,3 +1182,9 @@ These observations are documented not as deficiencies but as design decision poi
 - Indexing: `tools/cq/index/def_index.py`
 - Multi-language: `tools/cq/core/multilang_orchestrator.py`
 - Serialization: `tools/cq/core/codec.py`, `tools/cq/core/contracts.py`
+- Neighborhood: `tools/cq/neighborhood/bundle_builder.py`, `tools/cq/neighborhood/section_layout.py`
+- LDMD: `tools/cq/ldmd/format.py`, `tools/cq/ldmd/writer.py`
+
+**Related Documentation:**
+- Neighborhood Architecture: [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md)
+- LDMD Format: [09_ldmd_format.md](09_ldmd_format.md)

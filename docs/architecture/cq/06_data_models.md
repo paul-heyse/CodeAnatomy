@@ -270,6 +270,53 @@ class CqResult(msgspec.Struct):
 2. sections - Grouped results (main content)
 3. evidence - Supporting findings (lower priority)
 
+### CliTextResult
+
+Text payload for protocol commands (LDMD, admin):
+
+```python
+class CliTextResult(CqStruct, frozen=True):
+    text: str
+    media_type: str = "text/plain"
+```
+
+**Design Notes:**
+- Used by protocol commands that return raw text instead of CqResult
+- Examples: LDMD progressive disclosure, admin commands, help text
+- media_type supports content negotiation (text/plain, text/markdown, application/json)
+
+**Usage Pattern:**
+```python
+# LDMD index command returns text table
+result = CliTextResult(
+    text="| ID | Title | Depth |\n|----+-------+-------|\n| R1 | Overview | 1 |",
+    media_type="text/plain"
+)
+
+# Admin version command returns JSON text
+result = CliTextResult(
+    text='{"version": "0.5.0", "schema": "1.0.0"}',
+    media_type="application/json"
+)
+```
+
+**Architectural Notes:**
+
+CliTextResult exists as an escape hatch for commands that don't fit the CqResult structure (which assumes findings/sections/artifacts). This creates a dual result type system:
+
+1. **CqResult** - Structured analysis results with findings, sections, artifacts
+2. **CliTextResult** - Raw text for protocol/admin commands
+
+This split is pragmatic but creates ambiguity:
+- Some consumers expect CqResult, others CliTextResult
+- No unified Result[T] envelope to discriminate result types
+- media_type is free-form string (not Literal enum)
+
+**Improvement Vectors:**
+- **Unified envelope** - Create `CommandResult = CqResult | CliTextResult | ErrorResult` discriminated union
+- **Media type enum** - Replace `str` with `MediaType = Literal["text/plain", "text/markdown", "application/json", ...]`
+- **Structured text results** - For JSON/markdown text, consider embedding parsed structure instead of raw text
+
 **Architectural Observations for Improvement Proposals:**
 
 CqResult's structure conflates presentation and data:
@@ -621,6 +668,433 @@ SearchSummaryContract has grown complex through feature accretion:
 - **Typed language partition** - Create LanguagePartition(stats, enrichment, capabilities) and use dict[str, LanguagePartition]
 - **Enum for languages** - Define SupportedLanguage = Literal["python", "rust"] to prevent typos
 - **Capability protocol** - Define LanguageCapabilities(enrichers: set[str], features: set[str]) as structured type
+
+## Semantic Neighborhood Bundle Schema
+
+Location: `tools/cq/core/snb_schema.py`
+
+The Semantic Neighborhood Bundle (SNB) schema provides a versioned, deterministic representation of semantic neighborhoods combining structural, LSP, and enrichment planes. All SNB types inherit from `CqStruct` for deterministic serialization.
+
+Cross-references: See `08_neighborhood_subsystem.md` for operational details and `09_ldmd_format.md` for progressive disclosure mechanisms.
+
+### SemanticNeighborhoodBundleV1
+
+The canonical bundle type containing a complete semantic neighborhood:
+
+```python
+class SemanticNeighborhoodBundleV1(CqStruct, frozen=True):
+    bundle_id: str
+    subject: SemanticNodeRefV1 | None = None
+    subject_label: str = ""
+    meta: BundleMetaV1 | None = None
+    slices: tuple[NeighborhoodSliceV1, ...] = ()
+    graph: NeighborhoodGraphSummaryV1 | None = None
+    node_index: dict[str, SemanticNodeRefV1] | None = None
+    artifacts: tuple[ArtifactPointerV1, ...] = ()
+    diagnostics: tuple[DegradeEventV1, ...] = ()
+    schema_version: str = "cq.snb.v1"
+```
+
+**Design Notes:**
+- bundle_id provides unique identity for caching and reference
+- subject is the focal node (None for multi-subject bundles)
+- slices contain relationship-typed neighborhoods (callers, callees, etc.)
+- node_index provides O(1) node lookup by ID
+- diagnostics track degradation events across enrichment pipeline
+- artifacts point to related outputs (graphs, detailed reports)
+
+**Bundle Lifecycle:**
+1. Anchor resolution → subject node identification
+2. Structural slice assembly (tree-sitter, AST)
+3. LSP enrichment (rust-analyzer, Pyrefly)
+4. Graph summary computation
+5. Serialization to LDMD or JSON
+
+### SemanticNodeRefV1
+
+Minimal node reference for slice membership:
+
+```python
+class SemanticNodeRefV1(CqStruct, frozen=True):
+    node_id: str
+    kind: str                                    # "function", "class", "import", etc.
+    name: str
+    display_label: str = ""
+    file_path: str = ""
+    byte_span: tuple[int, int] | None = None    # (bstart, bend)
+    signature: str | None = None
+    qualname: str | None = None
+```
+
+**Design Notes:**
+- node_id is unique within bundle (often file_path:byte_span)
+- kind follows LSP SymbolKind conventions
+- byte_span is canonical location (not line/col)
+- Full node details live in node_index, slices hold lightweight refs
+
+### NeighborhoodSliceV1
+
+A single relationship-typed slice with progressive disclosure:
+
+```python
+NeighborhoodSliceKind = Literal[
+    "callers",
+    "callees",
+    "references",
+    "implementations",
+    "type_supertypes",
+    "type_subtypes",
+    "parents",
+    "children",
+    "siblings",
+    "enclosing_context",
+    "imports",
+    "importers",
+    "related",
+]
+
+class NeighborhoodSliceV1(CqStruct, frozen=True):
+    kind: NeighborhoodSliceKind
+    title: str
+    total: int = 0
+    preview: tuple[SemanticNodeRefV1, ...] = ()
+    edges: tuple[SemanticEdgeV1, ...] = ()
+    collapsed: bool = True
+    metadata: dict[str, object] | None = None
+```
+
+**Design Notes:**
+- kind discriminates relationship type (13 values)
+- total tracks full count for pagination/UI
+- preview contains first N nodes (progressive disclosure)
+- edges connect subject to slice members
+- collapsed controls default UI presentation
+
+**Slice Kind Semantics:**
+- **callers/callees** - Function call relationships
+- **references** - Symbol usage sites
+- **implementations** - Interface/trait implementations
+- **type_supertypes/type_subtypes** - Type hierarchy (superclasses/subclasses)
+- **parents/children** - AST containment hierarchy
+- **siblings** - Same-scope symbols
+- **enclosing_context** - Containing functions/classes
+- **imports/importers** - Module dependency relationships
+- **related** - Catch-all for other semantic relationships
+
+### SemanticEdgeV1
+
+Directed edge with evidence provenance:
+
+```python
+class SemanticEdgeV1(CqStruct, frozen=True):
+    edge_id: str
+    source_node_id: str
+    target_node_id: str
+    edge_kind: str                               # "calls", "imports", "extends", etc.
+    weight: float = 1.0
+    evidence_source: str = ""                    # "ast", "lsp.rust", "bytecode"
+    metadata: dict[str, object] | None = None
+```
+
+**Design Notes:**
+- edge_id enables deduplication and reference
+- weight supports ranking (e.g., call frequency)
+- evidence_source tracks which enricher produced edge
+- metadata holds enricher-specific details
+
+### DegradeEventV1
+
+Typed degradation event for failure tracking:
+
+```python
+class DegradeEventV1(CqStruct, frozen=True):
+    stage: str                                   # "lsp.rust", "structural.interval_index"
+    severity: Literal["info", "warning", "error"] = "warning"
+    category: str = ""                           # "timeout", "unavailable", "parse_error"
+    message: str = ""
+    correlation_key: str | None = None
+```
+
+**Design Notes:**
+- stage identifies which enrichment plane failed
+- category enables programmatic filtering (group all timeouts, etc.)
+- correlation_key groups related events (e.g., same file parse errors)
+
+**Common Categories:**
+- "timeout" - LSP server timeout
+- "unavailable" - Tool/server not running
+- "parse_error" - Syntax error preventing analysis
+- "capability_missing" - Feature not supported by server
+
+### BundleMetaV1
+
+Bundle creation metadata and provenance:
+
+```python
+class BundleMetaV1(CqStruct, frozen=True):
+    tool: str = "cq"
+    tool_version: str | None = None
+    workspace_root: str | None = None
+    query_text: str | None = None
+    created_at_ms: float | None = None
+    lsp_servers: tuple[dict[str, object], ...] = ()
+    limits: dict[str, int] | None = None
+```
+
+**Design Notes:**
+- tool_version enables compatibility checks
+- query_text supports reproducibility
+- lsp_servers documents which servers contributed enrichment
+- limits records query constraints (max depth, timeout, etc.)
+
+### NeighborhoodGraphSummaryV1
+
+Lightweight graph summary:
+
+```python
+class NeighborhoodGraphSummaryV1(CqStruct, frozen=True):
+    node_count: int = 0
+    edge_count: int = 0
+    full_graph_artifact: ArtifactPointerV1 | None = None
+```
+
+**Design Notes:**
+- Counts support UI rendering decisions
+- full_graph_artifact points to detailed graph export (DOT, Mermaid)
+
+### ArtifactPointerV1
+
+Generic artifact reference with cache support:
+
+```python
+class ArtifactPointerV1(CqStruct, frozen=True):
+    artifact_kind: str                           # "snb.bundle", "lsp.call_graph"
+    artifact_id: str
+    deterministic_id: str                        # SHA256 of normalized content
+    byte_size: int = 0
+    storage_path: str | None = None
+    metadata: dict[str, object] | None = None
+```
+
+**Design Notes:**
+- deterministic_id enables content-addressed caching
+- storage_path supports lazy loading from disk/object store
+- artifact_kind discriminates artifact types
+
+### SemanticNeighborhoodBundleRefV1
+
+Lightweight bundle reference for lazy loading:
+
+```python
+class SemanticNeighborhoodBundleRefV1(CqStruct, frozen=True):
+    bundle_id: str
+    deterministic_id: str
+    byte_size: int = 0
+    artifact_path: str | None = None
+    preview_slices: tuple[NeighborhoodSliceKind, ...] = ()
+    subject_node_id: str = ""
+    subject_label: str = ""
+```
+
+**Design Notes:**
+- Enables catalog of bundles without loading full payloads
+- preview_slices advertises available relationships
+- deterministic_id supports cache validation
+
+**Architectural Observations for Improvement Proposals:**
+
+The SNB schema has several design tensions:
+
+1. **Untyped metadata** - SemanticEdgeV1.metadata, NeighborhoodSliceV1.metadata, and ArtifactPointerV1.metadata are all `dict[str, object]`, losing type safety. Different enrichers may produce incompatible structures.
+
+2. **node_index redundancy** - node_index duplicates data from slice previews. No enforcement that node_index is complete or that slice nodes are present in index.
+
+3. **Edge orphans** - NeighborhoodSliceV1.edges references node_ids but no validation that referenced nodes exist in node_index or preview.
+
+4. **Kind proliferation** - NeighborhoodSliceKind has 13 values but no formal taxonomy. "related" is catch-all escape hatch.
+
+**Improvement Vectors:**
+- **Typed metadata unions** - Replace `dict[str, object]` with discriminated unions: `EdgeMetadata = AstEdgeMeta | LspEdgeMeta | BytecodeEdgeMeta`
+- **Index validation** - Add post_init validation ensuring node_index contains all referenced nodes
+- **Edge integrity** - Add referential integrity checks or FK constraints on node_ids
+- **Slice taxonomy** - Formalize slice kind hierarchy: PrimaryRelationships (callers, callees) vs StructuralContext (parents, siblings) vs TypeRelationships (supertypes, subtypes)
+
+## SNB Typed Registry
+
+Location: `tools/cq/core/snb_registry.py`
+
+The SNB registry provides runtime type resolution and validation for SNB schema types embedded in Finding details payloads.
+
+### DETAILS_KIND_REGISTRY
+
+Maps kind strings to struct types for dynamic deserialization:
+
+```python
+DETAILS_KIND_REGISTRY: dict[str, type[msgspec.Struct]] = {
+    "cq.snb.bundle_ref.v1": SemanticNeighborhoodBundleRefV1,
+    "cq.snb.bundle.v1": SemanticNeighborhoodBundleV1,
+    "cq.snb.node.v1": SemanticNodeRefV1,
+    "cq.snb.edge.v1": SemanticEdgeV1,
+    "cq.snb.slice.v1": NeighborhoodSliceV1,
+    "cq.snb.degrade.v1": DegradeEventV1,
+    "cq.snb.bundle_meta.v1": BundleMetaV1,
+    "cq.snb.graph_summary.v1": NeighborhoodGraphSummaryV1,
+}
+```
+
+**Design Notes:**
+- Kind strings follow `cq.snb.<type>.v1` convention for versioning
+- Registry enables polymorphic deserialization from Finding.details
+- All types are msgspec.Struct for validation at decode time
+
+**Kind Naming Convention:**
+```
+cq.snb.<short_name>.<major_version>
+│   │   │            │
+│   │   │            └─ Schema version (v1, v2, etc.)
+│   │   └────────────── Type identifier (bundle, node, edge, etc.)
+│   └────────────────── Namespace (snb = Semantic Neighborhood Bundle)
+└────────────────────── Tool prefix (cq)
+```
+
+### resolve_kind()
+
+Resolve kind string to struct type:
+
+```python
+def resolve_kind(kind: str) -> type[msgspec.Struct] | None:
+    """Resolve kind string to struct type for runtime validation."""
+    return DETAILS_KIND_REGISTRY.get(kind)
+```
+
+**Usage:**
+```python
+struct_type = resolve_kind("cq.snb.node.v1")
+assert struct_type is SemanticNodeRefV1
+```
+
+### validate_finding_details()
+
+Validate finding details has registered kind:
+
+```python
+def validate_finding_details(details: dict[str, object]) -> bool:
+    """Validate that finding details dict has valid kind and structure."""
+    kind = details.get("kind")
+    if not isinstance(kind, str):
+        return False
+    struct_type = resolve_kind(kind)
+    return struct_type is not None
+```
+
+**Usage:**
+```python
+details = {"kind": "cq.snb.node.v1", "node_id": "...", "name": "foo", ...}
+if validate_finding_details(details):
+    # Safe to decode
+    node = decode_finding_details(details)
+```
+
+**Design Notes:**
+- Fail-fast validation before expensive decoding
+- Used by enrichment pipeline to catch malformed payloads early
+- Returns bool (not exceptions) for graceful degradation
+
+### decode_finding_details()
+
+Decode finding details dict into typed struct:
+
+```python
+def decode_finding_details(details: dict[str, object]) -> msgspec.Struct | None:
+    """Decode finding details dict into typed struct."""
+    kind = details.get("kind")
+    if not isinstance(kind, str):
+        return None
+
+    struct_type = resolve_kind(kind)
+    if struct_type is None:
+        return None
+
+    try:
+        return msgspec.convert(details, type=struct_type)
+    except (msgspec.ValidationError, TypeError):
+        return None
+```
+
+**Usage Pattern:**
+```python
+# Finding with SNB node in details
+finding = Finding(
+    category="definition",
+    message="Function foo",
+    details=DetailPayload(data={
+        "kind": "cq.snb.node.v1",
+        "node_id": "src/foo.py:100-120",
+        "name": "foo",
+        "kind": "function",
+        ...
+    })
+)
+
+# Decode to typed struct
+details_dict = finding.details.data
+if validate_finding_details(details_dict):
+    node = decode_finding_details(details_dict)
+    assert isinstance(node, SemanticNodeRefV1)
+    print(f"Function: {node.name} at {node.file_path}")
+```
+
+**Design Notes:**
+- Returns None on failure (not exceptions) for fail-open behavior
+- Uses msgspec.convert() for validation + type coercion
+- Validation errors are silent (logged internally if needed)
+
+**Integration with Finding Details:**
+
+The registry enables polymorphic details payloads in Finding:
+
+```python
+# Before: Untyped details
+finding = Finding(
+    category="neighborhood",
+    message="Found 42 callers",
+    details=DetailPayload(data={"callers": [...], "callees": [...]})
+)
+
+# After: Typed SNB bundle in details
+finding = Finding(
+    category="neighborhood",
+    message="Semantic neighborhood for foo",
+    details=DetailPayload(data={
+        "kind": "cq.snb.bundle.v1",
+        "bundle_id": "...",
+        "subject": {...},
+        "slices": [...],
+        ...
+    })
+)
+
+# Consumer can decode and validate
+if validate_finding_details(finding.details.data):
+    bundle = decode_finding_details(finding.details.data)
+    print(f"Bundle has {len(bundle.slices)} slices")
+```
+
+**Architectural Observations for Improvement Proposals:**
+
+The typed registry pattern addresses some DetailPayload issues but has limitations:
+
+1. **Silent failures** - decode_finding_details() returns None on validation errors with no diagnostic context. Consumer doesn't know why decoding failed.
+
+2. **No schema validation** - Registry validates kind exists but doesn't validate struct completeness. Missing required fields fail at decode time, not registration time.
+
+3. **Global registry** - DETAILS_KIND_REGISTRY is module-level dict with no extension mechanism. Adding new kinds requires modifying core module.
+
+**Improvement Vectors:**
+- **Error detail** - Return `Result[T, ValidationError]` instead of `T | None` to preserve error context
+- **Pre-validation** - Add JSON Schema validation before msgspec conversion to catch structure errors early
+- **Plugin registry** - Replace global dict with PluginRegistry that supports runtime registration from external modules
+- **Kind discovery** - Add `list_registered_kinds() -> list[str]` for introspection and testing
 
 ## Search Request Models
 

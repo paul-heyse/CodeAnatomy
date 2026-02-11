@@ -10,7 +10,7 @@ Located under `tools/cq/run/` and `tools/cq/cli_app/commands/`, the subsystem co
 
 ### Core Execution Engine
 - `tools/cq/run/runner.py` (1038 LOC) - Main execution orchestration, batching strategy, language scope expansion, result collapse
-- `tools/cq/run/spec.py` (211 LOC) - RunPlan data model, 10 step type variants, step ID normalization
+- `tools/cq/run/spec.py` (211 LOC) - RunPlan data model, 11 step type variants, step ID normalization
 - `tools/cq/run/loader.py` (93 LOC) - TOML/JSON plan loading, inline step coercion
 
 ### Frontend Interfaces
@@ -42,7 +42,7 @@ Global scope filters are applied to all steps:
 - `exclude`: glob patterns to exclude from all steps
 - Applied via `_apply_run_scope()` for Q steps, `_apply_run_scope_filter()` for non-Q steps
 
-### Step Type Taxonomy (10 variants)
+### Step Type Taxonomy (11 variants)
 
 #### Query Steps
 - **QStep**: Entity or pattern query via query IR
@@ -81,6 +81,13 @@ Global scope filters are applied to all steps:
 
 - **BytecodeSurfaceStep**: Bytecode opcode inspection
   - Fields: `target: str`, `show: str = "globals,attrs,constants"`, `max_files: int = 500`
+
+#### Neighborhood Steps
+- **NeighborhoodStep**: Semantic neighborhood assembly for a target
+  - Fields: `target: str`, `lang: str = "python"`, `top_k: int = 10`, `no_lsp: bool = False`
+  - Executes the full neighborhood pipeline: target resolution → structural collection → LSP enrichment → bundle assembly → rendering
+  - Results are not batch-optimized (each neighborhood step is independent)
+  - See [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) for full pipeline documentation
 
 ### Step Base Protocol
 ```python
@@ -251,14 +258,46 @@ Pattern queries are separated because:
 - Different optimization strategy (file list union vs record union)
 
 ### Non-Q Step Execution
-`_execute_non_q_step()` dispatches by step type:
+
+**Location:** `runner.py:710-720, 976-988`
+
+Non-Q, non-search steps use a static dispatch table for execution routing:
+
 ```python
-if isinstance(step, SearchStep):
-    return _execute_search_step(step, plan, ctx)
-elif isinstance(step, CallsStep):
-    result = _execute_calls(step, ctx)
-# ... 7 more branches
+_NON_SEARCH_DISPATCH: dict[type, Callable[..., CqResult]] = {
+    CallsStep: _execute_calls,
+    ImpactStep: _execute_impact,
+    ImportsStep: _execute_imports,
+    ExceptionsStep: _execute_exceptions,
+    SigImpactStep: _execute_sig_impact,
+    SideEffectsStep: _execute_side_effects,
+    ScopesStep: _execute_scopes,
+    BytecodeSurfaceStep: _execute_bytecode_surface,
+    NeighborhoodStep: _execute_neighborhood_step,
+}
 ```
+
+**Dispatch logic** (`_execute_non_q_step`):
+
+```python
+def _execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext) -> CqResult:
+    if isinstance(step, SearchStep):
+        return _execute_search_step(step, plan, ctx)
+
+    executor = _NON_SEARCH_DISPATCH.get(type(step))
+    if executor is None:
+        msg = f"Unsupported step type: {type(step)!r}"
+        raise TypeError(msg)
+
+    result = executor(step, ctx)
+    return _apply_run_scope_filter(result, ctx.root, plan.in_dir, plan.exclude)
+```
+
+**Design rationale:**
+- Dict dispatch avoids long if/elif chains
+- `SearchStep` is handled separately because it requires the `plan` parameter for scope filtering
+- New step types only need to add an entry to `_NON_SEARCH_DISPATCH` and implement the executor function
+- All non-Q steps go through `_apply_run_scope_filter` for consistent scope enforcement
 
 Each step type maps to a corresponding macro:
 - `CallsStep` → `tools.cq.macros.calls.cmd_calls()`
@@ -269,8 +308,7 @@ Each step type maps to a corresponding macro:
 - `SideEffectsStep` → `tools.cq.macros.side_effects.cmd_side_effects()`
 - `ScopesStep` → `tools.cq.macros.scopes.cmd_scopes()`
 - `BytecodeSurfaceStep` → `tools.cq.macros.bytecode.cmd_bytecode_surface()`
-
-After execution, `_apply_run_scope_filter()` filters results by `plan.in_dir` and `plan.exclude`.
+- `NeighborhoodStep` → `tools.cq.macros.neighborhood.cmd_neighborhood()`
 
 ### Search Fallback Logic
 `_handle_query_parse_error()` provides fallback:

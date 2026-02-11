@@ -716,3 +716,97 @@ If you want, I can also give you a **ready-to-drop “LDMD indexer/extractor”*
 [1]: https://rich.readthedocs.io/en/stable/_modules/rich/markdown.html "rich.markdown — Rich 14.1.0 documentation"
 [2]: https://daobook.github.io/markdown-it-py/_modules/markdown_it/presets/commonmark.html?utm_source=chatgpt.com "markdown_it.presets.commonmark — markdown-it-py"
 [3]: https://textual.textualize.io/widgets/markdown/?utm_source=chatgpt.com "Markdown - Textual"
+
+## 35) `MarkdownViewer`: “browser-like” selective navigation over Markdown
+
+* **Optional Table of Contents pane**: `MarkdownViewer` is explicitly described as adding “browser-like functionality” on top of `Markdown`, including an optional TOC. ([Textual Documentation][1])
+* **History + navigation**:
+
+  * `back()` / `forward()` move through history
+  * `go(location)` navigates to a new document path ([Textual Documentation][1])
+* **TOC visibility toggle**: `show_table_of_contents` is a documented attribute controlling whether the TOC is shown. ([Textual Documentation][1])
+
+## 36) Table-of-contents as a first-class data model (jump-to-section hooks)
+
+* **TOC structure (`TableOfContentsType`)**: the TOC is a list of triples encoding `(level, label, optional block_id)` for each heading. That “block_id” is the key to deterministic section addressing. ([Textual Documentation][1])
+* **TOC events**:
+
+  * `TableOfContentsUpdated(markdown, table_of_contents)` fires when TOC changes. ([Textual Documentation][1])
+  * `TableOfContentsSelected(markdown, block_id)` fires when a TOC item is selected, providing the selected `block_id`. ([Textual Documentation][1])
+* **Standalone TOC widget**: `MarkdownTableOfContents` is a separate widget that “displays a table of contents for a markdown document,” with a reactive `table_of_contents`, plus `rebuild_table_of_contents(...)` and `watch_table_of_contents(...)`. ([Textual Documentation][1])
+
+## 37) Anchor navigation (`#...`) and stable “jump” semantics
+
+* **`goto_anchor(anchor)`**: searches headings for a slug matching the anchor; docs note the slugging is “similar to that found on GitHub.” ([Textual Documentation][2])
+* **`sanitize_location(location)`**: splits a location into `(path, anchor)` so `path.md#section` can be routed predictably. ([Textual Documentation][1])
+
+## 38) Link routing as your selective-delivery control plane
+
+This is the most direct “selective reveal” mechanism in Textual’s Markdown stack: treat links as *commands*.
+
+* **`open_links` switch**:
+
+  * When `open_links=True`, links open automatically.
+  * When `open_links=False`, you can handle `LinkClicked` events yourself. ([Textual Documentation][1])
+* **`LinkClicked` payload** includes the clicked `href` (and the `Markdown` widget that contained it). ([Textual Documentation][1])
+* **Per-block handler hook**: `MarkdownBlock.action_link(href)` is explicitly documented as “Called on link click.” ([Textual Documentation][1])
+
+Practical pattern: encode “section links” like `[Expand S03.02](ldmd://S03.02)` and route `href` to your file slicer instead of opening anything.
+
+## 39) Parser control + token extensibility (structure beyond vanilla Markdown)
+
+* **`parser_factory`**: both `Markdown` and `MarkdownViewer` accept a factory that returns a configured `MarkdownIt` parser; if `None`, Textual uses a “gfm-like” parser. ([Textual Documentation][1])
+  *This is the knob that lets you parse custom directives or extensions (then render them via custom blocks).*
+* **Unhandled token hook**: `Markdown.unhandled_token(token)` lets you “Process an unhandled token” and return either a `MarkdownBlock` widget to include in output or `None`. ([Textual Documentation][2])
+* **Block-class resolution**: `get_block_class(block_name)` returns the widget class used for a given block token name. ([Textual Documentation][1])
+* **Inline style component classes**: `MarkdownBlock.COMPONENT_CLASSES = {'em','strong','s','code_inline'}` defines the inline styling hooks; modifying them can break standard formatting (useful to know if you theme aggressively). ([Textual Documentation][1])
+
+## 40) Streaming + incremental loading (selective delivery without re-render storms)
+
+If you want “progressively reveal” *within the same session* (e.g., agent asks for deeper detail and you stream it in chunks):
+
+* **`append(markdown_fragment)`**: append fragments; returns an awaitable that you can await to ensure the UI updates. ([Textual Documentation][2])
+* **`update(markdown)`**: replace the document contents; returns an awaitable to ensure children mount. ([Textual Documentation][2])
+* **`Markdown.get_stream(markdown_widget)` → `MarkdownStream`**:
+
+  * Designed specifically to batch updates when appending frequently (docs call out ~20 appends/sec as a point where the UI can lag).
+  * `MarkdownStream.write(fragment)` enqueues/accumulates fragments; `stop()` stops/awaits finish. ([Textual Documentation][2])
+* **Async execution model**: Textual’s widget guide notes “Every widget runs in its own asyncio task,” which is exactly what you want for background fetch + controlled reveal. ([Textual Documentation][3])
+
+## 41) Multi-view selective presentation (summary vs detail, multiple docs)
+
+These are the “structure the experience” primitives you didn’t use earlier:
+
+* **`ContentSwitcher`**: container that “switch[es] display between multiple child widgets”; you set `ContentSwitcher.current` (or call `set_current`) to select which child is visible. ([Textual Documentation][4])
+* **`TabbedContent`**:
+
+  * Composed of a `Tabs` + a `ContentSwitcher`.
+  * Has a reactive `active` attribute (“Set this to switch tabs.”). ([Textual Documentation][5])
+    This is ideal for: `Summary` | `Full` | `Raw` | `Index` | `Search hits` tabs, all sourced from the same underlying one-file doc.
+
+## 42) File + outline navigation widgets for selective loading
+
+* **`DirectoryTree`**: a filesystem tree control; use it to browse a docs folder and load only the chosen file into `MarkdownViewer`. ([Textual Documentation][6])
+* **`Tree`**: general-purpose tree with a `root` node and methods like `add()` / `add_leaf()` to build arbitrary hierarchies. Use this to display *your own* LDMD section tree (IDs, tags, sizes) and load slices on selection. ([Textual Documentation][7])
+
+## 43) “Selective interaction” inside Markdown tables (DataTable-backed)
+
+If your markdown contains large tables, Textual’s stack can give you selective interaction *within* that content:
+
+* `MarkdownViewer`’s own example explicitly states: “Tables are displayed in a DataTable widget.” ([Textual Documentation][1])
+* `DataTable` supports cursor navigation, mouse click responses, updates, row/column deletion, and per-cell Rich renderables. ([Textual Documentation][8])
+
+This matters because you can keep the doc static but still let the consumer (human or agent-driven tooling) focus on a row/column subset via events.
+
+---
+
+If you want, I can translate these Textual primitives into an **agent-first protocol** that uses `open_links=False` + `LinkClicked.href` as the single “expand” command channel, and never loads more than the requested LDMD slice into any widget (or into the agent context).
+
+[1]: https://textual.textualize.io/widgets/markdown_viewer/ "MarkdownViewer - Textual"
+[2]: https://textual.textualize.io/widgets/markdown/ "Markdown - Textual"
+[3]: https://textual.textualize.io/guide/widgets/?utm_source=chatgpt.com "Widgets - Textual"
+[4]: https://textual.textualize.io/widgets/content_switcher/ "ContentSwitcher - Textual"
+[5]: https://textual.textualize.io/widgets/tabbed_content/ "TabbedContent - Textual"
+[6]: https://textual.textualize.io/widgets/directory_tree/ "DirectoryTree - Textual"
+[7]: https://textual.textualize.io/widgets/tree/?utm_source=chatgpt.com "Tree - Textual"
+[8]: https://textual.textualize.io/widgets/data_table/?utm_source=chatgpt.com "DataTable - Textual"

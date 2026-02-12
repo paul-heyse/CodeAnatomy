@@ -832,6 +832,49 @@ class TestSmartSearch:  # noqa: PLR0904
         location_file = str(location.get("file"))
         assert location_file.removeprefix("./").startswith("src/")
         assert isinstance(location.get("line"), int)
+        assert target.get("kind") in {"function", "class", "type"}
+
+    def test_search_insight_excludes_annotation_reference_target_kinds(
+        self, tmp_path: Path
+    ) -> None:
+        """Definition candidates should not surface annotation/reference target kinds."""
+        module = tmp_path / "module.py"
+        module.write_text(
+            "\n".join(
+                [
+                    "class AsyncService:",
+                    "    pass",
+                    "",
+                    "def build_pipeline() -> tuple[AsyncService, int]:",
+                    "    return (AsyncService(), 1)",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        clear_caches()
+        result = smart_search(tmp_path, "AsyncService", lang_scope="python")
+        insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
+        target = cast("dict[str, object]", insight.get("target", {}))
+        assert target.get("kind") in {"function", "class", "type"}
+
+    def test_search_neighborhood_preview_section_present_for_resolved_definition(
+        self, sample_repo: Path
+    ) -> None:
+        """Resolved definition targets should include a neighborhood preview section."""
+        clear_caches()
+        result = smart_search(sample_repo, "build_graph")
+        titles = [section.title for section in result.sections]
+        assert "Neighborhood Preview" in titles
+
+    def test_search_degradation_notes_are_deduplicated(self, sample_repo: Path) -> None:
+        """Degradation notes should avoid duplicate status markers."""
+        clear_caches()
+        result = smart_search(sample_repo, "build_graph")
+        insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
+        degradation = cast("dict[str, object]", insight.get("degradation", {}))
+        notes = cast("list[str]", degradation.get("notes", []))
+        assert len(notes) == len(set(notes))
 
     def test_evidence_cap(self, sample_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Evidence should respect MAX_EVIDENCE cap."""

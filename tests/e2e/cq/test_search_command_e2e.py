@@ -34,6 +34,12 @@ def test_search_python_workspace_golden(
 
     spec = load_golden_spec("golden_specs/search_python_asyncservice_spec.json")
     assert_result_matches_spec(result, spec)
+    insight = result.summary.get("front_door_insight")
+    assert isinstance(insight, dict)
+    target = insight.get("target")
+    assert isinstance(target, dict)
+    assert target.get("kind") in {"function", "class", "type"}
+    assert any(section.title == "Neighborhood Preview" for section in result.sections)
     assert_json_snapshot_data(
         "search_python_asyncservice.json",
         result_snapshot_projection(result),
@@ -62,6 +68,20 @@ def test_search_rust_workspace_golden(
 
     spec = load_golden_spec("golden_specs/search_rust_compile_target_spec.json")
     assert_result_matches_spec(result, spec)
+    insight = result.summary.get("front_door_insight")
+    assert isinstance(insight, dict)
+    neighborhood = insight.get("neighborhood")
+    assert isinstance(neighborhood, dict)
+    for key in ("callers", "callees", "references", "hierarchy_or_scope"):
+        payload = neighborhood.get(key)
+        assert isinstance(payload, dict)
+        assert {
+            "total",
+            "preview",
+            "availability",
+            "source",
+            "overflow_artifact_ref",
+        }.issubset(payload.keys())
     assert_json_snapshot_data(
         "search_rust_compile_target.json",
         result_snapshot_projection(result),

@@ -53,11 +53,13 @@ tools/cq/
 │       └── search.py       # Search command entry
 ├── core/                   # Shared infrastructure
 │   ├── __init__.py         # Re-exports: Anchor, Artifact, CqResult, Finding, RunMeta, Section, Toolchain
+│   ├── artifacts.py        # Artifact storage (diagnostics, neighborhood overflow, results)
 │   ├── bundles.py          # TargetSpec, TargetScope, BundleContext
 │   ├── codec.py            # JSON/msgpack encoders/decoders
 │   ├── contracts.py        # ContractEnvelope, contract serialization
 │   ├── enrichment_facts.py # Code Facts cluster system (6 clusters, 50+ fields)
 │   ├── findings_table.py   # FindingRecord (tabular flattening for filtering)
+│   ├── front_door_insight.py  # FrontDoorInsightV1 contract, builders, rendering (904 lines)
 │   ├── locations.py        # SourceSpan, byte-to-char conversion
 │   ├── merge.py            # Step result merging with provenance
 │   ├── multilang_orchestrator.py # Multi-language execution and merge
@@ -434,6 +436,16 @@ class CqResult(CqStruct, frozen=True):
     detail_payload: DetailPayload | None = None
 ```
 
+**Front-Door Insight Integration:**
+
+Front-door commands (search, calls, entity) embed `FrontDoorInsightV1` in `summary["front_door_insight"]`, which is rendered as the first markdown block ("Insight Card"). The insight provides:
+- Target grounding (symbol, kind, location, signature)
+- Neighborhood preview slices (callers, callees, references, hierarchy/scope)
+- Risk assessment with explicit drivers and counters
+- Confidence scoring
+- Degradation status per subsystem
+- Budget tracking and artifact references
+
 **Supporting Types:**
 
 ```python
@@ -529,6 +541,10 @@ Default markdown output follows structured template:
 ```markdown
 # [Command Title]
 
+## Insight Card (if present)
+
+[FrontDoorInsightV1 rendering: target, confidence, risk, neighborhood preview, budget, artifacts]
+
 [Summary paragraph]
 
 ## Section 1
@@ -551,6 +567,19 @@ Default markdown output follows structured template:
 - Total Findings: [count]
 - Toolchain: [versions]
 ```
+
+**Insight Card Rendering (Front-Door Commands):**
+
+When `summary["front_door_insight"]` is present (search, calls, entity), the markdown renderer emits a structured "## Insight Card" section as the first content block. The card includes:
+- **Target**: Symbol, kind, location, signature (with confidence badge)
+- **Risk**: Level (low/med/high) with explicit drivers and counters
+- **Neighborhood Preview**: Preview slices for callers, callees, references, hierarchy/scope (with overflow artifact references)
+- **Budget**: Token counts and limits
+- **Artifacts**: Links to diagnostic and overflow artifact files
+
+**Diagnostic Offloading:**
+
+Large diagnostic payloads (enrichment_telemetry, pyrefly_telemetry, pyrefly_diagnostics, language_capabilities, cross_language_diagnostics) are offloaded to artifact files rather than emitted in-band. The markdown output shows compact status lines instead of verbose diagnostic blocks. Full diagnostics are available in `.cq/artifacts/*_diagnostics_*.json` files.
 
 **Finding Table Columns:**
 - Path (relative to root)
@@ -587,9 +616,20 @@ def save_artifact(result: CqResult, artifact_dir: Path) -> Path:
 
 **Artifact Structure:**
 - Location: `.cq/artifacts/` by default
-- Filename: `{command}_{timestamp}.msgpack`
-- Format: msgpack-encoded `ContractEnvelope` with schema version
+- Filename patterns:
+  - Results: `{macro}_result_{timestamp}_{run_id}.json`
+  - Diagnostics: `{macro}_diagnostics_{timestamp}_{run_id}.json`
+  - Neighborhood overflow: `{macro}_neighborhood_overflow_{timestamp}_{run_id}.json`
+- Format: JSON with structured payload (diagnostics, neighborhood slices, or full CqResult)
 - Disabled via `--no-save-artifact` flag
+
+**Artifact Types:**
+
+1. **Result artifacts** (`save_artifact_json`): Full CqResult as JSON
+2. **Diagnostic artifacts** (`save_diagnostics_artifact`): Offloaded diagnostic payloads (enrichment_telemetry, pyrefly_telemetry, pyrefly_diagnostics, language_capabilities, cross_language_diagnostics)
+3. **Neighborhood overflow artifacts** (`save_neighborhood_overflow_artifact`): Full neighborhood slices when insight preview is truncated
+
+Artifact references are included in `FrontDoorInsightV1.artifacts` and markdown "## Artifacts" sections for easy retrieval of offloaded data.
 
 ### Architectural Observations for Improvement Proposals
 
@@ -772,6 +812,14 @@ class Finding(CqStruct, frozen=True):
 - Included in markdown finding tables (separate column)
 - Preserved in JSON/msgpack artifacts
 - Surfaced in summary statistics
+
+**Insight-Level Degradation:**
+
+For front-door commands, `FrontDoorInsightV1` includes an `InsightDegradationV1` payload that tracks per-subsystem degradation status alongside the existing `Finding.degrade_reasons` list. This provides structured status tracking for:
+- Enrichment subsystems (5-stage pipeline status)
+- LSP integration (capability gate failures)
+- Neighborhood assembly (structural/LSP slice availability)
+- Pyrefly integration (type analysis failures)
 
 ### Error Result Pattern
 
@@ -1177,6 +1225,9 @@ These observations are documented not as deficiencies but as design decision poi
 
 **File Locations:**
 - Core schema: `tools/cq/core/schema.py`
+- Front-door insight: `tools/cq/core/front_door_insight.py`
+- Artifacts: `tools/cq/core/artifacts.py`
+- Report rendering: `tools/cq/core/report.py`
 - CLI app: `tools/cq/cli_app/app.py`
 - Toolchain: `tools/cq/core/toolchain.py`
 - Indexing: `tools/cq/index/def_index.py`

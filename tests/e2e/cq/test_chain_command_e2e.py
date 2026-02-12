@@ -39,6 +39,9 @@ def test_chain_search_and_q_steps_golden(
     steps = result.summary.get("steps")
     assert isinstance(steps, list)
     assert len(steps) == 2
+    section_titles = [section.title for section in result.sections]
+    assert any("Target Candidates" in title for title in section_titles)
+    assert any("Neighborhood Preview" in title for title in section_titles)
 
     assert_json_snapshot_data(
         "chain_search_q_python.json",

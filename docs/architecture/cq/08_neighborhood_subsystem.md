@@ -14,6 +14,7 @@ The CQ neighborhood subsystem (`tools/cq/neighborhood/`) provides targeted seman
 - SemanticNeighborhoodBundleV1 (SNB) canonical schema with progressive disclosure
 - Multi-language support (Python via Pyrefly, Rust via rust-analyzer)
 - Typed degradation events with stage/category/severity classification
+- Front-door insight integration: Structural neighborhood data reused by `FrontDoorInsightV1` for compact preview slices in search/calls/entity output
 
 **Target audience:** Advanced LLM programmers proposing architectural improvements.
 
@@ -1292,7 +1293,43 @@ snapshot = ScanSnapshot.build_from_repo(Path("."), lang="python")
 
 ---
 
-## 8. SNB Rendering
+## 8. Front-Door Insight Integration
+
+The neighborhood subsystem's structural data feeds the `FrontDoorInsightV1` contract used by front-door commands (search, calls, entity). This integration reuses existing infrastructure rather than duplicating neighborhood logic.
+
+### Structural Adapter Reuse (Delta D)
+
+Per the v3 enrichment plan's Delta D, front-door commands reuse the `ScanSnapshot` adapter to extract structural neighborhood data. The `build_search_insight()`, `build_calls_insight()`, and `build_entity_insight()` functions in `front_door_insight.py` consume scan state structures and produce `InsightSliceV1` objects with:
+
+- `total`: Full count from structural scan
+- `preview`: Bounded preview (up to `budget.preview_per_slice` items)
+- `availability`: "full" | "partial" | "unavailable" based on scan completeness
+- `source`: "structural" | "lsp" | "heuristic" | "none" tracking data provenance
+
+### InsightSliceV1 vs NeighborhoodSliceV1
+
+Both represent neighborhood data but at different fidelity levels:
+
+| Aspect | InsightSliceV1 | NeighborhoodSliceV1 |
+|--------|---------------|---------------------|
+| Purpose | Compact front-door preview | Full neighborhood detail |
+| Preview size | 5 items (budgeted) | 10+ items (configurable) |
+| Edge data | None | Full edges with evidence |
+| Collapse state | Always visible | Dynamic collapse rules |
+| Metadata | availability + source | Full metadata dict |
+| Overflow | artifact_ref pointer | In-bundle |
+
+### Overflow Artifact Handling
+
+When insight preview slices are truncated (preview count < total), `save_neighborhood_overflow_artifact()` persists the full neighborhood list. The artifact path is stored in `InsightArtifactRefsV1.neighborhood_overflow` for retrieval by agents that need the complete data.
+
+### Cross-Language Stability (Delta E)
+
+The `mark_partial_for_missing_languages()` function ensures that Rust or degraded language contexts still emit stable `InsightSliceV1` keys with explicit availability markers ("unavailable") rather than omitting fields. This guarantees schema stability across all language scopes.
+
+---
+
+## 9. SNB Rendering
 
 **Location:** `tools/cq/neighborhood/snb_renderer.py` (158 LOC)
 
@@ -1387,7 +1424,7 @@ enrichment_payload: dict[str, object] = {
 
 ---
 
-## 9. Pyrefly Adapter
+## 10. Pyrefly Adapter
 
 **Location:** `tools/cq/neighborhood/pyrefly_adapter.py` (269 LOC)
 
@@ -1486,7 +1523,7 @@ lsp_env = {
 
 ---
 
-## 10. CLI + Run Integration
+## 11. CLI + Run Integration
 
 ### CLI Command
 
@@ -1582,7 +1619,7 @@ no_lsp = false
 
 ---
 
-## 11. Typed Registry
+## 12. Typed Registry
 
 **Location:** `tools/cq/core/snb_registry.py` (100 LOC)
 
@@ -1659,7 +1696,7 @@ if validate_finding_details(details):
 
 ---
 
-## 12. Architectural Observations
+## 13. Architectural Observations
 
 ### Design Rationale
 

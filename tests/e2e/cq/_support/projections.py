@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from tools.cq.core.front_door_insight import coerce_front_door_insight
 from tools.cq.core.schema import CqResult
 
 _DURATION_PATTERN = re.compile(r"(\*\*(?:Created|Elapsed):\*\*)\s+[0-9]+(?:\.[0-9]+)?ms")
@@ -13,6 +14,67 @@ _DURATION_PATTERN = re.compile(r"(\*\*(?:Created|Elapsed):\*\*)\s+[0-9]+(?:\.[0-
 
 def _normalize_message(message: str) -> str:
     return _DURATION_PATTERN.sub(r"\1 <duration_ms>", message)
+
+
+def _normalize_path(path: str) -> str:
+    return path.removeprefix("./")
+
+
+def _project_front_door_insight(summary: dict[str, object]) -> dict[str, Any] | None:
+    insight = coerce_front_door_insight(summary.get("front_door_insight"))
+    if insight is None:
+        return None
+    return {
+        "source": insight.source,
+        "target": {
+            "symbol": insight.target.symbol,
+            "kind": insight.target.kind,
+            "selection_reason": insight.target.selection_reason,
+            "location": {
+                "file": _normalize_path(insight.target.location.file),
+                "line": insight.target.location.line,
+                "col": insight.target.location.col,
+            },
+        },
+        "neighborhood": {
+            "callers": {
+                "total": insight.neighborhood.callers.total,
+                "availability": insight.neighborhood.callers.availability,
+            },
+            "callees": {
+                "total": insight.neighborhood.callees.total,
+                "availability": insight.neighborhood.callees.availability,
+            },
+            "references": {
+                "total": insight.neighborhood.references.total,
+                "availability": insight.neighborhood.references.availability,
+            },
+            "hierarchy_or_scope": {
+                "total": insight.neighborhood.hierarchy_or_scope.total,
+                "availability": insight.neighborhood.hierarchy_or_scope.availability,
+            },
+        },
+        "risk": {
+            "level": insight.risk.level,
+            "counters": {
+                "callers": insight.risk.counters.callers,
+                "callees": insight.risk.counters.callees,
+                "hazard_count": insight.risk.counters.hazard_count,
+                "forwarding_count": insight.risk.counters.forwarding_count,
+            },
+        },
+        "degradation": {
+            "lsp": insight.degradation.lsp,
+            "scan": insight.degradation.scan,
+            "scope_filter": insight.degradation.scope_filter,
+            "notes": list(insight.degradation.notes),
+        },
+        "artifact_ref_presence": {
+            "diagnostics": bool(insight.artifact_refs.diagnostics),
+            "telemetry": bool(insight.artifact_refs.telemetry),
+            "neighborhood_overflow": bool(insight.artifact_refs.neighborhood_overflow),
+        },
+    }
 
 
 def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
@@ -39,6 +101,7 @@ def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
         "total_nodes": summary.get("total_nodes"),
         "total_edges": summary.get("total_edges"),
         "total_diagnostics": summary.get("total_diagnostics"),
+        "front_door_insight": _project_front_door_insight(summary),
     }
 
     key_findings = [_normalize_message(finding.message) for finding in result.key_findings[:20]]

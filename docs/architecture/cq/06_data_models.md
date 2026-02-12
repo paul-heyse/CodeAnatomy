@@ -1096,6 +1096,739 @@ The typed registry pattern addresses some DetailPayload issues but has limitatio
 - **Plugin registry** - Replace global dict with PluginRegistry that supports runtime registration from external modules
 - **Kind discovery** - Add `list_registered_kinds() -> list[str]` for introspection and testing
 
+## Front-Door Insight Contract (FrontDoorInsightV1)
+
+Location: `tools/cq/core/front_door_insight.py`
+
+The Front-Door Insight Contract provides a canonical shared schema for search, calls, and entity front-door commands. It structures target grounding, neighborhood previews, risk assessment, confidence scoring, degradation status, budget controls, and artifact references in a concise, front-door-focused format.
+
+### Type Aliases
+
+```python
+InsightSource = Literal["search", "calls", "entity"]
+Availability = Literal["full", "partial", "unavailable"]
+NeighborhoodSource = Literal["structural", "lsp", "heuristic", "none"]
+RiskLevel = Literal["low", "med", "high"]
+```
+
+**Design Notes:**
+- InsightSource discriminates which command produced the insight
+- Availability tracks data completeness (full, partial degradation, or unavailable)
+- NeighborhoodSource documents enrichment provenance (structural AST, LSP server, heuristic fallback, or none)
+- RiskLevel provides categorical risk bucketing for quick assessment
+
+### InsightTargetV1
+
+Primary target selected by a front-door command:
+
+```python
+class InsightTargetV1(CqStruct, frozen=True):
+    symbol: str
+    kind: str = "unknown"
+    location: InsightLocationV1 = InsightLocationV1()
+    signature: str | None = None
+    qualname: str | None = None
+    selection_reason: str = ""
+```
+
+**Design Notes:**
+- symbol is the primary identifier (function name, class name, etc.)
+- kind follows LSP SymbolKind conventions ("function", "class", "method", etc.)
+- location points to definition site
+- signature captures full type signature when available
+- qualname provides fully qualified name for disambiguation
+- selection_reason documents why this target was chosen ("top_definition", "resolved_calls_target", etc.)
+
+### InsightLocationV1
+
+Location payload for a selected target:
+
+```python
+class InsightLocationV1(CqStruct, frozen=True):
+    file: str = ""
+    line: int | None = None
+    col: int | None = None
+```
+
+**Design Notes:**
+- Simplified location (no end positions)
+- Optional line/col for targets without precise location
+- Used within InsightTargetV1 for definition grounding
+
+### InsightSliceV1
+
+Preview-able neighborhood slice with provenance and availability:
+
+```python
+class InsightSliceV1(CqStruct, frozen=True):
+    total: int = 0
+    preview: tuple[SemanticNodeRefV1, ...] = ()
+    availability: Availability = "unavailable"
+    source: NeighborhoodSource = "none"
+    overflow_artifact_ref: str | None = None
+```
+
+**Design Notes:**
+- total tracks full relationship count (for pagination/overflow detection)
+- preview contains first N nodes (bounded by budget.preview_per_slice)
+- availability indicates data completeness state
+- source tracks which enricher populated the slice
+- overflow_artifact_ref points to full slice data when preview is truncated
+
+### InsightNeighborhoodV1
+
+Neighborhood envelope used by the front-door card:
+
+```python
+class InsightNeighborhoodV1(CqStruct, frozen=True):
+    callers: InsightSliceV1 = InsightSliceV1()
+    callees: InsightSliceV1 = InsightSliceV1()
+    references: InsightSliceV1 = InsightSliceV1()
+    hierarchy_or_scope: InsightSliceV1 = InsightSliceV1()
+```
+
+**Design Notes:**
+- Four canonical slices for front-door presentation
+- callers/callees map to NeighborhoodSliceKind "callers"/"callees"
+- references aggregates "references", "imports", "importers" slices
+- hierarchy_or_scope aggregates "parents", "children", "siblings", "enclosing_context", "implementations", "type_supertypes", "type_subtypes", "related" slices
+- All slices default to unavailable (empty InsightSliceV1)
+
+### InsightRiskCountersV1
+
+Deterministic risk counters for edit-surface evaluation:
+
+```python
+class InsightRiskCountersV1(CqStruct, frozen=True):
+    callers: int = 0
+    callees: int = 0
+    files_with_calls: int = 0
+    arg_shape_count: int = 0
+    forwarding_count: int = 0
+    hazard_count: int = 0
+    closure_capture_count: int = 0
+```
+
+**Design Notes:**
+- Raw counts (not normalized scores)
+- callers/callees track call graph surface
+- files_with_calls measures cross-file impact
+- arg_shape_count captures signature variance across call sites
+- forwarding_count detects argument forwarding patterns
+- hazard_count aggregates dynamic hazards (eval, exec, getattr, etc.)
+- closure_capture_count identifies closure variable capture
+
+### InsightRiskV1
+
+Risk level + explicit drivers and counters:
+
+```python
+class InsightRiskV1(CqStruct, frozen=True):
+    level: RiskLevel = "low"
+    drivers: tuple[str, ...] = ()
+    counters: InsightRiskCountersV1 = InsightRiskCountersV1()
+```
+
+**Design Notes:**
+- level is categorical bucketing (low/med/high)
+- drivers are human-readable risk factors (e.g., "high_call_surface", "dynamic_hazards")
+- counters provide raw data for risk computation
+
+**Risk Level Computation Rules:**
+
+From `risk_from_counters()` and `_risk_level_from_counters()`:
+
+**High Risk:**
+- callers > 10, OR
+- hazard_count > 0, OR
+- (forwarding_count > 0 AND callers > 0)
+
+**Medium Risk:**
+- callers > 3, OR
+- arg_shape_count > 3, OR
+- files_with_calls > 3, OR
+- closure_capture_count > 0
+
+**Low Risk:**
+- All other cases
+
+**Risk Drivers:**
+- "high_call_surface" if callers >= 10
+- "medium_call_surface" if 4 <= callers < 10
+- "argument_forwarding" if forwarding_count > 0
+- "dynamic_hazards" if hazard_count > 0
+- "arg_shape_variance" if arg_shape_count > 3
+- "closure_capture" if closure_capture_count > 0
+
+### InsightConfidenceV1
+
+Confidence payload used by card headline and machine parsing:
+
+```python
+class InsightConfidenceV1(CqStruct, frozen=True):
+    evidence_kind: str = "unknown"
+    score: float = 0.0
+    bucket: str = "low"
+```
+
+**Design Notes:**
+- evidence_kind describes provenance ("resolved_ast", "resolved_lsp", "unknown", etc.)
+- score is numeric confidence (0.0-1.0 scale)
+- bucket is categorical ("low", "med", "high")
+
+### InsightDegradationV1
+
+Compact degradation status for front-door rendering:
+
+```python
+class InsightDegradationV1(CqStruct, frozen=True):
+    lsp: str = "none"
+    scan: str = "none"
+    scope_filter: str = "none"
+    notes: tuple[str, ...] = ()
+```
+
+**Design Notes:**
+- lsp tracks LSP enrichment status ("ok", "partial", "failed", "skipped", "none")
+- scan tracks scan health ("ok", "truncated", "timed_out")
+- scope_filter tracks language filtering ("none", "partial", "dropped")
+- notes contains freeform diagnostic messages (e.g., "dropped_by_scope={...}")
+
+### InsightBudgetV1
+
+Budget knobs used to keep front-door output bounded:
+
+```python
+class InsightBudgetV1(CqStruct, frozen=True):
+    top_candidates: int = _DEFAULT_TOP_CANDIDATES      # Default: 3
+    preview_per_slice: int = _DEFAULT_PREVIEW_PER_SLICE # Default: 5
+    lsp_targets: int = _DEFAULT_LSP_TARGETS            # Default: 1
+```
+
+**Design Notes:**
+- top_candidates limits target selection in search results
+- preview_per_slice caps nodes per InsightSliceV1.preview
+- lsp_targets limits LSP enrichment attempts
+
+**Default Values:**
+- `_DEFAULT_TOP_CANDIDATES = 3`
+- `_DEFAULT_PREVIEW_PER_SLICE = 5`
+- `_DEFAULT_LSP_TARGETS = 1`
+
+### InsightArtifactRefsV1
+
+Artifact references for offloaded diagnostic/detail payloads:
+
+```python
+class InsightArtifactRefsV1(CqStruct, frozen=True):
+    diagnostics: str | None = None
+    telemetry: str | None = None
+    neighborhood_overflow: str | None = None
+```
+
+**Design Notes:**
+- diagnostics points to offloaded diagnostic summary artifact
+- telemetry points to enrichment telemetry artifact (if offloaded)
+- neighborhood_overflow points to full neighborhood data when slices are truncated
+- All refs are relative paths from repository root
+
+### FrontDoorInsightV1
+
+Canonical front-door insight schema for search/calls/entity:
+
+```python
+class FrontDoorInsightV1(CqStruct, frozen=True):
+    source: InsightSource
+    target: InsightTargetV1
+    neighborhood: InsightNeighborhoodV1 = InsightNeighborhoodV1()
+    risk: InsightRiskV1 = InsightRiskV1()
+    confidence: InsightConfidenceV1 = InsightConfidenceV1()
+    degradation: InsightDegradationV1 = InsightDegradationV1()
+    budget: InsightBudgetV1 = InsightBudgetV1()
+    artifact_refs: InsightArtifactRefsV1 = InsightArtifactRefsV1()
+    schema_version: str = "cq.insight.v1"
+```
+
+**Design Notes:**
+- source discriminates command origin (search, calls, entity)
+- All fields except source and target have default values
+- schema_version enables forward/backward compatibility
+
+### Builder Functions
+
+#### build_search_insight()
+
+Build search front-door insight payload:
+
+```python
+def build_search_insight(
+    *,
+    summary: dict[str, object],
+    primary_target: Finding | None,
+    target_candidates: Sequence[Finding],
+    neighborhood: InsightNeighborhoodV1 | None = None,
+    risk: InsightRiskV1 | None = None,
+    degradation: InsightDegradationV1 | None = None,
+    budget: InsightBudgetV1 | None = None,
+) -> FrontDoorInsightV1
+```
+
+**Design Notes:**
+- Extracts target from primary_target or falls back to summary["query"]
+- Computes confidence from target_candidates scoring
+- Auto-derives risk from neighborhood if not provided
+- Auto-derives degradation from summary diagnostics if not provided
+- Sets budget.top_candidates from len(target_candidates)
+
+#### build_calls_insight()
+
+Build calls front-door insight payload:
+
+```python
+def build_calls_insight(
+    *,
+    function_name: str,
+    signature: str | None,
+    location: InsightLocationV1 | None,
+    neighborhood: InsightNeighborhoodV1,
+    files_with_calls: int,
+    arg_shape_count: int,
+    forwarding_count: int,
+    hazard_counts: dict[str, int],
+    confidence: InsightConfidenceV1,
+    budget: InsightBudgetV1 | None = None,
+    degradation: InsightDegradationV1 | None = None,
+) -> FrontDoorInsightV1
+```
+
+**Design Notes:**
+- Target is always a function (kind="function")
+- Computes risk from counters (neighborhood counts + calls-specific counters)
+- Merges hazard_counts keys into risk.drivers
+- selection_reason is always "resolved_calls_target"
+
+#### build_entity_insight()
+
+Build entity front-door insight payload:
+
+```python
+def build_entity_insight(
+    *,
+    summary: dict[str, object],
+    primary_target: Finding | None,
+    neighborhood: InsightNeighborhoodV1 | None = None,
+    risk: InsightRiskV1 | None = None,
+    confidence: InsightConfidenceV1 | None = None,
+    degradation: InsightDegradationV1 | None = None,
+    budget: InsightBudgetV1 | None = None,
+) -> FrontDoorInsightV1
+```
+
+**Design Notes:**
+- Extracts target from primary_target or falls back to summary["query"] or summary["entity_kind"]
+- Sets budget.lsp_targets to 3 (higher than search/calls)
+- Default confidence is high ("resolved_ast", score=0.8, bucket="high")
+
+### Helper Functions
+
+#### render_insight_card()
+
+Render a compact markdown card from a front-door insight:
+
+```python
+def render_insight_card(insight: FrontDoorInsightV1) -> list[str]
+```
+
+**Design Notes:**
+- Returns markdown lines for rendering
+- Includes target, neighborhood, risk, confidence, degradation, budget, artifact_refs
+- Used for human-readable insight display
+
+#### augment_insight_with_lsp()
+
+Overlay LSP data on top of an existing insight payload:
+
+```python
+def augment_insight_with_lsp(
+    insight: FrontDoorInsightV1,
+    lsp_payload: dict[str, object],
+    *,
+    preview_per_slice: int | None = None,
+) -> FrontDoorInsightV1
+```
+
+**Design Notes:**
+- Merges LSP call_graph into neighborhood.callers/callees
+- Extracts type_contract signature and overlays on target.signature
+- Upgrades confidence to "resolved_lsp" if previously unknown
+- Marks degradation.lsp as "ok"
+- Non-destructive: preserves existing data, overlays LSP enhancements
+
+#### mark_partial_for_missing_languages()
+
+Mark insight slices partial when language partitions are missing:
+
+```python
+def mark_partial_for_missing_languages(
+    insight: FrontDoorInsightV1,
+    *,
+    missing_languages: Sequence[str],
+) -> FrontDoorInsightV1
+```
+
+**Design Notes:**
+- Downgrades slice availability to "partial" for all neighborhood slices
+- Adds "missing_languages=..." note to degradation.notes
+- Sets degradation.scope_filter to "partial"
+
+#### attach_artifact_refs()
+
+Attach artifact refs to an existing insight object:
+
+```python
+def attach_artifact_refs(
+    insight: FrontDoorInsightV1,
+    *,
+    diagnostics: str | None = None,
+    telemetry: str | None = None,
+    neighborhood_overflow: str | None = None,
+) -> FrontDoorInsightV1
+```
+
+#### attach_neighborhood_overflow_ref()
+
+Attach overflow artifact ref to truncated neighborhood slices:
+
+```python
+def attach_neighborhood_overflow_ref(
+    insight: FrontDoorInsightV1,
+    *,
+    overflow_ref: str,
+) -> FrontDoorInsightV1
+```
+
+**Design Notes:**
+- Sets InsightSliceV1.overflow_artifact_ref for slices where total > len(preview)
+- Updates artifact_refs.neighborhood_overflow
+
+#### risk_from_counters()
+
+Build risk payload from deterministic counters:
+
+```python
+def risk_from_counters(counters: InsightRiskCountersV1) -> InsightRiskV1
+```
+
+**Design Notes:**
+- Applies risk level computation rules (documented above)
+- Derives drivers from counters
+- Returns complete InsightRiskV1 with level, drivers, and counters
+
+### Supporting Functions
+
+#### build_neighborhood_from_slices()
+
+Map structural neighborhood slices into insight neighborhood schema:
+
+```python
+def build_neighborhood_from_slices(
+    slices: Sequence[NeighborhoodSliceV1],
+    *,
+    preview_per_slice: int = _DEFAULT_PREVIEW_PER_SLICE,
+    source: NeighborhoodSource = "structural",
+    overflow_artifact_ref: str | None = None,
+) -> InsightNeighborhoodV1
+```
+
+**Design Notes:**
+- Aggregates SNB slices into four canonical insight slices
+- Deduplicates nodes across slices (via node_id)
+- Applies preview budget per slice group
+- Maps slice kinds to insight slice categories
+
+#### coerce_front_door_insight()
+
+Best-effort conversion from summary payload to insight struct:
+
+```python
+def coerce_front_door_insight(payload: object) -> FrontDoorInsightV1 | None
+```
+
+**Design Notes:**
+- Returns None on validation failure (not exceptions)
+- Used for extracting insights from Finding.details or CqResult.summary
+
+**Architectural Observations for Improvement Proposals:**
+
+The Front-Door Insight Contract addresses several design goals:
+
+1. **Unified schema** - Single contract for search, calls, entity commands eliminates per-command schema divergence
+2. **Progressive disclosure** - preview + total + overflow_artifact_ref enables bounded output with opt-in detail
+3. **Provenance tracking** - source, NeighborhoodSource, selection_reason document data origins
+4. **Risk-driven UX** - Explicit risk drivers and counters enable actionable warnings
+
+**Design Tensions:**
+
+1. **Lossy aggregation** - InsightNeighborhoodV1 collapses 13 NeighborhoodSliceKind values into 4 slices. "hierarchy_or_scope" aggregates 8 distinct relationship types. No way to distinguish which kinds contributed.
+
+2. **Untyped artifact refs** - artifact_refs fields are `str | None` (relative paths). No validation that paths exist or are valid. No schema for artifact payload structure.
+
+3. **Evidence kind strings** - confidence.evidence_kind is free-form string ("resolved_ast", "resolved_lsp", "unknown"). No enum enforcement. Variant spellings observed in practice.
+
+4. **Budget hard-coded** - DEFAULT values are module constants. No per-command or per-environment tuning. Budget values in InsightBudgetV1 can't be validated against actual data sizes.
+
+5. **Risk formula opacity** - Risk level computation is embedded in `_risk_level_from_counters()`. No external configuration or tuning knobs. Thresholds (callers > 10, arg_shape_count > 3) are magic numbers.
+
+**Improvement Vectors:**
+
+- **Slice provenance** - Add `contributing_kinds: tuple[NeighborhoodSliceKind, ...]` to InsightSliceV1 to track which SNB slice kinds were aggregated
+- **Typed artifact refs** - Define `ArtifactRef(path: str, kind: str, byte_size: int)` struct instead of raw strings
+- **Evidence kind enum** - Define `EvidenceKind = Literal["resolved_ast", "resolved_lsp", "resolved_scip", "unresolved", "heuristic"]`
+- **Budget profiles** - Define BudgetProfile(top_candidates, preview_per_slice, lsp_targets) registry with "interactive", "detailed", "minimal" presets
+- **Risk policy externalization** - Move risk thresholds to RiskPolicy(high_caller_threshold, med_caller_threshold, ...) struct loaded from config
+- **Slice integrity validation** - Add post_init validation ensuring preview length <= total, overflow_artifact_ref is set when preview < total
+
+## Artifact Storage Subsystem
+
+Location: `tools/cq/core/artifacts.py`
+
+The artifact storage subsystem provides persistence for CQ result artifacts, including diagnostics, neighborhood overflow, and full result payloads. Artifacts are written to a configurable directory (defaulting to `.cq/artifacts/`) with deterministic naming and JSON serialization.
+
+### Artifact Types
+
+**Supported Artifact Kinds:**
+1. **diagnostics** - Offloaded diagnostic summary (enrichment telemetry, language capabilities, cross-language diagnostics)
+2. **neighborhood_overflow** - Full neighborhood slice data when insight preview is truncated
+3. **result** - Full CqResult JSON serialization
+
+### Default Configuration
+
+```python
+DEFAULT_ARTIFACT_DIR = ".cq/artifacts"
+```
+
+**Design Notes:**
+- Artifacts are stored relative to CqResult.run.root
+- Directory is created automatically if missing (parents=True, exist_ok=True)
+
+### Diagnostic Summary Keys
+
+Offloaded diagnostic keys (from CqResult.summary):
+
+```python
+_DIAGNOSTIC_SUMMARY_KEYS: tuple[str, ...] = (
+    "enrichment_telemetry",
+    "pyrefly_telemetry",
+    "pyrefly_diagnostics",
+    "language_capabilities",
+    "cross_language_diagnostics",
+)
+```
+
+**Design Notes:**
+- These keys are extracted from CqResult.summary and saved to diagnostics artifact
+- Only keys present in summary are included (missing keys are skipped)
+- Artifact payload includes "run_meta" for provenance
+
+### save_artifact_json()
+
+Save result as JSON artifact:
+
+```python
+def save_artifact_json(
+    result: CqResult,
+    artifact_dir: str | Path | None = None,
+    filename: str | None = None,
+) -> Artifact
+```
+
+**Design Notes:**
+- Serializes full CqResult to JSON
+- Filename defaults to `{macro}_result_{timestamp}_{run_id}.json`
+- Returns Artifact reference with relative path
+
+**Usage:**
+```python
+artifact = save_artifact_json(result)
+# artifact.path = ".cq/artifacts/search_result_20260212_152030_abc123.json"
+```
+
+### save_diagnostics_artifact()
+
+Persist offloaded diagnostics summary payload for artifact-first rendering:
+
+```python
+def save_diagnostics_artifact(
+    result: CqResult,
+    artifact_dir: str | Path | None = None,
+    filename: str | None = None,
+) -> Artifact | None
+```
+
+**Design Notes:**
+- Extracts diagnostic keys from CqResult.summary (see _DIAGNOSTIC_SUMMARY_KEYS)
+- Returns None if no diagnostic keys present
+- Adds "run_meta" dict with macro, root, run_id for provenance
+- Filename defaults to `{macro}_diagnostics_{timestamp}_{run_id}.json`
+
+**Payload Structure:**
+```python
+{
+    "enrichment_telemetry": {...},
+    "pyrefly_telemetry": {...},
+    "pyrefly_diagnostics": {...},
+    "language_capabilities": {...},
+    "cross_language_diagnostics": [...],
+    "run_meta": {
+        "macro": "search",
+        "root": "/path/to/repo",
+        "run_id": "abc123"
+    }
+}
+```
+
+**Usage:**
+```python
+artifact = save_diagnostics_artifact(result)
+if artifact:
+    print(f"Diagnostics saved to {artifact.path}")
+```
+
+### save_neighborhood_overflow_artifact()
+
+Persist neighborhood overflow payload when insight preview is truncated:
+
+```python
+def save_neighborhood_overflow_artifact(
+    result: CqResult,
+    artifact_dir: str | Path | None = None,
+    filename: str | None = None,
+) -> Artifact | None
+```
+
+**Design Notes:**
+- Extracts FrontDoorInsightV1 from CqResult.summary["front_door_insight"]
+- Returns None if no insight present or no slices are truncated
+- Only includes slices where total > len(preview)
+- Filename defaults to `{macro}_neighborhood_overflow_{timestamp}_{run_id}.json`
+
+**Payload Structure:**
+```python
+{
+    "target": {
+        "symbol": "foo",
+        "kind": "function",
+        "location": {...},
+        ...
+    },
+    "budget": {
+        "top_candidates": 3,
+        "preview_per_slice": 5,
+        "lsp_targets": 1
+    },
+    "overflow_slices": [
+        {
+            "slice": "callers",
+            "total": 42,
+            "preview_count": 5,
+            "source": "lsp",
+            "availability": "full",
+            "preview": [...]
+        },
+        ...
+    ]
+}
+```
+
+**Usage:**
+```python
+artifact = save_neighborhood_overflow_artifact(result)
+if artifact:
+    # Update insight with overflow ref
+    insight = attach_neighborhood_overflow_ref(insight, overflow_ref=artifact.path)
+```
+
+### Internal Helpers
+
+#### _resolve_artifact_dir()
+
+Resolve artifact directory from result or explicit path:
+
+```python
+def _resolve_artifact_dir(result: CqResult, artifact_dir: str | Path | None) -> Path
+```
+
+**Design Notes:**
+- Falls back to `{result.run.root}/.cq/artifacts` if artifact_dir is None
+
+#### _timestamp()
+
+Generate timestamp string for filenames:
+
+```python
+def _timestamp() -> str
+```
+
+**Format:** `"%Y%m%d_%H%M%S"` (e.g., "20260212_152030")
+
+#### _default_filename()
+
+Generate default filename for artifacts:
+
+```python
+def _default_filename(result: CqResult, suffix: str) -> str
+```
+
+**Format:** `"{macro}_{suffix}_{timestamp}_{run_id}.json"`
+
+**Example:** `"search_diagnostics_20260212_152030_abc123.json"`
+
+#### _write_json_artifact()
+
+Internal helper for writing JSON artifacts:
+
+```python
+def _write_json_artifact(
+    *,
+    result: CqResult,
+    payload: object,
+    artifact_dir: str | Path | None,
+    filename: str,
+) -> Artifact
+```
+
+**Design Notes:**
+- Creates artifact directory if missing
+- Serializes payload to JSON with 2-space indent
+- Returns Artifact with relative path (relative to result.run.root)
+- Falls back to absolute path if relative conversion fails
+
+**Architectural Observations for Improvement Proposals:**
+
+The artifact storage subsystem provides basic persistence but has limitations:
+
+1. **No artifact registry** - Artifacts are written to disk but not tracked in a central registry. No index of saved artifacts or metadata lookup.
+
+2. **No content-addressed storage** - Filenames use timestamp + run_id but not content hash. Duplicate payloads create multiple files.
+
+3. **JSON-only** - No support for msgpack, LDMD, or other formats despite CQ supporting them elsewhere.
+
+4. **No artifact lifecycle** - No cleanup, expiration, or size limits. Artifacts accumulate indefinitely.
+
+5. **Untyped payload** - save_artifact_json() and internal functions accept `object`, losing type information. No validation that payload is serializable.
+
+6. **No atomic writes** - Direct write to final path (no write-to-temp-then-rename pattern). Risk of partial writes on crash.
+
+**Improvement Vectors:**
+
+- **Artifact registry** - Create ArtifactRegistry that indexes saved artifacts with metadata (kind, size, timestamp, content_hash)
+- **Content-addressed storage** - Use SHA256 of payload as filename (or part of filename) to deduplicate identical artifacts
+- **Format support** - Add save_artifact_msgpack(), save_artifact_ldmd() for alternative serialization formats
+- **Lifecycle policy** - Add artifact retention policy (max_age, max_size, cleanup_on_exit) with automatic pruning
+- **Typed payloads** - Define ArtifactPayload protocol and validate at save time, not at read time
+- **Atomic writes** - Use tempfile.NamedTemporaryFile + os.rename() for atomic write operations
+- **Compression** - Add optional gzip compression for large artifacts (especially neighborhood overflow)
+
 ## Search Request Models
 
 Location: `tools/cq/search/`

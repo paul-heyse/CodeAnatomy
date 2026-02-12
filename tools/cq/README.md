@@ -66,6 +66,7 @@ Canonical detailed behavior reference:
 | `mermaid` | Mermaid flowchart |
 | `mermaid-class` | Mermaid class diagram |
 | `dot` | Graphviz DOT |
+| `ldmd` | LDMD marker format for progressive disclosure |
 
 ## Dependencies
 
@@ -134,18 +135,26 @@ at markdown render time, parallelized across up to 4 workers for up to 9 files
 `render_markdown` is code-first and ordered as:
 
 1. Title
-2. `Code Overview`
-3. Key Findings
-4. Sections
-5. Evidence
-6. Artifacts
-7. Summary (compact JSON line)
-8. Footer
+2. Insight Card (FrontDoorInsightV1, when a target exists — rendered before section reordering)
+3. `Code Overview`
+4. Key Findings
+5. Sections (reordered per `_SECTION_ORDER_MAP` for search/calls)
+6. Evidence
+7. Artifacts
+8. Summary (compact JSON line, with heavy diagnostics offloaded to artifacts)
+9. Footer
 
 Code Overview guarantees best-effort `Query` and `Mode` values:
 - `search`/`q`: taken from result summary.
 - `run`: synthesized when needed (`mode="run"`, `query="multi-step plan (<n> steps)"` for mixed plans).
 - macro commands: standardized to `mode="macro:<macro_name>"` with macro-specific query text.
+
+### Front-Door Insight
+
+Front-door commands (`search`, `calls`, `entity`) embed a `FrontDoorInsightV1` contract
+in `summary["front_door_insight"]`. This provides immediate target identity, neighborhood
+context, risk assessment, and confidence. The Insight Card is rendered first in markdown
+output. See `cq_reference.md` for full schema details.
 
 ### Parallel Classification
 
@@ -180,3 +189,13 @@ entries. Multiple findings in the same file share a single session.
 
 JSON artifacts are saved by default to `.cq/artifacts`.
 Use `--no-save-artifact` to skip.
+
+Artifact types:
+
+| Suffix | Content | When Saved |
+|--------|---------|------------|
+| `result` | Full `CqResult` JSON | Always (unless `--no-save-artifact`) |
+| `diagnostics` | Offloaded diagnostic keys | When any offloaded key is present |
+| `neighborhood_overflow` | Large neighborhood bundles | When bundle exceeds inline size budget |
+
+Filename pattern: `{macro}_{suffix}_{timestamp}_{run_id}.json`

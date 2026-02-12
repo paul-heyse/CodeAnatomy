@@ -24,6 +24,7 @@ InsightSource = Literal["search", "calls", "entity"]
 Availability = Literal["full", "partial", "unavailable"]
 NeighborhoodSource = Literal["structural", "lsp", "heuristic", "none"]
 RiskLevel = Literal["low", "med", "high"]
+LspStatus = Literal["unavailable", "skipped", "failed", "partial", "ok", "none"]
 
 _DEFAULT_TOP_CANDIDATES = 3
 _DEFAULT_PREVIEW_PER_SLICE = 5
@@ -99,8 +100,8 @@ class InsightConfidenceV1(CqStruct, frozen=True):
 class InsightDegradationV1(CqStruct, frozen=True):
     """Compact degradation status for front-door rendering."""
 
-    lsp: str = "none"
-    scan: str = "none"
+    lsp: LspStatus = "none"
+    scan: str = "ok"
     scope_filter: str = "none"
     notes: tuple[str, ...] = ()
 
@@ -655,20 +656,19 @@ def _confidence_from_findings(findings: Sequence[Finding]) -> InsightConfidenceV
 
 
 def _degradation_from_summary(summary: dict[str, object]) -> InsightDegradationV1:
-    lsp = "none"
+    lsp_available = _python_lsp_available(summary)
+    lsp = derive_lsp_status(available=lsp_available)
     pyrefly = summary.get("pyrefly_telemetry")
     if isinstance(pyrefly, dict):
         attempted = _int_or_none(pyrefly.get("attempted")) or 0
         applied = _int_or_none(pyrefly.get("applied")) or 0
         failed = _int_or_none(pyrefly.get("failed")) or 0
-        if attempted == 0:
-            lsp = "skipped"
-        elif failed > 0 and applied == 0:
-            lsp = "failed"
-        elif failed > 0:
-            lsp = "partial"
-        else:
-            lsp = "ok"
+        lsp = derive_lsp_status(
+            available=lsp_available,
+            attempted=attempted,
+            applied=applied,
+            failed=failed,
+        )
 
     scan = "ok"
     if bool(summary.get("timed_out")):
@@ -685,7 +685,12 @@ def _degradation_from_summary(summary: dict[str, object]) -> InsightDegradationV
     if isinstance(dropped, dict) and dropped:
         notes.append(f"dropped_by_scope={dropped}")
 
-    return InsightDegradationV1(lsp=lsp, scan=scan, scope_filter=scope_filter, notes=tuple(notes))
+    return InsightDegradationV1(
+        lsp=lsp,
+        scan=scan,
+        scope_filter=scope_filter,
+        notes=tuple(notes),
+    )
 
 
 def _target_from_finding(
@@ -873,6 +878,117 @@ def _empty_neighborhood() -> InsightNeighborhoodV1:
     )
 
 
+def derive_lsp_status(
+    *,
+    available: bool,
+    attempted: int | None = None,
+    applied: int | None = None,
+    failed: int | None = None,
+) -> LspStatus:
+    """Derive canonical LSP status from capability + attempt counters."""
+    if not available:
+        return "unavailable"
+    attempted_count = attempted or 0
+    applied_count = applied or 0
+    failed_count = failed or 0
+    if attempted_count <= 0:
+        return "skipped"
+    if applied_count <= 0:
+        return "failed"
+    if failed_count > 0 or applied_count < attempted_count:
+        return "partial"
+    return "ok"
+
+
+def to_public_front_door_insight_dict(insight: FrontDoorInsightV1) -> dict[str, object]:
+    """Serialize insight with explicit/full schema fields for public JSON output."""
+    return {
+        "source": insight.source,
+        "schema_version": insight.schema_version,
+        "target": _serialize_target(insight.target),
+        "neighborhood": {
+            "callers": _serialize_slice(insight.neighborhood.callers),
+            "callees": _serialize_slice(insight.neighborhood.callees),
+            "references": _serialize_slice(insight.neighborhood.references),
+            "hierarchy_or_scope": _serialize_slice(insight.neighborhood.hierarchy_or_scope),
+        },
+        "risk": {
+            "level": insight.risk.level,
+            "drivers": list(insight.risk.drivers),
+            "counters": _serialize_risk_counters(insight.risk.counters),
+        },
+        "confidence": {
+            "evidence_kind": insight.confidence.evidence_kind,
+            "score": float(insight.confidence.score),
+            "bucket": insight.confidence.bucket,
+        },
+        "degradation": {
+            "lsp": insight.degradation.lsp,
+            "scan": insight.degradation.scan,
+            "scope_filter": insight.degradation.scope_filter,
+            "notes": list(insight.degradation.notes),
+        },
+        "budget": {
+            "top_candidates": int(insight.budget.top_candidates),
+            "preview_per_slice": int(insight.budget.preview_per_slice),
+            "lsp_targets": int(insight.budget.lsp_targets),
+        },
+        "artifact_refs": {
+            "diagnostics": insight.artifact_refs.diagnostics,
+            "telemetry": insight.artifact_refs.telemetry,
+            "neighborhood_overflow": insight.artifact_refs.neighborhood_overflow,
+        },
+    }
+
+
+def _serialize_target(target: InsightTargetV1) -> dict[str, object]:
+    return {
+        "symbol": target.symbol,
+        "kind": target.kind,
+        "location": {
+            "file": target.location.file,
+            "line": target.location.line,
+            "col": target.location.col,
+        },
+        "signature": target.signature,
+        "qualname": target.qualname,
+        "selection_reason": target.selection_reason,
+    }
+
+
+def _serialize_slice(slice_payload: InsightSliceV1) -> dict[str, object]:
+    return {
+        "total": int(slice_payload.total),
+        "preview": [msgspec.to_builtins(node) for node in slice_payload.preview],
+        "availability": slice_payload.availability,
+        "source": slice_payload.source,
+        "overflow_artifact_ref": slice_payload.overflow_artifact_ref,
+    }
+
+
+def _serialize_risk_counters(counters: InsightRiskCountersV1) -> dict[str, int]:
+    return {
+        "callers": int(counters.callers),
+        "callees": int(counters.callees),
+        "files_with_calls": int(counters.files_with_calls),
+        "arg_shape_count": int(counters.arg_shape_count),
+        "forwarding_count": int(counters.forwarding_count),
+        "hazard_count": int(counters.hazard_count),
+        "closure_capture_count": int(counters.closure_capture_count),
+    }
+
+
+def _python_lsp_available(summary: dict[str, object]) -> bool:
+    scope = _string_or_none(summary.get("lang_scope"))
+    if scope == "rust":
+        return False
+    order = summary.get("language_order")
+    if isinstance(order, list):
+        languages = {str(item) for item in order}
+        return "python" in languages
+    return True
+
+
 __all__ = [
     "Availability",
     "FrontDoorInsightV1",
@@ -887,6 +1003,7 @@ __all__ = [
     "InsightSliceV1",
     "InsightSource",
     "InsightTargetV1",
+    "LspStatus",
     "NeighborhoodSource",
     "RiskLevel",
     "attach_artifact_refs",
@@ -897,7 +1014,9 @@ __all__ = [
     "build_neighborhood_from_slices",
     "build_search_insight",
     "coerce_front_door_insight",
+    "derive_lsp_status",
     "mark_partial_for_missing_languages",
     "render_insight_card",
     "risk_from_counters",
+    "to_public_front_door_insight_dict",
 ]

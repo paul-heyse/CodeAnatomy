@@ -13,7 +13,7 @@ This document provides a fully integrated architectural review of the CQ tool (`
 | [03_query_subsystem.md](03_query_subsystem.md) | Query DSL grammar, IR, parser, planner, executor, batch spans, metavariables, multi-language | 1242 |
 | [04_analysis_commands.md](04_analysis_commands.md) | 8 macro commands (calls, impact, sig-impact, scopes, bytecode, side-effects, imports, exceptions), DefIndex, scoring | 803 |
 | [05_multi_step_execution.md](05_multi_step_execution.md) | RunPlan model, 11 step types, TOML/JSON plans, shared scan, chain command, result merging, provenance | 846 |
-| [06_data_models.md](06_data_models.md) | Contract architecture, CqStruct, schema types, enrichment facts, serialization codecs, boundary protocol | 1161 |
+| [06_data_models.md](06_data_models.md) | Contract architecture, CqStruct, schema types, enrichment facts, FrontDoorInsightV1, serialization codecs, boundary protocol | ~2400 |
 | [07_ast_grep_and_formatting.md](07_ast_grep_and_formatting.md) | ast-grep-py integration, rule system, output renderers, file scanning, gitignore, shared scan context | 1124 |
 | [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) | Semantic neighborhood assembly, SNB schema, 4-phase pipeline, capability gating, section layout, CLI/run integration | 1957 |
 | [09_ldmd_format.md](09_ldmd_format.md) | LDMD progressive disclosure format, parser/writer architecture, protocol commands, OutputFormat integration | 1505 |
@@ -30,6 +30,8 @@ CQ is a code query tool that occupies a specific niche: **AST-aware code analysi
 - Impact awareness: Call graph traversal, data flow taint analysis, and signature change simulation
 - Workflow composition: Multi-step execution with shared scan infrastructure
 - Contextual neighborhoods: Semantic neighborhood assembly with capability-gated LSP enrichment and progressive disclosure via LDMD
+- Front-door orientation: Single `FrontDoorInsightV1` contract across search/calls/entity commands providing target identity, neighborhood, risk, and confidence in the first output block
+- Artifact-first diagnostics: Heavy diagnostic payloads offloaded to artifacts with compact in-band status lines
 
 **Technology stack:**
 - CLI: cyclopts for command routing
@@ -56,6 +58,10 @@ CQ is organized as a layered system with four execution tiers and a shared infra
     enrichment)          ast-grep)          (macros)          (SNB assembly)
          |                    |                    |                   |
          +--------------------+--------------------+-------------------+
+                              |
+                    Front-Door Insight Layer
+              (FrontDoorInsightV1 contract, risk,
+               neighborhood preview, degradation)
                               |
                     Shared Infrastructure
               (ast-grep, DefIndex, scoring,
@@ -116,6 +122,7 @@ Command Dispatch (cyclopts @app.command routing)
                               v
                     CqResult Construction
                 (RunMeta + findings + sections + summary)
+                (summary.front_door_insight for search/calls/entity)
                               |
                               v
                     Render Dispatch
@@ -161,6 +168,7 @@ Merged CqResult (aggregated findings, per-step sections)
 | Executor -> Scanner | `AstGrepRule`, `RuleSpec` | Internal |
 | Scanner -> Executor | `SgRecord` | Internal |
 | Analysis -> Index | `DefIndex`, `CallResolver`, `ArgBinder` | Internal |
+| Any front-door command -> Output | `FrontDoorInsightV1` in `summary.front_door_insight` | Output |
 | Any Command -> Output | `CqResult` | Output |
 | Output -> Disk | `ContractEnvelope` (msgpack) | Persistence |
 
@@ -207,6 +215,39 @@ The Code Facts cluster system (6 clusters, 50+ fields) provides structured enric
 
 Each field has a `FactFieldSpec` with multi-level key paths for fallback resolution, language/kind applicability filters, and an `NAReason` for unavailable data.
 
+### 4.4 Front-Door Insight Contract
+
+The `FrontDoorInsightV1` contract (`tools/cq/core/front_door_insight.py`) provides a single shared output schema for all front-door commands (`search`, `calls`, `entity`). Embedded in `CqResult.summary["front_door_insight"]`, it ensures agents always see the same high-signal block first:
+
+- **target**: Symbol identity, kind, location, signature, selection reason
+- **neighborhood**: Callers, callees, references, hierarchy/scope (each with total + bounded preview + availability + source)
+- **risk**: Level (low/med/high), risk drivers, counters
+- **confidence**: Evidence kind, score, bucket
+- **degradation**: Per-subsystem status (lsp, scan, scope_filter)
+- **budget**: Output bounds (top_candidates, preview_per_slice, lsp_targets)
+- **artifact_refs**: Pointers to diagnostics, neighborhood overflow, telemetry artifacts
+
+Builder functions (`build_search_insight()`, `build_calls_insight()`, `build_entity_insight()`) construct the contract from command-specific data structures. `render_insight_card()` produces the markdown "Insight Card" section.
+
+### 4.5 Artifact-First Diagnostics
+
+CQ follows an artifact-first diagnostics policy: heavy diagnostic payloads are offloaded to `.cq/artifacts/` while compact status lines remain in-band.
+
+**In-band (markdown summary):**
+- One-line enrichment status
+- One-line scope/filter status
+- One-line degradation status
+
+**Artifact-only:**
+- enrichment_telemetry
+- pyrefly_telemetry
+- pyrefly_diagnostics
+- language_capabilities
+- cross_language_diagnostics
+- full per-stage timing and cache stats
+
+Artifact references are included in `front_door_insight.artifact_refs` for retrieval.
+
 ---
 
 ## 5. Cross-Cutting Concerns
@@ -233,7 +274,7 @@ CQ follows a consistent fail-open philosophy across all subsystems:
 - **Multi-step failures**: `stop_on_error=False` (default) continues execution; errors accumulated in per-step results.
 - **Parallel worker failures**: ProcessPool with `spawn` context fails open to sequential execution.
 
-**Degradation tracking:** Flat `list[str]` in `Finding.degrade_reasons`. No structured error types, severity levels, or correlation across findings.
+**Degradation tracking:** Two layers. Findings retain `degrade_reasons: list[str]` for backward compatibility. The `FrontDoorInsightV1.degradation` field provides structured per-subsystem status (lsp, scan, scope_filter). The SNB schema provides typed `DegradeEventV1` events with stage/category/severity/correlation_key. Neighborhood and insight artifacts carry the most detailed degradation records.
 
 ### 5.3 Performance Architecture
 
@@ -394,7 +435,7 @@ The subsystem documents identify numerous per-module improvement opportunities. 
 
 **Systemic impact:** Consumers cannot programmatically react to specific failure modes. Same root cause (e.g., Pyrefly timeout) appears as N independent string entries. No way to distinguish "no results found" from "error prevented results."
 
-**Improvement direction:** Define `DegradeEvent(stage: str, severity: Severity, category: ErrorCategory, message: str, correlation_id: str)`. Aggregate related events. Support partial results (findings collected before error).
+**Improvement direction:** `DegradeEventV1` is now implemented in the SNB and neighborhood subsystems. `InsightDegradationV1` provides compact per-subsystem status in front-door outputs. Remaining work: propagate structured degradation to all findings (replacing flat `degrade_reasons`), aggregate related events with correlation keys, and support partial result recovery.
 
 ### 8.3 Request/Config Type Consolidation
 

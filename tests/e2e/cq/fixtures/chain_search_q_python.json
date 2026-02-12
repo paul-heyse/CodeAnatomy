@@ -35,6 +35,16 @@
     {
       "count": 4,
       "messages": [
+        "Nested Definitions: 1 (top: recorder)",
+        "Sibling Definitions: 1 (top: resolve)",
+        "Functions Called: 8 (top: ServiceRegistry, register, DynamicRouter, AsyncService, handle)",
+        "Callers: 1 (top: run)"
+      ],
+      "title": "search_0: Neighborhood Preview"
+    },
+    {
+      "count": 4,
+      "messages": [
         "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
         "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
         "build_pipeline (./tests/e2e/cq/_golden_workspace/python_project/app/api.py)",
@@ -79,6 +89,7 @@
   ],
   "summary": {
     "enable_lsp": null,
+    "front_door_insight": null,
     "lang_scope": "auto",
     "language_order": [
       "python",

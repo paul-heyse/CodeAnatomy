@@ -2,24 +2,25 @@
 
 This index provides an overview of CodeAnatomy's architecture documentation, including document summaries, reading order, and quick reference links.
 
+CodeAnatomy is an inference-driven Code Property Graph (CPG) builder that uses a three-phase pipeline: Python extraction, Python semantic IR compilation, and Rust engine execution. The architecture documentation reflects the current Rust-first execution model where the `codeanatomy_engine` Rust crate owns compilation, scheduling, rule application, and materialization.
+
 ---
 
 ## Document Overview
 
 | Document | Purpose | Lines |
 |----------|---------|-------|
-| [01_overview.md](01_overview.md) | System introduction, four-stage pipeline, invariants, public API | ~600 |
-| [02_pipeline_stages.md](02_pipeline_stages.md) | Detailed extraction → normalization → scheduling → CPG build | ~650 |
-| [03_semantic_compiler.md](03_semantic_compiler.md) | SemanticCompiler, 10 composable rules, view catalog | ~500 |
-| [04_datafusion_integration.md](04_datafusion_integration.md) | Plan bundles, sessions, lineage extraction, schema contracts | ~550 |
-| [05_rust_and_udfs.md](05_rust_and_udfs.md) | Crate structure, UDF platform, quality gates | ~450 |
-| [06_hamilton_orchestration.md](06_hamilton_orchestration.md) | Hamilton DAG, driver factory, execution modes | ~450 |
-| [07_storage_and_incremental.md](07_storage_and_incremental.md) | Delta Lake integration, CDF, incremental processing | ~550 |
-| [08_observability.md](08_observability.md) | OpenTelemetry, diagnostics, metrics, quality tables | ~600 |
-| [09_configuration.md](09_configuration.md) | Runtime profiles, policies, utilities, fingerprinting | ~500 |
-| [10_debugging_guide.md](10_debugging_guide.md) | Plan inspection, data flow tracing, common issues | ~650 |
+| [01_overview.md](01_overview.md) | System introduction, three-phase pipeline, invariants, public API | ~650 |
+| [02_extraction.md](02_extraction.md) | Multi-source evidence extraction (Python) | ~780 |
+| [03_semantic_compiler.md](03_semantic_compiler.md) | Semantic IR compilation, view kinds, entity model (Python) | ~980 |
+| [04_boundary_contract.md](04_boundary_contract.md) | `SemanticExecutionSpec` contract between Python and Rust | ~1,090 |
+| [05_rust_engine.md](05_rust_engine.md) | Rust compiler, rules system, session management, scheduling | ~550 |
+| [06_execution.md](06_execution.md) | Rust execution pipeline, Delta writer, metrics, tracing | ~1,010 |
+| [07_datafusion_and_udfs.md](07_datafusion_and_udfs.md) | DataFusion integration, UDF platform, plugin system | ~700 |
+| [08_storage.md](08_storage.md) | Delta Lake storage layer (Python + Rust), incremental processing | ~680 |
+| [09_observability_and_config.md](09_observability_and_config.md) | Observability, configuration, debugging workflows | ~730 |
 
-**Total:** ~5,500 lines (consolidated from ~24,000 lines)
+**Total:** ~7,170 lines across 9 documents
 
 ---
 
@@ -28,154 +29,159 @@ This index provides an overview of CodeAnatomy's architecture documentation, inc
 ### Recommended Path
 
 ```
-01_overview.md                     ← Start here (system introduction)
-    ↓
-02_pipeline_stages.md              ← Understand the four-stage flow
-    ↓
-┌───────────────────────────────────────────────────┐
-│  Parallel reading (no dependencies between these) │
-├───────────────────────────────────────────────────┤
-│  03_semantic_compiler.md    (normalization)       │
-│  04_datafusion_integration.md (query engine)      │
-│  05_rust_and_udfs.md        (native extensions)   │
-│  06_hamilton_orchestration.md (DAG execution)     │
-│  07_storage_and_incremental.md (persistence)      │
-└───────────────────────────────────────────────────┘
-    ↓
-08_observability.md                ← Cross-cutting concern
-09_configuration.md                ← Cross-cutting concern
-    ↓
-10_debugging_guide.md              ← Practical reference (read as needed)
+01_overview.md                     <- Start here (three-phase pipeline introduction)
+    |
+02_extraction.md                   <- Phase 1: how evidence is extracted
+    |
+04_boundary_contract.md            <- The Python-Rust boundary (read before 03)
+    |
+03_semantic_compiler.md            <- Phase 2: what Python produces for Rust
+    |
++---------------------------------------------------+
+|  Parallel reading (no strict dependencies)         |
++---------------------------------------------------+
+|  05_rust_engine.md     (compiler, rules, session)  |
+|  06_execution.md       (execution, materialization)|
+|  07_datafusion_and_udfs.md (query engine, UDFs)    |
+|  08_storage.md         (Delta Lake, incremental)   |
++---------------------------------------------------+
+    |
+09_observability_and_config.md     <- Cross-cutting concerns + debugging
 ```
+
+### Why 04 Before 03
+
+The boundary contract (`SemanticExecutionSpec`) is the architectural keystone.
+Reading it before the semantic compiler clarifies *what* Python must produce and
+*why* the semantic IR is shaped the way it is.
 
 ### By Topic
 
 | Topic | Primary Document | Related Documents |
 |-------|------------------|-------------------|
-| Getting started | 01_overview.md | 02_pipeline_stages.md |
-| Extraction | 02_pipeline_stages.md | - |
-| Normalization | 02_pipeline_stages.md, 03_semantic_compiler.md | - |
-| Query engine | 04_datafusion_integration.md | 05_rust_and_udfs.md |
-| UDF development | 05_rust_and_udfs.md | 04_datafusion_integration.md |
-| Pipeline execution | 06_hamilton_orchestration.md | 04_datafusion_integration.md |
-| Storage | 07_storage_and_incremental.md | - |
-| Incremental processing | 07_storage_and_incremental.md | 03_semantic_compiler.md |
-| Telemetry | 08_observability.md | 09_configuration.md |
-| Configuration | 09_configuration.md | - |
-| Troubleshooting | 10_debugging_guide.md | All |
+| Getting started | 01_overview.md | 02_extraction.md, 04_boundary_contract.md |
+| Evidence extraction | 02_extraction.md | 03_semantic_compiler.md |
+| Semantic IR | 03_semantic_compiler.md | 04_boundary_contract.md |
+| Python-Rust boundary | 04_boundary_contract.md | 03_semantic_compiler.md, 05_rust_engine.md |
+| Rust compilation | 05_rust_engine.md | 04_boundary_contract.md, 06_execution.md |
+| Execution + materialization | 06_execution.md | 05_rust_engine.md, 08_storage.md |
+| Query engine + UDFs | 07_datafusion_and_udfs.md | 05_rust_engine.md, 08_storage.md |
+| Storage | 08_storage.md | 06_execution.md, 07_datafusion_and_udfs.md |
+| Incremental processing | 08_storage.md | 04_boundary_contract.md |
+| Observability | 09_observability_and_config.md | 06_execution.md |
+| Configuration | 09_observability_and_config.md | 01_overview.md |
+| Debugging | 09_observability_and_config.md | All |
 
 ---
 
 ## Document Summaries
 
-### 01_overview.md - System Overview & Public API
+### 01_overview.md - System Overview & Pipeline Architecture
 
-Introduction to CodeAnatomy's inference-driven CPG builder. Covers:
-- Four-stage pipeline architecture
-- Technology stack (DataFusion, Hamilton, PyArrow, Delta Lake)
+Introduction to CodeAnatomy's three-phase CPG pipeline. Covers:
+- Three-phase architecture: Extraction -> Semantic IR -> Rust Engine
+- Technology stack (DataFusion 51.0, PyArrow, Delta Lake, msgspec)
 - Module map and entry points
-- Key architectural invariants
+- Five architectural invariants (byte-span canonicalization, determinism, inference-driven scheduling, graceful degradation, spec-driven boundary)
 - Public API (`GraphProductBuildRequest`, `build_graph_product`)
 
-**Key Concepts:** Byte span canonicalization, determinism contract, inference-driven scheduling
+**Key Concepts:** Three-phase pipeline, `SemanticExecutionSpec` boundary, Rust-first execution
 
-### 02_pipeline_stages.md - The Four-Stage Pipeline
+### 02_extraction.md - Extraction Pipeline (Python)
 
-Detailed coverage of each pipeline stage:
-- **Stage 1: Extraction** - LibCST, AST, symtable, bytecode, SCIP, tree-sitter evidence
-- **Stage 2: Normalization** - Byte span alignment, ID generation, schema enforcement
-- **Stage 3: Scheduling** - Task graph inference, rustworkx scheduling, plan compilation
-- **Stage 4: CPG Build** - Node/edge/property emission, Delta Lake output
+Multi-source evidence extraction from Python source code:
+- Six extractors: LibCST, AST, symtable, bytecode, SCIP, tree-sitter
+- Four-stage extraction flow: discovery -> per-file -> cross-file -> output mapping
+- Extraction orchestration via `run_extraction()`
+- Output contracts and semantic input mapping
 
-**Key Concepts:** Evidence layers, semantic compilation, task graph inference
+**Key Concepts:** Evidence layers, byte-span anchoring, extraction options, semantic input registry
 
-### 03_semantic_compiler.md - Semantic Pipeline
+### 03_semantic_compiler.md - Semantic IR Compilation (Python)
 
-The SemanticCompiler and its 10 composable rules:
-- Input/spec registries
-- Normalize/relate/union operations
-- View catalog with fingerprints
-- Schema-driven join inference
+The Python-owned phase that compiles extraction evidence into semantic IR:
+- Four-stage IR pipeline: build -> compile -> validate -> package
+- SemanticIR data model (views, dataset_rows, join_groups)
+- 14 view kinds across 4 categories
+- 10 composable semantic rules
+- Entity model (nodes, edges, properties)
 
-**Key Concepts:** Rule composition, view registration authority, graceful degradation
+**Key Concepts:** View kinds, rule composition, entity model, `build_semantic_ir()` pipeline
 
-### 04_datafusion_integration.md - DataFusion Engine
+### 04_boundary_contract.md - The Python-Rust Boundary Contract
 
-DataFusion query engine integration:
-- Plan bundle compilation and fingerprinting
-- Session management and configuration
-- Lineage extraction from logical plans
-- Schema contracts and validation
-- Two-pass Delta pin planning
+The architectural keystone defining the immutable contract between Python and Rust:
+- `SemanticExecutionSpec` structure (version 4, msgspec Struct)
+- Seven spec components: InputRelation, ViewDefinition, JoinGraph, OutputTarget, RuleIntent, RuntimeConfig, TracingConfig
+- Python-side building via `SemanticPlanCompiler.build_spec_json()`
+- Rust-side consumption via `run_build()` (PyO3 entry point)
+- Output contracts and naming conventions
+- JSON wire format and serialization
+- Error boundary (Python errors vs Rust errors)
+- Two-layer determinism (spec_hash + envelope_hash via BLAKE3)
 
-**Key Concepts:** Plan bundles, Substrait serialization, lineage inference
+**Key Concepts:** Spec immutability, JSON wire format, determinism contract, error boundary
 
-### 05_rust_and_udfs.md - Rust Architecture & UDFs
+### 05_rust_engine.md - Rust Execution Engine Architecture
 
-Rust extensions and UDF platform:
-- Crate workspace structure
-- 28+ scalar UDFs, 11+ aggregate UDFs
-- Plugin architecture with ABI stability
-- PyO3 bindings and Arrow IPC bridge
-- UDF quality gate requirements
+The Rust engine (`codeanatomy_engine`, ~21K LOC) that owns post-boundary execution:
+- Compiler subsystem: `SemanticPlanCompiler`, graph validation, view compilation
+- Rules system: 4 rule classes, 4 rulepack profiles, intent compiler
+- Session management: `SessionFactory`, environment profiles, session envelope
+- Scheduling and cost model
+- Optimizer pipeline with pass tracing
 
-**Key Concepts:** UDF implementation patterns, plugin capabilities, API compliance
+**Key Concepts:** Plan compilation flow, rulepack profiles, session envelope, cost model
 
-### 06_hamilton_orchestration.md - Pipeline Orchestration
+### 06_execution.md - Execution and Materialization Layer
 
-Hamilton DAG orchestration:
-- Driver factory and caching
-- Dynamic task module generation
-- Execution modes (serial, parallel, remote)
-- Lifecycle hooks for diagnostics
-- Cache lineage tracking
+The Rust execution pipeline that materializes CPG outputs:
+- Six-stage pipeline: preflight -> compilation -> plan bundle -> compliance -> materialization -> maintenance
+- Delta writer with schema mapping and output table lifecycle
+- `RunResult` contract returned to Python
+- Metrics collection (`CollectedMetrics`, scan selectivity)
+- Warning system with `WarningCode` taxonomy
+- OTel tracing integration
+- Adaptive tuner with bounded adjustment
+- Delta maintenance schedule (compact -> checkpoint -> vacuum -> cleanup -> constraints)
 
-**Key Concepts:** Task routing, configuration fingerprinting, execution manager
+**Key Concepts:** Execution pipeline stages, Delta writer, RunResult, adaptive tuning
 
-### 07_storage_and_incremental.md - Storage Layer
+### 07_datafusion_and_udfs.md - DataFusion Integration and UDF Platform
 
-Delta Lake integration and incremental processing:
-- Read/write operations with version pinning
-- Two-pass scan planning
-- File pruning (partition, stats, row-group)
-- CDF-based incrementality
-- Cursor tracking and merge strategies
+DataFusion's dual role across both Python and Rust:
+- 8-crate Rust workspace structure
+- UDF platform: 29+ scalar, 11+ aggregate, 3+ window, 5+ table functions
+- Plugin system: ABI-stable `df_plugin_api`, plugin host, CodeAnatomy plugin
+- Python-side DataFusion: session management, pooling, schema contracts, lineage extraction
+- Delta control plane with feature gating
 
-**Key Concepts:** Version pinning, CDF cursors, merge strategies (UPSERT, REPLACE, APPEND)
+**Key Concepts:** Dual-role DataFusion, UDF registration flow, plugin ABI stability
 
-### 08_observability.md - Observability
+### 08_storage.md - Storage Layer Architecture
 
-Diagnostics and telemetry:
-- DiagnosticsCollector for event recording
-- Dataset and column statistics
-- Quality tables for invalid entities
-- OpenTelemetry bootstrap and processors
-- Metrics catalog (histograms, counters, gauges)
+Delta Lake storage for both Python extraction and Rust materialization:
+- Python storage layer: core operations, snapshot identity, mutation safety, file pruning
+- Rust Delta operations: Delta writer, table provider registration, scan configuration
+- Incremental processing: CDF cursors, merge strategies (UPSERT, APPEND, REPLACE, DELETE_INSERT)
+- State directory layout and cursor tracking
+- Storage options for local and cloud (S3, Azure, GCS)
 
-**Key Concepts:** Two-layer architecture (domain + transport), run correlation
+**Key Concepts:** Dual write paths, CDF cursors, merge strategies, scan configuration
 
-### 09_configuration.md - Configuration & Utilities
+### 09_observability_and_config.md - Observability, Configuration, and Debugging
 
-Configuration system and utilities:
-- Runtime profiles (dev, prod, CST autoload)
-- Determinism tiers (CANONICAL, STABLE_SET, BEST_EFFORT)
+Cross-cutting concerns spanning the full pipeline:
+- DiagnosticsCollector and event recording
+- Engine metrics bridge (Rust -> Python)
+- OpenTelemetry integration (bootstrap, processors, instrumentation scopes)
+- Rust tracing integration with `TracingConfig`
+- Configuration philosophy: Policy/Settings/Config/Spec/Options hierarchy
+- Runtime profiles and determinism tiers
 - Environment variables reference
-- Hashing utilities (BLAKE2b, SHA-256)
-- Registry protocol and implementations
+- Debugging workflows: plan inspection, fingerprint debugging, data flow tracing
 
-**Key Concepts:** Configuration hierarchy (Policy/Settings/Config/Spec/Options)
-
-### 10_debugging_guide.md - Debugging & Troubleshooting
-
-Practical debugging workflows:
-- Plan bundle inspection
-- Fingerprint debugging
-- Data flow tracing with examples
-- Hamilton execution debugging
-- Delta Lake and UDF troubleshooting
-- Common issues and solutions
-
-**Key Concepts:** Diagnostic checklist, data flow walkthrough, debugging workflows
+**Key Concepts:** Two-layer observability (domain + transport), engine metrics bridge, configuration hierarchy
 
 ---
 
@@ -188,31 +194,49 @@ Practical debugging workflows:
 from graph import GraphProductBuildRequest, build_graph_product
 result = build_graph_product(GraphProductBuildRequest(repo_root="."))
 
-# Direct pipeline access
-from hamilton_pipeline import execute_pipeline
-result = execute_pipeline(repo_root=".", options=options)
+# Three-phase orchestration (internal)
+from graph.build_pipeline import orchestrate_build
+# Phase 1: _run_extraction_phase()
+# Phase 2: _compile_semantic_phase()  -> SemanticExecutionSpec
+# Phase 3: _execute_engine_phase()    -> RunResult (via Rust run_build())
 ```
 
 ### Key Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
-| `CODEANATOMY_RUNTIME_PROFILE` | Runtime profile name |
-| `CODEANATOMY_DETERMINISM_TIER` | Determinism level |
-| `CODEANATOMY_DISKCACHE_DIR` | DiskCache root |
-| `OTEL_SERVICE_NAME` | Service name for telemetry |
+| Variable | Purpose | Document |
+|----------|---------|----------|
+| `CODEANATOMY_RUNTIME_PROFILE` | Runtime profile name | 09 |
+| `CODEANATOMY_DETERMINISM_TIER` | Determinism level (STRICT, BEST_EFFORT) | 09 |
+| `CODEANATOMY_ENGINE_PROFILE` | Rust engine profile (Small, Medium, Large) | 05, 06 |
+| `OTEL_SERVICE_NAME` | Service name for telemetry | 09 |
+| `OTEL_SDK_DISABLED` | Disable OpenTelemetry | 09 |
 
 ### Source File Locations
 
 | Concern | Location |
 |---------|----------|
-| Extraction | `src/extract/` |
-| Semantic pipeline | `src/semantics/` |
-| DataFusion engine | `src/datafusion_engine/` |
-| Hamilton pipeline | `src/hamilton_pipeline/` |
-| Rust extensions | `rust/` |
-| Storage | `src/storage/` |
+| Extraction (Python) | `src/extract/`, `src/extraction/` |
+| Semantic pipeline (Python) | `src/semantics/` |
+| Boundary contract (Python) | `src/planning_engine/spec_contracts.py` |
+| Rust engine | `rust/codeanatomy_engine/` |
+| Rust PyO3 bindings | `rust/codeanatomy_engine_py/` |
+| DataFusion engine (Python) | `src/datafusion_engine/` |
+| DataFusion extensions (Rust) | `rust/datafusion_ext/` |
+| UDF plugins (Rust) | `rust/df_plugin_api/`, `rust/df_plugin_host/`, `rust/df_plugin_codeanatomy/` |
+| Storage (Python) | `src/storage/` |
 | Observability | `src/obs/` |
+| Pipeline orchestration | `src/graph/build_pipeline.py` |
+
+### Technology Stack
+
+| Technology | Version | Role |
+|------------|---------|------|
+| DataFusion | 51.0 | Query engine (Python + Rust) |
+| PyArrow | - | In-memory columnar data |
+| Delta Lake | - | Versioned table storage |
+| msgspec | - | Serialization (spec contract) |
+| PyO3 | - | Python-Rust bindings |
+| OpenTelemetry | - | Observability transport |
 
 ---
 
@@ -221,3 +245,4 @@ result = execute_pipeline(repo_root=".", options=options)
 - **CLAUDE.md** - Agent instructions and project overview
 - **AGENTS.md** - Agent operating protocols
 - **pyproject.toml** - Project configuration and dependencies
+- **rust/Cargo.toml** - Rust workspace configuration

@@ -17,7 +17,9 @@
     "section_4_tldr",
     "section_4",
     "section_5_tldr",
-    "section_5"
+    "section_5",
+    "section_6_tldr",
+    "section_6"
   ],
   "neighbors": {
     "next": "diagnostic_artifacts",
@@ -32,5 +34,5 @@
     "<!--LDMD:END id=\"run_meta\"-->",
     ""
   ],
-  "search_match_count": 15
+  "search_match_count": 17
 }

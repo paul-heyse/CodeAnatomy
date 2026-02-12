@@ -46,6 +46,7 @@
   ],
   "summary": {
     "enable_lsp": null,
+    "front_door_insight": null,
     "lang_scope": "auto",
     "language_order": [
       "python",

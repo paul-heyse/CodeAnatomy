@@ -125,6 +125,27 @@ def test_entity_definition_finding_includes_counts_and_scope(tmp_path: Path) -> 
     assert isinstance(payload.get("enclosing_scope"), str)
 
 
+def test_auto_scope_entity_insight_marks_missing_language_partial(tmp_path: Path) -> None:
+    """Merged auto-scope entity insight should mark missing language partitions."""
+    (tmp_path / "only_rust.rs").write_text(
+        "fn compile_target() -> i32 { 1 }\n",
+        encoding="utf-8",
+    )
+    tc = Toolchain.detect()
+    query = parse_query("entity=function name=compile_target lang=auto")
+    plan = compile_query(query)
+    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+
+    insight = result.summary.get("front_door_insight")
+    assert isinstance(insight, dict)
+    degradation = insight.get("degradation")
+    assert isinstance(degradation, dict)
+    assert degradation.get("scope_filter") == "partial"
+    notes = degradation.get("notes")
+    assert isinstance(notes, list)
+    assert any("missing_languages=python" in str(note) for note in notes)
+
+
 def test_query_text_preserved_when_provided(tmp_path: Path) -> None:
     """Execute plan should preserve caller-provided query text in summary."""
     (tmp_path / "a.py").write_text("def target():\n    return 1\n", encoding="utf-8")

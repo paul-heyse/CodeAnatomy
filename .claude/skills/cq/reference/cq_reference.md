@@ -97,8 +97,9 @@ Code Query (cq) is a high-signal code analysis tool designed for Claude Code. It
 │  core/schema.py       - CqResult, Finding, Section, Anchor        │
 │  core/scoring.py      - Impact/Confidence signal computation      │
 │  core/findings_table.py - Polars-based filtering + rehydration    │
-│  core/report.py       - Markdown rendering                        │
-│  core/artifacts.py    - JSON artifact persistence                 │
+│  core/report.py       - Markdown rendering + section reordering   │
+│  core/artifacts.py    - JSON artifact persistence + diagnostics   │
+│  core/front_door_insight.py - FrontDoorInsightV1 contract + render│
 │  core/toolchain.py    - External tool detection (rg, ast-grep)      │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -214,7 +215,7 @@ Every cq command returns a `CqResult` with these components:
 | Field | Type | Description |
 |-------|------|-------------|
 | `run` | `RunMeta` | Invocation metadata (macro, argv, root, timing, toolchain) |
-| `summary` | `dict[str, Any]` | Key metrics at a glance |
+| `summary` | `dict[str, object]` | Key metrics at a glance (includes `front_door_insight` for search/calls/entity) |
 | `key_findings` | `list[Finding]` | Top-level actionable insights |
 | `sections` | `list[Section]` | Organized finding groups |
 | `evidence` | `list[Finding]` | Supporting details (often truncated in display) |
@@ -376,14 +377,20 @@ For large result sets, the classification phase runs in parallel:
 - File role: src/ > tests/ > docs/
 - Confidence from classification evidence
 
-**Output sections:**
-- Summary: stats, pattern, mode
+**Output sections** (Insight Card and Code Overview are rendered before section reordering; remaining sections follow `_SECTION_ORDER_MAP`):
+- Insight Card: FrontDoorInsightV1 card (target, neighborhood, risk) when a top definition exists
+- Code Overview: query/mode/language scope/top symbols/top files/categories
+- Target Candidates: top definitions
+- Neighborhood Preview: caller/callee/reference totals and previews
+- Definitions: function/class definitions (identifier mode)
 - Top Contexts: grouped by containing function
-- Definitions/Imports/Callsites: category-specific (identifier mode)
+- Imports: import statements
+- Callsites: function calls
 - Uses by Kind: category counts
-- Non-Code Matches: strings/comments (collapsed)
+- Non-Code Matches (Strings / Comments / Docstrings): strings/comments (collapsed)
 - Hot Files: files with most matches
 - Suggested Follow-ups: next commands
+- Cross-Language Diagnostics: cross-language scope/capability diagnostics
 
 **Examples:**
 ```bash
@@ -698,6 +705,142 @@ Telemetry helps diagnose enrichment issues:
 
 ---
 
+## Front-Door Insight Contract (FrontDoorInsightV1)
+
+Front-door commands (`search`, `calls`, `entity`) embed a shared `FrontDoorInsightV1` contract in `summary["front_door_insight"]`. This provides agents with immediate target identity, neighborhood context, risk assessment, and confidence in a single consistent schema.
+
+**Module:** `tools/cq/core/front_door_insight.py` (~1022 lines)
+
+### Type Aliases
+
+| Alias | Type | Values |
+|-------|------|--------|
+| `InsightSource` | `Literal` | `"search"`, `"calls"`, `"entity"` |
+| `Availability` | `Literal` | `"full"`, `"partial"`, `"unavailable"` |
+| `NeighborhoodSource` | `Literal` | `"structural"`, `"lsp"`, `"heuristic"`, `"none"` |
+| `RiskLevel` | `Literal` | `"low"`, `"med"`, `"high"` |
+| `LspStatus` | `Literal` | `"unavailable"`, `"skipped"`, `"failed"`, `"partial"`, `"ok"`, `"none"` |
+
+### Schema
+
+```text
+FrontDoorInsightV1:
+  source: InsightSource
+  target: InsightTargetV1
+    symbol: str
+    kind: str = "unknown"
+    location: InsightLocationV1 (file, line, col)
+    signature: str | None
+    qualname: str | None
+    selection_reason: str
+  neighborhood: InsightNeighborhoodV1
+    callers: InsightSliceV1 (total, preview, availability, source, overflow_artifact_ref)
+    callees: InsightSliceV1
+    references: InsightSliceV1
+    hierarchy_or_scope: InsightSliceV1
+  risk: InsightRiskV1
+    level: RiskLevel = "low"
+    drivers: tuple[str, ...]
+    counters: InsightRiskCountersV1
+      callers, callees, files_with_calls, arg_shape_count,
+      forwarding_count, hazard_count, closure_capture_count
+  confidence: InsightConfidenceV1
+    evidence_kind: str = "unknown"
+    score: float = 0.0
+    bucket: str = "low"
+  degradation: InsightDegradationV1
+    lsp: LspStatus = "none"
+    scan: str = "ok"
+    scope_filter: str = "none"
+    notes: tuple[str, ...]
+  budget: InsightBudgetV1
+    top_candidates: int = 3
+    preview_per_slice: int = 5
+    lsp_targets: int = 1
+  artifact_refs: InsightArtifactRefsV1
+    diagnostics: str | None
+    telemetry: str | None
+    neighborhood_overflow: str | None
+  schema_version: str = "cq.insight.v1"
+```
+
+### Risk Computation
+
+Risk level is computed deterministically by `_risk_level_from_counters()`:
+
+- **high**: callers > 10 OR hazard_count > 0 OR (forwarding_count > 0 AND callers > 0)
+- **med**: callers > 3 OR arg_shape_count > 3 OR files_with_calls > 3 OR closure_capture_count > 0
+- **low**: all other cases
+
+Risk drivers are explicit strings: `high_call_surface`, `medium_call_surface`, `argument_forwarding`, `dynamic_hazards`, `arg_shape_variance`, `closure_capture`.
+
+### Builder Functions
+
+| Function | Source Command | Key Inputs |
+|----------|---------------|------------|
+| `build_search_insight()` | search | Top definition, neighborhood counts, risk/confidence/degradation |
+| `build_calls_insight()` | calls | Resolved target, call census, callee extraction |
+| `build_entity_insight()` | entity (q) | Top entity result, mini-neighborhood counts |
+
+### Cross-Language Stability (Delta E)
+
+`mark_partial_for_missing_languages()` ensures stable `InsightSliceV1` keys across all language scopes. When languages are missing, slices are marked `availability="partial"` or `"unavailable"` with explicit `source` markers rather than being omitted. Degradation notes list the missing languages.
+
+### Rendering
+
+The Insight Card is rendered as the **first section** in markdown output (after the title), via `_render_insight_card_from_summary()` in `report.py`. It shows:
+- Target symbol, kind, location, signature
+- Neighborhood totals (callers, callees, references, hierarchy)
+- Risk level and drivers
+- Confidence bucket and evidence kind
+- Degradation status (LSP, scan, scope filter)
+
+---
+
+## Artifact-First Diagnostics
+
+Heavy diagnostic payloads are offloaded to `.cq/artifacts/` and replaced by compact status lines in rendered output.
+
+### Offloaded Keys (ARTIFACT_ONLY_KEYS)
+
+| Key | Contents |
+|-----|----------|
+| `enrichment_telemetry` | Per-language per-stage enrichment metrics |
+| `pyrefly_telemetry` | Pyrefly LSP execution telemetry |
+| `pyrefly_diagnostics` | Full Pyrefly diagnostic list |
+| `language_capabilities` | Per-language capability matrix |
+| `cross_language_diagnostics` | Cross-language diagnostic events |
+
+### Compact Summary
+
+`compact_summary_for_rendering()` splits the summary dict into a compact display dict (with status lines replacing heavy payloads) and offloaded `(key, payload)` pairs for artifact persistence.
+
+### Artifact Types
+
+| Type | Function | Suffix | Contents |
+|------|----------|--------|----------|
+| Result | `save_artifact_json()` | `result` | Full CqResult as JSON |
+| Diagnostics | `save_diagnostics_artifact()` | `diagnostics` | Offloaded diagnostic payloads |
+| Neighborhood Overflow | `save_neighborhood_overflow_artifact()` | `neighborhood_overflow` | Truncated preview slices with full data |
+
+Artifact filenames: `{macro}_{suffix}_{timestamp}_{run_id}.json`
+
+Default directory: `.cq/artifacts/` (configurable via `--artifact-dir`)
+
+### Section Reordering
+
+Front-door commands use `_SECTION_ORDER_MAP` to reorder sections for optimal signal density:
+
+The Insight Card is rendered independently **before** section reordering (directly after the title), via `_render_insight_card_from_summary()`. The `_SECTION_ORDER_MAP` controls the remaining sections:
+
+**search:** Target Candidates → Neighborhood Preview → Definitions → Top Contexts → Imports → Callsites → Uses by Kind → Non-Code Matches (Strings / Comments / Docstrings) → Hot Files → Suggested Follow-ups → Cross-Language Diagnostics
+
+**calls:** Neighborhood Preview → Target Callees → Argument Shape Histogram → Hazards → Keyword Argument Usage → Calling Contexts → Call Sites
+
+Sections not in the order map are appended at the end.
+
+---
+
 ### impact - Parameter Taint Analysis
 
 Traces data flow from a function parameter to identify downstream consumers.
@@ -764,14 +907,15 @@ Finds all call sites for a function with argument shape analysis and context enr
 
 **Performance:** The on-demand signature lookup avoids a full repository scan. Instead of parsing all Python files to build a complete index, cq finds only the file containing the function definition and extracts the signature from that single file.
 
-**Output sections:**
-- Summary: total sites, files, signature preview
+**Output sections** (Insight Card is rendered before section reordering; remaining sections follow `_SECTION_ORDER_MAP`):
+- Insight Card: FrontDoorInsightV1 card (target + call surface, risk, neighborhood)
+- Neighborhood Preview: target callees preview
+- Target Callees: functions called by the target
 - Argument Shape Histogram: distribution of arg patterns
+- Hazards: promoted above long callsite list
 - Keyword Argument Usage: which kwargs used how often
 - Calling Contexts: which functions call this one
-- Hazards: dynamic dispatch and forwarding patterns
 - Call Sites: detailed list with previews and context
-- Evidence
 
 **Example:**
 ```bash
@@ -1612,21 +1756,23 @@ This compact format enables efficient parsing while preserving all key metrics i
 The markdown report is ordered for code-first analysis:
 
 1. Title (`# cq <command>`)
-2. `Code Overview` (query/mode/language scope/top symbols/top files/categories)
-3. `Key Findings`
-4. `Sections` (Top Contexts/Definitions/Imports/Callsites/etc.)
-5. `Evidence`
-6. `Artifacts`
-7. `Summary` (single compact JSON line)
-8. Footer (`Completed in ... | Schema ...`)
+2. `Insight Card` (FrontDoorInsightV1 card, when a target exists — rendered first)
+3. `Code Overview` (query/mode/language scope/top symbols/top files/categories)
+4. `Key Findings`
+5. `Sections` (reordered per `_SECTION_ORDER_MAP` for search/calls; other commands use original order)
+6. `Evidence`
+7. `Artifacts`
+8. `Summary` (single compact JSON line, with heavy diagnostics offloaded to artifacts)
+9. Footer (`Completed in ... | Schema ...`)
 
 ### Output Interpretation
 
 Use this priority when reading CQ markdown:
-1. `Code Overview`: confirm intent, scope, and headline coverage.
-2. `Code Facts`: primary actionable context for each finding.
-3. `Context` + `Details`: local source evidence and compact residual payload.
-4. `Summary` + footer: diagnostics, capabilities, telemetry, and processing metadata.
+1. `Insight Card`: target identity, neighborhood, risk, confidence (first screen for agent orientation).
+2. `Code Overview`: confirm intent, scope, and headline coverage.
+3. `Code Facts`: primary actionable context for each finding.
+4. `Context` + `Details`: local source evidence and compact residual payload.
+5. `Summary` + footer: diagnostics, capabilities, telemetry, and processing metadata (heavy payloads in artifacts).
 
 ---
 
@@ -1636,10 +1782,21 @@ By default, cq saves JSON artifacts to `.cq/artifacts/`:
 
 ```
 .cq/artifacts/
-├── impact_20240115_143022.json
-├── calls_20240115_143145.json
+├── search_result_20240115_143022_abc123.json
+├── calls_diagnostics_20240115_143145_def456.json
+├── search_neighborhood_overflow_20240115_143200_ghi789.json
 └── ...
 ```
+
+**Artifact Types:**
+
+| Type | Function | Suffix | Description |
+|------|----------|--------|-------------|
+| Result | `save_artifact_json()` | `result` | Full CqResult as JSON |
+| Diagnostics | `save_diagnostics_artifact()` | `diagnostics` | Offloaded diagnostic payloads (enrichment_telemetry, pyrefly_telemetry, pyrefly_diagnostics, language_capabilities, cross_language_diagnostics) |
+| Neighborhood Overflow | `save_neighborhood_overflow_artifact()` | `neighborhood_overflow` | Full neighborhood data when insight preview is truncated |
+
+**Filename pattern:** `{macro}_{suffix}_{timestamp}_{run_id}.json`
 
 **Options:**
 - `--artifact-dir <path>`: Custom artifact directory

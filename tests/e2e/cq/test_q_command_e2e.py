@@ -30,6 +30,14 @@ def test_q_python_resolve_entities_golden(
 
     spec = load_golden_spec("golden_specs/q_python_resolve_spec.json")
     assert_result_matches_spec(result, spec)
+    insight = result.summary.get("front_door_insight")
+    assert isinstance(insight, dict)
+    degradation = insight.get("degradation")
+    assert isinstance(degradation, dict)
+    assert degradation.get("scope_filter") == "partial"
+    notes = degradation.get("notes")
+    assert isinstance(notes, list)
+    assert any("missing_languages=rust" in str(note) for note in notes)
     assert_json_snapshot_data(
         "q_python_resolve.json",
         result_snapshot_projection(result),
@@ -55,8 +63,32 @@ def test_q_rust_compile_target_golden(
 
     spec = load_golden_spec("golden_specs/q_rust_compile_target_spec.json")
     assert_result_matches_spec(result, spec)
+    insight = result.summary.get("front_door_insight")
+    assert isinstance(insight, dict)
+    neighborhood = insight.get("neighborhood")
+    assert isinstance(neighborhood, dict)
+    callers = neighborhood.get("callers")
+    assert isinstance(callers, dict)
+    assert callers.get("availability") in {"partial", "full", "unavailable"}
     assert_json_snapshot_data(
         "q_rust_compile_target.json",
         result_snapshot_projection(result),
         update=update_golden,
     )
+
+
+@pytest.mark.e2e
+def test_q_pattern_query_excludes_front_door_insight(
+    run_cq_result: Callable[..., CqResult],
+) -> None:
+    result = run_cq_result(
+        [
+            "q",
+            "pattern='getattr($X, $Y)' lang=auto",
+            "--format",
+            "json",
+            "--no-save-artifact",
+        ]
+    )
+    assert result.summary.get("mode") == "pattern"
+    assert "front_door_insight" not in result.summary

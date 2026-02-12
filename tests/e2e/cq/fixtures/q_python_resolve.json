@@ -22,6 +22,59 @@
   ],
   "summary": {
     "enable_lsp": null,
+    "front_door_insight": {
+      "artifact_ref_presence": {
+        "diagnostics": false,
+        "neighborhood_overflow": false,
+        "telemetry": false
+      },
+      "degradation": {
+        "lsp": "ok",
+        "notes": [
+          "missing_languages=rust"
+        ],
+        "scan": "ok",
+        "scope_filter": "partial"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "partial",
+          "total": 0
+        },
+        "callers": {
+          "availability": "partial",
+          "total": 5
+        },
+        "hierarchy_or_scope": {
+          "availability": "partial",
+          "total": 1
+        },
+        "references": {
+          "availability": "partial",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "callees": 0,
+          "callers": 5,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "level": "med"
+      },
+      "source": "entity",
+      "target": {
+        "kind": "definition",
+        "location": {
+          "col": 0,
+          "file": "tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+          "line": 13
+        },
+        "selection_reason": "top_entity_result",
+        "symbol": "resolve"
+      }
+    },
     "lang_scope": "auto",
     "language_order": [
       "python",

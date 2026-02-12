@@ -43,8 +43,8 @@ def _attach_insight_artifact_refs(
         attach_artifact_refs,
         attach_neighborhood_overflow_ref,
         coerce_front_door_insight,
+        to_public_front_door_insight_dict,
     )
-    from tools.cq.core.serialization import to_builtins
 
     insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
     if insight is None:
@@ -57,7 +57,7 @@ def _attach_insight_artifact_refs(
     )
     if neighborhood_overflow_ref:
         updated = attach_neighborhood_overflow_ref(updated, overflow_ref=neighborhood_overflow_ref)
-    result.summary["front_door_insight"] = to_builtins(updated)
+    result.summary["front_door_insight"] = to_public_front_door_insight_dict(updated)
 
 
 def apply_result_filters(result: CqResult, filters: FilterConfig) -> CqResult:

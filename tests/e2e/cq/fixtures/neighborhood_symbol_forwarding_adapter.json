@@ -54,6 +54,7 @@
   ],
   "summary": {
     "enable_lsp": false,
+    "front_door_insight": null,
     "lang_scope": null,
     "language_order": null,
     "mode": null,

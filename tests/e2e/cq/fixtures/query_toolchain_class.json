@@ -13,7 +13,10 @@
       "category": "definition",
       "details": {
         "data": {
+          "callee_count": 0,
+          "caller_count": 1,
           "calls_within": 0,
+          "enclosing_scope": "<module>",
           "kind": "class_bases",
           "language": "python",
           "name": "Toolchain"
@@ -24,7 +27,7 @@
           "confidence_score": 0.95,
           "evidence_kind": "resolved_ast",
           "impact_bucket": "low",
-          "impact_score": 0.0275
+          "impact_score": 0.032
         }
       },
       "message": "class_bases: Toolchain",
@@ -42,9 +45,135 @@
       "sgpy": "0.40.5"
     }
   },
-  "sections": [],
+  "sections": [
+    {
+      "collapsed": false,
+      "findings": [
+        {
+          "anchor": {
+            "col": 0,
+            "end_col": 32,
+            "end_line": 128,
+            "file": "tools/cq/core/toolchain.py",
+            "line": 48
+          },
+          "category": "entity_neighborhood",
+          "details": {
+            "data": {
+              "callee_count": 0,
+              "caller_count": 1,
+              "enclosing_scope": "<module>",
+              "language": "python",
+              "name": "Toolchain"
+            },
+            "kind": "entity_neighborhood",
+            "score": {
+              "confidence_bucket": "high",
+              "confidence_score": 0.95,
+              "evidence_kind": "resolved_ast",
+              "impact_bucket": "low",
+              "impact_score": 0.032
+            }
+          },
+          "message": "Toolchain: callers=1, callees=0, scope=<module>",
+          "severity": "info"
+        }
+      ],
+      "title": "python: Neighborhood Preview"
+    }
+  ],
   "summary": {
     "cross_language_diagnostics": [],
+    "front_door_insight": {
+      "artifact_refs": {
+        "diagnostics": null,
+        "neighborhood_overflow": null,
+        "telemetry": null
+      },
+      "budget": {
+        "lsp_targets": 3,
+        "preview_per_slice": 5,
+        "top_candidates": 3
+      },
+      "confidence": {
+        "bucket": "high",
+        "evidence_kind": "resolved_ast",
+        "score": 0.95
+      },
+      "degradation": {
+        "lsp": "ok",
+        "notes": [
+          "missing_languages=rust"
+        ],
+        "scan": "ok",
+        "scope_filter": "partial"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "lsp",
+          "total": 0
+        },
+        "callers": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [
+            {
+              "display_label": "Toolchain",
+              "file_path": "tools/cq/core/toolchain.py",
+              "kind": "definition",
+              "name": "Toolchain",
+              "node_id": "entity:caller:tools/cq/core/toolchain.py:48:Toolchain"
+            }
+          ],
+          "source": "lsp",
+          "total": 1
+        },
+        "hierarchy_or_scope": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "heuristic",
+          "total": 0
+        },
+        "references": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "none",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "arg_shape_count": 0,
+          "callees": 0,
+          "callers": 1,
+          "closure_capture_count": 0,
+          "files_with_calls": 0,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "drivers": [],
+        "level": "low"
+      },
+      "schema_version": "cq.insight.v1",
+      "source": "entity",
+      "target": {
+        "kind": "definition",
+        "location": {
+          "col": 0,
+          "file": "tools/cq/core/toolchain.py",
+          "line": 48
+        },
+        "qualname": null,
+        "selection_reason": "top_entity_result",
+        "signature": null,
+        "symbol": "Toolchain"
+      }
+    },
     "lang_scope": "auto",
     "language_capabilities": {
       "python": {

@@ -166,16 +166,19 @@ Known-good matrix:
 ```
 
 **Output structure:**
+- **Insight Card**: FrontDoorInsightV1 card (target, neighborhood, risk, confidence) — rendered first, before section reordering
+- **Code Overview**: Query-focused top block (query/mode/scope/top symbols/top files/categories)
+- **Target Candidates**: Top definitions with location and signature
+- **Neighborhood Preview**: Caller/callee/reference totals and previews
 - **Top Contexts**: Matches grouped by containing function
 - **Definitions**: Function/class definitions (identifier mode)
 - **Imports**: Import statements
 - **Callsites**: Function calls
 - **Uses by Kind**: Category breakdown
-- **Non-Code Matches**: Strings/comments (collapsed)
+- **Non-Code Matches (Strings / Comments / Docstrings)**: Strings/comments (collapsed)
 - **Hot Files**: Files with most matches
 - **Suggested Follow-ups**: Next commands to explore
 - **Code Facts**: Per-finding enrichment clusters (Identity, Scope, Interface, Behavior, Structure)
-- **Code Overview**: Query-focused top block (query/mode/scope/top symbols/top files/categories)
 - **Enrichment Telemetry**: Summary/footer diagnostics (pipeline performance and stage stats)
 - **Scope Diagnostics**: Summary/footer includes `dropped_by_scope` when strict language filtering removes candidates
 

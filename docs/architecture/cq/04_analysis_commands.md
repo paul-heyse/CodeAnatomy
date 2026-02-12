@@ -4,6 +4,8 @@
 
 CQ analysis commands provide impact analysis, call site census, scope capture analysis, bytecode inspection, and signature change simulation. The macro system operates at the intersection of static AST analysis, bytecode inspection, symtable introspection, and heuristic search fallbacks.
 
+Analysis commands (primarily `calls`) now embed a `FrontDoorInsightV1` contract providing target identity, neighborhood preview, and risk assessment as the first output block. The Insight Card offers concise front-door grounding: target selection with location and signature, neighborhood slice totals with preview nodes, risk level with explicit drivers and counters, confidence scoring from evidence kind, degradation status, and budget controls.
+
 This document targets advanced LLM programmers seeking to propose architectural improvements. All line references are stable as of 2026-02-09.
 
 ## Module Map
@@ -204,12 +206,34 @@ class CallSite(msgspec.Struct):
   - "resolved_ast" otherwise
 
 **Output Sections**:
-- Key findings: Total calls, forwarding warnings
+- Insight Card (see below)
+- Target Callees Preview: Top callees extracted from target definition body
 - Argument Shape Histogram: Distribution of (args, kwargs, *, **)
 - Keyword Argument Usage: Most common keyword args
 - Calling Contexts: Most common containing functions
 - Hazards: Dynamic dispatch and execution patterns
 - Call Sites: Full list with context snippets
+
+### Calls Insight Card
+
+The `calls` command embeds a `FrontDoorInsightV1` contract as the first output block. `build_calls_insight()` constructs the insight from:
+
+- **target**: Resolved function definition with `selection_reason="resolved_calls_target"`
+- **neighborhood**: Callers from call census, callees from bounded extraction of target definition body
+- **risk**: Deterministic computation from call surface metrics:
+  - Risk drivers: `high_call_surface` (callers >= 10), `medium_call_surface` (callers >= 4), `argument_forwarding` (forwarding_count > 0), `dynamic_hazards` (hazard_count > 0), `arg_shape_variance` (arg_shape_count > threshold), `closure_capture` (closure_capture_count > 0)
+  - Risk level: "high" if callers > 10 OR hazards > 0 OR (forwarding > 0 AND callers > 0), else "med" if callers > 3 OR arg_shape_count > 3 OR files_with_calls > 3 OR closure_capture_count > 0, else "low"
+- **confidence**: Evidence kind from resolution (resolved_ast, heuristic, etc.)
+- **degradation**: LSP/scan/scope_filter per-subsystem status
+
+Budget defaults for calls:
+- top_candidates: up to 3 when ambiguous
+- preview_per_slice: 5 nodes per neighborhood slice
+- lsp_targets: 1
+
+Section ordering: Neighborhood Preview → Target Callees → Argument Shape Histogram → Hazards → Keyword Argument Usage → Calling Contexts → Call Sites
+
+Note: Insight Card is rendered independently before section reordering.
 
 ### impact: Taint/Data Flow Analysis
 
@@ -612,6 +636,16 @@ return clamp(score, 0.0, 1.0)
 **Bucket Classification** (`bucket`, lines 157-174):
 - Simple threshold-based classification
 - No hysteresis or fuzzy boundaries
+
+**Insight Card Risk Scoring**:
+
+The `calls` command uses a separate risk scoring model in the Insight Card (`risk_from_counters` in `front_door_insight.py`). This is explicit driver/counter based computation rather than the general `ImpactSignals` model:
+
+- **Drivers**: Explicit conditions (`high_call_surface`, `medium_call_surface`, `argument_forwarding`, `dynamic_hazards`, `arg_shape_variance`, `closure_capture`)
+- **Risk Level**: Deterministic thresholds (high: callers > 10 OR hazards > 0 OR (forwarding > 0 AND callers > 0); med: callers > 3 OR arg_shape_count > 3 OR files_with_calls > 3; low: otherwise)
+- **Counters**: Explicit metrics (callers, callees, files_with_calls, arg_shape_count, forwarding_count, hazard_count, closure_capture_count)
+
+This separate risk model provides more transparent, actionable risk assessment for the front-door card compared to the normalized `ImpactSignals` scoring used for overall impact ranking.
 
 ## Architectural Observations for Improvement Proposals
 

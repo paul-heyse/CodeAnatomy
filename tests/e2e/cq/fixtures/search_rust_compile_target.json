@@ -4,13 +4,24 @@
     "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
   ],
   "key_findings": [
-    "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs",
-    "run_pipeline (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs)",
-    "compile_target (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)",
-    "tests (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)",
-    "smoke_compile_target (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)"
+    "function: compile_target"
   ],
   "sections": [
+    {
+      "count": 1,
+      "messages": [
+        "function: compile_target"
+      ],
+      "title": "Target Candidates"
+    },
+    {
+      "count": 2,
+      "messages": [
+        "Sibling Definitions: 5 (top: pub mod engine;, pub mod traits;, mod macros;, mod tests {\n    use super::compile_target;\n\n    #[test]\n    fn smoke_compile_target, smoke_compile_target)",
+        "Functions Called: 2 (top: Engine::new, compile)"
+      ],
+      "title": "Neighborhood Preview"
+    },
     {
       "count": 5,
       "messages": [
@@ -40,6 +51,57 @@
   ],
   "summary": {
     "enable_lsp": null,
+    "front_door_insight": {
+      "artifact_ref_presence": {
+        "diagnostics": false,
+        "neighborhood_overflow": false,
+        "telemetry": false
+      },
+      "degradation": {
+        "lsp": "unavailable",
+        "notes": [],
+        "scan": "ok",
+        "scope_filter": "none"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "full",
+          "total": 2
+        },
+        "callers": {
+          "availability": "unavailable",
+          "total": 0
+        },
+        "hierarchy_or_scope": {
+          "availability": "full",
+          "total": 5
+        },
+        "references": {
+          "availability": "unavailable",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "callees": 2,
+          "callers": 0,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "level": "low"
+      },
+      "source": "search",
+      "target": {
+        "kind": "function",
+        "location": {
+          "col": 7,
+          "file": "tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs",
+          "line": 10
+        },
+        "selection_reason": "top_definition",
+        "symbol": "compile_target"
+      }
+    },
     "lang_scope": "rust",
     "language_order": [
       "rust"

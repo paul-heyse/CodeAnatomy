@@ -203,3 +203,9 @@ def test_merge_language_results_marks_partial_when_language_missing_insight() ->
     callers = neighborhood.get("callers")
     assert isinstance(callers, dict)
     assert callers.get("availability") == "partial"
+    degradation = raw.get("degradation")
+    assert isinstance(degradation, dict)
+    assert degradation.get("scope_filter") == "partial"
+    notes = degradation.get("notes")
+    assert isinstance(notes, list)
+    assert any("missing_languages=rust" in str(note) for note in notes)

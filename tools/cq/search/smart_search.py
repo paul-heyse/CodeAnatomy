@@ -127,6 +127,7 @@ _CASE_SENSITIVE_DEFAULT = True
 
 # Evidence disclosure cap to keep output high-signal
 MAX_EVIDENCE = 100
+MAX_TARGET_CANDIDATES = 3
 _RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 MAX_SEARCH_CLASSIFY_WORKERS = 4
 MAX_PYREFLY_ENRICH_FINDINGS = 8
@@ -2329,18 +2330,36 @@ def _is_definition_like_match(match: EnrichedMatch) -> bool:
     )
 
 
+def _is_definition_candidate_match(match: EnrichedMatch) -> bool:
+    if _is_definition_like_match(match):
+        return True
+    return match.node_kind in {
+        "function_definition",
+        "class_definition",
+        "decorated_definition",
+        "function_item",
+        "struct_item",
+        "enum_item",
+        "trait_item",
+        "impl_item",
+        "mod_item",
+    }
+
+
 def _definition_kind_from_text(text: str) -> str:
     trimmed = text.lstrip()
     if trimmed.startswith("class "):
         return "class"
     if trimmed.startswith(("struct ", "enum ", "trait ")):
         return "type"
+    if trimmed.startswith("impl "):
+        return "type"
     return "function"
 
 
 def _extract_definition_name_from_text(text: str, fallback: str) -> str:
     match = re.search(
-        r"(?:async\\s+def|def|class|pub\\s+fn|fn|struct|enum|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+        r"(?:async\\s+def|def|class|pub\\s+fn|fn|struct|enum|trait|impl)\\s+([A-Za-z_][A-Za-z0-9_]*)",
         text,
     )
     if match is None:
@@ -2348,27 +2367,38 @@ def _extract_definition_name_from_text(text: str, fallback: str) -> str:
     return match.group(1)
 
 
-def _build_definition_candidate_finding(match: EnrichedMatch, root: Path) -> Finding:
+def _build_definition_candidate_finding(match: EnrichedMatch, root: Path) -> Finding | None:
+    if not _is_definition_candidate_match(match):
+        return None
     finding = build_finding(match, root)
-    if match.category == "definition":
-        return finding
-    symbol = _extract_definition_name_from_text(match.text, match.match_text or "target")
+    symbol = _extract_definition_name_from_text(
+        match.text,
+        match.match_text or "target",
+    )
     kind = _definition_kind_from_text(match.text)
+    signature = match.text.strip()
     data = dict(finding.details.data)
     data["name"] = symbol
     data["kind"] = kind
-    data.setdefault("signature", match.text.strip())
+    data["signature"] = signature
     return Finding(
         category="definition",
         message=f"{kind}: {symbol}",
         anchor=finding.anchor,
         severity=finding.severity,
         details=DetailPayload(
-            kind=finding.details.kind or "definition",
+            kind=kind,
             score=finding.details.score,
             data=data,
         ),
     )
+
+
+def _normalize_neighborhood_file_path(path: str) -> str:
+    normalized = path.strip()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return Path(normalized).as_posix()
 
 
 def _build_pyrefly_overview(matches: list[EnrichedMatch]) -> dict[str, object]:  # noqa: C901, PLR0914
@@ -2517,20 +2547,17 @@ def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
     run = run_ctx.to_runmeta("search")
 
     ranked_matches = sorted(enriched_matches, key=compute_relevance_score, reverse=True)
-    definition_matches = [match for match in ranked_matches if match.category == "definition"]
-    if not definition_matches:
-        definition_matches = [match for match in ranked_matches if _is_definition_like_match(match)]
+    definition_pairs: list[tuple[EnrichedMatch, Finding]] = []
+    for match in ranked_matches:
+        candidate = _build_definition_candidate_finding(match, ctx.root)
+        if candidate is None:
+            continue
+        definition_pairs.append((match, candidate))
+        if len(definition_pairs) >= MAX_TARGET_CANDIDATES:
+            break
 
-    candidate_findings = [
-        _build_definition_candidate_finding(match, ctx.root) for match in definition_matches[:3]
-    ]
-    if not candidate_findings:
-        definitions_section = next(
-            (section for section in sections if section.title == "Definitions"),
-            None,
-        )
-        if definitions_section is not None:
-            candidate_findings = list(definitions_section.findings[:3])
+    definition_matches = [match for match, _finding in definition_pairs]
+    candidate_findings = [finding for _match, finding in definition_pairs]
     if candidate_findings:
         sections.insert(0, Section(title="Target Candidates", findings=candidate_findings))
     primary_target_finding = candidate_findings[0] if candidate_findings else None
@@ -2540,8 +2567,8 @@ def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
         build_neighborhood_from_slices,
         build_search_insight,
         risk_from_counters,
+        to_public_front_door_insight_dict,
     )
-    from tools.cq.core.serialization import to_builtins
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
     from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
 
@@ -2554,11 +2581,18 @@ def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
             or primary_target_finding.message.split(":")[-1].strip()
             or ctx.query
         )
+        target_file = _normalize_neighborhood_file_path(primary_target_finding.anchor.file)
+        target_language = (
+            definition_matches[0].language
+            if definition_matches
+            else str(primary_target_finding.details.get("language", "python"))
+        )
+        snapshot_language: QueryLanguage = "rust" if target_language == "rust" else "python"
         try:
-            snapshot = ScanSnapshot.build_from_repo(ctx.root, lang="python")
+            snapshot = ScanSnapshot.build_from_repo(ctx.root, lang=snapshot_language)
             slices, degrades = collect_structural_neighborhood(
                 target_name=target_name,
-                target_file=primary_target_finding.anchor.file,
+                target_file=target_file,
                 target_line=primary_target_finding.anchor.line,
                 target_col=int(primary_target_finding.anchor.col or 0),
                 snapshot=snapshot,
@@ -2595,9 +2629,12 @@ def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
                 )
             for degrade in degrades:
                 note = f"{degrade.stage}:{degrade.category or degrade.severity}"
-                neighborhood_notes.append(note)
+                if note not in neighborhood_notes:
+                    neighborhood_notes.append(note)
         except Exception as exc:  # noqa: BLE001 - fail-open for insight enrichment
-            neighborhood_notes.append(f"structural_scan_unavailable:{type(exc).__name__}")
+            note = f"structural_scan_unavailable:{type(exc).__name__}"
+            if note not in neighborhood_notes:
+                neighborhood_notes.append(note)
 
     if neighborhood_slice_findings:
         insert_idx = 1 if candidate_findings else 0
@@ -2626,33 +2663,20 @@ def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
         risk=search_risk,
     )
     if neighborhood_notes:
+        merged_notes = tuple(dict.fromkeys([*insight.degradation.notes, *neighborhood_notes]))
         insight = msgspec.structs.replace(
             insight,
             degradation=msgspec.structs.replace(
                 insight.degradation,
-                notes=(*insight.degradation.notes, *neighborhood_notes),
+                notes=merged_notes,
             ),
         )
     top_def_match = definition_matches[0] if definition_matches else None
-    if (
-        top_def_match is None
-        and primary_target_finding is not None
-        and primary_target_finding.anchor is not None
-    ):
-        anchor = primary_target_finding.anchor
-        for match in enriched_matches:
-            if (
-                match.file == anchor.file
-                and match.line == anchor.line
-                and match.language == "python"
-            ):
-                top_def_match = match
-                break
     if top_def_match is not None and isinstance(top_def_match.pyrefly_enrichment, dict):
         from tools.cq.core.front_door_insight import augment_insight_with_lsp
 
         insight = augment_insight_with_lsp(insight, top_def_match.pyrefly_enrichment)
-    summary["front_door_insight"] = to_builtins(insight)
+    summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
     return CqResult(
         run=run,

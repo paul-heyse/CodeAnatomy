@@ -38,6 +38,88 @@
   "sections": [],
   "summary": {
     "cross_language_diagnostics": [],
+    "front_door_insight": {
+      "artifact_refs": {
+        "diagnostics": null,
+        "neighborhood_overflow": null,
+        "telemetry": null
+      },
+      "budget": {
+        "lsp_targets": 3,
+        "preview_per_slice": 5,
+        "top_candidates": 3
+      },
+      "confidence": {
+        "bucket": "high",
+        "evidence_kind": "resolved_ast",
+        "score": 0.8
+      },
+      "degradation": {
+        "lsp": "unavailable",
+        "notes": [
+          "missing_languages=rust"
+        ],
+        "scan": "ok",
+        "scope_filter": "partial"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "heuristic",
+          "total": 0
+        },
+        "callers": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "heuristic",
+          "total": 0
+        },
+        "hierarchy_or_scope": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "heuristic",
+          "total": 0
+        },
+        "references": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "none",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "arg_shape_count": 0,
+          "callees": 0,
+          "callers": 0,
+          "closure_capture_count": 0,
+          "files_with_calls": 0,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "drivers": [],
+        "level": "low"
+      },
+      "schema_version": "cq.insight.v1",
+      "source": "entity",
+      "target": {
+        "kind": "entity",
+        "location": {
+          "col": null,
+          "file": "",
+          "line": null
+        },
+        "qualname": null,
+        "selection_reason": "fallback_query",
+        "signature": null,
+        "symbol": "entity=import name=Path"
+      }
+    },
     "lang_scope": "auto",
     "language_capabilities": {
       "python": {

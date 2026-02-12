@@ -5,11 +5,25 @@
     "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py"
   ],
   "key_findings": [
-    "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py",
-    "mixed_symbol (./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py)",
-    "mixed_symbol (./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs)"
+    "function: mixed_symbol",
+    "function: mixed_symbol"
   ],
   "sections": [
+    {
+      "count": 2,
+      "messages": [
+        "function: mixed_symbol",
+        "function: mixed_symbol"
+      ],
+      "title": "Target Candidates"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "Sibling Definitions: 1 (top: resolve_name)"
+      ],
+      "title": "Neighborhood Preview"
+    },
     {
       "count": 3,
       "messages": [
@@ -54,6 +68,57 @@
   ],
   "summary": {
     "enable_lsp": null,
+    "front_door_insight": {
+      "artifact_ref_presence": {
+        "diagnostics": false,
+        "neighborhood_overflow": false,
+        "telemetry": false
+      },
+      "degradation": {
+        "lsp": "ok",
+        "notes": [],
+        "scan": "ok",
+        "scope_filter": "none"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "partial",
+          "total": 0
+        },
+        "callers": {
+          "availability": "partial",
+          "total": 0
+        },
+        "hierarchy_or_scope": {
+          "availability": "full",
+          "total": 1
+        },
+        "references": {
+          "availability": "unavailable",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "callees": 0,
+          "callers": 0,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "level": "low"
+      },
+      "source": "search",
+      "target": {
+        "kind": "function",
+        "location": {
+          "col": 4,
+          "file": "tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py",
+          "line": 6
+        },
+        "selection_reason": "top_definition",
+        "symbol": "mixed_symbol"
+      }
+    },
     "lang_scope": "auto",
     "language_order": [
       "python",

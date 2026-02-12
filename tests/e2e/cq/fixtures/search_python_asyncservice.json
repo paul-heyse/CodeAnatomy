@@ -5,12 +5,28 @@
     "./tests/e2e/cq/_golden_workspace/python_project/app/services.py"
   ],
   "key_findings": [
-    "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
-    "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
-    "build_pipeline (./tests/e2e/cq/_golden_workspace/python_project/app/api.py)",
-    "AsyncService (./tests/e2e/cq/_golden_workspace/python_project/app/services.py)"
+    "function: AsyncService",
+    "class: AsyncService"
   ],
   "sections": [
+    {
+      "count": 2,
+      "messages": [
+        "function: AsyncService",
+        "class: AsyncService"
+      ],
+      "title": "Target Candidates"
+    },
+    {
+      "count": 4,
+      "messages": [
+        "Nested Definitions: 1 (top: recorder)",
+        "Sibling Definitions: 1 (top: resolve)",
+        "Functions Called: 8 (top: ServiceRegistry, register, DynamicRouter, AsyncService, handle)",
+        "Callers: 1 (top: run)"
+      ],
+      "title": "Neighborhood Preview"
+    },
     {
       "count": 4,
       "messages": [
@@ -58,6 +74,57 @@
   ],
   "summary": {
     "enable_lsp": null,
+    "front_door_insight": {
+      "artifact_ref_presence": {
+        "diagnostics": false,
+        "neighborhood_overflow": false,
+        "telemetry": false
+      },
+      "degradation": {
+        "lsp": "ok",
+        "notes": [],
+        "scan": "ok",
+        "scope_filter": "none"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "full",
+          "total": 8
+        },
+        "callers": {
+          "availability": "full",
+          "total": 1
+        },
+        "hierarchy_or_scope": {
+          "availability": "full",
+          "total": 2
+        },
+        "references": {
+          "availability": "unavailable",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "callees": 8,
+          "callers": 1,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "level": "low"
+      },
+      "source": "search",
+      "target": {
+        "kind": "function",
+        "location": {
+          "col": 62,
+          "file": "tests/e2e/cq/_golden_workspace/python_project/app/api.py",
+          "line": 18
+        },
+        "selection_reason": "top_definition",
+        "symbol": "AsyncService"
+      }
+    },
     "lang_scope": "python",
     "language_order": [
       "python"

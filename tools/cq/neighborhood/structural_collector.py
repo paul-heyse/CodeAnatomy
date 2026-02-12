@@ -8,6 +8,7 @@ callees) from the ast-grep scan snapshot.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -210,12 +211,14 @@ def _find_target_definition(
     target_col: int | None,
 ) -> tuple[SgRecord | None, tuple[DegradeEventV1, ...]]:
     degrades: list[DegradeEventV1] = []
+    target_file = _normalize_file_path(file)
 
     if target_line is not None and file:
         candidates = [
             record
             for record in snapshot.def_records
-            if record.file == file and record.start_line <= target_line <= record.end_line
+            if _normalize_file_path(record.file) == target_file
+            and record.start_line <= target_line <= record.end_line
         ]
         if candidates:
             candidates.sort(key=_anchor_sort_key)
@@ -254,7 +257,7 @@ def _find_target_definition(
     name_candidates = [
         record
         for record in snapshot.def_records
-        if record.file == file and _extract_name(record) == name
+        if _normalize_file_path(record.file) == target_file and _extract_name(record) == name
     ]
     if name_candidates:
         name_candidates.sort(key=_record_sort_key)
@@ -282,6 +285,7 @@ def _collect_neighborhood(target: SgRecord, snapshot: ScanSnapshot) -> Structura
         snapshot.interval_index if isinstance(snapshot.interval_index, IntervalIndex) else None
     )
 
+    target_file = _normalize_file_path(target.file)
     parents: list[SgRecord] = []
     if interval_index is not None:
         candidates = interval_index.find_candidates(target.start_line)
@@ -289,7 +293,7 @@ def _collect_neighborhood(target: SgRecord, snapshot: ScanSnapshot) -> Structura
             candidate
             for candidate in candidates
             if candidate != target
-            and candidate.file == target.file
+            and _normalize_file_path(candidate.file) == target_file
             and candidate.start_line <= target.start_line <= candidate.end_line
         ]
 
@@ -300,7 +304,7 @@ def _collect_neighborhood(target: SgRecord, snapshot: ScanSnapshot) -> Structura
     children = [
         def_rec
         for def_rec in snapshot.def_records
-        if def_rec.file == target.file
+        if _normalize_file_path(def_rec.file) == target_file
         and def_rec != target
         and target.start_line <= def_rec.start_line <= target.end_line
     ]
@@ -309,7 +313,7 @@ def _collect_neighborhood(target: SgRecord, snapshot: ScanSnapshot) -> Structura
         siblings = [
             def_rec
             for def_rec in snapshot.def_records
-            if def_rec.file == target.file
+            if _normalize_file_path(def_rec.file) == target_file
             and def_rec != target
             and enclosing_context.start_line <= def_rec.start_line <= enclosing_context.end_line
             and def_rec not in children
@@ -318,7 +322,9 @@ def _collect_neighborhood(target: SgRecord, snapshot: ScanSnapshot) -> Structura
         siblings = [
             def_rec
             for def_rec in snapshot.def_records
-            if def_rec.file == target.file and def_rec != target and def_rec not in children
+            if _normalize_file_path(def_rec.file) == target_file
+            and def_rec != target
+            and def_rec not in children
         ]
 
     target_key = f"{target.file}:{target.start_line}:{target.start_col}"
@@ -362,16 +368,33 @@ def _apply_limit(
 
 def _extract_name(record: SgRecord) -> str:
     text = record.text.strip()
-    if text.startswith(("def ", "class ")):
+    extracted = text
+    if text.startswith(("def ", "async def ", "class ")):
+        if text.startswith("async def "):
+            text = text[len("async ") :]
         parts = text.split("(", 1)
         if parts:
-            return parts[0].split()[-1]
-    if "(" in text:
+            extracted = parts[0].split()[-1]
+    elif text.startswith(("pub fn ", "fn ")):
+        head = text.split("(", 1)[0].strip()
+        if head.startswith("pub fn "):
+            extracted = head[len("pub fn ") :].strip()
+        elif head.startswith("fn "):
+            extracted = head[len("fn ") :].strip()
+    elif text.startswith(("struct ", "enum ", "trait ", "impl ")):
+        head = text.split("{", 1)[0].strip()
+        extracted = head.split()[-1]
+    elif "(" in text:
         call_part = text.split("(", 1)[0]
-        if "." in call_part:
-            return call_part.split(".")[-1]
-        return call_part.strip()
-    return text
+        extracted = call_part.split(".")[-1] if "." in call_part else call_part.strip()
+    return extracted
+
+
+def _normalize_file_path(path: str) -> str:
+    normalized = path.strip()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return Path(normalized).as_posix()
 
 
 def _node_id_from_record(record: SgRecord) -> str:

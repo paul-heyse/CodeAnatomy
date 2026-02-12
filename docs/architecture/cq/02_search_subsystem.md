@@ -13,6 +13,8 @@ The CQ search subsystem (`tools/cq/search/`) provides semantically-enriched code
 - Cross-source agreement validation across ast-grep, LibCST, and tree-sitter
 - Multi-language orchestration with per-language partition statistics
 - Pyrefly LSP integration for semantic hover data and diagnostics
+- Front-door insight card: `FrontDoorInsightV1` contract embedded as first output block with target identity, neighborhood preview, risk, and confidence
+- Artifact-first diagnostics: Heavy diagnostic payloads offloaded to `.cq/artifacts/` with compact in-band status lines
 
 **Target audience:** Advanced LLM programmers proposing architectural improvements.
 
@@ -2009,7 +2011,30 @@ def _assemble_smart_search_result(
     # 3. Group by containing scope
     grouped = _group_matches_by_context(all_matches)
 
-    # 4. Build sections
+    # 4. Build summary payload
+    summary = _build_summary_payload(
+        ctx=ctx,
+        partition_stats=partition_stats,
+        total_matches=len(all_matches),
+    )
+
+    # 5. Build front-door insight (embedded in summary["front_door_insight"])
+    # Constructs FrontDoorInsightV1 from:
+    # - Top definition finding → InsightTargetV1
+    # - Structural neighborhood counts from scan state → InsightNeighborhoodV1
+    # - Call/hazard counts → InsightRiskV1
+    # - Enrichment evidence kind → InsightConfidenceV1
+    # - LSP/scan/scope status → InsightDegradationV1
+    # - Budget defaults (top_candidates=3, preview_per_slice=5, lsp_targets=1)
+    front_door_insight = build_search_insight(
+        summary=summary,
+        primary_target=_find_primary_target(all_matches),
+        target_candidates=_find_target_candidates(all_matches),
+        neighborhood=_build_neighborhood_from_scan_state(ctx),
+    )
+    summary["front_door_insight"] = front_door_insight
+
+    # 6. Build sections
     sections = [
         _build_top_contexts_section(grouped),
         _build_definitions_section(all_matches),
@@ -2021,19 +2046,12 @@ def _assemble_smart_search_result(
         _build_suggested_followups_section(ctx, all_matches),
     ]
 
-    # 5. Build summary payload
-    summary = _build_summary_payload(
-        ctx=ctx,
-        partition_stats=partition_stats,
-        total_matches=len(all_matches),
-    )
-
-    # 6. Build findings
+    # 7. Build findings
     findings = [
         _enriched_match_to_finding(match) for match in all_matches
     ]
 
-    # 7. Return CqResult
+    # 8. Return CqResult
     return CqResult(
         command=ctx.argv,
         summary=summary,
@@ -2044,21 +2062,20 @@ def _assemble_smart_search_result(
 
 ### Section Construction
 
-**Top Contexts:** Highest-relevance matches grouped by containing scope.
+Search output sections are rendered in the following order:
 
-**Definitions:** All definition matches (functions, classes).
-
-**Imports:** All import/from_import matches.
-
-**Callsites:** All callsite matches.
-
-**Uses by Kind:** Breakdown by match category (reference, assignment, etc.).
-
-**Non-Code Matches:** Docstring/comment/string matches (collapsed by default).
-
-**Hot Files:** Files with most matches.
-
-**Suggested Follow-ups:** Next CQ commands to explore (e.g., `/cq calls <function>`).
+1. **Insight Card** (`## Insight Card`) - Target identity, neighborhood totals (callers/callees/references), risk level, confidence, degradation status (from `FrontDoorInsightV1`)
+2. **Code Overview** - Query metadata, mode, language scope, top symbols, top files
+3. **Target Candidates** - Top 3 definitions (bounded by `budget.top_candidates`)
+4. **Neighborhood Preview** - Caller/callee/reference totals with bounded previews (from `InsightSliceV1`)
+5. **Definitions** - All definition matches (functions, classes)
+6. **Top Contexts** - Highest-relevance matches grouped by containing scope
+7. **Imports** - All import/from_import matches
+8. **Callsites** - All callsite matches
+9. **Uses by Kind** - Breakdown by match category (reference, assignment, etc.)
+10. **Non-Code Matches** - Docstring/comment/string matches (collapsed by default)
+11. **Hot Files** - Files with most matches
+12. **Suggested Follow-ups** - Next CQ commands to explore (e.g., `/cq calls <function>`)
 
 ### Summary Payload
 
@@ -2106,8 +2123,22 @@ def _assemble_smart_search_result(
         "skipped": 0,
         "timed_out": 0,
     },
+    "front_door_insight": <FrontDoorInsightV1>,  # Embedded insight card
 }
 ```
+
+**Insight Construction:**
+
+After enrichment and before result rendering, `build_search_insight()` constructs a `FrontDoorInsightV1` object from:
+
+- **Top definition finding** → `InsightTargetV1` (symbol, kind, location, signature, selection_reason)
+- **Structural neighborhood counts** from scan state → `InsightNeighborhoodV1` (callers, callees, references, hierarchy)
+- **Call/hazard counts** → `InsightRiskV1` (level, drivers, counters)
+- **Enrichment evidence kind** → `InsightConfidenceV1` (evidence_kind, score, bucket)
+- **LSP/scan/scope status** → `InsightDegradationV1` (scan, scope, lsp, enrichment)
+- **Budget defaults** → `InsightBudgetV1` (top_candidates=3, preview_per_slice=5, lsp_targets=1)
+
+This insight is embedded in `summary["front_door_insight"]` and rendered as the first markdown section (## Insight Card).
 
 ---
 
@@ -2299,6 +2330,32 @@ All enrichment stages follow a fail-open policy:
 **Pyrefly timeout:** 2-second timeout per request, tracked in `PyreflyTelemetry.timed_out`.
 
 **Classification timeout:** None - ProcessPool relies on OS-level process limits.
+
+### Diagnostic Telemetry and Artifact Offloading
+
+**Artifact-first strategy:** Heavy diagnostic payloads are now offloaded to `.cq/artifacts/` instead of embedding in rendered markdown. This reduces context token usage and improves readability.
+
+**Offloaded payloads:**
+- `enrichment_telemetry` → artifact
+- `pyrefly_telemetry` → artifact
+- `pyrefly_diagnostics` → artifact
+- `language_capabilities` → artifact
+- `cross_language_diagnostics` → artifact
+
+**In-band status lines:** Rendered markdown includes only compact status summaries:
+- "Enrichment: applied=N, skipped=N, degraded=N"
+- "Scope: dropped_by_scope=N"
+- "Pyrefly: attempted=N, applied=N, failed=N"
+
+**Artifact references:** `FrontDoorInsightV1.artifact_refs` contains references to offloaded artifacts:
+- `diagnostics` - Full diagnostic payloads
+- `telemetry` - Full telemetry data
+- `neighborhood_overflow` - Overflow neighborhood slices
+
+**Budget defaults:**
+- `top_candidates`: 3 (top target candidates shown in insight card)
+- `preview_per_slice`: 5 (max preview items per neighborhood slice)
+- `lsp_targets`: 1 (optional LSP target count for top target only)
 
 ---
 

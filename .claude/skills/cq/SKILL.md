@@ -324,12 +324,15 @@ Smart Search (`/cq search`) is the **primary tool for finding code**. It provide
 
 ### Output Sections
 
+- **Insight Card**: FrontDoorInsightV1 card (target, neighborhood, risk) when a top definition exists
+- **Target Candidates**: top definitions with location and signature
+- **Neighborhood Preview**: caller/callee/reference totals and previews
 - **Top Contexts**: Representative match per containing function
 - **Definitions**: Function/class definitions (identifier mode)
 - **Imports**: Import statements
 - **Callsites**: Function calls
 - **Uses by Kind**: Category breakdown
-- **Non-Code Matches**: Strings/comments (collapsed)
+- **Non-Code Matches (Strings / Comments / Docstrings)**: Strings/comments (collapsed)
 - **Hot Files**: Files with most matches
 - **Suggested Follow-ups**: Next commands to explore
 - **Code Facts**: Per-finding enrichment clusters (Identity, Scope, Interface, Behavior, Structure)
@@ -633,11 +636,13 @@ Usage: /cq calls <FUNCTION_NAME>
 Example: /cq calls build_graph_product
 
 **Output Sections:**
+- Insight Card: FrontDoorInsightV1 card (target + call surface, risk, neighborhood)
+- Neighborhood Preview: target callees preview
 - Summary: total sites, files, signature preview
 - Argument Shape Histogram: distribution of arg patterns
+- Hazards: promoted above long callsite list
 - Keyword Argument Usage: which kwargs used how often
 - Calling Contexts: which functions call this one
-- Hazards: dynamic dispatch patterns detected
 - Call Sites: detailed list with previews and context
 
 **Context Window Enrichment:**
@@ -1195,12 +1200,13 @@ Use telemetry to diagnose enrichment issues: high degraded counts suggest parse 
 The markdown output follows this ordering:
 
 1. **Title** - Command and target
-2. **Code Overview** - Query-focused overview (code-informative, not diagnostics-first)
-3. **Key Findings** - Top-level actionable insights
-4. **Sections** - Organized finding groups with per-finding Code Facts
-5. **Evidence** - Supporting details
-6. **Artifacts** - Saved JSON artifact references
-7. **Summary** - Single ordered JSON line with priority-keyed metrics
+2. **Insight Card** - FrontDoorInsightV1 card (rendered first, before section reordering)
+3. **Code Overview** - Query-focused overview (code-informative, not diagnostics-first)
+4. **Key Findings** - Top-level actionable insights
+5. **Sections** - Organized finding groups with per-finding Code Facts (reordered per `_SECTION_ORDER_MAP` for search/calls)
+6. **Evidence** - Supporting details
+7. **Artifacts** - Saved JSON artifact references
+8. **Summary** - Single ordered JSON line with priority-keyed metrics
 
 The summary appears at the end as a compact JSON line:
 ```
@@ -1324,6 +1330,16 @@ Based on evidence quality:
 ## Artifacts
 
 JSON artifacts saved to `.cq/artifacts/` by default.
+
+Artifact types:
+
+| Suffix | Content | When Saved |
+|--------|---------|------------|
+| `result` | Full `CqResult` JSON | Always (unless `--no-save-artifact`) |
+| `diagnostics` | Offloaded diagnostic keys (enrichment_telemetry, pyrefly_telemetry, pyrefly_diagnostics, language_capabilities, cross_language_diagnostics) | When any offloaded key is present |
+| `neighborhood_overflow` | Large neighborhood bundles | When bundle exceeds inline size budget |
+
+Filename pattern: `{macro}_{suffix}_{timestamp}_{run_id}.json`
 
 Options:
 - `--artifact-dir <path>` - Custom location

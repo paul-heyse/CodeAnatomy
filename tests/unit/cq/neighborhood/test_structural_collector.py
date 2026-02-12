@@ -426,3 +426,49 @@ def test_node_ref_structure() -> None:
         assert node_ref.name
         assert node_ref.display_label
         assert node_ref.file_path == "test.py"
+
+
+def test_target_resolution_normalizes_dot_slash_path() -> None:
+    """Target file with leading './' should resolve snapshot records."""
+    target_def = SgRecord(
+        record="def",
+        kind="function",
+        file="src/test.py",
+        start_line=3,
+        start_col=0,
+        end_line=8,
+        end_col=0,
+        text="def normalize_path(): pass",
+        rule_id="py_def_function",
+    )
+    snapshot = ScanSnapshot.from_records([target_def])
+    slices, degrades = collect_structural_neighborhood(
+        target_name="normalize_path",
+        target_file="./src/test.py",
+        snapshot=snapshot,
+    )
+    assert len(degrades) == 0
+    assert isinstance(slices, tuple)
+
+
+def test_rust_pub_fn_name_extraction_for_target_resolution() -> None:
+    """Rust 'pub fn' definitions should resolve by function name."""
+    rust_def = SgRecord(
+        record="def",
+        kind="function_item",
+        file="crates/corelib/src/lib.rs",
+        start_line=10,
+        start_col=0,
+        end_line=20,
+        end_col=1,
+        text="pub fn compile_target(input: &str) -> String {",
+        rule_id="rust_function_item",
+    )
+    snapshot = ScanSnapshot.from_records([rust_def])
+    slices, degrades = collect_structural_neighborhood(
+        target_name="compile_target",
+        target_file="./crates/corelib/src/lib.rs",
+        snapshot=snapshot,
+    )
+    assert len(degrades) == 0
+    assert isinstance(slices, tuple)

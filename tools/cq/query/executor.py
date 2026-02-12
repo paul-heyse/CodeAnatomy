@@ -679,8 +679,50 @@ def _merge_auto_scope_results(
         )
     )
     if not query.is_pattern_query:
-        _attach_entity_insight(merged)
+        if "front_door_insight" not in merged.summary:
+            _attach_entity_insight(merged)
+        else:
+            _mark_entity_insight_partial_from_summary(merged)
     return merged
+
+
+def _missing_languages_from_summary(summary: dict[str, object]) -> list[str]:
+    languages = summary.get("languages")
+    if not isinstance(languages, dict):
+        return []
+    missing: list[str] = []
+    for lang, payload in languages.items():
+        lang_name = str(lang)
+        if not isinstance(payload, dict):
+            missing.append(lang_name)
+            continue
+        total = payload.get("total_matches")
+        if isinstance(total, int):
+            if total <= 0:
+                missing.append(lang_name)
+            continue
+        matches = payload.get("matches")
+        if isinstance(matches, int) and matches <= 0:
+            missing.append(lang_name)
+    return missing
+
+
+def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
+    from tools.cq.core.front_door_insight import (
+        coerce_front_door_insight,
+        mark_partial_for_missing_languages,
+        to_public_front_door_insight_dict,
+    )
+
+    insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
+    if insight is None:
+        return
+    lang_scope = result.summary.get("lang_scope")
+    if isinstance(lang_scope, str) and lang_scope == "auto":
+        missing = _missing_languages_from_summary(result.summary)
+        if missing:
+            insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
+    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
 
 def _attach_entity_insight(result: CqResult) -> None:
@@ -694,7 +736,10 @@ def _attach_entity_insight(result: CqResult) -> None:
         InsightSliceV1,
         augment_insight_with_lsp,
         build_entity_insight,
+        derive_lsp_status,
+        mark_partial_for_missing_languages,
         risk_from_counters,
+        to_public_front_door_insight_dict,
     )
     from tools.cq.core.snb_schema import SemanticNodeRefV1
     from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_lsp
@@ -853,16 +898,26 @@ def _attach_entity_insight(result: CqResult) -> None:
         lsp_applied += 1
         insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
 
-    if lsp_attempted > 0:
-        lsp_status = (
-            "ok" if lsp_applied == lsp_attempted else "partial" if lsp_applied else "failed"
-        )
-        insight = msgspec.structs.replace(
-            insight,
-            degradation=msgspec.structs.replace(insight.degradation, lsp=lsp_status),
-        )
+    lsp_available = any(
+        finding.anchor is not None
+        and (Path(result.run.root) / finding.anchor.file).suffix in {".py", ".pyi"}
+        for finding in candidates
+    )
+    lsp_status = derive_lsp_status(
+        available=lsp_available,
+        attempted=lsp_attempted,
+        applied=lsp_applied,
+        failed=max(0, lsp_attempted - lsp_applied),
+    )
+    insight = msgspec.structs.replace(
+        insight,
+        degradation=msgspec.structs.replace(insight.degradation, lsp=lsp_status),
+    )
+    missing = _missing_languages_from_summary(result.summary)
+    if missing:
+        insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
 
-    result.summary["front_door_insight"] = to_builtins(insight)
+    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
 
 def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:

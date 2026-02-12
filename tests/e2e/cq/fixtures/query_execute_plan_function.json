@@ -6,14 +6,17 @@
       "anchor": {
         "col": 0,
         "end_col": 39,
-        "end_line": 568,
+        "end_line": 569,
         "file": "tools/cq/query/executor.py",
-        "line": 522
+        "line": 523
       },
       "category": "definition",
       "details": {
         "data": {
+          "callee_count": 4,
+          "caller_count": 0,
           "calls_within": 4,
+          "enclosing_scope": "<module>",
           "kind": "function",
           "language": "python",
           "name": "execute_plan"
@@ -42,9 +45,135 @@
       "sgpy": "0.40.5"
     }
   },
-  "sections": [],
+  "sections": [
+    {
+      "collapsed": false,
+      "findings": [
+        {
+          "anchor": {
+            "col": 0,
+            "end_col": 39,
+            "end_line": 569,
+            "file": "tools/cq/query/executor.py",
+            "line": 523
+          },
+          "category": "entity_neighborhood",
+          "details": {
+            "data": {
+              "callee_count": 4,
+              "caller_count": 0,
+              "enclosing_scope": "<module>",
+              "language": "python",
+              "name": "execute_plan"
+            },
+            "kind": "entity_neighborhood",
+            "score": {
+              "confidence_bucket": "high",
+              "confidence_score": 0.95,
+              "evidence_kind": "resolved_ast",
+              "impact_bucket": "low",
+              "impact_score": 0.0455
+            }
+          },
+          "message": "execute_plan: callers=0, callees=4, scope=<module>",
+          "severity": "info"
+        }
+      ],
+      "title": "python: Neighborhood Preview"
+    }
+  ],
   "summary": {
     "cross_language_diagnostics": [],
+    "front_door_insight": {
+      "artifact_refs": {
+        "diagnostics": null,
+        "neighborhood_overflow": null,
+        "telemetry": null
+      },
+      "budget": {
+        "lsp_targets": 3,
+        "preview_per_slice": 5,
+        "top_candidates": 3
+      },
+      "confidence": {
+        "bucket": "high",
+        "evidence_kind": "resolved_ast",
+        "score": 0.95
+      },
+      "degradation": {
+        "lsp": "ok",
+        "notes": [
+          "missing_languages=rust"
+        ],
+        "scan": "ok",
+        "scope_filter": "partial"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [
+            {
+              "display_label": "execute_plan",
+              "file_path": "tools/cq/query/executor.py",
+              "kind": "definition",
+              "name": "execute_plan",
+              "node_id": "entity:callee:tools/cq/query/executor.py:523:execute_plan"
+            }
+          ],
+          "source": "lsp",
+          "total": 4
+        },
+        "callers": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "lsp",
+          "total": 0
+        },
+        "hierarchy_or_scope": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "heuristic",
+          "total": 0
+        },
+        "references": {
+          "availability": "partial",
+          "overflow_artifact_ref": null,
+          "preview": [],
+          "source": "none",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "arg_shape_count": 0,
+          "callees": 4,
+          "callers": 0,
+          "closure_capture_count": 0,
+          "files_with_calls": 0,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "drivers": [],
+        "level": "low"
+      },
+      "schema_version": "cq.insight.v1",
+      "source": "entity",
+      "target": {
+        "kind": "definition",
+        "location": {
+          "col": 0,
+          "file": "tools/cq/query/executor.py",
+          "line": 523
+        },
+        "qualname": null,
+        "selection_reason": "top_entity_result",
+        "signature": null,
+        "symbol": "execute_plan"
+      }
+    },
     "lang_scope": "auto",
     "language_capabilities": {
       "python": {

@@ -16,9 +16,11 @@ from tools.cq.core.front_door_insight import (
     build_neighborhood_from_slices,
     build_search_insight,
     coerce_front_door_insight,
+    derive_lsp_status,
     mark_partial_for_missing_languages,
     render_insight_card,
     risk_from_counters,
+    to_public_front_door_insight_dict,
 )
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
@@ -215,3 +217,49 @@ def test_coerce_front_door_insight_from_mapping() -> None:
     recovered = coerce_front_door_insight(payload)
     assert recovered is not None
     assert recovered.target.symbol == "target"
+
+
+def test_to_public_front_door_insight_dict_emits_full_shape() -> None:
+    insight = build_search_insight(
+        summary={"query": "target", "scan_method": "hybrid"},
+        primary_target=_definition_finding("target"),
+        target_candidates=[_definition_finding("target")],
+    )
+    payload = to_public_front_door_insight_dict(insight)
+    assert payload["source"] == "search"
+    assert payload["schema_version"] == "cq.insight.v1"
+    neighborhood = payload["neighborhood"]
+    assert isinstance(neighborhood, dict)
+    callers = neighborhood["callers"]
+    assert isinstance(callers, dict)
+    assert set(callers) == {
+        "total",
+        "preview",
+        "availability",
+        "source",
+        "overflow_artifact_ref",
+    }
+    risk = payload["risk"]
+    assert isinstance(risk, dict)
+    counters = risk["counters"]
+    assert isinstance(counters, dict)
+    assert set(counters) == {
+        "callers",
+        "callees",
+        "files_with_calls",
+        "arg_shape_count",
+        "forwarding_count",
+        "hazard_count",
+        "closure_capture_count",
+    }
+    artifact_refs = payload["artifact_refs"]
+    assert isinstance(artifact_refs, dict)
+    assert set(artifact_refs) == {"diagnostics", "telemetry", "neighborhood_overflow"}
+
+
+def test_derive_lsp_status_contract() -> None:
+    assert derive_lsp_status(available=False) == "unavailable"
+    assert derive_lsp_status(available=True, attempted=0, applied=0) == "skipped"
+    assert derive_lsp_status(available=True, attempted=2, applied=0, failed=2) == "failed"
+    assert derive_lsp_status(available=True, attempted=3, applied=1, failed=2) == "partial"
+    assert derive_lsp_status(available=True, attempted=2, applied=2, failed=0) == "ok"

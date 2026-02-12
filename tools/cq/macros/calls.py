@@ -1445,8 +1445,9 @@ def _build_calls_result(
         augment_insight_with_lsp,
         build_calls_insight,
         build_neighborhood_from_slices,
+        derive_lsp_status,
+        to_public_front_door_insight_dict,
     )
-    from tools.cq.core.serialization import to_builtins
     from tools.cq.core.snb_schema import SemanticNodeRefV1
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
     from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
@@ -1604,6 +1605,16 @@ def _build_calls_result(
         else 0.0,
         bucket=score.confidence_bucket if score and score.confidence_bucket else "low",
     )
+    target_file_path: Path | None = None
+    target_line = 1
+    if target_location is not None:
+        target_file_path = ctx.root / target_location[0]
+        target_line = int(target_location[1])
+
+    lsp_available = bool(target_file_path and target_file_path.suffix in {".py", ".pyi"})
+    lsp_attempted = 0
+    lsp_applied = 0
+
     insight = build_calls_insight(
         function_name=ctx.function_name,
         signature=scan_result.signature_info or None,
@@ -1624,38 +1635,48 @@ def _build_calls_result(
             lsp_targets=1,
         ),
         degradation=InsightDegradationV1(
-            lsp="skipped",
+            lsp=derive_lsp_status(available=lsp_available),
             scan="fallback" if scan_result.used_fallback else "ok",
             scope_filter="none",
             notes=tuple(degradation_notes),
         ),
     )
 
-    if target_location is not None:
-        lsp_payload: dict[str, object] | None = None
-        target_file = ctx.root / target_location[0]
-        if target_file.suffix in {".py", ".pyi"}:
-            lsp_payload = enrich_with_pyrefly_lsp(
-                PyreflyLspRequest(
-                    root=ctx.root,
-                    file_path=target_file,
-                    line=max(1, int(target_location[1])),
-                    col=0,
-                    symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
-                    timeout_seconds=_CALLS_LSP_TIMEOUT_SECONDS,
-                    startup_timeout_seconds=_CALLS_LSP_TIMEOUT_SECONDS,
-                    max_callers=_FRONT_DOOR_PREVIEW_PER_SLICE,
-                    max_callees=_FRONT_DOOR_PREVIEW_PER_SLICE,
-                )
+    if target_file_path is not None and lsp_available:
+        lsp_payload: dict[str, object] | None = enrich_with_pyrefly_lsp(
+            PyreflyLspRequest(
+                root=ctx.root,
+                file_path=target_file_path,
+                line=max(1, target_line),
+                col=0,
+                symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
+                timeout_seconds=_CALLS_LSP_TIMEOUT_SECONDS,
+                startup_timeout_seconds=_CALLS_LSP_TIMEOUT_SECONDS,
+                max_callers=_FRONT_DOOR_PREVIEW_PER_SLICE,
+                max_callees=_FRONT_DOOR_PREVIEW_PER_SLICE,
             )
-            if lsp_payload is not None:
-                insight = augment_insight_with_lsp(
-                    insight,
-                    lsp_payload,
-                    preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
-                )
+        )
+        lsp_attempted = 1
+        if lsp_payload is not None:
+            lsp_applied = 1
+            insight = augment_insight_with_lsp(
+                insight,
+                lsp_payload,
+                preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+            )
 
-    result.summary["front_door_insight"] = to_builtins(insight)
+    lsp_status = derive_lsp_status(
+        available=lsp_available,
+        attempted=lsp_attempted,
+        applied=lsp_applied,
+        failed=max(0, lsp_attempted - lsp_applied),
+    )
+    insight = msgspec.structs.replace(
+        insight,
+        degradation=msgspec.structs.replace(insight.degradation, lsp=lsp_status),
+    )
+
+    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
     return result
 

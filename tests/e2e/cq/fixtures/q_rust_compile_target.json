@@ -16,6 +16,57 @@
   ],
   "summary": {
     "enable_lsp": null,
+    "front_door_insight": {
+      "artifact_ref_presence": {
+        "diagnostics": false,
+        "neighborhood_overflow": false,
+        "telemetry": false
+      },
+      "degradation": {
+        "lsp": "unavailable",
+        "notes": [],
+        "scan": "ok",
+        "scope_filter": "none"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "partial",
+          "total": 2
+        },
+        "callers": {
+          "availability": "partial",
+          "total": 2
+        },
+        "hierarchy_or_scope": {
+          "availability": "unavailable",
+          "total": 0
+        },
+        "references": {
+          "availability": "unavailable",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "callees": 2,
+          "callers": 2,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "level": "low"
+      },
+      "source": "entity",
+      "target": {
+        "kind": "definition",
+        "location": {
+          "col": 0,
+          "file": "tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs",
+          "line": 10
+        },
+        "selection_reason": "top_entity_result",
+        "symbol": "compile_target"
+      }
+    },
     "lang_scope": "rust",
     "language_order": [
       "rust"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from datafusion_engine.extensions.context_adaptation import (
@@ -13,7 +14,7 @@ from datafusion_engine.extensions.context_adaptation import (
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-_EXTENSION_MODULES: tuple[str, ...] = ("datafusion_ext", "datafusion._internal")
+_EXTENSION_MODULES: tuple[str, ...] = ("datafusion._internal", "datafusion_ext")
 
 
 def load_schema_evolution_adapter_factory() -> object:
@@ -45,9 +46,13 @@ def install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
         RuntimeError: If extension entrypoint invocation fails unexpectedly.
         TypeError: If invocation fails due to SessionContext ABI mismatch.
     """
-    from datafusion_engine.udf.platform import native_udf_platform_available
+    from datafusion_engine.udf.runtime import extension_capabilities_report
 
-    if not native_udf_platform_available():
+    try:
+        capabilities = extension_capabilities_report()
+    except (RuntimeError, TypeError, ValueError):
+        capabilities = {"available": False, "compatible": False}
+    if not (bool(capabilities.get("available")) and bool(capabilities.get("compatible"))):
         return
     resolved = resolve_extension_module(
         _EXTENSION_MODULES,
@@ -57,6 +62,10 @@ def install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
         msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
         raise RuntimeError(msg)
     module_name, module = resolved
+    installer = getattr(module, "install_schema_evolution_adapter_factory", None)
+    if not callable(installer):
+        msg = "Schema evolution adapter install entrypoint is unavailable in the extension module."
+        raise TypeError(msg)
     try:
         invoke_entrypoint_with_adapted_context(
             module_name,
@@ -68,16 +77,24 @@ def install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
                 allow_fallback=False,
             ),
         )
-    except RuntimeError as exc:
-        message = str(exc)
-        if "cannot be converted" in message:
-            msg = (
-                "Schema evolution adapter install failed due to SessionContext ABI mismatch. "
-                "Rebuild and install matching datafusion/datafusion_ext wheels "
-                "(scripts/build_datafusion_wheels.sh + uv sync)."
+    except (RuntimeError, TypeError, ValueError) as exc:
+        from datafusion_engine.udf.runtime import rust_runtime_install_payload
+
+        runtime_payload = rust_runtime_install_payload(ctx)
+        runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")
+        if runtime_install_mode == "internal_compat":
+            logging.getLogger(__name__).warning(
+                "Skipping schema evolution adapter install due to SessionContext ABI mismatch "
+                "in internal_compat runtime install mode: %s",
+                exc,
             )
-            raise TypeError(msg) from exc
-        raise
+            return
+        msg = (
+            "Schema evolution adapter install failed due to SessionContext ABI mismatch. "
+            "Rebuild and install matching datafusion/datafusion_ext wheels "
+            "(scripts/build_datafusion_wheels.sh + uv sync)."
+        )
+        raise RuntimeError(msg) from exc
 
 
 __all__ = [

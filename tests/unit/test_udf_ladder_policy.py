@@ -11,8 +11,9 @@ from tests.test_helpers.optional_deps import require_datafusion_udfs
 require_datafusion_udfs()
 
 
-def test_udf_tier_tags_and_lane_precedence() -> None:
+def test_udf_tier_tags_and_lane_precedence(require_native_runtime: None) -> None:
     """Prefer DataFusion UDF lanes in the ladder."""
+    _ = require_native_runtime
     ctx = df_ctx()
     ensure_rust_udfs(ctx)
     introspector = SchemaIntrospector(ctx, sql_options=None)

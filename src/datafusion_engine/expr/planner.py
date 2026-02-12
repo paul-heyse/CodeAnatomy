@@ -2,24 +2,16 @@
 
 from __future__ import annotations
 
-import base64
 import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-import pyarrow as pa
 from datafusion import SessionContext
 
 from core.config_base import FingerprintableConfig, config_fingerprint
-from datafusion_engine.arrow.schema import version_field
-from storage.ipc_utils import payload_ipc_bytes
-
-EXPR_PLANNER_PAYLOAD_VERSION = 1
-_EXPR_PLANNER_PAYLOAD_SCHEMA = pa.schema(
-    [
-        version_field(),
-        pa.field("planner_names", pa.list_(pa.string()), nullable=False),
-    ]
+from datafusion_engine.extensions.context_adaptation import (
+    ExtensionEntrypointInvocation,
+    invoke_entrypoint_with_adapted_context,
 )
 
 
@@ -75,12 +67,6 @@ def default_expr_planner_policy(
     return ExprPlannerPolicy(planner_names=tuple(planner_names))
 
 
-def _policy_payload(policy: ExprPlannerPolicy) -> str:
-    payload = {"version": EXPR_PLANNER_PAYLOAD_VERSION, **policy.to_payload()}
-    payload_bytes = payload_ipc_bytes(payload, _EXPR_PLANNER_PAYLOAD_SCHEMA)
-    return base64.b64encode(payload_bytes).decode("ascii")
-
-
 def _load_extension() -> object:
     """Import the native DataFusion extension module.
 
@@ -110,40 +96,23 @@ def _install_native_expr_planners(
     ctx: SessionContext,
     *,
     planner_names: Sequence[str],
-    payload: str,
 ) -> None:
     module = _load_extension()
     install = getattr(module, "install_expr_planners", None)
     if not callable(install):
         msg = "DataFusion extension entrypoint install_expr_planners is unavailable."
         raise TypeError(msg)
-    ctx_arg: object = ctx
-    module_name = getattr(module, "__name__", "")
-    if module_name in {"datafusion._internal", "datafusion_ext"}:
-        internal_ctx = getattr(ctx, "ctx", None)
-        if internal_ctx is not None:
-            ctx_arg = internal_ctx
-    try:
-        install(ctx_arg, list(planner_names))
-    except TypeError:
-        install(ctx_arg, payload)
-
-
-def _fallback_install_expr_planners(ctx: SessionContext, planner_names: Sequence[str]) -> bool:
-    try:
-        module = importlib.import_module("datafusion_ext")
-    except ImportError:
-        return False
-    if not getattr(module, "IS_STUB", False):
-        return False
-    stub_install = getattr(module, "install_expr_planners", None)
-    if not callable(stub_install):
-        return False
-    try:
-        stub_install(ctx, list(planner_names))
-    except (RuntimeError, TypeError, ValueError):
-        return False
-    return True
+    invoke_entrypoint_with_adapted_context(
+        getattr(module, "__name__", "unknown"),
+        module,
+        "install_expr_planners",
+        ExtensionEntrypointInvocation(
+            ctx=ctx,
+            internal_ctx=getattr(ctx, "ctx", None),
+            args=(list(planner_names),),
+            allow_fallback=False,
+        ),
+    )
 
 
 def install_expr_planners(
@@ -158,22 +127,12 @@ def install_expr_planners(
         planner_names: Description.
 
     Raises:
-        TypeError: If the operation cannot be completed.
         ValueError: If the operation cannot be completed.
     """
     if not planner_names:
         msg = "ExprPlanner installation requires at least one planner name."
         raise ValueError(msg)
-    policy = default_expr_planner_policy(planner_names)
-    payload = _policy_payload(policy)
-    try:
-        _install_native_expr_planners(ctx, planner_names=planner_names, payload=payload)
-    except TypeError as exc:
-        if "cannot be converted" in str(exc) and _fallback_install_expr_planners(
-            ctx, planner_names
-        ):
-            return
-        raise
+    _install_native_expr_planners(ctx, planner_names=planner_names)
 
 
 def expr_planner_payloads(planner_names: Sequence[str]) -> Mapping[str, object]:

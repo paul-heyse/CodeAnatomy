@@ -15,7 +15,7 @@ def test_register_rust_udfs_requires_native_backend(
         lambda: (_ for _ in ()).throw(ImportError("missing extension")),
     )
 
-    with pytest.raises(RuntimeError, match="Rust UDF registry snapshot is unavailable"):
+    with pytest.raises(ImportError, match="missing extension"):
         runtime.register_rust_udfs(SessionContext())
 
 

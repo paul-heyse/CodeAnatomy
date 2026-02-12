@@ -29,7 +29,6 @@ All DataFusion execution facades automatically install the platform in
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -51,8 +50,8 @@ from datafusion_engine.udf.factory import (
     install_function_factory,
 )
 from datafusion_engine.udf.runtime import (
-    extension_capabilities_report,
     register_rust_udfs,
+    rust_runtime_install_payload,
     rust_udf_docs,
     rust_udf_snapshot_hash,
 )
@@ -235,6 +234,8 @@ def _resolve_expr_planner_names(
         if planner_names:
             return tuple(dict.fromkeys((*planner_names, *derived_planners)))
         return derived_planners
+    if resolved.enable_expr_planners and resolved.expr_planner_hook is None and not planner_names:
+        return ("codeanatomy_domain",)
     return planner_names
 
 
@@ -244,10 +245,13 @@ def _resolve_function_factory_policy(
 ) -> FunctionFactoryPolicy | None:
     if resolved.function_factory_policy is not None or snapshot is None:
         return resolved.function_factory_policy
-    return function_factory_policy_from_snapshot(
-        snapshot,
-        allow_async=resolved.enable_async_udfs,
-    )
+    try:
+        return function_factory_policy_from_snapshot(
+            snapshot,
+            allow_async=resolved.enable_async_udfs,
+        )
+    except RuntimeError:
+        return FunctionFactoryPolicy(allow_async=resolved.enable_async_udfs)
 
 
 def _strict_failure_message(
@@ -259,7 +263,7 @@ def _strict_failure_message(
     return f"{status_label} installation failed; native extension is required. {status.error}"
 
 
-def install_rust_udf_platform(
+def install_rust_udf_platform(  # noqa: C901, PLR0912, PLR0914
     ctx: SessionContext,
     *,
     options: RustUdfPlatformOptions | None = None,
@@ -279,22 +283,71 @@ def install_rust_udf_platform(
     resolved = options or RustUdfPlatformOptions()
     from datafusion_engine.udf.runtime import validate_extension_capabilities
 
-    _ = validate_extension_capabilities(strict=resolved.strict)
+    _ = validate_extension_capabilities(strict=resolved.strict, ctx=ctx)
     snapshot, snapshot_hash, rewrite_tags, docs = _resolve_udf_snapshot(ctx, resolved)
+    runtime_payload = (
+        rust_runtime_install_payload(ctx)
+        if snapshot is not None
+        else cast("Mapping[str, object]", {})
+    )
     planner_names = _resolve_expr_planner_names(resolved, snapshot)
     function_factory_policy = _resolve_function_factory_policy(resolved, snapshot)
-    function_factory, function_factory_payload = _install_function_factory(
-        ctx,
-        enabled=resolved.enable_function_factory,
-        hook=resolved.function_factory_hook,
-        policy=function_factory_policy,
+
+    function_factory_payload = (
+        function_factory_payloads(function_factory_policy)
+        if resolved.enable_function_factory
+        else None
     )
-    expr_planners, expr_planner_payload = _install_expr_planners(
-        ctx,
-        enabled=resolved.enable_expr_planners,
-        hook=resolved.expr_planner_hook,
-        planner_names=planner_names,
+    if not resolved.enable_function_factory:
+        function_factory: ExtensionInstallStatus | None = None
+    elif resolved.function_factory_hook is not None:
+        function_factory, function_factory_payload = _install_function_factory(
+            ctx,
+            enabled=True,
+            hook=resolved.function_factory_hook,
+            policy=function_factory_policy,
+        )
+    elif snapshot is not None and "function_factory_installed" in runtime_payload:
+        installed = bool(runtime_payload.get("function_factory_installed"))
+        error = (
+            None if installed else "install_codeanatomy_runtime did not install FunctionFactory."
+        )
+        function_factory = ExtensionInstallStatus(
+            available=True,
+            installed=installed,
+            error=error,
+        )
+    else:
+        function_factory, function_factory_payload = _install_function_factory(
+            ctx,
+            enabled=True,
+            hook=None,
+            policy=function_factory_policy,
+        )
+
+    expr_planner_payload = (
+        expr_planner_payloads(planner_names) if resolved.enable_expr_planners else None
     )
+    if not resolved.enable_expr_planners:
+        expr_planners: ExtensionInstallStatus | None = None
+    elif resolved.expr_planner_hook is not None:
+        expr_planners, expr_planner_payload = _install_expr_planners(
+            ctx,
+            enabled=True,
+            hook=resolved.expr_planner_hook,
+            planner_names=planner_names,
+        )
+    elif snapshot is not None and "expr_planners_installed" in runtime_payload:
+        installed = bool(runtime_payload.get("expr_planners_installed"))
+        error = None if installed else "install_codeanatomy_runtime did not install ExprPlanners."
+        expr_planners = ExtensionInstallStatus(available=True, installed=installed, error=error)
+    else:
+        expr_planners, expr_planner_payload = _install_expr_planners(
+            ctx,
+            enabled=True,
+            hook=None,
+            planner_names=planner_names,
+        )
     if resolved.strict:
         allow_soft_fail = env_bool("CODEANATOMY_DIAGNOSTICS_BUNDLE", default=False)
         strict_checks = (
@@ -322,60 +375,6 @@ def install_rust_udf_platform(
         function_factory_policy=function_factory_payload,
         expr_planner_policy=expr_planner_payload,
     )
-
-
-def native_udf_platform_available() -> bool:
-    """Return whether native UDF platform capabilities are available/compatible.
-
-    Returns:
-    -------
-    bool
-        ``True`` when the Rust capability snapshot is available and ABI-compatible.
-    """
-    available = False
-    try:
-        report = extension_capabilities_report()
-    except (RuntimeError, TypeError, ValueError):
-        report = None
-    if (
-        isinstance(report, Mapping)
-        and bool(report.get("available"))
-        and bool(report.get("compatible"))
-    ):
-        available = _probe_registry_snapshot()
-    return available
-
-
-def _probe_registry_snapshot() -> bool:
-    import importlib
-
-    snapshotter = None
-    for module_name in ("datafusion_ext", "datafusion._internal"):
-        with contextlib.suppress(ImportError):
-            module = importlib.import_module(module_name)
-            candidate = getattr(module, "registry_snapshot", None)
-            if callable(candidate):
-                snapshotter = candidate
-                break
-    if snapshotter is None:
-        return False
-
-    probe_ctx = SessionContext()
-    candidates: list[object] = [probe_ctx]
-    internal_ctx = getattr(probe_ctx, "ctx", None)
-    if internal_ctx is not None:
-        candidates.append(internal_ctx)
-    for candidate in candidates:
-        try:
-            snapshot = snapshotter(candidate)
-        except TypeError as exc:
-            if "cannot be converted" in str(exc):
-                continue
-            return False
-        except (RuntimeError, ValueError):
-            return False
-        return isinstance(snapshot, Mapping)
-    return False
 
 
 def ensure_rust_udfs(
@@ -423,5 +422,4 @@ __all__ = [
     "RustUdfPlatformOptions",
     "ensure_rust_udfs",
     "install_rust_udf_platform",
-    "native_udf_platform_available",
 ]

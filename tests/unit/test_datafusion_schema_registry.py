@@ -85,40 +85,45 @@ def test_symtable_schema_metadata() -> None:
     assert span_meta.get(b"end_exclusive") == b"true"
 
 
-def test_required_functions_present() -> None:
+def test_required_functions_present(require_native_runtime: None) -> None:
     """Validate required CST function inventory and signatures."""
+    _ = require_native_runtime
     profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)
     validate_required_cst_functions(ctx)
 
 
-def test_required_symtable_functions_present() -> None:
+def test_required_symtable_functions_present(require_native_runtime: None) -> None:
     """Validate required symtable function inventory and signatures."""
+    _ = require_native_runtime
     profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)
     validate_required_symtable_functions(ctx)
 
 
-def test_required_bytecode_functions_present() -> None:
+def test_required_bytecode_functions_present(require_native_runtime: None) -> None:
     """Validate required bytecode function inventory and signatures."""
+    _ = require_native_runtime
     profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)
     validate_required_bytecode_functions(ctx)
 
 
-def test_required_engine_functions_present() -> None:
+def test_required_engine_functions_present(require_native_runtime: None) -> None:
     """Validate required engine function inventory."""
+    _ = require_native_runtime
     profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)
     validate_required_engine_functions(ctx)
 
 
-def test_validate_ast_views_smoke() -> None:
+def test_validate_ast_views_smoke(require_native_runtime: None) -> None:
     """Ensure AST view validation runs against registered views."""
+    _ = require_native_runtime
     profile = df_profile()
     ctx = profile.session_context()
     ensure_rust_udfs(ctx)

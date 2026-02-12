@@ -18,8 +18,9 @@ require_datafusion_udfs()
 
 
 @pytest.mark.integration
-def test_function_factory_records_installation_result() -> None:
+def test_function_factory_records_installation_result(require_native_runtime: None) -> None:
     """Record FunctionFactory installation success or failure."""
+    _ = require_native_runtime
     profile, sink = diagnostic_profile(
         profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
             diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),

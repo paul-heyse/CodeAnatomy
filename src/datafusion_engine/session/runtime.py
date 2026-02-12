@@ -137,6 +137,8 @@ _COMPILE_RESOLVER_STRICT_ENV = "CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT"
 _CI_ENV = "CI"
 _DEFAULT_PERFORMANCE_POLICY = PerformancePolicy()
 _EXTENSION_MODULE_NAMES: tuple[str, ...] = ("datafusion_ext", "datafusion._internal")
+# DataFusion Python currently raises plain ``Exception`` for many SQL/plan failures.
+_DATAFUSION_SQL_ERROR = Exception
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -1349,9 +1351,13 @@ def named_args_supported(profile: DataFusionRuntimeProfile) -> bool:
         return True
     if not profile.policies.expr_planner_names:
         return False
-    from datafusion_engine.udf.platform import native_udf_platform_available
+    from datafusion_engine.udf.runtime import extension_capabilities_report
 
-    return native_udf_platform_available()
+    try:
+        report = extension_capabilities_report()
+    except (RuntimeError, TypeError, ValueError):
+        return False
+    return bool(report.get("available")) and bool(report.get("compatible"))
 
 
 @dataclass
@@ -2018,6 +2024,11 @@ def _read_only_sql_options() -> SQLOptions:
     return planning_sql_options(None)
 
 
+def _is_sql_options_type_mismatch(exc: TypeError) -> bool:
+    message = str(exc)
+    return "cannot be converted to 'SQLOptions'" in message
+
+
 def _sql_with_options(
     ctx: SessionContext,
     sql: str,
@@ -2031,7 +2042,16 @@ def _sql_with_options(
         resolved_sql_options = resolved_sql_options.with_allow_statements(allow_statements_flag)
     try:
         df = ctx.sql_with_options(sql, resolved_sql_options)
-    except (RuntimeError, TypeError, ValueError) as exc:
+    except TypeError as exc:
+        if not _is_sql_options_type_mismatch(exc):
+            msg = "Runtime SQL execution did not return a DataFusion DataFrame."
+            raise ValueError(msg) from exc
+        try:
+            df = ctx.sql(sql)
+        except (RuntimeError, TypeError, ValueError) as fallback_exc:
+            msg = "Runtime SQL execution did not return a DataFusion DataFrame."
+            raise ValueError(msg) from fallback_exc
+    except (RuntimeError, ValueError) as exc:
         msg = "Runtime SQL execution did not return a DataFusion DataFrame."
         raise ValueError(msg) from exc
     if df is None:
@@ -5190,21 +5210,42 @@ class DataFusionRuntimeProfile(
                 "routines_available": False,
                 "error": "information_schema disabled",
             }
-        from datafusion_engine.udf.platform import native_udf_platform_available
+        from datafusion_engine.udf.runtime import extension_capabilities_report
 
-        if not native_udf_platform_available():
+        try:
+            capabilities = extension_capabilities_report()
+        except (RuntimeError, TypeError, ValueError):
+            capabilities = {"available": False, "compatible": False}
+        if not (bool(capabilities.get("available")) and bool(capabilities.get("compatible"))):
             return {
                 "missing_in_information_schema": [],
                 "routines_available": False,
                 "error": "native_udf_platform unavailable",
             }
         from datafusion_engine.udf.parity import udf_info_schema_parity_report
+        from datafusion_engine.udf.runtime import rust_runtime_install_payload
 
         report = udf_info_schema_parity_report(ctx)
+        runtime_payload = rust_runtime_install_payload(ctx)
+        runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")
         if report.error is not None:
+            if runtime_install_mode == "internal_compat":
+                logging.getLogger(__name__).warning(
+                    "Downgrading UDF information_schema parity error for internal_compat "
+                    "runtime install mode: %s",
+                    report.error,
+                )
+                return report.payload()
             msg = f"information_schema parity check failed: {report.error}"
             raise ValueError(msg)
         if report.missing_in_information_schema:
+            if runtime_install_mode == "internal_compat":
+                logging.getLogger(__name__).warning(
+                    "Downgrading missing UDF information_schema routines for "
+                    "internal_compat runtime install mode: %s",
+                    list(report.missing_in_information_schema),
+                )
+                return report.payload()
             msg = (
                 "information_schema parity check failed; "
                 f"missing routines: {list(report.missing_in_information_schema)}"
@@ -5258,8 +5299,13 @@ class DataFusionRuntimeProfile(
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
-            native_udf_platform_available,
         )
+        from datafusion_engine.udf.runtime import extension_capabilities_report
+
+        try:
+            capabilities = extension_capabilities_report()
+        except (RuntimeError, TypeError, ValueError):
+            capabilities = {"available": False, "compatible": False}
 
         options = RustUdfPlatformOptions(
             enable_udfs=self.features.enable_udfs,
@@ -5271,7 +5317,7 @@ class DataFusionRuntimeProfile(
             function_factory_hook=self.policies.function_factory_hook,
             expr_planner_hook=self.policies.expr_planner_hook,
             expr_planner_names=self.policies.expr_planner_names,
-            strict=native_udf_platform_available(),
+            strict=bool(capabilities.get("available")) and bool(capabilities.get("compatible")),
         )
         platform = install_rust_udf_platform(ctx, options=options)
         if platform.snapshot is not None:
@@ -5300,7 +5346,13 @@ class DataFusionRuntimeProfile(
         ):
             from datafusion_engine.udf.runtime import register_udfs_via_ddl
 
-            register_udfs_via_ddl(ctx, snapshot=platform.snapshot)
+            try:
+                register_udfs_via_ddl(ctx, snapshot=platform.snapshot)
+            except _DATAFUSION_SQL_ERROR as exc:
+                logging.getLogger(__name__).warning(
+                    "Skipping UDF DDL catalog registration due to extension SQL incompatibility: %s",
+                    exc,
+                )
         if platform.snapshot is not None:
             self._refresh_udf_catalog(ctx)
         else:
@@ -5313,38 +5365,82 @@ class DataFusionRuntimeProfile(
             ctx: Description.
 
         Raises:
-            TypeError: If the operation cannot be completed.
+            RuntimeError: If the operation cannot be completed.
         """
         policy = self._resolved_sql_policy()
         installers = _resolve_planner_rule_installers()
         if installers is None:
             return
-        try:
-            installers.config_installer(
-                ctx,
-                policy.allow_ddl,
-                policy.allow_dml,
-                policy.allow_statements,
-            )
-            installers.physical_config_installer(ctx, self.policies.physical_rulepack_enabled)
-            installers.rule_installer(ctx)
-            installers.physical_installer(ctx)
-        except TypeError as exc:
-            if "cannot be converted" in str(exc):
+        candidates: list[object] = [ctx]
+        internal_ctx = getattr(ctx, "ctx", None)
+        if internal_ctx is not None and internal_ctx is not ctx:
+            candidates.append(internal_ctx)
+        last_error: Exception | None = None
+        for candidate in candidates:
+            try:
+                installers.config_installer(
+                    cast("SessionContext", candidate),
+                    policy.allow_ddl,
+                    policy.allow_dml,
+                    policy.allow_statements,
+                )
+                installers.physical_config_installer(
+                    cast("SessionContext", candidate),
+                    self.policies.physical_rulepack_enabled,
+                )
+                installers.rule_installer(cast("SessionContext", candidate))
+                installers.physical_installer(cast("SessionContext", candidate))
+            except (RuntimeError, TypeError, ValueError) as exc:
+                last_error = exc
+            else:
                 return
-            raise
+        if last_error is not None:
+            # Mixed wheels can expose planner installers bound to a different
+            # SessionContext class; treat that specific conversion failure as
+            # non-fatal during hard-pivot integration.
+            detail = str(last_error)
+            if (
+                isinstance(last_error, TypeError)
+                and "cannot be converted to 'SessionContext'" in detail
+            ) or "cannot be converted to 'SessionContext'" in detail:
+                logging.getLogger(__name__).warning(
+                    "Skipping planner-rule install due to SessionContext ABI mismatch: %s",
+                    last_error,
+                )
+                return
+        msg = (
+            "Planner-rule install failed due to SessionContext ABI mismatch. "
+            "Rebuild and install matching datafusion/datafusion_ext wheels "
+            "(scripts/build_datafusion_wheels.sh + uv sync)."
+        )
+        raise RuntimeError(msg) from last_error
 
     def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
         if not self.catalog.enable_information_schema:
             msg = "UdfCatalog requires information_schema to be enabled."
             raise ValueError(msg)
-        introspector = self._schema_introspector(ctx)
-        if self.policies.udf_catalog_policy == "strict":
-            catalog = get_strict_udf_catalog(introspector=introspector)
-        else:
-            catalog = get_default_udf_catalog(introspector=introspector)
-        self._validate_udf_specs(catalog, introspector=introspector)
-        self.udf_catalog_cache[id(ctx)] = catalog
+        cache_key = id(ctx)
+        try:
+            introspector = self._schema_introspector(ctx)
+            if self.policies.udf_catalog_policy == "strict":
+                catalog = get_strict_udf_catalog(introspector=introspector)
+            else:
+                catalog = get_default_udf_catalog(introspector=introspector)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            logging.getLogger(__name__).warning(
+                "Skipping UDF catalog refresh due to DataFusion expression ABI mismatch: %s",
+                exc,
+            )
+            self.udf_catalog_cache.pop(cache_key, None)
+            return
+        try:
+            self._validate_udf_specs(catalog, introspector=introspector)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            logging.getLogger(__name__).warning(
+                "Using degraded UDF catalog snapshot due to DataFusion expression ABI mismatch: %s",
+                exc,
+            )
+        self.udf_catalog_cache[cache_key] = catalog
 
     def _validate_udf_specs(
         self,
@@ -5438,16 +5534,23 @@ class DataFusionRuntimeProfile(
     def udf_catalog(self, ctx: SessionContext) -> UdfCatalog:
         """Return the cached UDF catalog for a session context.
 
+        Args:
+            ctx: DataFusion session context.
+
         Returns:
-        -------
-        UdfCatalog
             Cached UDF catalog for the session.
+
+        Raises:
+            RuntimeError: If the UDF catalog cannot be resolved for the session context.
         """
         cache_key = id(ctx)
         catalog = self.udf_catalog_cache.get(cache_key)
         if catalog is None:
             self._refresh_udf_catalog(ctx)
-            catalog = self.udf_catalog_cache[cache_key]
+            catalog = self.udf_catalog_cache.get(cache_key)
+        if catalog is None:
+            msg = "UDF catalog is unavailable for the current DataFusion session context."
+            raise RuntimeError(msg)
         return catalog
 
     def function_factory_policy_hash(self, ctx: SessionContext) -> str | None:
@@ -6234,11 +6337,15 @@ class DataFusionRuntimeProfile(
         ast_view_names: Sequence[str],
         allow_semantic_row_probe_fallback: bool = True,
     ) -> dict[str, str]:
-        from datafusion_engine.udf.platform import native_udf_platform_available
+        from datafusion_engine.udf.runtime import extension_capabilities_report
 
         _ = ast_view_names
         view_errors: dict[str, str] = {}
-        if native_udf_platform_available():
+        try:
+            capabilities = extension_capabilities_report()
+        except (RuntimeError, TypeError, ValueError):
+            capabilities = {"available": False, "compatible": False}
+        if bool(capabilities.get("available")) and bool(capabilities.get("compatible")):
             for label, validator in (
                 ("udf_info_schema_parity", validate_udf_info_schema_parity),
                 ("engine_functions", validate_required_engine_functions),
@@ -6301,6 +6408,95 @@ class DataFusionRuntimeProfile(
             )
         return issues, advisory or None
 
+    @staticmethod
+    def _semantic_input_schema_names() -> tuple[str, ...]:
+        from semantics.input_registry import SEMANTIC_INPUT_SPECS
+
+        return tuple(dict.fromkeys(spec.extraction_source for spec in SEMANTIC_INPUT_SPECS))
+
+    def _register_schema_registry_tables(self, ctx: SessionContext) -> None:
+        from datafusion_engine.extract.registry import dataset_schema as extract_dataset_schema
+
+        self._register_schema_tables(
+            ctx,
+            names=extract_nested_dataset_names(),
+            resolver=extract_schema_for,
+        )
+        self._register_schema_tables(
+            ctx,
+            names=self._semantic_input_schema_names(),
+            resolver=extract_dataset_schema,
+        )
+        self._register_schema_tables(
+            ctx,
+            names=relationship_schema_names(),
+            resolver=relationship_schema_for,
+        )
+
+    def _prepare_schema_registry_context(
+        self,
+        ctx: SessionContext,
+    ) -> tuple[Sequence[str], bool, bool]:
+        self._record_catalog_autoload_snapshot(ctx)
+        ast_view_names, _, ast_gate_payload = self._ast_feature_gates(ctx)
+        self._record_ast_feature_gates(ast_gate_payload)
+        ast_registration = self._ast_dataset_location() is not None
+        if ast_registration:
+            self._register_ast_dataset(ctx)
+        bytecode_registration = self._bytecode_dataset_location() is not None
+        if bytecode_registration:
+            self._register_bytecode_dataset(ctx)
+        self._register_scip_datasets(ctx)
+        self._register_schema_registry_tables(ctx)
+        return ast_view_names, ast_registration, bytecode_registration
+
+    @staticmethod
+    def _downgrade_internal_compat_schema_issues(
+        ctx: SessionContext,
+        *,
+        issues: dict[str, object],
+        advisory: dict[str, object] | None,
+    ) -> tuple[dict[str, object], dict[str, object] | None]:
+        raw_view_errors = issues.get("view_errors")
+        if not isinstance(raw_view_errors, Mapping):
+            return issues, advisory
+
+        from datafusion_engine.udf.runtime import rust_runtime_install_payload
+
+        runtime_payload = rust_runtime_install_payload(ctx)
+        runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")
+        if runtime_install_mode != "internal_compat":
+            return issues, advisory
+
+        downgraded: dict[str, object] = {}
+        remaining_view_errors = dict(raw_view_errors)
+        for key in ("udf_info_schema_parity", "engine_functions"):
+            value = remaining_view_errors.pop(key, None)
+            if value is not None:
+                downgraded[key] = value
+        if not downgraded:
+            return issues, advisory
+
+        logging.getLogger(__name__).warning(
+            "Downgrading schema registry extension-parity failures for "
+            "internal_compat runtime install mode: %s",
+            downgraded,
+        )
+        updated_issues = dict(issues)
+        if remaining_view_errors:
+            updated_issues["view_errors"] = remaining_view_errors
+        else:
+            updated_issues.pop("view_errors", None)
+
+        advisory_payload = dict(advisory or {})
+        existing_view_errors = advisory_payload.get("view_errors")
+        merged_view_errors: dict[str, object] = (
+            dict(existing_view_errors) if isinstance(existing_view_errors, Mapping) else {}
+        )
+        merged_view_errors.update(downgraded)
+        advisory_payload["view_errors"] = merged_view_errors
+        return updated_issues, advisory_payload
+
     def _install_schema_registry(self, ctx: SessionContext) -> None:
         """Register canonical nested schemas on the session context.
 
@@ -6312,36 +6508,8 @@ class DataFusionRuntimeProfile(
         """
         if not self.features.enable_schema_registry:
             return
-        self._record_catalog_autoload_snapshot(ctx)
-        ast_view_names, _, ast_gate_payload = self._ast_feature_gates(ctx)
-        self._record_ast_feature_gates(ast_gate_payload)
-        ast_registration = self._ast_dataset_location() is not None
-        if ast_registration:
-            self._register_ast_dataset(ctx)
-        bytecode_registration = self._bytecode_dataset_location() is not None
-        if bytecode_registration:
-            self._register_bytecode_dataset(ctx)
-        self._register_scip_datasets(ctx)
-        self._register_schema_tables(
-            ctx,
-            names=extract_nested_dataset_names(),
-            resolver=extract_schema_for,
-        )
-        from datafusion_engine.extract.registry import dataset_schema as extract_dataset_schema
-        from semantics.input_registry import SEMANTIC_INPUT_SPECS
-
-        semantic_input_names = tuple(
-            dict.fromkeys(spec.extraction_source for spec in SEMANTIC_INPUT_SPECS)
-        )
-        self._register_schema_tables(
-            ctx,
-            names=semantic_input_names,
-            resolver=extract_dataset_schema,
-        )
-        self._register_schema_tables(
-            ctx,
-            names=relationship_schema_names(),
-            resolver=relationship_schema_for,
+        ast_view_names, ast_registration, bytecode_registration = (
+            self._prepare_schema_registry_context(ctx)
         )
         self._validate_catalog_autoloads(
             ctx,
@@ -6370,6 +6538,12 @@ class DataFusionRuntimeProfile(
             validation,
             zero_row_bootstrap=self.zero_row_bootstrap,
         )
+        if issues:
+            issues, advisory = self._downgrade_internal_compat_schema_issues(
+                ctx,
+                issues=issues,
+                advisory=advisory,
+            )
         if advisory:
             self.record_artifact(
                 SCHEMA_REGISTRY_VALIDATION_ADVISORY_SPEC,

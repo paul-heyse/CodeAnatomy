@@ -11,6 +11,7 @@ use datafusion_common::Result;
 use std::collections::HashMap;
 
 use crate::compiler::cache_policy::{compute_cache_boundaries, CachePlacementPolicy};
+use crate::compiler::table_registration::register_or_replace_table;
 use crate::spec::execution_spec::SemanticExecutionSpec;
 use crate::spec::relations::ViewTransform;
 use crate::tuner::metrics_store::MetricsStore;
@@ -89,7 +90,7 @@ pub async fn insert_cache_boundaries(
 
             // Re-register as cached view
             let cached_view = cached.into_view();
-            ctx.register_table(&view.name, cached_view)?;
+            register_or_replace_table(ctx, &view.name, cached_view)?;
 
             cached_count += 1;
         }
@@ -154,7 +155,7 @@ pub async fn insert_cache_boundaries_with_policy(
 
         // Re-register as cached view
         let cached_view = cached.into_view();
-        ctx.register_table(view_name.as_str(), cached_view)?;
+        register_or_replace_table(ctx, view_name.as_str(), cached_view)?;
 
         cached_count += 1;
     }

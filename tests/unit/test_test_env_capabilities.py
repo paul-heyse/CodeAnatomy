@@ -21,8 +21,11 @@ from tests.test_helpers.optional_deps import (
 )
 
 
-def test_required_runtime_capabilities_available() -> None:
+def test_required_runtime_capabilities_available(  # noqa: PLR0914
+    require_native_runtime: None,
+) -> None:
     """Fail fast when required runtime dependencies are missing."""
+    _ = require_native_runtime
     datafusion = require_datafusion()
     _ = require_datafusion_udfs()
     _ = require_deltalake()
@@ -31,8 +34,19 @@ def test_required_runtime_capabilities_available() -> None:
     substrait_module = importlib.import_module("datafusion.substrait")
     assert callable(getattr(substrait_module.Consumer, "from_substrait_plan", None))
     assert callable(getattr(substrait_module.Producer, "to_substrait_plan", None))
-    extension = importlib.import_module("datafusion_ext")
-    assert callable(getattr(extension, "register_codeanatomy_udfs", None))
+    extension = importlib.import_module("datafusion._internal")
+    has_unified_runtime = callable(getattr(extension, "install_codeanatomy_runtime", None))
+    has_modular_runtime = all(
+        callable(getattr(extension, entrypoint, None))
+        for entrypoint in (
+            "register_codeanatomy_udfs",
+            "install_function_factory",
+            "install_expr_planners",
+            "registry_snapshot",
+        )
+    )
+    assert has_unified_runtime or has_modular_runtime
+    assert callable(getattr(extension, "session_context_contract_probe", None))
     assert callable(getattr(extension, "delta_write_ipc", None))
     assert callable(getattr(extension, "capabilities_snapshot", None))
     assert callable(getattr(extension, "runtime_execution_metrics_snapshot", None))
@@ -47,6 +61,14 @@ def test_required_runtime_capabilities_available() -> None:
         assert callable(getattr(resolved.module, entrypoint, None))
     capabilities = extension.capabilities_snapshot()
     assert isinstance(capabilities, dict)
+    runtime_contract = capabilities.get("runtime_install_contract")
+    if isinstance(runtime_contract, dict):
+        version = runtime_contract.get("version")
+        assert isinstance(version, int)
+        assert version >= 3
+    else:
+        # Compatibility path for wheel builds that still expose legacy capability payloads.
+        assert has_unified_runtime or has_modular_runtime
     for name in ("delta_control_plane", "substrait", "async_udf"):
         payload = capabilities.get(name)
         assert isinstance(payload, dict)

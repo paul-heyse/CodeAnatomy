@@ -17,7 +17,7 @@ use crate::spec::relations::AggregationExpr;
 /// - normalized text via utf8_normalize UDF
 pub async fn build_normalize(
     ctx: &SessionContext,
-    _view_name: &str,
+    view_name: &str,
     source: &str,
     id_columns: &[String],
     span_columns: &Option<(String, String)>,
@@ -25,10 +25,15 @@ pub async fn build_normalize(
 ) -> Result<DataFrame> {
     let mut df = ctx.table(source).await?;
 
-    // Add entity_id via stable_id UDF
-    let id_col_exprs: Vec<Expr> = id_columns.iter().map(col).collect();
+    // Internal-compat mode may produce sparse normalize metadata; always satisfy the
+    // current stable_id(prefix, value) contract with deterministic fallbacks.
+    let id_value_expr = if let Some(first_id_column) = id_columns.first() {
+        col(first_id_column)
+    } else {
+        lit(source.to_string())
+    };
     let stable_id_udf = ctx.udf("stable_id")?;
-    let entity_id_expr = stable_id_udf.call(id_col_exprs);
+    let entity_id_expr = stable_id_udf.call(vec![lit(view_name.to_string()), id_value_expr]);
     df = df.with_column("entity_id", entity_id_expr)?;
 
     // Add span if specified

@@ -10,12 +10,16 @@ import platform
 import resource
 import signal
 import sys
+from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 import pytest
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
 
 try:
     import psutil
@@ -231,3 +235,46 @@ def diagnostic_profile() -> tuple[object, object]:
     from tests.test_helpers.diagnostics import diagnostic_profile as _diagnostic_profile
 
     return _diagnostic_profile()
+
+
+def _validate_native_runtime_contract(ctx: SessionContext) -> None:
+    from datafusion_engine.udf.runtime import rust_runtime_install_payload, validate_required_udfs
+
+    runtime_payload = rust_runtime_install_payload(ctx)
+    runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")
+    if runtime_install_mode == "internal_compat":
+        msg = (
+            "native runtime contract unavailable: runtime_install_mode=internal_compat "
+            "(rebuild/install matching datafusion/datafusion_ext wheels)"
+        )
+        raise RuntimeError(msg)
+    snapshot = runtime_payload.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        msg = "native runtime contract unavailable: missing Rust runtime snapshot payload"
+        raise TypeError(msg)
+    validate_required_udfs(
+        snapshot,
+        required=(
+            "stable_hash64",
+            "stable_id",
+            "stable_id_parts",
+            "span_make",
+        ),
+    )
+
+
+@pytest.fixture(scope="session")
+def require_native_runtime() -> None:
+    """Require the Rust-first DataFusion runtime contract for native-path tests."""
+    from datafusion_engine.extensions.schema_runtime import load_schema_runtime
+    from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+    from datafusion_engine.udf.runtime import validate_extension_capabilities
+
+    try:
+        profile = DataFusionRuntimeProfile()
+        ctx = profile.session_context()
+        validate_extension_capabilities(strict=True, ctx=ctx)
+        _validate_native_runtime_contract(ctx)
+        _ = load_schema_runtime()
+    except (ImportError, RuntimeError, TypeError, ValueError) as exc:
+        pytest.skip(f"native runtime contract unavailable: {exc}")

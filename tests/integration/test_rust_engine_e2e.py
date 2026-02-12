@@ -175,12 +175,7 @@ def test_compile_metadata_json_returns_expected_contract_payload(tmp_path: Path)
 
 @pytest.mark.integration
 def test_run_result_task_schedule_returns_schedule_payload(tmp_path: Path) -> None:
-    """RunResult.task_schedule() returns the Rust schedule contract payload.
-
-    Raises:
-        RuntimeError: When the materializer fails for reasons other than known
-            process-local table-registration collisions.
-    """
+    """RunResult.task_schedule() returns the Rust schedule contract payload."""
     engine = pytest.importorskip("codeanatomy_engine")
     pyarrow = pytest.importorskip("pyarrow")
     write_deltalake = getattr(pytest.importorskip("deltalake"), "write_deltalake", None)
@@ -210,15 +205,7 @@ def test_run_result_task_schedule_returns_schedule_payload(tmp_path: Path) -> No
     compiler = engine.SemanticPlanCompiler()
     compiled = compiler.compile(spec_json)
     materializer = engine.CpgMaterializer()
-    try:
-        run_result = materializer.execute(engine.SessionFactory.from_class("small"), compiled)
-    except RuntimeError as exc:
-        if "already exists" in str(exc):
-            pytest.xfail(
-                "Rust engine currently reuses registered table names within a process; "
-                "RunResult.task_schedule contract assertion is deferred."
-            )
-        raise
+    run_result = materializer.execute(engine.SessionFactory.from_class("small"), compiled)
 
     schedule = run_result.task_schedule()
     assert isinstance(schedule, dict)
@@ -233,13 +220,7 @@ def test_run_result_task_schedule_returns_schedule_payload(tmp_path: Path) -> No
 def test_rust_engine_identity_surfaces_stable_across_runs(  # noqa: PLR0914
     tmp_path: Path,
 ) -> None:
-    """Repeated Python materialization preserves envelope/planning/provider identity surfaces.
-
-    Raises:
-        RuntimeError: If the underlying engine execution fails for reasons
-            other than the known "already exists" replay case handled by this
-            test.
-    """
+    """Repeated Python materialization preserves envelope/planning/provider identity surfaces."""
     engine = pytest.importorskip("codeanatomy_engine")
     pyarrow = pytest.importorskip("pyarrow")
     write_deltalake = getattr(pytest.importorskip("deltalake"), "write_deltalake", None)
@@ -272,24 +253,8 @@ def test_rust_engine_identity_surfaces_stable_across_runs(  # noqa: PLR0914
         materializer = engine.CpgMaterializer()
         return materializer.execute(factory, compiled).to_dict()
 
-    try:
-        first = _run_once()
-    except RuntimeError as exc:
-        if "already exists" in str(exc):
-            pytest.xfail(
-                "Rust engine currently reuses registered table names within a process; "
-                "identity-stability assertions are deferred."
-            )
-        raise
-    try:
-        second = _run_once()
-    except RuntimeError as exc:
-        if "already exists" in str(exc):
-            pytest.xfail(
-                "Rust engine currently reuses registered table names across repeated "
-                "runs in one process; parity/determinism assertions are deferred."
-            )
-        raise
+    first = _run_once()
+    second = _run_once()
     runs = [first, second]
     assert runs[0]["envelope_hash"] == runs[1]["envelope_hash"]
 

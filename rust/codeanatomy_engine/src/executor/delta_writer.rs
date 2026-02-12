@@ -198,7 +198,10 @@ pub fn validate_output_schema(
     for expected_field in expected.fields() {
         match actual.field_with_name(expected_field.name()) {
             Ok(actual_field) => {
-                if actual_field.data_type() != expected_field.data_type() {
+                if !actual_field
+                    .data_type()
+                    .equals_datatype(expected_field.data_type())
+                {
                     return Err(DataFusionError::Plan(format!(
                         "Schema mismatch for column '{}': expected {:?}, got {:?}",
                         expected_field.name(),

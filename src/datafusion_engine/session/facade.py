@@ -139,10 +139,16 @@ class DataFusionExecutionFacade:
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
-            native_udf_platform_available,
         )
+        from datafusion_engine.udf.runtime import extension_capabilities_report
 
-        platform_strict = native_udf_platform_available()
+        try:
+            capabilities = extension_capabilities_report()
+        except (RuntimeError, TypeError, ValueError):
+            capabilities = {"available": False, "compatible": False}
+        platform_strict = bool(capabilities.get("available")) and bool(
+            capabilities.get("compatible")
+        )
 
         if self.runtime_profile is None:
             # Default configuration: enable all planner extensions

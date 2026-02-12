@@ -256,6 +256,7 @@ dependencies = [
     { name = "ast-grep-py" },
     { name = "asyncio" },
     { name = "basedpyright" },
+    { name = "codeanatomy-engine" },
     { name = "coverage" },
     { name = "cyclopts" },
     { name = "cython" },
@@ -324,6 +325,7 @@ requires-dist = [
     { name = "ast-grep-py" },
     { name = "asyncio", specifier = ">=4.0.0" },
     { name = "basedpyright" },
+    { name = "codeanatomy-engine", path = "dist/wheels/codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl" },
     { name = "coverage", specifier = ">=7.12.0" },
     { name = "cyclopts", specifier = ">=4.4.1" },
     { name = "cython" },
@@ -384,6 +386,14 @@ requires-dist = [
     { name = "tree-sitter-python", specifier = ">=0.25.0" },
     { name = "tree-sitter-rust", specifier = ">=0.24.0" },
     { name = "uuid6", specifier = ">=2025.0.1" },
+]
+
+[[package]]
+name = "codeanatomy-engine"
+version = "0.1.0"
+source = { path = "dist/wheels/codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl" }
+wheels = [
+    { filename = "codeanatomy_engine-0.1.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:ed7529fba1da8ee760895ff543509daa4f0366eb9bbe0e3093f9fa2dcb19b726" },
 ]
 
 [[package]]

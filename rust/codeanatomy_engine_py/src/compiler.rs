@@ -147,8 +147,45 @@ impl SemanticPlanCompiler {
         }
 
         let profile = canonical_rulepack_profile(request.rulepack_profile.as_deref());
-        let view_names: HashSet<&str> =
-            semantic_ir.views.iter().map(|view| view.name.as_str()).collect();
+        let executable_views = semantic_ir
+            .views
+            .iter()
+            .filter(|view| !view.kind.eq_ignore_ascii_case("diagnostic"))
+            .collect::<Vec<_>>();
+        let available_inputs: HashSet<&str> =
+            request.input_locations.keys().map(String::as_str).collect();
+        let mut executable_views = executable_views;
+        loop {
+            let retained_names: HashSet<&str> = executable_views
+                .iter()
+                .map(|view| view.name.as_str())
+                .collect();
+            let prior_len = executable_views.len();
+            executable_views = executable_views
+                .into_iter()
+                .filter(|view| {
+                    view.inputs.iter().all(|input| {
+                        let source = input.as_str();
+                        available_inputs.contains(source) || retained_names.contains(source)
+                    })
+                })
+                .collect();
+            if executable_views.len() == prior_len {
+                break;
+            }
+        }
+        if executable_views.is_empty() {
+            return Err(engine_execution_error(
+                "validation",
+                "SEMANTIC_IR_MISSING_EXECUTABLE_VIEWS",
+                "Semantic IR does not contain executable views after filtering diagnostics",
+                None,
+            ));
+        }
+        let view_names: HashSet<&str> = executable_views
+            .iter()
+            .map(|view| view.name.as_str())
+            .collect();
         let group_by_relationship = join_group_index(&semantic_ir.join_groups);
         let join_edges = build_join_edges(&semantic_ir.join_groups)?;
 
@@ -166,8 +203,7 @@ impl SemanticPlanCompiler {
             })
             .collect::<Vec<_>>();
 
-        let view_definitions = semantic_ir
-            .views
+        let view_definitions = executable_views
             .iter()
             .map(|view| {
                 let deps = view
@@ -186,8 +222,8 @@ impl SemanticPlanCompiler {
             })
             .collect::<PyResult<Vec<_>>>()?;
 
-        let default_output_source = semantic_ir
-            .views
+        let default_output_source = executable_views
+            .iter()
             .last()
             .map(|view| view.name.clone())
             .unwrap_or_default();
@@ -416,6 +452,23 @@ fn build_transform(
     view: &SemanticIrViewPayload,
     by_relationship: &BTreeMap<String, SemanticIrJoinGroupPayload>,
 ) -> PyResult<Value> {
+    if view.kind.eq_ignore_ascii_case("diagnostic") {
+        if view.inputs.len() > 1 {
+            return Ok(json!({
+                "kind": "Union",
+                "sources": view.inputs,
+                "discriminator_column": null,
+                "distinct": false
+            }));
+        }
+        if view.inputs.len() == 1 {
+            return Ok(json!({
+                "kind": "Filter",
+                "source": view.inputs[0],
+                "predicate": "TRUE"
+            }));
+        }
+    }
     if let Some(output_kind) = cpg_output_kind_for_view(&view.name) {
         return Ok(json!({
             "kind": "CpgEmit",

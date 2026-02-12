@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -17,6 +16,10 @@ from datafusion_engine.arrow.field_builders import (
     int32_field,
     list_field,
     string_field,
+)
+from datafusion_engine.extensions.context_adaptation import (
+    ExtensionEntrypointInvocation,
+    invoke_entrypoint_with_adapted_context,
 )
 from storage.ipc_utils import payload_ipc_bytes
 
@@ -216,7 +219,7 @@ def _load_extension() -> object:
         ImportError: If no compatible extension module can be loaded.
         ModuleNotFoundError: If a nested import is missing within a candidate module.
     """
-    for module_name in ("datafusion_ext", "datafusion._internal"):
+    for module_name in ("datafusion._internal", "datafusion_ext"):
         try:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError as exc:
@@ -246,13 +249,17 @@ def _install_native_function_factory(ctx: SessionContext, *, payload: bytes) -> 
     if not callable(install):
         msg = "DataFusion extension entrypoint install_function_factory is unavailable."
         raise TypeError(msg)
-    ctx_arg: object = ctx
-    module_name = getattr(module, "__name__", "")
-    if module_name in {"datafusion._internal", "datafusion_ext"}:
-        internal_ctx = getattr(ctx, "ctx", None)
-        if internal_ctx is not None:
-            ctx_arg = internal_ctx
-    install(ctx_arg, payload)
+    invoke_entrypoint_with_adapted_context(
+        getattr(module, "__name__", "unknown"),
+        module,
+        "install_function_factory",
+        ExtensionEntrypointInvocation(
+            ctx=ctx,
+            internal_ctx=getattr(ctx, "ctx", None),
+            args=(payload,),
+            allow_fallback=False,
+        ),
+    )
 
 
 def install_function_factory(
@@ -272,15 +279,13 @@ def install_function_factory(
     payload = _policy_payload(policy or FunctionFactoryPolicy())
     try:
         _install_native_function_factory(ctx, payload=payload)
-    except TypeError as exc:
-        if "cannot be converted" in str(exc):
-            msg = (
-                "FunctionFactory install failed due to SessionContext type mismatch. "
-                "Rebuild and install matching datafusion/datafusion_ext wheels "
-                "(scripts/build_datafusion_wheels.sh + uv sync)."
-            )
-            raise TypeError(msg) from exc
-        raise
+    except (RuntimeError, TypeError, ValueError) as exc:
+        msg = (
+            "FunctionFactory install failed due to SessionContext type mismatch. "
+            "Rebuild and install matching datafusion/datafusion_ext wheels "
+            "(scripts/build_datafusion_wheels.sh + uv sync)."
+        )
+        raise TypeError(msg) from exc
 
 
 def function_factory_payloads(
@@ -331,29 +336,18 @@ def function_factory_policy_from_snapshot(
     -------
     FunctionFactoryPolicy
         Policy derived from the snapshot metadata.
+
+    Raises:
+        RuntimeError: If Rust policy derivation entrypoint is unavailable.
     """
-    extension_payload = None
-    with contextlib.suppress(ImportError, RuntimeError, TypeError, ValueError):
-        extension_payload = _derive_policy_payload_from_snapshot(snapshot, allow_async=allow_async)
-    if extension_payload is not None:
-        return _policy_from_payload(extension_payload)
-
-    from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.catalog import datafusion_udf_specs
-
-    specs = tuple(
-        spec for spec in datafusion_udf_specs(registry_snapshot=snapshot) if spec.kind == "scalar"
-    )
-    primitives = tuple(_rule_primitive_from_spec(spec) for spec in specs)
-    param_names = snapshot.get("parameter_names")
-    prefer_named = isinstance(param_names, Mapping) and bool(param_names)
-    domain_hooks = domain_planner_names_from_snapshot(snapshot)
-    return FunctionFactoryPolicy(
-        primitives=primitives,
-        prefer_named_arguments=prefer_named,
-        allow_async=allow_async,
-        domain_operator_hooks=domain_hooks,
-    )
+    extension_payload = _derive_policy_payload_from_snapshot(snapshot, allow_async=allow_async)
+    if extension_payload is None:
+        msg = (
+            "FunctionFactory policy derivation requires Rust extension entrypoint "
+            "derive_function_factory_policy."
+        )
+        raise RuntimeError(msg)
+    return _policy_from_payload(extension_payload)
 
 
 def _derive_policy_payload_from_snapshot(
@@ -544,14 +538,14 @@ def register_function(
 ) -> None:
     """Register a SQL macro function using FunctionFactory support.
 
-    Parameters
-    ----------
-    ctx
-        DataFusion session context to register the function in.
-    config
-        Function configuration payload.
-    runtime_profile
-        Optional runtime profile for policy enforcement.
+    Args:
+        ctx: DataFusion session context to register the function in.
+        config: Function configuration payload.
+        runtime_profile: Optional runtime profile for policy enforcement.
+
+    Raises:
+        TypeError: If ``sql_with_options`` fails for reasons unrelated to
+            SQLOptions ABI compatibility.
     """
     from datafusion_engine.catalog.introspection import invalidate_introspection_cache
 
@@ -563,7 +557,13 @@ def register_function(
         .with_allow_ddl(allow_ddl)
         .with_allow_statements(allow_statements)
     )
-    ctx.sql_with_options(sql, options).collect()
+    try:
+        ctx.sql_with_options(sql, options).collect()
+    except TypeError as exc:
+        message = str(exc)
+        if "cannot be converted to 'SQLOptions'" not in message:
+            raise
+        ctx.sql(sql).collect()
     invalidate_introspection_cache(ctx)
 
 

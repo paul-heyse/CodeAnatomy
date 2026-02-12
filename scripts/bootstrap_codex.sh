@@ -82,23 +82,40 @@ import importlib
 import sys
 
 try:
-    mod = importlib.import_module("datafusion_ext")
+    mod = importlib.import_module("datafusion._internal")
 except ImportError as exc:
-    print(f"Failed to import datafusion_ext: {exc}", file=sys.stderr)
+    print(f"Failed to import datafusion._internal: {exc}", file=sys.stderr)
     raise SystemExit(1) from exc
 
-required = ("register_codeanatomy_udfs", "delta_table_provider_from_session")
+required = (
+    "install_codeanatomy_runtime",
+    "session_context_contract_probe",
+    "delta_table_provider_from_session",
+)
 missing = [name for name in required if not hasattr(mod, name)]
 if missing:
     print(
-        "datafusion_ext missing required hooks: " + ", ".join(missing),
+        "datafusion._internal missing required hooks: " + ", ".join(missing),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+try:
+    engine = importlib.import_module("codeanatomy_engine")
+except ImportError as exc:
+    print(f"Failed to import codeanatomy_engine: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
+
+if not hasattr(engine, "SchemaRuntime"):
+    print(
+        "codeanatomy_engine missing required class: SchemaRuntime",
         file=sys.stderr,
     )
     raise SystemExit(1)
 PY
 then
   cat >&2 <<EOF
-Error: datafusion_ext is unavailable or missing required hooks.
+Error: datafusion._internal/codeanatomy_engine are unavailable or missing required hooks.
 
 From a normal shell on this machine run:
 

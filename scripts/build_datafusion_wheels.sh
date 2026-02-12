@@ -267,7 +267,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
         raise SystemExit("datafusion_ext wheel is missing embedded plugin shared library.")
     sys.path.insert(0, tmpdir)
     # Ensure the extension module is importable under the expected package.
-    importlib.import_module("datafusion._internal")
+    internal = importlib.import_module("datafusion._internal")
     module = importlib.import_module("datafusion.substrait")
     producer = getattr(module, "Producer", None)
     to_substrait = getattr(producer, "to_substrait_plan", None) if producer else None
@@ -294,13 +294,26 @@ with tempfile.TemporaryDirectory() as tmpdir:
     plugin_path = manifest.get("plugin_path") if isinstance(manifest, dict) else None
     if not plugin_path or not Path(str(plugin_path)).exists():
         raise SystemExit(f"plugin_manifest() returned invalid plugin_path: {plugin_path!r}")
-    register_udfs = getattr(ext, "register_codeanatomy_udfs", None)
-    if not callable(register_udfs):
-        raise SystemExit("register_codeanatomy_udfs() missing from datafusion_ext wheel.")
+    install_runtime = getattr(internal, "install_codeanatomy_runtime", None)
+    if not callable(install_runtime):
+        raise SystemExit("install_codeanatomy_runtime() missing from datafusion._internal wheel.")
+    contract_probe = getattr(internal, "session_context_contract_probe", None)
+    if not callable(contract_probe):
+        raise SystemExit("session_context_contract_probe() missing from datafusion._internal wheel.")
     try:
-        register_udfs(ctx_builder(), True, 1000, 64)
+        from datafusion import SessionContext
+
+        ctx = SessionContext()
+        probe_payload = contract_probe(ctx)
+        if not isinstance(probe_payload, dict):
+            raise SystemExit("session_context_contract_probe() must return a dict payload.")
+        runtime_payload = install_runtime(ctx, True, 1000, 64)
+        if not isinstance(runtime_payload, dict):
+            raise SystemExit("install_codeanatomy_runtime() must return a dict payload.")
+        if "snapshot" not in runtime_payload:
+            raise SystemExit("install_codeanatomy_runtime() payload missing snapshot.")
     except Exception as exc:
-        raise SystemExit(f"Async UDF feature validation failed: {exc}") from exc
+        raise SystemExit(f"Unified runtime install validation failed: {exc}") from exc
 PY
 
 # Validate the engine wheel via a real install/import cycle.
@@ -310,7 +323,7 @@ from __future__ import annotations
 
 import codeanatomy_engine
 
-required = ("SessionFactory", "SemanticPlanCompiler", "CpgMaterializer")
+required = ("SessionFactory", "SemanticPlanCompiler", "CpgMaterializer", "SchemaRuntime")
 for attr in required:
     if not hasattr(codeanatomy_engine, attr):
         raise SystemExit(f"codeanatomy_engine wheel missing attribute: {attr}")
@@ -328,11 +341,13 @@ lines = text.splitlines()
 header = "[tool.uv.sources]"
 datafusion_wheel = Path("${datafusion_wheel}").as_posix()
 datafusion_ext_wheel = Path("${datafusion_ext_wheel}").as_posix()
+engine_wheel = Path("${engine_wheel}").as_posix()
 
 def update_section(section_lines: list[str]) -> list[str]:
     updated = []
     seen_datafusion = False
     seen_ext = False
+    seen_engine = False
     for line in section_lines:
         stripped = line.strip()
         if stripped.startswith("datafusion "):
@@ -343,11 +358,17 @@ def update_section(section_lines: list[str]) -> list[str]:
             updated.append(f'datafusion_ext = {{ path = "{datafusion_ext_wheel}" }}')
             seen_ext = True
             continue
+        if stripped.startswith("codeanatomy_engine "):
+            updated.append(f'codeanatomy_engine = {{ path = "{engine_wheel}" }}')
+            seen_engine = True
+            continue
         updated.append(line)
     if not seen_datafusion:
         updated.append(f'datafusion = {{ path = "{datafusion_wheel}" }}')
     if not seen_ext:
         updated.append(f'datafusion_ext = {{ path = "{datafusion_ext_wheel}" }}')
+    if not seen_engine:
+        updated.append(f'codeanatomy_engine = {{ path = "{engine_wheel}" }}')
     return updated
 
 try:
@@ -359,6 +380,7 @@ except StopIteration:
         [
             f'datafusion = {{ path = "{datafusion_wheel}" }}',
             f'datafusion_ext = {{ path = "{datafusion_ext_wheel}" }}',
+            f'codeanatomy_engine = {{ path = "{engine_wheel}" }}',
         ]
     )
 else:
@@ -411,6 +433,7 @@ manifest = {
     "wheel_paths": {
         "datafusion": str(datafusion_wheel),
         "datafusion_ext": str(datafusion_ext_wheel),
+        "codeanatomy_engine": str(Path("${engine_wheel}")),
     },
 }
 
@@ -424,10 +447,12 @@ PY
 if [ "${CODEANATOMY_SKIP_UV_SYNC:-}" != "1" ]; then
   uv lock --refresh-package datafusion
   uv lock --refresh-package datafusion-ext
+  uv lock --refresh-package codeanatomy-engine
   if ! uv sync; then
     echo "uv sync failed; refreshing datafusion wheel hashes and retrying..." >&2
     uv lock --refresh-package datafusion
     uv lock --refresh-package datafusion-ext
+    uv lock --refresh-package codeanatomy-engine
     uv sync
   fi
 fi
@@ -436,4 +461,4 @@ echo "Wheel build complete."
 echo "  profile: ${profile}"
 echo "  wheels : ${wheel_dir}"
 echo "  plugin : rust/datafusion_ext_py/plugin/$(basename \"${plugin_lib}\")"
-echo "  uv src : pyproject.toml updated to ${datafusion_wheel} and ${datafusion_ext_wheel}"
+echo "  uv src : pyproject.toml updated to ${datafusion_wheel}, ${datafusion_ext_wheel}, and ${engine_wheel}"

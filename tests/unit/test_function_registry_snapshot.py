@@ -10,8 +10,9 @@ from tests.test_helpers.optional_deps import require_datafusion_udfs
 require_datafusion_udfs()
 
 
-def test_udf_specs_are_stable() -> None:
+def test_udf_specs_are_stable(require_native_runtime: None) -> None:
     """Keep UDF specs deterministic across snapshots."""
+    _ = require_native_runtime
     ctx = df_ctx()
     snapshot = ensure_rust_udfs(ctx)
     first = datafusion_udf_specs(registry_snapshot=snapshot)
@@ -19,8 +20,9 @@ def test_udf_specs_are_stable() -> None:
     assert first == second
 
 
-def test_udf_specs_only_include_builtin_tier() -> None:
+def test_udf_specs_only_include_builtin_tier(require_native_runtime: None) -> None:
     """Ensure UDF specs only include Rust builtin tiers."""
+    _ = require_native_runtime
     ctx = df_ctx()
     snapshot = ensure_rust_udfs(ctx)
     specs = datafusion_udf_specs(registry_snapshot=snapshot)

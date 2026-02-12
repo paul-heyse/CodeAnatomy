@@ -20,6 +20,7 @@ pub mod optimizer_pipeline;
 pub mod scheduling;
 pub mod cost_model;
 pub mod substrait;
+pub mod table_registration;
 pub mod udtf_builder;
 pub mod union_builder;
 pub mod view_builder;

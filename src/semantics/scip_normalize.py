@@ -27,7 +27,7 @@ LOGGER = logging.getLogger(__name__)
 def _empty_scip_occurrences_norm(ctx: SessionContext) -> DataFrame:
     from semantics.catalog.dataset_specs import dataset_schema
 
-    schema = dataset_schema("scip_occurrences_norm_v1")
+    schema = dataset_schema("scip_occurrences_norm")
     table = empty_table_for_schema(cast("pa.Schema", schema))
     return ctx.from_arrow(table)
 

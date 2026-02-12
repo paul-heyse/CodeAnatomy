@@ -87,7 +87,7 @@ use datafusion_expr::{
     lit, CreateExternalTable, DdlStatement, Expr, LogicalPlan, SortExpr,
     TableProviderFilterPushDown, TableType,
 };
-use datafusion_ext::install_expr_planners_native;
+use datafusion_ext::{install_expr_planners_native, install_sql_macro_factory_native};
 use datafusion_ext::physical_rules::{
     ensure_physical_config, install_physical_rules as install_physical_rules_native,
 };
@@ -627,6 +627,27 @@ fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
             "major": DF_PLUGIN_ABI_MAJOR,
             "minor": DF_PLUGIN_ABI_MINOR,
         },
+        "runtime_install_contract": {
+            "version": 3,
+            "supports_unified_entrypoint": true,
+            "supports_modular_entrypoints": true,
+            "required_modular_entrypoints": [
+                "register_codeanatomy_udfs",
+                "install_function_factory",
+                "install_expr_planners",
+                "registry_snapshot",
+            ],
+        },
+        "function_factory": {
+            "available": true,
+        },
+        "expr_planners": {
+            "available": true,
+        },
+        "cache_registrar": {
+            "available": true,
+            "entrypoint": "register_cache_tables",
+        },
         "delta_control_plane": {
             "available": true,
             "entrypoints": [
@@ -881,6 +902,84 @@ fn register_codeanatomy_udfs(
         PyRuntimeError::new_err(format!("Failed to register CodeAnatomy UDFs: {err}"))
     })?;
     Ok(())
+}
+
+#[pyfunction]
+fn session_context_contract_probe(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<Py<PyAny>> {
+    let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
+    let hash = registry_snapshot_hash(&snapshot)?;
+    let payload = json!({
+        "ok": true,
+        "plugin_abi": {
+            "major": DF_PLUGIN_ABI_MAJOR,
+            "minor": DF_PLUGIN_ABI_MINOR,
+        },
+        "udf_registry": {
+            "scalar": snapshot.scalar.len(),
+            "aggregate": snapshot.aggregate.len(),
+            "window": snapshot.window.len(),
+            "table": snapshot.table.len(),
+            "custom": snapshot.custom_udfs.len(),
+            "hash": hash,
+        },
+    });
+    json_to_py(py, &payload)
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    ctx,
+    enable_async_udfs = false,
+    async_udf_timeout_ms = None,
+    async_udf_batch_size = None
+))]
+fn install_codeanatomy_runtime(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    enable_async_udfs: bool,
+    async_udf_timeout_ms: Option<u64>,
+    async_udf_batch_size: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    udf_registry::register_all_with_policy(
+        &ctx.ctx,
+        enable_async_udfs,
+        async_udf_timeout_ms,
+        async_udf_batch_size,
+    )
+    .map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to install CodeAnatomy runtime UDFs: {err}"))
+    })?;
+    install_sql_macro_factory_native(&ctx.ctx).map_err(|err| {
+        PyRuntimeError::new_err(format!(
+            "Failed to install CodeAnatomy FunctionFactory runtime: {err}"
+        ))
+    })?;
+    let planner_names = ["codeanatomy_domain"];
+    install_expr_planners_native(&ctx.ctx, &planner_names).map_err(|err| {
+        PyRuntimeError::new_err(format!(
+            "Failed to install CodeAnatomy ExprPlanner runtime: {err}"
+        ))
+    })?;
+    let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
+    let snapshot_json = serde_json::to_value(&snapshot).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to serialize runtime snapshot payload: {err}"))
+    })?;
+    let payload = json!({
+        "contract_version": 3,
+        "runtime_install_mode": "unified",
+        "snapshot": snapshot_json,
+        "udf_installed": true,
+        "function_factory_installed": true,
+        "expr_planners_installed": true,
+        "expr_planner_names": planner_names,
+        "cache_registrar_available": true,
+        "async": {
+            "enabled": enable_async_udfs,
+            "timeout_ms": async_udf_timeout_ms,
+            "batch_size": async_udf_batch_size,
+        },
+    });
+    json_to_py(py, &payload)
 }
 
 #[pyfunction]
@@ -3098,6 +3197,8 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
         module,
         [
             crate::codeanatomy_ext::capabilities_snapshot,
+            crate::codeanatomy_ext::session_context_contract_probe,
+            crate::codeanatomy_ext::install_codeanatomy_runtime,
             crate::codeanatomy_ext::install_function_factory,
             crate::codeanatomy_ext::derive_function_factory_policy,
             crate::codeanatomy_ext::udf_expr,
@@ -3176,6 +3277,8 @@ pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> Py
             crate::codeanatomy_ext::install_function_factory,
             crate::codeanatomy_ext::derive_function_factory_policy,
             crate::codeanatomy_ext::capabilities_snapshot,
+            crate::codeanatomy_ext::session_context_contract_probe,
+            crate::codeanatomy_ext::install_codeanatomy_runtime,
             crate::codeanatomy_ext::arrow_stream_to_batches,
             crate::codeanatomy_ext::udf_expr,
             crate::codeanatomy_ext::install_codeanatomy_udf_config,

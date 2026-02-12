@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterable, Mapping, Sequence
-from functools import lru_cache
-from typing import TYPE_CHECKING, Literal, Protocol, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, Unpack, cast
 
 import msgspec
 import pyarrow as pa
@@ -38,6 +37,7 @@ from datafusion_engine.arrow.metadata import (
 from datafusion_engine.delta.protocol import DeltaFeatureGate
 from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
 from datafusion_engine.expr.spec import ExprSpec
+from datafusion_engine.extensions.schema_runtime import load_schema_runtime
 from datafusion_engine.kernels import DedupeSpec, SortKey
 from datafusion_engine.schema.alignment import SchemaEvolutionSpec
 from datafusion_engine.schema.finalize import Contract
@@ -67,14 +67,6 @@ from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-
-
-class _SchemaRuntime(Protocol):
-    """Runtime protocol for Rust schema-policy bridge methods."""
-
-    def apply_scan_policy_json(self, scan_policy_json: str, defaults_json: str) -> str: ...
-
-    def apply_delta_scan_policy_json(self, delta_scan_json: str, defaults_json: str) -> str: ...
 
 
 def validate_arrow_table(
@@ -548,39 +540,6 @@ class ScanPolicyConfig(StructBaseStrict, frozen=True):
         return config_fingerprint(self.fingerprint_payload())
 
 
-@lru_cache(maxsize=1)
-def _schema_runtime() -> _SchemaRuntime:
-    """Return a cached Rust SchemaRuntime bridge.
-
-    Runtime schema-policy paths require the Rust extension. Missing or
-    misconfigured extension imports are treated as hard failures.
-
-    Raises:
-        RuntimeError: If the Rust extension or ``SchemaRuntime`` class is
-            unavailable, or runtime initialization fails.
-    """
-    try:
-        module = importlib.import_module("codeanatomy_engine")
-    except ImportError as exc:
-        msg = (
-            "codeanatomy_engine.SchemaRuntime is required for scan-policy "
-            "resolution; install/build the Rust extension for this environment."
-        )
-        raise RuntimeError(msg) from exc
-    runtime_cls = getattr(module, "SchemaRuntime", None)
-    if runtime_cls is None:
-        msg = (
-            "codeanatomy_engine.SchemaRuntime is required for scan-policy "
-            "resolution, but the class is not exported by the extension."
-        )
-        raise RuntimeError(msg)
-    try:
-        return cast("_SchemaRuntime", runtime_cls())
-    except (TypeError, ValueError) as exc:
-        msg = "Failed to initialize codeanatomy_engine.SchemaRuntime."
-        raise RuntimeError(msg) from exc
-
-
 def apply_scan_policy(
     options: DataFusionScanOptions | None,
     *,
@@ -604,7 +563,7 @@ def apply_scan_policy(
     if options is None and not defaults.has_any():
         return None
     base = options or DataFusionScanOptions()
-    runtime = _schema_runtime()
+    runtime = load_schema_runtime()
     defaults_payload = defaults.apply(DataFusionScanOptions())
     merged_json = runtime.apply_scan_policy_json(
         msgspec.json.encode(base).decode("utf-8"),
@@ -639,7 +598,7 @@ def apply_delta_scan_policy(
     if options is None and not defaults.has_any():
         return None
     base = options or DeltaScanOptions()
-    runtime = _schema_runtime()
+    runtime = load_schema_runtime()
     defaults_payload = defaults.apply(DeltaScanOptions())
     merged_json = runtime.apply_delta_scan_policy_json(
         msgspec.json.encode(base).decode("utf-8"),

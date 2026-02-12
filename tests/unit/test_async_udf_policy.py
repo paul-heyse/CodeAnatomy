@@ -11,8 +11,9 @@ from tests.test_helpers.optional_deps import require_datafusion_udfs
 require_datafusion_udfs()
 
 
-def test_async_udf_policy_requires_enable_flag() -> None:
+def test_async_udf_policy_requires_enable_flag(require_native_runtime: None) -> None:
     """Reject async policy settings when async UDFs are disabled."""
+    _ = require_native_runtime
     ctx = df_ctx()
     with pytest.raises(ValueError, match="enable_async is False"):
         ensure_rust_udfs(
@@ -23,8 +24,9 @@ def test_async_udf_policy_requires_enable_flag() -> None:
         )
 
 
-def test_async_udf_policy_requires_timeout_and_batch() -> None:
+def test_async_udf_policy_requires_timeout_and_batch(require_native_runtime: None) -> None:
     """Reject incomplete async UDF policy settings."""
+    _ = require_native_runtime
     ctx = df_ctx()
     with pytest.raises(ValueError, match="async_udf_timeout_ms"):
         ensure_rust_udfs(

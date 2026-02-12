@@ -18,6 +18,7 @@ use crate::compiler::inline_policy::{compute_inline_policy, InlineDecision};
 use crate::compiler::semantic_validator::{self, SemanticValidationError, SemanticValidationWarning};
 use crate::compiler::join_builder;
 use crate::compiler::param_compiler;
+use crate::compiler::table_registration::register_or_replace_table;
 use crate::compiler::udtf_builder;
 use crate::compiler::union_builder;
 use crate::compiler::view_builder;
@@ -106,7 +107,7 @@ impl<'a> SemanticPlanCompiler<'a> {
                 }
                 _ => {
                     let view = df.into_view();
-                    self.ctx.register_table(&view_def.name, view)?;
+                    register_or_replace_table(self.ctx, &view_def.name, view)?;
                 }
             }
         }

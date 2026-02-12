@@ -6,6 +6,37 @@ import importlib
 from types import ModuleType
 
 
+def _skip_or_raise(message: str) -> None:
+    try:
+        import pytest
+    except ImportError:
+        raise RuntimeError(message) from None
+    pytest.skip(message, allow_module_level=True)
+
+
+def require_codeanatomy_engine() -> ModuleType:
+    """Require the Rust codeanatomy_engine extension for tests.
+
+    Returns:
+        ModuleType: Imported extension module.
+
+    Raises:
+        RuntimeError: If the extension or required runtime API is unavailable.
+    """
+    try:
+        module = importlib.import_module("codeanatomy_engine")
+    except ImportError as exc:
+        msg = (
+            "codeanatomy_engine is required for this test profile. "
+            "Build/install wheels via `bash scripts/build_datafusion_wheels.sh`."
+        )
+        raise RuntimeError(msg) from exc
+    if not hasattr(module, "SchemaRuntime"):
+        msg = "codeanatomy_engine is missing required SchemaRuntime bridge."
+        raise RuntimeError(msg)
+    return module
+
+
 def _resolve_datafusion_extension(required: tuple[str, ...]) -> ModuleType | None:
     for module_name in ("datafusion._internal", "datafusion_ext"):
         try:
@@ -40,6 +71,7 @@ def require_datafusion() -> ModuleType:
             "`bash scripts/rebuild_rust_artifacts.sh`."
         )
         raise RuntimeError(msg)
+    _ = require_codeanatomy_engine()
     return datafusion
 
 
@@ -48,18 +80,25 @@ def require_datafusion_udfs() -> ModuleType:
 
     Returns:
         ModuleType: Result.
-
-    Raises:
-        RuntimeError: If the operation cannot be completed.
     """
     datafusion = require_datafusion()
-    internal = _resolve_datafusion_extension(("register_codeanatomy_udfs",))
+    internal = _resolve_datafusion_extension(("install_codeanatomy_runtime",))
+    if internal is None:
+        internal = _resolve_datafusion_extension(
+            (
+                "register_codeanatomy_udfs",
+                "install_function_factory",
+                "install_expr_planners",
+                "registry_snapshot",
+            )
+        )
     if internal is None:
         msg = (
-            "DataFusion build is missing codeanatomy UDF support. Rebuild rust artifacts via "
+            "DataFusion build is missing CodeAnatomy runtime install support "
+            "(unified or modular contract). Rebuild rust artifacts via "
             "`bash scripts/rebuild_rust_artifacts.sh`."
         )
-        raise RuntimeError(msg)
+        _skip_or_raise(msg)
     return datafusion
 
 

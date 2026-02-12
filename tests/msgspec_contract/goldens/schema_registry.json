@@ -8943,7 +8943,7 @@
     },
     "ValidationPolicySpec": {
       "additionalProperties": false,
-      "description": "Runtime DataFrame validation policy (Pandera).",
+      "description": "Runtime DataFrame validation policy.",
       "properties": {
         "coerce": {
           "anyOf": [

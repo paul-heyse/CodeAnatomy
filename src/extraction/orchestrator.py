@@ -115,13 +115,37 @@ def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
         errors.append({"extractor": "repo_scan", "error": str(exc)})
         record_error("extraction", type(exc).__name__)
         logger.warning("repo_scan failed: %s", exc)
-        # Cannot proceed without repo_files
-        return ExtractionResult(
-            delta_locations=delta_locations,
-            semantic_input_locations=semantic_input_locations,
-            errors=errors,
-            timing=timing,
-        )
+        t0_fallback = time.monotonic()
+        try:
+            with stage_span(
+                "extraction.repo_scan_fallback",
+                stage="extraction",
+                scope_name=SCOPE_EXTRACT,
+                attributes={"extractor": "repo_scan_fallback"},
+            ):
+                repo_scan_outputs = _run_repo_scan_fallback(
+                    repo_root,
+                    options=resolved_options,
+                )
+            timing["repo_scan_fallback"] = time.monotonic() - t0_fallback
+            repo_files = _require_repo_scan_table(repo_scan_outputs, "repo_files_v1")
+            for name, table in sorted(repo_scan_outputs.items()):
+                delta_locations[name] = _write_delta(table, extract_dir / name, name)
+            logger.warning(
+                "Using non-git repo scan fallback with %d discovered files",
+                repo_files.num_rows,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as fallback_exc:
+            timing["repo_scan_fallback"] = time.monotonic() - t0_fallback
+            errors.append({"extractor": "repo_scan_fallback", "error": str(fallback_exc)})
+            record_error("extraction", type(fallback_exc).__name__)
+            logger.warning("repo_scan_fallback failed: %s", fallback_exc)
+            return ExtractionResult(
+                delta_locations=delta_locations,
+                semantic_input_locations=semantic_input_locations,
+                errors=errors,
+                timing=timing,
+            )
 
     # Stage 1: parallel extractors (all depend on repo_files)
     stage1_extractors = _build_stage1_extractors(
@@ -310,6 +334,92 @@ def _run_repo_scan(
     )
 
     return {name: _coerce_to_table(value) for name, value in outputs.items()}
+
+
+def _run_repo_scan_fallback(
+    repo_root: Path,
+    *,
+    options: ExtractionRunOptions,
+) -> dict[str, pa.Table]:
+    """Fallback repo scan for non-git workdirs.
+
+    Produces a minimal ``repo_files_v1`` table by walking Python files directly
+    from the filesystem while honoring include/exclude globs.
+
+    Args:
+        repo_root: Repository root to scan.
+        options: Extraction include/exclude scope options.
+
+    Returns:
+        dict[str, pyarrow.Table]: Single-table mapping containing ``repo_files_v1``.
+
+    Raises:
+        ValueError: If no Python source files are found under the requested scope.
+    """
+    import pyarrow as pa
+
+    from datafusion_engine.hashing import stable_id
+    from utils.file_io import detect_encoding
+    from utils.hashing import hash_file_sha256
+
+    include_globs = tuple(options.include_globs) if options.include_globs else ("**/*.py",)
+    exclude_globs = tuple(options.exclude_globs)
+
+    rows: list[dict[str, object]] = []
+    seen_paths: set[str] = set()
+    for include_glob in include_globs:
+        for path in sorted(repo_root.glob(include_glob)):
+            if not path.is_file():
+                continue
+            rel_path = path.relative_to(repo_root).as_posix()
+            if rel_path in seen_paths:
+                continue
+            if exclude_globs and any(Path(rel_path).match(pattern) for pattern in exclude_globs):
+                continue
+            if not rel_path.endswith(".py"):
+                continue
+            seen_paths.add(rel_path)
+
+            try:
+                stat_result = path.stat()
+                with path.open("rb") as handle:
+                    sample = handle.read(8192)
+            except OSError:
+                continue
+
+            try:
+                file_sha256: str | None = hash_file_sha256(path)
+            except OSError:
+                file_sha256 = None
+
+            rows.append(
+                {
+                    "file_id": stable_id("file", "extraction_orchestrator", rel_path),
+                    "path": rel_path,
+                    "abs_path": str(path.resolve()),
+                    "size_bytes": int(stat_result.st_size),
+                    "mtime_ns": int(stat_result.st_mtime_ns),
+                    "file_sha256": file_sha256,
+                    "encoding": detect_encoding(sample, default="utf-8"),
+                }
+            )
+
+    repo_files_schema = pa.schema(
+        [
+            pa.field("file_id", pa.string()),
+            pa.field("path", pa.string()),
+            pa.field("abs_path", pa.string()),
+            pa.field("size_bytes", pa.int64()),
+            pa.field("mtime_ns", pa.int64()),
+            pa.field("file_sha256", pa.string()),
+            pa.field("encoding", pa.string()),
+        ]
+    )
+    repo_files = pa.Table.from_pylist(rows, schema=repo_files_schema)
+    if repo_files.num_rows == 0:
+        msg = "repo_scan_fallback found no Python source files"
+        raise ValueError(msg)
+    return {"repo_files_v1": repo_files}
 
 
 def _build_stage1_extractors(

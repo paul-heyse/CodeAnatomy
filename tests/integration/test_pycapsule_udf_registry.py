@@ -31,8 +31,9 @@ require_datafusion_udfs()
 
 
 @pytest.mark.integration
-def test_udf_registry_snapshot_includes_capsule_payload() -> None:
+def test_udf_registry_snapshot_includes_capsule_payload(require_native_runtime: None) -> None:
     """Record UDF registry payloads while executing a UDF query."""
+    _ = require_native_runtime
     profile, sink = diagnostic_profile(
         profile_factory=lambda diagnostics: DataFusionRuntimeProfile(
             diagnostics=DiagnosticsConfig(diagnostics_sink=diagnostics),

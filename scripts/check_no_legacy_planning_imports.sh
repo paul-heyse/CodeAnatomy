@@ -54,6 +54,7 @@ semantics_cpg_authority_modules=(
 # schema_spec operational modules targeted for hard cutover deletion.
 schema_authority_modules=(
   "dataset_spec_ops"
+  "pandera_bridge"
 )
 
 if rg -n "${legacy_pattern}" src; then

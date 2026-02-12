@@ -880,7 +880,7 @@ class DeltaPolicyBundle(StructBaseStrict, frozen=True):
 
 
 class ValidationPolicySpec(StructBaseStrict, frozen=True):
-    """Runtime DataFrame validation policy (Pandera)."""
+    """Runtime DataFrame validation policy."""
 
     enabled: bool = True
     lazy: bool = True
@@ -889,6 +889,50 @@ class ValidationPolicySpec(StructBaseStrict, frozen=True):
     tail: NonNegativeInt | None = None
     strict: bool | Literal["filter"] | None = None
     coerce: bool | None = None
+
+
+def validation_policy_to_arrow_options(
+    policy: ValidationPolicySpec | None,
+) -> ArrowValidationOptions | None:
+    """Map dataframe validation policy to Arrow validation options.
+
+    Returns:
+    -------
+    ArrowValidationOptions | None
+        Arrow validation options derived from the dataframe policy, or
+        ``None`` when validation is disabled.
+    """
+    if policy is None or not policy.enabled:
+        return None
+    strict: bool | Literal["filter"] = "filter"
+    if policy.strict is not None:
+        strict = policy.strict
+    coerce = bool(policy.coerce) if policy.coerce is not None else False
+    return ArrowValidationOptions(
+        strict=strict,
+        coerce=coerce,
+    )
+
+
+def validation_policy_payload(policy: ValidationPolicySpec | None) -> Mapping[str, object] | None:
+    """Return a JSON-serializable payload for the dataframe validation policy.
+
+    Returns:
+    -------
+    Mapping[str, object] | None
+        Serializable policy payload when defined.
+    """
+    if policy is None:
+        return None
+    return {
+        "enabled": policy.enabled,
+        "lazy": policy.lazy,
+        "sample": policy.sample,
+        "head": policy.head,
+        "tail": policy.tail,
+        "strict": policy.strict,
+        "coerce": policy.coerce,
+    }
 
 
 class DatasetPolicies(StructBaseStrict, frozen=True):
@@ -1830,4 +1874,6 @@ __all__ = [
     "schema_from_datafusion_catalog",
     "table_spec_from_schema",
     "validate_arrow_table",
+    "validation_policy_payload",
+    "validation_policy_to_arrow_options",
 ]

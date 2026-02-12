@@ -63,9 +63,10 @@ from datafusion_engine.schema.contracts import delta_constraints_for_location
 from datafusion_engine.sql.options import sql_options_for_profile
 from relspec.table_size_tiers import TableSizeTier, classify_table_size
 from schema_spec.contracts import (
+    ArrowValidationOptions,
     DeltaMaintenancePolicy,
-    dataset_spec_delta_constraints,
-    dataset_spec_name,
+    validate_arrow_table,
+    validation_policy_to_arrow_options,
 )
 from serde_artifacts import DeltaStatsDecision, DeltaStatsDecisionEnvelope
 from serde_msgspec import convert, convert_from_attributes
@@ -97,7 +98,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.streaming import StreamingExecutionResult
     from obs.datafusion_runs import DataFusionRun
-    from schema_spec.contracts import DatasetSpec, ValidationPolicySpec
+    from schema_spec.contracts import DatasetSpec
     from semantics.program_manifest import ManifestDatasetResolver
 from datafusion_engine.tables.metadata import table_provider_metadata
 
@@ -901,16 +902,21 @@ class WritePipeline:
         return self._execute_sql(request.source)
 
     @staticmethod
-    def _resolve_dataframe_validation_policy(
+    def _resolve_validation_options(
         *,
         dataset_spec: DatasetSpec | None,
         overrides: DatasetLocationOverrides | None,
-    ) -> ValidationPolicySpec | None:
-        if overrides is not None and overrides.dataframe_validation is not None:
-            return overrides.dataframe_validation
+    ) -> ArrowValidationOptions | None:
+        if overrides is not None:
+            if overrides.validation is not None:
+                return overrides.validation
+            if overrides.dataframe_validation is not None:
+                return validation_policy_to_arrow_options(overrides.dataframe_validation)
         if dataset_spec is None:
             return None
-        return dataset_spec.policies.dataframe_validation
+        if dataset_spec.policies.validation is not None:
+            return dataset_spec.policies.validation
+        return validation_policy_to_arrow_options(dataset_spec.policies.dataframe_validation)
 
     def _validate_dataframe(
         self,
@@ -922,30 +928,19 @@ class WritePipeline:
         if dataset_spec is None:
             return
 
-        policy = self._resolve_dataframe_validation_policy(
+        validation = self._resolve_validation_options(
             dataset_spec=dataset_spec,
             overrides=overrides,
         )
-        constraints: tuple[str, ...] = ()
-        if dataset_spec.contract_spec is not None:
-            constraints = tuple(dataset_spec.contract_spec.constraints)
-        delta_constraints = dataset_spec_delta_constraints(dataset_spec)
-        if delta_constraints:
-            constraints = (*constraints, *delta_constraints)
-        diagnostics = None
-        if self.runtime_profile is not None:
-            diagnostics = self.runtime_profile.diagnostics.diagnostics_sink
-        from schema_spec.pandera_bridge import DataframeValidationRequest, validate_with_policy
-
-        request = DataframeValidationRequest(
-            df=df,
-            schema_spec=dataset_spec.table_spec,
-            policy=policy,
-            constraints=constraints,
-            diagnostics=diagnostics,
-            name=dataset_spec_name(dataset_spec),
+        if validation is None:
+            return
+        table = df.to_arrow_table()
+        validate_arrow_table(
+            table,
+            spec=dataset_spec.table_spec,
+            options=validation,
+            runtime_profile=self.runtime_profile,
         )
-        validate_with_policy(request)
 
     def _dataset_location_for_destination(
         self,

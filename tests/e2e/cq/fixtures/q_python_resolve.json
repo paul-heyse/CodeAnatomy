@@ -9,7 +9,17 @@
     "function: resolve",
     "function: resolve"
   ],
-  "sections": [],
+  "sections": [
+    {
+      "count": 3,
+      "messages": [
+        "resolve: callers=2, callees=0, scope=<module>",
+        "resolve: callers=1, callees=0, scope=Service",
+        "resolve: callers=2, callees=0, scope=<module>"
+      ],
+      "title": "python: Neighborhood Preview"
+    }
+  ],
   "summary": {
     "enable_lsp": null,
     "lang_scope": "auto",

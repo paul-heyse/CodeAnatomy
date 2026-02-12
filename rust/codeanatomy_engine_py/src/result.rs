@@ -117,13 +117,6 @@ impl PyRunResult {
         }
     }
 
-    pub(crate) fn to_payload_object(
-        &self,
-        py: Python<'_>,
-    ) -> PyResult<Py<pyo3::types::PyAny>> {
-        self.to_payload(py)
-    }
-
     pub(crate) fn json_str(&self) -> &str {
         &self.inner_json
     }

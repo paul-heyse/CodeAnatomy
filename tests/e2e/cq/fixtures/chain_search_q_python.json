@@ -11,12 +11,27 @@
     "function: resolve",
     "function: resolve",
     "function: resolve",
-    "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
-    "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
-    "build_pipeline (./tests/e2e/cq/_golden_workspace/python_project/app/api.py)",
-    "AsyncService (./tests/e2e/cq/_golden_workspace/python_project/app/services.py)"
+    "function: AsyncService",
+    "class: AsyncService"
   ],
   "sections": [
+    {
+      "count": 3,
+      "messages": [
+        "resolve: callers=2, callees=0, scope=<module>",
+        "resolve: callers=1, callees=0, scope=Service",
+        "resolve: callers=2, callees=0, scope=<module>"
+      ],
+      "title": "q_1: python: Neighborhood Preview"
+    },
+    {
+      "count": 2,
+      "messages": [
+        "function: AsyncService",
+        "class: AsyncService"
+      ],
+      "title": "search_0: Target Candidates"
+    },
     {
       "count": 4,
       "messages": [

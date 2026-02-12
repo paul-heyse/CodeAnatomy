@@ -13,7 +13,7 @@ pub fn engine_execution_error(
     details: Option<Value>,
 ) -> PyErr {
     let message = message.into();
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let error_type = py.get_type::<EngineExecutionError>();
         let instance = match error_type.call1((message.clone(),)) {
             Ok(obj) => obj,

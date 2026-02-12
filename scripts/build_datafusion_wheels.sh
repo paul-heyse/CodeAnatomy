@@ -300,20 +300,35 @@ with tempfile.TemporaryDirectory() as tmpdir:
     contract_probe = getattr(internal, "session_context_contract_probe", None)
     if not callable(contract_probe):
         raise SystemExit("session_context_contract_probe() missing from datafusion._internal wheel.")
+    ctx = None
+    ctx_internal = None
     try:
         from datafusion import SessionContext
 
         ctx = SessionContext()
-        probe_payload = contract_probe(ctx)
+        ctx_internal = getattr(ctx, "ctx", ctx)
+        session_type = getattr(internal, "SessionContext", None)
+        if isinstance(session_type, type) and not isinstance(ctx_internal, session_type):
+            raise SystemExit(
+                "SessionContext normalization failed: expected internal SessionContext, "
+                f"got wrapper={type(ctx)!r}, normalized={type(ctx_internal)!r}, "
+                f"internal_module={getattr(internal, '__name__', '<unknown>')!r}"
+            )
+        probe_payload = contract_probe(ctx_internal)
         if not isinstance(probe_payload, dict):
             raise SystemExit("session_context_contract_probe() must return a dict payload.")
-        runtime_payload = install_runtime(ctx, True, 1000, 64)
+        runtime_payload = install_runtime(ctx_internal, True, 1000, 64)
         if not isinstance(runtime_payload, dict):
             raise SystemExit("install_codeanatomy_runtime() must return a dict payload.")
         if "snapshot" not in runtime_payload:
             raise SystemExit("install_codeanatomy_runtime() payload missing snapshot.")
     except Exception as exc:
-        raise SystemExit(f"Unified runtime install validation failed: {exc}") from exc
+        raise SystemExit(
+            "Unified runtime install validation failed: "
+            f"{exc} "
+            f"(wrapper_type={type(ctx)!r}, normalized_type={type(ctx_internal)!r}, "
+            f"internal_module={getattr(internal, '__name__', '<unknown>')!r})"
+        ) from exc
 PY
 
 # Validate the engine wheel via a real install/import cycle.

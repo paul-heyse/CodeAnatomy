@@ -5,7 +5,15 @@
   "key_findings": [
     "function: compile_target"
   ],
-  "sections": [],
+  "sections": [
+    {
+      "count": 1,
+      "messages": [
+        "compile_target: callers=2, callees=2, scope=<module>"
+      ],
+      "title": "Neighborhood Preview"
+    }
+  ],
   "summary": {
     "enable_lsp": null,
     "lang_scope": "rust",

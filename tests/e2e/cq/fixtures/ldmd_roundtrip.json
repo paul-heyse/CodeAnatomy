@@ -1,7 +1,9 @@
 {
   "index_section_ids": [
     "run_meta",
+    "insight_card",
     "summary",
+    "diagnostic_artifacts",
     "key_findings_tldr",
     "key_findings",
     "section_0_tldr",
@@ -13,11 +15,13 @@
     "section_3_tldr",
     "section_3",
     "section_4_tldr",
-    "section_4"
+    "section_4",
+    "section_5_tldr",
+    "section_5"
   ],
   "neighbors": {
-    "next": "key_findings_tldr",
-    "prev": "run_meta",
+    "next": "diagnostic_artifacts",
+    "prev": "insight_card",
     "section_id": "summary"
   },
   "run_meta_slice_prefix": [
@@ -28,5 +32,5 @@
     "<!--LDMD:END id=\"run_meta\"-->",
     ""
   ],
-  "search_match_count": 7
+  "search_match_count": 15
 }

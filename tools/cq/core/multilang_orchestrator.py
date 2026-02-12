@@ -1,4 +1,5 @@
 """Shared multi-language orchestration and merge helpers."""
+# ruff: noqa: C901
 
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from tools.cq.core.multilang_summary import (
 from tools.cq.core.requests import MergeResultsRequest, SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, DetailPayload, Finding, Section, mk_result
+from tools.cq.core.serialization import to_builtins
 from tools.cq.query.language import (
     QueryLanguage,
     QueryLanguageScope,
@@ -134,6 +136,61 @@ def _result_match_count(result: CqResult) -> int:
     return len(result.key_findings)
 
 
+def _select_front_door_insight(
+    scope: QueryLanguageScope,
+    results: Mapping[QueryLanguage, CqResult],
+) -> object | None:
+    from tools.cq.core.front_door_insight import (
+        FrontDoorInsightV1,
+        coerce_front_door_insight,
+        mark_partial_for_missing_languages,
+    )
+
+    order = list(expand_language_scope(scope))
+    by_language: dict[QueryLanguage, FrontDoorInsightV1] = {}
+    for lang in order:
+        result = results.get(lang)
+        if result is None:
+            continue
+        raw = result.summary.get("front_door_insight")
+        insight = coerce_front_door_insight(raw)
+        if insight is not None:
+            by_language[lang] = insight
+    if not by_language:
+        return None
+
+    def _is_grounded(insight: FrontDoorInsightV1) -> bool:
+        location = insight.target.location
+        if location.file:
+            return True
+        return insight.target.kind not in {"query", "unknown", "entity"}
+
+    selected: FrontDoorInsightV1 | None = None
+    for lang in order:
+        candidate = by_language.get(lang)
+        if candidate is None:
+            continue
+        if _is_grounded(candidate):
+            selected = candidate
+            break
+    if selected is None:
+        for lang in order:
+            candidate = by_language.get(lang)
+            if candidate is not None:
+                selected = candidate
+                break
+    if selected is None:
+        return None
+
+    missing_languages = [lang for lang in order if lang not in by_language]
+    if missing_languages:
+        selected = mark_partial_for_missing_languages(
+            selected,
+            missing_languages=missing_languages,
+        )
+    return selected
+
+
 def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
     """Merge per-language CQ results into a canonical multi-language result.
 
@@ -248,6 +305,9 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
             language_capabilities=request.language_capabilities,
         )
     )
+    merged_insight = _select_front_door_insight(request.scope, request.results)
+    if merged_insight is not None:
+        merged.summary["front_door_insight"] = to_builtins(merged_insight)
     if diag_findings:
         merged.key_findings.extend(diag_findings)
     return merged

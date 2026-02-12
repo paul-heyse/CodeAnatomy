@@ -1,4 +1,5 @@
 """LDMD writer with preview/body separation."""
+# ruff: noqa: DOC201
 
 from __future__ import annotations
 
@@ -172,6 +173,7 @@ def render_ldmd_from_cq_result(result: CqResult) -> str:
     """
     lines: list[str] = []
     _emit_run_meta(lines, result)
+    _emit_insight_card(lines, result)
     _emit_summary(lines, result)
     _emit_key_findings(lines, result)
     _emit_sections(lines, result)
@@ -182,6 +184,34 @@ def render_ldmd_from_cq_result(result: CqResult) -> str:
 # -- CqResult LDMD helpers ---------------------------------------------------
 
 _CQ_PREVIEW_LIMIT = 5
+
+
+def _emit_insight_card(lines: list[str], result: CqResult) -> None:
+    """Emit insight card as first LDMD section if present."""
+    raw = result.summary.get("front_door_insight") if isinstance(result.summary, dict) else None
+    if raw is None:
+        return
+
+    from tools.cq.core.front_door_insight import FrontDoorInsightV1, render_insight_card
+
+    insight: FrontDoorInsightV1 | None = None
+    if isinstance(raw, FrontDoorInsightV1):
+        insight = raw
+    elif isinstance(raw, dict):
+        import msgspec
+
+        try:
+            insight = msgspec.convert(raw, FrontDoorInsightV1)
+        except (msgspec.ValidationError, TypeError):
+            return
+    if insight is None:
+        return
+
+    card_lines = render_insight_card(insight)
+    lines.append(_ldmd_begin("insight_card", title="Insight Card", level=1))
+    lines.extend(card_lines)
+    lines.append(_ldmd_end("insight_card"))
+    lines.append("")
 
 
 def _ldmd_begin(
@@ -229,11 +259,45 @@ def _emit_run_meta(lines: list[str], result: CqResult) -> None:
 def _emit_summary(lines: list[str], result: CqResult) -> None:
     if not result.summary:
         return
+    from tools.cq.core.report import compact_summary_for_rendering
+
+    compact, offloaded = compact_summary_for_rendering(result.summary)
     lines.append(_ldmd_begin("summary", title="Summary", level=1))
     lines.append("## Summary")
-    lines.extend(f"- **{key}:** {value}" for key, value in result.summary.items())
+    lines.extend(f"- **{key}:** {value}" for key, value in compact.items())
     lines.append(_ldmd_end("summary"))
     lines.append("")
+
+    # Offloaded diagnostics are artifact-only; render only compact key list + refs.
+    if offloaded:
+        offloaded_keys = ", ".join(key for key, _payload in offloaded)
+        refs = _extract_insight_artifact_refs(result.summary)
+        lines.append(_ldmd_begin("diagnostic_artifacts", title="Diagnostic Artifacts", level=2))
+        lines.append(f"- offloaded_keys: {offloaded_keys}")
+        if refs:
+            for key, path in refs.items():
+                lines.append(f"- {key}: `{path}`")
+        else:
+            lines.append("- artifact_refs: unavailable")
+        lines.append(_ldmd_end("diagnostic_artifacts"))
+        lines.append("")
+
+
+def _extract_insight_artifact_refs(summary: dict[str, object]) -> dict[str, str]:
+    """Extract artifact refs from front_door_insight summary payload."""
+    from tools.cq.core.front_door_insight import coerce_front_door_insight
+
+    insight = coerce_front_door_insight(summary.get("front_door_insight"))
+    if insight is None:
+        return {}
+    refs: dict[str, str] = {}
+    if insight.artifact_refs.diagnostics:
+        refs["diagnostics"] = insight.artifact_refs.diagnostics
+    if insight.artifact_refs.telemetry:
+        refs["telemetry"] = insight.artifact_refs.telemetry
+    if insight.artifact_refs.neighborhood_overflow:
+        refs["neighborhood_overflow"] = insight.artifact_refs.neighborhood_overflow
+    return refs
 
 
 def _emit_key_findings(lines: list[str], result: CqResult) -> None:

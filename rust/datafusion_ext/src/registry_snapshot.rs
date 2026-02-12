@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::udf_config::UdfConfigValue;
 use crate::{udaf_builtin, udf, udf_docs, udf_registry, udwf_builtin};
 
+#[derive(Debug, Clone, Serialize)]
 pub struct RegistrySnapshot {
     pub scalar: Vec<String>,
     pub aggregate: Vec<String>,

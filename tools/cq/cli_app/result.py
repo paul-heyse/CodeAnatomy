@@ -6,7 +6,11 @@ import sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from tools.cq.core.artifacts import save_artifact_json
+from tools.cq.core.artifacts import (
+    save_artifact_json,
+    save_diagnostics_artifact,
+    save_neighborhood_overflow_artifact,
+)
 from tools.cq.core.findings_table import (
     FindingsTableOptions,
     apply_filters,
@@ -26,6 +30,34 @@ if TYPE_CHECKING:
     from tools.cq.cli_app.context import CliResult, FilterConfig
     from tools.cq.cli_app.types import OutputFormat
     from tools.cq.core.schema import CqResult
+
+
+def _attach_insight_artifact_refs(
+    result: CqResult,
+    *,
+    diagnostics_ref: str | None = None,
+    telemetry_ref: str | None = None,
+    neighborhood_overflow_ref: str | None = None,
+) -> None:
+    from tools.cq.core.front_door_insight import (
+        attach_artifact_refs,
+        attach_neighborhood_overflow_ref,
+        coerce_front_door_insight,
+    )
+    from tools.cq.core.serialization import to_builtins
+
+    insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
+    if insight is None:
+        return
+    updated = attach_artifact_refs(
+        insight,
+        diagnostics=diagnostics_ref,
+        telemetry=telemetry_ref,
+        neighborhood_overflow=neighborhood_overflow_ref,
+    )
+    if neighborhood_overflow_ref:
+        updated = attach_neighborhood_overflow_ref(updated, overflow_ref=neighborhood_overflow_ref)
+    result.summary["front_door_insight"] = to_builtins(updated)
 
 
 def apply_result_filters(result: CqResult, filters: FilterConfig) -> CqResult:
@@ -154,6 +186,20 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
     if not no_save:
         artifact = save_artifact_json(result, artifact_dir)
         result.artifacts.append(artifact)
+        diagnostics_artifact = save_diagnostics_artifact(result, artifact_dir)
+        if diagnostics_artifact is not None:
+            result.artifacts.append(diagnostics_artifact)
+        overflow_artifact = save_neighborhood_overflow_artifact(result, artifact_dir)
+        if overflow_artifact is not None:
+            result.artifacts.append(overflow_artifact)
+        _attach_insight_artifact_refs(
+            result,
+            diagnostics_ref=diagnostics_artifact.path if diagnostics_artifact is not None else None,
+            telemetry_ref=diagnostics_artifact.path if diagnostics_artifact is not None else None,
+            neighborhood_overflow_ref=(
+                overflow_artifact.path if overflow_artifact is not None else None
+            ),
+        )
 
     # Render and output
     output = render_result(result, output_format)

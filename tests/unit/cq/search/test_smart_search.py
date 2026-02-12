@@ -807,15 +807,31 @@ class TestSmartSearch:  # noqa: PLR0904
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
         assert len(result.sections) > 0
-        # Top Contexts should always be first
-        assert result.sections[0].title == "Top Contexts"
+        titles = [section.title for section in result.sections]
+        assert "Top Contexts" in titles
+        assert "Target Candidates" in titles
 
     def test_smart_search_key_findings(self, sample_repo: Path) -> None:
         """Test that key findings are populated."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph")
-        # Key findings should be populated from top contexts
         assert len(result.key_findings) > 0 or len(result.sections) == 0
+        first = result.key_findings[0]
+        assert first.category in {"definition", "context", "from_import", "import", "callsite"}
+
+    def test_search_insight_target_grounded_from_definitions(self, sample_repo: Path) -> None:
+        """Insight target should resolve to a definition location when available."""
+        clear_caches()
+        result = smart_search(sample_repo, "build_graph")
+        insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
+        assert insight
+        target = cast("dict[str, object]", insight.get("target", {}))
+        assert target.get("kind") != "query"
+        location = cast("dict[str, object]", target.get("location", {}))
+        assert isinstance(location.get("file"), str)
+        location_file = str(location.get("file"))
+        assert location_file.removeprefix("./").startswith("src/")
+        assert isinstance(location.get("line"), int)
 
     def test_evidence_cap(self, sample_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Evidence should respect MAX_EVIDENCE cap."""

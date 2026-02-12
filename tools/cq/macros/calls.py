@@ -3,6 +3,7 @@
 Finds all call sites for a function, analyzing argument patterns,
 keyword usage, and forwarding behavior.
 """
+# ruff: noqa: DOC201,C901,PLR0912,PLR0914,PLR0915
 
 from __future__ import annotations
 
@@ -49,6 +50,10 @@ _KW_TEXT_TRIM = 12
 _MIN_QUAL_PARTS = 2
 _MAX_CONTEXT_SNIPPET_LINES = 30
 _TRIPLE_QUOTE_RE = re.compile(r"^[rRuUbBfF]*(?P<quote>'''|\"\"\")")
+_CALLS_TARGET_CALLEE_PREVIEW = 10
+_FRONT_DOOR_TOP_CANDIDATES = 3
+_FRONT_DOOR_PREVIEW_PER_SLICE = 5
+_CALLS_LSP_TIMEOUT_SECONDS = 2.0
 
 
 class CallAnalysis(msgspec.Struct, frozen=True):
@@ -377,6 +382,100 @@ def _find_function_signature(
                 return f"({', '.join(params)})"
 
     return ""
+
+
+def _resolve_target_definition(
+    root: Path,
+    function_name: str,
+) -> tuple[str, int] | None:
+    """Resolve concrete definition location for a target function."""
+    base_name = function_name.rsplit(".", maxsplit=1)[-1]
+    pattern = rf"\bdef {base_name}\s*\("
+    def_files = find_files_with_pattern(root, pattern, limits=INTERACTIVE)
+    for filepath in def_files:
+        try:
+            source = filepath.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+        except (SyntaxError, OSError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == base_name:
+                try:
+                    rel_path = filepath.relative_to(root).as_posix()
+                except ValueError:
+                    rel_path = filepath.as_posix()
+                return rel_path, int(node.lineno)
+    return None
+
+
+def _scan_target_callees(
+    root: Path,
+    function_name: str,
+    target_location: tuple[str, int] | None,
+) -> Counter[str]:
+    """Collect callees from the resolved target definition body."""
+    if target_location is None:
+        return Counter()
+    rel_path, line = target_location
+    file_path = root / rel_path
+    try:
+        source = file_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+    except (SyntaxError, OSError, UnicodeDecodeError):
+        return Counter()
+
+    base_name = function_name.rsplit(".", maxsplit=1)[-1]
+    target_node: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == base_name
+            and int(node.lineno) == int(line)
+        ):
+            target_node = node
+            break
+    if target_node is None:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == base_name:
+                target_node = node
+                break
+    if target_node is None:
+        return Counter()
+
+    callee_counts: Counter[str] = Counter()
+    for node in ast.walk(target_node):
+        if not isinstance(node, ast.Call):
+            continue
+        callee_name, _is_method, _receiver = _get_call_name(node.func)
+        if callee_name and callee_name not in {function_name, base_name}:
+            callee_counts[callee_name] += 1
+    return callee_counts
+
+
+def _add_target_callees_section(
+    result: CqResult,
+    target_callees: Counter[str],
+    score: ScoreDetails | None,
+) -> None:
+    """Append bounded target-callee preview section."""
+    if not target_callees:
+        return
+    findings = [
+        Finding(
+            category="target_callee",
+            message=f"{name}: {count} calls",
+            severity="info",
+            details=build_detail_payload(
+                data={
+                    "callee": name,
+                    "count": count,
+                },
+                score=score,
+            ),
+        )
+        for name, count in target_callees.most_common(_CALLS_TARGET_CALLEE_PREVIEW)
+    ]
+    result.sections.append(Section(title="Target Callees", findings=findings))
 
 
 def _detect_hazards(call: ast.Call, info: CallAnalysis) -> list[str]:
@@ -1265,6 +1364,8 @@ def _build_calls_summary(
     scan_result: CallScanResult,
 ) -> dict[str, object]:
     return {
+        "query": function_name,
+        "mode": "macro:calls",
         "function": function_name,
         "signature": scan_result.signature_info,
         "total_sites": len(scan_result.all_sites),
@@ -1334,6 +1435,23 @@ def _build_calls_result(
     *,
     started_ms: float,
 ) -> CqResult:
+    from tools.cq.core.front_door_insight import (
+        InsightBudgetV1,
+        InsightConfidenceV1,
+        InsightDegradationV1,
+        InsightLocationV1,
+        InsightNeighborhoodV1,
+        InsightSliceV1,
+        augment_insight_with_lsp,
+        build_calls_insight,
+        build_neighborhood_from_slices,
+    )
+    from tools.cq.core.serialization import to_builtins
+    from tools.cq.core.snb_schema import SemanticNodeRefV1
+    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
+    from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
+    from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_lsp
+
     run_ctx = RunContext.from_parts(
         root=ctx.root,
         argv=ctx.argv,
@@ -1345,6 +1463,14 @@ def _build_calls_result(
 
     result.summary = _build_calls_summary(ctx.function_name, scan_result)
 
+    analysis = CallAnalysisSummary(
+        arg_shapes=Counter(),
+        kwarg_usage=Counter(),
+        forwarding_count=0,
+        contexts=Counter(),
+        hazard_counts=Counter(),
+    )
+    score: ScoreDetails | None = None
     if not scan_result.all_sites:
         result.key_findings.append(
             Finding(
@@ -1353,17 +1479,184 @@ def _build_calls_result(
                 severity="info",
             )
         )
-        return result
+    else:
+        analysis = _summarize_sites(scan_result.all_sites)
+        score = _build_call_scoring(
+            scan_result.all_sites,
+            scan_result.files_with_calls,
+            analysis.forwarding_count,
+            analysis.hazard_counts,
+            used_fallback=scan_result.used_fallback,
+        )
+        _append_calls_findings(result, ctx, scan_result, analysis, score)
 
-    analysis = _summarize_sites(scan_result.all_sites)
-    score = _build_call_scoring(
-        scan_result.all_sites,
-        scan_result.files_with_calls,
-        analysis.forwarding_count,
-        analysis.hazard_counts,
-        used_fallback=scan_result.used_fallback,
+    target_location = _resolve_target_definition(ctx.root, ctx.function_name)
+    if target_location is not None:
+        result.summary["target_file"] = target_location[0]
+        result.summary["target_line"] = target_location[1]
+    target_callees = _scan_target_callees(ctx.root, ctx.function_name, target_location)
+    _add_target_callees_section(result, target_callees, score)
+
+    neighborhood = InsightNeighborhoodV1()
+    neighborhood_findings: list[Finding] = []
+    degradation_notes: list[str] = []
+    if target_location is not None:
+        target_file, target_line = target_location
+        target_symbol = ctx.function_name.rsplit(".", maxsplit=1)[-1]
+        try:
+            snapshot = ScanSnapshot.build_from_repo(ctx.root, lang="python")
+            slices, degrades = collect_structural_neighborhood(
+                target_name=target_symbol,
+                target_file=target_file,
+                target_line=target_line,
+                target_col=0,
+                snapshot=snapshot,
+                max_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+            )
+            neighborhood = build_neighborhood_from_slices(
+                slices,
+                preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+                source="structural",
+            )
+            for slice_item in slices:
+                labels = [
+                    node.display_label or node.name
+                    for node in slice_item.preview[:_FRONT_DOOR_PREVIEW_PER_SLICE]
+                    if (node.display_label or node.name)
+                ]
+                message = f"{slice_item.title}: {slice_item.total}"
+                if labels:
+                    message += f" (top: {', '.join(labels)})"
+                neighborhood_findings.append(
+                    Finding(
+                        category="neighborhood",
+                        message=message,
+                        severity="info",
+                        details=build_detail_payload(
+                            data={
+                                "slice_kind": slice_item.kind,
+                                "total": slice_item.total,
+                                "preview": labels,
+                            },
+                            score=score,
+                        ),
+                    )
+                )
+            degradation_notes.extend(
+                f"{degrade.stage}:{degrade.category or degrade.severity}" for degrade in degrades
+            )
+        except Exception as exc:  # noqa: BLE001 - fail-open front-door enrichment
+            degradation_notes.append(f"structural_scan_unavailable:{type(exc).__name__}")
+    else:
+        degradation_notes.append("target_definition_unresolved")
+
+    if neighborhood.callers.total == 0 and analysis.contexts:
+        preview_nodes = tuple(
+            SemanticNodeRefV1(
+                node_id=f"context:{name}",
+                kind="function",
+                name=name,
+                display_label=name,
+                file_path="",
+            )
+            for name, _count in analysis.contexts.most_common(_FRONT_DOOR_PREVIEW_PER_SLICE)
+        )
+        neighborhood = msgspec.structs.replace(
+            neighborhood,
+            callers=InsightSliceV1(
+                total=sum(analysis.contexts.values()),
+                preview=preview_nodes,
+                availability="partial",
+                source="heuristic",
+            ),
+        )
+
+    if neighborhood.callees.total == 0 and target_callees:
+        preview_nodes = tuple(
+            SemanticNodeRefV1(
+                node_id=f"callee:{name}",
+                kind="callsite",
+                name=name,
+                display_label=name,
+                file_path=target_location[0] if target_location is not None else "",
+            )
+            for name, _count in target_callees.most_common(_FRONT_DOOR_PREVIEW_PER_SLICE)
+        )
+        neighborhood = msgspec.structs.replace(
+            neighborhood,
+            callees=InsightSliceV1(
+                total=sum(target_callees.values()),
+                preview=preview_nodes,
+                availability="partial",
+                source="heuristic",
+            ),
+        )
+
+    if neighborhood_findings:
+        result.sections.insert(
+            0, Section(title="Neighborhood Preview", findings=neighborhood_findings)
+        )
+
+    confidence = InsightConfidenceV1(
+        evidence_kind=(score.evidence_kind if score and score.evidence_kind else "resolved_ast"),
+        score=float(score.confidence_score)
+        if score and score.confidence_score is not None
+        else 0.0,
+        bucket=score.confidence_bucket if score and score.confidence_bucket else "low",
     )
-    _append_calls_findings(result, ctx, scan_result, analysis, score)
+    insight = build_calls_insight(
+        function_name=ctx.function_name,
+        signature=scan_result.signature_info or None,
+        location=(
+            InsightLocationV1(file=target_location[0], line=target_location[1], col=0)
+            if target_location is not None
+            else None
+        ),
+        neighborhood=neighborhood,
+        files_with_calls=scan_result.files_with_calls,
+        arg_shape_count=len(analysis.arg_shapes),
+        forwarding_count=analysis.forwarding_count,
+        hazard_counts=dict(analysis.hazard_counts),
+        confidence=confidence,
+        budget=InsightBudgetV1(
+            top_candidates=_FRONT_DOOR_TOP_CANDIDATES,
+            preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+            lsp_targets=1,
+        ),
+        degradation=InsightDegradationV1(
+            lsp="skipped",
+            scan="fallback" if scan_result.used_fallback else "ok",
+            scope_filter="none",
+            notes=tuple(degradation_notes),
+        ),
+    )
+
+    if target_location is not None:
+        lsp_payload: dict[str, object] | None = None
+        target_file = ctx.root / target_location[0]
+        if target_file.suffix in {".py", ".pyi"}:
+            lsp_payload = enrich_with_pyrefly_lsp(
+                PyreflyLspRequest(
+                    root=ctx.root,
+                    file_path=target_file,
+                    line=max(1, int(target_location[1])),
+                    col=0,
+                    symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
+                    timeout_seconds=_CALLS_LSP_TIMEOUT_SECONDS,
+                    startup_timeout_seconds=_CALLS_LSP_TIMEOUT_SECONDS,
+                    max_callers=_FRONT_DOOR_PREVIEW_PER_SLICE,
+                    max_callees=_FRONT_DOOR_PREVIEW_PER_SLICE,
+                )
+            )
+            if lsp_payload is not None:
+                insight = augment_insight_with_lsp(
+                    insight,
+                    lsp_payload,
+                    preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+                )
+
+    result.summary["front_door_insight"] = to_builtins(insight)
+
     return result
 
 
@@ -1381,8 +1674,9 @@ def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> Cq
     from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
 
     existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
+    existing_insight = existing_summary.get("front_door_insight")
     fallback_matches = existing_summary.get("total_sites")
-    return apply_rust_macro_fallback(
+    merged = apply_rust_macro_fallback(
         result=result,
         root=root,
         pattern=function_name,
@@ -1390,6 +1684,9 @@ def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> Cq
         fallback_matches=fallback_matches if isinstance(fallback_matches, int) else 0,
         query=function_name,
     )
+    if existing_insight is not None and "front_door_insight" not in merged.summary:
+        merged.summary["front_door_insight"] = existing_insight
+    return merged
 
 
 def cmd_calls(

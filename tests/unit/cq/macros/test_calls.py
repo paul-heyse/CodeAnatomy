@@ -167,6 +167,47 @@ def test_cmd_calls_sets_summary_query_and_mode(tmp_path: Path) -> None:
     assert result.summary["query"] == "foo"
 
 
+def test_cmd_calls_includes_target_callees_and_insight_counters(tmp_path: Path) -> None:
+    """Calls output should include bounded target-callee preview and risk counters."""
+    tc = Toolchain.detect()
+    if not tc.has_sgpy:
+        pytest.skip("ast-grep-py not available")
+
+    repo = tmp_path / "repo"
+    _write_file(
+        repo / "mod.py",
+        textwrap.dedent(
+            """\
+            def helper(x):
+                return str(x)
+
+            def foo(value, **kwargs):
+                helper(value)
+                return max(value, 1)
+
+            def bar():
+                return foo(1, debug=True)
+            """
+        ),
+    )
+
+    result = cmd_calls(tc, repo, ["cq", "calls", "foo"], "foo")
+    target_callees = [section for section in result.sections if section.title == "Target Callees"]
+    assert target_callees, "Target Callees section missing"
+    assert len(target_callees[0].findings) <= 10
+
+    insight = cast("Mapping[str, object]", result.summary.get("front_door_insight", {}))
+    assert insight
+    risk = cast("Mapping[str, object]", insight.get("risk", {}))
+    counters = cast("Mapping[str, object]", risk.get("counters", {}))
+    files_with_calls = counters.get("files_with_calls", 0)
+    forwarding_count = counters.get("forwarding_count", 0)
+    assert isinstance(files_with_calls, int)
+    assert isinstance(forwarding_count, int)
+    assert files_with_calls >= 1
+    assert forwarding_count >= 0
+
+
 def test_extract_context_snippet_prioritizes_anchor_block() -> None:
     """Context snippet should include function top and matched anchor block."""
     source = textwrap.dedent(

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import msgspec
+from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightSliceV1, InsightTargetV1
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
@@ -114,3 +116,90 @@ def test_runmeta_for_scope_merge_builds_runmeta() -> None:
         tc=None,
     )
     assert run.macro == "q"
+
+
+def test_merge_language_results_preserves_front_door_insight() -> None:
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=1.0,
+        toolchain={},
+    )
+    py_insight = FrontDoorInsightV1(
+        source="entity",
+        target=InsightTargetV1(symbol="target", kind="function"),
+        neighborhood=msgspec.structs.replace(
+            FrontDoorInsightV1(
+                source="entity", target=InsightTargetV1(symbol="target")
+            ).neighborhood,
+            callers=InsightSliceV1(total=2, availability="full", source="structural"),
+        ),
+    )
+    py_result = CqResult(
+        run=run,
+        summary={"matches": 1, "front_door_insight": msgspec.to_builtins(py_insight)},
+        key_findings=[Finding(category="definition", message="py")],
+    )
+    rs_result = CqResult(
+        run=run,
+        summary={"matches": 0},
+        key_findings=[],
+    )
+    merged = merge_language_cq_results(
+        MergeResultsRequest(
+            scope="auto",
+            results={"python": py_result, "rust": rs_result},
+            run=run,
+            summary_common={"query": "entity=function name=target", "mode": "entity"},
+        )
+    )
+    raw = merged.summary.get("front_door_insight")
+    assert isinstance(raw, dict)
+    assert raw.get("source") == "entity"
+    target = raw.get("target")
+    assert isinstance(target, dict)
+    assert target.get("symbol") == "target"
+
+
+def test_merge_language_results_marks_partial_when_language_missing_insight() -> None:
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=1.0,
+        toolchain={},
+    )
+    insight = FrontDoorInsightV1(
+        source="entity",
+        target=InsightTargetV1(symbol="target", kind="function"),
+        neighborhood=msgspec.structs.replace(
+            FrontDoorInsightV1(
+                source="entity", target=InsightTargetV1(symbol="target")
+            ).neighborhood,
+            callers=InsightSliceV1(total=3, availability="full", source="structural"),
+        ),
+    )
+    merged = merge_language_cq_results(
+        MergeResultsRequest(
+            scope="auto",
+            results={
+                "python": CqResult(
+                    run=run,
+                    summary={"matches": 1, "front_door_insight": msgspec.to_builtins(insight)},
+                ),
+                "rust": CqResult(run=run, summary={"matches": 0}),
+            },
+            run=run,
+            summary_common={"query": "entity=function name=target", "mode": "entity"},
+        )
+    )
+    raw = merged.summary.get("front_door_insight")
+    assert isinstance(raw, dict)
+    neighborhood = raw.get("neighborhood")
+    assert isinstance(neighborhood, dict)
+    callers = neighborhood.get("callers")
+    assert isinstance(callers, dict)
+    assert callers.get("availability") == "partial"

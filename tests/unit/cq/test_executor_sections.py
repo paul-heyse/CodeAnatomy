@@ -77,6 +77,7 @@ def test_auto_scope_summary_uses_multilang_partitions(tmp_path: Path) -> None:
     assert "rust" in languages
     assert isinstance(languages["python"], dict)
     assert "query" not in languages["python"]
+    assert "front_door_insight" in result.summary
 
 
 def test_single_scope_summary_uses_canonical_multilang_keys(tmp_path: Path) -> None:
@@ -96,6 +97,32 @@ def test_single_scope_summary_uses_canonical_multilang_keys(tmp_path: Path) -> N
     assert isinstance(languages, dict)
     assert set(languages) == {"python"}
     assert isinstance(languages["python"], dict)
+
+
+def test_entity_definition_finding_includes_counts_and_scope(tmp_path: Path) -> None:
+    """Definition findings should include caller/callee counts and enclosing scope."""
+    (tmp_path / "a.py").write_text(
+        "def helper():\n"
+        "    return 1\n\n"
+        "def target(x):\n"
+        "    helper()\n"
+        "    return x\n\n"
+        "def caller():\n"
+        "    return target(1)\n",
+        encoding="utf-8",
+    )
+    tc = Toolchain.detect()
+    query = parse_query("entity=function name=target lang=python")
+    plan = compile_query(query)
+    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+
+    definitions = [finding for finding in result.key_findings if finding.category == "definition"]
+    assert definitions
+    payload = definitions[0].details
+    assert isinstance(payload.get("caller_count"), int)
+    assert isinstance(payload.get("callee_count"), int)
+    assert isinstance(payload.get("calls_within"), int)
+    assert isinstance(payload.get("enclosing_scope"), str)
 
 
 def test_query_text_preserved_when_provided(tmp_path: Path) -> None:

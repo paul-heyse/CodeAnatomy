@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use datafusion::config::ConfigOptions;
 use datafusion_common::config::ConfigExtension;
+use serde::Serialize;
 
 const PREFIX: &str = "codeanatomy_udf";
 
@@ -141,7 +142,7 @@ impl ConfigExtension for CodeAnatomyUdfConfig {
     const PREFIX: &'static str = PREFIX;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum UdfConfigValue {
     Bool(bool),
     Int(i64),

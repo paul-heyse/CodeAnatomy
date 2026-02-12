@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import cast
@@ -14,6 +15,10 @@ from tools.cq.core.enrichment_facts import (
     resolve_fact_clusters,
     resolve_fact_context,
     resolve_primary_language_payload,
+)
+from tools.cq.core.front_door_insight import (
+    FrontDoorInsightV1,
+    render_insight_card,
 )
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 from tools.cq.core.serialization import to_builtins
@@ -59,6 +64,44 @@ DETAILS_SUPPRESS_KEYS: frozenset[str] = frozenset(
         "rust_tree_sitter",
     }
 )
+
+# Diagnostics keys whose full payloads are offloaded to artifacts.
+# Only compact status lines appear in rendered output.
+ARTIFACT_ONLY_KEYS: frozenset[str] = frozenset(
+    {
+        "enrichment_telemetry",
+        "pyrefly_telemetry",
+        "pyrefly_diagnostics",
+        "language_capabilities",
+        "cross_language_diagnostics",
+    }
+)
+
+# Section ordering per front-door command
+_SECTION_ORDER_MAP: dict[str, tuple[str, ...]] = {
+    "search": (
+        "Target Candidates",
+        "Neighborhood Preview",
+        "Definitions",
+        "Top Contexts",
+        "Imports",
+        "Callsites",
+        "Uses by Kind",
+        "Non-Code Matches (Strings / Comments / Docstrings)",
+        "Hot Files",
+        "Suggested Follow-ups",
+        "Cross-Language Diagnostics",
+    ),
+    "calls": (
+        "Neighborhood Preview",
+        "Target Callees",
+        "Argument Shape Histogram",
+        "Hazards",
+        "Keyword Argument Usage",
+        "Calling Contexts",
+        "Call Sites",
+    ),
+}
 
 
 class RenderEnrichmentTask(CqStruct, frozen=True):
@@ -1212,6 +1255,205 @@ def _render_footer(result: CqResult) -> list[str]:
     return ["---", footer]
 
 
+def _render_insight_card_from_summary(summary: dict[str, object]) -> list[str]:
+    """Extract and render insight card from summary, if present.
+
+    Returns:
+    -------
+    list[str]
+        Insight card markdown lines, or empty list if not present.
+    """
+    raw = summary.get("front_door_insight")
+    if raw is None:
+        return []
+    if isinstance(raw, FrontDoorInsightV1):
+        return render_insight_card(raw)
+    if isinstance(raw, dict):
+        import msgspec
+
+        try:
+            insight = msgspec.convert(raw, FrontDoorInsightV1)
+            return render_insight_card(insight)
+        except (msgspec.ValidationError, TypeError):
+            return []
+    return []
+
+
+def _reorder_sections(sections: list[Section], macro: str) -> list[Section]:
+    """Reorder sections according to fixed order for the command.
+
+    Sections not in the order map are appended at end.
+
+    Parameters
+    ----------
+    sections : list[Section]
+        Sections to reorder.
+    macro : str
+        Command name (e.g. ``search``, ``calls``).
+
+    Returns:
+    -------
+    list[Section]
+        Reordered sections.
+    """
+    order = _SECTION_ORDER_MAP.get(macro)
+    if order is None:
+        return sections
+    order_index = {title: idx for idx, title in enumerate(order)}
+    known = [s for s in sections if s.title in order_index]
+    unknown = [s for s in sections if s.title not in order_index]
+    known.sort(key=lambda s: order_index[s.title])
+    return known + unknown
+
+
+def compact_summary_for_rendering(
+    summary: dict[str, object],
+) -> tuple[dict[str, object], list[tuple[str, object]]]:
+    """Split summary into compact display and artifact detail payloads.
+
+    Keys in ``ARTIFACT_ONLY_KEYS`` are replaced by compact status lines
+    in the returned display dict.  Full payloads are returned separately
+    for offloading into collapsed artifact sections.
+
+    Parameters
+    ----------
+    summary : dict[str, object]
+        Full summary dict.
+
+    Returns:
+    -------
+    tuple[dict[str, object], list[tuple[str, object]]]
+        (compact display dict, offloaded (key, payload) pairs).
+    """
+    compact: dict[str, object] = {}
+    offloaded: list[tuple[str, object]] = []
+    for key, value in summary.items():
+        if key in ARTIFACT_ONLY_KEYS:
+            offloaded.append((key, value))
+            status = _derive_compact_status(key, value)
+            if status is not None:
+                compact[key] = status
+        else:
+            compact[key] = value
+    return compact, offloaded
+
+
+def _derive_compact_status(key: str, value: object) -> str | None:
+    """Derive a compact one-line status from a diagnostic payload.
+
+    Returns:
+    -------
+    str | None
+        Compact status string or None if no deriver available.
+    """
+    deriver = _COMPACT_STATUS_DERIVERS.get(key)
+    if deriver is not None:
+        return deriver(value)
+    return None
+
+
+def _derive_enrichment_status(value: object) -> str:
+    """Derive compact enrichment telemetry status.
+
+    Returns:
+    -------
+    str
+        Compact status line.
+    """
+    applied = 0
+    total = 0
+    degraded = 0
+    if isinstance(value, dict):
+        for lang_data in value.values():
+            if isinstance(lang_data, dict):
+                for stage_data in lang_data.values():
+                    if isinstance(stage_data, dict):
+                        applied += int(stage_data.get("applied", 0) or 0)
+                        total += int(stage_data.get("total", 0) or 0)
+                        degraded += int(stage_data.get("degraded", 0) or 0)
+    if total == 0:
+        return "Enrichment: none"
+    result = f"Enrichment: {applied}/{total} applied"
+    if degraded:
+        result += f" | degraded: {degraded}"
+    return result
+
+
+def _derive_pyrefly_telemetry_status(value: object) -> str:
+    """Derive compact pyrefly telemetry status.
+
+    Returns:
+    -------
+    str
+        Compact status line.
+    """
+    if not isinstance(value, dict):
+        return "Pyrefly: skipped"
+    applied = value.get("applied", 0)
+    attempted = value.get("attempted", 0)
+    if not attempted:
+        return "Pyrefly: skipped"
+    return f"Pyrefly: {applied}/{attempted} applied"
+
+
+def _derive_pyrefly_diagnostics_status(value: object) -> str:
+    """Derive compact pyrefly diagnostics status.
+
+    Returns:
+    -------
+    str
+        Compact status line.
+    """
+    count = len(value) if isinstance(value, (list, dict)) else 0
+    if count == 0:
+        return "Pyrefly diagnostics: clean"
+    return f"Pyrefly diagnostics: {count} items"
+
+
+def _derive_capabilities_status(value: object) -> str:
+    """Derive compact language capabilities status.
+
+    Returns:
+    -------
+    str
+        Compact status line.
+    """
+    langs: list[str] = []
+    if isinstance(value, dict):
+        langs = [str(key) for key in value]
+    return f"Capabilities: {', '.join(langs)}" if langs else "Capabilities: none"
+
+
+def _derive_cross_lang_status(value: object) -> str:
+    """Derive compact cross-language diagnostics status.
+
+    Returns:
+    -------
+    str
+        Compact status line.
+    """
+    count = 0
+    if isinstance(value, list):
+        count = len(value)
+    elif isinstance(value, dict):
+        raw = value.get("diagnostics")
+        count = len(raw) if isinstance(raw, list) else 0
+    if count == 0:
+        return "Cross-lang: clean"
+    return f"Cross-lang: {count} diagnostics"
+
+
+_CompactDeriver = Callable[[object], str]
+
+_COMPACT_STATUS_DERIVERS: dict[str, _CompactDeriver] = {
+    "enrichment_telemetry": _derive_enrichment_status,
+    "pyrefly_telemetry": _derive_pyrefly_telemetry_status,
+    "pyrefly_diagnostics": _derive_pyrefly_diagnostics_status,
+    "language_capabilities": _derive_capabilities_status,
+    "cross_language_diagnostics": _derive_cross_lang_status,
+}
+
+
 def render_markdown(result: CqResult) -> str:
     """Render CqResult as markdown for Claude Code context.
 
@@ -1252,7 +1494,11 @@ def render_markdown(result: CqResult) -> str:
     )
     rendered_seen_keys = {_finding_dedupe_key(finding) for finding in result.key_findings}
 
+    # Apply compact diagnostics
+    compact_summary, _offloaded = compact_summary_for_rendering(summary_with_metrics)
+
     lines = [f"# cq {result.run.macro}", ""]
+    lines.extend(_render_insight_card_from_summary(result.summary))
     lines.extend(_render_code_overview(result))
     lines.extend(
         _render_key_findings(
@@ -1262,9 +1508,10 @@ def render_markdown(result: CqResult) -> str:
             allowed_enrichment_files=allowed_enrichment_files,
         )
     )
+    reordered = _reorder_sections(result.sections, result.run.macro)
     lines.extend(
         _render_sections(
-            result.sections,
+            reordered,
             root=root,
             enrich_cache=enrich_cache,
             allowed_enrichment_files=allowed_enrichment_files,
@@ -1281,7 +1528,7 @@ def render_markdown(result: CqResult) -> str:
         )
     )
     lines.extend(_render_artifacts(result.artifacts))
-    lines.extend(_render_summary(summary_with_metrics))
+    lines.extend(_render_summary(compact_summary))
     lines.extend(_render_footer(result))
     return "\n".join(lines)
 

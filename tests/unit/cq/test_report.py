@@ -477,3 +477,22 @@ def test_render_enrichment_parallelization_workers_1_vs_4(
     assert len(serial_pids) == 1
     assert len(parallel_pids) >= 2
     assert parallel_elapsed < serial_elapsed * 0.8
+
+
+def test_render_markdown_keeps_compact_diagnostics_without_payload_dump() -> None:
+    run = _run_meta()
+    result = CqResult(
+        run=run,
+        summary={
+            "query": "target",
+            "mode": "identifier",
+            "pyrefly_diagnostics": [{"message": "diag"}],
+            "cross_language_diagnostics": [{"code": "ML001"}],
+        },
+        key_findings=[Finding(category="definition", message="function: target")],
+    )
+    output = render_markdown(result)
+    assert "Pyrefly diagnostics: 1 items" in output
+    assert "Cross-lang: 1 diagnostics" in output
+    assert "Diagnostic Details" not in output
+    assert '"message": "diag"' not in output

@@ -2313,6 +2313,64 @@ def _first_string(*values: object) -> str | None:
     return None
 
 
+def _is_definition_like_match(match: EnrichedMatch) -> bool:
+    text = match.text.lstrip()
+    return text.startswith(
+        (
+            "def ",
+            "async def ",
+            "class ",
+            "fn ",
+            "pub fn ",
+            "struct ",
+            "enum ",
+            "trait ",
+        )
+    )
+
+
+def _definition_kind_from_text(text: str) -> str:
+    trimmed = text.lstrip()
+    if trimmed.startswith("class "):
+        return "class"
+    if trimmed.startswith(("struct ", "enum ", "trait ")):
+        return "type"
+    return "function"
+
+
+def _extract_definition_name_from_text(text: str, fallback: str) -> str:
+    match = re.search(
+        r"(?:async\\s+def|def|class|pub\\s+fn|fn|struct|enum|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+        text,
+    )
+    if match is None:
+        return fallback
+    return match.group(1)
+
+
+def _build_definition_candidate_finding(match: EnrichedMatch, root: Path) -> Finding:
+    finding = build_finding(match, root)
+    if match.category == "definition":
+        return finding
+    symbol = _extract_definition_name_from_text(match.text, match.match_text or "target")
+    kind = _definition_kind_from_text(match.text)
+    data = dict(finding.details.data)
+    data["name"] = symbol
+    data["kind"] = kind
+    data.setdefault("signature", match.text.strip())
+    return Finding(
+        category="definition",
+        message=f"{kind}: {symbol}",
+        anchor=finding.anchor,
+        severity=finding.severity,
+        details=DetailPayload(
+            kind=finding.details.kind or "definition",
+            score=finding.details.score,
+            data=data,
+        ),
+    )
+
+
 def _build_pyrefly_overview(matches: list[EnrichedMatch]) -> dict[str, object]:  # noqa: C901, PLR0914
     primary_symbol: str | None = None
     enclosing_class: str | None = None
@@ -2368,7 +2426,7 @@ def _build_pyrefly_overview(matches: list[EnrichedMatch]) -> dict[str, object]: 
     }
 
 
-def _assemble_smart_search_result(  # noqa: PLR0914
+def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
 ) -> CqResult:
@@ -2458,11 +2516,149 @@ def _assemble_smart_search_result(  # noqa: PLR0914
     )
     run = run_ctx.to_runmeta("search")
 
+    ranked_matches = sorted(enriched_matches, key=compute_relevance_score, reverse=True)
+    definition_matches = [match for match in ranked_matches if match.category == "definition"]
+    if not definition_matches:
+        definition_matches = [match for match in ranked_matches if _is_definition_like_match(match)]
+
+    candidate_findings = [
+        _build_definition_candidate_finding(match, ctx.root) for match in definition_matches[:3]
+    ]
+    if not candidate_findings:
+        definitions_section = next(
+            (section for section in sections if section.title == "Definitions"),
+            None,
+        )
+        if definitions_section is not None:
+            candidate_findings = list(definitions_section.findings[:3])
+    if candidate_findings:
+        sections.insert(0, Section(title="Target Candidates", findings=candidate_findings))
+    primary_target_finding = candidate_findings[0] if candidate_findings else None
+
+    from tools.cq.core.front_door_insight import (
+        InsightRiskCountersV1,
+        build_neighborhood_from_slices,
+        build_search_insight,
+        risk_from_counters,
+    )
+    from tools.cq.core.serialization import to_builtins
+    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
+    from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
+
+    insight_neighborhood = None
+    neighborhood_slice_findings: list[Finding] = []
+    neighborhood_notes: list[str] = []
+    if primary_target_finding is not None and primary_target_finding.anchor is not None:
+        target_name = (
+            str(primary_target_finding.details.get("name", "")).strip()
+            or primary_target_finding.message.split(":")[-1].strip()
+            or ctx.query
+        )
+        try:
+            snapshot = ScanSnapshot.build_from_repo(ctx.root, lang="python")
+            slices, degrades = collect_structural_neighborhood(
+                target_name=target_name,
+                target_file=primary_target_finding.anchor.file,
+                target_line=primary_target_finding.anchor.line,
+                target_col=int(primary_target_finding.anchor.col or 0),
+                snapshot=snapshot,
+                max_per_slice=5,
+            )
+            insight_neighborhood = build_neighborhood_from_slices(
+                slices,
+                preview_per_slice=5,
+                source="structural",
+            )
+            for slice_item in slices:
+                labels = [
+                    node.display_label or node.name
+                    for node in slice_item.preview[:5]
+                    if (node.display_label or node.name)
+                ]
+                message = f"{slice_item.title}: {slice_item.total}"
+                if labels:
+                    message += f" (top: {', '.join(labels)})"
+                neighborhood_slice_findings.append(
+                    Finding(
+                        category="neighborhood",
+                        message=message,
+                        severity="info",
+                        details=DetailPayload(
+                            kind="neighborhood",
+                            data={
+                                "slice_kind": slice_item.kind,
+                                "total": slice_item.total,
+                                "preview": labels,
+                            },
+                        ),
+                    )
+                )
+            for degrade in degrades:
+                note = f"{degrade.stage}:{degrade.category or degrade.severity}"
+                neighborhood_notes.append(note)
+        except Exception as exc:  # noqa: BLE001 - fail-open for insight enrichment
+            neighborhood_notes.append(f"structural_scan_unavailable:{type(exc).__name__}")
+
+    if neighborhood_slice_findings:
+        insert_idx = 1 if candidate_findings else 0
+        sections.insert(
+            insert_idx,
+            Section(title="Neighborhood Preview", findings=neighborhood_slice_findings),
+        )
+
+    search_risk = None
+    if insight_neighborhood is not None:
+        search_risk = risk_from_counters(
+            InsightRiskCountersV1(
+                callers=insight_neighborhood.callers.total,
+                callees=insight_neighborhood.callees.total,
+            )
+        )
+
+    result_key_findings = candidate_findings or (sections[0].findings[:5] if sections else [])
+    result_key_findings += all_diagnostics
+
+    insight = build_search_insight(
+        summary=summary,
+        primary_target=primary_target_finding,
+        target_candidates=candidate_findings,
+        neighborhood=insight_neighborhood,
+        risk=search_risk,
+    )
+    if neighborhood_notes:
+        insight = msgspec.structs.replace(
+            insight,
+            degradation=msgspec.structs.replace(
+                insight.degradation,
+                notes=(*insight.degradation.notes, *neighborhood_notes),
+            ),
+        )
+    top_def_match = definition_matches[0] if definition_matches else None
+    if (
+        top_def_match is None
+        and primary_target_finding is not None
+        and primary_target_finding.anchor is not None
+    ):
+        anchor = primary_target_finding.anchor
+        for match in enriched_matches:
+            if (
+                match.file == anchor.file
+                and match.line == anchor.line
+                and match.language == "python"
+            ):
+                top_def_match = match
+                break
+    if top_def_match is not None and isinstance(top_def_match.pyrefly_enrichment, dict):
+        from tools.cq.core.front_door_insight import augment_insight_with_lsp
+
+        insight = augment_insight_with_lsp(insight, top_def_match.pyrefly_enrichment)
+    summary["front_door_insight"] = to_builtins(insight)
+
     return CqResult(
         run=run,
         summary=summary,
         sections=sections,
-        key_findings=(sections[0].findings[:5] if sections else []) + all_diagnostics,
+        key_findings=result_key_findings,
         evidence=[build_finding(m, ctx.root) for m in enriched_matches[:MAX_EVIDENCE]],
     )
 

@@ -2,6 +2,7 @@
 
 Executes ToolPlans and returns CqResult objects.
 """
+# ruff: noqa: DOC201,C901,PLR0914,PLR0915
 
 from __future__ import annotations
 
@@ -666,7 +667,7 @@ def _merge_auto_scope_results(
         argv=argv,
         tc=tc,
     )
-    return merge_language_cq_results(
+    merged = merge_language_cq_results(
         MergeResultsRequest(
             scope=query.lang_scope,
             results=results,
@@ -677,6 +678,191 @@ def _merge_auto_scope_results(
             summary_common=_summary_common_for_query(query, query_text=query_text),
         )
     )
+    if not query.is_pattern_query:
+        _attach_entity_insight(merged)
+    return merged
+
+
+def _attach_entity_insight(result: CqResult) -> None:
+    """Build and attach front-door insight card to entity result."""
+    from tools.cq.core.front_door_insight import (
+        InsightBudgetV1,
+        InsightConfidenceV1,
+        InsightDegradationV1,
+        InsightNeighborhoodV1,
+        InsightRiskCountersV1,
+        InsightSliceV1,
+        augment_insight_with_lsp,
+        build_entity_insight,
+        risk_from_counters,
+    )
+    from tools.cq.core.snb_schema import SemanticNodeRefV1
+    from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_lsp
+
+    mode_value = result.summary.get("mode")
+    if isinstance(mode_value, str) and mode_value == "pattern":
+        return
+
+    definition_findings = [f for f in result.key_findings if f.category == "definition"]
+    primary_target = definition_findings[0] if definition_findings else None
+    candidates = definition_findings[:3]
+
+    def _detail_int(finding: Finding, key: str) -> int:
+        value = finding.details.get(key)
+        return value if isinstance(value, int) else 0
+
+    def _preview_node(finding: Finding, suffix: str, label: str | None = None) -> SemanticNodeRefV1:
+        anchor = finding.anchor
+        name = str(finding.details.get("name") or finding.message)
+        file_path = anchor.file if anchor else ""
+        line = anchor.line if anchor else 0
+        node_id = f"entity:{suffix}:{file_path}:{line}:{name}"
+        return SemanticNodeRefV1(
+            node_id=node_id,
+            kind="definition",
+            name=name,
+            display_label=label or name,
+            file_path=file_path,
+        )
+
+    callers_total = sum(_detail_int(finding, "caller_count") for finding in candidates)
+    caller_preview = tuple(
+        _preview_node(finding, "caller")
+        for finding in candidates
+        if _detail_int(finding, "caller_count") > 0
+    )
+    callees_total = sum(_detail_int(finding, "callee_count") for finding in candidates)
+    callee_preview = tuple(
+        _preview_node(finding, "callee")
+        for finding in candidates
+        if _detail_int(finding, "callee_count") > 0
+    )
+    scope_values = {
+        str(finding.details.get("enclosing_scope"))
+        for finding in candidates
+        if isinstance(finding.details.get("enclosing_scope"), str)
+        and str(finding.details.get("enclosing_scope")) not in {"", "<module>"}
+    }
+    scope_preview = tuple(
+        SemanticNodeRefV1(
+            node_id=f"scope:{value}",
+            kind="scope",
+            name=value,
+            display_label=value,
+            file_path="",
+        )
+        for value in sorted(scope_values)
+    )
+    neighborhood = InsightNeighborhoodV1(
+        callers=InsightSliceV1(
+            total=callers_total,
+            preview=caller_preview,
+            availability="partial" if callers_total > 0 else "unavailable",
+            source="heuristic",
+        ),
+        callees=InsightSliceV1(
+            total=callees_total,
+            preview=callee_preview,
+            availability="partial" if callees_total > 0 else "unavailable",
+            source="heuristic",
+        ),
+        references=InsightSliceV1(availability="unavailable", source="none"),
+        hierarchy_or_scope=InsightSliceV1(
+            total=len(scope_preview),
+            preview=scope_preview,
+            availability="partial" if scope_preview else "unavailable",
+            source="heuristic",
+        ),
+    )
+    counters = InsightRiskCountersV1(
+        callers=callers_total,
+        callees=callees_total,
+        closure_capture_count=len(scope_preview),
+    )
+    risk = risk_from_counters(counters)
+
+    confidence = InsightConfidenceV1(evidence_kind="resolved_ast", score=0.8, bucket="high")
+    for finding in candidates:
+        score = finding.details.score
+        if score is None:
+            continue
+        confidence = InsightConfidenceV1(
+            evidence_kind=score.evidence_kind or confidence.evidence_kind,
+            score=float(score.confidence_score) if score.confidence_score is not None else 0.8,
+            bucket=score.confidence_bucket or confidence.bucket,
+        )
+        break
+
+    scope_filter_status = "none"
+    dropped = result.summary.get("dropped_by_scope")
+    if isinstance(dropped, dict) and dropped:
+        scope_filter_status = "dropped"
+    notes: list[str] = []
+    if isinstance(dropped, dict) and dropped:
+        notes.append(f"dropped_by_scope={dropped}")
+    degradation = InsightDegradationV1(
+        lsp="skipped",
+        scan=(
+            "timed_out"
+            if bool(result.summary.get("timed_out"))
+            else "truncated"
+            if bool(result.summary.get("truncated"))
+            else "ok"
+        ),
+        scope_filter=scope_filter_status,
+        notes=tuple(notes),
+    )
+    insight = build_entity_insight(
+        summary=result.summary,
+        primary_target=primary_target,
+        neighborhood=neighborhood,
+        risk=risk,
+        confidence=confidence,
+        degradation=degradation,
+        budget=InsightBudgetV1(top_candidates=3, preview_per_slice=5, lsp_targets=3),
+    )
+
+    lsp_attempted = 0
+    lsp_applied = 0
+    for finding in candidates:
+        if finding.anchor is None:
+            continue
+        target_file = Path(result.run.root) / finding.anchor.file
+        if target_file.suffix not in {".py", ".pyi"}:
+            continue
+        lsp_attempted += 1
+        payload = enrich_with_pyrefly_lsp(
+            PyreflyLspRequest(
+                root=Path(result.run.root),
+                file_path=target_file,
+                line=max(1, int(finding.anchor.line)),
+                col=int(finding.anchor.col or 0),
+                symbol_hint=(
+                    str(finding.details.get("name"))
+                    if isinstance(finding.details.get("name"), str)
+                    else None
+                ),
+                timeout_seconds=2.0,
+                startup_timeout_seconds=2.0,
+                max_callers=5,
+                max_callees=5,
+            )
+        )
+        if payload is None:
+            continue
+        lsp_applied += 1
+        insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
+
+    if lsp_attempted > 0:
+        lsp_status = (
+            "ok" if lsp_applied == lsp_attempted else "partial" if lsp_applied else "failed"
+        )
+        insight = msgspec.structs.replace(
+            insight,
+            degradation=msgspec.structs.replace(insight.degradation, lsp=lsp_status),
+        )
+
+    result.summary["front_door_insight"] = to_builtins(insight)
 
 
 def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
@@ -697,6 +883,7 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     result.summary["files_scanned"] = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
+    _attach_entity_insight(result)
     return result
 
 
@@ -740,6 +927,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     result.summary["files_scanned"] = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
+    _attach_entity_insight(result)
     return result
 
 
@@ -1358,7 +1546,20 @@ def _process_def_query(
     matching_records = list(matching_defs)  # Keep copy for scope filtering
 
     for def_record in matching_defs:
-        finding = _def_to_finding(def_record, scan_ctx.calls_by_def.get(def_record, []))
+        calls_within = scan_ctx.calls_by_def.get(def_record, [])
+        caller_count = _count_callers_for_definition(
+            def_record,
+            scan_ctx.call_records,
+            scan_ctx.file_index,
+        )
+        enclosing_scope = _resolve_enclosing_scope(def_record, scan_ctx.file_index)
+        finding = _def_to_finding(
+            def_record,
+            calls_within,
+            caller_count=caller_count,
+            callee_count=len(calls_within),
+            enclosing_scope=enclosing_scope,
+        )
         result.key_findings.append(finding)
 
     # Apply scope filter if present
@@ -1391,6 +1592,10 @@ def _process_def_query(
         imports_section = _build_imports_section(matching_defs, scan_ctx.all_records)
         if imports_section.findings:
             result.sections.append(imports_section)
+
+    preview_section = _build_entity_neighborhood_preview_section(result.key_findings)
+    if preview_section.findings:
+        result.sections.insert(0, preview_section)
 
     _append_expander_sections(result, matching_defs, scan_ctx, root, query)
 
@@ -1513,6 +1718,96 @@ def _process_call_query(
 
     result.summary["total_calls"] = len(ctx.call_records)
     result.summary["matches"] = len(result.key_findings)
+
+
+def _count_callers_for_definition(
+    def_record: SgRecord,
+    all_calls: list[SgRecord],
+    index: FileIntervalIndex,
+) -> int:
+    """Count callsites that target the given definition."""
+    target_name = _extract_def_name(def_record)
+    if not target_name:
+        return 0
+    count = 0
+    for call in all_calls:
+        if _extract_call_target(call) != target_name:
+            continue
+        receiver = _extract_call_receiver(call)
+        containing = index.find_containing(call)
+        if receiver in {"self", "cls"}:
+            target_class = _find_enclosing_class(def_record, index)
+            caller_class = (
+                _find_enclosing_class(containing, index) if containing is not None else None
+            )
+            target_class_name = (
+                _extract_def_name(target_class) if target_class is not None else None
+            )
+            caller_class_name = (
+                _extract_def_name(caller_class) if caller_class is not None else None
+            )
+            if target_class_name and caller_class_name and target_class_name != caller_class_name:
+                continue
+        count += 1
+    return count
+
+
+def _resolve_enclosing_scope(def_record: SgRecord, index: FileIntervalIndex) -> str:
+    """Resolve human-readable enclosing scope for a definition."""
+    file_index = index.by_file.get(def_record.file)
+    if file_index is None:
+        return "<module>"
+    parents: list[SgRecord] = []
+    for start, end, candidate in file_index.intervals:
+        if _record_key(candidate) == _record_key(def_record):
+            continue
+        if start <= def_record.start_line <= end:
+            parents.append(candidate)
+    if not parents:
+        return "<module>"
+    parent = min(parents, key=lambda candidate: candidate.end_line - candidate.start_line)
+    name = _extract_def_name(parent)
+    return name or "<module>"
+
+
+def _build_entity_neighborhood_preview_section(
+    findings: list[Finding],
+) -> Section:
+    """Build bounded neighborhood preview for entity query top results."""
+    preview_findings: list[Finding] = []
+    definition_findings = [finding for finding in findings if finding.category == "definition"][:3]
+    for finding in definition_findings:
+        name = (
+            str(finding.details.get("name"))
+            if isinstance(finding.details.get("name"), str)
+            else finding.message
+        )
+        caller_count = finding.details.get("caller_count")
+        callee_count = finding.details.get("callee_count")
+        enclosing_scope = finding.details.get("enclosing_scope")
+        caller_total = caller_count if isinstance(caller_count, int) else 0
+        callee_total = callee_count if isinstance(callee_count, int) else 0
+        scope_name = enclosing_scope if isinstance(enclosing_scope, str) else "<module>"
+        preview_findings.append(
+            Finding(
+                category="entity_neighborhood",
+                message=(
+                    f"{name}: callers={caller_total}, callees={callee_total}, scope={scope_name}"
+                ),
+                anchor=finding.anchor,
+                severity="info",
+                details=build_detail_payload(
+                    data={
+                        "name": name,
+                        "caller_count": caller_total,
+                        "callee_count": callee_total,
+                        "enclosing_scope": scope_name,
+                    },
+                    score=finding.details.score,
+                ),
+            )
+        )
+    return Section(title="Neighborhood Preview", findings=preview_findings)
 
 
 def _append_expander_sections(
@@ -1911,6 +2206,10 @@ def _extract_rust_use_name(text: str) -> str | None:
 def _def_to_finding(
     def_record: SgRecord,
     calls_within: list[SgRecord],
+    *,
+    caller_count: int = 0,
+    callee_count: int | None = None,
+    enclosing_scope: str | None = None,
 ) -> Finding:
     """Convert a definition record to a Finding.
 
@@ -1931,8 +2230,10 @@ def _def_to_finding(
     )
 
     # Calculate scores
+    effective_callee_count = len(calls_within) if callee_count is None else callee_count
+    scope_label = enclosing_scope or "<module>"
     impact_signals = ImpactSignals(
-        sites=len(calls_within),
+        sites=max(caller_count, effective_callee_count),
         files=1,
         depth=1,
     )
@@ -1949,6 +2250,9 @@ def _def_to_finding(
                 "kind": def_record.kind,
                 "name": def_name,
                 "calls_within": len(calls_within),
+                "caller_count": caller_count,
+                "callee_count": effective_callee_count,
+                "enclosing_scope": scope_label,
             },
             score=score,
         ),

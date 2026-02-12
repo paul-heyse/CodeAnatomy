@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
-from weakref import WeakSet
 
 import pyarrow as pa
 from datafusion import SessionContext, SQLOptions
@@ -27,8 +27,6 @@ if TYPE_CHECKING:
 UdfVolatility = Literal["immutable", "stable", "volatile"]
 
 POLICY_PAYLOAD_VERSION: int = 1
-
-_FUNCTION_FACTORY_FALLBACK_CTXS: WeakSet[SessionContext] = WeakSet()
 
 _PARAMETER_SCHEMA = pa.struct(
     [
@@ -218,7 +216,7 @@ def _load_extension() -> object:
         ImportError: If no compatible extension module can be loaded.
         ModuleNotFoundError: If a nested import is missing within a candidate module.
     """
-    for module_name in ("datafusion._internal", "datafusion_ext"):
+    for module_name in ("datafusion_ext", "datafusion._internal"):
         try:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError as exc:
@@ -257,35 +255,6 @@ def _install_native_function_factory(ctx: SessionContext, *, payload: bytes) -> 
     install(ctx_arg, payload)
 
 
-def _fallback_install_function_factory(ctx: SessionContext, *, payload: bytes) -> bool:
-    try:
-        module = importlib.import_module("datafusion_ext")
-    except ImportError:
-        return False
-    if not getattr(module, "IS_STUB", False):
-        return False
-    stub_install = getattr(module, "install_function_factory", None)
-    if not callable(stub_install):
-        return False
-    try:
-        stub_install(ctx, payload)
-    except (RuntimeError, TypeError, ValueError):
-        return False
-    _FUNCTION_FACTORY_FALLBACK_CTXS.add(ctx)
-    return True
-
-
-def function_factory_fallback_active(ctx: SessionContext) -> bool:
-    """Return True when the fallback function factory is active for ctx.
-
-    Returns:
-    -------
-    bool
-        True when a fallback function factory was installed.
-    """
-    return ctx in _FUNCTION_FACTORY_FALLBACK_CTXS
-
-
 def install_function_factory(
     ctx: SessionContext,
     *,
@@ -305,8 +274,6 @@ def install_function_factory(
         _install_native_function_factory(ctx, payload=payload)
     except TypeError as exc:
         if "cannot be converted" in str(exc):
-            if _fallback_install_function_factory(ctx, payload=payload):
-                return
             msg = (
                 "FunctionFactory install failed due to SessionContext type mismatch. "
                 "Rebuild and install matching datafusion/datafusion_ext wheels "
@@ -365,6 +332,12 @@ def function_factory_policy_from_snapshot(
     FunctionFactoryPolicy
         Policy derived from the snapshot metadata.
     """
+    extension_payload = None
+    with contextlib.suppress(ImportError, RuntimeError, TypeError, ValueError):
+        extension_payload = _derive_policy_payload_from_snapshot(snapshot, allow_async=allow_async)
+    if extension_payload is not None:
+        return _policy_from_payload(extension_payload)
+
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
     from datafusion_engine.udf.catalog import datafusion_udf_specs
 
@@ -380,6 +353,84 @@ def function_factory_policy_from_snapshot(
         prefer_named_arguments=prefer_named,
         allow_async=allow_async,
         domain_operator_hooks=domain_hooks,
+    )
+
+
+def _derive_policy_payload_from_snapshot(
+    snapshot: Mapping[str, object],
+    *,
+    allow_async: bool,
+) -> Mapping[str, object] | None:
+    module = _load_extension()
+    derive = getattr(module, "derive_function_factory_policy", None)
+    if not callable(derive):
+        return None
+    payload = derive(snapshot, allow_async)
+    if isinstance(payload, Mapping):
+        return dict(payload)
+    return None
+
+
+def _payload_sequence(payload: object) -> tuple[object, ...]:
+    if isinstance(payload, Mapping):
+        payload = payload.values()
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes, bytearray)):
+        return tuple(payload)
+    return ()
+
+
+def _params_from_payload(params_payload: object) -> tuple[FunctionParameter, ...]:
+    params: list[FunctionParameter] = []
+    for param_item in _payload_sequence(params_payload):
+        if not isinstance(param_item, Mapping):
+            continue
+        param_name = param_item.get("name")
+        dtype = param_item.get("dtype")
+        if isinstance(param_name, str) and isinstance(dtype, str):
+            params.append(FunctionParameter(name=param_name, dtype=dtype))
+    return tuple(params)
+
+
+def _primitive_from_payload(item: Mapping[str, object]) -> RulePrimitive | None:
+    name = item.get("name")
+    return_type = item.get("return_type")
+    if not isinstance(name, str) or not isinstance(return_type, str):
+        return None
+    params = _params_from_payload(item.get("params"))
+    volatility_value = item.get("volatility")
+    description_value = item.get("description")
+    return RulePrimitive(
+        name=name,
+        params=params,
+        return_type=return_type,
+        volatility=_normalize_udf_volatility(
+            volatility_value if isinstance(volatility_value, str) else None
+        ),
+        description=description_value if isinstance(description_value, str) else None,
+        supports_named_args=bool(item.get("supports_named_args", bool(params))),
+    )
+
+
+def _policy_from_payload(payload: Mapping[str, object]) -> FunctionFactoryPolicy:
+    primitives: list[RulePrimitive] = []
+    for item in _payload_sequence(payload.get("primitives")):
+        if not isinstance(item, Mapping):
+            continue
+        primitive = _primitive_from_payload(item)
+        if primitive is not None:
+            primitives.append(primitive)
+    prefer_named_arguments = bool(payload.get("prefer_named_arguments", False))
+    allow_async = bool(payload.get("allow_async", False))
+    hooks = tuple(
+        str(item)
+        for item in _payload_sequence(payload.get("domain_operator_hooks"))
+        if isinstance(item, str)
+    )
+    return FunctionFactoryPolicy(
+        primitives=tuple(primitives),
+        prefer_named_arguments=prefer_named_arguments,
+        allow_async=allow_async,
+        domain_operator_hooks=hooks,
     )
 
 
@@ -568,7 +619,6 @@ __all__ = [
     "build_create_function_sql",
     "create_udaf_spec",
     "create_udwf_spec",
-    "function_factory_fallback_active",
     "function_factory_payloads",
     "function_factory_policy_from_snapshot",
     "function_factory_policy_hash",

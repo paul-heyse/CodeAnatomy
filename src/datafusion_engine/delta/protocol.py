@@ -8,6 +8,7 @@ from typing import Annotated
 import msgspec
 
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
+from datafusion_engine.extensions.context_adaptation import resolve_extension_module
 from datafusion_engine.generated.delta_types import DeltaFeatureGate
 from serde_msgspec import StructBaseCompat, StructBaseStrict
 from utils.value_coercion import coerce_int
@@ -207,11 +208,16 @@ def validate_delta_gate(
     if resolved is None:
         msg = "Delta protocol snapshot is required for gate validation."
         raise DataFusionEngineError(msg, kind=ErrorKind.DELTA)
-    try:
-        import datafusion_ext
-    except ImportError as exc:  # pragma: no cover - extension optional in tests
-        msg = "datafusion_ext is required for Delta protocol gate validation."
-        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN) from exc
+    module_names = ("datafusion_ext", "datafusion._internal")
+    resolved_module = resolve_extension_module(module_names, entrypoint="validate_protocol_gate")
+    if resolved_module is None:
+        msg = "Delta protocol gate validation requires datafusion._internal or datafusion_ext."
+        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
+    _module_name, module = resolved_module
+    validator = getattr(module, "validate_protocol_gate", None)
+    if not callable(validator):
+        msg = "Delta protocol gate validation hook is unavailable in the extension module."
+        raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
     snapshot_payload = {
         "min_reader_version": resolved.min_reader_version,
         "min_writer_version": resolved.min_writer_version,
@@ -227,7 +233,7 @@ def validate_delta_gate(
     snapshot_msgpack = msgspec.msgpack.encode(snapshot_payload)
     gate_msgpack = msgspec.msgpack.encode(gate_payload)
     try:
-        datafusion_ext.validate_protocol_gate(snapshot_msgpack, gate_msgpack)
+        validator(snapshot_msgpack, gate_msgpack)
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = "Delta protocol gate validation failed."
         raise DataFusionEngineError(msg, kind=ErrorKind.DELTA) from exc

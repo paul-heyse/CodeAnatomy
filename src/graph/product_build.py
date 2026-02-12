@@ -399,11 +399,11 @@ def _expected_outputs_for_request(request: GraphProductBuildRequest) -> set[str]
     outputs = set(ENGINE_CPG_OUTPUTS)
     outputs.update(CPG_OUTPUT_CANONICAL_TO_LEGACY.values())
     if request.include_extract_errors:
-        outputs.add("write_extract_error_artifacts_delta")
+        outputs.add("extract_error_artifacts_delta")
     if request.include_manifest:
-        outputs.add("write_run_manifest_delta")
+        outputs.add("run_manifest_delta")
     if request.include_run_bundle:
-        outputs.add("write_run_bundle_dir")
+        outputs.add("run_bundle_dir")
     return outputs
 
 
@@ -424,7 +424,11 @@ def _resolve_output_dir(repo_root: Path, output_dir: PathLike | None) -> Path:
 
 
 def _optional(outputs: Mapping[str, JsonDict | None], key: str) -> JsonDict | None:
-    return outputs.get(key)
+    for alias in output_aliases(key):
+        value = outputs.get(alias)
+        if value is not None:
+            return value
+    return None
 
 
 def _require_cpg_output(outputs: Mapping[str, JsonDict | None], key: str) -> JsonDict:
@@ -480,7 +484,7 @@ def _parse_manifest_path(
 ) -> Path | None:
     if not include_manifest:
         return None
-    manifest = _optional(pipeline_outputs, "write_run_manifest_delta")
+    manifest = _optional(pipeline_outputs, "run_manifest_delta")
     if manifest is None or not manifest.get("path"):
         return None
     return Path(cast("str", manifest["path"]))
@@ -493,7 +497,7 @@ def _parse_manifest_details(
 ) -> tuple[Path | None, str | None]:
     if not include_manifest:
         return None, None
-    manifest = _optional(pipeline_outputs, "write_run_manifest_delta")
+    manifest = _optional(pipeline_outputs, "run_manifest_delta")
     if manifest is None:
         return None, None
     manifest_path = None
@@ -513,7 +517,7 @@ def _parse_run_bundle(
 ) -> tuple[Path | None, str | None]:
     if not include_run_bundle:
         return None, None
-    bundle = _optional(pipeline_outputs, "write_run_bundle_dir")
+    bundle = _optional(pipeline_outputs, "run_bundle_dir")
     if bundle is None:
         return None, None
     run_bundle_dir = None
@@ -660,7 +664,7 @@ def _parse_build_result(
         cpg_edges_by_src=_parse_table(_require_cpg_output(all_outputs, "cpg_edges_by_src")),
         cpg_edges_by_dst=_parse_table(_require_cpg_output(all_outputs, "cpg_edges_by_dst")),
         extract_error_artifacts=(
-            _optional(all_outputs, "write_extract_error_artifacts_delta")
+            _optional(all_outputs, "extract_error_artifacts_delta")
             if request.include_extract_errors
             else None
         ),

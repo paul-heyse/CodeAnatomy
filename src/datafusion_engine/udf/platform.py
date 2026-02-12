@@ -29,7 +29,7 @@ All DataFusion execution facades automatically install the platform in
 
 from __future__ import annotations
 
-import importlib
+import contextlib
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -51,6 +51,7 @@ from datafusion_engine.udf.factory import (
     install_function_factory,
 )
 from datafusion_engine.udf.runtime import (
+    extension_capabilities_report,
     register_rust_udfs,
     rust_udf_docs,
     rust_udf_snapshot_hash,
@@ -203,12 +204,17 @@ def _resolve_udf_snapshot(
     rewrite_tags: tuple[str, ...] = ()
     if not resolved.enable_udfs:
         return snapshot, snapshot_hash, rewrite_tags, docs
-    snapshot = register_rust_udfs(
-        ctx,
-        enable_async=resolved.enable_async_udfs,
-        async_udf_timeout_ms=resolved.async_udf_timeout_ms,
-        async_udf_batch_size=resolved.async_udf_batch_size,
-    )
+    try:
+        snapshot = register_rust_udfs(
+            ctx,
+            enable_async=resolved.enable_async_udfs,
+            async_udf_timeout_ms=resolved.async_udf_timeout_ms,
+            async_udf_batch_size=resolved.async_udf_batch_size,
+        )
+    except (RuntimeError, TypeError, ValueError):
+        if resolved.strict:
+            raise
+        return snapshot, snapshot_hash, rewrite_tags, docs
     snapshot_hash = rust_udf_snapshot_hash(snapshot)
     tag_index = rewrite_tag_index(snapshot)
     rewrite_tags = tuple(sorted(tag_index))
@@ -319,22 +325,56 @@ def install_rust_udf_platform(
 
 
 def native_udf_platform_available() -> bool:
-    """Return whether native FunctionFactory/ExprPlanner hooks are available.
+    """Return whether native UDF platform capabilities are available/compatible.
 
     Returns:
     -------
     bool
-        ``True`` when the native UDF platform hooks are available.
+        ``True`` when the Rust capability snapshot is available and ABI-compatible.
     """
-    for module_name in ("datafusion._internal", "datafusion_ext"):
-        try:
+    available = False
+    try:
+        report = extension_capabilities_report()
+    except (RuntimeError, TypeError, ValueError):
+        report = None
+    if (
+        isinstance(report, Mapping)
+        and bool(report.get("available"))
+        and bool(report.get("compatible"))
+    ):
+        available = _probe_registry_snapshot()
+    return available
+
+
+def _probe_registry_snapshot() -> bool:
+    import importlib
+
+    snapshotter = None
+    for module_name in ("datafusion_ext", "datafusion._internal"):
+        with contextlib.suppress(ImportError):
             module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        if callable(getattr(module, "install_function_factory", None)) and callable(
-            getattr(module, "install_expr_planners", None)
-        ):
-            return True
+            candidate = getattr(module, "registry_snapshot", None)
+            if callable(candidate):
+                snapshotter = candidate
+                break
+    if snapshotter is None:
+        return False
+
+    probe_ctx = SessionContext()
+    candidates: list[object] = [probe_ctx]
+    internal_ctx = getattr(probe_ctx, "ctx", None)
+    if internal_ctx is not None:
+        candidates.append(internal_ctx)
+    for candidate in candidates:
+        try:
+            snapshot = snapshotter(candidate)
+        except TypeError as exc:
+            if "cannot be converted" in str(exc):
+                continue
+            return False
+        except (RuntimeError, ValueError):
+            return False
+        return isinstance(snapshot, Mapping)
     return False
 
 

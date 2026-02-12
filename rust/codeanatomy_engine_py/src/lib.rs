@@ -5,6 +5,7 @@
 
 use pyo3::prelude::*;
 use serde_json::{json, Value};
+use std::path::Path;
 
 pub mod compiler;
 pub mod errors;
@@ -12,6 +13,20 @@ pub mod materializer;
 pub mod result;
 pub mod schema;
 pub mod session;
+
+fn infer_output_root(outputs: &Value) -> Option<String> {
+    let entries = outputs.as_array()?;
+    for entry in entries {
+        let Some(location) = entry.get("delta_location").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(parent) = Path::new(location).parent() else {
+            continue;
+        };
+        return Some(parent.to_string_lossy().to_string());
+    }
+    None
+}
 
 #[pyfunction]
 fn run_build(py: Python<'_>, request_json: &str) -> PyResult<Py<pyo3::types::PyAny>> {
@@ -90,28 +105,73 @@ fn run_build(py: Python<'_>, request_json: &str) -> PyResult<Py<pyo3::types::PyA
         .get("warnings")
         .cloned()
         .unwrap_or_else(|| json!([]));
+    let output_root = infer_output_root(&outputs);
+    let include_manifest = orchestration
+        .get("include_manifest")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let include_run_bundle = orchestration
+        .get("include_run_bundle")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let emit_auxiliary_outputs = orchestration
+        .get("emit_auxiliary_outputs")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let manifest_path = if include_manifest {
+        output_root
+            .as_ref()
+            .map(|root| format!("{root}/run_manifest"))
+            .map(Value::String)
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+    let run_bundle_dir = if include_run_bundle {
+        output_root
+            .as_ref()
+            .map(|root| format!("{root}/run_bundle"))
+            .map(Value::String)
+            .unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+    let mut auxiliary_outputs = serde_json::Map::new();
+    if emit_auxiliary_outputs {
+        let normalize_path = output_root
+            .as_ref()
+            .map(|root| format!("{root}/normalize_outputs"));
+        auxiliary_outputs.insert(
+            "normalize_outputs_delta".to_string(),
+            normalize_path.map_or(Value::Null, Value::String),
+        );
+        auxiliary_outputs.insert(
+            "extract_error_artifacts_delta".to_string(),
+            Value::Null,
+        );
+        let manifest_aux = output_root
+            .as_ref()
+            .filter(|_| include_manifest)
+            .map(|root| format!("{root}/run_manifest"));
+        auxiliary_outputs.insert(
+            "run_manifest_delta".to_string(),
+            manifest_aux.map_or(Value::Null, Value::String),
+        );
+    }
     let diagnostics = json!({
         "events": [],
         "artifacts": [],
     });
     let artifacts = json!({
-        "manifest_path": Value::Null,
-        "run_bundle_dir": Value::Null,
-        "include_manifest": orchestration
-            .get("include_manifest")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
-        "include_run_bundle": orchestration
-            .get("include_run_bundle")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        "emit_auxiliary_outputs": orchestration
-            .get("emit_auxiliary_outputs")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
+        "manifest_path": manifest_path,
+        "run_bundle_dir": run_bundle_dir,
+        "auxiliary_outputs": Value::Object(auxiliary_outputs),
+        "include_manifest": include_manifest,
+        "include_run_bundle": include_run_bundle,
+        "emit_auxiliary_outputs": emit_auxiliary_outputs,
     });
     let response = json!({
-        "contract_version": 2,
+        "contract_version": 3,
         "run_result": run_result_value,
         "outputs": outputs,
         "warnings": warnings,

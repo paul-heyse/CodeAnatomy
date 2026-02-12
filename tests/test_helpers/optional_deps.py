@@ -43,14 +43,6 @@ def require_datafusion() -> ModuleType:
     return datafusion
 
 
-def _fallback_udfs_available() -> bool:
-    try:
-        from datafusion_engine.udf.fallback import fallback_udf_specs
-    except ImportError:
-        return False
-    return bool(fallback_udf_specs())
-
-
 def require_datafusion_udfs() -> ModuleType:
     """Require DataFusion UDF extensions for tests.
 
@@ -63,8 +55,6 @@ def require_datafusion_udfs() -> ModuleType:
     datafusion = require_datafusion()
     internal = _resolve_datafusion_extension(("register_codeanatomy_udfs",))
     if internal is None:
-        if _fallback_udfs_available():
-            return datafusion
         msg = (
             "DataFusion build is missing codeanatomy UDF support. Rebuild rust artifacts via "
             "`bash scripts/rebuild_rust_artifacts.sh`."

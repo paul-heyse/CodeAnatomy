@@ -452,7 +452,7 @@ def _diagnostics_sink_from_value(value: str) -> DiagnosticsSink | None:
     raise ValueError(msg)
 
 
-def resolve_runtime_profile(
+def resolve_runtime_profile(  # noqa: PLR0914
     profile: str,
     *,
     determinism: DeterminismTier | None = None,
@@ -475,6 +475,12 @@ def resolve_runtime_profile(
         profile_class = _session_factory_class(profile)
         engine_module = importlib.import_module("codeanatomy_engine")
         rust_factory = engine_module.SessionFactory.from_class(profile_class)
+        profile_snapshot_value = getattr(rust_factory, "profile_snapshot", None)
+        profile_payload: dict[str, object] = {}
+        if callable(profile_snapshot_value):
+            candidate_payload = profile_snapshot_value()
+            if isinstance(candidate_payload, dict):
+                profile_payload = candidate_payload
         rust_profile_hash_value = getattr(rust_factory, "profile_hash", None)
         if callable(rust_profile_hash_value):
             candidate = rust_profile_hash_value()
@@ -485,12 +491,23 @@ def resolve_runtime_profile(
             candidate = rust_settings_hash_value()
             if isinstance(candidate, str) and candidate:
                 rust_settings_hash = candidate
-        raw_profile_json = rust_factory.profile_json()
-        raw_profile_payload = msgspec.json.decode(raw_profile_json)
-        profile_payload = (
-            cast("dict[str, object]", raw_profile_payload)
-            if isinstance(raw_profile_payload, dict)
-            else {}
+        if not profile_payload:
+            raw_profile_json = rust_factory.profile_json()
+            raw_profile_payload = msgspec.json.decode(raw_profile_json)
+            profile_payload = (
+                cast("dict[str, object]", raw_profile_payload)
+                if isinstance(raw_profile_payload, dict)
+                else {}
+            )
+        rust_profile_hash = (
+            rust_profile_hash
+            if rust_profile_hash is not None
+            else cast("str | None", profile_payload.get("profile_hash"))
+        )
+        rust_settings_hash = (
+            rust_settings_hash
+            if rust_settings_hash is not None
+            else cast("str | None", profile_payload.get("settings_hash"))
         )
         target_partitions = profile_payload.get("target_partitions")
         batch_size = profile_payload.get("batch_size")

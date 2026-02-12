@@ -176,3 +176,73 @@ These are additional low-friction migration targets not explicitly captured in p
 2. The largest remaining easy wins are now concentrated in `src/datafusion_engine` bridge code: fallback UDF paths, cache registration wrappers, extension probing/resolution duplication, and thin Delta gate shims.
 3. Schema-evolution adapter migration should be re-sequenced: implement the Rust installer behavior first (currently stubbed), then delete duplicated Python paths.
 4. Python orchestration decommission (`build_pipeline.py`) is still blocked by Rust `run_build` artifact contract completeness; this remains a high-value but dependency-gated step.
+
+---
+
+## 8) Execution Status (2026-02-12 implementation pass)
+
+### Wave 0: CQ baseline ledger (completed)
+- Captured CQ baselines and impact artifacts before edits.
+- Representative artifacts:
+  - `.cq/artifacts/search_20260212_020647_019c4f99-d6bd-7ce3-acf1-abfe6680db1a.json`
+  - `.cq/artifacts/calls_20260212_021008_019c4f9c-e511-7efa-a39e-992b0e567b9c.json`
+  - `.cq/artifacts/impact_20260212_021014_019c4f9c-f415-739b-9e6f-f19a71f55bcd.json`
+  - `.cq/artifacts/neighborhood_20260212_021043_019c4f9d-6ed2-77d5-af7f-ff9cb349c78f.json`
+  - `.cq/artifacts/sig-impact_20260212_021104_019c4f9d-c053-7867-acc8-526df6b87810.json`
+
+### Wave 1: UDF hardening + fallback decommission (completed)
+- Deleted `src/datafusion_engine/udf/fallback.py`.
+- Removed fallback branches and APIs from:
+  - `src/datafusion_engine/udf/runtime.py`
+  - `src/datafusion_engine/udf/factory.py`
+  - `src/datafusion_engine/udf/expr.py`
+  - `src/datafusion_engine/session/runtime.py`
+  - `src/datafusion_engine/schema/registry.py`
+- Switched platform availability checks to capabilities snapshot compatibility in:
+  - `src/datafusion_engine/udf/platform.py`
+- Updated fallback-oriented tests/helpers:
+  - `tests/unit/test_fallback_udf_snapshot.py`
+  - `tests/test_helpers/optional_deps.py`
+
+### Wave 2: DataFusion bridge reduction (completed for targeted surfaces)
+- Delta gate validation now resolves extension hooks through shared module-resolution contracts:
+  - `src/datafusion_engine/delta/protocol.py`
+- Cache-table registration bridge simplified to one extension invocation path (no local candidate retry loop):
+  - `src/datafusion_engine/catalog/introspection.py`
+- Added direct registration unit coverage:
+  - `tests/unit/datafusion_engine/catalog/test_cache_table_registration.py`
+- Runtime extension resolution now reuses shared resolver contract:
+  - `src/datafusion_engine/session/runtime.py`
+
+### Wave 3: Schema-evolution + runtime profile migration (partial, implemented)
+- Consolidated schema-evolution adapter load/install helpers into shared module:
+  - `src/datafusion_engine/extensions/schema_evolution.py`
+- Rewired duplicate installers/loaders to shared module:
+  - `src/datafusion_engine/session/runtime.py`
+  - `src/datafusion_engine/dataset/registration.py`
+  - `src/datafusion_engine/extensions/__init__.py`
+- Upgraded Rust installer entrypoint from no-op to runtime-config mutation path:
+  - `rust/datafusion_python/src/codeanatomy_ext.rs`
+- Added Rust profile snapshot API and consumed it from Python resolver:
+  - `rust/codeanatomy_engine_py/src/session.rs`
+  - `src/extraction/runtime_profile.py`
+
+### Wave 4: run_build artifact contract + build_pipeline reduction (completed)
+- Bumped run_build contract to v3 and added artifact payload fields:
+  - `rust/codeanatomy_engine_py/src/lib.rs`
+  - `contract_version: 3`
+  - `artifacts.manifest_path`
+  - `artifacts.run_bundle_dir`
+  - `artifacts.auxiliary_outputs` with canonical keys
+- Removed Python auxiliary writer implementations and switched to artifact consumption:
+  - `src/graph/build_pipeline.py`
+- Added artifact contract coverage:
+  - `tests/unit/test_build_pipeline_artifact_contract.py`
+  - `tests/contracts/test_output_contracts.py` (updated boundary expectations)
+- Updated output contract constants + alias mapping:
+  - `src/planning_engine/output_contracts.py`
+  - `src/graph/product_build.py`
+
+### Wave 5: final decommission sweep (in progress)
+- Symbol-level decommission of fallback UDF internals is complete.
+- Remaining work is final zero-hit CQ bundle + full-gate validation and doc boundary updates after integration test run.

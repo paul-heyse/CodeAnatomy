@@ -71,6 +71,9 @@ from datafusion_engine.delta.store_policy import (
 )
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.expr.planner import expr_planner_payloads, install_expr_planners
+from datafusion_engine.extensions.context_adaptation import (
+    resolve_extension_module as _resolve_extension_module_contract,
+)
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.lineage.diagnostics import (
     DiagnosticsSink,
@@ -133,6 +136,7 @@ _MISSING = object()
 _COMPILE_RESOLVER_STRICT_ENV = "CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT"
 _CI_ENV = "CI"
 _DEFAULT_PERFORMANCE_POLICY = PerformancePolicy()
+_EXTENSION_MODULE_NAMES: tuple[str, ...] = ("datafusion_ext", "datafusion._internal")
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -567,16 +571,15 @@ def resolved_schema_hardening(
     return _resolved_schema_hardening_for_profile(profile)
 
 
-def _resolve_extension_module(required_attr: str | None = None) -> object | None:
-    for module_name in ("datafusion._internal", "datafusion_ext"):
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        if required_attr is not None and not hasattr(module, required_attr):
-            continue
-        return module
-    return None
+def _resolve_runtime_extension_module(required_attr: str | None = None) -> object | None:
+    resolved = _resolve_extension_module_contract(
+        _EXTENSION_MODULE_NAMES,
+        required_attr=required_attr,
+    )
+    if resolved is None:
+        return None
+    _module_name, module = resolved
+    return module
 
 
 def _resolve_tracing_context(
@@ -630,7 +633,7 @@ def delta_runtime_env_options(
         and profile.execution.delta_max_temp_directory_size is None
     ):
         return None
-    module = _resolve_extension_module(required_attr="DeltaRuntimeEnvOptions")
+    module = _resolve_runtime_extension_module(required_attr="DeltaRuntimeEnvOptions")
     if module is None:
         msg = "Delta runtime env options require datafusion._internal or datafusion_ext."
         raise RuntimeError(msg)
@@ -1929,21 +1932,10 @@ def _register_schema_table(ctx: SessionContext, name: str, schema: pa.Schema) ->
 
 
 def _load_schema_evolution_adapter_factory() -> object:
-    """Return a schema evolution adapter factory from the native extension.
+    """Return a schema evolution adapter factory from the native extension."""
+    from datafusion_engine.extensions.schema_evolution import load_schema_evolution_adapter_factory
 
-    Raises:
-        RuntimeError: If the operation cannot be completed.
-        TypeError: If the operation cannot be completed.
-    """
-    module = _resolve_extension_module(required_attr="schema_evolution_adapter_factory")
-    if module is None:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
-        raise RuntimeError(msg)
-    factory = getattr(module, "schema_evolution_adapter_factory", None)
-    if not callable(factory):
-        msg = "Schema evolution adapter factory is unavailable in the extension module."
-        raise TypeError(msg)
-    return factory()
+    return load_schema_evolution_adapter_factory()
 
 
 def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
@@ -1951,27 +1943,12 @@ def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
 
     Args:
         ctx: Description.
-
-    Raises:
-        RuntimeError: If the operation cannot be completed.
-        TypeError: If the operation cannot be completed.
     """
-    module = _resolve_extension_module(
-        required_attr="install_schema_evolution_adapter_factory",
+    from datafusion_engine.extensions.schema_evolution import (
+        install_schema_evolution_adapter_factory,
     )
-    if module is None:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
-        raise RuntimeError(msg)
-    installer = getattr(module, "install_schema_evolution_adapter_factory", None)
-    if not callable(installer):
-        msg = "Schema evolution adapter installer is unavailable in the extension module."
-        raise TypeError(msg)
-    try:
-        installer(ctx)
-    except TypeError as exc:
-        if "cannot be converted" in str(exc):
-            return
-        raise
+
+    install_schema_evolution_adapter_factory(ctx)
 
 
 def _settings_by_prefix(payload: Mapping[str, str], prefix: str) -> dict[str, str]:
@@ -3442,6 +3419,26 @@ def _settings_rows_to_mapping(rows: Sequence[Mapping[str, object]]) -> dict[str,
     return mapping
 
 
+def _empty_udf_snapshot_payload() -> dict[str, object]:
+    empty_names: tuple[str, ...] = ()
+    empty_mapping: dict[str, object] = {}
+    return {
+        "scalar": empty_names,
+        "aggregate": empty_names,
+        "window": empty_names,
+        "table": empty_names,
+        "aliases": dict(empty_mapping),
+        "parameter_names": dict(empty_mapping),
+        "volatility": dict(empty_mapping),
+        "simplify": dict(empty_mapping),
+        "coerce_types": dict(empty_mapping),
+        "short_circuits": dict(empty_mapping),
+        "signature_inputs": dict(empty_mapping),
+        "return_types": dict(empty_mapping),
+        "config_defaults": dict(empty_mapping),
+    }
+
+
 def _build_session_runtime_from_context(
     ctx: SessionContext,
     *,
@@ -3451,7 +3448,10 @@ def _build_session_runtime_from_context(
     from datafusion_engine.udf.catalog import rewrite_tag_index
     from datafusion_engine.udf.runtime import rust_udf_snapshot, rust_udf_snapshot_hash
 
-    snapshot = rust_udf_snapshot(ctx)
+    try:
+        snapshot = rust_udf_snapshot(ctx)
+    except (RuntimeError, TypeError, ValueError):
+        snapshot = _empty_udf_snapshot_payload()
     snapshot_hash = rust_udf_snapshot_hash(snapshot)
     tag_index = rewrite_tag_index(snapshot)
     rewrite_tags = tuple(sorted(tag_index))
@@ -4766,7 +4766,7 @@ class DataFusionRuntimeProfile(
             and self.execution.delta_max_temp_directory_size is None
         ):
             return None
-        module = _resolve_extension_module(required_attr="DeltaRuntimeEnvOptions")
+        module = _resolve_runtime_extension_module(required_attr="DeltaRuntimeEnvOptions")
         if module is None:
             msg = "Delta runtime env options require datafusion._internal or datafusion_ext."
             raise RuntimeError(msg)
@@ -5190,15 +5190,15 @@ class DataFusionRuntimeProfile(
                 "routines_available": False,
                 "error": "information_schema disabled",
             }
-        from datafusion_engine.udf.parity import udf_info_schema_parity_report
-        from datafusion_engine.udf.runtime import fallback_udfs_active
+        from datafusion_engine.udf.platform import native_udf_platform_available
 
-        if fallback_udfs_active(ctx):
+        if not native_udf_platform_available():
             return {
                 "missing_in_information_schema": [],
                 "routines_available": False,
-                "error": None,
+                "error": "native_udf_platform unavailable",
             }
+        from datafusion_engine.udf.parity import udf_info_schema_parity_report
 
         report = udf_info_schema_parity_report(ctx)
         if report.error is not None:
@@ -5258,8 +5258,8 @@ class DataFusionRuntimeProfile(
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
+            native_udf_platform_available,
         )
-        from datafusion_engine.udf.runtime import udf_backend_available
 
         options = RustUdfPlatformOptions(
             enable_udfs=self.features.enable_udfs,
@@ -5271,7 +5271,7 @@ class DataFusionRuntimeProfile(
             function_factory_hook=self.policies.function_factory_hook,
             expr_planner_hook=self.policies.expr_planner_hook,
             expr_planner_names=self.policies.expr_planner_names,
-            strict=udf_backend_available(),
+            strict=native_udf_platform_available(),
         )
         platform = install_rust_udf_platform(ctx, options=options)
         if platform.snapshot is not None:
@@ -5298,16 +5298,13 @@ class DataFusionRuntimeProfile(
             and platform.function_factory is not None
             and platform.function_factory.installed
         ):
-            from datafusion_engine.udf.factory import function_factory_fallback_active
             from datafusion_engine.udf.runtime import register_udfs_via_ddl
 
-            if function_factory_fallback_active(ctx):
-                logger.warning(
-                    "FunctionFactory fallback active; skipping CREATE FUNCTION registration."
-                )
-            else:
-                register_udfs_via_ddl(ctx, snapshot=platform.snapshot)
-        self._refresh_udf_catalog(ctx)
+            register_udfs_via_ddl(ctx, snapshot=platform.snapshot)
+        if platform.snapshot is not None:
+            self._refresh_udf_catalog(ctx)
+        else:
+            self.udf_catalog_cache.pop(id(ctx), None)
 
     def _install_planner_rules(self, ctx: SessionContext) -> None:
         """Install Rust planner policy rules for the session context.
@@ -5364,14 +5361,8 @@ class DataFusionRuntimeProfile(
         Raises:
             ValueError: If the operation cannot be completed.
         """
-        from datafusion_engine.udf.runtime import (
-            fallback_udfs_active,
-            rust_udf_snapshot,
-            udf_names_from_snapshot,
-        )
+        from datafusion_engine.udf.runtime import rust_udf_snapshot, udf_names_from_snapshot
 
-        if fallback_udfs_active(introspector.ctx):
-            return
         registry_snapshot = rust_udf_snapshot(introspector.ctx)
         registered_udfs = self._registered_udf_names(registry_snapshot)
         required_builtins = self._required_builtin_udfs(
@@ -6243,16 +6234,19 @@ class DataFusionRuntimeProfile(
         ast_view_names: Sequence[str],
         allow_semantic_row_probe_fallback: bool = True,
     ) -> dict[str, str]:
+        from datafusion_engine.udf.platform import native_udf_platform_available
+
         _ = ast_view_names
         view_errors: dict[str, str] = {}
-        for label, validator in (
-            ("udf_info_schema_parity", validate_udf_info_schema_parity),
-            ("engine_functions", validate_required_engine_functions),
-        ):
-            try:
-                validator(ctx)
-            except (RuntimeError, TypeError, ValueError) as exc:
-                view_errors[label] = str(exc)
+        if native_udf_platform_available():
+            for label, validator in (
+                ("udf_info_schema_parity", validate_udf_info_schema_parity),
+                ("engine_functions", validate_required_engine_functions),
+            ):
+                try:
+                    validator(ctx)
+                except (RuntimeError, TypeError, ValueError) as exc:
+                    view_errors[label] = str(exc)
         for name in extract_nested_dataset_names():
             if not ctx.table_exist(name):
                 continue
@@ -6429,7 +6423,7 @@ class DataFusionRuntimeProfile(
     def _install_delta_plan_codecs_extension(
         ctx: SessionContext,
     ) -> tuple[bool, bool]:
-        module = _resolve_extension_module(required_attr="install_delta_plan_codecs")
+        module = _resolve_runtime_extension_module(required_attr="install_delta_plan_codecs")
         if module is None:
             return False, False
         installer = getattr(module, "install_delta_plan_codecs", None)
@@ -6858,7 +6852,7 @@ class DataFusionRuntimeProfile(
                 },
             )
         if self.diagnostics.tracing_hook is None:
-            module = _resolve_extension_module(required_attr="install_tracing")
+            module = _resolve_runtime_extension_module(required_attr="install_tracing")
             if module is None:
                 msg = "Tracing enabled but datafusion._internal or datafusion_ext is unavailable."
                 raise ValueError(msg)

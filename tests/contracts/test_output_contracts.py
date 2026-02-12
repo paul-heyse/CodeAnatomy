@@ -51,10 +51,10 @@ class TestOutputContractConstants:
             "cpg_props_map",
             "cpg_edges_by_src",
             "cpg_edges_by_dst",
-            "write_normalize_outputs_delta",
-            "write_extract_error_artifacts_delta",
-            "write_run_manifest_delta",
-            "write_run_bundle_dir",
+            "normalize_outputs_delta",
+            "extract_error_artifacts_delta",
+            "run_manifest_delta",
+            "run_bundle_dir",
         }
         assert set(FULL_PIPELINE_OUTPUTS) == expected
 
@@ -254,8 +254,43 @@ class TestRustBoundaryContracts:
             spec=_spec_fixture(),
             engine_profile="small",
         )
-        assert payload["spec_hash"] == "abc123"
-        assert payload["outputs"] == []
+        run_result, artifacts = payload
+        assert run_result["spec_hash"] == "abc123"
+        assert run_result["outputs"] == []
+        assert artifacts == {}
+
+    def test_execute_engine_phase_returns_artifact_contract(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Engine response artifacts are returned to orchestrator callers."""
+        from graph import build_pipeline as build_pipeline_mod
+
+        class _FakeEngineModule:
+            @staticmethod
+            def run_build(_request_json: str) -> dict[str, object]:
+                return {
+                    "run_result": {"outputs": []},
+                    "artifacts": {
+                        "manifest_path": "/tmp/build/run_manifest",
+                        "run_bundle_dir": "/tmp/build/run_bundle",
+                    },
+                }
+
+        monkeypatch.setattr(
+            build_pipeline_mod.importlib,
+            "import_module",
+            lambda _name: _FakeEngineModule(),
+        )
+
+        run_result, artifacts = build_pipeline_mod._execute_engine_phase(  # noqa: SLF001
+            semantic_input_locations={},
+            spec=_spec_fixture(),
+            engine_profile="small",
+        )
+        assert run_result["outputs"] == []
+        assert artifacts["manifest_path"] == "/tmp/build/run_manifest"
+        assert artifacts["run_bundle_dir"] == "/tmp/build/run_bundle"
 
 
 class TestCLIOutputContracts:

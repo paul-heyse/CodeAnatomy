@@ -16,13 +16,12 @@ import pyarrow as pa
 from datafusion import col
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
-
     from datafusion import SessionContext, SQLOptions
 
 from datafusion_engine.extensions.context_adaptation import (
+    ExtensionEntrypointInvocation,
+    invoke_entrypoint_with_adapted_context,
     resolve_extension_module,
-    select_context_candidate,
 )
 from datafusion_engine.sql.options import sql_options_for_profile
 
@@ -659,17 +658,41 @@ def capture_cache_diagnostics(ctx: SessionContext) -> dict[str, Any]:
 
 
 def register_cache_introspection_functions(ctx: SessionContext) -> None:
-    """Register cache introspection table functions in the SessionContext."""
-    register = _resolve_cache_table_registrar()
-    payload = _cache_table_registration_payload(ctx)
-    mismatch_errors = _register_cache_tables_with_candidates(
-        ctx, register=register, payload=payload
-    )
-    if mismatch_errors:
-        _LOGGER.warning(
-            "Skipping cache introspection table registration due to SessionContext ABI mismatch: %s",
-            "; ".join(mismatch_errors),
+    """Register cache introspection table functions in the SessionContext.
+
+    Raises:
+        RuntimeError: If extension registration fails for non-ABI reasons.
+        TypeError: If the extension entrypoint is unavailable.
+    """
+    module_names = ("datafusion_ext", "datafusion._internal")
+    resolved = resolve_extension_module(module_names, entrypoint="register_cache_tables")
+    if resolved is None:
+        msg = "Cache table registration hook is unavailable in the DataFusion extension module."
+        raise TypeError(msg)
+    module_name, module = resolved
+    raw_payload = _cache_table_registration_payload(ctx)
+    payload = {key: str(value) for key, value in raw_payload.items() if value is not None}
+    try:
+        invoke_entrypoint_with_adapted_context(
+            module_name,
+            module,
+            "register_cache_tables",
+            ExtensionEntrypointInvocation(
+                ctx=ctx,
+                internal_ctx=getattr(ctx, "ctx", None),
+                args=(payload,),
+                allow_fallback=False,
+            ),
         )
+    except RuntimeError as exc:
+        message = str(exc)
+        if "cannot be converted" in message:
+            _LOGGER.warning(
+                "Skipping cache introspection table registration due to SessionContext ABI mismatch: %s",
+                message,
+            )
+            return
+        raise
 
 
 def _cache_table_registration_payload(ctx: SessionContext) -> dict[str, object]:
@@ -681,49 +704,6 @@ def _cache_table_registration_payload(ctx: SessionContext) -> dict[str, object]:
         "metadata_cache_limit": config.metadata_cache_limit,
         "predicate_cache_size": config.predicate_cache_size,
     }
-
-
-def _resolve_cache_table_registrar() -> Callable[[object, Mapping[str, object]], object]:
-    module_names = ("datafusion._internal", "datafusion_ext")
-    resolved_any = resolve_extension_module(module_names)
-    if resolved_any is None:
-        msg = "DataFusion extensions are required for cache introspection tables."
-        raise ImportError(msg)
-    resolved_with_hook = resolve_extension_module(module_names, entrypoint="register_cache_tables")
-    if resolved_with_hook is None:
-        msg = "Cache table registration hook is unavailable in the DataFusion extension module."
-        raise TypeError(msg)
-    _name, module = resolved_with_hook
-    register = getattr(module, "register_cache_tables", None)
-    if not callable(register):
-        msg = "Cache table registration hook is unavailable in the DataFusion extension module."
-        raise TypeError(msg)
-    return register
-
-
-def _register_cache_tables_with_candidates(
-    ctx: SessionContext,
-    *,
-    register: Callable[[object, Mapping[str, object]], object],
-    payload: Mapping[str, object],
-) -> list[str]:
-    candidates = select_context_candidate(
-        ctx,
-        internal_ctx=getattr(ctx, "ctx", None),
-        allow_fallback=False,
-    )
-    mismatches: list[str] = []
-    for _ctx_kind, candidate in candidates:
-        try:
-            register(candidate, payload)
-        except TypeError as exc:
-            message = str(exc)
-            if "cannot be converted" in message:
-                mismatches.append(message)
-                continue
-            raise
-        return []
-    return mismatches
 
 
 __all__ = [

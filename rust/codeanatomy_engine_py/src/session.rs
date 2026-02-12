@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use serde_json::json;
 
 use codeanatomy_engine::session::profiles::{EnvironmentClass, EnvironmentProfile};
 
@@ -84,6 +85,27 @@ impl SessionFactory {
             PyValueError::new_err(format!("Failed to encode settings payload: {e}"))
         })?;
         Ok(blake3::hash(encoded.as_bytes()).to_hex().to_string())
+    }
+
+    /// Return a typed runtime-profile snapshot for Python adapters.
+    fn profile_snapshot(&self, py: Python<'_>) -> PyResult<Py<pyo3::types::PyAny>> {
+        let profile = self.inner.profile();
+        let payload = json!({
+            "target_partitions": profile.target_partitions,
+            "batch_size": profile.batch_size,
+            "memory_pool_bytes": profile.memory_pool_bytes,
+            "profile_hash": blake3::hash(
+                serde_json::to_string(profile)
+                    .map_err(|e| PyValueError::new_err(format!("Failed to encode profile: {e}")))?
+                    .as_bytes()
+            ).to_hex().to_string(),
+            "settings_hash": self.settings_hash()?,
+        });
+        let json_module = py.import("json")?;
+        let dumped = serde_json::to_string(&payload).map_err(|e| {
+            PyValueError::new_err(format!("Failed to encode profile snapshot payload: {e}"))
+        })?;
+        Ok(json_module.call_method1("loads", (dumped,))?.unbind())
     }
 
     fn __repr__(&self) -> String {

@@ -4024,10 +4024,6 @@ def validate_udf_info_schema_parity(ctx: SessionContext) -> None:
         ValueError: If the operation cannot be completed.
     """
     from datafusion_engine.udf.parity import udf_info_schema_parity_report
-    from datafusion_engine.udf.runtime import fallback_udfs_active
-
-    if fallback_udfs_active(ctx):
-        return
 
     report = udf_info_schema_parity_report(ctx)
     if report.error is not None:

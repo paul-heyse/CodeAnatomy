@@ -45,17 +45,6 @@ def _wrap_result(result: object) -> Expr:
         raise TypeError(msg) from exc
 
 
-def _fallback_expr(name: str, *args: object, **kwargs: object) -> Expr | None:
-    try:
-        from datafusion_engine.udf.fallback import fallback_expr
-    except ImportError:
-        return None
-    try:
-        return fallback_expr(name, *args, **kwargs)
-    except (RuntimeError, TypeError, ValueError):
-        return None
-
-
 def _join_expr_parts(parts: list[object]) -> Expr | None:
     if not parts:
         return None
@@ -142,11 +131,6 @@ def udf_expr(
         *args: Description.
         ctx: Description.
         **kwargs: Description.
-
-    Raises:
-        RuntimeError: If the operation cannot be completed.
-        TypeError: If the operation cannot be completed.
-        ValueError: If the operation cannot be completed.
     """
     call_args = list(args)
     if kwargs:
@@ -156,13 +140,7 @@ def udf_expr(
         expr = _ctx_udf_expr(ctx, name=call_name, args=call_args)
         if expr is not None:
             return expr
-    try:
-        return _extension_udf_expr(call_name, call_args)
-    except (RuntimeError, TypeError, ValueError):
-        fallback = _fallback_expr(call_name, *call_args)
-        if fallback is not None:
-            return fallback
-        raise
+    return _extension_udf_expr(call_name, call_args)
 
 
 __all__ = ["udf_expr"]

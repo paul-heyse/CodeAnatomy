@@ -511,6 +511,107 @@ fn install_function_factory(
         .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))
 }
 
+fn _json_string_list(value: Option<&JsonValue>) -> Vec<String> {
+    let Some(JsonValue::Array(values)) = value else {
+        return Vec::new();
+    };
+    values
+        .iter()
+        .filter_map(JsonValue::as_str)
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn _json_object<'a>(value: Option<&'a JsonValue>) -> Option<&'a JsonMap<String, JsonValue>> {
+    match value {
+        Some(JsonValue::Object(entries)) => Some(entries),
+        _ => None,
+    }
+}
+
+fn _dtype_for_param(
+    signature_inputs: Option<&JsonMap<String, JsonValue>>,
+    name: &str,
+    index: usize,
+) -> String {
+    let Some(entries) = signature_inputs else {
+        return "Utf8".to_string();
+    };
+    let Some(JsonValue::Array(signatures)) = entries.get(name) else {
+        return "Utf8".to_string();
+    };
+    let Some(JsonValue::Array(first_signature)) = signatures.first() else {
+        return "Utf8".to_string();
+    };
+    first_signature
+        .get(index)
+        .and_then(JsonValue::as_str)
+        .map_or_else(|| "Utf8".to_string(), ToString::to_string)
+}
+
+#[pyfunction]
+fn derive_function_factory_policy(py: Python<'_>, snapshot: &Bound<'_, PyAny>, allow_async: bool) -> PyResult<Py<PyAny>> {
+    let json_module = py.import("json")?;
+    let dumped = json_module.call_method1("dumps", (snapshot,))?;
+    let snapshot_json: String = dumped.extract()?;
+    let parsed: JsonValue = serde_json::from_str(&snapshot_json).map_err(|err| {
+        PyValueError::new_err(format!("Invalid snapshot payload for FunctionFactory policy: {err}"))
+    })?;
+    let snapshot_obj = parsed.as_object().ok_or_else(|| {
+        PyValueError::new_err("FunctionFactory policy derivation requires a mapping snapshot.")
+    })?;
+
+    let scalar_names = _json_string_list(snapshot_obj.get("scalar"));
+    let parameter_names = _json_object(snapshot_obj.get("parameter_names"));
+    let signature_inputs = _json_object(snapshot_obj.get("signature_inputs"));
+    let return_types = _json_object(snapshot_obj.get("return_types"));
+    let volatility = _json_object(snapshot_obj.get("volatility"));
+
+    let primitives = scalar_names
+        .iter()
+        .map(|name| {
+            let params = _json_string_list(parameter_names.and_then(|entries| entries.get(name)));
+            let params_payload = params
+                .iter()
+                .enumerate()
+                .map(|(index, param_name)| {
+                    json!({
+                        "name": param_name,
+                        "dtype": _dtype_for_param(signature_inputs, name, index),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let return_type = return_types
+                .and_then(|entries| entries.get(name))
+                .and_then(|value| value.as_array())
+                .and_then(|rows| rows.first())
+                .and_then(JsonValue::as_str)
+                .map_or_else(|| "Utf8".to_string(), ToString::to_string);
+            let volatility_value = volatility
+                .and_then(|entries| entries.get(name))
+                .and_then(JsonValue::as_str)
+                .map_or_else(|| "stable".to_string(), ToString::to_string);
+            json!({
+                "name": name,
+                "params": params_payload,
+                "return_type": return_type,
+                "volatility": volatility_value,
+                "description": JsonValue::Null,
+                "supports_named_args": !params.is_empty(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let domain_operator_hooks = _json_string_list(snapshot_obj.get("domain_operator_hooks"));
+    let payload = json!({
+        "primitives": primitives,
+        "prefer_named_arguments": parameter_names.map_or(false, |entries| !entries.is_empty()),
+        "allow_async": allow_async,
+        "domain_operator_hooks": domain_operator_hooks,
+    });
+    json_to_py(py, &payload)
+}
+
 #[pyfunction]
 fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let ctx = SessionContext::new();
@@ -1504,7 +1605,15 @@ fn table_dfschema_tree(ctx: PyRef<PySessionContext>, table_name: String) -> PyRe
 }
 
 #[pyfunction]
-fn install_schema_evolution_adapter_factory(_ctx: PyRef<PySessionContext>) -> PyResult<()> {
+fn install_schema_evolution_adapter_factory(ctx: PyRef<PySessionContext>) -> PyResult<()> {
+    let state_ref = ctx.ctx.state_ref();
+    let mut state = state_ref.write();
+    let config = state.config_mut();
+    ensure_physical_config(config.options_mut()).map_err(|err| {
+        PyRuntimeError::new_err(format!(
+            "Schema evolution adapter install failed while updating runtime config: {err}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -2990,6 +3099,7 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
         [
             crate::codeanatomy_ext::capabilities_snapshot,
             crate::codeanatomy_ext::install_function_factory,
+            crate::codeanatomy_ext::derive_function_factory_policy,
             crate::codeanatomy_ext::udf_expr,
         ]
     );
@@ -3064,6 +3174,7 @@ pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> Py
         module,
         [
             crate::codeanatomy_ext::install_function_factory,
+            crate::codeanatomy_ext::derive_function_factory_policy,
             crate::codeanatomy_ext::capabilities_snapshot,
             crate::codeanatomy_ext::arrow_stream_to_batches,
             crate::codeanatomy_ext::udf_expr,

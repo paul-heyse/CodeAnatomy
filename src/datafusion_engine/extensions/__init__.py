@@ -12,13 +12,19 @@ from datafusion_engine.extensions.plugin_manifest import (
     PluginManifestResolution,
     resolve_plugin_manifest,
 )
+from datafusion_engine.extensions.schema_evolution import (
+    install_schema_evolution_adapter_factory,
+    load_schema_evolution_adapter_factory,
+)
 
 __all__ = [
     "ExtensionContextPolicy",
     "ExtensionContextProbe",
     "ExtensionContextSelection",
     "PluginManifestResolution",
+    "install_schema_evolution_adapter_factory",
     "invoke_entrypoint_with_adapted_context",
+    "load_schema_evolution_adapter_factory",
     "resolve_extension_module",
     "resolve_plugin_manifest",
     "select_context_candidate",

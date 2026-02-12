@@ -36,15 +36,25 @@ CPG_OUTPUT_LEGACY_TO_CANONICAL: dict[str, str] = {
 # Canonical list used by all engine-native code paths.
 ENGINE_CPG_OUTPUTS: tuple[str, ...] = CANONICAL_CPG_OUTPUTS
 
-# Auxiliary outputs handled Python-side
+# Canonical auxiliary outputs produced by run_build contract artifacts.
 PYTHON_AUXILIARY_OUTPUTS: tuple[str, ...] = (
-    "write_normalize_outputs_delta",
-    "write_extract_error_artifacts_delta",
-    "write_run_manifest_delta",
+    "normalize_outputs_delta",
+    "extract_error_artifacts_delta",
+    "run_manifest_delta",
 )
 
+AUXILIARY_OUTPUT_CANONICAL_TO_LEGACY: dict[str, str] = {
+    "normalize_outputs_delta": "write_normalize_outputs_delta",
+    "extract_error_artifacts_delta": "write_extract_error_artifacts_delta",
+    "run_manifest_delta": "write_run_manifest_delta",
+}
+
 # Orchestrator-level outputs
-ORCHESTRATOR_OUTPUTS: tuple[str, ...] = ("write_run_bundle_dir",)
+ORCHESTRATOR_OUTPUTS: tuple[str, ...] = ("run_bundle_dir",)
+
+ORCHESTRATOR_OUTPUT_CANONICAL_TO_LEGACY: dict[str, str] = {
+    "run_bundle_dir": "write_run_bundle_dir",
+}
 
 # Full pipeline output set (union of all canonical sources)
 FULL_PIPELINE_OUTPUTS: tuple[str, ...] = (
@@ -64,6 +74,8 @@ OUTPUT_SOURCE_MAP: dict[str, str] = {
 OUTPUT_SOURCE_MAP_WITH_ALIASES: dict[str, str] = {
     **OUTPUT_SOURCE_MAP,
     **dict.fromkeys(LEGACY_CPG_OUTPUTS, "rust_engine"),
+    **dict.fromkeys(AUXILIARY_OUTPUT_CANONICAL_TO_LEGACY.values(), "python_auxiliary"),
+    **dict.fromkeys(ORCHESTRATOR_OUTPUT_CANONICAL_TO_LEGACY.values(), "orchestrator"),
 }
 
 
@@ -82,14 +94,21 @@ def output_aliases(name: str) -> tuple[str, ...]:
 
     Non-CPG outputs are returned as a singleton tuple.
     """
-    canonical = canonical_cpg_output_name(name)
-    legacy = CPG_OUTPUT_CANONICAL_TO_LEGACY.get(canonical)
-    if legacy is None:
-        return (name,)
-    return (canonical, legacy)
+    canonical_cpg = canonical_cpg_output_name(name)
+    cpg_legacy = CPG_OUTPUT_CANONICAL_TO_LEGACY.get(canonical_cpg)
+    if cpg_legacy is not None:
+        return (canonical_cpg, cpg_legacy)
+    for canonical, legacy in AUXILIARY_OUTPUT_CANONICAL_TO_LEGACY.items():
+        if name in {canonical, legacy}:
+            return (canonical, legacy)
+    for canonical, legacy in ORCHESTRATOR_OUTPUT_CANONICAL_TO_LEGACY.items():
+        if name in {canonical, legacy}:
+            return (canonical, legacy)
+    return (name,)
 
 
 __all__ = [
+    "AUXILIARY_OUTPUT_CANONICAL_TO_LEGACY",
     "CANONICAL_CPG_OUTPUTS",
     "CPG_OUTPUT_CANONICAL_TO_LEGACY",
     "CPG_OUTPUT_LEGACY_TO_CANONICAL",
@@ -97,6 +116,7 @@ __all__ = [
     "FULL_PIPELINE_OUTPUTS",
     "LEGACY_CPG_OUTPUTS",
     "ORCHESTRATOR_OUTPUTS",
+    "ORCHESTRATOR_OUTPUT_CANONICAL_TO_LEGACY",
     "OUTPUT_SOURCE_MAP",
     "OUTPUT_SOURCE_MAP_WITH_ALIASES",
     "PYTHON_AUXILIARY_OUTPUTS",

@@ -172,11 +172,11 @@ def orchestrate_build(  # noqa: PLR0913
             output_dir=output_dir,
             runtime_config=runtime_config,
         )
-        run_result = _execute_engine_phase(semantic_inputs, spec, engine_profile)
+        run_result, run_artifacts = _execute_engine_phase(semantic_inputs, spec, engine_profile)
         cpg_outputs = _collect_cpg_outputs(run_result, output_dir=output_dir)
-        auxiliary_outputs = _write_auxiliary_outputs(
+        auxiliary_outputs = _collect_auxiliary_outputs(
             output_dir=output_dir,
-            spec=spec,
+            artifacts=run_artifacts,
             run_result=run_result,
             extraction_result=extraction_result,
             include_errors=include_errors,
@@ -306,7 +306,7 @@ def _execute_engine_phase(
     semantic_input_locations: dict[str, str],
     spec: SemanticExecutionSpec,
     engine_profile: str,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], dict[str, object]]:
     with stage_span("engine_execute", stage="engine", scope_name=SCOPE_PIPELINE):
         t_start = time.monotonic()
         try:
@@ -345,9 +345,11 @@ def _execute_engine_phase(
         response_payload = response if isinstance(response, dict) else {}
         run_payload = response_payload.get("run_result")
         run_result = run_payload if isinstance(run_payload, dict) else {}
+        artifacts_payload = response_payload.get("artifacts")
+        artifacts = artifacts_payload if isinstance(artifacts_payload, dict) else {}
         elapsed = time.monotonic() - t_start
         logger.info("Rust engine execution complete in %.2fs", elapsed)
-    return run_result
+    return run_result, artifacts
 
 
 def _record_observability(
@@ -457,10 +459,10 @@ def _collect_cpg_outputs(
     return outputs
 
 
-def _write_auxiliary_outputs(  # noqa: PLR0913
+def _collect_auxiliary_outputs(  # noqa: PLR0913
     *,
     output_dir: Path,
-    spec: SemanticExecutionSpec,
+    artifacts: dict[str, object],
     run_result: dict[str, object],
     extraction_result: ExtractionResult,
     include_errors: bool,
@@ -468,202 +470,74 @@ def _write_auxiliary_outputs(  # noqa: PLR0913
     include_run_bundle: bool,
 ) -> dict[str, dict[str, object]]:
     with stage_span("auxiliary_outputs", stage="orchestrator", scope_name=SCOPE_PIPELINE):
+        _ = run_result, extraction_result
         auxiliary: dict[str, dict[str, object]] = {}
+        paths = _artifact_path_map(artifacts, output_dir=output_dir)
 
-        normalize_location = _write_normalize_outputs(
-            output_dir=output_dir,
-            spec=spec,
-        )
-        if normalize_location:
-            auxiliary["write_normalize_outputs_delta"] = {"path": normalize_location}
+        normalize_location = paths.get("normalize_outputs_delta")
+        if isinstance(normalize_location, str) and normalize_location:
+            payload: dict[str, object] = {"path": normalize_location}
+            auxiliary["normalize_outputs_delta"] = payload
+            auxiliary["write_normalize_outputs_delta"] = payload
 
-        if include_errors and extraction_result.errors:
-            error_location = _write_extract_error_artifacts(
-                output_dir=output_dir,
-                errors=extraction_result.errors,
-            )
-            if error_location:
-                auxiliary["write_extract_error_artifacts_delta"] = {
+        if include_errors:
+            error_location = paths.get("extract_error_artifacts_delta")
+            if isinstance(error_location, str) and error_location:
+                payload: dict[str, object] = {
                     "path": error_location,
                     "rows": len(extraction_result.errors),
                 }
+                auxiliary["extract_error_artifacts_delta"] = payload
+                auxiliary["write_extract_error_artifacts_delta"] = payload
 
         if include_manifest:
-            manifest_location = _write_run_manifest(
-                output_dir=output_dir,
-                spec=spec,
-                run_result=run_result,
-                extraction_result=extraction_result,
-            )
-            if manifest_location:
-                auxiliary["write_run_manifest_delta"] = {"path": manifest_location}
+            manifest_location = paths.get("run_manifest_delta")
+            if isinstance(manifest_location, str) and manifest_location:
+                payload: dict[str, object] = {"path": manifest_location}
+                auxiliary["run_manifest_delta"] = payload
+                auxiliary["write_run_manifest_delta"] = payload
 
         if include_run_bundle:
-            bundle_location = _write_run_bundle_dir(
-                output_dir=output_dir,
-                spec=spec,
-                run_result=run_result,
-                extraction_result=extraction_result,
-            )
-            if bundle_location:
-                auxiliary["write_run_bundle_dir"] = {
+            bundle_location = paths.get("run_bundle_dir")
+            if isinstance(bundle_location, str) and bundle_location:
+                payload: dict[str, object] = {
                     "bundle_dir": bundle_location,
                     "run_id": Path(bundle_location).name,
                 }
+                auxiliary["run_bundle_dir"] = payload
+                auxiliary["write_run_bundle_dir"] = payload
 
-        logger.info("Wrote %d auxiliary outputs", len(auxiliary))
+        logger.info("Collected %d auxiliary outputs from Rust artifacts", len(auxiliary))
 
     return auxiliary
 
 
-def _write_normalize_outputs(
+def _artifact_path_map(
+    artifacts: dict[str, object],
     *,
     output_dir: Path,
-    spec: SemanticExecutionSpec,
-) -> str | None:
-    import deltalake
-    import pyarrow as pa
-
-    normalize_dir = output_dir / "normalize_outputs"
-    normalize_dir.mkdir(parents=True, exist_ok=True)
-
-    output_names = [view.name for view in spec.view_definitions]
-
-    schema = pa.schema(
-        [
-            pa.field("event_time_unix_ms", pa.int64()),
-            pa.field("output_dir", pa.string()),
-            pa.field("outputs", pa.string()),
-            pa.field("row_count", pa.int64()),
-        ]
-    )
-    arrays = [
-        pa.array([int(time.time() * 1000)]),
-        pa.array([str(output_dir)]),
-        pa.array([msgspec.json.encode(output_names).decode()]),
-        pa.array([len(output_names)]),
-    ]
-    table = pa.table(dict(zip(schema.names, arrays, strict=False)), schema=schema)
-
-    location = str(normalize_dir)
-    deltalake.write_deltalake(location, table, mode="overwrite")
-    logger.info("Wrote normalize outputs metadata to %s", location)
-    return location
-
-
-def _write_extract_error_artifacts(
-    *,
-    output_dir: Path,
-    errors: list[dict[str, object]],
-) -> str | None:
-    import deltalake
-    import pyarrow as pa
-
-    if not errors:
-        return None
-
-    error_dir = output_dir / "extract_errors"
-    error_dir.mkdir(parents=True, exist_ok=True)
-
-    schema = pa.schema(
-        [
-            pa.field("extractor", pa.string()),
-            pa.field("error", pa.string()),
-        ]
-    )
-    arrays = [
-        pa.array([str(err.get("extractor", "unknown")) for err in errors]),
-        pa.array([str(err.get("error", "")) for err in errors]),
-    ]
-    table = pa.table(dict(zip(schema.names, arrays, strict=False)), schema=schema)
-
-    location = str(error_dir)
-    deltalake.write_deltalake(location, table, mode="overwrite")
-    logger.info("Wrote %d extraction errors to %s", len(errors), location)
-    return location
-
-
-def _write_run_manifest(
-    *,
-    output_dir: Path,
-    spec: SemanticExecutionSpec,
-    run_result: dict[str, object],
-    extraction_result: ExtractionResult,
-) -> str | None:
-    import deltalake
-    import pyarrow as pa
-
-    from utils.hashing import hash_msgpack_canonical
-
-    manifest_dir = output_dir / "run_manifest"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
-
-    spec_payload = msgspec.to_builtins(spec)
-    spec_hash = hash_msgpack_canonical(spec_payload)
-    run_result_hash = hash_msgpack_canonical(run_result)
-
-    manifest_payload = {
-        "spec_hash": spec_hash,
-        "run_result_hash": run_result_hash,
-        "extraction_delta_locations": extraction_result.delta_locations,
-        "extraction_timing": extraction_result.timing,
-        "extraction_errors": len(extraction_result.errors),
-        "view_count": len(spec.view_definitions),
-        "input_relation_count": len(spec.input_relations),
-        "output_target_count": len(spec.output_targets),
-    }
-
-    schema = pa.schema(
-        [
-            pa.field("spec_hash", pa.string()),
-            pa.field("run_result_hash", pa.string()),
-            pa.field("extraction_delta_locations", pa.string()),
-            pa.field("extraction_timing", pa.string()),
-            pa.field("extraction_errors", pa.int64()),
-            pa.field("view_count", pa.int64()),
-            pa.field("input_relation_count", pa.int64()),
-            pa.field("output_target_count", pa.int64()),
-        ]
-    )
-    arrays = [
-        pa.array([manifest_payload["spec_hash"]]),
-        pa.array([manifest_payload["run_result_hash"]]),
-        pa.array([msgspec.json.encode(manifest_payload["extraction_delta_locations"]).decode()]),
-        pa.array([msgspec.json.encode(manifest_payload["extraction_timing"]).decode()]),
-        pa.array([manifest_payload["extraction_errors"]]),
-        pa.array([manifest_payload["view_count"]]),
-        pa.array([manifest_payload["input_relation_count"]]),
-        pa.array([manifest_payload["output_target_count"]]),
-    ]
-    table = pa.table(dict(zip(schema.names, arrays, strict=False)), schema=schema)
-
-    location = str(manifest_dir)
-    deltalake.write_deltalake(location, table, mode="overwrite")
-    logger.info("Wrote run manifest to %s", location)
-    return location
-
-
-def _write_run_bundle_dir(
-    *,
-    output_dir: Path,
-    spec: SemanticExecutionSpec,
-    run_result: dict[str, object],
-    extraction_result: ExtractionResult,
-) -> str | None:
-    bundle_dir = output_dir / "run_bundle"
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-
-    spec_file = bundle_dir / "execution_spec.json"
-    spec_file.write_text(msgspec.json.encode(msgspec.to_builtins(spec)).decode())
-
-    result_file = bundle_dir / "run_result.json"
-    result_file.write_text(msgspec.json.encode(run_result).decode())
-
-    extraction_file = bundle_dir / "extraction.json"
-    extraction_file.write_text(msgspec.json.encode(msgspec.to_builtins(extraction_result)).decode())
-
-    logger.info("Wrote run bundle to %s", bundle_dir)
-    return str(bundle_dir)
+) -> dict[str, str]:
+    paths: dict[str, str] = {}
+    auxiliary = artifacts.get("auxiliary_outputs")
+    if isinstance(auxiliary, dict):
+        paths.update(
+            {
+                key: value
+                for key, value in auxiliary.items()
+                if isinstance(key, str) and isinstance(value, str) and value
+            }
+        )
+    manifest_path = artifacts.get("manifest_path")
+    if isinstance(manifest_path, str) and manifest_path:
+        paths.setdefault("run_manifest_delta", manifest_path)
+    run_bundle_dir = artifacts.get("run_bundle_dir")
+    if isinstance(run_bundle_dir, str) and run_bundle_dir:
+        paths.setdefault("run_bundle_dir", run_bundle_dir)
+    # Compatibility fallback while the Rust contract rollout is in-flight.
+    paths.setdefault("normalize_outputs_delta", str(output_dir / "normalize_outputs"))
+    paths.setdefault("run_manifest_delta", str(output_dir / "run_manifest"))
+    paths.setdefault("run_bundle_dir", str(output_dir / "run_bundle"))
+    return paths
 
 
 def _extract_warnings(run_result: dict[str, object]) -> list[dict[str, object]]:

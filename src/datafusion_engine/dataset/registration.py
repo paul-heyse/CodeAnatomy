@@ -1091,23 +1091,11 @@ def _validate_constraints_and_defaults(
 
 
 def _install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
-    module = None
-    for module_name in ("datafusion._internal", "datafusion_ext"):
-        try:
-            candidate = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        if hasattr(candidate, "install_schema_evolution_adapter_factory"):
-            module = candidate
-            break
-    if module is None:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
-        raise RuntimeError(msg)
-    installer = getattr(module, "install_schema_evolution_adapter_factory", None)
-    if not callable(installer):
-        msg = "Schema evolution adapter installer is unavailable in the extension module."
-        raise TypeError(msg)
-    installer(ctx)
+    from datafusion_engine.extensions.schema_evolution import (
+        install_schema_evolution_adapter_factory,
+    )
+
+    install_schema_evolution_adapter_factory(ctx)
 
 
 def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec | None:

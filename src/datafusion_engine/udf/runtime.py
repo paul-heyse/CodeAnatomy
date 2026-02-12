@@ -36,7 +36,6 @@ _RUST_UDF_POLICIES: WeakKeyDictionary[
 ] = WeakKeyDictionary()
 _RUST_UDF_VALIDATED: WeakSet[SessionContext] = WeakSet()
 _RUST_UDF_DDL: WeakSet[SessionContext] = WeakSet()
-_RUST_UDF_FALLBACK_CONTEXTS: WeakSet[SessionContext] = WeakSet()
 
 _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "scalar",
@@ -111,14 +110,60 @@ _EXPR_SURFACE_SNAPSHOT_ENTRIES: Mapping[str, Mapping[str, object]] = {
 
 
 def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
+    expected = {"major": _EXPECTED_PLUGIN_ABI_MAJOR, "minor": _EXPECTED_PLUGIN_ABI_MINOR}
     try:
         internal = _datafusion_internal()
-        ctx_arg = _module_ctx_arg(internal, ctx)
-        snapshot = internal.registry_snapshot(ctx_arg)
-    except (ImportError, AttributeError, TypeError, ValueError):
-        return _fallback_registry_snapshot(ctx)
+    except ImportError as exc:
+        msg = (
+            "Rust UDF registry snapshot is unavailable. "
+            "Rebuild and install matching datafusion/datafusion_ext wheels "
+            "(scripts/build_datafusion_wheels.sh + uv sync)."
+        )
+        raise RuntimeError(msg) from exc
+    snapshotter = getattr(internal, "registry_snapshot", None)
+    if not callable(snapshotter):
+        msg = (
+            "Rust UDF registry snapshot hook is unavailable in the extension module. "
+            "Rebuild and install matching datafusion/datafusion_ext wheels "
+            "(scripts/build_datafusion_wheels.sh + uv sync)."
+        )
+        raise TypeError(msg)
+    ctx_arg = _module_ctx_arg(internal, ctx)
+    try:
+        snapshot = snapshotter(ctx_arg)
+    except TypeError as exc:
+        message = str(exc)
+        if "cannot be converted" in message:
+            internal_ctx = getattr(ctx, "ctx", None)
+            if internal_ctx is not None and internal_ctx is not ctx_arg:
+                try:
+                    snapshot = snapshotter(internal_ctx)
+                except TypeError:
+                    pass
+                else:
+                    return _normalize_registry_snapshot(snapshot, ctx=ctx)
+            msg = (
+                "Rust UDF registry snapshot failed due to SessionContext ABI mismatch. "
+                f"expected_plugin_abi={expected}. "
+                "Rebuild and install matching datafusion/datafusion_ext wheels "
+                "(scripts/build_datafusion_wheels.sh + uv sync)."
+            )
+            raise TypeError(msg) from exc
+        raise
+    except (RuntimeError, ValueError) as exc:
+        msg = f"Rust UDF registry snapshot failed: {exc}"
+        raise RuntimeError(msg) from exc
+    return _normalize_registry_snapshot(snapshot, ctx=ctx)
+
+
+def _normalize_registry_snapshot(
+    snapshot: object,
+    *,
+    ctx: SessionContext,
+) -> Mapping[str, object]:
     if not isinstance(snapshot, Mapping):
-        return _fallback_registry_snapshot(ctx)
+        msg = "datafusion extension registry_snapshot returned a non-mapping payload."
+        raise TypeError(msg)
     payload = dict(snapshot)
     payload.pop("pycapsule_udfs", None)
     # Preserve the key for diagnostics/tests while dropping non-serializable payloads.
@@ -181,11 +226,15 @@ def _install_rust_udfs(
     try:
         installer(ctx_arg, enable_async, async_udf_timeout_ms, async_udf_batch_size)
     except TypeError:
-        return
+        internal_ctx = getattr(ctx, "ctx", None)
+        if internal_ctx is None or internal_ctx is ctx_arg:
+            return
+        with contextlib.suppress(TypeError):
+            installer(internal_ctx, enable_async, async_udf_timeout_ms, async_udf_batch_size)
 
 
 def _datafusion_internal() -> ModuleType:
-    for module_name in ("datafusion._internal", "datafusion_ext"):
+    for module_name in ("datafusion_ext", "datafusion._internal"):
         try:
             module = importlib.import_module(module_name)
         except ImportError:
@@ -206,7 +255,7 @@ def _module_ctx_arg(module: ModuleType, ctx: SessionContext) -> object:
 
 
 def _extension_module_with_capabilities() -> ModuleType | None:
-    for module_name in ("datafusion._internal", "datafusion_ext"):
+    for module_name in ("datafusion_ext", "datafusion._internal"):
         try:
             module = importlib.import_module(module_name)
         except ImportError:
@@ -310,17 +359,6 @@ def udf_backend_available() -> bool:
     return callable(installer) and callable(snapshotter)
 
 
-def fallback_udfs_active(ctx: SessionContext) -> bool:
-    """Return whether fallback Python UDFs were installed for a context.
-
-    Returns:
-    -------
-    bool
-        ``True`` when fallback UDFs are registered for the context.
-    """
-    return ctx in _RUST_UDF_FALLBACK_CONTEXTS
-
-
 def _empty_registry_snapshot() -> dict[str, object]:
     return {
         "scalar": [],
@@ -340,15 +378,6 @@ def _empty_registry_snapshot() -> dict[str, object]:
         "config_defaults": {},
         "custom_udfs": [],
     }
-
-
-def _fallback_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    from datafusion_engine.udf.fallback import fallback_udf_snapshot, register_fallback_udfs
-
-    register_fallback_udfs(ctx)
-    _RUST_UDF_FALLBACK_CONTEXTS.add(ctx)
-    payload = dict(fallback_udf_snapshot())
-    return _supplement_expr_surface_snapshot(payload, ctx=ctx)
 
 
 def _coerce_nonstring_sequence(value: object) -> tuple[object, ...] | None:
@@ -1021,11 +1050,19 @@ def _async_udf_policy(
 
 
 def _install_udf_config(ctx: SessionContext) -> None:
-    internal = _datafusion_internal()
+    try:
+        internal = _datafusion_internal()
+    except ImportError:
+        return
     installer = getattr(internal, "install_codeanatomy_udf_config", None)
     if callable(installer):
         with contextlib.suppress(RuntimeError, TypeError, ValueError):
             installer(_module_ctx_arg(internal, ctx))
+            return
+        internal_ctx = getattr(ctx, "ctx", None)
+        if internal_ctx is not None:
+            with contextlib.suppress(RuntimeError, TypeError, ValueError):
+                installer(internal_ctx)
 
 
 def _registered_snapshot(
@@ -1317,7 +1354,6 @@ __all__ = [
     "RustUdfSnapshot",
     "extension_capabilities_report",
     "extension_capabilities_snapshot",
-    "fallback_udfs_active",
     "register_rust_udfs",
     "register_udfs_via_ddl",
     "rust_udf_docs",

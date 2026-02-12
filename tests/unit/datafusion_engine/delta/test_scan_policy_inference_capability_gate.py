@@ -5,7 +5,7 @@ from __future__ import annotations
 from datafusion_engine.delta.scan_policy_inference import derive_scan_policy_overrides
 from datafusion_engine.lineage.datafusion import LineageReport, ScanLineage
 from datafusion_engine.plan.signals import NormalizedPlanStats, PlanSignals
-from schema_spec.system import DeltaScanPolicyDefaults, ScanPolicyConfig, ScanPolicyDefaults
+from schema_spec.contracts import DeltaScanPolicyDefaults, ScanPolicyConfig, ScanPolicyDefaults
 
 
 def _policy(

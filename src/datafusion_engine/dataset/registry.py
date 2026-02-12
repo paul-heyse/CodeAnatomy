@@ -29,7 +29,7 @@ from utils.registry_protocol import MutableRegistry
 if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.system import (
+    from schema_spec.contracts import (
         ArrowValidationOptions,
         DataFusionScanOptions,
         DatasetSpec,
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     )
 else:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
-    from schema_spec.system import (
+    from schema_spec.contracts import (
         ArrowValidationOptions,
         DataFusionScanOptions,
         DatasetSpec,
@@ -593,7 +593,7 @@ def apply_scan_policy_overrides_to_location(
     if delta_scan is not None:
         delta_bundle = policies.delta_bundle
         if delta_bundle is None:
-            from schema_spec.system import DeltaPolicyBundle as _DeltaPolicyBundle
+            from schema_spec.contracts import DeltaPolicyBundle as _DeltaPolicyBundle
 
             delta_bundle = _DeltaPolicyBundle(scan=delta_scan)
         else:
@@ -615,7 +615,7 @@ def _resolve_dataset_schema_internal(
     if table_spec is not None:
         return table_spec.to_arrow_schema()
     if location.dataset_spec is not None:
-        from schema_spec.system import dataset_spec_schema
+        from schema_spec.contracts import dataset_spec_schema
 
         return dataset_spec_schema(location.dataset_spec)
     if location.format == "delta":

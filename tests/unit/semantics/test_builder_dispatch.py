@@ -254,31 +254,13 @@ class TestRegistryFunctions:
         for name, builder in registry.items():
             assert callable(builder), f"Builder for {name!r} is not callable"
 
-    def test_finalize_registry_keys(self) -> None:
-        """The finalize registry returns CPG output builders."""
-        from semantics.pipeline import _finalize_registry
+    def test_finalize_kind_is_rust_only(self) -> None:
+        """FINALIZE views should be rejected in Python dispatch."""
+        from semantics.pipeline import _builder_for_project_kind
 
-        # _finalize_registry needs real context.runtime_profile and
-        # context.manifest because _cpg_output_view_specs accesses them.
-        # Build a mock with the .session_runtime() chain.
-        mock_runtime_profile = MagicMock()
-        mock_session_runtime = MagicMock()
-        mock_runtime_profile.session_runtime.return_value = mock_session_runtime
-        mock_session_runtime.semantic_output_key = "test_key"
-        mock_session_runtime.semantic_output_format = "delta"
-
-        ctx = MagicMock()
-        ctx.runtime_profile = mock_runtime_profile
-        ctx.manifest = MagicMock()
-
-        # The registry may raise if the mock is insufficient for
-        # _cpg_output_view_specs; guard with try/except for robustness.
-        try:
-            registry = _finalize_registry(ctx)
-            assert len(registry) > 0
-        except (AttributeError, TypeError):
-            # Expected if mock is too shallow for the full builder chain.
-            pytest.skip("Mock insufficient for _cpg_output_view_specs")
+        spec = _make_spec("cpg_nodes", "finalize")
+        with pytest.raises(ValueError, match="Rust CpgEmit transforms"):
+            _builder_for_project_kind(spec, _stub_context())
 
     def test_registry_builders_are_callable(self) -> None:
         """All registry values must be callable DataFrameBuilder instances."""

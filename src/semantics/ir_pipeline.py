@@ -485,35 +485,146 @@ def _build_export_rows() -> tuple[SemanticDatasetRow, ...]:
 
 
 def _build_cpg_output_rows() -> tuple[SemanticDatasetRow, ...]:
-    from semantics.cpg.emit_specs import cpg_output_specs
-
-    rows: list[SemanticDatasetRow] = []
-    for spec in cpg_output_specs():
-        canonical = canonical_output_name(spec.name)
-        source_dataset = canonical_output_name(spec.source_dataset) if spec.source_dataset else None
-        rows.append(
-            SemanticDatasetRow(
-                name=canonical,
-                version=SEMANTIC_SCHEMA_VERSION,
-                bundles=spec.bundles,
-                fields=spec.fields,
-                category="semantic",
-                supports_cdf=True,
-                partition_cols=spec.partition_cols,
-                merge_keys=spec.merge_keys,
-                join_keys=spec.join_keys,
-                template=spec.template,
-                view_builder=spec.view_builder,
-                register_view=True,
-                source_dataset=source_dataset,
-                entity=spec.entity,
-                grain=spec.grain,
-                stability="design",
-                materialization="delta",
-                materialized_name=f"semantic.{canonical}",
-            )
+    # Canonical CPG outputs are now Rust-owned (`ViewTransform::CpgEmit`).
+    # Keep Python-side dataset rows as static contract metadata only.
+    rows: tuple[
+        tuple[
+            str,
+            tuple[str, ...],
+            tuple[str, ...],
+            tuple[str, ...],
+            tuple[str, ...],
+            str,
+            str,
+            str,
+            str,
+            str | None,
+        ],
+        ...,
+    ] = (
+        (
+            "cpg_nodes",
+            ("node_kind", "node_id", "task_name", "task_priority"),
+            ("file_identity", "span"),
+            ("node_id",),
+            ("node_id",),
+            "node",
+            "per_node",
+            "cpg_output",
+            "cpg_nodes_df_builder",
+            None,
+        ),
+        (
+            "cpg_edges",
+            (
+                "edge_id",
+                "edge_kind",
+                "src_node_id",
+                "dst_node_id",
+                "origin",
+                "resolution_method",
+                "confidence",
+                "score",
+                "symbol_roles",
+                "qname_source",
+                "ambiguity_group_id",
+                "task_name",
+                "task_priority",
+            ),
+            ("file_identity", "span"),
+            ("edge_id",),
+            ("edge_id",),
+            "edge",
+            "per_edge",
+            "cpg_output",
+            "cpg_edges_df_builder",
+            None,
+        ),
+        (
+            "cpg_props",
+            (
+                "entity_kind",
+                "entity_id",
+                "node_kind",
+                "prop_key",
+                "value_type",
+                "value_string",
+                "value_int",
+                "value_float",
+                "value_bool",
+                "value_json",
+                "task_name",
+                "task_priority",
+            ),
+            ("file_identity",),
+            ("entity_kind", "entity_id", "prop_key"),
+            ("entity_kind", "entity_id", "prop_key"),
+            "prop",
+            "per_prop",
+            "cpg_output",
+            "cpg_props_df_builder",
+            None,
+        ),
+        (
+            "cpg_props_map",
+            ("entity_kind", "entity_id", "node_kind", "props"),
+            (),
+            ("entity_kind", "entity_id"),
+            ("entity_kind", "entity_id"),
+            "prop",
+            "per_entity",
+            "cpg_adjacency",
+            "cpg_props_map_df_builder",
+            "cpg_props",
+        ),
+        (
+            "cpg_edges_by_src",
+            ("src_node_id", "edges"),
+            (),
+            ("src_node_id",),
+            ("src_node_id",),
+            "edge",
+            "per_node",
+            "cpg_adjacency",
+            "cpg_edges_by_src_df_builder",
+            "cpg_edges",
+        ),
+        (
+            "cpg_edges_by_dst",
+            ("dst_node_id", "edges"),
+            (),
+            ("dst_node_id",),
+            ("dst_node_id",),
+            "edge",
+            "per_node",
+            "cpg_adjacency",
+            "cpg_edges_by_dst_df_builder",
+            "cpg_edges",
+        ),
+    )
+    return tuple(
+        SemanticDatasetRow(
+            name=canonical_output_name(name),
+            version=SEMANTIC_SCHEMA_VERSION,
+            bundles=bundles,
+            fields=fields,
+            category="semantic",
+            supports_cdf=True,
+            partition_cols=(),
+            merge_keys=merge_keys,
+            join_keys=join_keys,
+            template=template,
+            view_builder=view_builder,
+            register_view=True,
+            source_dataset=canonical_output_name(source_dataset) if source_dataset else None,
+            entity=entity,
+            grain=grain,
+            stability="design",
+            materialization="delta",
+            materialized_name=f"semantic.{canonical_output_name(name)}",
         )
-    return tuple(rows)
+        for name, fields, bundles, merge_keys, join_keys, entity, grain, template, view_builder, source_dataset in rows
+    )
 
 
 def _build_semantic_dataset_rows(model: SemanticModel) -> tuple[SemanticDatasetRow, ...]:
@@ -753,19 +864,8 @@ def compile_semantics(model: SemanticModel) -> SemanticIR:
     for output_spec in model.outputs:
         _emit_output_spec(output_spec)
 
-    cpg_entities = model.cpg_entity_specs()
-    cpg_node_inputs = tuple(
-        sorted({spec.node_table for spec in cpg_entities if spec.node_table is not None})
-    )
-    prop_inputs: set[str] = set()
-    for spec in cpg_entities:
-        if not spec.prop_source_map:
-            continue
-        table_name = spec.prop_table or spec.node_table
-        if table_name is None:
-            continue
-        prop_inputs.add(table_name)
-    cpg_prop_inputs = tuple(sorted(prop_inputs))
+    cpg_node_inputs = model.normalization_output_names(include_nodes_only=True)
+    cpg_prop_inputs = cpg_node_inputs
     cpg_nodes = canonical_output_name("cpg_nodes")
     cpg_edges = canonical_output_name("cpg_edges")
     cpg_props = canonical_output_name("cpg_props")
@@ -870,8 +970,6 @@ def optimize_semantics(
     optimized = SemanticIR(
         views=tuple(ordered),
         dataset_rows=ir.dataset_rows,
-        cpg_node_specs=ir.cpg_node_specs,
-        cpg_prop_specs=ir.cpg_prop_specs,
         join_groups=ordered_join_groups,
     )
     return prune_ir(optimized, outputs=outputs)
@@ -891,8 +989,6 @@ def emit_semantics(ir: SemanticIR) -> SemanticIR:
     return SemanticIR(
         views=ir.views,
         dataset_rows=dataset_rows,
-        cpg_node_specs=SEMANTIC_MODEL.cpg_node_specs(),
-        cpg_prop_specs=SEMANTIC_MODEL.cpg_prop_specs(),
         join_groups=ir.join_groups,
         model_hash=model_hash,
         ir_hash=ir_hash,
@@ -1255,8 +1351,6 @@ def infer_semantics(ir: SemanticIR) -> SemanticIR:
     return SemanticIR(
         views=tuple(enriched),
         dataset_rows=ir.dataset_rows,
-        cpg_node_specs=ir.cpg_node_specs,
-        cpg_prop_specs=ir.cpg_prop_specs,
         join_groups=ir.join_groups,
         model_hash=ir.model_hash,
         ir_hash=ir.ir_hash,

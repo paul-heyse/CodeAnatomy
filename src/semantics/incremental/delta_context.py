@@ -161,7 +161,7 @@ def register_delta_df(
         table_spec = resolved_location.table_spec
     overrides = None
     if resolved_scan is not None or table_spec is not None:
-        from schema_spec.system import DeltaPolicyBundle
+        from schema_spec.contracts import DeltaPolicyBundle
 
         delta_bundle = DeltaPolicyBundle(scan=resolved_scan) if resolved_scan is not None else None
         overrides = DatasetLocationOverrides(delta=delta_bundle, table_spec=table_spec)

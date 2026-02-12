@@ -11,7 +11,7 @@ import pytest
 
 from datafusion_engine.dataset import resolution as resolution_module
 from datafusion_engine.dataset.registry import DatasetLocation
-from schema_spec.system import DeltaScanPolicyDefaults, ScanPolicyConfig, ScanPolicyDefaults
+from schema_spec.contracts import DeltaScanPolicyDefaults, ScanPolicyConfig, ScanPolicyDefaults
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

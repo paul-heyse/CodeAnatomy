@@ -17,11 +17,7 @@ from semantics.specs import SemanticTableSpec
 from utils.registry_protocol import MappingRegistryAdapter
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
-
     from semantics.catalog.dataset_rows import SemanticDatasetRow
-    from semantics.cpg.specs import NodePlanSpec, PropTableSpec
-    from semantics.cpg_entity_specs import CpgEntitySpec
 
 
 def _generate_semantic_table_specs() -> dict[str, SemanticTableSpec]:
@@ -284,51 +280,6 @@ class SemanticModel:
         from semantics.compile_context import semantic_ir_for_outputs
 
         return semantic_ir_for_outputs().dataset_rows
-
-    def cpg_node_specs(self) -> tuple[NodePlanSpec, ...]:
-        """Return CPG node plan specs generated from the model.
-
-        Returns:
-        -------
-        tuple[NodePlanSpec, ...]
-            CPG node plan specs.
-        """
-        from semantics.cpg.spec_registry import build_node_plan_specs
-
-        return build_node_plan_specs(self)
-
-    def cpg_prop_specs(
-        self,
-        *,
-        source_columns_lookup: Callable[[str], Sequence[str] | None] | None = None,
-    ) -> tuple[PropTableSpec, ...]:
-        """Return CPG prop table specs generated from the model.
-
-        Parameters
-        ----------
-        source_columns_lookup
-            Optional lookup for source columns by table name.
-
-        Returns:
-        -------
-        tuple[PropTableSpec, ...]
-            CPG prop table specs.
-        """
-        from semantics.cpg.spec_registry import build_prop_table_specs
-
-        return build_prop_table_specs(self, source_columns_lookup=source_columns_lookup)
-
-    def cpg_entity_specs(self) -> tuple[CpgEntitySpec, ...]:
-        """Return CPG entity specs generated from the model.
-
-        Returns:
-        -------
-        tuple[CpgEntitySpec, ...]
-            CPG entity specs for node and prop emission.
-        """
-        from semantics.cpg_entity_specs import build_cpg_entity_specs
-
-        return build_cpg_entity_specs(self)
 
     def normalization_output_names(self, *, include_nodes_only: bool = False) -> tuple[str, ...]:
         """Return normalization output names in model order.

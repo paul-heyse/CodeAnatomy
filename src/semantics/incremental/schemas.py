@@ -7,7 +7,7 @@ import pyarrow as pa
 from datafusion_engine.arrow.interop import SchemaLike
 from datafusion_engine.schema.registry import registered_table_names
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
-from schema_spec.system import (
+from schema_spec.contracts import (
     DatasetSpec,
     DeltaMaintenancePolicy,
     dataset_spec_from_schema,
@@ -46,7 +46,7 @@ def _is_incremental_schema(schema: SchemaLike) -> bool:
 
 
 def _incremental_maintenance_policy(spec: DatasetSpec) -> DeltaMaintenancePolicy | None:
-    from schema_spec.system import dataset_spec_schema
+    from schema_spec.contracts import dataset_spec_schema
 
     schema = dataset_spec_schema(spec)
     resolved = schema if isinstance(schema, pa.Schema) else pa.schema(schema)

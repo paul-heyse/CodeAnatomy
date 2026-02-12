@@ -46,7 +46,7 @@ from datafusion_engine.session.runtime import (
     FeatureGatesConfig,
     PolicyBundleConfig,
 )
-from schema_spec.system import DeltaPolicyBundle
+from schema_spec.contracts import DeltaPolicyBundle
 from storage.deltalake.config import DeltaSchemaPolicy
 
 

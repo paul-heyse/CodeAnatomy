@@ -23,9 +23,14 @@ from datafusion_engine.session.runtime import (
 from datafusion_engine.udf.catalog import DataFusionUdfSpecSnapshot, UdfCatalogSnapshot
 from obs.otel.config import OtelConfigSpec
 from schema_spec.arrow_types import ArrowPrimitiveSpec
+from schema_spec.contracts import (
+    DatasetPolicies,
+    DatasetSpec,
+    DeltaPolicyBundle,
+    ValidationPolicySpec,
+)
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
-from schema_spec.system import DatasetPolicies, DatasetSpec, DeltaPolicyBundle, ValidationPolicySpec
 from storage.deltalake.config import DeltaSchemaPolicy
 
 

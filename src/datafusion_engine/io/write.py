@@ -62,7 +62,7 @@ from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import delta_constraints_for_location
 from datafusion_engine.sql.options import sql_options_for_profile
 from relspec.table_size_tiers import TableSizeTier, classify_table_size
-from schema_spec.system import (
+from schema_spec.contracts import (
     DeltaMaintenancePolicy,
     dataset_spec_delta_constraints,
     dataset_spec_name,
@@ -97,7 +97,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.session.streaming import StreamingExecutionResult
     from obs.datafusion_runs import DataFusionRun
-    from schema_spec.system import DatasetSpec, ValidationPolicySpec
+    from schema_spec.contracts import DatasetSpec, ValidationPolicySpec
     from semantics.program_manifest import ManifestDatasetResolver
 from datafusion_engine.tables.metadata import table_provider_metadata
 
@@ -2038,7 +2038,7 @@ class WritePipeline:
         if location is None:
             overrides = None
             if spec.feature_gate is not None:
-                from schema_spec.system import DeltaPolicyBundle
+                from schema_spec.contracts import DeltaPolicyBundle
 
                 overrides = DatasetLocationOverrides(
                     delta=DeltaPolicyBundle(feature_gate=spec.feature_gate)

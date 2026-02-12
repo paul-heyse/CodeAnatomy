@@ -159,13 +159,13 @@ from datafusion_engine.dataset.registry import (
     DatasetLocation,
 )
 from datafusion_engine.views.artifacts import CachePolicy
-from schema_spec.policies import DataFusionWritePolicy
-from schema_spec.system import (
+from schema_spec.contracts import (
     DatasetSpec,
     DeltaScanOptions,
     ScanPolicyConfig,
     dataset_spec_from_schema,
 )
+from schema_spec.policies import DataFusionWritePolicy
 from semantics.incremental.cdf_cursors import CdfCursorStore
 
 if TYPE_CHECKING:
@@ -736,7 +736,7 @@ def _normalize_dataset_locations_for_root(
     if normalize_root is None:
         return {}
     root = Path(normalize_root)
-    from schema_spec.system import dataset_spec_name
+    from schema_spec.contracts import dataset_spec_name
     from semantics.catalog.dataset_specs import dataset_specs
 
     locations: dict[str, DatasetLocation] = {}
@@ -4465,7 +4465,7 @@ class RuntimeProfileCatalog:
             if delta_scan is not None:
                 delta_bundle = policies.delta_bundle
                 if delta_bundle is None:
-                    from schema_spec.system import DeltaPolicyBundle as _DeltaPolicyBundle
+                    from schema_spec.contracts import DeltaPolicyBundle as _DeltaPolicyBundle
 
                     delta_bundle = _DeltaPolicyBundle(scan=delta_scan)
                 else:
@@ -7995,7 +7995,7 @@ def read_delta_as_reader(
 
     overrides = None
     if delta_scan is not None:
-        from schema_spec.system import DeltaPolicyBundle
+        from schema_spec.contracts import DeltaPolicyBundle
 
         overrides = DatasetLocationOverrides(delta=DeltaPolicyBundle(scan=delta_scan))
     location = DatasetLocation(

@@ -22,7 +22,7 @@ from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.plan.perf_policy import PlanBundleComparisonPolicy
 from datafusion_engine.plan.signals import extract_plan_signals, plan_signals_payload
 from datafusion_engine.sql.options import planning_sql_options
-from schema_spec.system import dataset_spec_from_schema
+from schema_spec.contracts import dataset_spec_from_schema
 from serde_artifacts import DeltaStatsDecision, PlanArtifactRow, WriteArtifactRow
 from serde_msgspec import (
     StructBaseCompat,
@@ -1094,7 +1094,7 @@ def _with_delta_settings(location: DatasetLocation) -> DatasetLocation:
     resolved_log = location.resolved.delta_log_storage_options
     overrides = location.overrides
     if resolved_scan is not None:
-        from schema_spec.system import DeltaPolicyBundle
+        from schema_spec.contracts import DeltaPolicyBundle
 
         delta_bundle = DeltaPolicyBundle(scan=resolved_scan)
         if overrides is None:

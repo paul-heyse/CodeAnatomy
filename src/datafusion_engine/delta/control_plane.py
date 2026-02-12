@@ -45,7 +45,7 @@ from datafusion_engine.extensions.context_adaptation import select_context_candi
 from datafusion_engine.generated.delta_types import (
     DeltaFeatureGate,
 )
-from schema_spec.system import DeltaScanOptions
+from schema_spec.contracts import DeltaScanOptions
 from serde_msgspec import StructBaseStrict, ensure_raw
 from utils.validation import ensure_mapping
 from utils.value_coercion import coerce_mapping_list

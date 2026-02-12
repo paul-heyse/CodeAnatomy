@@ -79,7 +79,7 @@ def _validate_arrow_table(
     options: ArrowValidationOptions,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> TableLike:
-    module = importlib.import_module("schema_spec.system")
+    module = importlib.import_module("schema_spec.contracts")
     validate_fn = cast("_ValidateArrowTable", module.validate_arrow_table)
     return validate_fn(table, spec=spec, options=options, runtime_profile=runtime_profile)
 

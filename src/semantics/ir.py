@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from datafusion_engine.views.artifacts import CachePolicy
     from relspec.inference_confidence import InferenceConfidence
     from semantics.catalog.dataset_rows import SemanticDatasetRow
-    from semantics.cpg.specs import NodePlanSpec, PropTableSpec
     from semantics.quality import JoinHow
 
 GraphPosition = Literal[
@@ -134,8 +133,6 @@ class SemanticIR:
 
     views: tuple[SemanticIRView, ...]
     dataset_rows: tuple[SemanticDatasetRow, ...] = ()
-    cpg_node_specs: tuple[NodePlanSpec, ...] = ()
-    cpg_prop_specs: tuple[PropTableSpec, ...] = ()
     join_groups: tuple[SemanticIRJoinGroup, ...] = ()
     model_hash: str | None = None
     ir_hash: str | None = None

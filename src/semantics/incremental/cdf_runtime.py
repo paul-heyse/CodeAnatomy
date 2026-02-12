@@ -17,7 +17,7 @@ from datafusion_engine.dataset.registry import (
 )
 from datafusion_engine.delta.scan_config import resolve_delta_scan_options
 from datafusion_engine.lineage.diagnostics import record_artifact
-from schema_spec.system import DeltaScanOptions
+from schema_spec.contracts import DeltaScanOptions
 from semantics.incremental.cdf_cursors import CdfCursor, CdfCursorStore
 from semantics.incremental.cdf_types import CdfFilterPolicy
 from semantics.incremental.delta_context import DeltaAccessContext
@@ -28,7 +28,7 @@ from utils.uuid_factory import uuid7_hex
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.system import DeltaCdfPolicy
+    from schema_spec.contracts import DeltaCdfPolicy
     from semantics.incremental.runtime import IncrementalRuntime
 
 
@@ -267,7 +267,7 @@ def _register_cdf_dataset(
     cdf_name = f"__cdf_{uuid7_hex()}"
     overrides = None
     if state.inputs.scan_options is not None:
-        from schema_spec.system import DeltaPolicyBundle
+        from schema_spec.contracts import DeltaPolicyBundle
 
         overrides = DatasetLocationOverrides(
             delta=DeltaPolicyBundle(scan=state.inputs.scan_options)

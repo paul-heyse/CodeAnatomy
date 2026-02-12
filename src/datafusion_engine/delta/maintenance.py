@@ -32,7 +32,7 @@ from storage.deltalake.delta import DeltaFeatureMutationOptions
 if TYPE_CHECKING:
     from datafusion_engine.delta.protocol import DeltaFeatureGate
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.system import DeltaMaintenancePolicy
+    from schema_spec.contracts import DeltaMaintenancePolicy
 
 _MIN_RETENTION_HOURS = 168
 

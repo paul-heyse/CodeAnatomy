@@ -40,6 +40,17 @@ cpg_authority_modules=(
   "kind_catalog"
 )
 
+# semantics.cpg runtime authority modules targeted for final hard cutover deletion.
+semantics_cpg_authority_modules=(
+  "emit_specs"
+  "kind_catalog"
+  "node_families"
+  "prop_catalog"
+  "prop_transforms"
+  "spec_registry"
+  "specs"
+)
+
 # schema_spec operational modules targeted for hard cutover deletion.
 schema_authority_modules=(
   "dataset_spec_ops"
@@ -91,6 +102,25 @@ for module in "${schema_authority_modules[@]}"; do
   fi
 done
 
+for module in "${semantics_cpg_authority_modules[@]}"; do
+  module_path="src/semantics/cpg/${module}.py"
+  if [ ! -f "${module_path}" ]; then
+    semantics_cpg_pattern="^\s*(from|import)\s+semantics\.cpg\.${module}\b"
+    if rg -n "${semantics_cpg_pattern}" src; then
+      echo "Deleted semantics.cpg authority imports were found in src/ for module semantics.cpg.${module}." >&2
+      exit 1
+    fi
+  fi
+done
+
+# Once the legacy system facade is removed, block any reintroduction.
+if [ ! -f "src/schema_spec/system.py" ]; then
+  if rg -n "^\s*(from|import)\s+schema_spec\.system\b" src; then
+    echo "Deleted schema_spec.system imports were found in src/." >&2
+    exit 1
+  fi
+fi
+
 if [ "${strict_tests}" = true ]; then
   if rg -n "${legacy_pattern}" tests; then
     echo "Legacy planning/engine imports were found in tests/." >&2
@@ -134,6 +164,22 @@ if [ "${strict_tests}" = true ]; then
       fi
     fi
   done
+  for module in "${semantics_cpg_authority_modules[@]}"; do
+    module_path="src/semantics/cpg/${module}.py"
+    if [ ! -f "${module_path}" ]; then
+      semantics_cpg_pattern="^\s*(from|import)\s+semantics\.cpg\.${module}\b"
+      if rg -n "${semantics_cpg_pattern}" tests; then
+        echo "Deleted semantics.cpg authority imports were found in tests/ for module semantics.cpg.${module}." >&2
+        exit 1
+      fi
+    fi
+  done
+  if [ ! -f "src/schema_spec/system.py" ]; then
+    if rg -n "^\s*(from|import)\s+schema_spec\.system\b" tests; then
+      echo "Deleted schema_spec.system imports were found in tests/." >&2
+      exit 1
+    fi
+  fi
 fi
 
 echo "No legacy planning/engine imports detected."

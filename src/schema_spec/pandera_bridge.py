@@ -10,9 +10,9 @@ import polars as pl
 import pyarrow as pa
 
 from schema_spec.arrow_types import ArrowTypeBase, arrow_type_to_pyarrow
+from schema_spec.contracts import ValidationPolicySpec
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
-from schema_spec.system import ValidationPolicySpec
 from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:

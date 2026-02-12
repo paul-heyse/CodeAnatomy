@@ -21,9 +21,9 @@ from core.config_base import config_fingerprint
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.schema.introspection import schema_from_table
 from schema_spec.arrow_types import arrow_type_from_pyarrow
+from schema_spec.contracts import ContractSpec, DatasetSpec, TableSchemaContract
 from schema_spec.field_spec import FieldSpec
 from schema_spec.specs import TableSchemaSpec
-from schema_spec.system import ContractSpec, DatasetSpec, TableSchemaContract
 from utils.registry_protocol import MutableRegistry, Registry
 from validation.violations import ValidationViolation, ViolationType
 
@@ -373,7 +373,7 @@ def table_constraints_from_location(
     if resolved.delta_constraints:
         resolved_checks = merge_constraint_expressions(resolved.delta_constraints, extra_checks)
     elif dataset_spec is not None:
-        from schema_spec.system import dataset_spec_delta_constraints
+        from schema_spec.contracts import dataset_spec_delta_constraints
 
         resolved_checks = merge_constraint_expressions(
             dataset_spec_delta_constraints(dataset_spec),
@@ -1115,7 +1115,7 @@ def schema_contract_from_dataset_spec(
     SchemaContract
         Schema contract derived from the dataset specification.
     """
-    from schema_spec.system import dataset_spec_datafusion_scan, dataset_spec_schema
+    from schema_spec.contracts import dataset_spec_datafusion_scan, dataset_spec_schema
 
     table_schema = cast("pa.Schema", dataset_spec_schema(spec))
     partition_cols = ()

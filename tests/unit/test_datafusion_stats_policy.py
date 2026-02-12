@@ -15,7 +15,7 @@ from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationO
 from datafusion_engine.session.runtime import (
     settings_snapshot_for_profile,
 )
-from schema_spec.system import DataFusionScanOptions, table_spec_from_schema
+from schema_spec.contracts import DataFusionScanOptions, table_spec_from_schema
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion
 

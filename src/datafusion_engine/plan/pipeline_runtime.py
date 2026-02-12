@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.views.graph import ViewNode
     from relspec.inference_confidence import InferenceConfidence
-    from schema_spec.system import ScanPolicyConfig
+    from schema_spec.contracts import ScanPolicyConfig
     from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
 

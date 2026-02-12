@@ -21,13 +21,7 @@ from datafusion_engine.arrow.metadata import (
 )
 from datafusion_engine.arrow.semantic import SPAN_STORAGE
 from schema_spec.arrow_types import arrow_type_from_pyarrow
-from schema_spec.field_spec import FieldSpec
-from schema_spec.specs import (
-    FieldBundle,
-    file_identity_bundle,
-    span_bundle,
-)
-from schema_spec.system import (
+from schema_spec.contracts import (
     DatasetSpec,
     DeltaCdfPolicy,
     DeltaMaintenancePolicy,
@@ -36,6 +30,12 @@ from schema_spec.system import (
     make_contract_spec,
     make_dataset_spec,
     make_table_spec,
+)
+from schema_spec.field_spec import FieldSpec
+from schema_spec.specs import (
+    FieldBundle,
+    file_identity_bundle,
+    span_bundle,
 )
 from storage.deltalake.config import DeltaSchemaPolicy, DeltaWritePolicy
 

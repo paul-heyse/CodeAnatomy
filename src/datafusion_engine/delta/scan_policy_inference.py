@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from datafusion_engine.lineage.datafusion import ScanLineage
     from datafusion_engine.plan.signals import NormalizedPlanStats, PlanSignals
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.system import ScanPolicyConfig
+    from schema_spec.contracts import ScanPolicyConfig
 
 
 # Projection ratio below which column pruning is considered highly beneficial.
@@ -92,7 +92,7 @@ def derive_scan_policy_overrides(
     if signals.lineage is None:
         return ()
 
-    from schema_spec.system import ScanPolicyConfig as ScanPolicyCls
+    from schema_spec.contracts import ScanPolicyConfig as ScanPolicyCls
 
     effective_base = base_policy or ScanPolicyCls()
     overrides: list[ScanPolicyOverride] = []

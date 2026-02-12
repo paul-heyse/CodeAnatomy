@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 def _empty_exported_defs(ctx: SessionContext) -> DataFrame:
-    from schema_spec.system import dataset_spec_schema
+    from schema_spec.contracts import dataset_spec_schema
 
     schema_like = dataset_spec_schema(dataset_spec("dim_exported_defs"))
     schema = cast("pa.Schema", schema_like)

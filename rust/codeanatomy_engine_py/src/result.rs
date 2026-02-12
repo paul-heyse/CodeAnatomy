@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::PyList;
 use serde_json::Value;
 
 #[pyclass(name = "RunResult")]
@@ -103,37 +103,11 @@ impl PyRunResult {
 }
 
 pub(crate) fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<pyo3::types::PyAny>> {
-    match value {
-        Value::Null => Ok(py.None()),
-        Value::Bool(inner) => Ok(inner.into_py(py)),
-        Value::Number(inner) => {
-            if let Some(number) = inner.as_i64() {
-                return Ok(number.into_py(py));
-            }
-            if let Some(number) = inner.as_u64() {
-                return Ok(number.into_py(py));
-            }
-            if let Some(number) = inner.as_f64() {
-                return Ok(number.into_py(py));
-            }
-            Ok(py.None())
-        }
-        Value::String(inner) => Ok(inner.clone().into_py(py)),
-        Value::Array(inner) => {
-            let list = PyList::empty(py);
-            for item in inner {
-                list.append(json_value_to_py(py, item)?)?;
-            }
-            Ok(list.unbind().into_any())
-        }
-        Value::Object(inner) => {
-            let dict = PyDict::new(py);
-            for (key, item) in inner {
-                dict.set_item(key, json_value_to_py(py, item)?)?;
-            }
-            Ok(dict.unbind().into_any())
-        }
-    }
+    let json_module = py.import("json")?;
+    let dumped = serde_json::to_string(value)
+        .map_err(|err| pyo3::exceptions::PyValueError::new_err(err.to_string()))?;
+    let parsed = json_module.call_method1("loads", (dumped,))?;
+    Ok(parsed.unbind())
 }
 
 impl PyRunResult {

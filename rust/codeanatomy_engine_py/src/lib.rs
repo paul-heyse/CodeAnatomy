@@ -14,7 +14,7 @@ pub mod schema;
 pub mod session;
 
 #[pyfunction]
-fn run_build(py: Python<'_>, request_json: &str) -> PyResult<PyObject> {
+fn run_build(py: Python<'_>, request_json: &str) -> PyResult<Py<pyo3::types::PyAny>> {
     let request: Value = serde_json::from_str(request_json).map_err(|err| {
         errors::engine_execution_error(
             "validation",
@@ -118,7 +118,7 @@ fn run_build(py: Python<'_>, request_json: &str) -> PyResult<PyObject> {
         "diagnostics": diagnostics,
         "artifacts": artifacts,
     });
-    Ok(result::json_value_to_py(py, &response)?.into_py(py))
+    result::json_value_to_py(py, &response)
 }
 
 /// Python module entry point for codeanatomy_engine.

@@ -867,7 +867,7 @@ def read_delta_table(request: DeltaReadRequest) -> RecordBatchReaderLike:
         try:
             overrides = None
             if request.gate is not None:
-                from schema_spec.system import DeltaPolicyBundle
+                from schema_spec.contracts import DeltaPolicyBundle
 
                 overrides = DatasetLocationOverrides(
                     delta=DeltaPolicyBundle(feature_gate=request.gate)

@@ -8,7 +8,7 @@ from datafusion_engine.delta.maintenance import (
     maintenance_decision_artifact_payload,
     resolve_maintenance_from_execution,
 )
-from schema_spec.system import DeltaMaintenancePolicy
+from schema_spec.contracts import DeltaMaintenancePolicy
 
 
 def _plan_input(policy: DeltaMaintenancePolicy | None) -> DeltaMaintenancePlanInput:

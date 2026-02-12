@@ -94,8 +94,6 @@ def prune_ir(ir: SemanticIR, *, outputs: Collection[str] | None) -> SemanticIR:
     return SemanticIR(
         views=pruned_views,
         dataset_rows=pruned_rows,
-        cpg_node_specs=ir.cpg_node_specs,
-        cpg_prop_specs=ir.cpg_prop_specs,
         join_groups=tuple(join_groups),
         model_hash=ir.model_hash,
         ir_hash=ir.ir_hash,

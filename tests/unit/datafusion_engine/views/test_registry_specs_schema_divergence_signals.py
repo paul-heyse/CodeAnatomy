@@ -11,7 +11,7 @@ import pytest
 
 from datafusion_engine.plan.signals import PlanSignals
 from datafusion_engine.views import registry_specs
-from schema_spec.system import dataset_spec_from_schema
+from schema_spec.contracts import dataset_spec_from_schema
 from serde_artifact_specs import SCHEMA_DIVERGENCE_SPEC
 
 if TYPE_CHECKING:
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.io.adapter import DataFusionIOAdapter
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.system import DatasetSpec
+    from schema_spec.contracts import DatasetSpec
     from semantics.program_manifest import SemanticProgramManifest
 
 _VIEW_NAME = "__missing_semantic_dataset__"

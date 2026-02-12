@@ -120,7 +120,7 @@ from datafusion_engine.tables.metadata import (
 )
 from datafusion_engine.views.graph import arrow_schema_from_df
 from obs.otel.run_context import get_run_id
-from schema_spec.system import (
+from schema_spec.contracts import (
     DataFusionScanOptions,
     DatasetSpec,
     DeltaScanOptions,
@@ -1258,7 +1258,7 @@ def register_dataset_spec(
     Register a Delta dataset spec:
 
     >>> from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    >>> from schema_spec.system import DatasetSpec
+    >>> from schema_spec.contracts import DatasetSpec
     >>> ctx = DataFusionRuntimeProfile().io_ops.ephemeral_context()
     >>> spec = DatasetSpec(table_spec=table_spec)
     >>> register_dataset_spec(
@@ -1511,7 +1511,7 @@ def _delta_pruning_predicate(
     dataset_spec = _resolve_dataset_spec(context.name, context.location)
     if dataset_spec is None:
         return None, None
-    from schema_spec.system import dataset_spec_query
+    from schema_spec.contracts import dataset_spec_query
 
     query_spec = dataset_spec_query(dataset_spec)
     predicate = query_spec.pushdown_predicate or query_spec.predicate

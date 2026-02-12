@@ -9,7 +9,7 @@ from datafusion_engine.delta.maintenance import (
     WriteOutcomeMetrics,
     resolve_maintenance_from_execution,
 )
-from schema_spec.system import DeltaMaintenancePolicy
+from schema_spec.contracts import DeltaMaintenancePolicy
 
 
 @pytest.mark.integration

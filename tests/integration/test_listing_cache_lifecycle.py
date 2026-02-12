@@ -13,7 +13,7 @@ from datafusion_engine.dataset.registration import (
     register_dataset_df,
 )
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
-from schema_spec.system import DataFusionScanOptions
+from schema_spec.contracts import DataFusionScanOptions
 from tests.test_helpers.diagnostics import diagnostic_profile
 from tests.test_helpers.optional_deps import require_datafusion_udfs
 

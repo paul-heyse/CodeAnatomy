@@ -8,7 +8,7 @@ from datafusion_engine.session.runtime import dataset_schema_from_context, datas
 
 if TYPE_CHECKING:
     from datafusion_engine.arrow.interop import SchemaLike
-    from schema_spec.system import ContractSpec, DatasetSpec
+    from schema_spec.contracts import ContractSpec, DatasetSpec
 
 
 def dataset_spec(name: str) -> DatasetSpec:
@@ -41,7 +41,7 @@ def dataset_contract_spec(name: str) -> ContractSpec:
     ContractSpec
         Contract specification for the dataset.
     """
-    from schema_spec.system import dataset_spec_contract_spec_or_default
+    from schema_spec.contracts import dataset_spec_contract_spec_or_default
 
     return dataset_spec_contract_spec_or_default(dataset_spec_from_context(name))
 

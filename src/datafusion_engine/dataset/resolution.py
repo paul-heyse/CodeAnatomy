@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from datafusion_engine.delta.specs import DeltaCdfOptionsSpec
     from datafusion_engine.lineage.scan import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.system import DeltaScanOptions, ScanPolicyConfig
+    from schema_spec.contracts import DeltaScanOptions, ScanPolicyConfig
     from semantics.program_manifest import ManifestDatasetResolver
 
 DatasetProviderKind = Literal["delta", "delta_cdf"]

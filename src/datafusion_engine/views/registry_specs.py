@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from datafusion_engine.io.adapter import DataFusionIOAdapter
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from schema_spec.system import DatasetSpec
+    from schema_spec.contracts import DatasetSpec
     from semantics.catalog.dataset_rows import SemanticDatasetRow
     from semantics.ir import SemanticIR
     from semantics.program_manifest import SemanticProgramManifest
@@ -275,7 +275,7 @@ def view_graph_nodes(
 
 
 def _semantic_dataset_specs() -> dict[str, DatasetSpec]:
-    from schema_spec.system import dataset_spec_name
+    from schema_spec.contracts import dataset_spec_name
     from semantics.catalog.dataset_specs import dataset_specs
 
     return {dataset_spec_name(spec): spec for spec in dataset_specs()}
@@ -289,14 +289,14 @@ def _dataset_contract_for(
     dataset_spec = dataset_specs.get(name)
     if dataset_spec is None:
         return None, False
-    from schema_spec.system import dataset_spec_schema
+    from schema_spec.contracts import dataset_spec_schema
 
     return _arrow_schema_from_contract(dataset_spec_schema(dataset_spec)), True
 
 
 def _schema_divergence_strict_mode(*, dataset_spec: DatasetSpec | None) -> bool:
     if dataset_spec is not None:
-        from schema_spec.system import dataset_spec_strict_schema_validation
+        from schema_spec.contracts import dataset_spec_strict_schema_validation
 
         strict_setting = dataset_spec_strict_schema_validation(dataset_spec)
         if strict_setting is not None:

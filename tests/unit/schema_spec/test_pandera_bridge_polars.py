@@ -5,9 +5,9 @@ from __future__ import annotations
 import polars as pl
 import pyarrow as pa
 
+from schema_spec.contracts import ValidationPolicySpec
 from schema_spec.pandera_bridge import validate_dataframe
 from schema_spec.specs import TableSchemaSpec
-from schema_spec.system import ValidationPolicySpec
 
 
 def _policy() -> ValidationPolicySpec:

@@ -201,7 +201,7 @@
       "name": "cpg_edges_by_dst"
     }
   ],
-  "ir_hash": "836b43d89e1a1ee6f119d93f143f814d351378199743db8006a20c6990a6ba53",
+  "ir_hash": "38a3d7efc3bc738b1555f9b4c1ca076da78c15d2e3ad748fbec7db3b1ddbe52b",
   "join_groups": [],
   "model_hash": "35a01c89c7dd995255acb2559a28dc16af9c35543eb7638e844553c52a9f0bf2",
   "views": [
@@ -596,27 +596,13 @@
     },
     {
       "inputs": [
-        "cst_call_args_norm",
-        "cst_calls_norm",
-        "cst_decorators_norm",
-        "cst_defs_norm",
-        "cst_docstrings_norm",
-        "cst_imports_norm",
         "cst_refs_norm",
-        "repo_files_v1",
-        "scip_diagnostics_v1",
-        "scip_symbol_information_v1",
-        "symtable_bindings",
-        "symtable_def_sites",
-        "symtable_scopes",
-        "symtable_symbols",
-        "symtable_type_params",
-        "symtable_use_sites",
-        "ts_errors",
-        "ts_missing",
-        "ts_nodes",
-        "type_exprs_norm",
-        "type_nodes"
+        "cst_defs_norm",
+        "cst_imports_norm",
+        "cst_calls_norm",
+        "cst_call_args_norm",
+        "cst_docstrings_norm",
+        "cst_decorators_norm"
       ],
       "kind": "finalize",
       "name": "cpg_nodes",
@@ -627,25 +613,13 @@
     {
       "inputs": [
         "cpg_edges",
+        "cst_call_args_norm",
         "cst_calls_norm",
+        "cst_decorators_norm",
         "cst_defs_norm",
+        "cst_docstrings_norm",
         "cst_imports_norm",
-        "cst_refs_norm",
-        "repo_files_v1",
-        "scip_diagnostics_v1",
-        "scip_external_symbol_information_v1",
-        "scip_symbol_information_v1",
-        "symtable_bindings",
-        "symtable_def_sites",
-        "symtable_scopes",
-        "symtable_symbols",
-        "symtable_type_params",
-        "symtable_use_sites",
-        "ts_errors",
-        "ts_missing",
-        "ts_nodes",
-        "type_exprs_norm",
-        "type_nodes"
+        "cst_refs_norm"
       ],
       "kind": "finalize",
       "name": "cpg_props",

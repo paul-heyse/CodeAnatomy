@@ -12,7 +12,7 @@ import pytest
 from datafusion_engine.delta.scan_policy_inference import ScanPolicyOverride
 from datafusion_engine.plan import pipeline_runtime as pipeline
 from datafusion_engine.plan.signals import PlanSignals
-from schema_spec.system import DeltaScanPolicyDefaults, ScanPolicyConfig, ScanPolicyDefaults
+from schema_spec.contracts import DeltaScanPolicyDefaults, ScanPolicyConfig, ScanPolicyDefaults
 
 if TYPE_CHECKING:
     from datafusion import SessionContext

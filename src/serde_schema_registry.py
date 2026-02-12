@@ -78,10 +78,7 @@ from schema_spec.arrow_types import (
     ArrowStructSpec,
     ArrowTimestampSpec,
 )
-from schema_spec.field_spec import FieldSpec
-from schema_spec.relationship_specs import RelationshipData
-from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
-from schema_spec.system import (
+from schema_spec.contracts import (
     ContractSpec,
     DatasetPolicies,
     DatasetSpec,
@@ -91,10 +88,11 @@ from schema_spec.system import (
     ValidationPolicySpec,
     VirtualFieldSpec,
 )
+from schema_spec.field_spec import FieldSpec
+from schema_spec.relationship_specs import RelationshipData
+from schema_spec.specs import DerivedFieldSpec, FieldBundle, TableSchemaSpec
 from schema_spec.view_specs import ViewSpec
 from semantics.config import SemanticConfigSpec, SemanticTypePatternSpec
-from semantics.cpg.emit_specs import CpgOutputSpec, CpgPropOptions
-from semantics.cpg.specs import EdgeEmitSpec, NodeEmitSpec, NodePlanSpec, PropFieldSpec
 from semantics.specs import (
     ForeignKeyDerivation,
     IdDerivation,
@@ -243,18 +241,12 @@ _SCHEMA_TYPES: tuple[type[msgspec.Struct], ...] = (
     PlanBundleDiagnostics,
     PlanExecutionDiagnosticsPayload,
     PlanPhaseDiagnosticsPayload,
-    # Semantics / CPG / relspec contracts
+    # Semantics / relspec contracts
     SpanBinding,
     IdDerivation,
     ForeignKeyDerivation,
     SemanticTableSpec,
     RelationshipSpec,
-    EdgeEmitSpec,
-    NodeEmitSpec,
-    NodePlanSpec,
-    PropFieldSpec,
-    CpgOutputSpec,
-    CpgPropOptions,
     InferredDeps,
 )
 

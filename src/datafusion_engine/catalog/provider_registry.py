@@ -375,7 +375,7 @@ class ProviderRegistry(
 
         dataset_spec = spec.dataset_spec
         if dataset_spec is None:
-            from schema_spec.system import dataset_spec_from_schema
+            from schema_spec.contracts import dataset_spec_from_schema
 
             dataset_spec = dataset_spec_from_schema(spec.name, spec.schema)
         overrides = None

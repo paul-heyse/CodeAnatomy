@@ -1,178 +1,178 @@
-# src/ Rust Pivot Extension Assessment (v2)
+# src/ Rust Pivot Extension Assessment (v2, refreshed)
 
-**Date:** 2026-02-12  
+**Date:** 2026-02-12 (refresh pass)  
 **Authoring mode:** Codex-assisted CQ + dfdl_ref review  
-**Scope:** Re-assess `docs/plans/comprehensive_src_rust_pivot_review_v1_2026-02-11.md`, validate current state, and identify additional `src/` decommission candidates in favor of `rust/`.
+**Scope:** Refresh and update `docs/plans/src_rust_pivot_extension_assessment_v2_2026-02-12.md` against current code, then add additional near-term decommission scope with emphasis on `src/datafusion_engine`.
 
 ---
 
-## 1) Setup and Inputs
+## 1) Environment + Review Inputs
 
 ### Environment setup executed
 - `scripts/bootstrap_codex.sh`
 - `uv sync`
 
-Result: environment validated with Python `3.13.12`, extension artifact present (`rust/datafusion_ext_py/plugin/libdf_plugin_codeanatomy.dylib`).
+Result: environment validated with Python `3.13.12`; extension artifact present (`rust/datafusion_ext_py/plugin/libdf_plugin_codeanatomy.dylib`).
 
-### Inputs reviewed
+### Inputs reviewed in this refresh
+- `docs/plans/src_rust_pivot_extension_assessment_v2_2026-02-12.md` (current document, refreshed)
 - `docs/plans/comprehensive_src_rust_pivot_review_v1_2026-02-11.md`
-- `docs/plans/cpg_schema_spec_rust_datafusion_pivot_assessment_v1_2026-02-11.md`
-- CQ scans over `src/` and `rust/` for importer density + callsite locality
-- `dfdl_ref` references (planning, schema, UDF contracts, Delta integration, deployment gaps)
+- CQ scans across `src/` and `rust/` for callsite locality + duplication
+- `dfdl_ref` references (UDF/FunctionFactory, planning artifacts, schema/evolution adapters, Delta/DataFusion integration)
 
 ---
 
-## 2) Reassessment of v1 Findings
+## 2) Scope Changes Since Prior v2 Draft
 
-The v1 assessment remains directionally correct:
-- Decommission priorities in `relspec`, `cpg`, and `schema_spec` are still valid.
-- Python remains authoritative for extraction and semantic IR generation today.
-- Rust already owns planning/execution/materialization primitives and exposes substantial PyO3/API surface.
+## Completed/advanced since prior draft
+- `pandera` migration appears already actioned:
+  - `src/schema_spec/pandera_bridge.py` is absent.
+  - CQ search for `pandera` in `src/` now returns no matches.
 
-No contradictions were found with the major v1 conclusions.
-
----
-
-## 3) Additional Decommission Opportunities (Beyond v1)
-
-## A. Remove Python fallback UDF path after hard Rust-extension gate
-
-### New finding
-Python fallback UDF machinery appears isolated to fallback branches and not core production orchestration:
-- `src/datafusion_engine/udf/fallback.py`
-- Fallback entrypoint used from `src/datafusion_engine/udf/runtime.py` (`_fallback_registry_snapshot`)
-
-At the same time, Rust already exposes:
-- `register_codeanatomy_udfs`
-- `registry_snapshot`
-- `capabilities_snapshot`
-- `install_function_factory`
-- `install_expr_planners`
-(via `rust/datafusion_python/src/codeanatomy_ext.rs`)
-
-### Decommission target
-- Delete `src/datafusion_engine/udf/fallback.py`
-- Remove fallback branches in `src/datafusion_engine/udf/runtime.py`
-- Remove fallback compatibility logic in `src/datafusion_engine/udf/factory.py` where it exists for type mismatch fallback
-
-### Rust requirements
-- Make extension capability/ABI validation a strict startup invariant (no soft runtime fallback path)
-- Ensure required hooks (`register_codeanatomy_udfs`, function factory, expr planners) are always present and version-compatible
+## Still pending (core v2 items remain active)
+- Python fallback UDF path is still present:
+  - `src/datafusion_engine/udf/fallback.py`
+  - fallback path in `src/datafusion_engine/udf/runtime.py` (`_fallback_registry_snapshot`)
+  - fallback path in `src/datafusion_engine/udf/factory.py` (`_fallback_install_function_factory`)
+- Python FunctionFactory policy + installation wrappers remain active:
+  - `src/datafusion_engine/udf/factory.py`
+  - `src/datafusion_engine/udf/platform.py`
+- Python build orchestration still owns auxiliary output writing:
+  - `src/graph/build_pipeline.py` writes normalize/error/manifest/run-bundle outputs.
+  - Rust `run_build` still returns artifact placeholders (`manifest_path`/`run_bundle_dir` are `null`) in `rust/codeanatomy_engine_py/src/lib.rs`.
+- Runtime profile shaping still Python-heavy and broader than previously scoped:
+  - `resolve_runtime_profile` is used across `src/extraction/orchestrator.py`, `src/graph/build_pipeline.py`, `src/extract/coordination/context.py`, `src/extract/extractors/scip/extract.py`, and `src/extraction/runtime_profile.py`.
 
 ---
 
-## B. Collapse Python FunctionFactory policy synthesis into Rust
+## 3) Refreshed Status of Existing v2 Workstreams
 
-### New finding
-Python still computes and translates FunctionFactory policy payloads (`src/datafusion_engine/udf/factory.py`), even though Rust owns both registry semantics and installation hooks.
-
-### Decommission target
-- Reduce `src/datafusion_engine/udf/factory.py` to a thin adapter or remove it after Rust policy APIs are complete
-- Keep `src/datafusion_engine/udf/platform.py` only as minimal installer facade (or fold it into runtime bootstrap)
-
-### Rust requirements
-- Expose a single policy-derivation API from Rust snapshot metadata (named args, volatility, signatures, domain planner hooks)
-- Expose policy serialization contract directly from Rust (avoid Python-side schema duplication)
+| Workstream (from v2) | Current status | Scope update |
+|---|---|---|
+| A. Remove Python fallback UDF path | **Not started** | Keep as high-priority delete wave. Fallback branches are still active in `udf/runtime.py` + `udf/factory.py`, backed by `udf/fallback.py`. |
+| B. Collapse Python FunctionFactory policy synthesis | **Not started** | Keep; `udf/factory.py` still handles policy payload shaping, extension selection, and compatibility retry paths. |
+| C. Move auxiliary orchestration into Rust `run_build` contract | **Not started** | Keep; `build_pipeline.py` still owns multiple artifact writers while Rust returns artifact flags/placeholders only. |
+| D. Migrate runtime profile shaping to Rust | **In progress conceptually, not reduced in code** | Expand scope: profile resolver dependency fan-out is wider than prior v2 notes, so migration should start with Rust-emitted typed profile payloads + compatibility shim. |
+| E. Replace Pandera bridge via Rust/DataFusion-native schema path | **Partially completed** | `pandera` appears removed from `src/`; remaining schema/runtime reduction should now focus on `SchemaRuntime` authority and schema-evolution adapter installation paths. |
 
 ---
 
-## C. Move Python build orchestration auxiliaries into `run_build` response contract
+## 4) Additional `src/datafusion_engine` Decommission Scope (New)
 
-### New finding
-`src/graph/build_pipeline.py` still performs significant orchestration and auxiliary artifact writing after Rust execution, including normalize outputs, manifest writing, and run bundle shaping.
+These are additional low-friction migration targets not explicitly captured in prior v2 scope.
 
-Evidence also shows localized coupling:
-- `run_extraction` import occurs from `src/graph/build_pipeline.py` only.
+## A. Collapse Python Delta gate shim into Rust-owned contract
 
-Rust side already has substantial pipeline primitives (`executor::pipeline`, `executor::runner`, `executor::result`) and currently returns artifact flags/placeholders from `codeanatomy_engine_py::run_build`.
+### Current state
+- `src/datafusion_engine/delta/protocol.py::validate_delta_gate` constructs msgpack payloads and delegates to `datafusion_ext.validate_protocol_gate`.
+- Primary in-tree use is localized in `src/datafusion_engine/dataset/resolution.py` (`_resolve_delta_table`).
 
-### Decommission target
-- Remove Python-side auxiliary-output writers in `src/graph/build_pipeline.py`
-- Shrink or delete `src/graph/build_pipeline.py` after Rust emits complete artifact payloads
+### Migration opportunity
+- Replace Python payload assembly + extension call with a Rust-returned compatibility verdict in Delta provider/control-plane responses.
+- Shrink `delta/protocol.py` to data contracts only (or delete validation function entirely).
 
-### Rust requirements
-- Extend `run_build` to emit canonical artifact paths + metadata (manifest path, run bundle dir, auxiliary output locations)
-- Include optional auxiliary materialization behavior behind request flags already present in orchestration payload
+### Rust alignment
+- `rust/datafusion_python/src/codeanatomy_ext.rs::validate_protocol_gate` already exists.
+- dfdl_ref Delta integration guidance supports keeping protocol checks in Rust control-plane seams.
 
----
+## B. Remove Python cache-table registration bridge/mismatch loop
 
-## D. Migrate runtime profile shaping from Python to Rust profile APIs
+### Current state
+- `src/datafusion_engine/catalog/introspection.py::register_cache_introspection_functions` performs Python-side registrar resolution and ABI mismatch retries.
+- Runtime path is a single hop through `src/datafusion_engine/session/runtime.py::_register_cache_introspection_functions`.
 
-### New finding
-`src/extraction/runtime_profile.py` remains a large Python profile-shaping layer; however it already imports `codeanatomy_engine.SessionFactory` and hydrates values from Rust profile JSON.
+### Migration opportunity
+- Replace Python `_resolve_cache_table_registrar` and candidate-retry logic with a direct Rust call boundary from runtime bootstrap.
 
-Importer locality is narrow:
-- `resolve_runtime_profile` is imported in `src/extraction/orchestrator.py` and `src/graph/build_pipeline.py`
+### Rust alignment
+- `rust/datafusion_python/src/codeanatomy_ext.rs::register_cache_tables` already provides a direct registration API.
+- dfdl_ref notes favor Rust-owned metadata/cache plumbing for observability and planning control surfaces.
 
-### Decommission target
-- Reduce `src/extraction/runtime_profile.py` to compatibility shim, then deprecate
-- Reduce `src/extraction/engine_session_factory.py` when Rust profile/session payload APIs cover diagnostics + policy overlays
+## C. Consolidate schema-evolution adapter install/load paths (and remove duplicates)
 
-### Rust requirements
-- Add first-class profile overlay API (env patch + policy patch + diagnostics sink contract)
-- Return profile hash/settings hash/telemetry payload in a single structured response
+### Current state
+- Duplicate Python installer logic exists in:
+  - `src/datafusion_engine/dataset/registration.py::_install_schema_evolution_adapter_factory`
+  - `src/datafusion_engine/session/runtime.py::_install_schema_evolution_adapter_factory`
+- Additional loader path in `src/datafusion_engine/session/runtime.py::_load_schema_evolution_adapter_factory`.
+- Rust entrypoint currently exists but is a no-op:
+  - `rust/datafusion_python/src/codeanatomy_ext.rs::install_schema_evolution_adapter_factory` returns `Ok(())`.
 
----
+### Migration opportunity
+- Implement the schema-evolution adapter installation semantics in Rust, then delete duplicate Python installation paths.
+- Keep a single thin Python adapter if required for compatibility.
 
-## E. Expand `SchemaRuntime` to absorb Python schema/policy authority + Pandera bridge
+### Rust alignment
+- dfdl_ref schema/evolution guidance points to scan-boundary adapter ownership in Rust/engine surfaces.
 
-### New finding
-`schema_spec` already calls Rust `SchemaRuntime`, but only for limited helpers (`dataset_*` JSON extract + policy merge). Python remains authoritative for dataframe validation and policy application.
+## D. Replace dynamic UDF platform probing with Rust capabilities contract
 
-`pandera_bridge` is referenced by:
-- `src/semantics/pipeline.py`
-- `src/datafusion_engine/io/write.py`
-- `src/extract/coordination/schema_ops.py`
-- `src/obs/diagnostics.py`
-- `src/schema_spec/field_spec.py`
+### Current state
+- `src/datafusion_engine/udf/platform.py::native_udf_platform_available` dynamically imports `datafusion._internal`/`datafusion_ext` and introspects attributes.
+- This influences runtime strictness in `src/datafusion_engine/session/facade.py` and named-args support checks in `src/datafusion_engine/session/runtime.py`.
 
-### Decommission target
-- `src/schema_spec/pandera_bridge.py` (after Rust validation parity)
-- large sections of `src/schema_spec/system.py` policy-merge code
-- eventual reduction of `src/schema_spec/dataset_spec_ops.py`
+### Migration opportunity
+- Replace import+attribute probing with a Rust capability snapshot handshake at startup.
+- Remove repeated module probing and make planner/UDF availability deterministic.
 
-### Rust requirements
-- Add schema validation contract APIs to `SchemaRuntime` (constraint checks, type compatibility, violation payloads)
-- Emit structured validation diagnostics compatible with existing `ValidationViolation` consumption
-- Support DataFusion/Delta-native schema enforcement hooks (not Pandera-only path)
+### Rust alignment
+- `rust/datafusion_python/src/codeanatomy_ext.rs::capabilities_snapshot` already exposes feature/ABI metadata and UDF registry summary.
+- dfdl_ref FunctionFactory/UDF guidance favors strongly typed, Rust-owned function platform contracts.
 
----
+## E. De-duplicate extension module resolution surfaces across DataFusion engine
 
-## 4) dfdl_ref-Guided Rust Capability Alignment
+### Current state
+- Independent resolver implementations and call paths exist in:
+  - `src/datafusion_engine/session/runtime.py::_resolve_extension_module`
+  - `src/datafusion_engine/delta/control_plane.py::_resolve_extension_module`
+- CQ shows broad dependency fan-out across runtime + delta control-plane helpers.
 
-The following dfdl_ref-aligned capabilities are relevant to deleting additional `src/` modules:
+### Migration opportunity
+- Introduce a single Rust-exported extension descriptor/capability boundary and delete Python resolver duplication.
+- Keep Python focused on orchestration, not module-selection policy.
 
-1. `FunctionFactory` + named args + custom expression planning should be treated as Rust-owned defaults (remove Python policy synthesis duplication).
-2. Delta provider and mutation surfaces already exist in Rust (`delta_*` APIs via `datafusion_python` bridge), enabling Python-side control-plane reduction.
-3. Planning artifacts should be returned as Rust pipeline outputs (logical/physical provenance and run artifact metadata), not reassembled in Python.
-4. Schema/runtime contracts should move to Rust via `SchemaRuntime` expansion (schema hash/diff/cast alignment + policy merge + validation).
-5. Runtime cache/statistics knobs should be profile-driven in Rust SessionFactory, with Python consuming a typed summary only.
-
----
-
-## 5) Updated Wave Plan (Incremental)
-
-## Wave 0 (existing v1 fast deletes)
-- Keep v1 immediate deletes (relspec/cpg/schema_spec dead files).
-
-## Wave 1 (new low-risk Rust-first cutovers)
-- Hard-gate extension capability and remove Python fallback UDF paths.
-- Move FunctionFactory policy derivation/serialization into Rust; reduce Python wrappers.
-
-## Wave 2 (orchestration consolidation)
-- Extend `run_build` artifact contract and remove Python auxiliary output writers in `graph/build_pipeline.py`.
-
-## Wave 3 (profile/session consolidation)
-- Move profile patching and settings derivation into Rust SessionFactory APIs; reduce `extraction/runtime_profile.py` and `extraction/engine_session_factory.py`.
-
-## Wave 4 (schema/validation authority shift)
-- Expand `SchemaRuntime` to own policy+validation; decommission `pandera_bridge.py` and reduce `schema_spec/system.py` + `dataset_spec_ops.py`.
+### Rust alignment
+- dfdl_ref planning/control-plane patterns favor centralized engine feature surfaces rather than per-module Python probing.
 
 ---
 
-## 6) Net-New Conclusions
+## 5) dfdl_ref-Aligned Capability Priorities (Updated)
 
-1. v1 did not fully account for the decommission potential in `src/datafusion_engine/udf/*` fallback/policy layers; these are now prime near-term delete targets once strict extension gating is enforced.
-2. `graph/build_pipeline.py` still contains non-trivial Python orchestration that can move into existing Rust executor primitives with modest API expansion.
-3. `extraction/runtime_profile.py` and `extraction/engine_session_factory.py` are strong reduction candidates because they already depend on Rust profile/session data and mainly reshape it.
-4. `schema_spec` migration should prioritize replacing `pandera_bridge` with Rust/DataFusion-native validation contracts; this unlocks deletion of a large Python validation surface not explicitly prioritized in v1.
+1. Keep `FunctionFactory`/named-arg/ExprPlanner policy synthesis in Rust; Python should consume snapshots/policies, not derive them.
+2. Treat Delta provider + protocol + scan-config mechanics as Rust control-plane ownership; Python wrappers should become thin request DTO layers.
+3. Move schema-evolution adapter installation/selection to Rust scan/runtime boundaries, then remove duplicate Python install paths.
+4. Return orchestration artifacts from Rust `run_build` directly (manifest, run bundle, auxiliary paths) to delete Python artifact writers.
+5. Use a single capabilities handshake (`capabilities_snapshot`-style) instead of repeated Python dynamic import probing.
+
+---
+
+## 6) Revised Incremental Wave Plan
+
+## Wave 0 (already advanced)
+- Keep completed schema-side cleanup acknowledged (`pandera` removal from `src/`).
+
+## Wave 1 (highest-value low-risk deletes in `src/datafusion_engine`)
+- Remove fallback UDF branches (`udf/fallback.py`, runtime/factory fallback paths) after strict ABI/capability gate.
+- Replace Python cache registration bridge with Rust direct call.
+- Replace Python UDF availability probing with Rust capability snapshot.
+
+## Wave 2 (control-plane simplification)
+- Collapse Python Delta gate validation shim into Rust-owned response/validation contract.
+- Consolidate extension module resolver duplication (`session/runtime.py` and `delta/control_plane.py`).
+
+## Wave 3 (schema evolution + runtime profile)
+- Implement real Rust schema-evolution adapter installer and remove duplicated Python installer/loaders.
+- Move runtime profile shaping to Rust payload APIs and reduce `extraction/runtime_profile.py`/`engine_session_factory.py`.
+
+## Wave 4 (orchestration consolidation)
+- Extend Rust `run_build` artifact contract to emit manifest/bundle/auxiliary output paths.
+- Delete Python auxiliary-output writers from `src/graph/build_pipeline.py`.
+
+---
+
+## 7) Net Conclusions (Refresh)
+
+1. Prior v2 direction is still correct, but one major scope item (`pandera` removal) has already progressed and should no longer drive near-term effort.
+2. The largest remaining easy wins are now concentrated in `src/datafusion_engine` bridge code: fallback UDF paths, cache registration wrappers, extension probing/resolution duplication, and thin Delta gate shims.
+3. Schema-evolution adapter migration should be re-sequenced: implement the Rust installer behavior first (currently stubbed), then delete duplicated Python paths.
+4. Python orchestration decommission (`build_pipeline.py`) is still blocked by Rust `run_build` artifact contract completeness; this remains a high-value but dependency-gated step.

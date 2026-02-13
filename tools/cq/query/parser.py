@@ -256,7 +256,15 @@ def parse_query(query_string: str) -> Query:
     # Pattern queries can use either 'pattern' or 'pattern.context'
     if "pattern" in tokens or "pattern.context" in tokens:
         return _parse_pattern_query(tokens)
+    if _has_top_level_composite(tokens):
+        return _parse_composite_pattern_query(tokens)
     return _parse_entity_query(tokens)
+
+
+def _has_top_level_composite(tokens: dict[str, str]) -> bool:
+    if "entity" in tokens:
+        return False
+    return any(op in tokens for op in _COMPOSITE_OPS)
 
 
 def _tokenize(query_string: str) -> dict[str, str]:
@@ -332,6 +340,26 @@ def _parse_pattern_query(tokens: dict[str, str]) -> Query:
 
     """
     state = _PatternQueryState(pattern_spec=_parse_pattern_object(tokens))
+    _apply_token_handlers(tokens, _PATTERN_TOKEN_HANDLERS, _PATTERN_HANDLER_ORDER, state)
+    state.relational = _parse_relational_constraints(tokens)
+    state.metavar_filters = _parse_metavar_filters(tokens)
+    state.composite = _parse_composite_rule(tokens)
+    state.nth_child = _parse_nth_child(tokens)
+    return state.build()
+
+
+def _parse_composite_pattern_query(tokens: dict[str, str]) -> Query:
+    """Parse top-level composite rules without explicit entity/pattern token.
+
+    This desugars to a pattern-envelope query with a placeholder pattern so
+    composite operators can be expressed as first-class front-door syntax.
+
+    Returns:
+    -------
+    Query
+        Query configured for composite pattern execution.
+    """
+    state = _PatternQueryState(pattern_spec=PatternSpec(pattern="$X"))
     _apply_token_handlers(tokens, _PATTERN_TOKEN_HANDLERS, _PATTERN_HANDLER_ORDER, state)
     state.relational = _parse_relational_constraints(tokens)
     state.metavar_filters = _parse_metavar_filters(tokens)

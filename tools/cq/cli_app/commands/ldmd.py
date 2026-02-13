@@ -9,6 +9,7 @@ from typing import Annotated
 import cyclopts
 
 from tools.cq.cli_app.context import CliContext, CliResult, CliTextResult
+from tools.cq.cli_app.types import OutputFormat
 from tools.cq.ldmd.format import (
     LdmdParseError,
     build_index,
@@ -51,6 +52,10 @@ def _text_result(
         exit_code=exit_code,
         filters=None,
     )
+
+
+def _wants_json(ctx: CliContext) -> bool:
+    return ctx.output_format == OutputFormat.json
 
 
 @ldmd_app.command
@@ -158,6 +163,12 @@ def get(
     content = doc_path.read_bytes()
     try:
         idx = build_index(content)
+        resolved_id = section_id
+        if section_id == "root" and idx.sections:
+            resolved_id = min(
+                idx.sections,
+                key=lambda section: section.start_offset,
+            ).id
         slice_data = get_slice(
             content,
             idx,
@@ -168,8 +179,21 @@ def get(
         )
     except LdmdParseError as exc:
         return _text_result(ctx, f"Failed to extract section: {exc}", exit_code=2)
-
-    return _text_result(ctx, slice_data.decode("utf-8", errors="replace"))
+    extracted_text = slice_data.decode("utf-8", errors="replace")
+    if _wants_json(ctx):
+        payload = {
+            "section_id": resolved_id,
+            "mode": mode,
+            "depth": depth,
+            "limit_bytes": limit_bytes,
+            "content": extracted_text,
+        }
+        return _text_result(
+            ctx,
+            json.dumps(payload, indent=2),
+            media_type="application/json",
+        )
+    return _text_result(ctx, extracted_text)
 
 
 @ldmd_app.command
@@ -254,5 +278,17 @@ def neighbors(
         nav = get_neighbors(idx, section_id=section_id)
     except LdmdParseError as exc:
         return _text_result(ctx, f"Navigation failed: {exc}", exit_code=2)
-
+    if _wants_json(ctx):
+        payload = {
+            "section_id": nav.get("section_id"),
+            "neighbors": {
+                "prev": nav.get("prev"),
+                "next": nav.get("next"),
+            },
+        }
+        return _text_result(
+            ctx,
+            json.dumps(payload, indent=2),
+            media_type="application/json",
+        )
     return _text_result(ctx, json.dumps(nav, indent=2), media_type="application/json")

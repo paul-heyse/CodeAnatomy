@@ -19,6 +19,9 @@ Canonical detailed behavior reference:
 # Rust entity query
 /cq q "entity=function lang=rust in=rust"
 
+# Top-level composite pattern query (no entity= required)
+/cq q "any='logger.$M($$$),print($$$)'"
+
 # Multi-step execution (shared q-scan)
 /cq run --steps '[{"type":"search","query":"build_graph"},{"type":"q","query":"entity=function name=build_graph"},{"type":"calls","function":"build_graph"}]'
 ```
@@ -34,6 +37,8 @@ Canonical detailed behavior reference:
   - `auto` => union of Python and Rust extensions
 - Python-first ordering is preserved for merged results.
 - Scope drops are surfaced in summary diagnostics via `dropped_by_scope`.
+- `imports`, `exceptions`, and `side-effects` apply `--include/--exclude`
+  at scan time (not only post-render filtering).
 
 ## Global Options
 

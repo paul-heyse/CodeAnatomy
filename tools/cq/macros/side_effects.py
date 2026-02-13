@@ -28,8 +28,8 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
-from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
+from tools.cq.macros.scope_filters import resolve_macro_files, scope_filter_applied
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -250,30 +250,44 @@ class SideEffectsRequest(msgspec.Struct, frozen=True):
     root: Path
     argv: list[str]
     max_files: int = 2000
+    include: list[str] = msgspec.field(default_factory=list)
+    exclude: list[str] = msgspec.field(default_factory=list)
 
 
-def _iter_python_files(root: Path, max_files: int) -> list[Path]:
-    repo_context = resolve_repo_context(root)
-    repo_index = build_repo_file_index(repo_context)
-    result = tabulate_files(
-        repo_index,
-        [repo_context.repo_root],
-        None,
+def _iter_python_files(
+    root: Path,
+    max_files: int,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> list[Path]:
+    files = resolve_macro_files(
+        root=root,
+        include=include,
+        exclude=exclude,
         extensions=(".py",),
     )
-    return result.files[:max_files]
+    return files[:max_files]
 
 
 def _scan_side_effects(
     root: Path,
     max_files: int,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
 ) -> tuple[list[SideEffect], int]:
     repo_context = resolve_repo_context(root)
     repo_root = repo_context.repo_root
     all_effects: list[SideEffect] = []
     files_scanned = 0
 
-    for pyfile in _iter_python_files(repo_root, max_files):
+    for pyfile in _iter_python_files(
+        repo_root,
+        max_files,
+        include=include,
+        exclude=exclude,
+    ):
         rel = pyfile.relative_to(repo_root)
         try:
             source = pyfile.read_text(encoding="utf-8")
@@ -393,6 +407,8 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
     all_effects, files_scanned = _scan_side_effects(
         request.root,
         request.max_files,
+        include=request.include,
+        exclude=request.exclude,
     )
 
     run_ctx = RunContext.from_parts(
@@ -409,6 +425,11 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
 
     result.summary = {
         "files_scanned": files_scanned,
+        "scope_file_count": files_scanned,
+        "scope_filter_applied": scope_filter_applied(
+            request.include,
+            request.exclude,
+        ),
         "total_effects": len(all_effects),
         "top_level_calls": len(by_kind.get("top_level_call", [])),
         "global_writes": len(by_kind.get("global_write", [])),

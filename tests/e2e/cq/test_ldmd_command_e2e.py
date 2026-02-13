@@ -128,3 +128,60 @@ def _assert_ldmd_spec(
 
     assert "prev" in neighbors_payload
     assert "next" in neighbors_payload
+
+
+@pytest.mark.e2e
+def test_ldmd_root_alias_json_envelope(
+    run_cq_text: Callable[..., str],
+    tmp_path: Path,
+) -> None:
+    ldmd_text = run_cq_text(
+        [
+            "search",
+            "AsyncService",
+            "--in",
+            "tests/e2e/cq/_golden_workspace/python_project",
+            "--format",
+            "ldmd",
+            "--no-save-artifact",
+        ]
+    )
+    ldmd_path = tmp_path / "search_output.ldmd"
+    ldmd_path.write_text(ldmd_text, encoding="utf-8")
+
+    get_payload = json.loads(
+        run_cq_text(
+            [
+                "--format",
+                "json",
+                "ldmd",
+                "get",
+                str(ldmd_path),
+                "--id",
+                "root",
+                "--mode",
+                "preview",
+                "--depth",
+                "1",
+            ]
+        )
+    )
+    assert isinstance(get_payload, dict)
+    assert isinstance(get_payload.get("section_id"), str)
+    assert isinstance(get_payload.get("content"), str)
+
+    neighbors_payload = json.loads(
+        run_cq_text(
+            [
+                "--format",
+                "json",
+                "ldmd",
+                "neighbors",
+                str(ldmd_path),
+                "--id",
+                "root",
+            ]
+        )
+    )
+    assert isinstance(neighbors_payload, dict)
+    assert isinstance(neighbors_payload.get("neighbors"), dict)

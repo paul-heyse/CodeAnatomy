@@ -155,6 +155,8 @@ def imports(
         argv=ctx.argv,
         cycles=options.cycles,
         module=options.module,
+        include=options.include,
+        exclude=options.exclude,
     )
     result = cmd_imports(request)
 
@@ -194,6 +196,8 @@ def exceptions(
         root=ctx.root,
         argv=ctx.argv,
         function=options.function,
+        include=options.include,
+        exclude=options.exclude,
     )
 
     return CliResult(result=result, context=ctx, filters=options)
@@ -275,6 +279,8 @@ def side_effects(
         root=ctx.root,
         argv=ctx.argv,
         max_files=options.max_files,
+        include=options.include,
+        exclude=options.exclude,
     )
     result = cmd_side_effects(request)
 

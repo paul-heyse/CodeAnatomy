@@ -64,7 +64,9 @@ def collect_advanced_lsp_planes(
 
     payload: dict[str, object] = {
         "semantic_tokens_count": len(semantic_tokens),
-        "semantic_tokens_preview": [msgspec.to_builtins(item) for item in semantic_tokens[:_MAX_PREVIEW]],
+        "semantic_tokens_preview": [
+            msgspec.to_builtins(item) for item in semantic_tokens[:_MAX_PREVIEW]
+        ],
         "inlay_hints_count": len(inlay_hints),
         "inlay_hints_preview": [msgspec.to_builtins(item) for item in inlay_hints[:_MAX_PREVIEW]],
         "document_diagnostics_count": len(doc_diagnostics),

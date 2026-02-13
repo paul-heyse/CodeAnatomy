@@ -122,7 +122,9 @@ def resolve_target(
         if symbol_result is not None:
             return symbol_result
 
-    return _build_unresolved_target(spec=spec, root=root, symbol_name=symbol_name, degrades=degrades)
+    return _build_unresolved_target(
+        spec=spec, root=root, symbol_name=symbol_name, degrades=degrades
+    )
 
 
 def _resolve_anchor_target(
@@ -254,7 +256,9 @@ def _resolve_symbol_fallback_target(
     root: Path | None,
     degrades: list[DegradeEventV1],
 ) -> ResolvedTarget | None:
-    symbol_candidates = _name_candidates(def_records=def_records, name=symbol_name, target_file=None)
+    symbol_candidates = _name_candidates(
+        def_records=def_records, name=symbol_name, target_file=None
+    )
     if not symbol_candidates:
         return None
     chosen = symbol_candidates[0]

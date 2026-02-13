@@ -1779,7 +1779,9 @@ def _build_calls_front_door_state(
     )
 
 
-def _attach_calls_neighborhood_section(result: CqResult, neighborhood_findings: list[Finding]) -> None:
+def _attach_calls_neighborhood_section(
+    result: CqResult, neighborhood_findings: list[Finding]
+) -> None:
     if neighborhood_findings:
         result.sections.insert(
             0, Section(title="Neighborhood Preview", findings=neighborhood_findings)
@@ -1897,7 +1899,9 @@ def _attach_calls_lsp_summary(
     result.summary["pyrefly_telemetry"] = {
         "attempted": lsp_attempted if target_language == "python" else 0,
         "applied": lsp_applied if target_language == "python" else 0,
-        "failed": max(lsp_failed, lsp_attempted - lsp_applied) if target_language == "python" else 0,
+        "failed": max(lsp_failed, lsp_attempted - lsp_applied)
+        if target_language == "python"
+        else 0,
         "skipped": 0,
         "timed_out": lsp_timed_out if target_language == "python" else 0,
     }

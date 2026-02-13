@@ -37,7 +37,9 @@ def test_cache_policy_rejects_unknown_fields() -> None:
 
 def test_meta_constraints_reject_invalid_numeric_values() -> None:
     with pytest.raises(msgspec.ValidationError):
-        msgspec.convert({"cpu_workers": 0, "io_workers": 8, "lsp_request_workers": 2}, type=ParallelismPolicy)
+        msgspec.convert(
+            {"cpu_workers": 0, "io_workers": 8, "lsp_request_workers": 2}, type=ParallelismPolicy
+        )
 
     with pytest.raises(msgspec.ValidationError):
         msgspec.convert({"record": "def", "start_line": -1}, type=SgRecordCacheV1)

@@ -36,6 +36,7 @@ _DEFAULT_MAX_CALLERS = 8
 _DEFAULT_MAX_CALLEES = 8
 _DEFAULT_MAX_DIAGNOSTICS = 6
 _DEFAULT_MAX_REFERENCES = 16
+_DEFAULT_ENRICH_ATTEMPTS = 2
 _SIGNATURE_RANGE_LEN = 2
 _SEVERITY_ERROR = 1
 _SEVERITY_WARNING = 2
@@ -212,7 +213,9 @@ class _PyreflyLspSession:
             "implementation": self._request(
                 "textDocument/implementation", position_payload.as_tdp()
             ),
-            "signature_help": self._request("textDocument/signatureHelp", position_payload.as_tdp()),
+            "signature_help": self._request(
+                "textDocument/signatureHelp", position_payload.as_tdp()
+            ),
             "references": self._request(
                 "textDocument/references",
                 position_payload.references_payload(),
@@ -1004,18 +1007,28 @@ def enrich_with_pyrefly_lsp(request: PyreflyLspRequest) -> dict[str, object] | N
     """
     if request.file_path.suffix not in {".py", ".pyi"}:
         return None
-    try:
-        session = _session_for_root(
-            request.root,
-            startup_timeout_seconds=request.startup_timeout_seconds,
-        )
-        payload = session.probe(request)
-    except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
-        return None
-    if not isinstance(payload, Mapping):
-        return None
-    typed_payload = coerce_pyrefly_payload(payload)
-    return pyrefly_payload_to_dict(typed_payload)
+    attempts = max(1, _DEFAULT_ENRICH_ATTEMPTS)
+    for attempt in range(attempts):
+        try:
+            session = _session_for_root(
+                request.root,
+                startup_timeout_seconds=request.startup_timeout_seconds,
+            )
+            payload = session.probe(request)
+        except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
+            if attempt + 1 >= attempts:
+                return None
+            _SESSION_MANAGER.reset_root(request.root)
+            continue
+
+        if isinstance(payload, Mapping):
+            typed_payload = coerce_pyrefly_payload(payload)
+            return pyrefly_payload_to_dict(typed_payload)
+
+        if session.is_running or attempt + 1 >= attempts:
+            return None
+        _SESSION_MANAGER.reset_root(request.root)
+    return None
 
 
 def get_pyrefly_lsp_capabilities(

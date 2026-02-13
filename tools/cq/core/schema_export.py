@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import msgspec
 
@@ -15,6 +16,34 @@ from tools.cq.search.models import SearchConfig
 from tools.cq.search.profiles import SearchLimits
 
 
+def _schema_hook(type_: object) -> dict[str, Any] | None:
+    """Provide schema fallback for dynamic object-typed fields.
+
+    Msgspec schema export rejects ``object`` without a hook. CQ result contracts
+    still expose a few dynamic payload slots by design.
+
+    Returns:
+    -------
+    dict[str, Any] | None
+        JSON Schema override for the requested type.
+    """
+    if type_ is object:
+        return {
+            "anyOf": [
+                {"type": "string"},
+                {"type": "number"},
+                {"type": "integer"},
+                {"type": "boolean"},
+                {"type": "null"},
+                {"type": "array"},
+                {"type": "object"},
+            ]
+        }
+    if isinstance(type_, type) and issubclass(type_, Path):
+        return {"type": "string"}
+    return None
+
+
 def cq_result_schema() -> dict[str, Any]:
     """Return JSON Schema for CQ result output.
 
@@ -23,7 +52,7 @@ def cq_result_schema() -> dict[str, Any]:
     dict[str, Any]
         JSON Schema for the result model.
     """
-    return msgspec.json.schema(CqResult)
+    return msgspec.json.schema(CqResult, schema_hook=cast("Any", _schema_hook))
 
 
 def query_schema() -> dict[str, Any]:
@@ -34,7 +63,7 @@ def query_schema() -> dict[str, Any]:
     dict[str, Any]
         JSON Schema for the query model.
     """
-    return msgspec.json.schema(Query)
+    return msgspec.json.schema(Query, schema_hook=cast("Any", _schema_hook))
 
 
 def cq_schema_components() -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
@@ -55,7 +84,8 @@ def cq_schema_components() -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
             ConfidenceSignals,
             SourceSpan,
             SearchConfig,
-        ]
+        ],
+        schema_hook=cast("Any", _schema_hook),
     )
     return schema, components
 

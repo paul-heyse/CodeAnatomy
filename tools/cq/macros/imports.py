@@ -30,9 +30,9 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
-from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.graph_utils import find_sccs
 from tools.cq.index.repo import resolve_repo_context
+from tools.cq.macros.scope_filters import resolve_macro_files, scope_filter_applied
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -148,6 +148,8 @@ class ImportRequest(msgspec.Struct, frozen=True):
     argv: list[str]
     cycles: bool = False
     module: str | None = None
+    include: list[str] = msgspec.field(default_factory=list)
+    exclude: list[str] = msgspec.field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -284,24 +286,34 @@ def _find_import_cycles(deps: dict[str, ModuleDeps], internal_prefix: str) -> li
     return find_sccs(dict(graph))
 
 
-def _iter_python_files(root: Path) -> list[Path]:
-    repo_context = resolve_repo_context(root)
-    repo_index = build_repo_file_index(repo_context)
-    result = tabulate_files(
-        repo_index,
-        [repo_context.repo_root],
-        None,
+def _iter_python_files(
+    root: Path,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> list[Path]:
+    return resolve_macro_files(
+        root=root,
+        include=include,
+        exclude=exclude,
         extensions=(".py",),
     )
-    return result.files
 
 
-def _collect_imports(root: Path) -> tuple[dict[str, ModuleDeps], list[ImportInfo]]:
-    repo_context = resolve_repo_context(root)
-    repo_root = repo_context.repo_root
+def _collect_imports(
+    root: Path,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> tuple[dict[str, ModuleDeps], list[ImportInfo]]:
+    repo_root = resolve_repo_context(root).repo_root
     deps: dict[str, ModuleDeps] = {}
     all_imports: list[ImportInfo] = []
-    for pyfile in _iter_python_files(repo_root):
+    for pyfile in _iter_python_files(
+        repo_root,
+        include=include,
+        exclude=exclude,
+    ):
         rel_str = str(pyfile.relative_to(repo_root))
         try:
             source = pyfile.read_text(encoding="utf-8")
@@ -501,7 +513,11 @@ def _filter_to_module(
 
 
 def _prepare_import_context(request: ImportRequest) -> ImportContext:
-    deps, all_imports = _collect_imports(request.root)
+    deps, all_imports = _collect_imports(
+        request.root,
+        include=request.include,
+        exclude=request.exclude,
+    )
     if request.module:
         deps, all_imports = _filter_to_module(deps, all_imports, request.module)
     return ImportContext(request=request, deps=deps, all_imports=all_imports)
@@ -519,6 +535,11 @@ def _build_imports_summary(
         "total_imports": len(ctx.all_imports),
         "internal_dependencies": len(internal_deps),
         "external_dependencies": len(external_deps),
+        "scope_file_count": len(ctx.deps),
+        "scope_filter_applied": scope_filter_applied(
+            ctx.request.include,
+            ctx.request.exclude,
+        ),
     }
     if ctx.request.module:
         summary["module_filter"] = ctx.request.module

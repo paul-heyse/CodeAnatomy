@@ -2243,7 +2243,7 @@ Patterns in `all` are matched in order, and meta-variable captures from earlier 
 
 ```bash
 # Match where $A is assigned then used
-/cq q "all='\$A = \$B', 'func(\$A)'"
+/cq q "all='\$A = \$B,func(\$A)'"
 ```
 
 **any - First Match:**
@@ -2252,7 +2252,7 @@ Returns the first matching pattern:
 
 ```bash
 # Match any logging pattern
-/cq q "any='logger.info(\$$$)', 'print(\$$$)', 'console.log(\$$$)'"
+/cq q "any='logger.info(\$$$),print(\$$$),console.log(\$$$)'"
 ```
 
 **not - Exclusion:**
@@ -2275,7 +2275,7 @@ Can be applied to the main pattern or relational constraints:
 /cq q "entity=function all='await \$X' not.has='try:'"
 
 # Any security hazard in API routes
-/cq q "inside='@app.route' any='eval(\$X)', 'exec(\$X)', 'pickle.load(\$X)'"
+/cq q "inside='@app.route' any='eval(\$X),exec(\$X),pickle.load(\$X)'"
 ```
 
 **YAML Rule Generation:**

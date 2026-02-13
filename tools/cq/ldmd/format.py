@@ -151,6 +151,15 @@ def build_index(content: bytes) -> LdmdIndex:
     )
 
 
+def _resolve_section_id(index: LdmdIndex, section_id: str) -> str:
+    if section_id != "root":
+        return section_id
+    if not index.sections:
+        msg = "Document has no sections"
+        raise LdmdParseError(msg)
+    return min(index.sections, key=lambda section: section.start_offset).id
+
+
 def _safe_utf8_truncate(data: bytes, limit: int) -> bytes:
     """Truncate bytes at limit, preserving UTF-8 boundaries.
 
@@ -204,15 +213,16 @@ def get_slice(
         msg = f"Unsupported mode: {mode}"
         raise LdmdParseError(msg)
 
-    section = next((s for s in index.sections if s.id == section_id), None)
+    resolved_id = _resolve_section_id(index, section_id)
+    section = next((s for s in index.sections if s.id == resolved_id), None)
     if section is None:
-        msg = f"Section not found: {section_id}"
+        msg = f"Section not found: {resolved_id}"
         raise LdmdParseError(msg)
 
     slice_data = content[section.start_offset : section.end_offset]
 
     if mode == "tldr":
-        tldr_id = f"{section_id}_tldr"
+        tldr_id = f"{resolved_id}_tldr"
         try:
             local_index = build_index(slice_data)
             tldr_section = next((s for s in local_index.sections if s.id == tldr_id), None)
@@ -338,15 +348,16 @@ def get_neighbors(
     Raises:
         LdmdParseError: If `section_id` is not found.
     """
+    resolved_id = _resolve_section_id(index, section_id)
     # Find section index
     section_idx = None
     for idx, s in enumerate(index.sections):
-        if s.id == section_id:
+        if s.id == resolved_id:
             section_idx = idx
             break
 
     if section_idx is None:
-        msg = f"Section not found: {section_id}"
+        msg = f"Section not found: {resolved_id}"
         raise LdmdParseError(msg)
 
     prev_id = None
@@ -359,7 +370,7 @@ def get_neighbors(
         next_id = index.sections[section_idx + 1].id
 
     return {
-        "section_id": section_id,
+        "section_id": resolved_id,
         "prev": prev_id,
         "next": next_id,
     }

@@ -12,6 +12,25 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext
+from tools.cq.cli_app.types import OutputFormat
+
+
+def _emit_deprecated_message(ctx: CliContext, message: str) -> None:
+    from tools.cq.core.codec import dumps_json_value
+
+    if ctx.output_format == OutputFormat.json:
+        sys.stdout.write(
+            dumps_json_value(
+                {
+                    "deprecated": True,
+                    "message": message,
+                },
+                indent=2,
+            )
+        )
+        sys.stdout.write("\n")
+        return
+    sys.stdout.write(f"{message}\n")
 
 
 def index(
@@ -46,7 +65,7 @@ def index(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
-    sys.stdout.write("Index management has been removed. Caching is no longer used.\n")
+    _emit_deprecated_message(ctx, "Index management has been removed. Caching is no longer used.")
     return 0
 
 
@@ -82,7 +101,7 @@ def cache(
         msg = "Context not injected"
         raise RuntimeError(msg)
 
-    sys.stdout.write("Cache management has been removed. Caching is no longer used.\n")
+    _emit_deprecated_message(ctx, "Cache management has been removed. Caching is no longer used.")
     return 0
 
 

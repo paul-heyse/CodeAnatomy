@@ -500,15 +500,21 @@ class _RustLspSession:
                 "references": _normalize_targets(responses.get("references")),
             },
             "call_graph": {
-                "incoming_callers": _normalize_call_links(responses.get("incoming_calls"), key="from"),
-                "outgoing_callees": _normalize_call_links(responses.get("outgoing_calls"), key="to"),
+                "incoming_callers": _normalize_call_links(
+                    responses.get("incoming_calls"), key="from"
+                ),
+                "outgoing_callees": _normalize_call_links(
+                    responses.get("outgoing_calls"), key="to"
+                ),
             },
             "type_hierarchy": {
                 "supertypes": _normalize_type_links(responses.get("supertypes")),
                 "subtypes": _normalize_type_links(responses.get("subtypes")),
             },
             "document_symbols": _normalize_document_symbols(responses.get("document_symbols")),
-            "diagnostics": [to_builtins(diag) for diag in self._diagnostics_by_uri.get(uri_str, [])],
+            "diagnostics": [
+                to_builtins(diag) for diag in self._diagnostics_by_uri.get(uri_str, [])
+            ],
             "hover_text": _normalize_hover_text(responses.get("hover")),
             "degrade_events": degrade_events,
             "query_intent": request.query_intent,
@@ -880,7 +886,9 @@ def _build_probe_requests(
     requests: list[tuple[str, str, dict[str, object]]] = []
     requests.extend(_tier_a_probe_requests(capabilities, tdp))
     requests.extend(_tier_b_probe_requests(capabilities, health, text_document, position))
-    requests.extend(_tier_c_probe_requests(capabilities, health=health, quiescent=quiescent, tdp=tdp))
+    requests.extend(
+        _tier_c_probe_requests(capabilities, health=health, quiescent=quiescent, tdp=tdp)
+    )
     return requests
 
 

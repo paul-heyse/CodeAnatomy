@@ -64,8 +64,8 @@ def test_front_door_insight_roundtrip() -> None:
         source="search",
         target=_search_insight(
             SearchInsightBuildRequestV1(
-            summary={"query": "target", "scan_method": "hybrid"},
-            primary_target=_definition_finding("target"),
+                summary={"query": "target", "scan_method": "hybrid"},
+                primary_target=_definition_finding("target"),
                 target_candidates=(_definition_finding("target"),),
             )
         ).target,

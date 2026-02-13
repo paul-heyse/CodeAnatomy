@@ -463,7 +463,9 @@ def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsig
             )
         )
     degradation = request.degradation or _degradation_from_summary(request.summary)
-    budget = request.budget or _default_search_budget(target_candidate_count=len(request.target_candidates))
+    budget = request.budget or _default_search_budget(
+        target_candidate_count=len(request.target_candidates)
+    )
 
     return FrontDoorInsightV1(
         source="search",

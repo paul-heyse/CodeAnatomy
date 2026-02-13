@@ -94,3 +94,24 @@ def test_q_pattern_query_excludes_front_door_insight(
     )
     assert result.summary.get("mode") == "pattern"
     assert "front_door_insight" not in result.summary
+
+
+@pytest.mark.e2e
+def test_q_top_level_any_composite_executes(
+    run_cq_result: Callable[..., CqResult],
+) -> None:
+    result = run_cq_result(
+        [
+            "q",
+            (
+                "any='def $F($$$),class $C' "
+                "in=tests/e2e/cq/_golden_workspace/python_project/app "
+                "lang=python"
+            ),
+            "--format",
+            "json",
+            "--no-save-artifact",
+        ]
+    )
+    assert result.summary.get("mode") == "pattern"
+    assert isinstance(result.summary.get("matches"), int)

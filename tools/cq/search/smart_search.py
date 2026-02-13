@@ -2911,10 +2911,12 @@ def _prepare_search_assembly_inputs(
     definition_matches, candidate_findings = _collect_definition_candidates(ctx, enriched_matches)
     insert_target_candidates(sections, candidates=candidate_findings)
     primary_target_finding = candidate_findings[0] if candidate_findings else None
-    insight_neighborhood, neighborhood_findings, neighborhood_notes = _build_structural_neighborhood_preview(
-        ctx,
-        primary_target_finding=primary_target_finding,
-        definition_matches=definition_matches,
+    insight_neighborhood, neighborhood_findings, neighborhood_notes = (
+        _build_structural_neighborhood_preview(
+            ctx,
+            primary_target_finding=primary_target_finding,
+            definition_matches=definition_matches,
+        )
     )
     insert_neighborhood_preview(
         sections,
@@ -2977,7 +2979,9 @@ def _assemble_search_insight(
             insight,
             degradation=msgspec.structs.replace(
                 insight.degradation,
-                notes=tuple(dict.fromkeys([*insight.degradation.notes, *inputs.neighborhood_notes])),
+                notes=tuple(
+                    dict.fromkeys([*insight.degradation.notes, *inputs.neighborhood_notes])
+                ),
             ),
         )
     top_def_match = inputs.definition_matches[0] if inputs.definition_matches else None

@@ -62,5 +62,13 @@ class LspSessionManager[SessionT]:
         for session in sessions:
             self._close_session(session)
 
+    def reset_root(self, root: Path) -> None:
+        """Close and evict one workspace session."""
+        root_key = str(root.resolve())
+        with self._lock:
+            session = self._sessions.pop(root_key, None)
+        if session is not None:
+            self._close_session(session)
+
 
 __all__ = ["LspSessionManager"]

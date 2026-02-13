@@ -454,7 +454,7 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
 
     render_markdown(result)
 
-    assert collect_called is True
+    assert collect_called
     assert submit_count == 6
     assert timeout_seconds_seen == 6.0
     assert min(6, report_module.MAX_RENDER_ENRICH_WORKERS) == 4

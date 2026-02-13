@@ -30,8 +30,8 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
-from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
+from tools.cq.macros.scope_filters import resolve_macro_files, scope_filter_applied
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -265,7 +265,12 @@ class ExceptionVisitor(ast.NodeVisitor):
         return "<unknown>"
 
 
-def _iter_python_files(root: Path) -> list[Path]:
+def _iter_python_files(
+    root: Path,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> list[Path]:
     """Collect Python files under root using gitignore semantics.
 
     Returns:
@@ -273,18 +278,20 @@ def _iter_python_files(root: Path) -> list[Path]:
     list[Path]
         Python files under the repository root.
     """
-    repo_context = resolve_repo_context(root)
-    repo_index = build_repo_file_index(repo_context)
-    result = tabulate_files(
-        repo_index,
-        [repo_context.repo_root],
-        None,
+    return resolve_macro_files(
+        root=root,
+        include=include,
+        exclude=exclude,
         extensions=(".py",),
     )
-    return result.files
 
 
-def _scan_exceptions(root: Path) -> tuple[list[RaiseSite], list[CatchSite]]:
+def _scan_exceptions(
+    root: Path,
+    *,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> tuple[list[RaiseSite], list[CatchSite], int]:
     """Scan Python files for raise/catch sites.
 
     Returns:
@@ -296,7 +303,12 @@ def _scan_exceptions(root: Path) -> tuple[list[RaiseSite], list[CatchSite]]:
     repo_root = repo_context.repo_root
     all_raises: list[RaiseSite] = []
     all_catches: list[CatchSite] = []
-    for pyfile in _iter_python_files(repo_root):
+    files_scanned = 0
+    for pyfile in _iter_python_files(
+        repo_root,
+        include=include,
+        exclude=exclude,
+    ):
         rel_str = str(pyfile.relative_to(repo_root))
         try:
             source = pyfile.read_text(encoding="utf-8")
@@ -307,7 +319,8 @@ def _scan_exceptions(root: Path) -> tuple[list[RaiseSite], list[CatchSite]]:
         visitor.visit(tree)
         all_raises.extend(visitor.raises)
         all_catches.extend(visitor.catches)
-    return all_raises, all_catches
+        files_scanned += 1
+    return all_raises, all_catches, files_scanned
 
 
 def _summarize_exception_types(
@@ -473,6 +486,35 @@ def _append_exception_evidence(
         )
 
 
+def _build_exception_scoring(
+    *,
+    all_raises: list[RaiseSite],
+    all_catches: list[CatchSite],
+) -> tuple[dict[str, object], list[CatchSite]]:
+    unique_files = len({r.file for r in all_raises} | {c.file for c in all_catches})
+    bare_excepts = [caught for caught in all_catches if caught.is_bare_except]
+    imp_signals = ImpactSignals(
+        sites=len(all_raises),
+        files=unique_files,
+        depth=0,
+        breakages=len(bare_excepts),
+        ambiguities=0,
+    )
+    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
+    impact_value = impact_score(imp_signals)
+    confidence_value = confidence_score(conf_signals)
+    return (
+        {
+            "impact_score": impact_value,
+            "impact_bucket": bucket(impact_value),
+            "confidence_score": confidence_value,
+            "confidence_bucket": bucket(confidence_value),
+            "evidence_kind": conf_signals.evidence_kind,
+        },
+        bare_excepts,
+    )
+
+
 def _apply_rust_fallback(
     result: CqResult,
     root: Path,
@@ -505,6 +547,8 @@ def cmd_exceptions(
     root: Path,
     argv: list[str],
     function: str | None = None,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
 ) -> CqResult:
     """Analyze exception handling patterns.
 
@@ -526,7 +570,11 @@ def cmd_exceptions(
     """
     started = ms()
 
-    all_raises, all_catches = _scan_exceptions(root)
+    all_raises, all_catches, files_scanned = _scan_exceptions(
+        root,
+        include=include,
+        exclude=exclude,
+    )
 
     # Filter by function if specified
     if function:
@@ -544,6 +592,9 @@ def cmd_exceptions(
     raise_types, catch_types = _summarize_exception_types(all_raises, all_catches)
 
     result.summary = {
+        "files_scanned": files_scanned,
+        "scope_file_count": files_scanned,
+        "scope_filter_applied": scope_filter_applied(include, exclude),
         "total_raises": len(all_raises),
         "total_catches": len(all_catches),
         "unique_exception_types": len(raise_types),
@@ -551,26 +602,10 @@ def cmd_exceptions(
         "reraises": sum(1 for r in all_raises if r.is_reraise),
     }
 
-    # Compute scoring signals
-    unique_files = len({r.file for r in all_raises} | {c.file for c in all_catches})
-    bare_excepts = [c for c in all_catches if c.is_bare_except]
-    imp_signals = ImpactSignals(
-        sites=len(all_raises),
-        files=unique_files,
-        depth=0,
-        breakages=len(bare_excepts),
-        ambiguities=0,
+    scoring_details, bare_excepts = _build_exception_scoring(
+        all_raises=all_raises,
+        all_catches=all_catches,
     )
-    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    scoring_details: dict[str, object] = {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
 
     # Key findings
     if bare_excepts:

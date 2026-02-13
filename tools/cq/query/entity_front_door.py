@@ -9,6 +9,7 @@ from pathlib import Path
 import msgspec
 
 from tools.cq.core.front_door_insight import (
+    EntityInsightBuildRequestV1,
     FrontDoorInsightV1,
     InsightBudgetV1,
     InsightConfidenceV1,
@@ -84,13 +85,15 @@ def attach_entity_front_door_insight(
     )
     degradation = _build_degradation(result.summary)
     insight = build_entity_insight(
-        summary=result.summary,
-        primary_target=neighborhood_data.primary_target,
-        neighborhood=neighborhood_data.neighborhood,
-        risk=risk,
-        confidence=neighborhood_data.confidence,
-        degradation=degradation,
-        budget=InsightBudgetV1(top_candidates=3, preview_per_slice=5, lsp_targets=3),
+        EntityInsightBuildRequestV1(
+            summary=result.summary,
+            primary_target=neighborhood_data.primary_target,
+            neighborhood=neighborhood_data.neighborhood,
+            risk=risk,
+            confidence=neighborhood_data.confidence,
+            degradation=degradation,
+            budget=InsightBudgetV1(top_candidates=3, preview_per_slice=5, lsp_targets=3),
+        )
     )
 
     insight, telemetry = _run_entity_lsp(
@@ -265,22 +268,12 @@ def _apply_candidate_lsp(
     insight: FrontDoorInsightV1,
     telemetry: EntityLspTelemetry,
 ) -> FrontDoorInsightV1:
-    if finding.anchor is None:
+    target_context = _resolve_lsp_target_context(result, finding)
+    if target_context is None:
         return insight
 
-    target_file = Path(result.run.root) / finding.anchor.file
-    target_language = infer_language_for_path(target_file)
-    if target_language not in {"python", "rust"}:
-        telemetry.reasons.append("provider_unavailable")
-        return insight
-
-    if telemetry.lsp_provider == "none":
-        telemetry.lsp_provider = provider_for_language(target_language)
-    telemetry.lsp_attempted += 1
-    if target_language == "python":
-        telemetry.py_attempted += 1
-    else:
-        telemetry.rust_attempted += 1
+    target_file, target_language = target_context
+    _record_lsp_attempt(telemetry, target_language)
 
     payload, timed_out = enrich_with_language_lsp(
         LanguageLspEnrichmentRequest(
@@ -297,6 +290,50 @@ def _apply_candidate_lsp(
             ),
         )
     )
+    _record_lsp_timeout(telemetry, target_language, timed_out=timed_out)
+
+    if payload is None:
+        _record_lsp_failure(telemetry, target_language)
+        telemetry.reasons.append("request_timeout" if timed_out else "request_failed")
+        return insight
+
+    _record_lsp_applied(telemetry, target_language)
+    insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
+    advanced_planes = payload.get("advanced_planes")
+    if isinstance(advanced_planes, dict):
+        result.summary["lsp_advanced_planes"] = dict(advanced_planes)
+    return insight
+
+
+def _resolve_lsp_target_context(
+    result: CqResult,
+    finding: Finding,
+) -> tuple[Path, QueryLanguage] | None:
+    if finding.anchor is None:
+        return None
+    target_file = Path(result.run.root) / finding.anchor.file
+    target_language = infer_language_for_path(target_file)
+    if target_language not in {"python", "rust"}:
+        return None
+    return target_file, target_language
+
+
+def _record_lsp_attempt(telemetry: EntityLspTelemetry, target_language: QueryLanguage) -> None:
+    if telemetry.lsp_provider == "none":
+        telemetry.lsp_provider = provider_for_language(target_language)
+    telemetry.lsp_attempted += 1
+    if target_language == "python":
+        telemetry.py_attempted += 1
+    else:
+        telemetry.rust_attempted += 1
+
+
+def _record_lsp_timeout(
+    telemetry: EntityLspTelemetry,
+    target_language: QueryLanguage,
+    *,
+    timed_out: bool,
+) -> None:
     timeout_count = int(timed_out)
     telemetry.lsp_timed_out += timeout_count
     if target_language == "python":
@@ -304,26 +341,21 @@ def _apply_candidate_lsp(
     else:
         telemetry.rust_timed_out += timeout_count
 
-    if payload is None:
-        telemetry.lsp_failed += 1
-        if target_language == "python":
-            telemetry.py_failed += 1
-        else:
-            telemetry.rust_failed += 1
-        telemetry.reasons.append("request_timeout" if timed_out else "request_failed")
-        return insight
 
+def _record_lsp_failure(telemetry: EntityLspTelemetry, target_language: QueryLanguage) -> None:
+    telemetry.lsp_failed += 1
+    if target_language == "python":
+        telemetry.py_failed += 1
+    else:
+        telemetry.rust_failed += 1
+
+
+def _record_lsp_applied(telemetry: EntityLspTelemetry, target_language: QueryLanguage) -> None:
     telemetry.lsp_applied += 1
     if target_language == "python":
         telemetry.py_applied += 1
     else:
         telemetry.rust_applied += 1
-
-    insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
-    advanced_planes = payload.get("advanced_planes")
-    if isinstance(advanced_planes, dict):
-        result.summary["lsp_advanced_planes"] = dict(advanced_planes)
-    return insight
 
 
 def _apply_lsp_contract_state(

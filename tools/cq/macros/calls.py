@@ -191,6 +191,19 @@ class CallsLspRequest:
 
 
 @dataclass(frozen=True)
+class CallsFrontDoorState:
+    """Computed front-door state for calls insight assembly."""
+
+    target_location: tuple[str, int] | None
+    target_callees: Counter[str]
+    neighborhood: InsightNeighborhoodV1
+    degradation_notes: list[str]
+    target_file_path: Path | None
+    target_line: int
+    target_language: QueryLanguage | None
+
+
+@dataclass(frozen=True)
 class CallSiteBuildContext:
     """Cached context for call-site construction from records."""
 
@@ -938,12 +951,20 @@ def rg_find_candidates(
     *,
     limits: SearchLimits | None = None,
 ) -> list[tuple[Path, int]]:
-    """Public wrapper for ripgrep candidate discovery."""
+    """Public wrapper for ripgrep candidate discovery.
+
+    Returns:
+        Candidate locations as ``(path, line)`` tuples.
+    """
     return _rg_find_candidates(function_name, root, limits=limits)
 
 
 def group_candidates(candidates: list[tuple[Path, int]]) -> dict[Path, list[int]]:
-    """Public wrapper for candidate grouping."""
+    """Public wrapper for candidate grouping.
+
+    Returns:
+        Candidate line numbers grouped by file path.
+    """
     return _group_candidates(candidates)
 
 
@@ -952,7 +973,11 @@ def collect_call_sites(
     by_file: dict[Path, list[int]],
     function_name: str,
 ) -> list[CallSite]:
-    """Public wrapper for callsite collection."""
+    """Public wrapper for callsite collection.
+
+    Returns:
+        Callsite records for the requested function.
+    """
     return _collect_call_sites(root, by_file, function_name)
 
 
@@ -961,7 +986,11 @@ def compute_calls_context_window(
     def_lines: list[tuple[int, int]],
     total_lines: int,
 ) -> dict[str, int]:
-    """Public wrapper for callsite context window calculation."""
+    """Public wrapper for callsite context window calculation.
+
+    Returns:
+        Inclusive context line bounds for a callsite.
+    """
     return _compute_context_window(line, def_lines, total_lines)
 
 
@@ -972,7 +1001,11 @@ def extract_calls_context_snippet(
     *,
     match_line: int | None = None,
 ) -> str | None:
-    """Public wrapper for callsite context snippet extraction."""
+    """Public wrapper for callsite context snippet extraction.
+
+    Returns:
+        Context snippet when available, otherwise ``None``.
+    """
     return _extract_context_snippet(
         source_lines,
         start_line,
@@ -1458,7 +1491,10 @@ def _build_calls_neighborhood(
     )
     from tools.cq.core.snb_schema import SemanticNodeRefV1
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-    from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
+    from tools.cq.neighborhood.structural_collector import (
+        StructuralNeighborhoodCollectRequest,
+        collect_structural_neighborhood,
+    )
 
     neighborhood = InsightNeighborhoodV1()
     neighborhood_findings: list[Finding] = []
@@ -1470,12 +1506,14 @@ def _build_calls_neighborhood(
         try:
             snapshot = ScanSnapshot.build_from_repo(request.root, lang="python")
             slices, degrades = collect_structural_neighborhood(
-                target_name=request.function_name.rsplit(".", maxsplit=1)[-1],
-                target_file=target_file,
-                target_line=target_line,
-                target_col=0,
-                snapshot=snapshot,
-                max_per_slice=request.preview_per_slice,
+                StructuralNeighborhoodCollectRequest(
+                    target_name=request.function_name.rsplit(".", maxsplit=1)[-1],
+                    target_file=target_file,
+                    target_line=target_line,
+                    target_col=0,
+                    snapshot=snapshot,
+                    max_per_slice=request.preview_per_slice,
+                )
             )
             neighborhood = build_neighborhood_from_slices(
                 slices,
@@ -1638,29 +1676,12 @@ def _apply_calls_lsp(
     return insight, target_language, lsp_attempted, lsp_applied, lsp_failed, lsp_timed_out
 
 
-def _build_calls_result(
+def _init_calls_result(
     ctx: CallsContext,
     scan_result: CallScanResult,
     *,
     started_ms: float,
 ) -> CqResult:
-    from tools.cq.core.front_door_insight import (
-        InsightBudgetV1,
-        InsightConfidenceV1,
-        InsightDegradationV1,
-        InsightLocationV1,
-        build_calls_insight,
-        to_public_front_door_insight_dict,
-    )
-    from tools.cq.search.lsp_contract_state import (
-        LspContractStateInputV1,
-        derive_lsp_contract_state,
-    )
-    from tools.cq.search.lsp_front_door_adapter import (
-        infer_language_for_path,
-        provider_for_language,
-    )
-
     run_ctx = RunContext.from_parts(
         root=ctx.root,
         argv=ctx.argv,
@@ -1669,9 +1690,16 @@ def _build_calls_result(
     )
     run = run_ctx.to_runmeta("calls")
     result = mk_result(run)
-
     result.summary = _build_calls_summary(ctx.function_name, scan_result)
+    return result
 
+
+def _analyze_calls_sites(
+    result: CqResult,
+    *,
+    ctx: CallsContext,
+    scan_result: CallScanResult,
+) -> tuple[CallAnalysisSummary, ScoreDetails | None]:
     analysis = CallAnalysisSummary(
         arg_shapes=Counter(),
         kwarg_usage=Counter(),
@@ -1688,16 +1716,28 @@ def _build_calls_result(
                 severity="info",
             )
         )
-    else:
-        analysis = _summarize_sites(scan_result.all_sites)
-        score = _build_call_scoring(
-            scan_result.all_sites,
-            scan_result.files_with_calls,
-            analysis.forwarding_count,
-            analysis.hazard_counts,
-            used_fallback=scan_result.used_fallback,
-        )
-        _append_calls_findings(result, ctx, scan_result, analysis, score)
+        return analysis, score
+    analysis = _summarize_sites(scan_result.all_sites)
+    score = _build_call_scoring(
+        scan_result.all_sites,
+        scan_result.files_with_calls,
+        analysis.forwarding_count,
+        analysis.hazard_counts,
+        used_fallback=scan_result.used_fallback,
+    )
+    _append_calls_findings(result, ctx, scan_result, analysis, score)
+    return analysis, score
+
+
+def _build_calls_front_door_state(
+    result: CqResult,
+    *,
+    ctx: CallsContext,
+    analysis: CallAnalysisSummary,
+    score: ScoreDetails | None,
+) -> CallsFrontDoorState:
+    from tools.cq.core.front_door_insight import InsightNeighborhoodV1
+    from tools.cq.search.lsp_front_door_adapter import infer_language_for_path
 
     target_location, target_callees = attach_target_metadata(
         result,
@@ -1717,93 +1757,143 @@ def _build_calls_result(
             preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
         )
     )
+    _attach_calls_neighborhood_section(result, neighborhood_findings)
+    target_file_path, target_line = _target_file_path_and_line(ctx.root, target_location)
+    target_language = (
+        infer_language_for_path(target_file_path) if target_file_path is not None else None
+    )
+    return CallsFrontDoorState(
+        target_location=target_location,
+        target_callees=target_callees,
+        neighborhood=neighborhood
+        if isinstance(neighborhood, InsightNeighborhoodV1)
+        else InsightNeighborhoodV1(),
+        degradation_notes=degradation_notes,
+        target_file_path=target_file_path,
+        target_line=target_line,
+        target_language=target_language,
+    )
 
+
+def _attach_calls_neighborhood_section(result: CqResult, neighborhood_findings: list[Finding]) -> None:
     if neighborhood_findings:
         result.sections.insert(
             0, Section(title="Neighborhood Preview", findings=neighborhood_findings)
         )
 
-    confidence = InsightConfidenceV1(
+
+def _target_file_path_and_line(
+    root: Path,
+    target_location: tuple[str, int] | None,
+) -> tuple[Path | None, int]:
+    if target_location is None:
+        return None, 1
+    return root / target_location[0], int(target_location[1])
+
+
+def _build_calls_confidence(score: ScoreDetails | None) -> InsightConfidenceV1:
+    from tools.cq.core.front_door_insight import InsightConfidenceV1
+
+    return InsightConfidenceV1(
         evidence_kind=(score.evidence_kind if score and score.evidence_kind else "resolved_ast"),
         score=float(score.confidence_score)
         if score and score.confidence_score is not None
         else 0.0,
         bucket=score.confidence_bucket if score and score.confidence_bucket else "low",
     )
-    target_file_path: Path | None = None
-    target_line = 1
-    if target_location is not None:
-        target_file_path = ctx.root / target_location[0]
-        target_line = int(target_location[1])
 
-    target_language = (
-        infer_language_for_path(target_file_path) if target_file_path is not None else None
+
+def _build_calls_front_door_insight(
+    *,
+    ctx: CallsContext,
+    scan_result: CallScanResult,
+    analysis: CallAnalysisSummary,
+    confidence: InsightConfidenceV1,
+    state: CallsFrontDoorState,
+) -> FrontDoorInsightV1:
+    from tools.cq.core.front_door_insight import (
+        CallsInsightBuildRequestV1,
+        InsightBudgetV1,
+        InsightDegradationV1,
+        InsightLocationV1,
+        build_calls_insight,
     )
-    lsp_available = target_language in {"python", "rust"}
-    lsp_attempted = 0
-    lsp_applied = 0
-    lsp_failed = 0
-    lsp_timed_out = 0
-    lsp_provider = provider_for_language(target_language) if target_language else "none"
+    from tools.cq.search.lsp_contract_state import (
+        LspContractStateInputV1,
+        derive_lsp_contract_state,
+    )
+    from tools.cq.search.lsp_front_door_adapter import provider_for_language
 
-    insight = build_calls_insight(
-        function_name=ctx.function_name,
-        signature=scan_result.signature_info or None,
-        location=(
-            InsightLocationV1(file=target_location[0], line=target_location[1], col=0)
-            if target_location is not None
-            else None
-        ),
-        neighborhood=neighborhood,
-        files_with_calls=scan_result.files_with_calls,
-        arg_shape_count=len(analysis.arg_shapes),
-        forwarding_count=analysis.forwarding_count,
-        hazard_counts=dict(analysis.hazard_counts),
-        confidence=confidence,
-        budget=InsightBudgetV1(
-            top_candidates=_FRONT_DOOR_TOP_CANDIDATES,
-            preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
-            lsp_targets=1,
-        ),
-        degradation=InsightDegradationV1(
-            lsp=derive_lsp_contract_state(
-                LspContractStateInputV1(
-                    provider=lsp_provider,
-                    available=lsp_available,
-                )
-            ).status,
-            scan="fallback" if scan_result.used_fallback else "ok",
-            scope_filter="none",
-            notes=tuple(degradation_notes),
-        ),
+    lsp_provider = provider_for_language(state.target_language) if state.target_language else "none"
+    lsp_available = state.target_language in {"python", "rust"}
+    location = (
+        InsightLocationV1(file=state.target_location[0], line=state.target_location[1], col=0)
+        if state.target_location is not None
+        else None
+    )
+    return build_calls_insight(
+        CallsInsightBuildRequestV1(
+            function_name=ctx.function_name,
+            signature=scan_result.signature_info or None,
+            location=location,
+            neighborhood=state.neighborhood,
+            files_with_calls=scan_result.files_with_calls,
+            arg_shape_count=len(analysis.arg_shapes),
+            forwarding_count=analysis.forwarding_count,
+            hazard_counts=dict(analysis.hazard_counts),
+            confidence=confidence,
+            budget=InsightBudgetV1(
+                top_candidates=_FRONT_DOOR_TOP_CANDIDATES,
+                preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+                lsp_targets=1,
+            ),
+            degradation=InsightDegradationV1(
+                lsp=derive_lsp_contract_state(
+                    LspContractStateInputV1(
+                        provider=lsp_provider,
+                        available=lsp_available,
+                    )
+                ).status,
+                scan="fallback" if scan_result.used_fallback else "ok",
+                scope_filter="none",
+                notes=tuple(state.degradation_notes),
+            ),
+        )
     )
 
-    (
-        insight,
-        target_language,
-        lsp_attempted,
-        lsp_applied,
-        lsp_failed,
-        lsp_timed_out,
-    ) = _apply_calls_lsp(
+
+def _apply_calls_lsp_with_telemetry(
+    result: CqResult,
+    *,
+    insight: FrontDoorInsightV1,
+    state: CallsFrontDoorState,
+    symbol_hint: str,
+) -> tuple[FrontDoorInsightV1, tuple[int, int, int, int]]:
+    insight, _language, attempted, applied, failed, timed_out = _apply_calls_lsp(
         insight=insight,
         result=result,
         request=CallsLspRequest(
-            root=ctx.root,
-            target_file_path=target_file_path,
-            target_line=target_line,
-            target_language=target_language,
-            symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
+            root=Path(result.run.root),
+            target_file_path=state.target_file_path,
+            target_line=state.target_line,
+            target_language=state.target_language,
+            symbol_hint=symbol_hint,
             preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
         ),
     )
+    return insight, (attempted, applied, failed, timed_out)
 
+
+def _attach_calls_lsp_summary(
+    result: CqResult,
+    target_language: QueryLanguage | None,
+    lsp_telemetry: tuple[int, int, int, int],
+) -> None:
+    lsp_attempted, lsp_applied, lsp_failed, lsp_timed_out = lsp_telemetry
     result.summary["pyrefly_telemetry"] = {
         "attempted": lsp_attempted if target_language == "python" else 0,
         "applied": lsp_applied if target_language == "python" else 0,
-        "failed": max(lsp_failed, lsp_attempted - lsp_applied)
-        if target_language == "python"
-        else 0,
+        "failed": max(lsp_failed, lsp_attempted - lsp_applied) if target_language == "python" else 0,
         "skipped": 0,
         "timed_out": lsp_timed_out if target_language == "python" else 0,
     }
@@ -1815,8 +1905,34 @@ def _build_calls_result(
         "timed_out": lsp_timed_out if target_language == "rust" else 0,
     }
 
-    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
+def _build_calls_result(
+    ctx: CallsContext,
+    scan_result: CallScanResult,
+    *,
+    started_ms: float,
+) -> CqResult:
+    from tools.cq.core.front_door_insight import to_public_front_door_insight_dict
+
+    result = _init_calls_result(ctx, scan_result, started_ms=started_ms)
+    analysis, score = _analyze_calls_sites(result, ctx=ctx, scan_result=scan_result)
+    state = _build_calls_front_door_state(result, ctx=ctx, analysis=analysis, score=score)
+    confidence = _build_calls_confidence(score)
+    insight = _build_calls_front_door_insight(
+        ctx=ctx,
+        scan_result=scan_result,
+        analysis=analysis,
+        confidence=confidence,
+        state=state,
+    )
+    insight, lsp_telemetry = _apply_calls_lsp_with_telemetry(
+        result,
+        insight=insight,
+        state=state,
+        symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
+    )
+    _attach_calls_lsp_summary(result, state.target_language, lsp_telemetry)
+    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
     return result
 
 

@@ -44,6 +44,7 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
+from tools.cq.core.structs import CqStruct
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import (
@@ -138,6 +139,12 @@ class AstGrepExecutionState:
 
     findings: list[Finding]
     records: list[SgRecord]
+
+
+class DefQueryRelationshipPolicyV1(CqStruct, frozen=True):
+    """Policy controls for definition-query relationship detail expansion."""
+
+    compute_relationship_details: bool
     raw_matches: list[dict[str, object]]
 
 
@@ -404,7 +411,11 @@ def _build_scan_context(records: list[SgRecord]) -> ScanContext:
 
 
 def build_scan_context(records: list[SgRecord]) -> ScanContext:
-    """Public wrapper for scan-context construction."""
+    """Public wrapper for scan-context construction.
+
+    Returns:
+        Scan context computed from ast-grep records.
+    """
     return _build_scan_context(records)
 
 
@@ -1399,7 +1410,39 @@ def _process_def_query(
 
     candidate_records = def_candidates if def_candidates is not None else scan_ctx.def_records
     matching_defs = _filter_to_matching(candidate_records, query)
-    matching_records = list(matching_defs)  # Keep copy for scope filtering
+    relationship_policy = _build_def_relationship_policy(query, matching_defs)
+    _append_definition_findings(
+        result,
+        matching_defs=matching_defs,
+        scan_ctx=scan_ctx,
+        policy=relationship_policy,
+    )
+
+    # Apply scope filter if present
+    if query.scope_filter:
+        enricher = ctx.symtable if ctx.symtable is not None else SymtableEnricher(root)
+        result.key_findings = filter_by_scope(
+            result.key_findings,
+            query.scope_filter,
+            enricher,
+            matching_defs,
+        )
+
+    _append_def_query_sections(
+        result=result,
+        query=query,
+        matching_defs=matching_defs,
+        scan_ctx=scan_ctx,
+        root=root,
+    )
+    _append_expander_sections(result, matching_defs, scan_ctx, root, query)
+    _finalize_def_query_summary(result, scan_ctx)
+
+
+def _build_def_relationship_policy(
+    query: Query,
+    matching_records: list[SgRecord],
+) -> DefQueryRelationshipPolicyV1:
     has_scope_constraints = bool(query.scope.in_dir or query.scope.exclude or query.scope.globs)
     compute_relationship_details = (
         len(matching_records) <= _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES
@@ -1408,21 +1451,22 @@ def _process_def_query(
         or "callers" in query.fields
         or "callees" in query.fields
     )
+    return DefQueryRelationshipPolicyV1(compute_relationship_details=compute_relationship_details)
 
+
+def _append_definition_findings(
+    result: CqResult,
+    *,
+    matching_defs: list[SgRecord],
+    scan_ctx: ScanContext,
+    policy: DefQueryRelationshipPolicyV1,
+) -> None:
     for def_record in matching_defs:
-        calls_within: list[SgRecord]
-        if compute_relationship_details:
-            calls_within = scan_ctx.calls_by_def.get(def_record, [])
-            caller_count = _count_callers_for_definition(
-                def_record,
-                scan_ctx.call_records,
-                scan_ctx.file_index,
-            )
-            enclosing_scope = _resolve_enclosing_scope(def_record, scan_ctx.file_index)
-        else:
-            calls_within = []
-            caller_count = 0
-            enclosing_scope = "<module>"
+        calls_within, caller_count, enclosing_scope = _definition_relationship_detail(
+            def_record,
+            scan_ctx=scan_ctx,
+            policy=policy,
+        )
         finding = _def_to_finding(
             def_record,
             calls_within,
@@ -1432,17 +1476,33 @@ def _process_def_query(
         )
         result.key_findings.append(finding)
 
-    # Apply scope filter if present
-    if query.scope_filter:
-        enricher = ctx.symtable if ctx.symtable is not None else SymtableEnricher(root)
-        result.key_findings = filter_by_scope(
-            result.key_findings,
-            query.scope_filter,
-            enricher,
-            matching_records,
-        )
 
-    # Add sections based on query fields
+def _definition_relationship_detail(
+    def_record: SgRecord,
+    *,
+    scan_ctx: ScanContext,
+    policy: DefQueryRelationshipPolicyV1,
+) -> tuple[list[SgRecord], int, str]:
+    if not policy.compute_relationship_details:
+        return [], 0, "<module>"
+    calls_within = scan_ctx.calls_by_def.get(def_record, [])
+    caller_count = _count_callers_for_definition(
+        def_record,
+        scan_ctx.call_records,
+        scan_ctx.file_index,
+    )
+    enclosing_scope = _resolve_enclosing_scope(def_record, scan_ctx.file_index)
+    return calls_within, caller_count, enclosing_scope
+
+
+def _append_def_query_sections(
+    *,
+    result: CqResult,
+    query: Query,
+    matching_defs: list[SgRecord],
+    scan_ctx: ScanContext,
+    root: Path,
+) -> None:
     if "callers" in query.fields:
         callers_section = _build_callers_section(
             matching_defs,
@@ -1452,23 +1512,20 @@ def _process_def_query(
         )
         if callers_section.findings:
             result.sections.append(callers_section)
-
     if "callees" in query.fields:
         callees_section = _build_callees_section(matching_defs, scan_ctx.calls_by_def, root)
         if callees_section.findings:
             result.sections.append(callees_section)
-
     if "imports" in query.fields:
         imports_section = _build_imports_section(matching_defs, scan_ctx.all_records)
         if imports_section.findings:
             result.sections.append(imports_section)
-
     preview_section = _build_entity_neighborhood_preview_section(result.key_findings)
     if preview_section.findings:
         result.sections.insert(0, preview_section)
 
-    _append_expander_sections(result, matching_defs, scan_ctx, root, query)
 
+def _finalize_def_query_summary(result: CqResult, scan_ctx: ScanContext) -> None:
     result.summary["total_defs"] = len(scan_ctx.def_records)
     result.summary["total_calls"] = len(scan_ctx.call_records)
     result.summary["matches"] = len(result.key_findings)

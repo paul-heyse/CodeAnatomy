@@ -35,15 +35,33 @@ class StructuralNeighborhood(CqStruct, frozen=True):
     callees: tuple[SgRecord, ...] = ()
 
 
+class StructuralNeighborhoodCollectRequest(CqStruct, frozen=True):
+    """Typed request for structural neighborhood collection."""
+
+    target_name: str
+    target_file: str
+    snapshot: ScanSnapshot
+    target_line: int | None = None
+    target_col: int | None = None
+    max_per_slice: int = 50
+    slice_limits: Mapping[str, int] | None = None
+
+
+class RecordSliceBuildRequest(CqStruct, frozen=True):
+    """Request envelope for constructing one record-backed structural slice."""
+
+    records: tuple[SgRecord, ...]
+    slice_kind: str
+    title: str
+    edge_kind: str
+    subject_node_id: str
+    edge_direction: str
+    max_per_slice: int
+    slice_limits: Mapping[str, int] | None = None
+
+
 def collect_structural_neighborhood(
-    target_name: str,
-    target_file: str,
-    snapshot: ScanSnapshot,
-    *,
-    target_line: int | None = None,
-    target_col: int | None = None,
-    max_per_slice: int = 50,
-    slice_limits: Mapping[str, int] | None = None,
+    request: StructuralNeighborhoodCollectRequest,
 ) -> tuple[tuple[NeighborhoodSliceV1, ...], tuple[DegradeEventV1, ...]]:
     """Collect structural neighborhood slices from scan snapshot.
 
@@ -51,158 +69,191 @@ def collect_structural_neighborhood(
         Structural neighborhood slices and degrade events.
     """
     target_def, target_degrades = _find_target_definition(
-        name=target_name,
-        file=target_file,
-        snapshot=snapshot,
-        target_line=target_line,
-        target_col=target_col,
+        name=request.target_name,
+        file=request.target_file,
+        snapshot=request.snapshot,
+        target_line=request.target_line,
+        target_col=request.target_col,
     )
     if target_def is None:
         degrade = DegradeEventV1(
             stage="structural.target_resolution",
             severity="error",
             category="not_found",
-            message=f"Target definition '{target_name}' not found in {target_file}",
+            message=f"Target definition '{request.target_name}' not found in {request.target_file}",
         )
         return (), (*target_degrades, degrade)
 
-    neighborhood = _collect_neighborhood(target_def, snapshot)
+    neighborhood = _collect_neighborhood(target_def, request.snapshot)
     subject_node_id = _node_id_from_record(target_def)
+    slices = _build_structural_slices(
+        neighborhood=neighborhood,
+        subject_node_id=subject_node_id,
+        max_per_slice=request.max_per_slice,
+        slice_limits=request.slice_limits,
+    )
+    return tuple(slices), target_degrades
 
+
+def _build_structural_slices(
+    *,
+    neighborhood: StructuralNeighborhood,
+    subject_node_id: str,
+    max_per_slice: int,
+    slice_limits: Mapping[str, int] | None,
+) -> list[NeighborhoodSliceV1]:
     slices: list[NeighborhoodSliceV1] = []
-    degrades: list[DegradeEventV1] = list(target_degrades)
-
-    if neighborhood.parents:
-        limited = _apply_limit(neighborhood.parents, "parents", max_per_slice, slice_limits)
-        parent_nodes = [_record_to_node_ref(record) for record in limited]
-        parent_edges = [
-            SemanticEdgeV1(
-                edge_id=f"{_node_id_from_record(record)}→{subject_node_id}",
-                source_node_id=_node_id_from_record(record),
-                target_node_id=subject_node_id,
-                edge_kind="contains",
-                evidence_source="structural.ast",
-            )
-            for record in limited
-        ]
-        slices.append(
-            NeighborhoodSliceV1(
-                kind="parents",
-                title="Parent Scopes",
-                total=len(neighborhood.parents),
-                preview=tuple(parent_nodes),
-                edges=tuple(parent_edges),
-                collapsed=True,
-            )
-        )
-
-    if neighborhood.children:
-        limited = _apply_limit(neighborhood.children, "children", max_per_slice, slice_limits)
-        child_nodes = [_record_to_node_ref(record) for record in limited]
-        child_edges = [
-            SemanticEdgeV1(
-                edge_id=f"{subject_node_id}→{_node_id_from_record(record)}",
-                source_node_id=subject_node_id,
-                target_node_id=_node_id_from_record(record),
-                edge_kind="contains",
-                evidence_source="structural.ast",
-            )
-            for record in limited
-        ]
-        slices.append(
-            NeighborhoodSliceV1(
-                kind="children",
-                title="Nested Definitions",
-                total=len(neighborhood.children),
-                preview=tuple(child_nodes),
-                edges=tuple(child_edges),
-                collapsed=True,
-            )
-        )
-
-    if neighborhood.siblings:
-        limited = _apply_limit(neighborhood.siblings, "siblings", max_per_slice, slice_limits)
-        sibling_nodes = [_record_to_node_ref(record) for record in limited]
-        slices.append(
-            NeighborhoodSliceV1(
-                kind="siblings",
-                title="Sibling Definitions",
-                total=len(neighborhood.siblings),
-                preview=tuple(sibling_nodes),
-                edges=(),
-                collapsed=True,
-            )
-        )
-
-    if neighborhood.enclosing_context is not None:
-        enclosing_node = _record_to_node_ref(neighborhood.enclosing_context)
-        enclosing_edge = SemanticEdgeV1(
-            edge_id=f"{_node_id_from_record(neighborhood.enclosing_context)}→{subject_node_id}",
-            source_node_id=_node_id_from_record(neighborhood.enclosing_context),
-            target_node_id=subject_node_id,
+    _append_record_slice(
+        slices,
+        RecordSliceBuildRequest(
+            records=neighborhood.parents,
+            slice_kind="parents",
+            title="Parent Scopes",
             edge_kind="contains",
-            evidence_source="structural.ast",
-        )
-        slices.append(
-            NeighborhoodSliceV1(
-                kind="enclosing_context",
-                title="Enclosing Context",
-                total=1,
-                preview=(enclosing_node,),
-                edges=(enclosing_edge,),
-                collapsed=False,
-            )
-        )
+            subject_node_id=subject_node_id,
+            edge_direction="inbound",
+            max_per_slice=max_per_slice,
+            slice_limits=slice_limits,
+        ),
+    )
+    _append_record_slice(
+        slices,
+        RecordSliceBuildRequest(
+            records=neighborhood.children,
+            slice_kind="children",
+            title="Nested Definitions",
+            edge_kind="contains",
+            subject_node_id=subject_node_id,
+            edge_direction="outbound",
+            max_per_slice=max_per_slice,
+            slice_limits=slice_limits,
+        ),
+    )
+    _append_record_slice(
+        slices,
+        RecordSliceBuildRequest(
+            records=neighborhood.siblings,
+            slice_kind="siblings",
+            title="Sibling Definitions",
+            edge_kind="",
+            subject_node_id=subject_node_id,
+            edge_direction="none",
+            max_per_slice=max_per_slice,
+            slice_limits=slice_limits,
+        ),
+    )
+    _append_enclosing_context_slice(slices, neighborhood.enclosing_context, subject_node_id)
+    _append_record_slice(
+        slices,
+        RecordSliceBuildRequest(
+            records=neighborhood.callees,
+            slice_kind="callees",
+            title="Functions Called",
+            edge_kind="calls",
+            subject_node_id=subject_node_id,
+            edge_direction="outbound",
+            max_per_slice=max_per_slice,
+            slice_limits=slice_limits,
+        ),
+    )
+    _append_record_slice(
+        slices,
+        RecordSliceBuildRequest(
+            records=neighborhood.callers,
+            slice_kind="callers",
+            title="Callers",
+            edge_kind="calls",
+            subject_node_id=subject_node_id,
+            edge_direction="inbound",
+            max_per_slice=max_per_slice,
+            slice_limits=slice_limits,
+        ),
+    )
+    return slices
 
-    if neighborhood.callees:
-        limited = _apply_limit(neighborhood.callees, "callees", max_per_slice, slice_limits)
-        callee_nodes = [_record_to_node_ref(record) for record in limited]
-        callee_edges = [
+
+def _append_enclosing_context_slice(
+    slices: list[NeighborhoodSliceV1],
+    enclosing_context: SgRecord | None,
+    subject_node_id: str,
+) -> None:
+    if enclosing_context is None:
+        return
+    enclosing_node = _record_to_node_ref(enclosing_context)
+    enclosing_edge = SemanticEdgeV1(
+        edge_id=f"{_node_id_from_record(enclosing_context)}→{subject_node_id}",
+        source_node_id=_node_id_from_record(enclosing_context),
+        target_node_id=subject_node_id,
+        edge_kind="contains",
+        evidence_source="structural.ast",
+    )
+    slices.append(
+        NeighborhoodSliceV1(
+            kind="enclosing_context",
+            title="Enclosing Context",
+            total=1,
+            preview=(enclosing_node,),
+            edges=(enclosing_edge,),
+            collapsed=False,
+        )
+    )
+
+
+def _append_record_slice(
+    slices: list[NeighborhoodSliceV1],
+    request: RecordSliceBuildRequest,
+) -> None:
+    if not request.records:
+        return
+    limited = _apply_limit(
+        request.records,
+        request.slice_kind,
+        request.max_per_slice,
+        request.slice_limits,
+    )
+    nodes = [_record_to_node_ref(record) for record in limited]
+    edges = _build_slice_edges(
+        records=limited,
+        subject_node_id=request.subject_node_id,
+        edge_kind=request.edge_kind,
+        edge_direction=request.edge_direction,
+    )
+    slices.append(
+        NeighborhoodSliceV1(
+            kind=request.slice_kind,
+            title=request.title,
+            total=len(request.records),
+            preview=tuple(nodes),
+            edges=tuple(edges),
+            collapsed=True,
+        )
+    )
+
+
+def _build_slice_edges(
+    *,
+    records: tuple[SgRecord, ...],
+    subject_node_id: str,
+    edge_kind: str,
+    edge_direction: str,
+) -> list[SemanticEdgeV1]:
+    if edge_direction == "none":
+        return []
+    edges: list[SemanticEdgeV1] = []
+    for record in records:
+        record_node_id = _node_id_from_record(record)
+        source_node_id = record_node_id if edge_direction == "inbound" else subject_node_id
+        target_node_id = subject_node_id if edge_direction == "inbound" else record_node_id
+        edges.append(
             SemanticEdgeV1(
-                edge_id=f"{subject_node_id}→{_node_id_from_record(record)}",
-                source_node_id=subject_node_id,
-                target_node_id=_node_id_from_record(record),
-                edge_kind="calls",
+                edge_id=f"{source_node_id}→{target_node_id}",
+                source_node_id=source_node_id,
+                target_node_id=target_node_id,
+                edge_kind=edge_kind,
                 evidence_source="structural.ast",
             )
-            for record in limited
-        ]
-        slices.append(
-            NeighborhoodSliceV1(
-                kind="callees",
-                title="Functions Called",
-                total=len(neighborhood.callees),
-                preview=tuple(callee_nodes),
-                edges=tuple(callee_edges),
-                collapsed=True,
-            )
         )
-
-    if neighborhood.callers:
-        limited = _apply_limit(neighborhood.callers, "callers", max_per_slice, slice_limits)
-        caller_nodes = [_record_to_node_ref(record) for record in limited]
-        caller_edges = [
-            SemanticEdgeV1(
-                edge_id=f"{_node_id_from_record(record)}→{subject_node_id}",
-                source_node_id=_node_id_from_record(record),
-                target_node_id=subject_node_id,
-                edge_kind="calls",
-                evidence_source="structural.ast",
-            )
-            for record in limited
-        ]
-        slices.append(
-            NeighborhoodSliceV1(
-                kind="callers",
-                title="Callers",
-                total=len(neighborhood.callers),
-                preview=tuple(caller_nodes),
-                edges=tuple(caller_edges),
-                collapsed=True,
-            )
-        )
-
-    return tuple(slices), tuple(degrades)
+    return edges
 
 
 def _find_target_definition(
@@ -431,5 +482,6 @@ def _anchor_sort_key(record: SgRecord) -> tuple[int, int, int, str]:
 
 __all__ = [
     "StructuralNeighborhood",
+    "StructuralNeighborhoodCollectRequest",
     "collect_structural_neighborhood",
 ]

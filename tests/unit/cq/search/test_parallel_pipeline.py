@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import time
 
-from pytest import MonkeyPatch
+import pytest
 from tools.cq.core.multilang_orchestrator import execute_by_language_scope
 from tools.cq.core.runtime.worker_scheduler import close_worker_scheduler
 
 
 def test_execute_by_language_scope_parallel_preserves_language_order(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CQ_RUNTIME_QUERY_PARTITION_WORKERS", "2")
     close_worker_scheduler()

@@ -145,45 +145,102 @@ class FrontDoorInsightV1(CqStruct, frozen=True):
     schema_version: str = "cq.insight.v1"
 
 
+class SearchInsightBuildRequestV1(CqStruct, frozen=True):
+    """Typed request contract for search insight assembly."""
+
+    summary: dict[str, object]
+    primary_target: Finding | None
+    target_candidates: tuple[Finding, ...]
+    neighborhood: InsightNeighborhoodV1 | None = None
+    risk: InsightRiskV1 | None = None
+    degradation: InsightDegradationV1 | None = None
+    budget: InsightBudgetV1 | None = None
+
+
+class CallsInsightBuildRequestV1(CqStruct, frozen=True):
+    """Typed request contract for calls insight assembly."""
+
+    function_name: str
+    signature: str | None
+    location: InsightLocationV1 | None
+    neighborhood: InsightNeighborhoodV1
+    files_with_calls: int
+    arg_shape_count: int
+    forwarding_count: int
+    hazard_counts: dict[str, int]
+    confidence: InsightConfidenceV1
+    budget: InsightBudgetV1 | None = None
+    degradation: InsightDegradationV1 | None = None
+
+
+class EntityInsightBuildRequestV1(CqStruct, frozen=True):
+    """Typed request contract for entity insight assembly."""
+
+    summary: dict[str, object]
+    primary_target: Finding | None
+    neighborhood: InsightNeighborhoodV1 | None = None
+    risk: InsightRiskV1 | None = None
+    confidence: InsightConfidenceV1 | None = None
+    degradation: InsightDegradationV1 | None = None
+    budget: InsightBudgetV1 | None = None
+
+
 def render_insight_card(insight: FrontDoorInsightV1) -> list[str]:
     """Render a compact markdown card from a front-door insight.
 
     Returns:
         Markdown lines representing the insight card.
     """
-    lines: list[str] = ["## Insight Card"]
+    lines = ["## Insight Card", _render_target_line(insight.target)]
+    lines.extend(_render_neighborhood_lines(insight.neighborhood))
+    lines.append(_render_risk_line(insight.risk))
+    lines.append(_render_confidence_line(insight.confidence))
+    lines.append(_render_degradation_line(insight.degradation))
+    lines.append(_render_budget_line(insight.budget))
+    artifact_refs_line = _render_artifact_refs_line(insight.artifact_refs)
+    if artifact_refs_line is not None:
+        lines.append(artifact_refs_line)
+    lines.append("")
+    return lines
 
-    target = insight.target
-    loc = target.location
-    target_parts = [f"**{target.symbol}**", f"({target.kind})"]
-    if loc.file:
-        if loc.line is not None:
-            target_parts.append(f"`{loc.file}:{loc.line}`")
-        else:
-            target_parts.append(f"`{loc.file}`")
+
+def _render_target_line(target: InsightTargetV1) -> str:
+    location = _format_target_location(target.location)
+    target_parts = [f"**{target.symbol}**", f"({target.kind})", location]
     if target.signature:
         target_parts.append(f"`{target.signature}`")
-    lines.append(f"- Target: {' '.join(part for part in target_parts if part)}")
+    return f"- Target: {' '.join(part for part in target_parts if part)}"
 
-    nb = insight.neighborhood
-    lines.append(
+
+def _format_target_location(location: InsightLocationV1) -> str:
+    if not location.file:
+        return ""
+    if location.line is not None:
+        return f"`{location.file}:{location.line}`"
+    return f"`{location.file}`"
+
+
+def _render_neighborhood_lines(neighborhood: InsightNeighborhoodV1) -> list[str]:
+    lines = [
         "- Neighborhood: "
-        f"callers={nb.callers.total}, "
-        f"callees={nb.callees.total}, "
-        f"references={nb.references.total}, "
-        f"scope={nb.hierarchy_or_scope.total}"
-    )
-    callers_preview = _preview_labels(nb.callers.preview)
+        f"callers={neighborhood.callers.total}, "
+        f"callees={neighborhood.callees.total}, "
+        f"references={neighborhood.references.total}, "
+        f"scope={neighborhood.hierarchy_or_scope.total}"
+    ]
+    callers_preview = _preview_labels(neighborhood.callers.preview)
     if callers_preview:
         lines.append(f"  - Top callers: {', '.join(callers_preview)}")
-    callees_preview = _preview_labels(nb.callees.preview)
+    callees_preview = _preview_labels(neighborhood.callees.preview)
     if callees_preview:
         lines.append(f"  - Top callees: {', '.join(callees_preview)}")
+    return lines
 
-    risk = insight.risk
+
+def _render_risk_line(risk: InsightRiskV1) -> str:
     driver_text = ", ".join(risk.drivers) if risk.drivers else "none"
     counters = risk.counters
-    lines.append(
+    return (
         "- Risk: "
         f"level={risk.level}; "
         f"drivers={driver_text}; "
@@ -193,39 +250,47 @@ def render_insight_card(insight: FrontDoorInsightV1) -> list[str]:
         f"forwarding={counters.forwarding_count}"
     )
 
-    conf = insight.confidence
-    lines.append(
-        f"- Confidence: evidence={conf.evidence_kind}, score={conf.score:.2f}, bucket={conf.bucket}"
+
+def _render_confidence_line(confidence: InsightConfidenceV1) -> str:
+    return (
+        "- Confidence: "
+        f"evidence={confidence.evidence_kind}, "
+        f"score={confidence.score:.2f}, "
+        f"bucket={confidence.bucket}"
     )
 
-    degr = insight.degradation
-    notes = f" ({'; '.join(degr.notes)})" if degr.notes else ""
-    lines.append(
-        f"- Degradation: lsp={degr.lsp}, scan={degr.scan}, scope_filter={degr.scope_filter}{notes}"
+
+def _render_degradation_line(degradation: InsightDegradationV1) -> str:
+    notes = f" ({'; '.join(degradation.notes)})" if degradation.notes else ""
+    return (
+        "- Degradation: "
+        f"lsp={degradation.lsp}, "
+        f"scan={degradation.scan}, "
+        f"scope_filter={degradation.scope_filter}{notes}"
     )
 
-    budget = insight.budget
-    lines.append(
+
+def _render_budget_line(budget: InsightBudgetV1) -> str:
+    return (
         "- Budget: "
         f"top_candidates={budget.top_candidates}, "
         f"preview_per_slice={budget.preview_per_slice}, "
         f"lsp_targets={budget.lsp_targets}"
     )
 
-    refs = insight.artifact_refs
+
+def _render_artifact_refs_line(artifact_refs: InsightArtifactRefsV1) -> str | None:
     ref_parts = [
-        f"diagnostics={refs.diagnostics}" if refs.diagnostics else None,
-        f"telemetry={refs.telemetry}" if refs.telemetry else None,
-        f"neighborhood_overflow={refs.neighborhood_overflow}"
-        if refs.neighborhood_overflow
+        f"diagnostics={artifact_refs.diagnostics}" if artifact_refs.diagnostics else None,
+        f"telemetry={artifact_refs.telemetry}" if artifact_refs.telemetry else None,
+        f"neighborhood_overflow={artifact_refs.neighborhood_overflow}"
+        if artifact_refs.neighborhood_overflow
         else None,
     ]
-    ref_parts = [part for part in ref_parts if part is not None]
-    if ref_parts:
-        lines.append(f"- Artifact Refs: {' | '.join(ref_parts)}")
-
-    lines.append("")
-    return lines
+    refs = [part for part in ref_parts if part is not None]
+    if not refs:
+        return None
+    return f"- Artifact Refs: {' | '.join(refs)}"
 
 
 def build_neighborhood_from_slices(
@@ -364,37 +429,30 @@ def augment_insight_with_lsp(
     )
 
 
-def build_search_insight(
-    *,
-    summary: dict[str, object],
-    primary_target: Finding | None,
-    target_candidates: Sequence[Finding],
-    neighborhood: InsightNeighborhoodV1 | None = None,
-    risk: InsightRiskV1 | None = None,
-    degradation: InsightDegradationV1 | None = None,
-    budget: InsightBudgetV1 | None = None,
-) -> FrontDoorInsightV1:
+def build_search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsightV1:
     """Build search front-door insight payload.
 
     Returns:
         Front-door insight payload for search macro results.
     """
     target = _target_from_finding(
-        primary_target,
-        fallback_symbol=_string_or_none(summary.get("query")) or "search target",
+        request.primary_target,
+        fallback_symbol=_string_or_none(request.summary.get("query")) or "search target",
         fallback_kind="query",
-        selection_reason="top_definition" if primary_target is not None else "fallback_query",
+        selection_reason=(
+            "top_definition" if request.primary_target is not None else "fallback_query"
+        ),
     )
-    confidence = _confidence_from_findings(target_candidates)
+    confidence = _confidence_from_findings(request.target_candidates)
     confidence = msgspec.structs.replace(
         confidence,
         evidence_kind=confidence.evidence_kind
         if confidence.evidence_kind != "unknown"
-        else _string_or_none(summary.get("scan_method")) or "resolved_ast",
+        else _string_or_none(request.summary.get("scan_method")) or "resolved_ast",
     )
 
-    if neighborhood is None:
-        neighborhood = _empty_neighborhood()
+    neighborhood = request.neighborhood or _empty_neighborhood()
+    risk = request.risk
     if risk is None:
         risk = risk_from_counters(
             InsightRiskCountersV1(
@@ -402,16 +460,8 @@ def build_search_insight(
                 callees=neighborhood.callees.total,
             )
         )
-    if degradation is None:
-        degradation = _degradation_from_summary(summary)
-    if budget is None:
-        budget = InsightBudgetV1(
-            top_candidates=min(_DEFAULT_TOP_CANDIDATES, len(target_candidates))
-            if target_candidates
-            else _DEFAULT_TOP_CANDIDATES,
-            preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
-            lsp_targets=1,
-        )
+    degradation = request.degradation or _degradation_from_summary(request.summary)
+    budget = request.budget or _default_search_budget(target_candidate_count=len(request.target_candidates))
 
     return FrontDoorInsightV1(
         source="search",
@@ -424,44 +474,31 @@ def build_search_insight(
     )
 
 
-def build_calls_insight(
-    *,
-    function_name: str,
-    signature: str | None,
-    location: InsightLocationV1 | None,
-    neighborhood: InsightNeighborhoodV1,
-    files_with_calls: int,
-    arg_shape_count: int,
-    forwarding_count: int,
-    hazard_counts: dict[str, int],
-    confidence: InsightConfidenceV1,
-    budget: InsightBudgetV1 | None = None,
-    degradation: InsightDegradationV1 | None = None,
-) -> FrontDoorInsightV1:
+def build_calls_insight(request: CallsInsightBuildRequestV1) -> FrontDoorInsightV1:
     """Build calls front-door insight payload.
 
     Returns:
         Front-door insight payload for calls macro results.
     """
     target = InsightTargetV1(
-        symbol=function_name,
+        symbol=request.function_name,
         kind="function",
-        location=location or InsightLocationV1(),
-        signature=signature,
+        location=request.location or InsightLocationV1(),
+        signature=request.signature,
         selection_reason="resolved_calls_target",
     )
 
     counters = InsightRiskCountersV1(
-        callers=neighborhood.callers.total,
-        callees=neighborhood.callees.total,
-        files_with_calls=files_with_calls,
-        arg_shape_count=arg_shape_count,
-        forwarding_count=forwarding_count,
-        hazard_count=sum(hazard_counts.values()),
+        callers=request.neighborhood.callers.total,
+        callees=request.neighborhood.callees.total,
+        files_with_calls=request.files_with_calls,
+        arg_shape_count=request.arg_shape_count,
+        forwarding_count=request.forwarding_count,
+        hazard_count=sum(request.hazard_counts.values()),
     )
     risk = risk_from_counters(counters)
-    if hazard_counts:
-        drivers = tuple(sorted(hazard_counts.keys()))
+    if request.hazard_counts:
+        drivers = tuple(sorted(request.hazard_counts.keys()))
         risk = msgspec.structs.replace(
             risk, drivers=tuple(dict.fromkeys([*risk.drivers, *drivers]))
         )
@@ -469,46 +506,33 @@ def build_calls_insight(
     return FrontDoorInsightV1(
         source="calls",
         target=target,
-        neighborhood=neighborhood,
+        neighborhood=request.neighborhood,
         risk=risk,
-        confidence=confidence,
-        degradation=degradation or InsightDegradationV1(),
-        budget=budget
-        or InsightBudgetV1(
-            top_candidates=_DEFAULT_TOP_CANDIDATES,
-            preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
-            lsp_targets=1,
-        ),
+        confidence=request.confidence,
+        degradation=request.degradation or InsightDegradationV1(),
+        budget=request.budget or _default_calls_budget(),
     )
 
 
-def build_entity_insight(
-    *,
-    summary: dict[str, object],
-    primary_target: Finding | None,
-    neighborhood: InsightNeighborhoodV1 | None = None,
-    risk: InsightRiskV1 | None = None,
-    confidence: InsightConfidenceV1 | None = None,
-    degradation: InsightDegradationV1 | None = None,
-    budget: InsightBudgetV1 | None = None,
-) -> FrontDoorInsightV1:
+def build_entity_insight(request: EntityInsightBuildRequestV1) -> FrontDoorInsightV1:
     """Build entity front-door insight payload.
 
     Returns:
         Front-door insight payload for entity query results.
     """
     target = _target_from_finding(
-        primary_target,
-        fallback_symbol=_string_or_none(summary.get("query"))
-        or _string_or_none(summary.get("entity_kind"))
+        request.primary_target,
+        fallback_symbol=_string_or_none(request.summary.get("query"))
+        or _string_or_none(request.summary.get("entity_kind"))
         or "entity target",
-        fallback_kind=_string_or_none(summary.get("entity_kind")) or "entity",
-        selection_reason="top_entity_result" if primary_target is not None else "fallback_query",
+        fallback_kind=_string_or_none(request.summary.get("entity_kind")) or "entity",
+        selection_reason=(
+            "top_entity_result" if request.primary_target is not None else "fallback_query"
+        ),
     )
 
-    if neighborhood is None:
-        neighborhood = _empty_neighborhood()
-
+    neighborhood = request.neighborhood or _empty_neighborhood()
+    risk = request.risk
     if risk is None:
         risk = risk_from_counters(
             InsightRiskCountersV1(
@@ -517,6 +541,7 @@ def build_entity_insight(
             )
         )
 
+    confidence = request.confidence
     if confidence is None:
         confidence = InsightConfidenceV1(evidence_kind="resolved_ast", score=0.8, bucket="high")
 
@@ -526,13 +551,37 @@ def build_entity_insight(
         neighborhood=neighborhood,
         risk=risk,
         confidence=confidence,
-        degradation=degradation or InsightDegradationV1(),
-        budget=budget
-        or InsightBudgetV1(
-            top_candidates=_DEFAULT_TOP_CANDIDATES,
-            preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
-            lsp_targets=3,
-        ),
+        degradation=request.degradation or InsightDegradationV1(),
+        budget=request.budget or _default_entity_budget(),
+    )
+
+
+def _default_search_budget(*, target_candidate_count: int) -> InsightBudgetV1:
+    top_candidates = (
+        min(_DEFAULT_TOP_CANDIDATES, target_candidate_count)
+        if target_candidate_count > 0
+        else _DEFAULT_TOP_CANDIDATES
+    )
+    return InsightBudgetV1(
+        top_candidates=top_candidates,
+        preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
+        lsp_targets=1,
+    )
+
+
+def _default_calls_budget() -> InsightBudgetV1:
+    return InsightBudgetV1(
+        top_candidates=_DEFAULT_TOP_CANDIDATES,
+        preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
+        lsp_targets=1,
+    )
+
+
+def _default_entity_budget() -> InsightBudgetV1:
+    return InsightBudgetV1(
+        top_candidates=_DEFAULT_TOP_CANDIDATES,
+        preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
+        lsp_targets=3,
     )
 
 
@@ -1077,6 +1126,8 @@ def _read_lsp_telemetry(summary: dict[str, object]) -> tuple[int, int, int, int]
 
 __all__ = [
     "Availability",
+    "CallsInsightBuildRequestV1",
+    "EntityInsightBuildRequestV1",
     "FrontDoorInsightV1",
     "InsightArtifactRefsV1",
     "InsightBudgetV1",
@@ -1092,6 +1143,7 @@ __all__ = [
     "LspStatus",
     "NeighborhoodSource",
     "RiskLevel",
+    "SearchInsightBuildRequestV1",
     "attach_artifact_refs",
     "attach_neighborhood_overflow_ref",
     "augment_insight_with_lsp",

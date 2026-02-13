@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
+from tools.cq.neighborhood.structural_collector import (
+    StructuralNeighborhoodCollectRequest,
+    collect_structural_neighborhood,
+)
+
+
+def _collect(
+    **kwargs: object,
+) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    return collect_structural_neighborhood(
+        StructuralNeighborhoodCollectRequest(**kwargs)
+    )
 
 
 def test_collect_empty_snapshot() -> None:
@@ -17,7 +28,7 @@ def test_collect_empty_snapshot() -> None:
         calls_by_def={},
     )
 
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="foo",
         target_file="test.py",
         snapshot=snapshot,
@@ -48,7 +59,7 @@ def test_collect_simple_function() -> None:
 
     snapshot = ScanSnapshot.from_records([target_def])
 
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="target_func",
         target_file="test.py",
         snapshot=snapshot,
@@ -100,7 +111,7 @@ def test_collect_nested_functions() -> None:
 
     snapshot = ScanSnapshot.from_records([parent_def, target_def, child_def])
 
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="target_func",
         target_file="test.py",
         snapshot=snapshot,
@@ -167,7 +178,7 @@ def test_collect_siblings() -> None:
 
     snapshot = ScanSnapshot.from_records([parent_def, target_def, sibling_def])
 
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="target_method",
         target_file="test.py",
         snapshot=snapshot,
@@ -255,7 +266,7 @@ def test_collect_callers_and_callees() -> None:
         [caller_def, target_def, callee_def, call_to_callee, call_to_target]
     )
 
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="target_func",
         target_file="test.py",
         snapshot=snapshot,
@@ -317,7 +328,7 @@ def test_max_per_slice_limit() -> None:
 
     snapshot = ScanSnapshot.from_records([target_def, *children])
 
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="target_func",
         target_file="test.py",
         snapshot=snapshot,
@@ -360,7 +371,7 @@ def test_slice_edge_structure() -> None:
 
     snapshot = ScanSnapshot.from_records([parent_def, target_def])
 
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="target_func",
         target_file="test.py",
         snapshot=snapshot,
@@ -408,7 +419,7 @@ def test_node_ref_structure() -> None:
 
     snapshot = ScanSnapshot.from_records([target_def, child_def])
 
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="target_func",
         target_file="test.py",
         snapshot=snapshot,
@@ -442,7 +453,7 @@ def test_target_resolution_normalizes_dot_slash_path() -> None:
         rule_id="py_def_function",
     )
     snapshot = ScanSnapshot.from_records([target_def])
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="normalize_path",
         target_file="./src/test.py",
         snapshot=snapshot,
@@ -465,7 +476,7 @@ def test_rust_pub_fn_name_extraction_for_target_resolution() -> None:
         rule_id="rust_function_item",
     )
     snapshot = ScanSnapshot.from_records([rust_def])
-    slices, degrades = collect_structural_neighborhood(
+    slices, degrades = _collect(
         target_name="compile_target",
         target_file="./crates/corelib/src/lib.rs",
         snapshot=snapshot,

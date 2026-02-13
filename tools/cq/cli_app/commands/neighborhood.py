@@ -34,7 +34,7 @@ def neighborhood(
     """
     from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-    from tools.cq.neighborhood.snb_renderer import render_snb_result
+    from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
     from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
     from tools.cq.query.sg_parser import sg_scan
 
@@ -86,13 +86,15 @@ def neighborhood(
     )
 
     result = render_snb_result(
-        run=run,
-        bundle=bundle,
-        target=target,
-        language=lang,
-        top_k=top_k,
-        enable_lsp=not no_lsp,
-        lsp_env=_lsp_env_from_bundle(bundle),
+        RenderSnbRequest(
+            run=run,
+            bundle=bundle,
+            target=target,
+            language=lang,
+            top_k=top_k,
+            enable_lsp=not no_lsp,
+            lsp_env=_lsp_env_from_bundle(bundle),
+        )
     )
     result.summary["target_resolution_kind"] = resolved.resolution_kind
 

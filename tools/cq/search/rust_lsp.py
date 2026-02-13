@@ -348,17 +348,33 @@ class _RustLspSession:
         return uri
 
     def probe(self, request: RustLspRequest) -> RustLspEnrichmentPayload | None:
-        if self._process is None:
+        if self._process is None or isinstance(self._process.poll(), int):
             return None
-        poll_result = self._process.poll()
-        if isinstance(poll_result, int):
-            return None
-
         degrade_events: list[dict[str, object]] = []
+        uri_str = self._resolve_probe_uri(request, degrade_events)
+        self._drain_notifications()
+
+        responses = self._collect_probe_responses(request, uri_str, degrade_events)
+        self._collect_probe_followup_responses(responses, degrade_events)
+        self._drain_notifications()
+
+        raw_payload = self._build_probe_payload(
+            request=request,
+            uri_str=uri_str,
+            responses=responses,
+            degrade_events=degrade_events,
+        )
+        raw_payload["advanced_planes"] = self._collect_advanced_planes(request, uri=uri_str)
+        return coerce_rust_lsp_payload(raw_payload)
+
+    def _resolve_probe_uri(
+        self,
+        request: RustLspRequest,
+        degrade_events: list[dict[str, object]],
+    ) -> str:
         try:
-            uri_str = self._open_or_update_document(Path(request.file_path))
-        except Exception as exc:
-            uri_str = Path(request.file_path).resolve().as_uri()
+            return self._open_or_update_document(Path(request.file_path))
+        except _FAIL_OPEN_EXCEPTIONS as exc:
             degrade_events.append(
                 {
                     "stage": "lsp.rust",
@@ -367,169 +383,114 @@ class _RustLspSession:
                     "message": f"textDocument open/update failed: {type(exc).__name__}",
                 }
             )
+            return Path(request.file_path).resolve().as_uri()
 
+    def _drain_notifications(self) -> None:
         for notif in self._read_pending_notifications(timeout_seconds=0.0):
             self._handle_notification(notif)
 
+    def _collect_probe_responses(
+        self,
+        request: RustLspRequest,
+        uri_str: str,
+        degrade_events: list[dict[str, object]],
+    ) -> dict[str, object]:
         health = self._session_env.workspace_health
         caps = self._session_env.capabilities.server_caps
-
-        position = {
-            "line": max(0, request.line - 1),
-            "character": max(0, request.col),
-        }
-        text_document = {"uri": uri_str}
-
+        requests = _build_probe_requests(
+            uri=uri_str,
+            line=request.line,
+            col=request.col,
+            health=health,
+            quiescent=self._session_env.quiescent,
+            capabilities=caps,
+        )
         responses: dict[str, object] = {}
-        tier_a_requests: list[tuple[str, str, dict[str, object]]] = []
-        if caps.hover_provider:
-            tier_a_requests.append(
-                (
-                    "hover",
-                    "textDocument/hover",
-                    {"textDocument": text_document, "position": position},
-                )
+        for name, method, params in requests:
+            self._send_probe_request(
+                responses,
+                name=name,
+                method=method,
+                params=params,
+                degrade_events=degrade_events,
             )
-        if caps.definition_provider:
-            tier_a_requests.append(
-                (
-                    "definition",
-                    "textDocument/definition",
-                    {"textDocument": text_document, "position": position},
-                )
+        return responses
+
+    def _send_probe_request(
+        self,
+        responses: dict[str, object],
+        *,
+        name: str,
+        method: str,
+        params: dict[str, object],
+        degrade_events: list[dict[str, object]],
+        severity: str = "warning",
+    ) -> None:
+        try:
+            responses[name] = self._send_request(method, params)
+        except _FAIL_OPEN_EXCEPTIONS as exc:
+            responses[name] = None
+            degrade_events.append(
+                {
+                    "stage": "lsp.rust",
+                    "severity": severity,
+                    "category": "request_failed",
+                    "message": f"{method} failed: {type(exc).__name__}",
+                }
             )
-        if caps.type_definition_provider:
-            tier_a_requests.append(
-                (
-                    "type_definition",
-                    "textDocument/typeDefinition",
-                    {"textDocument": text_document, "position": position},
-                )
-            )
 
-        tier_b_requests: list[tuple[str, str, dict[str, object]]] = []
-        if health in {"ok", "warning"}:
-            if caps.references_provider:
-                tier_b_requests.append(
-                    (
-                        "references",
-                        "textDocument/references",
-                        {
-                            "textDocument": text_document,
-                            "position": position,
-                            "context": {"includeDeclaration": False},
-                        },
-                    )
-                )
-            if caps.document_symbol_provider:
-                tier_b_requests.append(
-                    (
-                        "document_symbols",
-                        "textDocument/documentSymbol",
-                        {"textDocument": text_document},
-                    )
-                )
-
-        tier_c_enabled = health == "ok" and self._session_env.quiescent
-        tier_c_requests: list[tuple[str, str, dict[str, object]]] = []
-        if tier_c_enabled:
-            if caps.call_hierarchy_provider:
-                tier_c_requests.append(
-                    (
-                        "call_prepare",
-                        "textDocument/prepareCallHierarchy",
-                        {"textDocument": text_document, "position": position},
-                    )
-                )
-            if caps.type_hierarchy_provider:
-                tier_c_requests.append(
-                    (
-                        "type_prepare",
-                        "textDocument/prepareTypeHierarchy",
-                        {"textDocument": text_document, "position": position},
-                    )
-                )
-
-        for name, method, params in (*tier_a_requests, *tier_b_requests, *tier_c_requests):
-            try:
-                responses[name] = self._send_request(method, params)
-            except Exception as exc:
-                responses[name] = None
-                degrade_events.append(
-                    {
-                        "stage": "lsp.rust",
-                        "severity": "warning",
-                        "category": "request_failed",
-                        "message": f"{method} failed: {type(exc).__name__}",
-                    }
-                )
-
+    def _collect_probe_followup_responses(
+        self,
+        responses: dict[str, object],
+        degrade_events: list[dict[str, object]],
+    ) -> None:
         call_item = _first_item(responses.get("call_prepare"))
         if call_item is not None:
-            try:
-                responses["incoming_calls"] = self._send_request(
-                    "callHierarchy/incomingCalls", {"item": call_item}
-                )
-            except Exception as exc:
-                responses["incoming_calls"] = None
-                degrade_events.append(
-                    {
-                        "stage": "lsp.rust",
-                        "severity": "info",
-                        "category": "request_failed",
-                        "message": f"callHierarchy/incomingCalls failed: {type(exc).__name__}",
-                    }
-                )
-            try:
-                responses["outgoing_calls"] = self._send_request(
-                    "callHierarchy/outgoingCalls", {"item": call_item}
-                )
-            except Exception as exc:
-                responses["outgoing_calls"] = None
-                degrade_events.append(
-                    {
-                        "stage": "lsp.rust",
-                        "severity": "info",
-                        "category": "request_failed",
-                        "message": f"callHierarchy/outgoingCalls failed: {type(exc).__name__}",
-                    }
-                )
-
+            self._send_probe_request(
+                responses,
+                name="incoming_calls",
+                method="callHierarchy/incomingCalls",
+                params={"item": call_item},
+                degrade_events=degrade_events,
+                severity="info",
+            )
+            self._send_probe_request(
+                responses,
+                name="outgoing_calls",
+                method="callHierarchy/outgoingCalls",
+                params={"item": call_item},
+                degrade_events=degrade_events,
+                severity="info",
+            )
         type_item = _first_item(responses.get("type_prepare"))
-        if type_item is not None:
-            try:
-                responses["supertypes"] = self._send_request(
-                    "typeHierarchy/supertypes", {"item": type_item}
-                )
-            except Exception as exc:
-                responses["supertypes"] = None
-                degrade_events.append(
-                    {
-                        "stage": "lsp.rust",
-                        "severity": "info",
-                        "category": "request_failed",
-                        "message": f"typeHierarchy/supertypes failed: {type(exc).__name__}",
-                    }
-                )
-            try:
-                responses["subtypes"] = self._send_request(
-                    "typeHierarchy/subtypes", {"item": type_item}
-                )
-            except Exception as exc:
-                responses["subtypes"] = None
-                degrade_events.append(
-                    {
-                        "stage": "lsp.rust",
-                        "severity": "info",
-                        "category": "request_failed",
-                        "message": f"typeHierarchy/subtypes failed: {type(exc).__name__}",
-                    }
-                )
+        if type_item is None:
+            return
+        self._send_probe_request(
+            responses,
+            name="supertypes",
+            method="typeHierarchy/supertypes",
+            params={"item": type_item},
+            degrade_events=degrade_events,
+            severity="info",
+        )
+        self._send_probe_request(
+            responses,
+            name="subtypes",
+            method="typeHierarchy/subtypes",
+            params={"item": type_item},
+            degrade_events=degrade_events,
+            severity="info",
+        )
 
-        for notif in self._read_pending_notifications(timeout_seconds=0.0):
-            self._handle_notification(notif)
-
-        raw_payload: dict[str, object] = {
+    def _build_probe_payload(
+        self,
+        *,
+        request: RustLspRequest,
+        uri_str: str,
+        responses: Mapping[str, object],
+        degrade_events: list[dict[str, object]],
+    ) -> dict[str, object]:
+        return {
             "session_env": _session_env_to_mapping(self._session_env),
             "symbol_grounding": {
                 "definitions": _normalize_targets(responses.get("definition")),
@@ -538,45 +499,40 @@ class _RustLspSession:
                 "references": _normalize_targets(responses.get("references")),
             },
             "call_graph": {
-                "incoming_callers": _normalize_call_links(
-                    responses.get("incoming_calls"), key="from"
-                ),
-                "outgoing_callees": _normalize_call_links(
-                    responses.get("outgoing_calls"), key="to"
-                ),
+                "incoming_callers": _normalize_call_links(responses.get("incoming_calls"), key="from"),
+                "outgoing_callees": _normalize_call_links(responses.get("outgoing_calls"), key="to"),
             },
             "type_hierarchy": {
                 "supertypes": _normalize_type_links(responses.get("supertypes")),
                 "subtypes": _normalize_type_links(responses.get("subtypes")),
             },
             "document_symbols": _normalize_document_symbols(responses.get("document_symbols")),
-            "diagnostics": [
-                to_builtins(diag) for diag in self._diagnostics_by_uri.get(uri_str, [])
-            ],
+            "diagnostics": [to_builtins(diag) for diag in self._diagnostics_by_uri.get(uri_str, [])],
             "hover_text": _normalize_hover_text(responses.get("hover")),
             "degrade_events": degrade_events,
+            "query_intent": request.query_intent,
         }
+
+    def _collect_advanced_planes(self, request: RustLspRequest, *, uri: str) -> dict[str, object]:
         try:
-            raw_payload["advanced_planes"] = collect_advanced_lsp_planes(
+            return collect_advanced_lsp_planes(
                 session=self,
                 language="rust",
-                uri=uri_str,
+                uri=uri,
                 line=max(0, request.line),
                 col=max(0, request.col),
             )
-        except Exception:
-            raw_payload["advanced_planes"] = dict[str, object]()
-
-        return coerce_rust_lsp_payload(raw_payload)
+        except _FAIL_OPEN_EXCEPTIONS:
+            return {}
 
     def shutdown(self) -> None:
         if self._process is None:
             return
         process = self._process
 
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(*_FAIL_OPEN_EXCEPTIONS):
             self._send_request("shutdown", {})
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(*_FAIL_OPEN_EXCEPTIONS):
             self._send_notification("exit", {})
 
         if not isinstance(process.poll(), int):
@@ -905,6 +861,91 @@ def _normalize_targets(value: object) -> list[dict[str, object]]:
     return targets
 
 
+def _build_probe_requests(
+    *,
+    uri: str,
+    line: int,
+    col: int,
+    health: str,
+    quiescent: bool,
+    capabilities: LspServerCapabilitySnapshotV1,
+) -> list[tuple[str, str, dict[str, object]]]:
+    position = {
+        "line": max(0, line - 1),
+        "character": max(0, col),
+    }
+    text_document = {"uri": uri}
+    tdp = {"textDocument": text_document, "position": position}
+    requests: list[tuple[str, str, dict[str, object]]] = []
+    requests.extend(_tier_a_probe_requests(capabilities, tdp))
+    requests.extend(_tier_b_probe_requests(capabilities, health, text_document, position))
+    requests.extend(_tier_c_probe_requests(capabilities, health=health, quiescent=quiescent, tdp=tdp))
+    return requests
+
+
+def _tier_a_probe_requests(
+    capabilities: LspServerCapabilitySnapshotV1,
+    tdp: dict[str, object],
+) -> list[tuple[str, str, dict[str, object]]]:
+    requests: list[tuple[str, str, dict[str, object]]] = []
+    if capabilities.hover_provider:
+        requests.append(("hover", "textDocument/hover", tdp))
+    if capabilities.definition_provider:
+        requests.append(("definition", "textDocument/definition", tdp))
+    if capabilities.type_definition_provider:
+        requests.append(("type_definition", "textDocument/typeDefinition", tdp))
+    return requests
+
+
+def _tier_b_probe_requests(
+    capabilities: LspServerCapabilitySnapshotV1,
+    health: str,
+    text_document: dict[str, object],
+    position: dict[str, object],
+) -> list[tuple[str, str, dict[str, object]]]:
+    if health not in {"ok", "warning"}:
+        return []
+    requests: list[tuple[str, str, dict[str, object]]] = []
+    if capabilities.references_provider:
+        requests.append(
+            (
+                "references",
+                "textDocument/references",
+                {
+                    "textDocument": text_document,
+                    "position": position,
+                    "context": {"includeDeclaration": False},
+                },
+            )
+        )
+    if capabilities.document_symbol_provider:
+        requests.append(
+            (
+                "document_symbols",
+                "textDocument/documentSymbol",
+                {"textDocument": text_document},
+            )
+        )
+    return requests
+
+
+def _tier_c_probe_requests(
+    capabilities: LspServerCapabilitySnapshotV1,
+    *,
+    health: str,
+    quiescent: bool,
+    tdp: dict[str, object],
+) -> list[tuple[str, str, dict[str, object]]]:
+    if health != "ok" or not quiescent:
+        return []
+    requests: list[tuple[str, str, dict[str, object]]] = []
+    if capabilities.call_hierarchy_provider:
+        requests.append(("call_prepare", "textDocument/prepareCallHierarchy", tdp))
+    if capabilities.type_hierarchy_provider:
+        requests.append(("type_prepare", "textDocument/prepareTypeHierarchy", tdp))
+    return requests
+
+
 def _normalize_target_row(row: dict[str, object]) -> dict[str, object] | None:
     uri = row.get("uri")
     range_data = row.get("range")
@@ -936,54 +977,60 @@ def _normalize_call_links(value: object, *, key: str) -> list[dict[str, object]]
         return []
     rows: list[dict[str, object]] = []
     for item in value:
-        if not isinstance(item, dict):
-            continue
-        node = item.get(key)
-        if not isinstance(node, dict):
-            continue
-        uri = node.get("uri")
-        name = node.get("name")
-        range_data = node.get("selectionRange") or node.get("range")
-        if (
-            not isinstance(uri, str)
-            or not isinstance(name, str)
-            or not isinstance(range_data, dict)
-        ):
-            continue
-        start = range_data.get("start")
-        if not isinstance(start, dict):
-            continue
-
-        from_ranges_raw = item.get("fromRanges")
-        from_ranges: list[tuple[int, int, int, int]] = []
-        if isinstance(from_ranges_raw, list):
-            for from_range in from_ranges_raw:
-                if not isinstance(from_range, dict):
-                    continue
-                fr_start = from_range.get("start")
-                fr_end = from_range.get("end")
-                if not isinstance(fr_start, dict) or not isinstance(fr_end, dict):
-                    continue
-                from_ranges.append(
-                    (
-                        _as_int(fr_start.get("line")),
-                        _as_int(fr_start.get("character")),
-                        _as_int(fr_end.get("line")),
-                        _as_int(fr_end.get("character")),
-                    )
-                )
-
-        rows.append(
-            {
-                "name": name,
-                "kind": _as_int(node.get("kind")),
-                "uri": uri,
-                "range_start_line": _as_int(start.get("line")),
-                "range_start_col": _as_int(start.get("character")),
-                "from_ranges": from_ranges,
-            }
-        )
+        normalized = _normalize_call_link_item(item, key=key)
+        if normalized is not None:
+            rows.append(normalized)
     return rows
+
+
+def _normalize_call_link_item(item: object, *, key: str) -> dict[str, object] | None:
+    if not isinstance(item, dict):
+        return None
+    node = item.get(key)
+    if not isinstance(node, dict):
+        return None
+    uri = node.get("uri")
+    name = node.get("name")
+    range_data = node.get("selectionRange") or node.get("range")
+    if not (isinstance(uri, str) and isinstance(name, str) and isinstance(range_data, dict)):
+        return None
+    start = range_data.get("start")
+    if not isinstance(start, dict):
+        return None
+    return {
+        "name": name,
+        "kind": _as_int(node.get("kind")),
+        "uri": uri,
+        "range_start_line": _as_int(start.get("line")),
+        "range_start_col": _as_int(start.get("character")),
+        "from_ranges": _normalize_from_ranges(item.get("fromRanges")),
+    }
+
+
+def _normalize_from_ranges(value: object) -> list[tuple[int, int, int, int]]:
+    if not isinstance(value, list):
+        return []
+    ranges: list[tuple[int, int, int, int]] = []
+    for from_range in value:
+        normalized = _normalize_from_range(from_range)
+        if normalized is not None:
+            ranges.append(normalized)
+    return ranges
+
+
+def _normalize_from_range(value: object) -> tuple[int, int, int, int] | None:
+    if not isinstance(value, dict):
+        return None
+    start = value.get("start")
+    end = value.get("end")
+    if not isinstance(start, dict) or not isinstance(end, dict):
+        return None
+    return (
+        _as_int(start.get("line")),
+        _as_int(start.get("character")),
+        _as_int(end.get("line")),
+        _as_int(end.get("character")),
+    )
 
 
 def _normalize_type_links(value: object) -> list[dict[str, object]]:

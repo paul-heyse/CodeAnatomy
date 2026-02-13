@@ -93,146 +93,202 @@ def resolve_target(
     degrades: list[DegradeEventV1] = []
     def_records = tuple(snapshot.def_records)
 
-    # Anchor-based targeting (preferred).
-    if spec.target_file and spec.target_line is not None:
-        anchor_candidates = _anchor_candidates(
-            def_records=def_records,
-            target_file=spec.target_file,
-            line=spec.target_line,
-            col=spec.target_col,
-        )
-        if anchor_candidates:
-            if len(anchor_candidates) > 1:
-                degrades.append(
-                    DegradeEventV1(
-                        stage="target_resolution",
-                        severity="warning",
-                        category="ambiguous",
-                        message=(
-                            f"Anchor {spec.target_file}:{spec.target_line} matched "
-                            f"{len(anchor_candidates)} definitions; choosing innermost"
-                        ),
-                    )
-                )
-            chosen = anchor_candidates[0]
-            name = _extract_name_from_text(chosen.text) or spec.target_name or spec.raw
-            file_path = chosen.file
-            return ResolvedTarget(
-                target_name=name,
-                target_file=file_path,
-                target_line=spec.target_line,
-                target_col=spec.target_col,
-                target_uri=_to_uri(root, file_path),
-                symbol_hint=spec.target_name or name,
-                resolution_kind="anchor",
-                degrade_events=tuple(degrades),
-            )
+    anchor_result = _resolve_anchor_target(
+        spec=spec,
+        def_records=def_records,
+        root=root,
+        degrades=degrades,
+    )
+    if anchor_result is not None:
+        return anchor_result
 
-        degrades.append(
-            DegradeEventV1(
-                stage="target_resolution",
-                severity="warning",
-                category="not_found",
-                message=(
-                    f"No definition found for anchor {spec.target_file}:{spec.target_line}; "
-                    "falling back to file-only resolution"
-                ),
-            )
-        )
-        if spec.target_name:
-            # Continue below with name+file resolution.
-            pass
-        else:
-            fallback_name = Path(spec.target_file).stem
-            return ResolvedTarget(
-                target_name=fallback_name,
-                target_file=spec.target_file,
-                target_line=spec.target_line,
-                target_col=spec.target_col,
-                target_uri=_to_uri(root, spec.target_file),
-                symbol_hint=fallback_name,
-                resolution_kind="file_anchor_unresolved",
-                degrade_events=tuple(degrades),
-            )
+    file_symbol_result = _resolve_file_symbol_target(
+        spec=spec,
+        def_records=def_records,
+        root=root,
+        degrades=degrades,
+    )
+    if file_symbol_result is not None:
+        return file_symbol_result
 
-    # Name + file targeting.
-    if spec.target_name and spec.target_file:
-        file_candidates = _name_candidates(
-            def_records=def_records,
-            name=spec.target_name,
-            target_file=spec.target_file,
-        )
-        if file_candidates:
-            if len(file_candidates) > 1:
-                degrades.append(
-                    DegradeEventV1(
-                        stage="target_resolution",
-                        severity="warning",
-                        category="ambiguous",
-                        message=(
-                            f"Multiple definitions for '{spec.target_name}' in "
-                            f"{spec.target_file}; choosing first by source order"
-                        ),
-                    )
-                )
-            chosen = file_candidates[0]
-            return ResolvedTarget(
-                target_name=spec.target_name,
-                target_file=chosen.file,
-                target_line=chosen.start_line,
-                target_col=chosen.start_col,
-                target_uri=_to_uri(root, chosen.file),
-                symbol_hint=spec.target_name,
-                resolution_kind="file_symbol",
-                degrade_events=tuple(degrades),
-            )
-
-        degrades.append(
-            DegradeEventV1(
-                stage="target_resolution",
-                severity="warning",
-                category="not_found",
-                message=(
-                    f"Definition '{spec.target_name}' not found in {spec.target_file}; "
-                    "falling back to symbol-only resolution"
-                ),
-            )
-        )
-
-    # Symbol-only targeting.
-    symbol_name = spec.target_name
-    if symbol_name is None:
-        symbol_name = Path(spec.target_file or spec.raw).stem
-
+    symbol_name = _resolve_symbol_name(spec)
     if allow_symbol_fallback and symbol_name:
-        symbol_candidates = _name_candidates(
-            def_records=def_records, name=symbol_name, target_file=None
+        symbol_result = _resolve_symbol_fallback_target(
+            symbol_name=symbol_name,
+            def_records=def_records,
+            root=root,
+            degrades=degrades,
         )
-        if symbol_candidates:
-            chosen = symbol_candidates[0]
-            if len(symbol_candidates) > 1:
-                degrades.append(
-                    DegradeEventV1(
-                        stage="target_resolution",
-                        severity="warning",
-                        category="ambiguous",
-                        message=(
-                            f"Symbol '{symbol_name}' matched {len(symbol_candidates)} definitions; "
-                            "using deterministic first match"
-                        ),
-                    )
-                )
-            return ResolvedTarget(
-                target_name=symbol_name,
-                target_file=chosen.file,
-                target_line=chosen.start_line,
-                target_col=chosen.start_col,
-                target_uri=_to_uri(root, chosen.file),
-                symbol_hint=symbol_name,
-                resolution_kind="symbol_fallback",
-                degrade_events=tuple(degrades),
-            )
+        if symbol_result is not None:
+            return symbol_result
 
+    return _build_unresolved_target(spec=spec, root=root, symbol_name=symbol_name, degrades=degrades)
+
+
+def _resolve_anchor_target(
+    *,
+    spec: TargetSpec,
+    def_records: tuple[SgRecord, ...],
+    root: Path | None,
+    degrades: list[DegradeEventV1],
+) -> ResolvedTarget | None:
+    if not spec.target_file or spec.target_line is None:
+        return None
+    anchor_candidates = _anchor_candidates(
+        def_records=def_records,
+        target_file=spec.target_file,
+        line=spec.target_line,
+        col=spec.target_col,
+    )
+    if anchor_candidates:
+        if len(anchor_candidates) > 1:
+            degrades.append(
+                DegradeEventV1(
+                    stage="target_resolution",
+                    severity="warning",
+                    category="ambiguous",
+                    message=(
+                        f"Anchor {spec.target_file}:{spec.target_line} matched "
+                        f"{len(anchor_candidates)} definitions; choosing innermost"
+                    ),
+                )
+            )
+        chosen = anchor_candidates[0]
+        name = _extract_name_from_text(chosen.text) or spec.target_name or spec.raw
+        return ResolvedTarget(
+            target_name=name,
+            target_file=chosen.file,
+            target_line=spec.target_line,
+            target_col=spec.target_col,
+            target_uri=_to_uri(root, chosen.file),
+            symbol_hint=spec.target_name or name,
+            resolution_kind="anchor",
+            degrade_events=tuple(degrades),
+        )
+    degrades.append(
+        DegradeEventV1(
+            stage="target_resolution",
+            severity="warning",
+            category="not_found",
+            message=(
+                f"No definition found for anchor {spec.target_file}:{spec.target_line}; "
+                "falling back to file-only resolution"
+            ),
+        )
+    )
+    if spec.target_name:
+        return None
+    fallback_name = Path(spec.target_file).stem
+    return ResolvedTarget(
+        target_name=fallback_name,
+        target_file=spec.target_file,
+        target_line=spec.target_line,
+        target_col=spec.target_col,
+        target_uri=_to_uri(root, spec.target_file),
+        symbol_hint=fallback_name,
+        resolution_kind="file_anchor_unresolved",
+        degrade_events=tuple(degrades),
+    )
+
+
+def _resolve_file_symbol_target(
+    *,
+    spec: TargetSpec,
+    def_records: tuple[SgRecord, ...],
+    root: Path | None,
+    degrades: list[DegradeEventV1],
+) -> ResolvedTarget | None:
+    if not spec.target_name or not spec.target_file:
+        return None
+    file_candidates = _name_candidates(
+        def_records=def_records,
+        name=spec.target_name,
+        target_file=spec.target_file,
+    )
+    if file_candidates:
+        if len(file_candidates) > 1:
+            degrades.append(
+                DegradeEventV1(
+                    stage="target_resolution",
+                    severity="warning",
+                    category="ambiguous",
+                    message=(
+                        f"Multiple definitions for '{spec.target_name}' in "
+                        f"{spec.target_file}; choosing first by source order"
+                    ),
+                )
+            )
+        chosen = file_candidates[0]
+        return ResolvedTarget(
+            target_name=spec.target_name,
+            target_file=chosen.file,
+            target_line=chosen.start_line,
+            target_col=chosen.start_col,
+            target_uri=_to_uri(root, chosen.file),
+            symbol_hint=spec.target_name,
+            resolution_kind="file_symbol",
+            degrade_events=tuple(degrades),
+        )
+    degrades.append(
+        DegradeEventV1(
+            stage="target_resolution",
+            severity="warning",
+            category="not_found",
+            message=(
+                f"Definition '{spec.target_name}' not found in {spec.target_file}; "
+                "falling back to symbol-only resolution"
+            ),
+        )
+    )
+    return None
+
+
+def _resolve_symbol_name(spec: TargetSpec) -> str:
+    return spec.target_name or Path(spec.target_file or spec.raw).stem
+
+
+def _resolve_symbol_fallback_target(
+    *,
+    symbol_name: str,
+    def_records: tuple[SgRecord, ...],
+    root: Path | None,
+    degrades: list[DegradeEventV1],
+) -> ResolvedTarget | None:
+    symbol_candidates = _name_candidates(def_records=def_records, name=symbol_name, target_file=None)
+    if not symbol_candidates:
+        return None
+    chosen = symbol_candidates[0]
+    if len(symbol_candidates) > 1:
+        degrades.append(
+            DegradeEventV1(
+                stage="target_resolution",
+                severity="warning",
+                category="ambiguous",
+                message=(
+                    f"Symbol '{symbol_name}' matched {len(symbol_candidates)} definitions; "
+                    "using deterministic first match"
+                ),
+            )
+        )
+    return ResolvedTarget(
+        target_name=symbol_name,
+        target_file=chosen.file,
+        target_line=chosen.start_line,
+        target_col=chosen.start_col,
+        target_uri=_to_uri(root, chosen.file),
+        symbol_hint=symbol_name,
+        resolution_kind="symbol_fallback",
+        degrade_events=tuple(degrades),
+    )
+
+
+def _build_unresolved_target(
+    *,
+    spec: TargetSpec,
+    root: Path | None,
+    symbol_name: str,
+    degrades: list[DegradeEventV1],
+) -> ResolvedTarget:
     if symbol_name:
         degrades.append(
             DegradeEventV1(
@@ -252,7 +308,6 @@ def resolve_target(
             resolution_kind="unresolved",
             degrade_events=tuple(degrades),
         )
-
     degrades.append(
         DegradeEventV1(
             stage="target_resolution",

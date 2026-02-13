@@ -41,6 +41,13 @@ _SEVERITY_ERROR = 1
 _SEVERITY_WARNING = 2
 _SEVERITY_INFO = 3
 _SEVERITY_HINT = 4
+_PYREFLY_FAIL_OPEN_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 class PyreflyLspRequest(CqStruct, frozen=True):
@@ -63,6 +70,26 @@ class PyreflyLspRequest(CqStruct, frozen=True):
 class _SessionDocState:
     version: int
     content_hash: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PositionPayload:
+    uri: str
+    line: int
+    character: int
+
+    def as_tdp(self) -> dict[str, object]:
+        return {
+            "textDocument": {"uri": self.uri},
+            "position": {"line": self.line, "character": self.character},
+        }
+
+    def references_payload(self) -> dict[str, object]:
+        return {
+            "textDocument": {"uri": self.uri},
+            "position": {"line": self.line, "character": self.character},
+            "context": {"includeDeclaration": False},
+        }
 
 
 class _LspProtocolError(RuntimeError):
@@ -110,9 +137,9 @@ class _PyreflyLspSession:
             try:
                 shutdown_id = self._request("shutdown", None)
                 self._wait_for_response(shutdown_id, timeout_seconds=0.2)
-            except Exception:
+            except _PYREFLY_FAIL_OPEN_EXCEPTIONS:
                 pass
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(*_PYREFLY_FAIL_OPEN_EXCEPTIONS):
                 self._notify("exit", None)
         if proc.poll() is None:
             proc.terminate()
@@ -137,87 +164,134 @@ class _PyreflyLspSession:
 
         try:
             uri = self._open_or_update_document(request.file_path)
-        except Exception:
+        except _PYREFLY_FAIL_OPEN_EXCEPTIONS:
             return None
 
-        pos = {
-            "line": max(0, request.line - 1),
-            "character": max(0, request.col),
-        }
-        td = {"uri": uri}
-        tdp = {"textDocument": td, "position": pos}
+        position_payload = _build_position_payload(request, uri=uri)
+        responses = self._collect_probe_responses(
+            position_payload,
+            timeout_seconds=request.timeout_seconds,
+        )
+        incoming, outgoing, call_item = self._collect_probe_call_graph(request, responses=responses)
+        payload = self._build_probe_payload(
+            request,
+            uri=uri,
+            responses=responses,
+            call_item=call_item,
+            incoming=incoming,
+            outgoing=outgoing,
+        )
+        payload["advanced_planes"] = self._collect_advanced_planes(
+            request=request,
+            uri=uri,
+            line=position_payload.line,
+            col=position_payload.character,
+        )
 
-        request_ids: dict[str, int] = {
-            "hover": self._request("textDocument/hover", tdp),
-            "definition": self._request("textDocument/definition", tdp),
-            "declaration": self._request("textDocument/declaration", tdp),
-            "type_definition": self._request("textDocument/typeDefinition", tdp),
-            "implementation": self._request("textDocument/implementation", tdp),
-            "signature_help": self._request("textDocument/signatureHelp", tdp),
+        has_signal, signal_reasons = evaluate_pyrefly_signal_from_mapping(payload)
+        coverage_reason = None if has_signal else f"no_pyrefly_signal:{','.join(signal_reasons)}"
+        payload["coverage"] = {
+            "status": "applied" if has_signal else "not_resolved",
+            "reason": coverage_reason,
+            "position_encoding": self._position_encoding,
+        }
+        return payload
+
+    def _collect_probe_responses(
+        self,
+        position_payload: _PositionPayload,
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        request_ids = {
+            "hover": self._request("textDocument/hover", position_payload.as_tdp()),
+            "definition": self._request("textDocument/definition", position_payload.as_tdp()),
+            "declaration": self._request("textDocument/declaration", position_payload.as_tdp()),
+            "type_definition": self._request(
+                "textDocument/typeDefinition", position_payload.as_tdp()
+            ),
+            "implementation": self._request(
+                "textDocument/implementation", position_payload.as_tdp()
+            ),
+            "signature_help": self._request("textDocument/signatureHelp", position_payload.as_tdp()),
             "references": self._request(
                 "textDocument/references",
-                {
-                    "textDocument": td,
-                    "position": pos,
-                    "context": {"includeDeclaration": False},
-                },
+                position_payload.references_payload(),
             ),
-            "call_prepare": self._request("textDocument/prepareCallHierarchy", tdp),
+            "call_prepare": self._request(
+                "textDocument/prepareCallHierarchy",
+                position_payload.as_tdp(),
+            ),
         }
+        return self._collect_responses(request_ids, timeout_seconds=timeout_seconds)
 
-        responses = self._collect_responses(request_ids, timeout_seconds=request.timeout_seconds)
+    def _collect_probe_call_graph(
+        self,
+        request: PyreflyLspRequest,
+        *,
+        responses: Mapping[str, object],
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object] | None]:
         call_item = _first_call_hierarchy_item(responses.get("call_prepare"))
-        incoming: list[dict[str, object]] = []
-        outgoing: list[dict[str, object]] = []
-        if call_item is not None:
-            try:
-                incoming_id = self._request("callHierarchy/incomingCalls", {"item": call_item})
-                outgoing_id = self._request("callHierarchy/outgoingCalls", {"item": call_item})
-                call_responses = self._collect_responses(
-                    {
-                        "incoming": incoming_id,
-                        "outgoing": outgoing_id,
-                    },
-                    timeout_seconds=request.timeout_seconds,
-                )
-                incoming = _normalize_call_hierarchy_incoming(
-                    call_responses.get("incoming"),
-                    limit=request.max_callers,
-                )
-                outgoing = _normalize_call_hierarchy_outgoing(
-                    call_responses.get("outgoing"),
-                    limit=request.max_callees,
-                )
-            except Exception:
-                incoming = []
-                outgoing = []
+        if call_item is None:
+            return [], [], None
+        try:
+            incoming_id = self._request("callHierarchy/incomingCalls", {"item": call_item})
+            outgoing_id = self._request("callHierarchy/outgoingCalls", {"item": call_item})
+            call_responses = self._collect_responses(
+                {
+                    "incoming": incoming_id,
+                    "outgoing": outgoing_id,
+                },
+                timeout_seconds=request.timeout_seconds,
+            )
+        except _PYREFLY_FAIL_OPEN_EXCEPTIONS:
+            return [], [], call_item
+        incoming = _normalize_call_hierarchy_incoming(
+            call_responses.get("incoming"),
+            limit=request.max_callers,
+        )
+        outgoing = _normalize_call_hierarchy_outgoing(
+            call_responses.get("outgoing"),
+            limit=request.max_callees,
+        )
+        return incoming, outgoing, call_item
 
+    def _build_probe_payload(
+        self,
+        request: PyreflyLspRequest,
+        *,
+        uri: str,
+        responses: Mapping[str, object],
+        call_item: Mapping[str, object] | None,
+        incoming: list[dict[str, object]],
+        outgoing: list[dict[str, object]],
+    ) -> dict[str, object]:
+        references = _normalize_reference_locations(
+            responses.get("references"),
+            limit=request.max_references,
+        )
+        declaration_targets = _normalize_targets(responses.get("declaration"), kind="declaration")
+        implementation_targets = _normalize_targets(
+            responses.get("implementation"),
+            kind="implementation",
+        )
         diagnostics = _normalize_anchor_diagnostics(
             self._diagnostics_by_uri.get(uri, []),
             line=max(0, request.line - 1),
             max_items=request.max_diagnostics,
         )
-        references = _normalize_reference_locations(
-            responses.get("references"),
-            limit=request.max_references,
-        )
-
-        payload: dict[str, object] = {
+        return {
             "symbol_grounding": {
                 "definition_targets": _normalize_targets(
-                    responses.get("definition"), kind="definition"
+                    responses.get("definition"),
+                    kind="definition",
                 ),
-                "declaration_targets": _normalize_targets(
-                    responses.get("declaration"), kind="declaration"
-                ),
+                "declaration_targets": declaration_targets,
                 "type_definition_targets": _normalize_targets(
                     responses.get("type_definition"),
                     kind="type_definition",
                 ),
-                "implementation_targets": _normalize_targets(
-                    responses.get("implementation"),
-                    kind="implementation",
-                ),
+                "implementation_targets": implementation_targets,
             },
             "type_contract": _normalize_type_contract(
                 hover=responses.get("hover"),
@@ -232,9 +306,7 @@ class _PyreflyLspSession:
             "class_method_context": _normalize_class_method_context(
                 hover=responses.get("hover"),
                 call_item=call_item,
-                implementations=_normalize_targets(
-                    responses.get("implementation"), kind="implementation"
-                ),
+                implementations=implementation_targets,
             ),
             "local_scope_context": {
                 "same_scope_symbols": list[object](),
@@ -243,32 +315,30 @@ class _PyreflyLspSession:
                 "reference_locations": references,
             },
             "import_alias_resolution": _normalize_import_alias_resolution(
-                declaration_targets=_normalize_targets(
-                    responses.get("declaration"), kind="declaration"
-                ),
+                declaration_targets=declaration_targets,
                 symbol_hint=request.symbol_hint,
             ),
             "anchor_diagnostics": diagnostics,
         }
+
+    def _collect_advanced_planes(
+        self,
+        *,
+        request: PyreflyLspRequest,
+        uri: str,
+        line: int,
+        col: int,
+    ) -> dict[str, object]:
         try:
-            payload["advanced_planes"] = collect_advanced_lsp_planes(
+            return collect_advanced_lsp_planes(
                 session=self,
                 language="python",
                 uri=uri,
-                line=max(0, request.line - 1),
-                col=max(0, request.col),
+                line=max(0, line),
+                col=max(0, col),
             )
-        except Exception:
-            payload["advanced_planes"] = dict[str, object]()
-
-        has_signal, signal_reasons = evaluate_pyrefly_signal_from_mapping(payload)
-        coverage_reason = None if has_signal else f"no_pyrefly_signal:{','.join(signal_reasons)}"
-        payload["coverage"] = {
-            "status": "applied" if has_signal else "not_resolved",
-            "reason": coverage_reason,
-            "position_encoding": self._position_encoding,
-        }
-        return payload
+        except _PYREFLY_FAIL_OPEN_EXCEPTIONS:
+            return {}
 
     def _start(self, *, timeout_seconds: float) -> None:
         proc = subprocess.Popen(
@@ -599,6 +669,14 @@ def _extract_hover_text(hover: object) -> str:
     return _render_hover_contents(contents)
 
 
+def _build_position_payload(request: PyreflyLspRequest, *, uri: str) -> _PositionPayload:
+    return _PositionPayload(
+        uri=uri,
+        line=max(0, request.line - 1),
+        character=max(0, request.col),
+    )
+
+
 def _render_hover_contents(contents: object) -> str:
     if isinstance(contents, str):
         return contents.strip()
@@ -639,32 +717,54 @@ def _extract_signature_list(signature_help: object) -> list[dict[str, object]]:
         return []
     normalized: list[dict[str, object]] = []
     for sig in signatures:
-        if not isinstance(sig, Mapping):
-            continue
-        label = sig.get("label")
-        if not isinstance(label, str):
-            continue
-        params: list[dict[str, object]] = []
-        raw_params = sig.get("parameters")
-        if isinstance(raw_params, list):
-            for raw_param in raw_params:
-                if not isinstance(raw_param, Mapping):
-                    continue
-                param_label = raw_param.get("label")
-                if isinstance(param_label, str):
-                    params.append({"label": param_label})
-                elif isinstance(param_label, list) and len(param_label) == _SIGNATURE_RANGE_LEN:
-                    start = _to_int(param_label[0])
-                    end = _to_int(param_label[1])
-                    slice_label = label[start:end] if 0 <= start <= end <= len(label) else ""
-                    params.append(
-                        {
-                            "label": slice_label,
-                            "label_span_in_signature": [start, end],
-                        }
-                    )
-        normalized.append({"label": label, "parameters": params})
+        signature_row = _normalize_signature_row(sig)
+        if signature_row is not None:
+            normalized.append(signature_row)
     return normalized
+
+
+def _normalize_signature_row(sig: object) -> dict[str, object] | None:
+    if not isinstance(sig, Mapping):
+        return None
+    label = sig.get("label")
+    if not isinstance(label, str):
+        return None
+    return {
+        "label": label,
+        "parameters": _normalize_signature_parameters(label, sig.get("parameters")),
+    }
+
+
+def _normalize_signature_parameters(label: str, raw_params: object) -> list[dict[str, object]]:
+    if not isinstance(raw_params, list):
+        return []
+    params: list[dict[str, object]] = []
+    for raw_param in raw_params:
+        param = _normalize_signature_parameter(raw_param, signature_label=label)
+        if param is not None:
+            params.append(param)
+    return params
+
+
+def _normalize_signature_parameter(
+    raw_param: object,
+    *,
+    signature_label: str,
+) -> dict[str, object] | None:
+    if not isinstance(raw_param, Mapping):
+        return None
+    param_label = raw_param.get("label")
+    if isinstance(param_label, str):
+        return {"label": param_label}
+    if not (isinstance(param_label, list) and len(param_label) == _SIGNATURE_RANGE_LEN):
+        return None
+    start = _to_int(param_label[0])
+    end = _to_int(param_label[1])
+    label_slice = signature_label[start:end] if 0 <= start <= end <= len(signature_label) else ""
+    return {
+        "label": label_slice,
+        "label_span_in_signature": [start, end],
+    }
 
 
 def _extract_active_signature_indices(signature_help: object) -> tuple[int, int]:

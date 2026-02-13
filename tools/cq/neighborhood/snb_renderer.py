@@ -14,55 +14,52 @@ from tools.cq.core.schema import (
     mk_result,
 )
 from tools.cq.core.snb_schema import DegradeEventV1, SemanticNeighborhoodBundleV1
+from tools.cq.core.structs import CqStruct
 from tools.cq.neighborhood.section_layout import materialize_section_layout
 
 
+class RenderSnbRequest(CqStruct, frozen=True):
+    """Request envelope for rendering an SNB bundle to CQ result."""
+
+    run: RunMeta
+    bundle: SemanticNeighborhoodBundleV1
+    target: str
+    language: str
+    top_k: int
+    enable_lsp: bool
+    lsp_env: Mapping[str, object] | None = None
+
+
 def render_snb_result(
-    *,
-    run: RunMeta,
-    bundle: SemanticNeighborhoodBundleV1,
-    target: str,
-    language: str,
-    top_k: int,
-    enable_lsp: bool,
-    lsp_env: Mapping[str, object] | None = None,
+    request: RenderSnbRequest,
 ) -> CqResult:
     """Render a semantic neighborhood bundle into `CqResult`.
 
     Returns:
         Rendered CQ result payload for neighborhood output.
     """
-    result = mk_result(run)
-    view = materialize_section_layout(bundle)
+    result = mk_result(request.run)
+    view = materialize_section_layout(request.bundle)
 
     _populate_summary(
         result=result,
-        bundle=bundle,
-        target=target,
-        language=language,
-        top_k=top_k,
-        enable_lsp=enable_lsp,
-        lsp_env=lsp_env,
+        request=request,
     )
-    _populate_findings(result=result, bundle=bundle, view=view, lsp_env=lsp_env)
-    _populate_artifacts(result=result, bundle=bundle)
+    _populate_findings(result=result, bundle=request.bundle, view=view, lsp_env=request.lsp_env)
+    _populate_artifacts(result=result, bundle=request.bundle)
     return result
 
 
 def _populate_summary(
     *,
     result: CqResult,
-    bundle: SemanticNeighborhoodBundleV1,
-    target: str,
-    language: str,
-    top_k: int,
-    enable_lsp: bool,
-    lsp_env: Mapping[str, object] | None,
+    request: RenderSnbRequest,
 ) -> None:
-    result.summary["target"] = target
-    result.summary["language"] = language
-    result.summary["top_k"] = top_k
-    result.summary["enable_lsp"] = enable_lsp
+    bundle = request.bundle
+    result.summary["target"] = request.target
+    result.summary["language"] = request.language
+    result.summary["top_k"] = request.top_k
+    result.summary["enable_lsp"] = request.enable_lsp
     result.summary["bundle_id"] = bundle.bundle_id
     result.summary["total_slices"] = len(bundle.slices)
     result.summary["total_diagnostics"] = len(bundle.diagnostics)
@@ -72,9 +69,9 @@ def _populate_summary(
     if bundle.graph is not None:
         result.summary["total_nodes"] = bundle.graph.node_count
         result.summary["total_edges"] = bundle.graph.edge_count
-    if lsp_env:
+    if request.lsp_env:
         for key in ("lsp_health", "lsp_quiescent", "lsp_position_encoding"):
-            value = lsp_env.get(key)
+            value = request.lsp_env.get(key)
             if value is not None:
                 result.summary[key] = value
 
@@ -158,4 +155,4 @@ def _degrade_event_dict(event: DegradeEventV1) -> dict[str, object]:
     }
 
 
-__all__ = ["render_snb_result"]
+__all__ = ["RenderSnbRequest", "render_snb_result"]

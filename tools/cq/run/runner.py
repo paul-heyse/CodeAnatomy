@@ -67,6 +67,14 @@ from tools.cq.search.multilang_diagnostics import (
 )
 from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
 
+RUN_STEP_NON_FATAL_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    ValueError,
+    TypeError,
+)
+
 
 @dataclass(frozen=True)
 class ParsedQStep:
@@ -459,7 +467,7 @@ def _execute_entity_q_steps(
         )
         try:
             result = execute_entity_query_from_records(request)
-        except Exception as exc:
+        except RUN_STEP_NON_FATAL_EXCEPTIONS as exc:
             result = _error_result(step.parent_step_id, "q", exc, ctx)
             result.summary["lang"] = step.plan.lang
             result.summary["query_text"] = step.step.query
@@ -518,7 +526,7 @@ def _execute_pattern_q_steps(
         )
         try:
             result = execute_pattern_query_with_files(request)
-        except Exception as exc:
+        except RUN_STEP_NON_FATAL_EXCEPTIONS as exc:
             result = _error_result(step.parent_step_id, "q", exc, ctx)
             result.summary["lang"] = step.plan.lang
             result.summary["query_text"] = step.step.query
@@ -732,7 +740,7 @@ def _execute_non_q_step_safe(step: RunStep, plan: RunPlan, ctx: CliContext) -> t
     step_id = step.id or step_type(step)
     try:
         return step_id, _execute_non_q_step(step, plan, ctx)
-    except Exception as exc:
+    except RUN_STEP_NON_FATAL_EXCEPTIONS as exc:
         return step_id, _error_result(step_id, step_type(step), exc, ctx)
 
 
@@ -953,7 +961,7 @@ def _execute_neighborhood_step(step: NeighborhoodStep, ctx: CliContext) -> CqRes
     from tools.cq.core.schema import mk_runmeta, ms
     from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-    from tools.cq.neighborhood.snb_renderer import render_snb_result
+    from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
     from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
     from tools.cq.query.sg_parser import sg_scan
 
@@ -1005,13 +1013,15 @@ def _execute_neighborhood_step(step: NeighborhoodStep, ctx: CliContext) -> CqRes
     )
 
     result = render_snb_result(
-        run=run,
-        bundle=bundle,
-        target=step.target,
-        language=step.lang,
-        top_k=step.top_k,
-        enable_lsp=not step.no_lsp,
-        lsp_env=_lsp_env_from_bundle(bundle),
+        RenderSnbRequest(
+            run=run,
+            bundle=bundle,
+            target=step.target,
+            language=step.lang,
+            top_k=step.top_k,
+            enable_lsp=not step.no_lsp,
+            lsp_env=_lsp_env_from_bundle(bundle),
+        )
     )
     result.summary["target_resolution_kind"] = resolved.resolution_kind
     return result

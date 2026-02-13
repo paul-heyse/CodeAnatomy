@@ -35,9 +35,24 @@ from tools.cq.neighborhood.capability_gates import (
 from tools.cq.neighborhood.capability_gates import (
     plan_feasible_slices as plan_capability_feasible_slices,
 )
-from tools.cq.neighborhood.pyrefly_adapter import collect_pyrefly_slices
-from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
+from tools.cq.neighborhood.pyrefly_adapter import (
+    PyreflySliceRequest,
+    collect_pyrefly_slices,
+)
+from tools.cq.neighborhood.structural_collector import (
+    StructuralNeighborhoodCollectRequest,
+    collect_structural_neighborhood,
+)
 from tools.cq.search.rust_lsp_contracts import LspCapabilitySnapshotV1
+
+LSP_NEGOTIATION_NON_FATAL_EXCEPTIONS = (
+    ImportError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    ValueError,
+    TypeError,
+)
 
 
 class BundleBuildRequest(CqStruct, frozen=True):
@@ -62,6 +77,26 @@ class BundleBuildRequest(CqStruct, frozen=True):
     target_degrade_events: tuple[DegradeEventV1, ...] = ()
 
 
+class LspSliceRowsRequest(CqStruct, frozen=True):
+    """Typed request for building a single LSP slice from row mappings."""
+
+    kind: NeighborhoodSliceKind
+    title: str
+    rows: tuple[Mapping[str, object], ...]
+    subject_id: str
+    edge_kind: str
+    top_k: int
+    source: str
+
+
+class LspCollectionResult(CqStruct, frozen=True):
+    """Intermediate bundle state for LSP collection."""
+
+    slices: tuple[NeighborhoodSliceV1, ...] = ()
+    degrades: tuple[DegradeEventV1, ...] = ()
+    lsp_env: dict[str, object] | None = None
+
+
 def build_neighborhood_bundle(
     request: BundleBuildRequest,
 ) -> SemanticNeighborhoodBundleV1:
@@ -71,37 +106,19 @@ def build_neighborhood_bundle(
         Fully assembled semantic neighborhood bundle.
     """
     started = ms()
-    degrade_events: list[DegradeEventV1] = list(request.target_degrade_events)
-
-    structural_slices, structural_degrades = collect_structural_neighborhood(
-        target_name=request.target_name,
-        target_file=request.target_file,
-        snapshot=request.snapshot,
-        target_line=request.target_line,
-        target_col=request.target_col,
-        max_per_slice=request.top_k,
-        slice_limits=_default_slice_limits(request.top_k),
-    )
-    degrade_events.extend(structural_degrades)
-
-    lsp_slices: list[NeighborhoodSliceV1] = []
-    lsp_env: dict[str, object] = {}
-    if request.enable_lsp:
-        negotiated_caps = _get_negotiated_caps(request)
-        feasible_slices, cap_degrades = plan_feasible_slices(
-            requested_slices=_lsp_slice_kinds(),
-            capabilities=negotiated_caps,
-        )
-        degrade_events.extend(cap_degrades)
-
-        lsp_slices_result, lsp_degrades, lsp_env = _collect_lsp_slices(request, feasible_slices)
-        lsp_slices.extend(lsp_slices_result)
-        degrade_events.extend(lsp_degrades)
-
-    all_slices = _merge_slices(structural_slices, tuple(lsp_slices), request.top_k)
+    structural_slices, structural_degrades = _collect_structural_slices(request)
+    lsp_result = _collect_lsp_bundle_result(request)
+    degrade_events = [
+        *request.target_degrade_events,
+        *structural_degrades,
+        *lsp_result.degrades,
+    ]
+    lsp_slices = lsp_result.slices
+    lsp_env = lsp_result.lsp_env or {}
+    all_slices = _merge_slices(structural_slices, lsp_slices, request.top_k)
     artifacts = _store_artifacts_with_preview(request.artifact_dir, all_slices)
     subject_node = _build_subject_node(request)
-    graph_summary = _build_graph_summary(structural_slices, tuple(lsp_slices))
+    graph_summary = _build_graph_summary(structural_slices, lsp_slices)
     meta = _build_meta(request, started, lsp_env)
 
     return SemanticNeighborhoodBundleV1(
@@ -115,6 +132,38 @@ def build_neighborhood_bundle(
         artifacts=tuple(artifacts),
         diagnostics=tuple(degrade_events),
         schema_version="cq.snb.v1",
+    )
+
+
+def _collect_structural_slices(
+    request: BundleBuildRequest,
+) -> tuple[tuple[NeighborhoodSliceV1, ...], tuple[DegradeEventV1, ...]]:
+    return collect_structural_neighborhood(
+        StructuralNeighborhoodCollectRequest(
+            target_name=request.target_name,
+            target_file=request.target_file,
+            snapshot=request.snapshot,
+            target_line=request.target_line,
+            target_col=request.target_col,
+            max_per_slice=request.top_k,
+            slice_limits=_default_slice_limits(request.top_k),
+        )
+    )
+
+
+def _collect_lsp_bundle_result(request: BundleBuildRequest) -> LspCollectionResult:
+    if not request.enable_lsp:
+        return LspCollectionResult()
+    negotiated_caps = _get_negotiated_caps(request)
+    feasible_slices, cap_degrades = plan_feasible_slices(
+        requested_slices=_lsp_slice_kinds(),
+        capabilities=negotiated_caps,
+    )
+    lsp_slices, lsp_degrades, lsp_env = _collect_lsp_slices(request, feasible_slices)
+    return LspCollectionResult(
+        slices=tuple(lsp_slices),
+        degrades=tuple([*cap_degrades, *lsp_degrades]),
+        lsp_env=lsp_env,
     )
 
 
@@ -164,7 +213,7 @@ def _get_negotiated_caps(request: BundleBuildRequest) -> dict[str, object]:
             from tools.cq.search.pyrefly_lsp import get_pyrefly_lsp_capabilities
 
             return get_pyrefly_lsp_capabilities(request.root)
-        except Exception:
+        except LSP_NEGOTIATION_NON_FATAL_EXCEPTIONS:
             return {}
 
     if request.language == "rust":
@@ -172,7 +221,7 @@ def _get_negotiated_caps(request: BundleBuildRequest) -> dict[str, object]:
             from tools.cq.search.rust_lsp import get_rust_lsp_capabilities
 
             return get_rust_lsp_capabilities(request.root)
-        except Exception:
+        except LSP_NEGOTIATION_NON_FATAL_EXCEPTIONS:
             return {}
 
     return {}
@@ -187,14 +236,16 @@ def _collect_lsp_slices(
 
     if request.language == "python":
         slices, degrades, env = collect_pyrefly_slices(
-            root=request.root,
-            target_file=request.target_file,
-            target_line=request.target_line,
-            target_col=request.target_col,
-            target_name=request.target_name,
-            feasible_slices=feasible_slices,
-            top_k=request.top_k,
-            symbol_hint=request.symbol_hint,
+            PyreflySliceRequest(
+                root=request.root,
+                target_file=request.target_file,
+                target_line=request.target_line,
+                target_col=request.target_col,
+                target_name=request.target_name,
+                feasible_slices=feasible_slices,
+                top_k=request.top_k,
+                symbol_hint=request.symbol_hint,
+            )
         )
         return list(slices), list(degrades), env
 
@@ -219,21 +270,27 @@ def _collect_rust_slices(
     request: BundleBuildRequest,
     feasible_slices: tuple[NeighborhoodSliceKind, ...],
 ) -> tuple[list[NeighborhoodSliceV1], list[DegradeEventV1], dict[str, object]]:
+    payload, missing_payload_degrades = _load_rust_payload(request)
+    if payload is None:
+        return [], missing_payload_degrades, {}
+    slices = _build_rust_slices_from_payload(
+        payload=payload,
+        request=request,
+        feasible_slices=feasible_slices,
+    )
+    lsp_env = _extract_lsp_env(payload)
+    if not slices:
+        return [], [_rust_no_signal_degrade()], lsp_env
+    return slices, [], lsp_env
+
+
+def _load_rust_payload(
+    request: BundleBuildRequest,
+) -> tuple[Mapping[str, object] | None, list[DegradeEventV1]]:
     from tools.cq.search.rust_lsp import RustLspRequest, enrich_with_rust_lsp
 
     if not request.target_file or request.target_line is None:
-        return (
-            [],
-            [
-                DegradeEventV1(
-                    stage="lsp.rust",
-                    severity="warning",
-                    category="missing_anchor",
-                    message="Rust LSP neighborhood slices require resolved file:line target",
-                )
-            ],
-            {},
-        )
+        return None, [_rust_missing_anchor_degrade()]
 
     payload = enrich_with_rust_lsp(
         RustLspRequest(
@@ -245,99 +302,120 @@ def _collect_rust_slices(
         root=request.root,
     )
     if not isinstance(payload, Mapping):
-        return (
-            [],
-            [
-                DegradeEventV1(
-                    stage="lsp.rust",
-                    severity="warning",
-                    category="unavailable",
-                    message="Rust LSP enrichment unavailable for resolved target",
-                )
-            ],
-            {},
-        )
+        return None, [_rust_unavailable_degrade()]
+    return payload, []
 
+
+def _build_rust_slices_from_payload(
+    *,
+    payload: Mapping[str, object],
+    request: BundleBuildRequest,
+    feasible_slices: tuple[NeighborhoodSliceKind, ...],
+) -> list[NeighborhoodSliceV1]:
     subject_id = f"target.{request.target_file}:{request.target_name}"
     slices: list[NeighborhoodSliceV1] = []
-
-    symbol_grounding: Mapping[str, object] = {}
-    symbol_grounding_raw = payload.get("symbol_grounding")
-    if isinstance(symbol_grounding_raw, Mapping):
-        symbol_grounding = symbol_grounding_raw
-    type_hierarchy: Mapping[str, object] = {}
-    type_hierarchy_raw = payload.get("type_hierarchy")
-    if isinstance(type_hierarchy_raw, Mapping):
-        type_hierarchy = type_hierarchy_raw
-
+    symbol_grounding = _mapping_or_empty(payload.get("symbol_grounding"))
+    type_hierarchy = _mapping_or_empty(payload.get("type_hierarchy"))
     for kind in feasible_slices:
-        if kind == "references":
-            slices.append(
-                _lsp_slice_from_rows(
-                    kind="references",
-                    title="References",
-                    rows=_mapping_rows(symbol_grounding.get("references")),
-                    subject_id=subject_id,
-                    edge_kind="references",
-                    top_k=request.top_k,
-                    source="lsp.rust",
-                )
-            )
-            continue
-        if kind == "implementations":
-            slices.append(
-                _lsp_slice_from_rows(
-                    kind="implementations",
-                    title="Implementations",
-                    rows=_mapping_rows(symbol_grounding.get("implementations")),
-                    subject_id=subject_id,
-                    edge_kind="implements",
-                    top_k=request.top_k,
-                    source="lsp.rust",
-                )
-            )
-            continue
-        if kind == "type_supertypes":
-            slices.append(
-                _lsp_slice_from_rows(
-                    kind="type_supertypes",
-                    title="Supertypes",
-                    rows=_mapping_rows(type_hierarchy.get("supertypes")),
-                    subject_id=subject_id,
-                    edge_kind="extends",
-                    top_k=request.top_k,
-                    source="lsp.rust",
-                )
-            )
-            continue
-        if kind == "type_subtypes":
-            slices.append(
-                _lsp_slice_from_rows(
-                    kind="type_subtypes",
-                    title="Subtypes",
-                    rows=_mapping_rows(type_hierarchy.get("subtypes")),
-                    subject_id=subject_id,
-                    edge_kind="subtype",
-                    top_k=request.top_k,
-                    source="lsp.rust",
-                )
-            )
-
-    lsp_env = _extract_lsp_env(payload)
-    if not slices:
-        return (
-            [],
-            [
-                DegradeEventV1(
-                    stage="lsp.rust",
-                    severity="info",
-                    category="no_signal",
-                    message="Rust LSP returned no neighborhood slice signals for this target",
-                )
-            ],
-            lsp_env,
+        slice_request = _rust_slice_request_for_kind(
+            kind=kind,
+            subject_id=subject_id,
+            symbol_grounding=symbol_grounding,
+            type_hierarchy=type_hierarchy,
+            top_k=request.top_k,
         )
-    return slices, [], lsp_env
+        if slice_request is None:
+            continue
+        slices.append(_lsp_slice_from_rows(slice_request))
+    return slices
+
+
+def _rust_slice_request_for_kind(
+    *,
+    kind: NeighborhoodSliceKind,
+    subject_id: str,
+    symbol_grounding: Mapping[str, object],
+    type_hierarchy: Mapping[str, object],
+    top_k: int,
+) -> LspSliceRowsRequest | None:
+    if kind == "references":
+        rows = _mapping_rows(symbol_grounding.get("references"))
+        return LspSliceRowsRequest(
+            kind="references",
+            title="References",
+            rows=tuple(rows),
+            subject_id=subject_id,
+            edge_kind="references",
+            top_k=top_k,
+            source="lsp.rust",
+        )
+    if kind == "implementations":
+        rows = _mapping_rows(symbol_grounding.get("implementations"))
+        return LspSliceRowsRequest(
+            kind="implementations",
+            title="Implementations",
+            rows=tuple(rows),
+            subject_id=subject_id,
+            edge_kind="implements",
+            top_k=top_k,
+            source="lsp.rust",
+        )
+    if kind == "type_supertypes":
+        rows = _mapping_rows(type_hierarchy.get("supertypes"))
+        return LspSliceRowsRequest(
+            kind="type_supertypes",
+            title="Supertypes",
+            rows=tuple(rows),
+            subject_id=subject_id,
+            edge_kind="extends",
+            top_k=top_k,
+            source="lsp.rust",
+        )
+    if kind == "type_subtypes":
+        rows = _mapping_rows(type_hierarchy.get("subtypes"))
+        return LspSliceRowsRequest(
+            kind="type_subtypes",
+            title="Subtypes",
+            rows=tuple(rows),
+            subject_id=subject_id,
+            edge_kind="subtype",
+            top_k=top_k,
+            source="lsp.rust",
+        )
+    return None
+
+
+def _mapping_or_empty(value: object) -> Mapping[str, object]:
+    if isinstance(value, Mapping):
+        return value
+    return {}
+
+
+def _rust_missing_anchor_degrade() -> DegradeEventV1:
+    return DegradeEventV1(
+        stage="lsp.rust",
+        severity="warning",
+        category="missing_anchor",
+        message="Rust LSP neighborhood slices require resolved file:line target",
+    )
+
+
+def _rust_unavailable_degrade() -> DegradeEventV1:
+    return DegradeEventV1(
+        stage="lsp.rust",
+        severity="warning",
+        category="unavailable",
+        message="Rust LSP enrichment unavailable for resolved target",
+    )
+
+
+def _rust_no_signal_degrade() -> DegradeEventV1:
+    return DegradeEventV1(
+        stage="lsp.rust",
+        severity="info",
+        category="no_signal",
+        message="Rust LSP returned no neighborhood slice signals for this target",
+    )
 
 
 def _mapping_rows(value: object) -> list[Mapping[str, object]]:
@@ -347,36 +425,29 @@ def _mapping_rows(value: object) -> list[Mapping[str, object]]:
 
 
 def _lsp_slice_from_rows(
-    *,
-    kind: NeighborhoodSliceKind,
-    title: str,
-    rows: list[Mapping[str, object]],
-    subject_id: str,
-    edge_kind: str,
-    top_k: int,
-    source: str,
+    request: LspSliceRowsRequest,
 ) -> NeighborhoodSliceV1:
-    preview_rows = rows[: max(0, top_k)]
+    preview_rows = request.rows[: max(0, request.top_k)]
 
     preview: list[SemanticNodeRefV1] = []
     edges: list[SemanticEdgeV1] = []
     for row in preview_rows:
-        node = _lsp_row_to_node(row, source=source)
+        node = _lsp_row_to_node(row, source=request.source)
         preview.append(node)
         edges.append(
             SemanticEdgeV1(
-                edge_id=f"{subject_id}→{node.node_id}:{edge_kind}",
-                source_node_id=subject_id,
+                edge_id=f"{request.subject_id}→{node.node_id}:{request.edge_kind}",
+                source_node_id=request.subject_id,
                 target_node_id=node.node_id,
-                edge_kind=edge_kind,
-                evidence_source=source,
+                edge_kind=request.edge_kind,
+                evidence_source=request.source,
             )
         )
 
     return NeighborhoodSliceV1(
-        kind=kind,
-        title=title,
-        total=len(rows),
+        kind=request.kind,
+        title=request.title,
+        total=len(request.rows),
         preview=tuple(preview),
         edges=tuple(edges),
         collapsed=True,

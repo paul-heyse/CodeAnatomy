@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import msgspec
 from tools.cq.core.front_door_insight import (
+    CallsInsightBuildRequestV1,
+    EntityInsightBuildRequestV1,
     FrontDoorInsightV1,
     InsightConfidenceV1,
     InsightLocationV1,
     InsightRiskCountersV1,
+    SearchInsightBuildRequestV1,
     attach_artifact_refs,
     attach_neighborhood_overflow_ref,
     augment_insight_with_lsp,
@@ -44,10 +47,25 @@ def _definition_finding(name: str = "target") -> Finding:
     )
 
 
+def _search_insight(**kwargs: object) -> FrontDoorInsightV1:
+    target_candidates = kwargs.get("target_candidates")
+    if isinstance(target_candidates, list):
+        kwargs["target_candidates"] = tuple(target_candidates)
+    return build_search_insight(SearchInsightBuildRequestV1(**kwargs))
+
+
+def _calls_insight(**kwargs: object) -> FrontDoorInsightV1:
+    return build_calls_insight(CallsInsightBuildRequestV1(**kwargs))
+
+
+def _entity_insight(**kwargs: object) -> FrontDoorInsightV1:
+    return build_entity_insight(EntityInsightBuildRequestV1(**kwargs))
+
+
 def test_front_door_insight_roundtrip() -> None:
     insight = FrontDoorInsightV1(
         source="search",
-        target=build_search_insight(
+        target=_search_insight(
             summary={"query": "target", "scan_method": "hybrid"},
             primary_target=_definition_finding("target"),
             target_candidates=[_definition_finding("target")],
@@ -80,7 +98,7 @@ def test_build_neighborhood_from_slices_maps_core_slices() -> None:
 
 
 def test_augment_insight_with_lsp_updates_target_and_call_graph() -> None:
-    base = build_entity_insight(
+    base = _entity_insight(
         summary={"query": "entity=function name=target", "entity_kind": "function"},
         primary_target=_definition_finding("target"),
     )
@@ -102,7 +120,7 @@ def test_augment_insight_with_lsp_updates_target_and_call_graph() -> None:
 
 def test_build_search_insight_prefers_definition_target() -> None:
     primary = _definition_finding("build_graph")
-    insight = build_search_insight(
+    insight = _search_insight(
         summary={"query": "build_graph", "scan_method": "hybrid"},
         primary_target=primary,
         target_candidates=[primary],
@@ -120,7 +138,7 @@ def test_build_calls_insight_uses_counters_for_risk() -> None:
             NeighborhoodSliceV1(kind="callees", title="Callees", total=6),
         ),
     )
-    insight = build_calls_insight(
+    insight = _calls_insight(
         function_name="build_graph",
         signature="(x, y)",
         location=InsightLocationV1(file="src/mod.py", line=22, col=0),
@@ -138,7 +156,7 @@ def test_build_calls_insight_uses_counters_for_risk() -> None:
 
 
 def test_build_entity_insight_fallback_target_when_missing_findings() -> None:
-    insight = build_entity_insight(
+    insight = _entity_insight(
         summary={"query": "entity=function name=foo", "entity_kind": "function"},
         primary_target=None,
     )
@@ -148,7 +166,7 @@ def test_build_entity_insight_fallback_target_when_missing_findings() -> None:
 
 
 def test_render_insight_card_includes_budget_and_artifact_refs() -> None:
-    insight = build_search_insight(
+    insight = _search_insight(
         summary={"query": "target", "scan_method": "hybrid"},
         primary_target=_definition_finding("target"),
         target_candidates=[_definition_finding("target")],
@@ -165,7 +183,7 @@ def test_render_insight_card_includes_budget_and_artifact_refs() -> None:
 
 
 def test_mark_partial_for_missing_languages_downgrades_availability() -> None:
-    insight = build_search_insight(
+    insight = _search_insight(
         summary={"query": "target", "scan_method": "hybrid"},
         primary_target=_definition_finding("target"),
         target_candidates=[_definition_finding("target")],
@@ -179,7 +197,7 @@ def test_mark_partial_for_missing_languages_downgrades_availability() -> None:
 
 
 def test_attach_neighborhood_overflow_ref_sets_slice_refs() -> None:
-    insight = build_search_insight(
+    insight = _search_insight(
         summary={"query": "target", "scan_method": "hybrid"},
         primary_target=_definition_finding("target"),
         target_candidates=[_definition_finding("target")],
@@ -211,7 +229,7 @@ def test_risk_from_counters_is_deterministic() -> None:
 
 
 def test_coerce_front_door_insight_from_mapping() -> None:
-    insight = build_search_insight(
+    insight = _search_insight(
         summary={"query": "target", "scan_method": "hybrid"},
         primary_target=_definition_finding("target"),
         target_candidates=[_definition_finding("target")],
@@ -223,7 +241,7 @@ def test_coerce_front_door_insight_from_mapping() -> None:
 
 
 def test_to_public_front_door_insight_dict_emits_full_shape() -> None:
-    insight = build_search_insight(
+    insight = _search_insight(
         summary={"query": "target", "scan_method": "hybrid"},
         primary_target=_definition_finding("target"),
         target_candidates=[_definition_finding("target")],

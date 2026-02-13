@@ -49,26 +49,56 @@ def resolve_target_definition(
     scheduler = get_worker_scheduler()
     workers = min(len(def_files), max(1, int(scheduler.policy.calls_file_workers)))
     if workers <= 1 or len(def_files) <= 1:
-        for filepath in def_files:
-            resolved = _resolve_target_in_file(filepath, root=root, base_name=base_name)
-            if resolved is not None:
-                return resolved
-        return None
+        return _resolve_target_sequential(def_files, root=root, base_name=base_name)
+    parallel_match = _resolve_target_parallel(
+        def_files,
+        root=root,
+        base_name=base_name,
+        timeout_seconds=max(1.0, float(len(def_files)) * 2.0),
+    )
+    if parallel_match is not None:
+        return parallel_match
+    return _resolve_target_sequential(def_files, root=root, base_name=base_name)
+
+
+def _resolve_target_sequential(
+    def_files: list[Path],
+    *,
+    root: Path,
+    base_name: str,
+) -> tuple[str, int] | None:
+    for filepath in def_files:
+        resolved = _resolve_target_in_file(filepath, root=root, base_name=base_name)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _resolve_target_parallel(
+    def_files: list[Path],
+    *,
+    root: Path,
+    base_name: str,
+    timeout_seconds: float,
+) -> tuple[str, int] | None:
+    scheduler = get_worker_scheduler()
     futures = [
         scheduler.submit_io(_resolve_target_in_file, filepath, root, base_name)
         for filepath in def_files
     ]
     batch = scheduler.collect_bounded(
         futures,
-        timeout_seconds=max(1.0, float(len(def_files)) * 2.0),
+        timeout_seconds=timeout_seconds,
     )
     if batch.timed_out > 0:
-        for filepath in def_files:
-            resolved = _resolve_target_in_file(filepath, root=root, base_name=base_name)
-            if resolved is not None:
-                return resolved
         return None
-    for resolved in batch.done:
+    return _first_resolved_target(batch.done)
+
+
+def _first_resolved_target(
+    resolved_items: list[tuple[str, int] | None],
+) -> tuple[str, int] | None:
+    for resolved in resolved_items:
         if resolved is not None:
             return resolved
     return None
@@ -108,30 +138,54 @@ def scan_target_callees(
         return Counter()
     rel_path, line = target_location
     file_path = root / rel_path
-    try:
-        source = file_path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-    except (SyntaxError, OSError, UnicodeDecodeError):
+    tree = _parse_python_file(file_path)
+    if tree is None:
         return Counter()
 
     base_name = function_name.rsplit(".", maxsplit=1)[-1]
-    target_node: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+    target_node = _find_target_node(tree, base_name=base_name, line=line)
+    if target_node is None:
+        return Counter()
+    return _count_callees_in_node(
+        target_node=target_node,
+        function_name=function_name,
+        base_name=base_name,
+    )
+
+
+def _parse_python_file(file_path: Path) -> ast.AST | None:
+    try:
+        source = file_path.read_text(encoding="utf-8")
+        return ast.parse(source)
+    except (SyntaxError, OSError, UnicodeDecodeError):
+        return None
+
+
+def _find_target_node(
+    tree: ast.AST,
+    *,
+    base_name: str,
+    line: int,
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     for node in ast.walk(tree):
         if (
             isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name == base_name
             and int(node.lineno) == int(line)
         ):
-            target_node = node
-            break
-    if target_node is None:
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == base_name:
-                target_node = node
-                break
-    if target_node is None:
-        return Counter()
+            return node
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == base_name:
+            return node
+    return None
 
+
+def _count_callees_in_node(
+    *,
+    target_node: ast.FunctionDef | ast.AsyncFunctionDef,
+    function_name: str,
+    base_name: str,
+) -> Counter[str]:
     callee_counts: Counter[str] = Counter()
     for node in ast.walk(target_node):
         if not isinstance(node, ast.Call):
@@ -178,7 +232,11 @@ def attach_target_metadata(
     score: ScoreDetails | None,
     preview_limit: int = _CALLS_TARGET_CALLEE_PREVIEW,
 ) -> tuple[tuple[str, int] | None, Counter[str]]:
-    """Resolve target location, collect target callees, and update result payload."""
+    """Resolve target location, collect target callees, and update result payload.
+
+    Returns:
+        Resolved target location and counted target-body callees.
+    """
     cache = get_cq_cache_backend(root=root)
     cache_key = build_cache_key(
         "calls_target_metadata",

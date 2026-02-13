@@ -135,7 +135,11 @@ from tools.cq.search.tree_sitter_rust import get_tree_sitter_rust_cache_stats
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
 
-    from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightNeighborhoodV1
+    from tools.cq.core.front_door_insight import (
+        FrontDoorInsightV1,
+        InsightNeighborhoodV1,
+        InsightRiskV1,
+    )
     from tools.cq.core.toolchain import Toolchain
 
 # Derive smart search limits from INTERACTIVE profile
@@ -153,6 +157,13 @@ _CASE_SENSITIVE_DEFAULT = True
 MAX_EVIDENCE = 100
 MAX_TARGET_CANDIDATES = 3
 _RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
+_PYREFLY_PREFETCH_NON_FATAL_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 MAX_SEARCH_CLASSIFY_WORKERS = 4
 MAX_PYREFLY_ENRICH_FINDINGS = 8
 _PyreflyAnchorKey = tuple[str, int, int, str]
@@ -2248,7 +2259,7 @@ def _prefetch_pyrefly_for_raw_matches(
         except TimeoutError:
             telemetry["timed_out"] += 1
             payload = None
-        except Exception:
+        except _PYREFLY_PREFETCH_NON_FATAL_EXCEPTIONS:
             telemetry["failed"] += 1
             payload = None
 
@@ -2343,7 +2354,7 @@ def _fetch_pyrefly_payload(
     except TimeoutError:
         telemetry["timed_out"] += 1
         return None, True
-    except Exception:
+    except _PYREFLY_PREFETCH_NON_FATAL_EXCEPTIONS:
         return None, True
 
 
@@ -2641,7 +2652,10 @@ def _build_structural_neighborhood_preview(
 ) -> tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]:
     from tools.cq.core.front_door_insight import build_neighborhood_from_slices
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-    from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
+    from tools.cq.neighborhood.structural_collector import (
+        StructuralNeighborhoodCollectRequest,
+        collect_structural_neighborhood,
+    )
 
     if primary_target_finding is None or primary_target_finding.anchor is None:
         return None, [], []
@@ -2661,12 +2675,14 @@ def _build_structural_neighborhood_preview(
     try:
         snapshot = ScanSnapshot.build_from_repo(ctx.root, lang=snapshot_language)
         slices, degrades = collect_structural_neighborhood(
-            target_name=target_name,
-            target_file=target_file,
-            target_line=primary_target_finding.anchor.line,
-            target_col=int(primary_target_finding.anchor.col or 0),
-            snapshot=snapshot,
-            max_per_slice=5,
+            StructuralNeighborhoodCollectRequest(
+                target_name=target_name,
+                target_file=target_file,
+                target_line=primary_target_finding.anchor.line,
+                target_col=int(primary_target_finding.anchor.col or 0),
+                snapshot=snapshot,
+                max_per_slice=5,
+            )
         )
     except (OSError, RuntimeError, TimeoutError, ValueError, TypeError) as exc:
         return None, [], [f"structural_scan_unavailable:{type(exc).__name__}"]
@@ -2747,6 +2763,19 @@ class _SearchLspOutcome:
     failed: int = 0
     timed_out: int = 0
     reasons: list[str] = dataclass_field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _SearchAssemblyInputs:
+    enriched_matches: list[EnrichedMatch]
+    summary: dict[str, object]
+    sections: list[Section]
+    all_diagnostics: list[Finding]
+    definition_matches: list[EnrichedMatch]
+    candidate_findings: list[Finding]
+    primary_target_finding: Finding | None
+    insight_neighborhood: InsightNeighborhoodV1 | None
+    neighborhood_notes: list[str]
 
 
 def _collect_search_lsp_outcome(
@@ -2855,23 +2884,13 @@ def _derive_search_lsp_state(outcome: _SearchLspOutcome) -> LspContractStateV1:
     )
 
 
-def _assemble_smart_search_result(
+def _prepare_search_assembly_inputs(
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
-) -> CqResult:
-    from tools.cq.core.front_door_insight import (
-        InsightRiskCountersV1,
-        build_search_insight,
-        risk_from_counters,
-        to_public_front_door_insight_dict,
+) -> _SearchAssemblyInputs:
+    enriched_matches, pyrefly_overview, pyrefly_telemetry, pyrefly_diagnostics = (
+        _merge_matches_and_pyrefly(ctx, partition_results)
     )
-
-    (
-        enriched_matches,
-        pyrefly_overview,
-        pyrefly_telemetry,
-        pyrefly_diagnostics,
-    ) = _merge_matches_and_pyrefly(ctx, partition_results)
     summary, all_diagnostics = _build_search_summary(
         ctx,
         partition_results,
@@ -2889,60 +2908,97 @@ def _assemble_smart_search_result(
     )
     if all_diagnostics:
         sections.append(Section(title="Cross-Language Diagnostics", findings=all_diagnostics))
-
     definition_matches, candidate_findings = _collect_definition_candidates(ctx, enriched_matches)
     insert_target_candidates(sections, candidates=candidate_findings)
     primary_target_finding = candidate_findings[0] if candidate_findings else None
-
-    insight_neighborhood, neighborhood_findings, neighborhood_notes = (
-        _build_structural_neighborhood_preview(
-            ctx,
-            primary_target_finding=primary_target_finding,
-            definition_matches=definition_matches,
-        )
+    insight_neighborhood, neighborhood_findings, neighborhood_notes = _build_structural_neighborhood_preview(
+        ctx,
+        primary_target_finding=primary_target_finding,
+        definition_matches=definition_matches,
     )
     insert_neighborhood_preview(
         sections,
         findings=neighborhood_findings,
         has_target_candidates=bool(candidate_findings),
     )
+    return _SearchAssemblyInputs(
+        enriched_matches=enriched_matches,
+        summary=summary,
+        sections=sections,
+        all_diagnostics=all_diagnostics,
+        definition_matches=definition_matches,
+        candidate_findings=candidate_findings,
+        primary_target_finding=primary_target_finding,
+        insight_neighborhood=insight_neighborhood,
+        neighborhood_notes=neighborhood_notes,
+    )
 
-    search_risk = None
-    if insight_neighborhood is not None:
-        search_risk = risk_from_counters(
-            InsightRiskCountersV1(
-                callers=insight_neighborhood.callers.total,
-                callees=insight_neighborhood.callees.total,
-            )
+
+def _build_search_result_key_findings(inputs: _SearchAssemblyInputs) -> list[Finding]:
+    key_findings = list(
+        inputs.candidate_findings or (inputs.sections[0].findings[:5] if inputs.sections else [])
+    )
+    key_findings.extend(inputs.all_diagnostics)
+    return key_findings
+
+
+def _build_search_risk(
+    neighborhood: InsightNeighborhoodV1 | None,
+) -> InsightRiskV1 | None:
+    from tools.cq.core.front_door_insight import InsightRiskCountersV1, risk_from_counters
+
+    if neighborhood is None:
+        return None
+    return risk_from_counters(
+        InsightRiskCountersV1(
+            callers=neighborhood.callers.total,
+            callees=neighborhood.callees.total,
         )
+    )
 
-    result_key_findings = candidate_findings or (sections[0].findings[:5] if sections else [])
-    result_key_findings += all_diagnostics
+
+def _assemble_search_insight(
+    ctx: SmartSearchContext,
+    inputs: _SearchAssemblyInputs,
+) -> FrontDoorInsightV1:
+    from tools.cq.core.front_door_insight import SearchInsightBuildRequestV1, build_search_insight
 
     insight = build_search_insight(
-        summary=summary,
-        primary_target=primary_target_finding,
-        target_candidates=candidate_findings,
-        neighborhood=insight_neighborhood,
-        risk=search_risk,
+        SearchInsightBuildRequestV1(
+            summary=inputs.summary,
+            primary_target=inputs.primary_target_finding,
+            target_candidates=tuple(inputs.candidate_findings),
+            neighborhood=inputs.insight_neighborhood,
+            risk=_build_search_risk(inputs.insight_neighborhood),
+        )
     )
-    if neighborhood_notes:
+    if inputs.neighborhood_notes:
         insight = msgspec.structs.replace(
             insight,
             degradation=msgspec.structs.replace(
                 insight.degradation,
-                notes=tuple(dict.fromkeys([*insight.degradation.notes, *neighborhood_notes])),
+                notes=tuple(dict.fromkeys([*insight.degradation.notes, *inputs.neighborhood_notes])),
             ),
         )
-    top_def_match = definition_matches[0] if definition_matches else None
-    insight = _apply_search_lsp_insight(
+    top_def_match = inputs.definition_matches[0] if inputs.definition_matches else None
+    return _apply_search_lsp_insight(
         ctx=ctx,
         insight=insight,
-        summary=summary,
-        primary_target_finding=primary_target_finding,
+        summary=inputs.summary,
+        primary_target_finding=inputs.primary_target_finding,
         top_definition_match=top_def_match,
     )
-    summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
+
+
+def _assemble_smart_search_result(
+    ctx: SmartSearchContext,
+    partition_results: list[_LanguageSearchResult],
+) -> CqResult:
+    from tools.cq.core.front_door_insight import to_public_front_door_insight_dict
+
+    inputs = _prepare_search_assembly_inputs(ctx, partition_results)
+    insight = _assemble_search_insight(ctx, inputs)
+    inputs.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
     run_ctx = RunContext.from_parts(
         root=ctx.root,
@@ -2953,10 +3009,10 @@ def _assemble_smart_search_result(
     run = run_ctx.to_runmeta("search")
     return CqResult(
         run=run,
-        summary=summary,
-        sections=sections,
-        key_findings=result_key_findings,
-        evidence=[build_finding(m, ctx.root) for m in enriched_matches[:MAX_EVIDENCE]],
+        summary=inputs.summary,
+        sections=inputs.sections,
+        key_findings=_build_search_result_key_findings(inputs),
+        evidence=[build_finding(m, ctx.root) for m in inputs.enriched_matches[:MAX_EVIDENCE]],
     )
 
 

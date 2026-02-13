@@ -9,7 +9,7 @@ from tools.cq.core.snb_schema import (
     SemanticNeighborhoodBundleV1,
     SemanticNodeRefV1,
 )
-from tools.cq.neighborhood.snb_renderer import render_snb_result
+from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
 
 
 def test_render_snb_result_emits_bundle_enrichment_evidence() -> None:
@@ -45,13 +45,19 @@ def test_render_snb_result_emits_bundle_enrichment_evidence() -> None:
     )
 
     result = render_snb_result(
-        run=run,
-        bundle=bundle,
-        target="target",
-        language="python",
-        top_k=10,
-        enable_lsp=True,
-        lsp_env={"lsp_health": "ok", "lsp_quiescent": True, "lsp_position_encoding": "utf-16"},
+        RenderSnbRequest(
+            run=run,
+            bundle=bundle,
+            target="target",
+            language="python",
+            top_k=10,
+            enable_lsp=True,
+            lsp_env={
+                "lsp_health": "ok",
+                "lsp_quiescent": True,
+                "lsp_position_encoding": "utf-16",
+            },
+        )
     )
 
     assert result.summary["bundle_id"] == "abc123"

@@ -13,26 +13,32 @@ from tools.cq.core.snb_schema import (
     SemanticEdgeV1,
     SemanticNodeRefV1,
 )
+from tools.cq.core.structs import CqStruct
 from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_lsp
 
 
+class PyreflySliceRequest(CqStruct, frozen=True):
+    """Typed request for collecting pyrefly-backed neighborhood slices."""
+
+    root: Path
+    target_file: str
+    target_line: int | None
+    target_col: int | None
+    target_name: str
+    feasible_slices: tuple[NeighborhoodSliceKind, ...]
+    top_k: int
+    symbol_hint: str | None = None
+
+
 def collect_pyrefly_slices(
-    *,
-    root: Path,
-    target_file: str,
-    target_line: int | None,
-    target_col: int | None,
-    target_name: str,
-    feasible_slices: tuple[NeighborhoodSliceKind, ...],
-    top_k: int,
-    symbol_hint: str | None = None,
+    request: PyreflySliceRequest,
 ) -> tuple[tuple[NeighborhoodSliceV1, ...], tuple[DegradeEventV1, ...], dict[str, object]]:
     """Collect Pyrefly-derived LSP slices for feasible neighborhood kinds.
 
     Returns:
         Collected slices, degrade events, and LSP environment metadata.
     """
-    if not target_file or target_line is None:
+    if not request.target_file or request.target_line is None:
         return (
             (),
             (
@@ -46,17 +52,17 @@ def collect_pyrefly_slices(
             {},
         )
 
-    file_path = Path(target_file)
+    file_path = Path(request.target_file)
     if not file_path.is_absolute():
-        file_path = root / file_path
+        file_path = request.root / file_path
 
     payload = enrich_with_pyrefly_lsp(
         PyreflyLspRequest(
-            root=root,
+            root=request.root,
             file_path=file_path,
-            line=target_line,
-            col=max(0, target_col or 0),
-            symbol_hint=symbol_hint or target_name,
+            line=request.target_line,
+            col=max(0, request.target_col or 0),
+            symbol_hint=request.symbol_hint or request.target_name,
         )
     )
     if not isinstance(payload, Mapping):
@@ -73,11 +79,11 @@ def collect_pyrefly_slices(
             {},
         )
 
-    subject_id = f"target.{target_file}:{target_name}"
+    subject_id = f"target.{request.target_file}:{request.target_name}"
     slices: list[NeighborhoodSliceV1] = []
     degrades: list[DegradeEventV1] = []
 
-    for kind in feasible_slices:
+    for kind in request.feasible_slices:
         if kind == "references":
             references = _coerce_ref_rows(payload)
             slices.append(
@@ -87,7 +93,7 @@ def collect_pyrefly_slices(
                     rows=references,
                     subject_id=subject_id,
                     edge_kind="references",
-                    top_k=top_k,
+                    top_k=request.top_k,
                 )
             )
             continue
@@ -100,7 +106,7 @@ def collect_pyrefly_slices(
                     rows=impl_rows,
                     subject_id=subject_id,
                     edge_kind="implements",
-                    top_k=top_k,
+                    top_k=request.top_k,
                 )
             )
             continue
@@ -113,7 +119,7 @@ def collect_pyrefly_slices(
                     rows=rows,
                     subject_id=subject_id,
                     edge_kind="extends",
-                    top_k=top_k,
+                    top_k=request.top_k,
                 )
             )
             continue
@@ -126,7 +132,7 @@ def collect_pyrefly_slices(
                     rows=rows,
                     subject_id=subject_id,
                     edge_kind="overrides",
-                    top_k=top_k,
+                    top_k=request.top_k,
                 )
             )
 
@@ -269,4 +275,4 @@ def _nested_scalar(payload: Mapping[str, object], path: tuple[str, str]) -> obje
     return container.get(path[1])
 
 
-__all__ = ["collect_pyrefly_slices"]
+__all__ = ["PyreflySliceRequest", "collect_pyrefly_slices"]

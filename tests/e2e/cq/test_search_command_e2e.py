@@ -128,3 +128,73 @@ def test_search_mixed_workspace_auto_lang_golden(
         result_snapshot_projection(result),
         update=update_golden,
     )
+
+
+@pytest.mark.e2e
+def test_search_mixed_monorepo_rust_nested_workspace_golden(
+    run_cq_result: Callable[..., CqResult],
+    update_golden: bool,
+) -> None:
+    result = run_cq_result(
+        [
+            "search",
+            "compile_target",
+            "--in",
+            "tests/e2e/cq/_golden_workspace/mixed_monorepo",
+            "--lang",
+            "rust",
+            "--format",
+            "json",
+            "--no-save-artifact",
+        ]
+    )
+
+    spec = load_golden_spec("golden_specs/search_mixed_monorepo_rust_spec.json")
+    assert_result_matches_spec(result, spec)
+    insight = result.summary.get("front_door_insight")
+    assert isinstance(insight, dict)
+    target = insight.get("target")
+    assert isinstance(target, dict)
+    assert target.get("kind") in {"function", "class", "type"}
+    rust_lsp_telemetry = result.summary.get("rust_lsp_telemetry")
+    assert isinstance(rust_lsp_telemetry, dict)
+    assert_json_snapshot_data(
+        "search_mixed_monorepo_rust_compile_target.json",
+        result_snapshot_projection(result),
+        update=update_golden,
+    )
+
+
+@pytest.mark.e2e
+def test_search_mixed_monorepo_python_nested_workspace_golden(
+    run_cq_result: Callable[..., CqResult],
+    update_golden: bool,
+) -> None:
+    result = run_cq_result(
+        [
+            "search",
+            "dispatch_wrapper",
+            "--in",
+            "tests/e2e/cq/_golden_workspace/mixed_monorepo",
+            "--lang",
+            "python",
+            "--format",
+            "json",
+            "--no-save-artifact",
+        ]
+    )
+
+    spec = load_golden_spec("golden_specs/search_mixed_monorepo_python_spec.json")
+    assert_result_matches_spec(result, spec)
+    insight = result.summary.get("front_door_insight")
+    assert isinstance(insight, dict)
+    target = insight.get("target")
+    assert isinstance(target, dict)
+    assert target.get("kind") in {"function", "class", "type"}
+    pyrefly_telemetry = result.summary.get("pyrefly_telemetry")
+    assert isinstance(pyrefly_telemetry, dict)
+    assert_json_snapshot_data(
+        "search_mixed_monorepo_python_dispatch_wrapper.json",
+        result_snapshot_projection(result),
+        update=update_golden,
+    )

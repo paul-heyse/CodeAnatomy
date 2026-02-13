@@ -34,7 +34,7 @@ def test_enrich_with_language_lsp_python(monkeypatch: pytest.MonkeyPatch) -> Non
         "enrich_with_pyrefly_lsp",
         lambda _request: {"call_graph": {"incoming_total": 1, "outgoing_total": 0}},
     )
-    payload, timed_out = enrich_with_language_lsp(
+    outcome = enrich_with_language_lsp(
         LanguageLspEnrichmentRequest(
             language="python",
             mode="search",
@@ -45,8 +45,9 @@ def test_enrich_with_language_lsp_python(monkeypatch: pytest.MonkeyPatch) -> Non
             symbol_hint="foo",
         )
     )
-    assert isinstance(payload, dict)
-    assert timed_out is False
+    assert isinstance(outcome.payload, dict)
+    assert outcome.timed_out is False
+    assert outcome.failure_reason is None
 
 
 def test_enrich_with_language_lsp_rust(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,7 +59,7 @@ def test_enrich_with_language_lsp_rust(monkeypatch: pytest.MonkeyPatch) -> None:
         "enrich_with_rust_lsp",
         lambda *_args, **_kwargs: {"call_graph": {"incoming_callers": []}},
     )
-    payload, timed_out = enrich_with_language_lsp(
+    outcome = enrich_with_language_lsp(
         LanguageLspEnrichmentRequest(
             language="rust",
             mode="search",
@@ -69,5 +70,42 @@ def test_enrich_with_language_lsp_rust(monkeypatch: pytest.MonkeyPatch) -> None:
             symbol_hint="foo",
         )
     )
-    assert isinstance(payload, dict)
-    assert timed_out is False
+    assert isinstance(outcome.payload, dict)
+    assert outcome.timed_out is False
+
+
+def test_enrich_with_language_lsp_runtime_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CQ_ENABLE_LSP", "0")
+    outcome = enrich_with_language_lsp(
+        LanguageLspEnrichmentRequest(
+            language="python",
+            mode="search",
+            root=Path(),
+            file_path=Path("foo.py"),
+            line=5,
+            col=0,
+        )
+    )
+    assert outcome.payload is None
+    assert outcome.failure_reason == "not_attempted_runtime_disabled"
+    assert outcome.timed_out is False
+
+
+def test_enrich_with_language_lsp_timeout_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tools.cq.search import lsp_front_door_adapter as adapter
+
+    monkeypatch.delenv("CQ_ENABLE_LSP", raising=False)
+    monkeypatch.setattr(adapter, "call_with_retry", lambda *_args, **_kwargs: (None, True))
+    outcome = enrich_with_language_lsp(
+        LanguageLspEnrichmentRequest(
+            language="python",
+            mode="search",
+            root=Path(),
+            file_path=Path("foo.py"),
+            line=5,
+            col=0,
+        )
+    )
+    assert outcome.payload is None
+    assert outcome.timed_out is True
+    assert outcome.failure_reason == "request_timeout"

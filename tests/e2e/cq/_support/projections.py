@@ -77,6 +77,30 @@ def _project_front_door_insight(summary: dict[str, object]) -> dict[str, Any] | 
     }
 
 
+def _project_step_summaries(summary: dict[str, object]) -> dict[str, Any]:
+    step_summaries = summary.get("step_summaries")
+    if not isinstance(step_summaries, dict):
+        return {}
+    projected: dict[str, Any] = {}
+    for step_id, step_summary in step_summaries.items():
+        if not isinstance(step_id, str) or not isinstance(step_summary, dict):
+            continue
+        insight = step_summary.get("front_door_insight")
+        degradation = {}
+        if isinstance(insight, dict):
+            maybe_degradation = insight.get("degradation")
+            if isinstance(maybe_degradation, dict):
+                degradation = maybe_degradation
+        projected[step_id] = {
+            "mode": step_summary.get("mode"),
+            "query": step_summary.get("query"),
+            "pyrefly_telemetry": step_summary.get("pyrefly_telemetry"),
+            "rust_lsp_telemetry": step_summary.get("rust_lsp_telemetry"),
+            "front_door_degradation_lsp": degradation,
+        }
+    return projected
+
+
 def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
     """Project a CqResult into a stable snapshot payload.
 
@@ -84,6 +108,7 @@ def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
     enrichment telemetry while preserving top-level behavioral contracts.
     """
     summary = result.summary
+    projected_step_summaries = _project_step_summaries(summary)
     projected_summary = {
         "mode": summary.get("mode"),
         "query": summary.get("query"),
@@ -107,6 +132,8 @@ def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
         and bool(summary.get("lsp_advanced_planes")),
         "front_door_insight": _project_front_door_insight(summary),
     }
+    if projected_step_summaries:
+        projected_summary["step_summaries"] = projected_step_summaries
 
     key_findings = [_normalize_message(finding.message) for finding in result.key_findings[:20]]
     section_shapes = [

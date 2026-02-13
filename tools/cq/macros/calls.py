@@ -1737,7 +1737,7 @@ def _apply_calls_lsp(
 
     if request.target_file_path is not None and target_language in {"python", "rust"}:
         if lsp_runtime_enabled():
-            lsp_payload, timed_out = enrich_with_language_lsp(
+            lsp_outcome = enrich_with_language_lsp(
                 LanguageLspEnrichmentRequest(
                     language=target_language,
                     mode="calls",
@@ -1749,7 +1749,8 @@ def _apply_calls_lsp(
                 )
             )
             lsp_attempted = 1
-            lsp_timed_out = int(timed_out)
+            lsp_timed_out = int(lsp_outcome.timed_out)
+            lsp_payload = lsp_outcome.payload
             if lsp_payload is not None:
                 payload_has_signal = _calls_payload_has_signal(target_language, lsp_payload)
                 if payload_has_signal:
@@ -1761,13 +1762,22 @@ def _apply_calls_lsp(
                     )
                 else:
                     lsp_failed = 1
-                    lsp_reasons.append(_calls_payload_reason(target_language, lsp_payload))
+                    lsp_reasons.append(
+                        _calls_payload_reason(
+                            target_language,
+                            lsp_payload,
+                            fallback_reason=lsp_outcome.failure_reason,
+                        )
+                    )
                 advanced_planes = lsp_payload.get("advanced_planes")
                 if isinstance(advanced_planes, dict):
                     result.summary["lsp_advanced_planes"] = dict(advanced_planes)
             else:
                 lsp_failed = 1
-                lsp_reasons.append("request_timeout" if timed_out else "request_failed")
+                lsp_reasons.append(
+                    lsp_outcome.failure_reason
+                    or ("request_timeout" if lsp_outcome.timed_out else "request_failed")
+                )
         else:
             lsp_reasons.append("not_attempted_runtime_disabled")
     elif lsp_provider == "none":
@@ -1808,17 +1818,18 @@ def _calls_payload_has_signal(
     return isinstance(hover, str) and bool(hover.strip())
 
 
-def _calls_payload_reason(
-    language: QueryLanguage,
-    payload: dict[str, object],
-) -> str:
-    if language == "python":
-        coverage = payload.get("coverage")
-        if isinstance(coverage, dict):
-            reason = coverage.get("reason")
-            if isinstance(reason, str) and reason:
-                return reason
+def _normalize_pyrefly_calls_reason(raw_reason: str | None) -> str:
+    if not raw_reason:
         return "no_signal"
+    if raw_reason == "timeout":
+        return "request_timeout"
+    if raw_reason.startswith("no_pyrefly_signal:"):
+        normalized = raw_reason.removeprefix("no_pyrefly_signal:")
+        return "request_timeout" if normalized == "timeout" else (normalized or "no_signal")
+    return raw_reason
+
+
+def _extract_rust_calls_reason(payload: dict[str, object]) -> str | None:
     advanced = payload.get("advanced_planes")
     if isinstance(advanced, dict):
         reason = advanced.get("reason")
@@ -1832,7 +1843,23 @@ def _calls_payload_reason(
             category = event.get("category")
             if isinstance(category, str) and category:
                 return category
-    return "no_signal"
+    return None
+
+
+def _calls_payload_reason(
+    language: QueryLanguage,
+    payload: dict[str, object],
+    *,
+    fallback_reason: str | None = None,
+) -> str:
+    if language == "python":
+        coverage = payload.get("coverage")
+        if isinstance(coverage, dict):
+            reason = coverage.get("reason")
+            if isinstance(reason, str) and reason:
+                return _normalize_pyrefly_calls_reason(reason)
+        return _normalize_pyrefly_calls_reason(fallback_reason)
+    return _extract_rust_calls_reason(payload) or fallback_reason or "no_signal"
 
 
 def _init_calls_result(

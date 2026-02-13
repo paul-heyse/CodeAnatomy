@@ -62,7 +62,31 @@ elif assertion_id == "neighborhood_rust":
     ensure(summary.get("target_file"), "neighborhood target_file missing")
     ensure(isinstance(summary.get("total_slices"), int), "neighborhood total_slices missing")
 elif assertion_id == "run_mixed":
-    ensure(isinstance(summary.get("steps"), int), "run summary missing steps")
+    steps = summary.get("steps")
+    ensure(isinstance(steps, list), "run summary missing steps list")
+    step_summaries = summary.get("step_summaries")
+    ensure(isinstance(step_summaries, dict), "run summary missing step_summaries")
+    py_top = summary.get("pyrefly_telemetry")
+    rust_top = summary.get("rust_lsp_telemetry")
+    ensure(isinstance(py_top, dict), "run summary missing top pyrefly telemetry")
+    ensure(isinstance(rust_top, dict), "run summary missing top rust telemetry")
+    def sum_telemetry(key: str) -> dict[str, int]:
+        totals = {"attempted": 0, "applied": 0, "failed": 0, "skipped": 0, "timed_out": 0}
+        for item in step_summaries.values():
+            if not isinstance(item, dict):
+                continue
+            row = item.get(key)
+            if not isinstance(row, dict):
+                continue
+            for field in totals:
+                value = row.get(field)
+                if isinstance(value, int):
+                    totals[field] += value
+        return totals
+    py_sum = sum_telemetry("pyrefly_telemetry")
+    rust_sum = sum_telemetry("rust_lsp_telemetry")
+    ensure(py_top == py_sum, "top-level pyrefly telemetry != summed step telemetry")
+    ensure(rust_top == rust_sum, "top-level rust telemetry != summed step telemetry")
 else:
     raise AssertionError(f"unknown assertion id: {assertion_id}")
 PY
@@ -116,7 +140,7 @@ run_case "calls_rust_compile_target" "calls_rust" \
   --no-save-artifact
 
 run_case "neighborhood_rust_anchor" "neighborhood_rust" \
-  ./cq --root tests/e2e/cq/_golden_workspace/rust_workspace neighborhood src/lib.rs:1 \
+  ./cq --root tests/e2e/cq/_golden_workspace/rust_workspace neighborhood crates/corelib/src/lib.rs:10 \
   --lang rust \
   --format json \
   --no-save-artifact
@@ -128,7 +152,7 @@ run_case "neighborhood_rust_symbol" "neighborhood_rust" \
   --no-save-artifact
 
 run_case "run_mixed_search_q" "run_mixed" \
-  ./cq --root tests/e2e/cq/_golden_workspace/rust_workspace run --steps '[{"type":"search","query":"compile_target","lang":"auto"},{"type":"q","query":"entity=function name=compile_target lang=auto"}]' \
+  ./cq --root tests/e2e/cq/_golden_workspace/rust_workspace run --steps '[{"type":"search","query":"compile_target","lang_scope":"auto"},{"type":"q","query":"entity=function name=compile_target lang=auto"}]' \
   --format json \
   --no-save-artifact
 

@@ -1,0 +1,137 @@
+{
+  "anchors": [
+    "./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py"
+  ],
+  "key_findings": [
+    "function: dispatch_wrapper"
+  ],
+  "sections": [
+    {
+      "count": 1,
+      "messages": [
+        "function: dispatch_wrapper"
+      ],
+      "title": "Target Candidates"
+    },
+    {
+      "count": 3,
+      "messages": [
+        "Sibling Definitions: 9 (top: trace, decorate, wrapped, Backend, dispatch)",
+        "Functions Called: 2 (top: LocalBackend, resolver)",
+        "Callers: 1 (top: _inner)"
+      ],
+      "title": "Neighborhood Preview"
+    },
+    {
+      "count": 2,
+      "messages": [
+        "dispatch_wrapper (./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py)",
+        "_inner (./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py)"
+      ],
+      "title": "Top Contexts"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "reference: 2"
+      ],
+      "title": "Uses by Kind"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py: 2 matches"
+      ],
+      "title": "Hot Files"
+    }
+  ],
+  "summary": {
+    "enable_lsp": null,
+    "front_door_insight": {
+      "artifact_ref_presence": {
+        "diagnostics": false,
+        "neighborhood_overflow": false,
+        "telemetry": false
+      },
+      "degradation": {
+        "lsp": "skipped",
+        "notes": [
+          "not_attempted_by_design",
+          "not_attempted_runtime_disabled"
+        ],
+        "scan": "ok",
+        "scope_filter": "none"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "full",
+          "total": 2
+        },
+        "callers": {
+          "availability": "full",
+          "total": 1
+        },
+        "hierarchy_or_scope": {
+          "availability": "full",
+          "total": 9
+        },
+        "references": {
+          "availability": "unavailable",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "callees": 2,
+          "callers": 1,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "level": "low"
+      },
+      "source": "search",
+      "target": {
+        "kind": "function",
+        "location": {
+          "col": 4,
+          "file": "tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py",
+          "line": 30
+        },
+        "selection_reason": "top_definition",
+        "symbol": "dispatch_wrapper"
+      }
+    },
+    "lang_scope": "python",
+    "language_order": [
+      "python"
+    ],
+    "lsp_advanced_planes_present": false,
+    "mode": "identifier",
+    "plan_version": null,
+    "pyrefly_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
+    "query": "dispatch_wrapper",
+    "rust_lsp_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
+    "steps": null,
+    "target": null,
+    "target_file": null,
+    "target_name": null,
+    "target_resolution_kind": null,
+    "top_k": null,
+    "total_diagnostics": null,
+    "total_edges": null,
+    "total_nodes": null,
+    "total_slices": null
+  }
+}

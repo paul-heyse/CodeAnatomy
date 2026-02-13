@@ -1,0 +1,7 @@
+{
+  "summary_mode": "identifier",
+  "summary_lang_scope": "python",
+  "min_findings": 1,
+  "required_messages": ["dispatch_wrapper"],
+  "required_files": ["tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service"]
+}

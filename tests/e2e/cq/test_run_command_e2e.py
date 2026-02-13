@@ -81,3 +81,48 @@ def test_run_inline_neighborhood_step_golden(
         result_snapshot_projection(result),
         update=update_golden,
     )
+
+
+@pytest.mark.e2e
+def test_run_top_level_lsp_telemetry_matches_step_summaries(
+    run_cq_result: Callable[..., CqResult],
+) -> None:
+    result = run_cq_result(
+        [
+            "run",
+            "--steps",
+            (
+                "["
+                '{"type":"search","query":"AsyncService",'
+                '"in_dir":"tests/e2e/cq/_golden_workspace/python_project",'
+                '"lang_scope":"python"},'
+                '{"type":"q","query":"entity=function name=resolve '
+                'in=tests/e2e/cq/_golden_workspace/python_project/app"}'
+                "]"
+            ),
+            "--format",
+            "json",
+            "--no-save-artifact",
+        ]
+    )
+
+    summary = result.summary
+    step_summaries = summary.get("step_summaries")
+    assert isinstance(step_summaries, dict)
+
+    def sum_telemetry(key: str) -> dict[str, int]:
+        totals = {"attempted": 0, "applied": 0, "failed": 0, "skipped": 0, "timed_out": 0}
+        for step_summary in step_summaries.values():
+            if not isinstance(step_summary, dict):
+                continue
+            raw = step_summary.get(key)
+            if not isinstance(raw, dict):
+                continue
+            for field in totals:
+                value = raw.get(field)
+                if isinstance(value, int):
+                    totals[field] += value
+        return totals
+
+    assert summary.get("pyrefly_telemetry") == sum_telemetry("pyrefly_telemetry")
+    assert summary.get("rust_lsp_telemetry") == sum_telemetry("rust_lsp_telemetry")

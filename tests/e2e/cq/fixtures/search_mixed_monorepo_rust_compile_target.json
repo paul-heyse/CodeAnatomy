@@ -1,0 +1,138 @@
+{
+  "anchors": [
+    "./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs"
+  ],
+  "key_findings": [
+    "function: compile_target"
+  ],
+  "sections": [
+    {
+      "count": 1,
+      "messages": [
+        "function: compile_target"
+      ],
+      "title": "Target Candidates"
+    },
+    {
+      "count": 3,
+      "messages": [
+        "Sibling Definitions: 4 (top: Compiler, CoreCompiler, compile, invoke_compile)",
+        "Functions Called: 1 (top: compile)",
+        "Callers: 1 (top: invoke_compile)"
+      ],
+      "title": "Neighborhood Preview"
+    },
+    {
+      "count": 3,
+      "messages": [
+        "compile_target (./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs)",
+        "./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs",
+        "invoke_compile (./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs)"
+      ],
+      "title": "Top Contexts"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "reference: 3"
+      ],
+      "title": "Uses by Kind"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs: 3 matches"
+      ],
+      "title": "Hot Files"
+    }
+  ],
+  "summary": {
+    "enable_lsp": null,
+    "front_door_insight": {
+      "artifact_ref_presence": {
+        "diagnostics": false,
+        "neighborhood_overflow": false,
+        "telemetry": false
+      },
+      "degradation": {
+        "lsp": "skipped",
+        "notes": [
+          "not_attempted_by_design",
+          "not_attempted_runtime_disabled"
+        ],
+        "scan": "ok",
+        "scope_filter": "none"
+      },
+      "neighborhood": {
+        "callees": {
+          "availability": "full",
+          "total": 1
+        },
+        "callers": {
+          "availability": "full",
+          "total": 1
+        },
+        "hierarchy_or_scope": {
+          "availability": "full",
+          "total": 4
+        },
+        "references": {
+          "availability": "unavailable",
+          "total": 0
+        }
+      },
+      "risk": {
+        "counters": {
+          "callees": 1,
+          "callers": 1,
+          "forwarding_count": 0,
+          "hazard_count": 0
+        },
+        "level": "low"
+      },
+      "source": "search",
+      "target": {
+        "kind": "function",
+        "location": {
+          "col": 14,
+          "file": "tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs",
+          "line": 13
+        },
+        "selection_reason": "top_definition",
+        "symbol": "compile_target"
+      }
+    },
+    "lang_scope": "rust",
+    "language_order": [
+      "rust"
+    ],
+    "lsp_advanced_planes_present": false,
+    "mode": "identifier",
+    "plan_version": null,
+    "pyrefly_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
+    "query": "compile_target",
+    "rust_lsp_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
+    "steps": null,
+    "target": null,
+    "target_file": null,
+    "target_name": null,
+    "target_resolution_kind": null,
+    "top_k": null,
+    "total_diagnostics": null,
+    "total_edges": null,
+    "total_nodes": null,
+    "total_slices": null
+  }
+}

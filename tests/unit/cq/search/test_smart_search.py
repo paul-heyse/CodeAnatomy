@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 from tools.cq.core.locations import SourceSpan
 from tools.cq.search.classifier import QueryMode, clear_caches
+from tools.cq.search.lsp_front_door_adapter import LanguageLspEnrichmentOutcome
 from tools.cq.search.models import SearchConfig
 from tools.cq.search.smart_search import (
     SMART_SEARCH_LIMITS,
@@ -1300,8 +1301,8 @@ def test_search_rust_front_door_uses_rust_lsp_adapter(
 
     monkeypatch.setattr(
         "tools.cq.search.smart_search.enrich_with_language_lsp",
-        lambda *_args, **_kwargs: (
-            {
+        lambda *_args, **_kwargs: LanguageLspEnrichmentOutcome(
+            payload={
                 "call_graph": {
                     "incoming_total": 1,
                     "outgoing_total": 0,
@@ -1309,8 +1310,7 @@ def test_search_rust_front_door_uses_rust_lsp_adapter(
                     "outgoing_callees": [],
                 },
                 "symbol_grounding": {"references": [{"uri": "file:///x.rs"}]},
-            },
-            False,
+            }
         ),
     )
 
@@ -1322,3 +1322,73 @@ def test_search_rust_front_door_uses_rust_lsp_adapter(
     attempted = rust_lsp.get("attempted", 0)
     assert isinstance(attempted, int)
     assert attempted >= 1
+
+
+def test_search_python_capability_probe_unavailable_is_non_fatal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Python search should not fail solely due capability probe instability."""
+    (tmp_path / "service.py").write_text(
+        "def build_graph() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+    clear_caches()
+
+    monkeypatch.setattr(
+        "tools.cq.search.smart_search.get_pyrefly_lsp_capabilities",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "tools.cq.search.smart_search.enrich_with_language_lsp",
+        lambda *_args, **_kwargs: LanguageLspEnrichmentOutcome(
+            payload={
+                "coverage": {"status": "applied", "reason": None},
+                "call_graph": {
+                    "incoming_total": 0,
+                    "outgoing_total": 0,
+                    "incoming_callers": [],
+                    "outgoing_callees": [],
+                },
+            }
+        ),
+    )
+
+    result = smart_search(tmp_path, "build_graph", lang_scope="python")
+    insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
+    degradation = cast("dict[str, object]", insight.get("degradation", {}))
+    assert degradation.get("lsp") in {"ok", "partial"}
+    pyrefly = cast("dict[str, object]", result.summary.get("pyrefly_telemetry", {}))
+    assert pyrefly.get("attempted", 0) >= 1
+    assert pyrefly.get("applied", 0) >= 1
+
+
+def test_search_python_timeout_reason_not_collapsed_to_session_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Timeout outcomes should preserve request_timeout reason in diagnostics."""
+    (tmp_path / "service.py").write_text(
+        "def build_graph() -> int:\n    return 1\n",
+        encoding="utf-8",
+    )
+    clear_caches()
+
+    monkeypatch.setattr(
+        "tools.cq.search.smart_search.enrich_with_language_lsp",
+        lambda *_args, **_kwargs: LanguageLspEnrichmentOutcome(
+            payload=None,
+            timed_out=True,
+            failure_reason="request_timeout",
+        ),
+    )
+
+    result = smart_search(tmp_path, "build_graph", lang_scope="python")
+    diagnostics = cast("list[object]", result.summary.get("pyrefly_diagnostics", []))
+    assert diagnostics
+    reasons = {
+        str(cast("dict[str, object]", row).get("reason"))
+        for row in diagnostics
+        if isinstance(row, dict)
+    }
+    assert "request_timeout" in reasons

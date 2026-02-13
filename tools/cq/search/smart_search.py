@@ -88,6 +88,7 @@ from tools.cq.search.contracts import (
 )
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
 from tools.cq.search.lsp.capabilities import supports_method
+from tools.cq.search.lsp.root_resolution import resolve_lsp_provider_root
 from tools.cq.search.lsp_contract_state import (
     LspContractStateInputV1,
     LspContractStateV1,
@@ -95,6 +96,7 @@ from tools.cq.search.lsp_contract_state import (
     derive_lsp_contract_state,
 )
 from tools.cq.search.lsp_front_door_adapter import (
+    LanguageLspEnrichmentOutcome,
     LanguageLspEnrichmentRequest,
     enrich_with_language_lsp,
     infer_language_for_path,
@@ -988,7 +990,7 @@ def _maybe_pyrefly_enrichment(
     if file_path.suffix not in {".py", ".pyi"}:
         return None
     try:
-        payload, timed_out = enrich_with_language_lsp(
+        outcome = enrich_with_language_lsp(
             LanguageLspEnrichmentRequest(
                 language="python",
                 mode="search",
@@ -1001,9 +1003,7 @@ def _maybe_pyrefly_enrichment(
         )
     except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
         return None
-    if timed_out and payload is None:
-        return None
-    return payload
+    return outcome.payload if isinstance(outcome.payload, dict) else None
 
 
 def _classify_file_role(file_path: str) -> str:
@@ -2240,24 +2240,28 @@ def _normalize_pyrefly_degradation_reason(
 ) -> str:
     explicit_reasons = {
         "unsupported_capability",
+        "capability_probe_unavailable",
         "request_interface_unavailable",
+        "request_failed",
+        "request_timeout",
         "session_unavailable",
         "timeout",
         "no_signal",
     }
+    normalized_coverage_reason = coverage_reason
+    if normalized_coverage_reason and normalized_coverage_reason.startswith("no_pyrefly_signal:"):
+        normalized_coverage_reason = normalized_coverage_reason.removeprefix("no_pyrefly_signal:")
+    if normalized_coverage_reason == "timeout":
+        normalized_coverage_reason = "request_timeout"
+    if normalized_coverage_reason in explicit_reasons:
+        return normalized_coverage_reason
     if coverage_reason:
-        if coverage_reason in explicit_reasons:
-            return coverage_reason
-        prefix = "no_pyrefly_signal:"
-        if coverage_reason.startswith(prefix):
-            normalized = coverage_reason.removeprefix(prefix)
-            if normalized in explicit_reasons:
-                return normalized
         return "no_signal"
 
     for reason in reasons:
-        if reason in explicit_reasons and reason != "no_signal":
-            return reason
+        normalized_reason = "request_timeout" if reason == "timeout" else reason
+        if normalized_reason in explicit_reasons and normalized_reason != "no_signal":
+            return normalized_reason
     return "no_signal"
 
 
@@ -2300,19 +2304,24 @@ def _prefetch_pyrefly_for_raw_matches(
         telemetry["attempted"] += 1
         file_path = ctx.root / raw.file
         try:
-            payload = _maybe_pyrefly_enrichment(
-                ctx.root,
-                file_path,
-                raw,
-                lang=lang,
-                enable_pyrefly=True,
+            outcome = enrich_with_language_lsp(
+                LanguageLspEnrichmentRequest(
+                    language="python",
+                    mode="search",
+                    root=ctx.root,
+                    file_path=file_path,
+                    line=raw.line,
+                    col=raw.col,
+                    symbol_hint=raw.match_text,
+                )
             )
-        except TimeoutError:
-            telemetry["timed_out"] += 1
-            payload = None
         except _PYREFLY_PREFETCH_NON_FATAL_EXCEPTIONS:
             telemetry["failed"] += 1
-            payload = None
+            diagnostics.append(_pyrefly_failure_diagnostic(reason="request_failed"))
+            continue
+        payload = outcome.payload if isinstance(outcome.payload, dict) else None
+        if outcome.timed_out:
+            telemetry["timed_out"] += 1
 
         if isinstance(payload, dict) and payload:
             has_signal, reasons = evaluate_pyrefly_signal_from_mapping(payload)
@@ -2329,7 +2338,18 @@ def _prefetch_pyrefly_for_raw_matches(
                 )
         else:
             telemetry["failed"] += 1
-            diagnostics.append(_pyrefly_failure_diagnostic(reason="session_unavailable"))
+            diagnostics.append(
+                _pyrefly_failure_diagnostic(
+                    reason=_normalize_pyrefly_degradation_reason(
+                        reasons=(
+                            outcome.failure_reason,
+                        )
+                        if isinstance(outcome.failure_reason, str)
+                        else (),
+                        coverage_reason=outcome.failure_reason,
+                    )
+                )
+            )
 
     return _PyreflyPrefetchResult(
         payloads=payloads,
@@ -2342,15 +2362,15 @@ def _prefetch_pyrefly_for_raw_matches(
 def _pyrefly_enrich_match(
     ctx: SmartSearchContext,
     match: EnrichedMatch,
-) -> dict[str, object] | None:
+) -> LanguageLspEnrichmentOutcome:
     if match.language != "python":
-        return None
+        return LanguageLspEnrichmentOutcome(failure_reason="provider_unavailable")
     if not lsp_runtime_enabled():
-        return None
+        return LanguageLspEnrichmentOutcome(failure_reason="not_attempted_runtime_disabled")
     file_path = ctx.root / match.file
     if file_path.suffix not in {".py", ".pyi"}:
-        return None
-    payload, timed_out = enrich_with_language_lsp(
+        return LanguageLspEnrichmentOutcome(failure_reason="provider_unavailable")
+    return enrich_with_language_lsp(
         LanguageLspEnrichmentRequest(
             language="python",
             mode="search",
@@ -2361,10 +2381,6 @@ def _pyrefly_enrich_match(
             symbol_hint=match.match_text,
         )
     )
-    if timed_out and payload is None:
-        msg = "pyrefly_timeout"
-        raise TimeoutError(msg)
-    return payload
 
 
 def _seed_pyrefly_state(
@@ -2406,12 +2422,12 @@ def _fetch_pyrefly_payload(
 
     telemetry["attempted"] += 1
     try:
-        return _pyrefly_enrich_match(ctx, match), True, None
-    except TimeoutError:
-        telemetry["timed_out"] += 1
-        return None, True, "timeout"
+        outcome = _pyrefly_enrich_match(ctx, match)
     except _PYREFLY_PREFETCH_NON_FATAL_EXCEPTIONS:
-        return None, True, "session_unavailable"
+        return None, True, "request_failed"
+    if outcome.timed_out:
+        telemetry["timed_out"] += 1
+    return outcome.payload, True, outcome.failure_reason
 
 
 def _merge_match_with_pyrefly_payload(
@@ -2443,7 +2459,10 @@ def _merge_match_with_pyrefly_payload(
         telemetry["failed"] += 1
         diagnostics.append(
             _pyrefly_failure_diagnostic(
-                reason=failure_reason or "session_unavailable",
+                reason=_normalize_pyrefly_degradation_reason(
+                    reasons=(failure_reason,) if isinstance(failure_reason, str) else (),
+                    coverage_reason=failure_reason,
+                ),
             )
         )
     return match
@@ -2931,16 +2950,20 @@ def _check_python_search_lsp_capabilities(
     *,
     ctx: SmartSearchContext,
     outcome: _SearchLspOutcome,
-) -> bool:
+    target_file_path: Path,
+) -> None:
+    provider_root = resolve_lsp_provider_root(
+        language="python",
+        command_root=ctx.root,
+        file_path=target_file_path,
+    )
     capabilities = get_pyrefly_lsp_capabilities(
-        ctx.root,
+        provider_root,
         startup_timeout_seconds=0.5,
     )
     if not capabilities:
-        outcome.attempted = 1
-        outcome.failed = 1
-        outcome.reasons.append("session_unavailable")
-        return False
+        outcome.reasons.append("capability_probe_unavailable")
+        return
 
     required_methods = (
         "textDocument/hover",
@@ -2951,11 +2974,8 @@ def _check_python_search_lsp_capabilities(
         method for method in required_methods if not supports_method(capabilities, method)
     ]
     if unsupported:
-        outcome.attempted = 1
-        outcome.failed = 1
         outcome.reasons.append("unsupported_capability")
-        return False
-    return True
+        return
 
 
 def _apply_prefetched_search_lsp_outcome(
@@ -2975,7 +2995,12 @@ def _apply_prefetched_search_lsp_outcome(
         outcome.applied = 1
     else:
         outcome.failed = 1
-        outcome.reasons.append(prefetch_reason or "no_signal")
+        outcome.reasons.append(
+            _normalize_pyrefly_degradation_reason(
+                reasons=(),
+                coverage_reason=prefetch_reason,
+            )
+        )
     return True
 
 
@@ -2985,12 +3010,21 @@ def _apply_search_lsp_payload_outcome(
     target_language: QueryLanguage,
     payload: dict[str, object] | None,
     timed_out: bool,
+    failure_reason: str | None,
 ) -> None:
     outcome.payload = payload
     outcome.timed_out = int(timed_out)
     if payload is None:
         outcome.failed = 1
-        outcome.reasons.append("request_timeout" if timed_out else "request_failed")
+        normalized_reason = (
+            _normalize_pyrefly_degradation_reason(
+                reasons=(failure_reason,) if isinstance(failure_reason, str) else (),
+                coverage_reason=failure_reason,
+            )
+            if target_language == "python"
+            else (failure_reason or ("request_timeout" if timed_out else "request_failed"))
+        )
+        outcome.reasons.append(normalized_reason)
         return
 
     if target_language == "rust":
@@ -2998,7 +3032,7 @@ def _apply_search_lsp_payload_outcome(
             outcome.applied = 1
             return
         outcome.failed = 1
-        outcome.reasons.append(_rust_payload_reason(payload) or "no_signal")
+        outcome.reasons.append(_rust_payload_reason(payload) or failure_reason or "no_signal")
         outcome.payload = None
         return
 
@@ -3008,7 +3042,12 @@ def _apply_search_lsp_payload_outcome(
         return
 
     outcome.failed = 1
-    outcome.reasons.append(payload_reason or "no_signal")
+    outcome.reasons.append(
+        _normalize_pyrefly_degradation_reason(
+            reasons=(failure_reason,) if isinstance(failure_reason, str) else (),
+            coverage_reason=payload_reason or failure_reason,
+        )
+    )
     outcome.payload = None
 
 
@@ -3038,12 +3077,6 @@ def _collect_search_lsp_outcome(
         outcome.reasons.append("not_attempted_runtime_disabled")
         return outcome
 
-    if target_language == "python" and not _check_python_search_lsp_capabilities(
-        ctx=ctx,
-        outcome=outcome,
-    ):
-        return outcome
-
     outcome.attempted = 1
     if _apply_prefetched_search_lsp_outcome(
         outcome=outcome,
@@ -3052,7 +3085,14 @@ def _collect_search_lsp_outcome(
     ):
         return outcome
 
-    payload, timed_out = enrich_with_language_lsp(
+    if target_language == "python":
+        _check_python_search_lsp_capabilities(
+            ctx=ctx,
+            outcome=outcome,
+            target_file_path=target_file_path,
+        )
+
+    lsp_outcome = enrich_with_language_lsp(
         LanguageLspEnrichmentRequest(
             language=target_language,
             mode="search",
@@ -3066,8 +3106,9 @@ def _collect_search_lsp_outcome(
     _apply_search_lsp_payload_outcome(
         outcome=outcome,
         target_language=target_language,
-        payload=payload,
-        timed_out=timed_out,
+        payload=lsp_outcome.payload,
+        timed_out=lsp_outcome.timed_out,
+        failure_reason=lsp_outcome.failure_reason,
     )
     return outcome
 

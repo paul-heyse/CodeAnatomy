@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import atexit
+import shutil
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -85,12 +87,24 @@ _BACKEND_STATE = _BackendState()
 
 
 def _build_diskcache_backend(policy: CqCachePolicyV1) -> CqCacheBackend:
-    cache = FanoutCache(
-        directory=str(Path(policy.directory).expanduser()),
-        shards=max(1, int(policy.shards)),
-        timeout=float(policy.timeout_seconds),
-        tag_index=True,
-    )
+    directory = Path(policy.directory).expanduser()
+
+    def _open_cache() -> FanoutCache:
+        return FanoutCache(
+            directory=str(directory),
+            shards=max(1, int(policy.shards)),
+            timeout=float(policy.timeout_seconds),
+            tag_index=True,
+        )
+
+    try:
+        cache = _open_cache()
+    except (sqlite3.DatabaseError, OSError, RuntimeError, ValueError, TypeError):
+        try:
+            shutil.rmtree(directory, ignore_errors=True)
+            cache = _open_cache()
+        except (sqlite3.DatabaseError, OSError, RuntimeError, ValueError, TypeError):
+            return NoopCacheBackend()
     return DiskcacheBackend(cache, default_ttl_seconds=policy.ttl_seconds)
 
 

@@ -9,7 +9,12 @@ from typing import cast
 
 import pytest
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.macros.calls import _extract_context_snippet, _find_function_signature, cmd_calls
+from tools.cq.macros.calls import (
+    _calls_payload_reason,
+    _extract_context_snippet,
+    _find_function_signature,
+    cmd_calls,
+)
 
 
 def _write_file(path: Path, content: str) -> None:
@@ -276,3 +281,13 @@ def test_extract_context_snippet_prioritizes_anchor_block() -> None:
     assert "if condition:" in snippet
     assert "target_marker = b" in snippet
     assert "docstring should be omitted" not in snippet
+
+
+def test_calls_payload_reason_normalizes_pyrefly_timeout() -> None:
+    payload = {"coverage": {"status": "not_resolved", "reason": "timeout"}}
+    assert _calls_payload_reason("python", payload) == "request_timeout"
+
+
+def test_calls_payload_reason_uses_fallback_for_rust() -> None:
+    payload: dict[str, object] = {}
+    assert _calls_payload_reason("rust", payload, fallback_reason="request_failed") == "request_failed"

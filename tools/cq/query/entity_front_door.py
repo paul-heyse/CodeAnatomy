@@ -279,7 +279,7 @@ def _apply_candidate_lsp(
         return insight
     _record_lsp_attempt(telemetry, target_language)
 
-    payload, timed_out = enrich_with_language_lsp(
+    lsp_outcome = enrich_with_language_lsp(
         LanguageLspEnrichmentRequest(
             language=target_language,
             mode="entity",
@@ -294,11 +294,15 @@ def _apply_candidate_lsp(
             ),
         )
     )
-    _record_lsp_timeout(telemetry, target_language, timed_out=timed_out)
+    _record_lsp_timeout(telemetry, target_language, timed_out=lsp_outcome.timed_out)
+    payload = lsp_outcome.payload
 
     if payload is None:
         _record_lsp_failure(telemetry, target_language)
-        telemetry.reasons.append("request_timeout" if timed_out else "request_failed")
+        telemetry.reasons.append(
+            lsp_outcome.failure_reason
+            or ("request_timeout" if lsp_outcome.timed_out else "request_failed")
+        )
         return insight
 
     _record_lsp_applied(telemetry, target_language)

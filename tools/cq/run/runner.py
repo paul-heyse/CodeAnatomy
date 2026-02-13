@@ -148,28 +148,87 @@ def _populate_run_summary_metadata(
     merged.summary.setdefault("lang_scope", lang_scope)
     merged.summary.setdefault("language_order", list(language_order))
     merged.summary.setdefault("pyrefly_overview", {})
-    merged.summary.setdefault(
-        "pyrefly_telemetry",
-        {
-            "attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-        },
+    step_summaries = merged.summary.get("step_summaries")
+    merged.summary["pyrefly_telemetry"] = _aggregate_run_lsp_telemetry(
+        step_summaries,
+        telemetry_key="pyrefly_telemetry",
     )
-    merged.summary.setdefault(
-        "rust_lsp_telemetry",
-        {
-            "attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-        },
+    merged.summary["rust_lsp_telemetry"] = _aggregate_run_lsp_telemetry(
+        step_summaries,
+        telemetry_key="rust_lsp_telemetry",
     )
-    merged.summary.setdefault("lsp_advanced_planes", {})
+    merged.summary["lsp_advanced_planes"] = _select_run_advanced_planes(
+        step_summaries,
+        step_order=merged.summary.get("steps"),
+    )
     merged.summary.setdefault("pyrefly_diagnostics", [])
+
+
+def _aggregate_run_lsp_telemetry(
+    step_summaries: object,
+    *,
+    telemetry_key: str,
+) -> dict[str, int]:
+    totals = {
+        "attempted": 0,
+        "applied": 0,
+        "failed": 0,
+        "skipped": 0,
+        "timed_out": 0,
+    }
+    if not isinstance(step_summaries, dict):
+        return totals
+    for step_summary in step_summaries.values():
+        if not isinstance(step_summary, dict):
+            continue
+        raw = step_summary.get(telemetry_key)
+        if not isinstance(raw, dict):
+            continue
+        for key in totals:
+            value = raw.get(key)
+            if isinstance(value, int):
+                totals[key] += value
+    return totals
+
+
+def _advanced_plane_signal_score(payload: dict[str, object]) -> int:
+    score = 0
+    for value in payload.values():
+        if isinstance(value, list | dict):
+            score += len(value)
+        elif isinstance(value, str) and value:
+            score += 1
+        elif isinstance(value, int):
+            score += max(0, value)
+    return score
+
+
+def _select_run_advanced_planes(
+    step_summaries: object,
+    *,
+    step_order: object,
+) -> dict[str, object]:
+    if not isinstance(step_summaries, dict):
+        return {}
+    ordered_steps = (
+        [step for step in step_order if isinstance(step, str)]
+        if isinstance(step_order, list)
+        else list(step_summaries)
+    )
+    best_planes: dict[str, object] = {}
+    best_score = -1
+    for step_id in ordered_steps:
+        summary = step_summaries.get(step_id)
+        if not isinstance(summary, dict):
+            continue
+        raw = summary.get("lsp_advanced_planes")
+        if not isinstance(raw, dict) or not raw:
+            continue
+        score = _advanced_plane_signal_score(raw)
+        if score > best_score:
+            best_planes = dict(raw)
+            best_score = score
+    return best_planes
 
 
 def _derive_run_summary_metadata(

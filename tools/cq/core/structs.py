@@ -7,3 +7,27 @@ import msgspec
 
 class CqStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True):
     """Base struct for CQ internal data models."""
+
+
+class CqSettingsStruct(
+    msgspec.Struct,
+    kw_only=True,
+    frozen=True,
+    omit_defaults=True,
+    forbid_unknown_fields=True,
+):
+    """Base struct for serializable CQ settings/config contracts."""
+
+
+class CqOutputStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True):
+    """Base struct for serializable CQ output/public contracts."""
+
+
+class CqCacheStruct(
+    msgspec.Struct,
+    kw_only=True,
+    frozen=True,
+    omit_defaults=True,
+    forbid_unknown_fields=True,
+):
+    """Base struct for serializable CQ cache payload contracts."""

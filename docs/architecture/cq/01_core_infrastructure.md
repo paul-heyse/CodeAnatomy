@@ -54,16 +54,27 @@ tools/cq/
 ├── core/                   # Shared infrastructure
 │   ├── __init__.py         # Re-exports: Anchor, Artifact, CqResult, Finding, RunMeta, Section, Toolchain
 │   ├── artifacts.py        # Artifact storage (diagnostics, neighborhood overflow, results)
+│   ├── bootstrap.py        # Composition root: CqRuntimeServices, resolve_runtime_services()
 │   ├── bundles.py          # TargetSpec, TargetScope, BundleContext
+│   ├── cache/              # Persistent disk cache infrastructure
+│   │   ├── __init__.py     # Re-exports: CqCacheBackend, DiskcacheBackend, cache policy
+│   │   ├── contracts.py    # Typed cache payloads: SgRecordCacheV1, SearchPartitionCacheV1, etc.
+│   │   ├── diskcache_backend.py # DiskcacheBackend wrapping FanoutCache, workspace singleton
+│   │   ├── interface.py    # CqCacheBackend protocol, NoopCacheBackend
+│   │   ├── key_builder.py  # build_cache_key() via sha256 of msgspec payload
+│   │   └── policy.py       # CqCachePolicyV1, default_cache_policy(), env var overrides
 │   ├── codec.py            # JSON/msgpack encoders/decoders
 │   ├── contracts.py        # ContractEnvelope, contract serialization
+│   ├── diagnostics_contracts.py # DiagnosticsArtifactPayloadV1, DiagnosticsArtifactRunMetaV1
 │   ├── enrichment_facts.py # Code Facts cluster system (6 clusters, 50+ fields)
 │   ├── findings_table.py   # FindingRecord (tabular flattening for filtering)
-│   ├── front_door_insight.py  # FrontDoorInsightV1 contract, builders, rendering (904 lines)
+│   ├── front_door_insight.py  # FrontDoorInsightV1 contract, builders, rendering (1161 lines)
 │   ├── locations.py        # SourceSpan, byte-to-char conversion
 │   ├── merge.py            # Step result merging with provenance
 │   ├── multilang_orchestrator.py # Multi-language execution and merge
 │   ├── multilang_summary.py     # Multi-language summary building
+│   ├── ports.py            # Hexagonal ports: SearchServicePort, EntityServicePort, CallsServicePort, CachePort
+│   ├── public_serialization.py # Public serialization API re-exports
 │   ├── renderers/          # Output format renderers
 │   │   ├── __init__.py
 │   │   ├── dot.py          # Graphviz DOT renderer
@@ -71,9 +82,20 @@ tools/cq/
 │   ├── report.py           # Markdown report renderer
 │   ├── requests.py         # SummaryBuildRequest, MergeResultsRequest
 │   ├── run_context.py      # RunContext (runtime-only)
+│   ├── runtime/            # Execution policy and worker scheduling
+│   │   ├── __init__.py     # Re-exports: RuntimeExecutionPolicy, WorkerScheduler
+│   │   ├── execution_policy.py # 3-level policy hierarchy, CQ_RUNTIME_* env vars
+│   │   └── worker_scheduler.py # Dual CPU/IO pools, lazy singleton, bounded collection
 │   ├── schema.py           # Core schema: CqResult, Finding, Section, Anchor, RunMeta, DetailPayload, ScoreDetails
+│   ├── schema_export.py    # Schema introspection utilities
 │   ├── scoring.py          # Impact/confidence scoring system
 │   ├── serialization.py    # High-level JSON/msgpack API
+│   ├── services/           # Application service layer (hexagonal adapters)
+│   │   ├── __init__.py     # Re-exports: CallsService, EntityService, SearchService
+│   │   ├── calls_service.py    # CallsService + CallsServiceRequest
+│   │   ├── entity_service.py   # EntityService + EntityFrontDoorRequest
+│   │   └── search_service.py   # SearchService + SearchServiceRequest
+│   ├── snb_registry.py     # Semantic Neighborhood Bundle registry
 │   ├── structs.py          # CqStruct base class
 │   ├── tests/              # Core unit tests
 │   └── toolchain.py        # Toolchain detection (rg, sgpy, python versions)
@@ -90,16 +112,20 @@ tools/cq/
 │   ├── __init__.py         # Re-exports all cmd_* functions
 │   ├── bytecode.py         # Bytecode surface analysis
 │   ├── calls.py            # Call site census (1429 lines)
+│   ├── calls_target.py     # Target resolution with cache: resolve_target_definition, attach_target_metadata
 │   ├── exceptions.py       # Exception pattern analysis
 │   ├── impact.py           # Taint/data flow analysis (901 lines)
 │   ├── imports.py          # Import structure analysis
+│   ├── multilang_fallback.py # Cross-language fallback behavior for macros
 │   ├── scopes.py           # Scope/closure analysis
 │   ├── side_effects.py     # Import-time side effects
-│   └── sig_impact.py       # Signature change analysis
+│   ├── sig_impact.py       # Signature change analysis
+│   └── _rust_fallback.py   # Shared Rust fallback search helper
 ├── query/                  # Declarative query DSL
 │   ├── __init__.py         # Re-exports: Query, parse_query, etc.
 │   ├── batch_spans.py      # Batch relational span collection
 │   ├── enrichment.py       # SymtableEnricher
+│   ├── entity_front_door.py # EntityLspTelemetry, CandidateNeighborhood, attach_entity_front_door_insight
 │   ├── execution_context.py # QueryExecutionContext
 │   ├── execution_requests.py # EntityQueryRequest, PatternQueryRequest
 │   ├── executor.py         # Query execution engine
@@ -117,6 +143,7 @@ tools/cq/
 ├── search/                 # Smart search subsystem
 │   ├── __init__.py         # Re-exports: SearchConfig, classifier types, adapter functions
 │   ├── adapter.py          # Ripgrep adapter functions
+│   ├── candidate_normalizer.py # Definition candidate selection and normalization
 │   ├── classifier.py       # 3-tier classification pipeline
 │   ├── collector.py        # RgCollector for streaming JSON events
 │   ├── context_window.py   # Context snippet extraction
@@ -125,6 +152,14 @@ tools/cq/
 │   │   ├── __init__.py
 │   │   ├── contracts.py    # EnrichmentMeta, PythonEnrichmentPayload
 │   │   └── core.py         # Enrichment normalization
+│   ├── lsp/                # LSP session infrastructure
+│   │   ├── capabilities.py # Capability gating and checking
+│   │   ├── request_queue.py # LSP request queueing
+│   │   ├── session_manager.py # Generic LSP session lifecycle management
+│   │   └── status.py       # LspStatus StrEnum, derive_lsp_status()
+│   ├── lsp_contract_state.py # LspContractStateV1, derive_lsp_contract_state()
+│   ├── lsp_front_door_adapter.py # Language-aware LSP routing adapter
+│   ├── lsp_request_budget.py # LspRequestBudgetV1, timeout/retry budgets
 │   ├── models.py           # SearchConfig, SearchRequest
 │   ├── profiles.py         # SearchLimits presets
 │   ├── python_enrichment.py # 5-stage Python enrichment (2174 lines)
@@ -146,6 +181,9 @@ tools/cq/
 │   ├── __init__.py
 │   ├── format.py           # Strict parser with stack validation
 │   └── writer.py           # Document writer, preview/body split
+├── perf/                   # Performance benchmarking
+│   ├── __init__.py
+│   └── smoke_report.py     # PerfSmokeReport, build_perf_smoke_report()
 └── utils/                  # Shared utilities
     └── __init__.py
 ```
@@ -1182,11 +1220,12 @@ def enumerate_files(root: Path, language_scope: LanguageScope) -> list[Path]:
 ### Architectural Observations for Improvement Proposals
 
 **DefIndex Scalability:**
-- Full repository scan on every invocation (no persistent index)
-- In-memory index structure (no disk cache)
+- Full repository scan on every invocation (DefIndex not persistently cached)
+- In-memory index structure for DefIndex
 - No incremental index updates (must rebuild on file changes)
+- Higher-level result caching (calls targets, search partitions, entity scans) is now available via persistent DiskCache in `core/cache/`
 
-**Improvement Vector:** Consider persistent index with file modification tracking, or lazy index building (only scan files relevant to query).
+**Improvement Vector:** Consider persistent DefIndex with file modification tracking, or lazy index building (only scan files relevant to query). Note that persistent disk caching is now available for higher-level results; see [10_runtime_services.md](10_runtime_services.md) for details on the caching infrastructure.
 
 **Call Resolution Ambiguity:**
 - Import resolution is shallow (doesn't follow re-exports)
@@ -1204,7 +1243,7 @@ def enumerate_files(root: Path, language_scope: LanguageScope) -> list[Path]:
 
 ## Conclusion
 
-The CQ core infrastructure provides a robust foundation for multi-language code analysis with fail-open semantics and extensible output formats. Recent additions (R0-R8) introduce semantic neighborhood assembly and progressive disclosure capabilities via LDMD format.
+The CQ core infrastructure provides a robust foundation for multi-language code analysis with fail-open semantics and extensible output formats. Recent additions (R0-R8) introduce semantic neighborhood assembly and progressive disclosure capabilities via LDMD format. The runtime services tier provides execution policies, persistent caching, worker scheduling, and hexagonal service boundaries.
 
 **Core Capabilities:**
 1. Multi-language analysis (Python, Rust) with deterministic scope enforcement
@@ -1212,6 +1251,11 @@ The CQ core infrastructure provides a robust foundation for multi-language code 
 3. Multiple output formats including visual diagrams and progressive disclosure
 4. Semantic neighborhood assembly with LSP integration (R0-R4)
 5. LDMD progressive disclosure protocol for large artifacts (R6)
+6. Persistent disk caching with TTL-based eviction and fail-open semantics
+7. Dual-pool worker scheduling (CPU/IO separation)
+8. Hexagonal service layer with protocol-based boundaries
+
+For comprehensive documentation of the runtime services tier (execution policies, caching, worker scheduling, service layer), see [10_runtime_services.md](10_runtime_services.md).
 
 The architecture exhibits several areas of coupling and rigidity that present opportunities for improvement:
 

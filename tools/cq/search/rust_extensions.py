@@ -7,6 +7,9 @@ and fail-open.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Protocol
+
 from tools.cq.core.structs import CqStruct
 
 _FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, TimeoutError, ValueError, TypeError)
@@ -53,6 +56,10 @@ class RustRunnableV1(CqStruct, frozen=True):
     args: tuple[str, ...] = ()
     location_uri: str | None = None
     location_line: int = 0
+
+
+class _LspRequestFn(Protocol):
+    def __call__(self, method: str, params: Mapping[str, object]) -> object: ...
 
 
 def expand_macro(
@@ -153,7 +160,7 @@ def get_runnables(
     return tuple(runnables)
 
 
-def _request_fn(session: object) -> object | None:
+def _request_fn(session: object) -> _LspRequestFn | None:
     request = getattr(session, "_send_request", None)
     if callable(request):
         return request

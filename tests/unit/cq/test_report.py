@@ -5,9 +5,8 @@ from __future__ import annotations
 import importlib
 import os
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
-from typing import Self
 
 import pytest
 from tools.cq.core.report import (
@@ -15,6 +14,7 @@ from tools.cq.core.report import (
     RenderEnrichmentTask,
     render_markdown,
 )
+from tools.cq.core.runtime.worker_scheduler import WorkerBatchResult
 from tools.cq.core.schema import Anchor, CqResult, DetailPayload, Finding, RunMeta, Section
 
 _RenderEnrichTask = RenderEnrichmentTask
@@ -406,27 +406,31 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
     report_module = importlib.import_module("tools.cq.core.report")
     result = _build_enrichment_result(tmp_path, file_count=6)
 
-    calls: dict[str, object] = {}
+    submit_count = 0
+    collect_called = False
+    timeout_seconds_seen = 0.0
 
-    class FakePool:
-        def __init__(self, *, max_workers: int, mp_context: object) -> None:
-            calls["max_workers"] = max_workers
-            get_start_method = getattr(mp_context, "get_start_method", None)
-            calls["start_method"] = get_start_method() if callable(get_start_method) else None
-
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *_args: object) -> bool:
-            return False
-
-        def map(
+    class FakeScheduler:
+        def submit_cpu(
             self,
             fn: Callable[[_RenderEnrichTask], _RenderEnrichResult],
-            tasks: Iterable[_RenderEnrichTask],
-        ) -> list[_RenderEnrichResult]:
-            calls["map_called"] = True
-            return [fn(task) for task in tasks]
+            task: _RenderEnrichTask,
+        ) -> _RenderEnrichResult:
+            nonlocal submit_count
+            submit_count += 1
+            return fn(task)
+
+        def collect_bounded(
+            self,
+            futures: list[_RenderEnrichResult],
+            *,
+            timeout_seconds: float,
+        ) -> WorkerBatchResult[_RenderEnrichResult]:
+            nonlocal collect_called, timeout_seconds_seen
+            collect_called = True
+            timeout_seconds_seen = timeout_seconds
+            done = list(futures)
+            return WorkerBatchResult(done=done, timed_out=0)
 
     def _fake_worker(
         task: _RenderEnrichTask,
@@ -442,14 +446,18 @@ def test_render_enrichment_uses_fixed_process_pool_workers(
             },
         )
 
-    monkeypatch.setattr(report_module, "ProcessPoolExecutor", FakePool)
+    def _fake_get_worker_scheduler() -> FakeScheduler:
+        return FakeScheduler()
+
+    monkeypatch.setattr(report_module, "get_worker_scheduler", _fake_get_worker_scheduler)
     monkeypatch.setattr(report_module, "_compute_render_enrichment_worker", _fake_worker)
 
     render_markdown(result)
 
-    assert calls["map_called"] is True
-    assert calls["max_workers"] == 4
-    assert calls["start_method"] == "spawn"
+    assert collect_called is True
+    assert submit_count == 6
+    assert timeout_seconds_seen == 6.0
+    assert min(6, report_module.MAX_RENDER_ENRICH_WORKERS) == 4
 
 
 def test_render_enrichment_parallelization_workers_1_vs_4(

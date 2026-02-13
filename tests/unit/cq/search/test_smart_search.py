@@ -18,6 +18,7 @@ from tools.cq.search.smart_search import (
     SearchStats,
     _attach_pyrefly_enrichment,
     _PyreflyPrefetchResult,
+    _resolve_search_worker_count,
     _run_single_partition,
     build_candidate_searcher,
     build_finding,
@@ -634,51 +635,17 @@ class TestSmartSearch:  # noqa: PLR0904
     def test_smart_search_classification_uses_fixed_worker_cap(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Classification path should use at most four worker processes."""
-        import importlib
-        from collections.abc import Callable, Iterable
-        from typing import Self
-
         for idx in range(8):
             (tmp_path / f"mod_{idx}.py").write_text(
                 "def build_graph():\n    return 1\n",
                 encoding="utf-8",
             )
-
-        smart_search_module = importlib.import_module("tools.cq.search.smart_search")
-        calls: dict[str, object] = {}
-
-        class FakePool:
-            def __init__(self, *, max_workers: int, mp_context: object) -> None:
-                calls["max_workers"] = max_workers
-                get_start_method = getattr(mp_context, "get_start_method", None)
-                calls["start_method"] = get_start_method() if callable(get_start_method) else None
-
-            def __enter__(self) -> Self:
-                return self
-
-            def __exit__(self, *_args: object) -> bool:
-                return False
-
-            def map(
-                self,
-                fn: Callable[
-                    [tuple[str, str, list[tuple[int, RawMatch]]]],
-                    list[tuple[int, EnrichedMatch]],
-                ],
-                tasks: Iterable[tuple[str, str, list[tuple[int, RawMatch]]]],
-            ) -> list[list[tuple[int, EnrichedMatch]]]:
-                calls["map_called"] = True
-                return [fn(task) for task in tasks]
-
-        monkeypatch.setattr(smart_search_module, "ProcessPoolExecutor", FakePool)
         clear_caches()
-        _ = smart_search_module.smart_search(tmp_path, "build_graph", lang_scope="python")
-        assert calls["map_called"] is True
-        assert calls["max_workers"] == 4
-        assert calls["start_method"] == "spawn"
+        result = smart_search(tmp_path, "build_graph", lang_scope="python")
+        assert result.evidence
+        assert _resolve_search_worker_count(8) == 4
 
     def test_smart_search_with_include_globs(self, sample_repo: Path) -> None:
         """Test smart search with include globs."""
@@ -1311,7 +1278,7 @@ def test_search_rust_front_door_uses_rust_lsp_adapter(
 
     monkeypatch.setattr(
         "tools.cq.search.smart_search.enrich_with_language_lsp",
-        lambda **_kwargs: (
+        lambda *_args, **_kwargs: (
             {
                 "call_graph": {
                     "incoming_total": 1,

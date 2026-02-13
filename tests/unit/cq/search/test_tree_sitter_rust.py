@@ -479,7 +479,7 @@ def test_cache_bounded() -> None:
 
     cache_size = len(tree_sitter_rust._TREE_CACHE)  # noqa: SLF001
     assert cache_size <= limit
-    assert tree_sitter_rust._cache_evictions > 0  # noqa: SLF001
+    assert tree_sitter_rust.get_tree_sitter_rust_cache_stats()["cache_evictions"] > 0
 
 
 @_ts_available

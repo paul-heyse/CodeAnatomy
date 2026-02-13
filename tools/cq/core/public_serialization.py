@@ -8,7 +8,7 @@ from typing import cast
 import msgspec
 
 
-def to_public_dict[T: msgspec.Struct](value: T) -> dict[str, object]:
+def to_public_dict(value: msgspec.Struct) -> dict[str, object]:
     """Serialize a msgspec struct to a builtins mapping.
 
     Returns:
@@ -27,7 +27,7 @@ def to_public_dict[T: msgspec.Struct](value: T) -> dict[str, object]:
     raise TypeError(msg)
 
 
-def to_public_list[T: msgspec.Struct](values: Iterable[T]) -> list[dict[str, object]]:
+def to_public_list(values: Iterable[msgspec.Struct]) -> list[dict[str, object]]:
     """Serialize msgspec struct iterable to list of builtins mappings.
 
     Returns:

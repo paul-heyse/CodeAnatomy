@@ -40,6 +40,15 @@ class LdmdIndex:
     total_bytes: int
 
 
+@dataclass(frozen=True)
+class _OpenSectionMeta:
+    byte_start: int
+    title: str
+    level: int
+    parent: str
+    tags: str
+
+
 def _is_collapsed(section_id: str) -> bool:
     """Determine if section should be collapsed by default.
 
@@ -86,7 +95,7 @@ def build_index(content: bytes) -> LdmdIndex:
     open_stack: list[str] = []
     seen_ids: set[str] = set()
     sections: list[SectionMeta] = []
-    open_sections: dict[str, dict[str, object]] = {}
+    open_sections: dict[str, _OpenSectionMeta] = {}
 
     byte_offset = 0
     for raw_line in content.splitlines(keepends=True):
@@ -102,13 +111,13 @@ def build_index(content: bytes) -> LdmdIndex:
                 raise LdmdParseError(msg)
             seen_ids.add(sid)
             open_stack.append(sid)
-            open_sections[sid] = {
-                "byte_start": byte_offset,
-                "title": begin_match.group(2) or "",
-                "level": int(begin_match.group(3)) if begin_match.group(3) else 0,
-                "parent": begin_match.group(4) or "",
-                "tags": begin_match.group(5) or "",
-            }
+            open_sections[sid] = _OpenSectionMeta(
+                byte_start=byte_offset,
+                title=begin_match.group(2) or "",
+                level=int(begin_match.group(3)) if begin_match.group(3) else 0,
+                parent=begin_match.group(4) or "",
+                tags=begin_match.group(5) or "",
+            )
 
         end_match = _END_RE.match(line)
         if end_match:
@@ -123,7 +132,7 @@ def build_index(content: bytes) -> LdmdIndex:
             sections.append(
                 SectionMeta(
                     id=sid,
-                    start_offset=int(section_meta["byte_start"]),
+                    start_offset=section_meta.byte_start,
                     end_offset=byte_offset + line_byte_len,
                     depth=len(open_stack),
                     collapsed=_is_collapsed(sid),

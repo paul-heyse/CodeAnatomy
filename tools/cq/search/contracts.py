@@ -8,6 +8,7 @@ from typing import Literal, cast
 import msgspec
 
 from tools.cq.core.public_serialization import to_public_dict
+from tools.cq.core.structs import CqOutputStruct
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope
 
 Severity = Literal["info", "warning", "error"]
@@ -36,7 +37,7 @@ def _coerce_diagnostic_severity(value: object) -> Severity:
     return "info"
 
 
-class LanguagePartitionStats(msgspec.Struct, omit_defaults=True):
+class LanguagePartitionStats(CqOutputStruct, frozen=True):
     """Per-language summary partition statistics."""
 
     matches: int = 0
@@ -90,14 +91,14 @@ class LanguagePartitionStats(msgspec.Struct, omit_defaults=True):
         )
 
 
-class CapabilitySupport(msgspec.Struct):
+class CapabilitySupport(CqOutputStruct, frozen=True):
     """Support descriptor for a feature in one language."""
 
     supported: bool = False
     level: str = "none"
 
 
-class LanguageCapabilities(msgspec.Struct, omit_defaults=True):
+class LanguageCapabilities(CqOutputStruct, frozen=True):
     """Capability matrix emitted in summary payloads."""
 
     python: dict[str, CapabilitySupport] = msgspec.field(default_factory=dict)
@@ -146,7 +147,7 @@ class LanguageCapabilities(msgspec.Struct, omit_defaults=True):
         )
 
 
-class CrossLanguageDiagnostic(msgspec.Struct, omit_defaults=True):
+class CrossLanguageDiagnostic(CqOutputStruct, frozen=True):
     """Structured cross-language diagnostic payload."""
 
     code: str = "ML000"
@@ -156,9 +157,9 @@ class CrossLanguageDiagnostic(msgspec.Struct, omit_defaults=True):
     languages: list[str] = msgspec.field(default_factory=list)
     counts: dict[str, int] = msgspec.field(default_factory=dict)
     remediation: str = ""
-    feature: str | None = None
-    language: str | None = None
-    capability_level: str | None = None
+    feature: str | msgspec.UnsetType | None = msgspec.UNSET
+    language: str | msgspec.UnsetType | None = msgspec.UNSET
+    capability_level: str | msgspec.UnsetType | None = msgspec.UNSET
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object] | None) -> CrossLanguageDiagnostic:
@@ -182,13 +183,15 @@ class CrossLanguageDiagnostic(msgspec.Struct, omit_defaults=True):
             languages=_coerce_diagnostic_languages(payload_map.get("languages")),
             counts=_coerce_diagnostic_counts(payload_map.get("counts")),
             remediation=str(payload_map.get("remediation", "")),
-            feature=feature if isinstance(feature, str) else None,
-            language=language if isinstance(language, str) else None,
-            capability_level=(capability_level if isinstance(capability_level, str) else None),
+            feature=feature if isinstance(feature, str) else msgspec.UNSET,
+            language=language if isinstance(language, str) else msgspec.UNSET,
+            capability_level=(
+                capability_level if isinstance(capability_level, str) else msgspec.UNSET
+            ),
         )
 
 
-class EnrichmentTelemetryBucket(msgspec.Struct, omit_defaults=True):
+class EnrichmentTelemetryBucket(CqOutputStruct, frozen=True):
     """Telemetry counters for one language enrichment pipeline."""
 
     applied: int = 0
@@ -199,7 +202,7 @@ class EnrichmentTelemetryBucket(msgspec.Struct, omit_defaults=True):
     cache_evictions: int | None = None
 
 
-class EnrichmentTelemetry(msgspec.Struct, omit_defaults=True):
+class EnrichmentTelemetry(CqOutputStruct, frozen=True):
     """Search enrichment telemetry by language."""
 
     python: EnrichmentTelemetryBucket = msgspec.field(default_factory=EnrichmentTelemetryBucket)
@@ -243,11 +246,11 @@ class EnrichmentTelemetry(msgspec.Struct, omit_defaults=True):
         )
 
 
-class PyreflyOverview(msgspec.Struct, omit_defaults=True):
+class PyreflyOverview(CqOutputStruct, frozen=True):
     """Aggregate Pyrefly semantic summary for code-overview rendering."""
 
-    primary_symbol: str | None = None
-    enclosing_class: str | None = None
+    primary_symbol: str | msgspec.UnsetType | None = msgspec.UNSET
+    enclosing_class: str | msgspec.UnsetType | None = msgspec.UNSET
     total_incoming_callers: int = 0
     total_outgoing_callees: int = 0
     total_implementations: int = 0
@@ -255,7 +258,7 @@ class PyreflyOverview(msgspec.Struct, omit_defaults=True):
     matches_enriched: int = 0
 
 
-class PyreflyTelemetry(msgspec.Struct, omit_defaults=True):
+class PyreflyTelemetry(CqOutputStruct, frozen=True):
     """Execution telemetry for Pyrefly enrichment retrieval."""
 
     attempted: int = 0
@@ -265,7 +268,7 @@ class PyreflyTelemetry(msgspec.Struct, omit_defaults=True):
     timed_out: int = 0
 
 
-class PyreflyDiagnostic(msgspec.Struct, omit_defaults=True):
+class PyreflyDiagnostic(CqOutputStruct, frozen=True):
     """Diagnostic emitted by Pyrefly integration policy."""
 
     code: str = "PYREFLY000"
@@ -290,8 +293,12 @@ def coerce_pyrefly_overview(value: Mapping[str, object] | None) -> PyreflyOvervi
     targeted_diagnostics_value = value.get("targeted_diagnostics")
     matches_enriched_value = value.get("matches_enriched")
     return PyreflyOverview(
-        primary_symbol=primary_symbol_value if isinstance(primary_symbol_value, str) else None,
-        enclosing_class=enclosing_class_value if isinstance(enclosing_class_value, str) else None,
+        primary_symbol=(
+            primary_symbol_value if isinstance(primary_symbol_value, str) else msgspec.UNSET
+        ),
+        enclosing_class=(
+            enclosing_class_value if isinstance(enclosing_class_value, str) else msgspec.UNSET
+        ),
         total_incoming_callers=total_incoming_value if isinstance(total_incoming_value, int) else 0,
         total_outgoing_callees=total_outgoing_value if isinstance(total_outgoing_value, int) else 0,
         total_implementations=(
@@ -361,7 +368,7 @@ def coerce_pyrefly_diagnostics(
     return rows
 
 
-class SearchSummaryContract(msgspec.Struct):
+class SearchSummaryContract(CqOutputStruct, frozen=True):
     """Canonical multi-language summary contract for CQ outputs."""
 
     lang_scope: QueryLanguageScope

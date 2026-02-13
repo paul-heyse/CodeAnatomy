@@ -18,6 +18,7 @@ The subsystem follows a classic compiler architecture with three distinct phases
 | `enrichment.py` | Symtable/bytecode enrichment | 600+ | `SymtableEnricher`, `BytecodeInfo`, `SymtableInfo` |
 | `execution_requests.py` | Request payloads for shared execution | 65 | `EntityQueryRequest`, `PatternQueryRequest` |
 | `execution_context.py` | Bundled execution context | 26 | `QueryExecutionContext` |
+| `entity_front_door.py` | Entity front-door insight assembly | 455 | `attach_entity_front_door_insight()`, `EntityLspTelemetry`, `CandidateNeighborhood` |
 | `language.py` | Multi-language scope resolution | 310 | `QueryLanguage`, `QueryLanguageScope`, extension mappings |
 | `metavar.py` | Metavariable parsing and filtering | 162 | `parse_metavariables()`, `apply_metavar_filters()` |
 
@@ -970,6 +971,141 @@ class QueryExecutionContext(CqStruct, frozen=True):
 ```
 
 This struct is threaded through the execution pipeline to provide consistent access to runtime parameters.
+
+## Entity Front-Door Insight Assembly
+
+Location: `tools/cq/query/entity_front_door.py` (455 lines)
+
+The entity front-door module builds and attaches `FrontDoorInsightV1` cards to entity query results, providing target identity, neighborhood preview, risk assessment, and confidence scoring.
+
+### Key Functions
+
+**Primary entry point:**
+```python
+def attach_entity_front_door_insight(
+    result: CqResult,
+    *,
+    relationship_detail_max_matches: int,
+) -> None:
+    """Build and attach front-door insight card to an entity result."""
+```
+
+**Integration flow:**
+1. Extract definition findings from result.key_findings
+2. Build candidate neighborhood from top 3 definitions
+3. Compute risk from neighborhood counters (callers, callees, scope)
+4. Execute language-aware LSP enrichment for candidates (budget-gated)
+5. Derive LSP contract state from telemetry
+6. Mark partial slices for missing languages
+7. Attach insight to result.summary["front_door_insight"]
+
+### Supporting Structs
+
+**EntityLspTelemetry** (dataclass):
+- Per-language LSP attempt/apply/fail/timeout counters
+- Provider tracking (`LspProvider = Literal["pyrefly", "rust_analyzer", "none"]`)
+- Reasons list for degradation tracking
+
+**CandidateNeighborhood** (dataclass):
+- `primary_target: Finding | None` — Top definition candidate
+- `candidates: list[Finding]` — Top 3 definition findings
+- `neighborhood: InsightNeighborhoodV1` — Aggregated slices (callers, callees, hierarchy_or_scope)
+- `confidence: InsightConfidenceV1` — Derived from candidate scoring
+
+### LSP Enrichment Integration
+
+**Language-aware routing:**
+```python
+for finding in candidates:
+    # Resolve target context (file, language)
+    target_context = _resolve_lsp_target_context(result, finding)
+    if target_context is None:
+        continue
+
+    # Enrich via language-specific adapter
+    payload, timed_out = enrich_with_language_lsp(
+        LanguageLspEnrichmentRequest(
+            language=target_language,
+            mode="entity",
+            root=Path(result.run.root),
+            file_path=target_file,
+            line=max(1, int(anchor.line)),
+            col=int(anchor.col or 0),
+            symbol_hint=str(finding.details.get("name")),
+        )
+    )
+
+    # Augment insight with LSP data
+    insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
+```
+
+**Provider mapping:**
+- Python files (`.py`, `.pyi`) → `pyrefly` provider
+- Rust files (`.rs`) → `rust_analyzer` provider
+
+**Budget controls:**
+- LSP enrichment skipped when `match_count > relationship_detail_max_matches`
+- LSP enrichment skipped when `CQ_ENABLE_LSP` is disabled
+- Per-candidate LSP requests use `budget_for_mode("entity")` timeouts
+
+### LSP Contract State Derivation
+
+```python
+lsp_state = derive_lsp_contract_state(
+    LspContractStateInputV1(
+        provider=telemetry.lsp_provider,
+        available=telemetry.lsp_provider != "none",
+        attempted=telemetry.lsp_attempted,
+        applied=telemetry.lsp_applied,
+        failed=max(telemetry.lsp_failed, telemetry.lsp_attempted - telemetry.lsp_applied),
+        timed_out=telemetry.lsp_timed_out,
+        reasons=tuple(dict.fromkeys(telemetry.reasons)),
+    )
+)
+```
+
+**Output:** Canonical `LspStatus` embedded in insight.degradation.lsp field.
+
+### Neighborhood Building
+
+**Strategy:** Aggregate heuristic data from definition findings:
+
+```python
+# Callers slice
+callers_total = sum(_detail_int(finding, "caller_count") for finding in candidates)
+caller_preview = tuple(
+    _preview_node(finding, "caller")
+    for finding in candidates
+    if _detail_int(finding, "caller_count") > 0
+)
+
+# Callees slice
+callees_total = sum(_detail_int(finding, "callee_count") for finding in candidates)
+callee_preview = tuple(
+    _preview_node(finding, "callee")
+    for finding in candidates
+    if _detail_int(finding, "callee_count") > 0
+)
+
+# Hierarchy/scope slice (enclosing scopes)
+scope_values = {
+    str(finding.details.get("enclosing_scope"))
+    for finding in candidates
+    if isinstance(finding.details.get("enclosing_scope"), str)
+    and str(finding.details.get("enclosing_scope")) not in {"", "<module>"}
+}
+scope_preview = tuple(SemanticNodeRefV1(...) for value in sorted(scope_values))
+```
+
+**Result:** `InsightNeighborhoodV1` with four canonical slices (callers, callees, references, hierarchy_or_scope).
+
+### Cross-Reference
+
+**Bootstrap integration:** Entity queries invoke `resolve_runtime_services()` to obtain `EntityService` for entity scan caching via `QueryEntityScanCacheV1`.
+
+**Cache integration:** Entity scan results cached in persistent DiskCache layer.
+
+**See:** [10_runtime_services.md](10_runtime_services.md) for runtime services documentation.
 
 ## Multi-Language Support
 

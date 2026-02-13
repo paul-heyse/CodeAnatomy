@@ -184,9 +184,15 @@ Execution flow:
 3. Normalize step IDs via `normalize_step_ids()`
 4. Partition steps into Q steps and other steps
 5. Execute Q steps with batch optimization
-6. Execute non-Q steps sequentially
+6. Execute non-Q steps (may execute in parallel via `_execute_non_q_steps_parallel()`)
 7. Populate run summary metadata
 8. Return merged result
+
+**Runtime Services Integration**:
+- Runner uses `resolve_runtime_services()` from `core/bootstrap.py` for service composition
+- `WorkerScheduler` provides CPU and I/O pools for parallel execution
+- `RuntimeExecutionPolicy` controls parallelism, LSP budgets, and cache behavior
+- See [10_runtime_services.md](10_runtime_services.md) for full runtime services documentation
 
 ### Q-Step Batch Optimization Pipeline
 
@@ -397,12 +403,12 @@ Parse caching impact:
 **Batch Infrastructure Design Tensions**:
 - Session is immutable post-construction (no incremental updates)
 - Record type union forces conservative scan (may scan unnecessary records)
-- Parse cache is file-scoped (no cross-file cache persistence)
+- In-memory parse cache is per-invocation. Higher-level result caching persists across invocations via DiskCache backend.
 - Language-specific sessions prevent heterogeneous batching
 - No cache eviction strategy (entire session held in memory)
 
 **Potential Improvement Vectors**:
-- Persistent parse cache across invocations (disk-backed AST cache)
+- Persistent parse cache across invocations (disk-backed AST cache) - infrastructure exists for macro-level results
 - Incremental session updates for interactive/watch mode
 - Record type intersection optimization (only scan minimal superset)
 - Memory budget awareness with cache eviction
@@ -776,15 +782,15 @@ Non-Q steps dominate run time for analysis-heavy workloads.
 **Performance Design Tensions**:
 - Batch session is all-or-nothing (no incremental construction)
 - Memory footprint grows linearly with file count (no pagination)
-- No parallel execution of independent steps
-- Parse cache not persisted across invocations
+- Parallel execution available for non-Q steps via WorkerScheduler
+- In-memory parse cache per invocation. Cross-invocation persistence available for higher-level results via DiskCache.
 - No cost estimation or adaptive strategy
 
 **Potential Improvement Vectors**:
 - Incremental session construction with early step execution
 - Memory-bounded batching with file chunking
-- Parallel step execution for independent steps
-- Persistent parse cache (disk-backed with TTL)
+- Parallel step execution for independent steps (partially addressed for non-Q steps)
+- Persistent parse cache (disk-backed with TTL) - infrastructure exists, not yet applied to scan-level cache
 - Cost-based execution planning (estimate latency before execution)
 
 ## Testing Strategy

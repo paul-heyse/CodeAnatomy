@@ -81,7 +81,7 @@ def build_definition_candidate_finding(
     match: EnrichedMatch,
     root: Path,
     *,
-    build_finding_fn: Callable[[EnrichedMatch, object], Finding],
+    build_finding_fn: Callable[[EnrichedMatch, Path], Finding],
 ) -> Finding | None:
     """Build normalized definition candidate finding from enriched match.
 

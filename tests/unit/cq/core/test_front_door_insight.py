@@ -47,28 +47,27 @@ def _definition_finding(name: str = "target") -> Finding:
     )
 
 
-def _search_insight(**kwargs: object) -> FrontDoorInsightV1:
-    target_candidates = kwargs.get("target_candidates")
-    if isinstance(target_candidates, list):
-        kwargs["target_candidates"] = tuple(target_candidates)
-    return build_search_insight(SearchInsightBuildRequestV1(**kwargs))
+def _search_insight(request: SearchInsightBuildRequestV1) -> FrontDoorInsightV1:
+    return build_search_insight(request)
 
 
-def _calls_insight(**kwargs: object) -> FrontDoorInsightV1:
-    return build_calls_insight(CallsInsightBuildRequestV1(**kwargs))
+def _calls_insight(request: CallsInsightBuildRequestV1) -> FrontDoorInsightV1:
+    return build_calls_insight(request)
 
 
-def _entity_insight(**kwargs: object) -> FrontDoorInsightV1:
-    return build_entity_insight(EntityInsightBuildRequestV1(**kwargs))
+def _entity_insight(request: EntityInsightBuildRequestV1) -> FrontDoorInsightV1:
+    return build_entity_insight(request)
 
 
 def test_front_door_insight_roundtrip() -> None:
     insight = FrontDoorInsightV1(
         source="search",
         target=_search_insight(
+            SearchInsightBuildRequestV1(
             summary={"query": "target", "scan_method": "hybrid"},
             primary_target=_definition_finding("target"),
-            target_candidates=[_definition_finding("target")],
+                target_candidates=(_definition_finding("target"),),
+            )
         ).target,
     )
     encoded = msgspec.json.encode(insight)
@@ -99,8 +98,10 @@ def test_build_neighborhood_from_slices_maps_core_slices() -> None:
 
 def test_augment_insight_with_lsp_updates_target_and_call_graph() -> None:
     base = _entity_insight(
-        summary={"query": "entity=function name=target", "entity_kind": "function"},
-        primary_target=_definition_finding("target"),
+        EntityInsightBuildRequestV1(
+            summary={"query": "entity=function name=target", "entity_kind": "function"},
+            primary_target=_definition_finding("target"),
+        )
     )
     lsp_payload: dict[str, object] = {
         "type_contract": {"callable_signature": "def target(x: int) -> str"},
@@ -121,9 +122,11 @@ def test_augment_insight_with_lsp_updates_target_and_call_graph() -> None:
 def test_build_search_insight_prefers_definition_target() -> None:
     primary = _definition_finding("build_graph")
     insight = _search_insight(
-        summary={"query": "build_graph", "scan_method": "hybrid"},
-        primary_target=primary,
-        target_candidates=[primary],
+        SearchInsightBuildRequestV1(
+            summary={"query": "build_graph", "scan_method": "hybrid"},
+            primary_target=primary,
+            target_candidates=(primary,),
+        )
     )
     assert insight.source == "search"
     assert insight.target.symbol == "build_graph"
@@ -139,15 +142,17 @@ def test_build_calls_insight_uses_counters_for_risk() -> None:
         ),
     )
     insight = _calls_insight(
-        function_name="build_graph",
-        signature="(x, y)",
-        location=InsightLocationV1(file="src/mod.py", line=22, col=0),
-        neighborhood=neighborhood,
-        files_with_calls=4,
-        arg_shape_count=5,
-        forwarding_count=2,
-        hazard_counts={"star_kwargs": 1},
-        confidence=InsightConfidenceV1(evidence_kind="resolved_ast", score=0.8, bucket="high"),
+        CallsInsightBuildRequestV1(
+            function_name="build_graph",
+            signature="(x, y)",
+            location=InsightLocationV1(file="src/mod.py", line=22, col=0),
+            neighborhood=neighborhood,
+            files_with_calls=4,
+            arg_shape_count=5,
+            forwarding_count=2,
+            hazard_counts={"star_kwargs": 1},
+            confidence=InsightConfidenceV1(evidence_kind="resolved_ast", score=0.8, bucket="high"),
+        )
     )
     assert insight.source == "calls"
     assert insight.risk.level == "high"
@@ -157,8 +162,10 @@ def test_build_calls_insight_uses_counters_for_risk() -> None:
 
 def test_build_entity_insight_fallback_target_when_missing_findings() -> None:
     insight = _entity_insight(
-        summary={"query": "entity=function name=foo", "entity_kind": "function"},
-        primary_target=None,
+        EntityInsightBuildRequestV1(
+            summary={"query": "entity=function name=foo", "entity_kind": "function"},
+            primary_target=None,
+        )
     )
     assert insight.source == "entity"
     assert insight.target.kind == "function"
@@ -167,9 +174,11 @@ def test_build_entity_insight_fallback_target_when_missing_findings() -> None:
 
 def test_render_insight_card_includes_budget_and_artifact_refs() -> None:
     insight = _search_insight(
-        summary={"query": "target", "scan_method": "hybrid"},
-        primary_target=_definition_finding("target"),
-        target_candidates=[_definition_finding("target")],
+        SearchInsightBuildRequestV1(
+            summary={"query": "target", "scan_method": "hybrid"},
+            primary_target=_definition_finding("target"),
+            target_candidates=(_definition_finding("target"),),
+        )
     )
     insight = attach_artifact_refs(
         insight,
@@ -184,12 +193,14 @@ def test_render_insight_card_includes_budget_and_artifact_refs() -> None:
 
 def test_mark_partial_for_missing_languages_downgrades_availability() -> None:
     insight = _search_insight(
-        summary={"query": "target", "scan_method": "hybrid"},
-        primary_target=_definition_finding("target"),
-        target_candidates=[_definition_finding("target")],
-        neighborhood=build_neighborhood_from_slices(
-            (NeighborhoodSliceV1(kind="callers", title="Callers", total=2),)
-        ),
+        SearchInsightBuildRequestV1(
+            summary={"query": "target", "scan_method": "hybrid"},
+            primary_target=_definition_finding("target"),
+            target_candidates=(_definition_finding("target"),),
+            neighborhood=build_neighborhood_from_slices(
+                (NeighborhoodSliceV1(kind="callers", title="Callers", total=2),)
+            ),
+        )
     )
     partial = mark_partial_for_missing_languages(insight, missing_languages=["rust"])
     assert partial.neighborhood.callers.availability == "partial"
@@ -198,13 +209,15 @@ def test_mark_partial_for_missing_languages_downgrades_availability() -> None:
 
 def test_attach_neighborhood_overflow_ref_sets_slice_refs() -> None:
     insight = _search_insight(
-        summary={"query": "target", "scan_method": "hybrid"},
-        primary_target=_definition_finding("target"),
-        target_candidates=[_definition_finding("target")],
-        neighborhood=build_neighborhood_from_slices(
-            (NeighborhoodSliceV1(kind="callers", title="Callers", total=8),),
-            preview_per_slice=1,
-        ),
+        SearchInsightBuildRequestV1(
+            summary={"query": "target", "scan_method": "hybrid"},
+            primary_target=_definition_finding("target"),
+            target_candidates=(_definition_finding("target"),),
+            neighborhood=build_neighborhood_from_slices(
+                (NeighborhoodSliceV1(kind="callers", title="Callers", total=8),),
+                preview_per_slice=1,
+            ),
+        )
     )
     updated = attach_neighborhood_overflow_ref(
         insight,
@@ -230,9 +243,11 @@ def test_risk_from_counters_is_deterministic() -> None:
 
 def test_coerce_front_door_insight_from_mapping() -> None:
     insight = _search_insight(
-        summary={"query": "target", "scan_method": "hybrid"},
-        primary_target=_definition_finding("target"),
-        target_candidates=[_definition_finding("target")],
+        SearchInsightBuildRequestV1(
+            summary={"query": "target", "scan_method": "hybrid"},
+            primary_target=_definition_finding("target"),
+            target_candidates=(_definition_finding("target"),),
+        )
     )
     payload = msgspec.to_builtins(insight)
     recovered = coerce_front_door_insight(payload)
@@ -242,9 +257,11 @@ def test_coerce_front_door_insight_from_mapping() -> None:
 
 def test_to_public_front_door_insight_dict_emits_full_shape() -> None:
     insight = _search_insight(
-        summary={"query": "target", "scan_method": "hybrid"},
-        primary_target=_definition_finding("target"),
-        target_candidates=[_definition_finding("target")],
+        SearchInsightBuildRequestV1(
+            summary={"query": "target", "scan_method": "hybrid"},
+            primary_target=_definition_finding("target"),
+            target_candidates=(_definition_finding("target"),),
+        )
     )
     payload = to_public_front_door_insight_dict(insight)
     assert payload["source"] == "search"

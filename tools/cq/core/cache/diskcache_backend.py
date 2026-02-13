@@ -112,6 +112,7 @@ def get_cq_cache_backend(*, root: Path) -> CqCacheBackend:
 
 def close_cq_cache_backend(*, root: Path | None = None) -> None:
     """Close and clear workspace-backed cache backend(s)."""
+    backends: list[CqCacheBackend]
     with _BACKEND_LOCK:
         if root is None:
             backends = list(_BACKEND_STATE.backends.values())

@@ -162,7 +162,7 @@ def _collect_lsp_bundle_result(request: BundleBuildRequest) -> LspCollectionResu
     lsp_slices, lsp_degrades, lsp_env = _collect_lsp_slices(request, feasible_slices)
     return LspCollectionResult(
         slices=tuple(lsp_slices),
-        degrades=tuple([*cap_degrades, *lsp_degrades]),
+        degrades=(*cap_degrades, *lsp_degrades),
         lsp_env=lsp_env,
     )
 

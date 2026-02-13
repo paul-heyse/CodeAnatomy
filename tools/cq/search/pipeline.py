@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeVar
 
 from tools.cq.core.schema import CqResult
 from tools.cq.search.context import SmartSearchContext
+
+TPartition = TypeVar("TPartition")
 
 
 @dataclass(slots=True)
@@ -17,8 +20,8 @@ class SearchPipeline:
 
     def run_partitions(
         self,
-        partition_runner: Callable[[SmartSearchContext], object],
-    ) -> object:
+        partition_runner: Callable[[SmartSearchContext], TPartition],
+    ) -> TPartition:
         """Run discovery/classification/enrichment partition stage.
 
         Returns:
@@ -28,8 +31,8 @@ class SearchPipeline:
 
     def assemble(
         self,
-        partition_results: object,
-        assembler: Callable[[SmartSearchContext, object], CqResult],
+        partition_results: TPartition,
+        assembler: Callable[[SmartSearchContext, TPartition], CqResult],
     ) -> CqResult:
         """Run final section/summary assembly stage.
 
@@ -40,8 +43,8 @@ class SearchPipeline:
 
     def execute(
         self,
-        partition_runner: Callable[[SmartSearchContext], object],
-        assembler: Callable[[SmartSearchContext, object], CqResult],
+        partition_runner: Callable[[SmartSearchContext], TPartition],
+        assembler: Callable[[SmartSearchContext, TPartition], CqResult],
     ) -> CqResult:
         """Execute candidate partitioning and result assembly.
 

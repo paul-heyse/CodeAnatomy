@@ -222,11 +222,13 @@ def _format_target_location(location: InsightLocationV1) -> str:
 
 def _render_neighborhood_lines(neighborhood: InsightNeighborhoodV1) -> list[str]:
     lines = [
-        "- Neighborhood: "
-        f"callers={neighborhood.callers.total}, "
-        f"callees={neighborhood.callees.total}, "
-        f"references={neighborhood.references.total}, "
-        f"scope={neighborhood.hierarchy_or_scope.total}"
+        (
+            "- Neighborhood: "
+            f"callers={neighborhood.callers.total}, "
+            f"callees={neighborhood.callees.total}, "
+            f"references={neighborhood.references.total}, "
+            f"scope={neighborhood.hierarchy_or_scope.total}"
+        )
     ]
     callers_preview = _preview_labels(neighborhood.callers.preview)
     if callers_preview:

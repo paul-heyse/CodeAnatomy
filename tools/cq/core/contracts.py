@@ -9,10 +9,11 @@ import msgspec
 
 from tools.cq.core.public_serialization import to_public_dict
 from tools.cq.core.serialization import to_builtins
+from tools.cq.core.structs import CqOutputStruct
 from tools.cq.search.contracts import SearchSummaryContract, summary_contract_to_dict
 
 
-class ContractEnvelope(msgspec.Struct):
+class ContractEnvelope(CqOutputStruct, frozen=True):
     """Generic typed envelope for contract payload transport."""
 
     payload: dict[str, object]

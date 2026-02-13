@@ -182,7 +182,6 @@ class _PyreflyLspSession:
             outgoing=outgoing,
         )
         payload["advanced_planes"] = self._collect_advanced_planes(
-            request=request,
             uri=uri,
             line=position_payload.line,
             col=position_payload.character,
@@ -324,7 +323,6 @@ class _PyreflyLspSession:
     def _collect_advanced_planes(
         self,
         *,
-        request: PyreflyLspRequest,
         uri: str,
         line: int,
         col: int,
@@ -869,7 +867,7 @@ def _normalize_reference_locations(value: object, *, limit: int) -> list[dict[st
 def _normalize_class_method_context(
     *,
     hover: object,
-    call_item: dict[str, object] | None,
+    call_item: Mapping[str, object] | None,
     implementations: list[dict[str, object]],
 ) -> dict[str, object]:
     hover_text = _extract_hover_text(hover)

@@ -39,7 +39,11 @@ from tools.cq.search.adapter import find_def_lines, find_files_with_pattern
 from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
-    from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightNeighborhoodV1
+    from tools.cq.core.front_door_insight import (
+        FrontDoorInsightV1,
+        InsightConfidenceV1,
+        InsightNeighborhoodV1,
+    )
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.query.language import QueryLanguage
     from tools.cq.search import SearchLimits

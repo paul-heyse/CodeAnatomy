@@ -43,24 +43,35 @@ The CQ search subsystem (`tools/cq/search/`) provides semantically-enriched code
 | `profiles.py` | ~66 | SearchLimits presets (DEFAULT, INTERACTIVE, AUDIT, LITERAL) |
 | `contracts.py` | ~488 | Multi-language summary contracts and telemetry |
 | `timeout.py` | ~108 | Async/sync timeout wrappers with fallback semantics |
+| `candidate_normalizer.py` | ~115 | Definition candidate selection: `is_definition_candidate_match()`, `definition_kind_from_text()`, `build_definition_candidate_finding()` |
+| `lsp_contract_state.py` | ~98 | LSP state derivation: `LspContractStateV1`, `derive_lsp_contract_state()` with deterministic state machine |
+| `lsp_front_door_adapter.py` | ~188 | Language-aware LSP routing: `LanguageLspEnrichmentRequest`, `lsp_runtime_enabled()`, `infer_language_for_path()`, `provider_for_language()` |
+| `lsp_request_budget.py` | ~80 | LSP timeout/retry policy: `LspRequestBudgetV1`, `budget_for_mode()`, `call_with_retry()` |
 | `pyrefly_lsp.py` | ~341 | Pyrefly LSP integration for hover/diagnostic enrichment |
 | `rust_lsp_contracts.py` | ~680 | Rust LSP contract structs (LspCapabilitySnapshotV1, LspSessionEnvV1, RustDiagnosticV1) |
 | `rust_lsp.py` | ~1107 | Rust LSP session management with rust-analyzer |
-| `pyrefly_capability_gates.py` | ~133 | Pyrefly capability gate functions for optional enrichment surfaces |
-| `pyrefly_expansion.py` | ~525 | Pyrefly expansion structs (DocumentSymbol, WorkspaceSymbol, SemanticToken) |
+| `pyrefly_contracts.py` | ~502 | Pyrefly contract types, capability structs, and expansion models (DocumentSymbol, WorkspaceSymbol, SemanticToken) |
+| `pyrefly_signal.py` | ~57 | Pyrefly signal processing and evidence merging |
 | `semantic_overlays.py` | ~366 | Semantic token and inlay hint overlays |
 | `refactor_actions.py` | ~388 | Code-action resolve/execute bridge and diagnostics |
 | `rust_extensions.py` | ~206 | Rust-analyzer macro expansion and runnables extensions |
 | `diagnostics_pull.py` | ~190 | Pull diagnostics normalization (textDocument/diagnostic, workspace/diagnostic) |
 
+### LSP Sub-Modules
+
+Located in `tools/cq/search/lsp/`:
+
+- `lsp/capabilities.py` — Capability gating and feature checking (`supports_method()`, `coerce_capabilities()`)
+- `lsp/request_queue.py` — LSP request queueing infrastructure (`run_lsp_requests()` with bounded timeout)
+- `lsp/session_manager.py` — Generic LSP session lifecycle (thread-safe, root-keyed, restart-on-failure): `LspSessionManager[T]`
+- `lsp/status.py` — `LspStatus` StrEnum with state derivation: `unavailable | skipped | failed | partial | ok`
+
 ### Enrichment Sub-Modules
 
 Located in `tools/cq/search/enrichment/`:
 
-- `core.py` - Shared enrichment utilities (payload normalization, budget enforcement)
-- `libcst_python.py` - LibCST resolution enrichment
-- `tree_sitter_python.py` - Tree-sitter gap-fill enrichment
-- `tree_sitter_rust.py` - Rust tree-sitter enrichment
+- `core.py` — Shared enrichment utilities (payload normalization, budget enforcement)
+- `contracts.py` — Enrichment contract types and stage metadata
 
 ---
 
@@ -878,6 +889,68 @@ _MAX_TREE_CACHE_ENTRIES = 64                       # LRU eviction threshold
 **Cache key format:** `blake2b(source_bytes).hexdigest()` for content-addressable caching.
 
 **LRU eviction:** When cache exceeds `_MAX_TREE_CACHE_ENTRIES`, oldest entries are evicted.
+
+### Persistent Cache Layer
+
+In addition to the in-memory per-invocation caches described above, CQ maintains a persistent disk-backed cache layer for cross-invocation sharing.
+
+**Backend:** DiskCache-backed via `get_cq_cache_backend()` from `tools/cq/core/cache/`
+
+**TTL:** Default 900 seconds (15 minutes), configurable via `CQ_CACHE_TTL_SECONDS`
+
+**Scope:** Workspace-scoped singleton lifecycle (one cache per repository root)
+
+**Usage:** Search partition results cached via `SearchPartitionCacheV1` contract
+
+**Coexistence:** In-memory caches handle within-command sharing (same search invocation); persistent cache handles cross-invocation sharing (repeated searches)
+
+**Cross-reference:** See [10_runtime_services.md](10_runtime_services.md) for full cache infrastructure documentation.
+
+---
+
+## 8b. LSP Contract State Machine
+
+The LSP front-door adapter uses a deterministic state machine to derive canonical LSP status from capability and telemetry signals.
+
+**Contract:** `LspContractStateV1` from `tools/cq/search/lsp_contract_state.py`
+
+**Input signals:**
+- `available: bool` — LSP provider is available
+- `attempted: int` — Number of enrichment requests attempted
+- `applied: int` — Number of requests successfully applied
+- `failed: int` — Number of failures
+- `timed_out: int` — Number of timeouts
+
+**Output status:** `LspStatus = Literal["unavailable", "skipped", "failed", "partial", "ok"]`
+
+**State derivation rules:**
+
+```python
+def derive_lsp_contract_state(input_state: LspContractStateInputV1) -> LspContractStateV1:
+    if not available:
+        return status="unavailable"
+    if attempted <= 0:
+        return status="skipped"
+    if applied <= 0:
+        return status="failed"
+    if failed > 0 or applied < attempted:
+        return status="partial"
+    return status="ok"
+```
+
+**Front-door adapter:** `lsp_front_door_adapter.py` routes language-specific enrichment:
+- Python → `pyrefly` provider → `enrich_with_pyrefly_lsp()`
+- Rust → `rust_analyzer` provider → `enrich_with_rust_lsp()`
+
+**Budget management:** `LspRequestBudgetV1` controls timeout/retry policy via `budget_for_mode()`:
+- `startup_timeout_seconds` — LSP server startup timeout
+- `probe_timeout_seconds` — Individual request timeout
+- `max_attempts` — Retry attempts
+- `retry_backoff_ms` — Backoff between retries
+
+**Retry semantics:** `call_with_retry()` retries only on `TimeoutError`; other exceptions fail fast.
+
+**Cross-reference:** See [10_runtime_services.md](10_runtime_services.md) for full LSP runtime documentation.
 
 ---
 
@@ -2567,6 +2640,8 @@ All enrichment stages follow a fail-open policy:
 #### 6. Unified Cache Architecture
 
 **Goal:** Replace per-module caches with centralized cache manager.
+
+**Status:** **Partially addressed:** Persistent DiskCache layer implemented for search partitions via `get_cq_cache_backend()`. In-memory session caches remain for within-command sharing.
 
 **Approach:**
 - Define `CacheManager` protocol with get/put/clear operations

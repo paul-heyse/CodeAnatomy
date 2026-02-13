@@ -25,6 +25,7 @@ from tools.cq.core.front_door_insight import (
 )
 from tools.cq.core.schema import CqResult, Finding
 from tools.cq.core.snb_schema import SemanticNodeRefV1
+from tools.cq.query.language import QueryLanguage
 from tools.cq.search.lsp_contract_state import (
     LspContractStateInputV1,
     LspProvider,
@@ -273,6 +274,9 @@ def _apply_candidate_lsp(
         return insight
 
     target_file, target_language = target_context
+    anchor = finding.anchor
+    if anchor is None:
+        return insight
     _record_lsp_attempt(telemetry, target_language)
 
     payload, timed_out = enrich_with_language_lsp(
@@ -281,8 +285,8 @@ def _apply_candidate_lsp(
             mode="entity",
             root=Path(result.run.root),
             file_path=target_file,
-            line=max(1, int(finding.anchor.line)),
-            col=int(finding.anchor.col or 0),
+            line=max(1, int(anchor.line)),
+            col=int(anchor.col or 0),
             symbol_hint=(
                 str(finding.details.get("name"))
                 if isinstance(finding.details.get("name"), str)

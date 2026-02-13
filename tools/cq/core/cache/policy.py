@@ -4,21 +4,27 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Annotated
+
+import msgspec
 
 from tools.cq.core.runtime.execution_policy import default_runtime_execution_policy
-from tools.cq.core.structs import CqStruct
+from tools.cq.core.structs import CqSettingsStruct
 
 _DEFAULT_DIR = ".cq_cache"
 
+PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
+PositiveFloat = Annotated[float, msgspec.Meta(gt=0.0)]
 
-class CqCachePolicyV1(CqStruct, frozen=True):
+
+class CqCachePolicyV1(CqSettingsStruct, frozen=True):
     """Policy controlling disk-backed CQ cache behavior."""
 
     enabled: bool = True
     directory: str = _DEFAULT_DIR
-    shards: int = 8
-    timeout_seconds: float = 0.05
-    ttl_seconds: int = 900
+    shards: PositiveInt = 8
+    timeout_seconds: PositiveFloat = 0.05
+    ttl_seconds: PositiveInt = 900
 
 
 def default_cache_policy(*, root: Path) -> CqCachePolicyV1:

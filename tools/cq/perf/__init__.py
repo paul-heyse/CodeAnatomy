@@ -1,3 +1,3 @@
 """Performance utilities for CQ runtime validation."""
 
-__all__ = []
+__all__: tuple[str, ...] = ()

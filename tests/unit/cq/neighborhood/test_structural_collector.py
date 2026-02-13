@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from tools.cq.astgrep.sgpy_scanner import SgRecord
+from tools.cq.core.snb_schema import DegradeEventV1, NeighborhoodSliceV1
 from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
 from tools.cq.neighborhood.structural_collector import (
     StructuralNeighborhoodCollectRequest,
@@ -11,10 +14,25 @@ from tools.cq.neighborhood.structural_collector import (
 
 
 def _collect(
-    **kwargs: object,
-) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    *,
+    target_name: str,
+    target_file: str,
+    snapshot: ScanSnapshot,
+    max_per_slice: int = 50,
+    slice_limits: Mapping[str, int] | None = None,
+    target_position: tuple[int | None, int | None] = (None, None),
+) -> tuple[tuple[NeighborhoodSliceV1, ...], tuple[DegradeEventV1, ...]]:
+    target_line, target_col = target_position
     return collect_structural_neighborhood(
-        StructuralNeighborhoodCollectRequest(**kwargs)
+        StructuralNeighborhoodCollectRequest(
+            target_name=target_name,
+            target_file=target_file,
+            snapshot=snapshot,
+            target_line=target_line,
+            target_col=target_col,
+            max_per_slice=max_per_slice,
+            slice_limits=slice_limits,
+        )
     )
 
 

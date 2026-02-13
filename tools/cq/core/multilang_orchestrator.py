@@ -51,9 +51,11 @@ def execute_by_language_scope[T](
         Per-language execution outputs.
     """
     languages = tuple(expand_language_scope(scope))
-    if len(languages) <= 1:
-        lang = languages[0]
-        return {lang: run_one(lang)}
+    if len(languages) == 0:
+        return {}
+    if len(languages) == 1:
+        only_language = languages[0]
+        return {only_language: run_one(only_language)}
 
     scheduler = get_worker_scheduler()
     policy = scheduler.policy

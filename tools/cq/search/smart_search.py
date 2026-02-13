@@ -3041,10 +3041,7 @@ def smart_search(
     request = _coerce_search_request(root=root, query=query, kwargs=kwargs)
     ctx = _build_search_context(request)
     pipeline = SearchPipeline(ctx)
-    partition_results = cast(
-        "list[_LanguageSearchResult]",
-        pipeline.run_partitions(_run_language_partitions),
-    )
+    partition_results = pipeline.run_partitions(_run_language_partitions)
     mode_chain = [ctx.mode]
     if _should_fallback_to_literal(
         request=request,
@@ -3056,10 +3053,7 @@ def smart_search(
             mode=QueryMode.LITERAL,
             fallback_applied=True,
         )
-        fallback_partitions = cast(
-            "list[_LanguageSearchResult]",
-            SearchPipeline(fallback_ctx).run_partitions(_run_language_partitions),
-        )
+        fallback_partitions = SearchPipeline(fallback_ctx).run_partitions(_run_language_partitions)
         mode_chain.append(QueryMode.LITERAL)
         ctx = msgspec.structs.replace(fallback_ctx, mode_chain=tuple(mode_chain))
         if _partition_total_matches(fallback_partitions) > 0:

@@ -2275,6 +2275,323 @@ Language support is hardcoded:
 - **Configurable scope** - Allow .cq.toml to specify `[language_scope] default = ["python", "rust", "typescript"]`
 - **Priority hints** - Support scope="auto(priority=python)" to prefer Python when multiple languages match
 
+## Runtime Policy Contracts
+
+Location: `tools/cq/core/runtime/execution_policy.py`
+
+CQ runtime policy contracts control parallelism, LSP timeout/retry behavior, and cache configuration.
+
+### RuntimeExecutionPolicy
+
+Top-level envelope for runtime execution settings:
+
+```python
+class RuntimeExecutionPolicy(CqSettingsStruct, frozen=True):
+    parallelism: ParallelismPolicy
+    lsp: LspRuntimePolicy = LspRuntimePolicy()
+    cache: CacheRuntimePolicy = CacheRuntimePolicy()
+```
+
+**Loading:** Populated from environment variables via `default_runtime_execution_policy()`.
+
+**Environment prefix:** `CQ_RUNTIME_*`
+
+### ParallelismPolicy
+
+Worker pool configuration for CPU and I/O execution:
+
+```python
+class ParallelismPolicy(CqSettingsStruct, frozen=True):
+    cpu_workers: PositiveInt                        # CPU-bound worker count
+    io_workers: PositiveInt                         # I/O-bound worker count
+    lsp_request_workers: PositiveInt                # LSP request worker count
+    query_partition_workers: PositiveInt = 2
+    calls_file_workers: PositiveInt = 4
+    run_step_workers: PositiveInt = 4
+    enable_process_pool: bool = True                # Enable ProcessPoolExecutor for CPU tasks
+```
+
+**Default values:**
+- `cpu_workers` = `max(1, os.cpu_count() - 1)`
+- `io_workers` = `max(8, os.cpu_count())`
+- `lsp_request_workers` = 4
+
+**Environment overrides:**
+- `CQ_RUNTIME_CPU_WORKERS`
+- `CQ_RUNTIME_IO_WORKERS`
+- `CQ_RUNTIME_LSP_REQUEST_WORKERS`
+- `CQ_RUNTIME_ENABLE_PROCESS_POOL` (bool)
+
+### LspRuntimePolicy
+
+LSP timeout and retry configuration:
+
+```python
+class LspRuntimePolicy(CqSettingsStruct, frozen=True):
+    timeout_ms: PositiveInt = 2_000                 # Request timeout (milliseconds)
+    startup_timeout_ms: PositiveInt = 2_000         # Server startup timeout (milliseconds)
+    max_targets_search: PositiveInt = 1             # Max targets for search enrichment
+    max_targets_calls: PositiveInt = 1              # Max targets for calls enrichment
+    max_targets_entity: PositiveInt = 3             # Max targets for entity enrichment
+```
+
+**Environment overrides:**
+- `CQ_RUNTIME_LSP_TIMEOUT_MS`
+- `CQ_RUNTIME_LSP_STARTUP_TIMEOUT_MS`
+- `CQ_RUNTIME_LSP_TARGETS_SEARCH`
+- `CQ_RUNTIME_LSP_TARGETS_CALLS`
+- `CQ_RUNTIME_LSP_TARGETS_ENTITY`
+
+### CacheRuntimePolicy
+
+Cache TTL and shard configuration:
+
+```python
+class CacheRuntimePolicy(CqSettingsStruct, frozen=True):
+    enabled: bool = True
+    ttl_seconds: PositiveInt = 900                  # Cache entry TTL (15 minutes)
+    shards: PositiveInt = 8                         # DiskCache shard count
+    timeout_seconds: PositiveFloat = 0.05           # Cache operation timeout
+```
+
+**Environment overrides:**
+- `CQ_RUNTIME_CACHE_ENABLED` (bool)
+- `CQ_RUNTIME_CACHE_TTL_SECONDS`
+- `CQ_RUNTIME_CACHE_SHARDS`
+- `CQ_RUNTIME_CACHE_TIMEOUT_SECONDS` (float)
+
+## Cache Contracts
+
+Location: `tools/cq/core/cache/contracts.py` and `tools/cq/core/cache/policy.py`
+
+### CqCachePolicyV1
+
+Policy controlling disk-backed CQ cache behavior:
+
+```python
+class CqCachePolicyV1(CqSettingsStruct, frozen=True):
+    enabled: bool = True
+    directory: str = ".cq_cache"                    # Cache directory (relative to root)
+    shards: PositiveInt = 8                         # Shard count
+    timeout_seconds: PositiveFloat = 0.05           # Operation timeout
+    ttl_seconds: PositiveInt = 900                  # Entry TTL (15 minutes)
+```
+
+**Loading:** Populated via `default_cache_policy(root=Path)` from runtime policy and environment overrides.
+
+**Environment overrides:**
+- `CQ_CACHE_ENABLED` (bool)
+- `CQ_CACHE_DIR` (path)
+- `CQ_CACHE_TTL_SECONDS`
+
+### Cache Payload Contracts
+
+**SgRecordCacheV1** — Cached ast-grep record:
+
+```python
+class SgRecordCacheV1(CqCacheStruct, frozen=True):
+    record: RecordType = "def"                      # "def" | "call" | "import" | etc.
+    kind: str = ""                                  # AST node kind
+    file: str = ""
+    start_line: NonNegativeInt = 0
+    start_col: NonNegativeInt = 0
+    end_line: NonNegativeInt = 0
+    end_col: NonNegativeInt = 0
+    text: str = ""
+    rule_id: str = ""
+```
+
+**SearchPartitionCacheV1** — Cached search partition result:
+
+```python
+class SearchPartitionCacheV1(CqCacheStruct, frozen=True):
+    pattern: str
+    raw_matches: list[dict[str, object]]
+    stats: dict[str, object]
+    enriched_matches: list[dict[str, object]]
+```
+
+**QueryEntityScanCacheV1** — Cached entity query scan payload:
+
+```python
+class QueryEntityScanCacheV1(CqCacheStruct, frozen=True):
+    records: list[SgRecordCacheV1]
+```
+
+**CallsTargetCacheV1** — Cached calls-target metadata:
+
+```python
+class CallsTargetCacheV1(CqCacheStruct, frozen=True):
+    target_location: tuple[str, int] | None = None
+    target_callees: dict[str, int] = msgspec.field(default_factory=dict)
+```
+
+### Cache Key Builder Contract
+
+**Key format:** SHA256 hash of msgspec-encoded payload.
+
+**Key builder:** `build_cache_key(namespace, version, workspace, **extras)` from `tools/cq/core/cache/__init__.py`.
+
+## Service and Port Contracts
+
+Location: `tools/cq/core/ports.py`
+
+CQ runtime services expose hexagonal ports for search, entity, calls, and cache operations.
+
+### SearchServicePort
+
+```python
+class SearchServicePort(Protocol):
+    def execute(self, request: SearchServiceRequest) -> CqResult:
+        """Execute a search request and return CQ result."""
+```
+
+### EntityServicePort
+
+```python
+class EntityServicePort(Protocol):
+    def attach_front_door(self, request: EntityFrontDoorRequest) -> None:
+        """Attach entity front-door insight to result."""
+```
+
+### CallsServicePort
+
+```python
+class CallsServicePort(Protocol):
+    def execute(self, request: CallsServiceRequest) -> CqResult:
+        """Execute a calls request and return CQ result."""
+```
+
+### CachePort
+
+```python
+class CachePort(Protocol):
+    def get(self, key: str) -> object | None:
+        """Read key from cache."""
+
+    def set(
+        self,
+        key: str,
+        value: object,
+        *,
+        expire: int | None = None,
+        tag: str | None = None,
+    ) -> None:
+        """Write key/value into cache."""
+```
+
+### Service Request Types
+
+**SearchServiceRequest** — Search command request envelope:
+- `query: str`
+- `mode: SearchMode | None`
+- `limits: SearchLimits | None`
+- `lang_scope: QueryLanguageScope`
+- Additional filters and config
+
+**EntityFrontDoorRequest** — Entity front-door insight request:
+- `result: CqResult`
+- `relationship_detail_max_matches: int`
+
+**CallsServiceRequest** — Calls macro request envelope:
+- `function: str`
+- `root: Path`
+- Additional config
+
+## LSP Contract State Types
+
+### LspContractStateV1
+
+Deterministic LSP state for front-door degradation semantics (from `tools/cq/search/lsp_contract_state.py`):
+
+```python
+class LspContractStateV1(CqStruct, frozen=True):
+    provider: LspProvider = "none"                  # "pyrefly" | "rust_analyzer" | "none"
+    available: bool = False
+    attempted: int = 0
+    applied: int = 0
+    failed: int = 0
+    timed_out: int = 0
+    status: LspStatus = "unavailable"               # "unavailable" | "skipped" | "failed" | "partial" | "ok"
+    reasons: tuple[str, ...] = ()
+```
+
+**Derivation:** Via `derive_lsp_contract_state(LspContractStateInputV1)` with deterministic state machine.
+
+### LspRequestBudgetV1
+
+Timeout and retry budget for LSP requests (from `tools/cq/search/lsp_request_budget.py`):
+
+```python
+class LspRequestBudgetV1(CqStruct, frozen=True):
+    startup_timeout_seconds: float = 3.0            # LSP server startup timeout
+    probe_timeout_seconds: float = 1.0              # Individual request timeout
+    max_attempts: int = 2                           # Retry attempts
+    retry_backoff_ms: int = 100                     # Backoff between retries
+```
+
+**Mode-based budgets:** `budget_for_mode(mode: str) -> LspRequestBudgetV1` returns budget profile for search/calls/entity modes.
+
+**Retry semantics:** `call_with_retry()` retries only on `TimeoutError`; other exceptions fail fast.
+
+### LanguageLspEnrichmentRequest
+
+Language-aware LSP enrichment request envelope (from `tools/cq/search/lsp_front_door_adapter.py`):
+
+```python
+class LanguageLspEnrichmentRequest(CqStruct, frozen=True):
+    language: QueryLanguage                         # "python" | "rust"
+    mode: str                                       # "search" | "calls" | "entity"
+    root: Path
+    file_path: Path
+    line: int                                       # 1-indexed
+    col: int                                        # 0-indexed
+    symbol_hint: str | None = None
+```
+
+**Language routing:**
+- Python → `enrich_with_pyrefly_lsp(PyreflyLspRequest)`
+- Rust → `enrich_with_rust_lsp(RustLspRequest)`
+
+**Cache integration:** Results cached in persistent DiskCache with workspace-scoped keys.
+
+## Diagnostic Artifact Contracts
+
+Location: `tools/cq/core/diagnostics_contracts.py`
+
+### DiagnosticsArtifactPayloadV1
+
+Typed diagnostics payload for artifact-first rendering:
+
+```python
+class DiagnosticsArtifactPayloadV1(CqStruct, frozen=True):
+    run_meta: DiagnosticsArtifactRunMetaV1
+    enrichment_telemetry: dict[str, object] = msgspec.field(default_factory=dict)
+    pyrefly_telemetry: dict[str, object] = msgspec.field(default_factory=dict)
+    rust_lsp_telemetry: dict[str, object] = msgspec.field(default_factory=dict)
+    lsp_advanced_planes: dict[str, object] = msgspec.field(default_factory=dict)
+    pyrefly_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
+    language_capabilities: dict[str, object] = msgspec.field(default_factory=dict)
+    cross_language_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
+```
+
+**Purpose:** Offloaded diagnostic summary for artifact-first rendering (see `tools/cq/core/artifacts.py`).
+
+### DiagnosticsArtifactRunMetaV1
+
+Run metadata persisted with diagnostics:
+
+```python
+class DiagnosticsArtifactRunMetaV1(CqStruct, frozen=True):
+    macro: str                                      # Command name
+    root: str                                       # Repository root
+    run_id: str | None = None                       # UUID7 correlation ID
+```
+
+**Builder:** `build_diagnostics_artifact_payload(result: CqResult) -> DiagnosticsArtifactPayloadV1 | None`
+
+**Usage:** Extracts diagnostic keys from `CqResult.summary`, packages into typed contract, returns `None` if no diagnostic data present.
+
 ## Boundary Protocol Summary
 
 ### Cross-Module (Serialized)
@@ -2287,6 +2604,10 @@ Language support is hardcoded:
 - CqConfig (when serialized)
 - All *Request types (RgRunRequest, etc.)
 - All *Contract types (SearchSummaryContract, etc.)
+- All cache payload types (SgRecordCacheV1, SearchPartitionCacheV1, QueryEntityScanCacheV1, CallsTargetCacheV1)
+- All runtime policy types (RuntimeExecutionPolicy, ParallelismPolicy, LspRuntimePolicy, CacheRuntimePolicy)
+- All LSP contract state types (LspContractStateV1, LspRequestBudgetV1, LanguageLspEnrichmentRequest)
+- All diagnostic artifact types (DiagnosticsArtifactPayloadV1, DiagnosticsArtifactRunMetaV1)
 
 **Rationale:** These types cross module boundaries (disk, network, IPC). Serialization must be deterministic and validated.
 
@@ -2300,6 +2621,14 @@ Language support is hardcoded:
 - PatternSpec (when not persisted)
 - ScanContext
 - EntityExecutionState
+- EntityLspTelemetry (from entity_front_door.py)
+- CandidateNeighborhood (from entity_front_door.py)
+
+**Protocols (structural typing, no serialization):**
+- SearchServicePort
+- EntityServicePort
+- CallsServicePort
+- CachePort (cache backend protocol)
 
 **Rationale:** These types exist only within a single process lifetime. No serialization needed.
 

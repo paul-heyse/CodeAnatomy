@@ -8,15 +8,16 @@ This document provides a fully integrated architectural review of the CQ tool (`
 
 | Document | Scope | Lines |
 |----------|-------|-------|
-| [01_core_infrastructure.md](01_core_infrastructure.md) | CLI, config, toolchain, result pipeline, multi-language orchestration, error handling, serialization, code indexing | 1077 |
-| [02_search_subsystem.md](02_search_subsystem.md) | Smart search, 3-tier classification, 5-stage enrichment, parallel pools, Pyrefly LSP, cross-source agreement | 1819 |
-| [03_query_subsystem.md](03_query_subsystem.md) | Query DSL grammar, IR, parser, planner, executor, batch spans, metavariables, multi-language | 1242 |
-| [04_analysis_commands.md](04_analysis_commands.md) | 8 macro commands (calls, impact, sig-impact, scopes, bytecode, side-effects, imports, exceptions), DefIndex, scoring | 803 |
-| [05_multi_step_execution.md](05_multi_step_execution.md) | RunPlan model, 11 step types, TOML/JSON plans, shared scan, chain command, result merging, provenance | 846 |
-| [06_data_models.md](06_data_models.md) | Contract architecture, CqStruct, schema types, enrichment facts, FrontDoorInsightV1, serialization codecs, boundary protocol | ~2400 |
+| [01_core_infrastructure.md](01_core_infrastructure.md) | CLI, config, toolchain, result pipeline, multi-language orchestration, error handling, serialization, code indexing | 1285 |
+| [02_search_subsystem.md](02_search_subsystem.md) | Smart search, 3-tier classification, 5-stage enrichment, parallel pools, Pyrefly LSP, cross-source agreement | 2837 |
+| [03_query_subsystem.md](03_query_subsystem.md) | Query DSL grammar, IR, parser, planner, executor, batch spans, metavariables, multi-language | 1378 |
+| [04_analysis_commands.md](04_analysis_commands.md) | 8 macro commands (calls, impact, sig-impact, scopes, bytecode, side-effects, imports, exceptions), DefIndex, scoring | 848 |
+| [05_multi_step_execution.md](05_multi_step_execution.md) | RunPlan model, 11 step types, TOML/JSON plans, shared scan, chain command, result merging, provenance | 890 |
+| [06_data_models.md](06_data_models.md) | Contract architecture, CqStruct, schema types, enrichment facts, FrontDoorInsightV1, serialization codecs, boundary protocol | 2697 |
 | [07_ast_grep_and_formatting.md](07_ast_grep_and_formatting.md) | ast-grep-py integration, rule system, output renderers, file scanning, gitignore, shared scan context | 1124 |
-| [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) | Semantic neighborhood assembly, SNB schema, 4-phase pipeline, capability gating, section layout, CLI/run integration | 1957 |
+| [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) | Semantic neighborhood assembly, SNB schema, 4-phase pipeline, capability gating, section layout, CLI/run integration | 1994 |
 | [09_ldmd_format.md](09_ldmd_format.md) | LDMD progressive disclosure format, parser/writer architecture, protocol commands, OutputFormat integration | 1505 |
+| [10_runtime_services.md](10_runtime_services.md) | Runtime services tier: execution policies, caching, workers, service layer | 1794 |
 
 ---
 
@@ -41,6 +42,9 @@ CQ is a code query tool that occupies a specific niche: **AST-aware code analysi
 - Parallelism: multiprocessing with `spawn` context (not `fork`)
 - Type enrichment: Pyrefly LSP for semantic hover data
 - Progressive disclosure: LDMD format for long document navigation
+- DiskCache: Persistent workspace-scoped caching (diskcache FanoutCache)
+- Hexagonal ports: Protocol-based service boundaries (SearchServicePort, EntityServicePort, etc.)
+- WorkerScheduler: Dual-pool CPU/IO worker scheduling
 
 ---
 
@@ -286,7 +290,7 @@ CQ follows a consistent fail-open philosophy across all subsystems:
 
 **Batch optimization:** Multiple Q-steps with the same language scope share a single ast-grep scan via `BatchEntityQuerySession`.
 
-**No persistent caching:** All indexes and scan results are in-memory, rebuilt per invocation. No disk cache, no incremental index updates.
+**Persistent caching:** Workspace-scoped DiskCache backend with TTL-based eviction (default 900s) provides persistent caching for calls target metadata, search partitions, and entity scans. The cache uses fail-open semantics, tag-based eviction, and is configurable via `CQ_CACHE_*` environment variables. In-memory per-invocation caches still exist alongside the persistent layer for short-lived data. DefIndex per-invocation rebuild remains, but result caching reduces redundant work.
 
 ### 5.4 Scoring System
 
@@ -419,13 +423,15 @@ The subsystem documents identify numerous per-module improvement opportunities. 
 
 ### 8.1 Persistent Index / Scan Cache
 
+**Status:** **IMPLEMENTED**
+
 **Affected subsystems:** Search, Query, Analysis, Multi-Step
 
-**Current state:** All indexes (DefIndex), scan contexts (ScanContext), and enrichment caches are in-memory, rebuilt per invocation. Multi-step execution shares scans within a single run, but separate invocations start from scratch.
+**Current state:** Persistent DiskCache-backed caching implemented in `core/cache/` with TTL-based eviction (default 900s), workspace-scoped singletons, and fail-open semantics. Caching covers calls target metadata, search partitions, and entity scans. DefIndex per-invocation rebuild remains, but result caching reduces redundant work. See [10_runtime_services.md](10_runtime_services.md) for comprehensive documentation.
 
-**Systemic impact:** Repository scan is O(n) per invocation. For large repos (>50k files), this dominates execution time. Analysis macros that need full DefIndex pay startup cost even for targeted queries.
+**Systemic impact:** Repository scan is O(n) per invocation for DefIndex builds. For large repos (>50k files), this dominates execution time. However, higher-level result caching (calls targets, search partitions, entity scans) now persists across invocations, significantly reducing redundant work for repeated queries.
 
-**Improvement direction:** Persistent scan cache (`.cq-cache/`) with file-mtime-based invalidation. Key design decisions: cache granularity (per-file SgRecord sets vs. full ScanContext), invalidation strategy (mtime vs. content hash), and cache format (msgpack for speed, JSON for debuggability).
+**Remaining improvement opportunities:** Persistent DefIndex caching with file-mtime-based invalidation. Key design decisions: cache granularity (per-file SgRecord sets vs. full ScanContext), invalidation strategy (mtime vs. content hash), and cache format (msgpack for speed, JSON for debuggability).
 
 ### 8.2 Structured Error/Degradation Model
 
@@ -557,6 +563,8 @@ External dependencies and their roles:
 **Rationale:** Simplicity. No cache invalidation bugs. No stale index risk. No disk I/O for cache management.
 **Trade-off:** O(n) startup cost per invocation, proportional to repository size. Acceptable for repos <100k files; becomes bottleneck beyond that.
 
+**Status:** This decision has been **partially superseded**. Persistent caching for calls target metadata, search partitions, and entity scans is now implemented via DiskCache (see `core/cache/`). DefIndex per-invocation rebuild remains, but result caching reduces redundant work for repeated queries. See [10_runtime_services.md](10_runtime_services.md) for details on the persistent caching implementation.
+
 ### 11.5 Flat Finding Model
 
 **Decision:** `CqResult.findings` is a flat list, not a tree.
@@ -626,7 +634,7 @@ For someone planning architectural improvements, the recommended reading order d
 
 | Priority | Theme | Subsystem Scope | Key Documents |
 |----------|-------|-----------------|---------------|
-| High | Persistent index/scan cache | All | 01, 02, 05, 07 |
+| ~~High~~ **DONE** | ~~Persistent index/scan cache~~ Result-level caching implemented | All | 01, 02, 05, 07, 10 |
 | High | Analysis macro scan sharing | Multi-step, Analysis | 04, 05 |
 | Medium | Structured error/degradation model | All | 01, 02, 04 |
 | Medium | Request/config type consolidation | Search, Query, Config | 01, 02, 06 |

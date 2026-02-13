@@ -10,6 +10,7 @@ import os
 import selectors
 import subprocess
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -885,23 +886,24 @@ def _build_probe_requests(
 
 def _tier_a_probe_requests(
     capabilities: LspServerCapabilitySnapshotV1,
-    tdp: dict[str, object],
+    tdp: Mapping[str, object],
 ) -> list[tuple[str, str, dict[str, object]]]:
+    tdp_payload = dict(tdp)
     requests: list[tuple[str, str, dict[str, object]]] = []
     if capabilities.hover_provider:
-        requests.append(("hover", "textDocument/hover", tdp))
+        requests.append(("hover", "textDocument/hover", dict(tdp_payload)))
     if capabilities.definition_provider:
-        requests.append(("definition", "textDocument/definition", tdp))
+        requests.append(("definition", "textDocument/definition", dict(tdp_payload)))
     if capabilities.type_definition_provider:
-        requests.append(("type_definition", "textDocument/typeDefinition", tdp))
+        requests.append(("type_definition", "textDocument/typeDefinition", dict(tdp_payload)))
     return requests
 
 
 def _tier_b_probe_requests(
     capabilities: LspServerCapabilitySnapshotV1,
     health: str,
-    text_document: dict[str, object],
-    position: dict[str, object],
+    text_document: Mapping[str, object],
+    position: Mapping[str, object],
 ) -> list[tuple[str, str, dict[str, object]]]:
     if health not in {"ok", "warning"}:
         return []
@@ -934,15 +936,16 @@ def _tier_c_probe_requests(
     *,
     health: str,
     quiescent: bool,
-    tdp: dict[str, object],
+    tdp: Mapping[str, object],
 ) -> list[tuple[str, str, dict[str, object]]]:
     if health != "ok" or not quiescent:
         return []
+    tdp_payload = dict(tdp)
     requests: list[tuple[str, str, dict[str, object]]] = []
     if capabilities.call_hierarchy_provider:
-        requests.append(("call_prepare", "textDocument/prepareCallHierarchy", tdp))
+        requests.append(("call_prepare", "textDocument/prepareCallHierarchy", dict(tdp_payload)))
     if capabilities.type_hierarchy_provider:
-        requests.append(("type_prepare", "textDocument/prepareTypeHierarchy", tdp))
+        requests.append(("type_prepare", "textDocument/prepareTypeHierarchy", dict(tdp_payload)))
     return requests
 
 

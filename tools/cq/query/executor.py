@@ -17,7 +17,7 @@ from ast_grep_py import Config, Rule, SgRoot
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.cache import build_cache_key, build_cache_tag, get_cq_cache_backend
-from tools.cq.core.cache.contracts import QueryEntityScanCacheV1
+from tools.cq.core.cache.contracts import QueryEntityScanCacheV1, SgRecordCacheV1
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.multilang_orchestrator import (
@@ -139,13 +139,13 @@ class AstGrepExecutionState:
 
     findings: list[Finding]
     records: list[SgRecord]
+    raw_matches: list[dict[str, object]]
 
 
 class DefQueryRelationshipPolicyV1(CqStruct, frozen=True):
     """Policy controls for definition-query relationship detail expansion."""
 
     compute_relationship_details: bool
-    raw_matches: list[dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -342,7 +342,7 @@ def _scan_entity_records(
     if isinstance(cached, dict):
         try:
             payload = msgspec.convert(cached, type=QueryEntityScanCacheV1)
-            return [_cache_dict_to_record(row) for row in payload.records]
+            return [_cache_record_to_record(row) for row in payload.records]
         except (RuntimeError, TypeError, ValueError):
             pass
 
@@ -357,7 +357,7 @@ def _scan_entity_records(
         cache_key,
         contract_to_builtins(
             QueryEntityScanCacheV1(
-                records=[_record_to_cache_dict(record) for record in records],
+                records=[_record_to_cache_record(record) for record in records],
             )
         ),
         expire=900,
@@ -366,31 +366,31 @@ def _scan_entity_records(
     return records
 
 
-def _record_to_cache_dict(record: SgRecord) -> dict[str, object]:
-    return {
-        "record": record.record,
-        "kind": record.kind,
-        "file": record.file,
-        "start_line": record.start_line,
-        "start_col": record.start_col,
-        "end_line": record.end_line,
-        "end_col": record.end_col,
-        "text": record.text,
-        "rule_id": record.rule_id,
-    }
+def _record_to_cache_record(record: SgRecord) -> SgRecordCacheV1:
+    return SgRecordCacheV1(
+        record=record.record,
+        kind=record.kind,
+        file=record.file,
+        start_line=record.start_line,
+        start_col=record.start_col,
+        end_line=record.end_line,
+        end_col=record.end_col,
+        text=record.text,
+        rule_id=record.rule_id,
+    )
 
 
-def _cache_dict_to_record(payload: dict[str, object]) -> SgRecord:
+def _cache_record_to_record(payload: SgRecordCacheV1) -> SgRecord:
     return SgRecord(
-        record=cast("str", payload.get("record", "def")),
-        kind=str(payload.get("kind", "")),
-        file=str(payload.get("file", "")),
-        start_line=int(payload.get("start_line", 0)),
-        start_col=int(payload.get("start_col", 0)),
-        end_line=int(payload.get("end_line", 0)),
-        end_col=int(payload.get("end_col", 0)),
-        text=str(payload.get("text", "")),
-        rule_id=str(payload.get("rule_id", "")),
+        record=payload.record,
+        kind=payload.kind,
+        file=payload.file,
+        start_line=payload.start_line,
+        start_col=payload.start_col,
+        end_line=payload.end_line,
+        end_col=payload.end_col,
+        text=payload.text,
+        rule_id=payload.rule_id,
     )
 
 

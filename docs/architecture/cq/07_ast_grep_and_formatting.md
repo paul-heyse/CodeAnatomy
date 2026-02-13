@@ -1081,7 +1081,7 @@ class ScanContext:
 - Current: Recursive `rglob("*")` for untracked files
 - Benefit: Simple, relies on OS filesystem cache
 - Tension: Large repos with many untracked files are slow
-- Improvement Vector: Add `.gitignore` early filtering (skip ignored directories entirely). Requires parsing `.gitignore` for directory patterns, not just files. Current approach works for repos <100k files.
+- Improvement Vector: Add `.gitignore` early filtering (skip ignored directories entirely). Requires parsing `.gitignore` for directory patterns, not just files. Persistent cache infrastructure (DiskCache) exists and is used for macro-level results, though file discovery cache persistence is not yet implemented. Current approach works for repos <100k files.
 
 **Extension Detection Rigidity**:
 - Current: Hardcoded extension lists per language
@@ -1102,10 +1102,10 @@ class ScanContext:
 - Improvement Vector: Add `--explain-sample N` to show first N decisions. Enable incremental debugging without full diagnostic dump.
 
 **Scan Context Sharing**:
-- Current: In-memory cache (not persisted)
+- Current: In-memory cache for within-command sharing (not persisted). Cross-invocation persistence available for higher-level results via DiskCache layer (see [10_runtime_services.md](10_runtime_services.md)).
 - Benefit: Fast multi-step execution within single command
-- Tension: Not shared across separate command invocations
-- Improvement Vector: Persistent scan cache (`.cq-cache/scan_*.msgpack`). Enable cross-command reuse. Requires invalidation strategy (file mtime tracking). Current in-memory approach is correct choice for single-command use.
+- Tension: Scan-level cache not persisted (macro-level results are cached)
+- Improvement Vector: Persistent scan cache (`.cq-cache/scan_*.msgpack`). Enable cross-command reuse. Requires invalidation strategy (file mtime tracking). Persistent cache infrastructure exists and is used for calls/search/entity results, though scan-level cache persistence specifically is not yet implemented.
 
 ## Summary
 

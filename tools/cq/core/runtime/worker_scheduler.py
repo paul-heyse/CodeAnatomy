@@ -8,7 +8,7 @@ import threading
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from typing import ParamSpec
+from typing import ParamSpec, TypeVar, cast
 
 from tools.cq.core.runtime.execution_policy import (
     ParallelismPolicy,
@@ -16,6 +16,8 @@ from tools.cq.core.runtime.execution_policy import (
 )
 
 P = ParamSpec("P")
+R = TypeVar("R")
+T = TypeVar("T")
 
 
 @dataclass(slots=True)
@@ -63,26 +65,40 @@ class WorkerScheduler:
                 )
             return self._cpu_pool
 
-    def submit_io[T](self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+    def submit_io(
+        self,
+        fn: Callable[P, R],
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> Future[R]:
         """Submit an I/O task.
 
         Returns:
             Future representing the scheduled task.
         """
-        return self.io_pool().submit(fn, *args, **kwargs)
+        callable_fn = cast("Callable[..., R]", fn)
+        return self.io_pool().submit(callable_fn, *args, **kwargs)
 
-    def submit_cpu[T](self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+    def submit_cpu(
+        self,
+        fn: Callable[P, R],
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> Future[R]:
         """Submit a CPU task.
 
         Returns:
             Future representing the scheduled task.
         """
+        callable_fn = cast("Callable[..., R]", fn)
         if self._policy.enable_process_pool:
-            return self.cpu_pool().submit(fn, *args, **kwargs)
-        return self.io_pool().submit(fn, *args, **kwargs)
+            return self.cpu_pool().submit(callable_fn, *args, **kwargs)
+        return self.io_pool().submit(callable_fn, *args, **kwargs)
 
     @staticmethod
-    def collect_bounded[T](
+    def collect_bounded(
         futures: Iterable[Future[T]],
         *,
         timeout_seconds: float,

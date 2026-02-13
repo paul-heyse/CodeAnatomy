@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.core.snb_schema import (
     DegradeEventV1,
+    NeighborhoodSliceKind,
     NeighborhoodSliceV1,
     SemanticEdgeV1,
     SemanticNodeRefV1,
@@ -51,7 +52,7 @@ class RecordSliceBuildRequest(CqStruct, frozen=True):
     """Request envelope for constructing one record-backed structural slice."""
 
     records: tuple[SgRecord, ...]
-    slice_kind: str
+    slice_kind: NeighborhoodSliceKind
     title: str
     edge_kind: str
     subject_node_id: str

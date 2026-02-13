@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+from typing import Annotated
 
-from tools.cq.core.structs import CqStruct
+import msgspec
+
+from tools.cq.core.structs import CqSettingsStruct
 
 _DEFAULT_LSP_TIMEOUT_MS = 2_000
 _DEFAULT_CACHE_TTL_SECONDS = 900
@@ -16,38 +19,42 @@ _DEFAULT_RUN_STEP_WORKERS = 4
 _ENV_PREFIX = "CQ_RUNTIME_"
 
 
-class ParallelismPolicy(CqStruct, frozen=True):
+PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
+PositiveFloat = Annotated[float, msgspec.Meta(gt=0.0)]
+
+
+class ParallelismPolicy(CqSettingsStruct, frozen=True):
     """Worker policy for CPU and I/O execution."""
 
-    cpu_workers: int
-    io_workers: int
-    lsp_request_workers: int
-    query_partition_workers: int = _DEFAULT_QUERY_PARTITION_WORKERS
-    calls_file_workers: int = _DEFAULT_CALLS_FILE_WORKERS
-    run_step_workers: int = _DEFAULT_RUN_STEP_WORKERS
+    cpu_workers: PositiveInt
+    io_workers: PositiveInt
+    lsp_request_workers: PositiveInt
+    query_partition_workers: PositiveInt = _DEFAULT_QUERY_PARTITION_WORKERS
+    calls_file_workers: PositiveInt = _DEFAULT_CALLS_FILE_WORKERS
+    run_step_workers: PositiveInt = _DEFAULT_RUN_STEP_WORKERS
     enable_process_pool: bool = True
 
 
-class LspRuntimePolicy(CqStruct, frozen=True):
+class LspRuntimePolicy(CqSettingsStruct, frozen=True):
     """LSP timing and budgeting policy."""
 
-    timeout_ms: int = _DEFAULT_LSP_TIMEOUT_MS
-    startup_timeout_ms: int = _DEFAULT_LSP_TIMEOUT_MS
-    max_targets_search: int = 1
-    max_targets_calls: int = 1
-    max_targets_entity: int = 3
+    timeout_ms: PositiveInt = _DEFAULT_LSP_TIMEOUT_MS
+    startup_timeout_ms: PositiveInt = _DEFAULT_LSP_TIMEOUT_MS
+    max_targets_search: PositiveInt = 1
+    max_targets_calls: PositiveInt = 1
+    max_targets_entity: PositiveInt = 3
 
 
-class CacheRuntimePolicy(CqStruct, frozen=True):
+class CacheRuntimePolicy(CqSettingsStruct, frozen=True):
     """Cache policy for CQ runtime adapters."""
 
     enabled: bool = True
-    ttl_seconds: int = _DEFAULT_CACHE_TTL_SECONDS
-    shards: int = 8
-    timeout_seconds: float = 0.05
+    ttl_seconds: PositiveInt = _DEFAULT_CACHE_TTL_SECONDS
+    shards: PositiveInt = 8
+    timeout_seconds: PositiveFloat = 0.05
 
 
-class RuntimeExecutionPolicy(CqStruct, frozen=True):
+class RuntimeExecutionPolicy(CqSettingsStruct, frozen=True):
     """Top-level runtime policy envelope."""
 
     parallelism: ParallelismPolicy

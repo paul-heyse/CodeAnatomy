@@ -12,6 +12,7 @@ This document targets advanced LLM programmers seeking to propose architectural 
 
 **Core Analysis Commands** (`tools/cq/macros/`):
 - `calls.py` (1429 lines) - Call site census with argument shape analysis
+- `calls_target.py` - Target resolution with persistent cache: `resolve_target_definition()`, `attach_target_metadata()`, `scan_target_callees()`
 - `impact.py` (901 lines) - Taint/data flow propagation
 - `sig_impact.py` (446 lines) - Signature change impact simulation
 - `scopes.py` (414 lines) - Closure/scope capture analysis
@@ -19,6 +20,8 @@ This document targets advanced LLM programmers seeking to propose architectural 
 - `side_effects.py` (264 lines) - Import-time side effect detection
 - `imports.py` (449 lines) - Import structure and cycle analysis
 - `exceptions.py` (478 lines) - Exception handling pattern analysis
+- `multilang_fallback.py` - Cross-language fallback behavior for macros
+- `_rust_fallback.py` - Shared Rust fallback search helper: `rust_fallback_search()`
 
 **Supporting Infrastructure**:
 - `cli_app/commands/analysis.py` (361 lines) - CLI dispatch layer
@@ -76,7 +79,7 @@ Both calls and impact use `ast.NodeVisitor` subclasses:
 **DefIndex** (`def_index.py:412-676`):
 - Repository-wide symbol index (functions, classes, methods)
 - Import alias tracking (module and symbol imports)
-- Built on-demand via full repo scan (no caching)
+- Built on-demand via full repo scan. Higher-level result caching available via persistent DiskCache layer for calls target metadata (`CallsTargetCacheV1`). See [10_runtime_services.md](10_runtime_services.md).
 - Supports both simple name and qualified name lookup
 
 **CallResolver** (`call_resolver.py:1-352`):
@@ -150,13 +153,20 @@ class CallSite(msgspec.Struct):
 
 **Algorithm Pipeline**:
 
-1. **Candidate Scan** (`_scan_call_sites`, lines 1159-1216):
+1. **Target Resolution and Caching** (`attach_target_metadata()`):
+   - Cache lookup for target metadata via `CallsTargetCacheV1` contract (900s TTL)
+   - On cache miss: `resolve_target_definition()` resolves target from DefIndex
+   - Cache write for future invocations
+   - `scan_target_callees()` collects callees from resolved target body
+   - Persistent cache reduces redundant DefIndex rebuilds across invocations
+
+2. **Candidate Scan** (`_scan_call_sites`, lines 1159-1216):
    - Use ripgrep for fast file-level filtering: `\b{function_name}\s*\(`
    - Try ast-grep on candidate files for structural matching
    - Fall back to ripgrep if ast-grep fails
    - Track fallback status for confidence scoring
 
-2. **Call Site Collection** (`_collect_call_sites`, lines 810-863):
+3. **Call Site Collection** (`_collect_call_sites`, lines 810-863):
    - Parse candidate files into AST
    - Visit all `ast.Call` nodes with CallFinder visitor
    - Match target expression by name or qualified name
@@ -652,19 +662,20 @@ This separate risk model provides more transparent, actionable risk assessment f
 ### 1. Index Construction Strategy
 
 **Current Design**:
-- DefIndex rebuilds on every invocation
-- No caching or persistence
-- Full repo scan for every command
+- DefIndex rebuilds on every invocation (within-command state only)
+- Persistent caching implemented for calls target metadata via DiskCache layer
+- Higher-level result caching reduces redundant work across invocations
+- Full repo scan still occurs per invocation for DefIndex construction
 
 **Tensions**:
-- Simplicity: No cache invalidation complexity
-- Performance: Repeated scans for multi-command workflows
-- Accuracy: Always fresh, never stale
+- Simplicity: No cache invalidation complexity for DefIndex itself
+- Performance: Persistent cache layer partially addresses repeated scan overhead
+- Accuracy: Always fresh DefIndex, cached results with TTL (900s)
 
 **Improvement Vectors**:
-- Session-scoped caching: Share index across chain/run commands
+- Session-scoped DefIndex caching: Share index across chain/run commands (partially addressed by result cache)
 - Incremental indexing: File-level invalidation with timestamps
-- Persistent index with invalidation: On-disk cache with mtime checks
+- Persistent DefIndex with invalidation: On-disk cache with mtime checks (infrastructure exists, not yet applied to DefIndex)
 
 ### 2. Taint Propagation Depth Control
 

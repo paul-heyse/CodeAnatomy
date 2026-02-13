@@ -76,3 +76,25 @@ def test_resolve_missing_target_returns_error_degrade() -> None:
     resolved = resolve_target(parse_target_spec("missing_symbol"), snapshot)
     assert resolved.target_name == "missing_symbol"
     assert any(event.category == "not_found" for event in resolved.degrade_events)
+
+
+def test_resolve_rust_pub_crate_anchor_extracts_function_name() -> None:
+    snapshot = ScanSnapshot(
+        def_records=(
+            SgRecord(
+                record="def",
+                kind="function_item",
+                file="rust/lib.rs",
+                start_line=7,
+                start_col=0,
+                end_line=14,
+                end_col=1,
+                text="pub(crate) fn compute_fanout(input: usize) -> usize {",
+                rule_id="rust_function_item",
+            ),
+        )
+    )
+    resolved = resolve_target(parse_target_spec("rust/lib.rs:8"), snapshot)
+    assert resolved.target_name == "compute_fanout"
+    assert resolved.target_file == "rust/lib.rs"
+    assert resolved.resolution_kind == "anchor"

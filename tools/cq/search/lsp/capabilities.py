@@ -21,23 +21,50 @@ _METHOD_TO_CAPABILITY: dict[str, str] = {
 }
 
 
+def _supports_semantic_tokens(capabilities: Mapping[str, object], method: str) -> bool:
+    tokens = capabilities.get("semanticTokensProvider")
+    if isinstance(tokens, Mapping):
+        if method == "textDocument/semanticTokens/full":
+            return bool(tokens.get("full")) or "full" in tokens
+        return bool(tokens.get("range")) or "range" in tokens
+    return bool(tokens)
+
+
+def _supports_workspace_diagnostic(
+    capabilities: Mapping[str, object], capability_field: str
+) -> bool:
+    if bool(capabilities.get(capability_field)):
+        return True
+    diagnostic_provider = capabilities.get("diagnosticProvider")
+    if isinstance(diagnostic_provider, Mapping):
+        workspace = diagnostic_provider.get("workspaceDiagnostics")
+        return bool(workspace)
+    return False
+
+
+def _supports_text_document_diagnostic(
+    capabilities: Mapping[str, object],
+    capability_field: str,
+) -> bool:
+    provider = capabilities.get(capability_field)
+    return bool(provider) or isinstance(provider, Mapping)
+
+
 def supports_method(capabilities: Mapping[str, object], method: str) -> bool:
     """Return whether server capabilities indicate method support."""
-    if method == "textDocument/semanticTokens/range":
-        tokens = capabilities.get("semanticTokensProvider")
-        return isinstance(tokens, Mapping)
+    if method in {"textDocument/semanticTokens/range", "textDocument/semanticTokens/full"}:
+        return _supports_semantic_tokens(capabilities, method)
+
     capability_field = _METHOD_TO_CAPABILITY.get(method)
     if capability_field is None:
         return False
-    if method == "workspace/diagnostic" and not bool(capabilities.get(capability_field)):
-        diagnostic_provider = capabilities.get("diagnosticProvider")
-        if isinstance(diagnostic_provider, Mapping):
-            workspace = diagnostic_provider.get("workspaceDiagnostics")
-            return bool(workspace)
-        return False
+
+    if method == "workspace/diagnostic":
+        return _supports_workspace_diagnostic(capabilities, capability_field)
+
     if method == "textDocument/diagnostic":
-        provider = capabilities.get(capability_field)
-        return bool(provider) or isinstance(provider, Mapping)
+        return _supports_text_document_diagnostic(capabilities, capability_field)
+
     return bool(capabilities.get(capability_field))
 
 

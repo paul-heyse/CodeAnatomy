@@ -90,5 +90,9 @@ def test_enrich_with_pyrefly_resets_when_session_not_running(
             col=0,
         )
     )
-    assert payload is None
+    assert isinstance(payload, dict)
+    coverage = payload.get("coverage")
+    assert isinstance(coverage, dict)
+    assert coverage.get("status") == "not_resolved"
+    assert coverage.get("reason") == "no_signal"
     assert resets == ["reset"]

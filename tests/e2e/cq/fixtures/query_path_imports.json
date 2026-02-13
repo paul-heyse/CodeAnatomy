@@ -57,7 +57,7 @@
         "score": 0.8
       },
       "degradation": {
-        "lsp": "unavailable",
+        "lsp": "skipped",
         "notes": [
           "provider_unavailable",
           "missing_languages=rust"

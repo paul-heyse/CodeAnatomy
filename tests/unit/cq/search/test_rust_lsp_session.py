@@ -155,7 +155,7 @@ def test_tiered_gating_tier_a_always_available(session: _RustLspSession) -> None
     session._process = MagicMock()
 
     # Mock LSP transport methods
-    with patch.object(session, "_send_request", return_value={}):
+    with patch.object(session, "_request_many", return_value={}):
         with patch.object(session, "_read_pending_notifications", return_value=[]):
             request = RustLspRequest(file_path="/path/to/file.rs", line=10, col=5)
             result = session.probe(request)
@@ -180,7 +180,7 @@ def test_tiered_gating_tier_b_requires_ok_or_warning(session: _RustLspSession) -
     )
     session._process = MagicMock()
 
-    with patch.object(session, "_send_request", return_value={}):
+    with patch.object(session, "_request_many", return_value={}):
         with patch.object(session, "_read_pending_notifications", return_value=[]):
             request = RustLspRequest(file_path="/path/to/file.rs", line=10, col=5)
             result = session.probe(request)
@@ -200,7 +200,7 @@ def test_tiered_gating_tier_b_requires_ok_or_warning(session: _RustLspSession) -
         ),
     )
 
-    with patch.object(session, "_send_request", return_value={}):
+    with patch.object(session, "_request_many", return_value={}):
         with patch.object(session, "_read_pending_notifications", return_value=[]):
             result = session.probe(request)
 
@@ -224,7 +224,7 @@ def test_tiered_gating_tier_c_requires_ok_and_quiescent(session: _RustLspSession
     )
     session._process = MagicMock()
 
-    with patch.object(session, "_send_request", return_value={}):
+    with patch.object(session, "_request_many", return_value={}):
         with patch.object(session, "_read_pending_notifications", return_value=[]):
             request = RustLspRequest(file_path="/path/to/file.rs", line=10, col=5)
             result = session.probe(request)
@@ -244,7 +244,7 @@ def test_tiered_gating_tier_c_requires_ok_and_quiescent(session: _RustLspSession
         ),
     )
 
-    with patch.object(session, "_send_request", return_value={}):
+    with patch.object(session, "_request_many", return_value={}):
         with patch.object(session, "_read_pending_notifications", return_value=[]):
             result = session.probe(request)
 
@@ -283,7 +283,7 @@ def test_probe_includes_diagnostics_for_file(session: _RustLspSession) -> None:
     session._session_env = LspSessionEnvV1(workspace_health="ok")
     session._process = MagicMock()
 
-    with patch.object(session, "_send_request", return_value={}):
+    with patch.object(session, "_request_many", return_value={}):
         with patch.object(session, "_read_pending_notifications", return_value=[]):
             request = RustLspRequest(file_path="/path/to/file.rs", line=10, col=5)
             result = session.probe(request)
@@ -305,7 +305,7 @@ def test_health_tri_state_handling(session: _RustLspSession) -> None:
         )
         session._process = MagicMock()
 
-        with patch.object(session, "_send_request", return_value={}):
+        with patch.object(session, "_request_many", return_value={}):
             with patch.object(session, "_read_pending_notifications", return_value=[]):
                 request = RustLspRequest(file_path="/path/to/file.rs", line=10, col=5)
                 result = session.probe(request)
@@ -326,7 +326,7 @@ def test_shutdown_graceful(session: _RustLspSession) -> None:
         session.shutdown()
 
         # Should send shutdown request and exit notification
-        mock_send_request.assert_called_once_with("shutdown", {})
+        mock_send_request.assert_called_once_with("shutdown", {}, timeout_seconds=2.0)
         mock_send_notification.assert_called_once_with("exit", {})
 
         # Should terminate process
@@ -351,7 +351,7 @@ def test_capability_checking_uses_provider_fields(session: _RustLspSession) -> N
     )
     session._process = MagicMock()
 
-    with patch.object(session, "_send_request", return_value={}):
+    with patch.object(session, "_request_many", return_value={}):
         with patch.object(session, "_read_pending_notifications", return_value=[]):
             request = RustLspRequest(file_path="/path/to/file.rs", line=10, col=5)
             result = session.probe(request)
@@ -359,3 +359,123 @@ def test_capability_checking_uses_provider_fields(session: _RustLspSession) -> N
             assert result is not None
             # The probe logic should respect the provider field settings
             # (hover not requested because hover_provider=False)
+
+
+def test_server_refresh_request_records_event_and_sends_response(
+    session: _RustLspSession,
+) -> None:
+    sent: list[dict[str, object]] = []
+    with patch.object(session, "_send", side_effect=sent.append):
+        session._handle_server_request(
+            {
+                "id": 7,
+                "method": "workspace/inlayHint/refresh",
+                "params": {},
+            }
+        )
+    assert "workspace/inlayHint/refresh" in session._session_env.refresh_events
+    assert sent
+    assert sent[0]["id"] == 7
+    assert "result" in sent[0]
+
+
+def test_unknown_server_request_sends_method_not_found_error(
+    session: _RustLspSession,
+) -> None:
+    sent: list[dict[str, object]] = []
+    with patch.object(session, "_send", side_effect=sent.append):
+        session._handle_server_request(
+            {
+                "id": 9,
+                "method": "workspace/unknownRefresh",
+                "params": {},
+            }
+        )
+    assert sent
+    message = sent[0]
+    assert message["id"] == 9
+    error = message.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == -32601
+
+
+def test_utf16_character_roundtrip_for_multibyte_content(
+    session: _RustLspSession,
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "utf16.rs"
+    source = 'fn main() { let crab = "🦀"; }\n'
+    file_path.write_text(source, encoding="utf-8")
+    uri = file_path.resolve().as_uri()
+    target_col = source.index("🦀")
+    after_emoji_col = target_col + 1
+
+    session._session_env = LspSessionEnvV1(position_encoding="utf-16")
+    session._doc_text_by_uri[uri] = source
+
+    lsp_char = session._to_lsp_character(file_path=file_path, line=0, column=after_emoji_col)
+    assert lsp_char > after_emoji_col
+    restored = session._from_lsp_character(uri=uri, line=0, character=lsp_char)
+    assert restored == after_emoji_col
+
+
+def test_collect_probe_responses_marks_timeout_category(session: _RustLspSession) -> None:
+    session._session_env = LspSessionEnvV1(
+        workspace_health="ok",
+        quiescent=False,
+        capabilities=LspCapabilitySnapshotV1(
+            server_caps=LspServerCapabilitySnapshotV1(
+                hover_provider=True,
+                definition_provider=True,
+                type_definition_provider=True,
+                references_provider=True,
+                document_symbol_provider=True,
+            )
+        ),
+    )
+    request = RustLspRequest(file_path="/tmp/lib.rs", line=0, col=0)
+    degrade_events: list[dict[str, object]] = []
+
+    with patch.object(session, "_to_lsp_character", return_value=0):
+        with patch.object(
+            session,
+            "_request_many",
+            return_value={
+                "hover": {},
+                "definition": {},
+                "type_definition": {},
+                "references": None,
+                "document_symbols": {},
+            },
+        ):
+            session._last_request_timeouts = {"references"}
+            session._collect_probe_responses(request, "file:///tmp/lib.rs", degrade_events)
+
+    timeout_events = [
+        event for event in degrade_events if event.get("category") == "request_timeout"
+    ]
+    assert timeout_events
+
+
+def test_collect_advanced_planes_skipped_when_workspace_unhealthy(
+    session: _RustLspSession,
+) -> None:
+    session._session_env = LspSessionEnvV1(workspace_health="warning", quiescent=False)
+    payload = session._collect_advanced_planes(
+        RustLspRequest(file_path="/tmp/lib.rs", line=0, col=0),
+        uri="file:///tmp/lib.rs",
+    )
+    assert payload["availability"] == "skipped"
+    assert payload["reason"] == "workspace_unhealthy"
+
+
+def test_collect_advanced_planes_partial_when_non_quiescent(
+    session: _RustLspSession,
+) -> None:
+    session._session_env = LspSessionEnvV1(workspace_health="ok", quiescent=False)
+    payload = session._collect_advanced_planes(
+        RustLspRequest(file_path="/tmp/lib.rs", line=0, col=0),
+        uri="file:///tmp/lib.rs",
+    )
+    assert payload["availability"] == "partial"
+    assert payload["reason"] == "workspace_not_quiescent_partial"

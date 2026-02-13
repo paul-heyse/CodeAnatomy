@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import msgspec
+from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightTargetV1
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.executor import FileIntervalIndex, _build_callers_section, execute_plan
+from tools.cq.query.merge import _mark_entity_insight_partial_from_summary
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.query.sg_parser import SgRecord
@@ -195,3 +198,53 @@ def test_entity_insight_skips_lsp_for_high_cardinality_query(tmp_path: Path) -> 
     attempted = pyrefly_telemetry.get("attempted")
     assert isinstance(attempted, int)
     assert attempted == 0
+
+
+def test_mark_entity_insight_lsp_from_merged_telemetry() -> None:
+    """Merged telemetry should drive deterministic front-door LSP status."""
+    from tools.cq.core.schema import CqResult, RunMeta
+
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=1.0,
+        toolchain={},
+    )
+    insight = FrontDoorInsightV1(
+        source="entity",
+        target=InsightTargetV1(symbol="compile_target", kind="function"),
+    )
+    result = CqResult(
+        run=run,
+        summary={
+            "lang_scope": "auto",
+            "front_door_insight": msgspec.to_builtins(insight),
+            "pyrefly_telemetry": {
+                "attempted": 2,
+                "applied": 1,
+                "failed": 1,
+                "skipped": 0,
+                "timed_out": 0,
+            },
+            "rust_lsp_telemetry": {
+                "attempted": 0,
+                "applied": 0,
+                "failed": 0,
+                "skipped": 0,
+                "timed_out": 0,
+            },
+            "languages": {
+                "python": {"matches": 1, "total_matches": 1},
+                "rust": {"matches": 0, "total_matches": 0},
+            },
+        },
+    )
+
+    _mark_entity_insight_partial_from_summary(result)
+    updated = result.summary.get("front_door_insight")
+    assert isinstance(updated, dict)
+    degradation = updated.get("degradation")
+    assert isinstance(degradation, dict)
+    assert degradation.get("lsp") == "partial"

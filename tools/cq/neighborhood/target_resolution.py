@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
+from tools.cq.core.definition_parser import extract_symbol_name
 from tools.cq.core.snb_schema import DegradeEventV1
 from tools.cq.core.structs import CqStruct
 from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
@@ -181,12 +182,13 @@ def _resolve_anchor_target(
     if spec.target_name:
         return None
     fallback_name = Path(spec.target_file).stem
+    normalized_file = _normalize_file_path(spec.target_file)
     return ResolvedTarget(
         target_name=fallback_name,
-        target_file=spec.target_file,
+        target_file=normalized_file,
         target_line=spec.target_line,
         target_col=spec.target_col,
-        target_uri=_to_uri(root, spec.target_file),
+        target_uri=_to_uri(root, normalized_file),
         symbol_hint=fallback_name,
         resolution_kind="file_anchor_unresolved",
         degrade_events=tuple(degrades),
@@ -304,10 +306,12 @@ def _build_unresolved_target(
         )
         return ResolvedTarget(
             target_name=symbol_name,
-            target_file=spec.target_file or "",
+            target_file=_normalize_file_path(spec.target_file) if spec.target_file else "",
             target_line=spec.target_line,
             target_col=spec.target_col,
-            target_uri=_to_uri(root, spec.target_file) if spec.target_file else None,
+            target_uri=_to_uri(root, _normalize_file_path(spec.target_file))
+            if spec.target_file
+            else None,
             symbol_hint=symbol_name,
             resolution_kind="unresolved",
             degrade_events=tuple(degrades),
@@ -322,10 +326,12 @@ def _build_unresolved_target(
     )
     return ResolvedTarget(
         target_name=spec.raw,
-        target_file=spec.target_file or "",
+        target_file=_normalize_file_path(spec.target_file) if spec.target_file else "",
         target_line=spec.target_line,
         target_col=spec.target_col,
-        target_uri=_to_uri(root, spec.target_file) if spec.target_file else None,
+        target_uri=_to_uri(root, _normalize_file_path(spec.target_file))
+        if spec.target_file
+        else None,
         symbol_hint=spec.target_name,
         resolution_kind="invalid",
         degrade_events=tuple(degrades),
@@ -339,10 +345,13 @@ def _anchor_candidates(
     line: int,
     col: int | None,
 ) -> list[SgRecord]:
+    normalized_target_file = _normalize_file_path(target_file)
     candidates = []
     for record in def_records:
         file_value = getattr(record, "file", None)
-        if file_value != target_file:
+        if not isinstance(file_value, str):
+            continue
+        if _normalize_file_path(file_value) != normalized_target_file:
             continue
         start_line = _as_int(getattr(record, "start_line", None), 0)
         end_line = _as_int(getattr(record, "end_line", None), 0)
@@ -366,11 +375,15 @@ def _name_candidates(
     name: str,
     target_file: str | None,
 ) -> list[SgRecord]:
+    normalized_target_file = _normalize_file_path(target_file) if target_file is not None else None
     candidates: list[SgRecord] = []
     for record in def_records:
         file_value = getattr(record, "file", None)
-        if target_file is not None and file_value != target_file:
-            continue
+        if target_file is not None:
+            if not isinstance(file_value, str):
+                continue
+            if _normalize_file_path(file_value) != normalized_target_file:
+                continue
         if _extract_name_from_text(str(getattr(record, "text", ""))) != name:
             continue
         candidates.append(record)
@@ -400,16 +413,14 @@ def _deterministic_record_key(record: SgRecord) -> tuple[str, int, int, str]:
 
 
 def _extract_name_from_text(text: str) -> str:
-    raw = text.strip()
-    if raw.startswith(("def ", "class ")):
-        head = raw.split("(", 1)[0].strip()
-        return head.split()[-1] if head else raw
-    if "(" in raw:
-        call_head = raw.split("(", 1)[0].strip()
-        if "." in call_head:
-            return call_head.split(".")[-1]
-        return call_head
-    return raw
+    return extract_symbol_name(text, fallback=text.strip())
+
+
+def _normalize_file_path(path: str) -> str:
+    normalized = path.strip()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return Path(normalized).as_posix()
 
 
 def _as_int(value: object, default: int) -> int:

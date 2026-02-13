@@ -11,10 +11,11 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 
+from tools.cq.core.definition_parser import extract_symbol_name
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import (
@@ -32,7 +33,7 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
-from tools.cq.macros.calls_target import attach_target_metadata
+from tools.cq.macros.calls_target import attach_target_metadata, infer_target_language
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file, list_scan_files, sg_scan
 from tools.cq.search import INTERACTIVE, find_call_candidates
 from tools.cq.search.adapter import find_def_lines, find_files_with_pattern
@@ -45,7 +46,7 @@ if TYPE_CHECKING:
         InsightNeighborhoodV1,
     )
     from tools.cq.core.toolchain import Toolchain
-    from tools.cq.query.language import QueryLanguage
+    from tools.cq.query.language import QueryLanguage, QueryLanguageScope
     from tools.cq.search import SearchLimits
 
 _ARG_PREVIEW_LIMIT = 3
@@ -56,6 +57,7 @@ _KW_TEXT_LIMIT = 15
 _KW_TEXT_TRIM = 12
 _MIN_QUAL_PARTS = 2
 _MAX_CONTEXT_SNIPPET_LINES = 30
+_MAX_RUST_ARG_PREVIEW_CHARS = 80
 _TRIPLE_QUOTE_RE = re.compile(r"^[rRuUbBfF]*(?P<quote>'''|\"\"\")")
 _CALLS_TARGET_CALLEE_PREVIEW = 10
 _FRONT_DOOR_TOP_CANDIDATES = 3
@@ -815,6 +817,7 @@ def _rg_find_candidates(
     root: Path,
     *,
     limits: SearchLimits | None = None,
+    lang_scope: str = "auto",
 ) -> list[tuple[Path, int]]:
     """Use ripgrep to find candidate files/lines.
 
@@ -834,7 +837,12 @@ def _rg_find_candidates(
     """
     limits = limits or INTERACTIVE
     search_name = function_name.rsplit(".", maxsplit=1)[-1]
-    return find_call_candidates(root, search_name, limits=limits)
+    return find_call_candidates(
+        root,
+        search_name,
+        limits=limits,
+        lang_scope=cast("QueryLanguageScope", lang_scope),
+    )
 
 
 def _group_candidates(candidates: list[tuple[Path, int]]) -> dict[Path, list[int]]:
@@ -1042,6 +1050,9 @@ def _collect_call_sites_from_records(
     by_file = group_records_by_file(records)
     all_sites: list[CallSite] = []
     for rel_path, file_records in by_file.items():
+        if Path(rel_path).suffix == ".rs":
+            all_sites.extend(_collect_rust_call_sites(rel_path, file_records, function_name))
+            continue
         filepath = root / rel_path
         if not filepath.exists():
             continue
@@ -1068,6 +1079,97 @@ def _collect_call_sites_from_records(
                 all_sites.append(site)
     files_with_calls = len({site.file for site in all_sites})
     return all_sites, files_with_calls
+
+
+def _collect_rust_call_sites(
+    rel_path: str,
+    records: list[SgRecord],
+    function_name: str,
+) -> list[CallSite]:
+    target_symbol = function_name.rsplit(".", maxsplit=1)[-1]
+    sites: list[CallSite] = []
+    for record in records:
+        site = _build_rust_call_site_from_record(
+            rel_path=rel_path,
+            record=record,
+            target_symbol=target_symbol,
+        )
+        if site is not None:
+            sites.append(site)
+    return sites
+
+
+def _build_rust_call_site_from_record(
+    *,
+    rel_path: str,
+    record: SgRecord,
+    target_symbol: str,
+) -> CallSite | None:
+    callee = extract_symbol_name(record.text, fallback="")
+    if callee != target_symbol:
+        return None
+    args_preview = _rust_call_preview(record.text)
+    num_args = _rust_call_arg_count(record.text)
+    context_window = {"start_line": record.start_line, "end_line": record.start_line}
+    return CallSite(
+        file=rel_path,
+        line=record.start_line,
+        col=record.start_col,
+        num_args=num_args,
+        num_kwargs=0,
+        kwargs=[],
+        has_star_args=False,
+        has_star_kwargs=False,
+        context="<module>",
+        arg_preview=args_preview,
+        callee=callee,
+        receiver=None,
+        resolution_confidence="heuristic",
+        resolution_path="ast_grep_rust",
+        binding="ok",
+        target_names=[target_symbol],
+        call_id=uuid7_str(),
+        hazards=[],
+        symtable_info=None,
+        bytecode_info=None,
+        context_window=context_window,
+        context_snippet=record.text.strip(),
+    )
+
+
+def _rust_call_arg_count(text: str) -> int:
+    segment = _rust_call_arg_segment(text)
+    if not segment:
+        return 0
+    depth = 0
+    count = 1
+    for char in segment:
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            count += 1
+    return count
+
+
+def _rust_call_preview(text: str) -> str:
+    segment = _rust_call_arg_segment(text)
+    if not segment:
+        return "()"
+    preview = segment.strip()
+    if len(preview) > _MAX_RUST_ARG_PREVIEW_CHARS:
+        preview = f"{preview[: _MAX_RUST_ARG_PREVIEW_CHARS - 3]}..."
+    return preview
+
+
+def _rust_call_arg_segment(text: str) -> str:
+    raw = text.strip()
+    start = raw.find("(")
+    end = raw.rfind(")")
+    if start < 0 or end <= start:
+        return ""
+    return raw[start + 1 : end]
 
 
 def _build_call_site_from_record(
@@ -1321,12 +1423,18 @@ def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
     """
     search_name = function_name.rsplit(".", maxsplit=1)[-1]
     pattern = rf"\b{search_name}\s*\("
-    candidate_files = find_files_with_pattern(root_path, pattern, limits=INTERACTIVE)
+    target_language = infer_target_language(root_path, function_name) or "python"
+    candidate_files = find_files_with_pattern(
+        root_path,
+        pattern,
+        limits=INTERACTIVE,
+        lang_scope=target_language,
+    )
 
-    all_py_files = list_scan_files([root_path], root=root_path)
-    total_py_files = len(all_py_files)
+    all_scan_files = list_scan_files([root_path], root=root_path, lang=target_language)
+    total_py_files = len(all_scan_files)
 
-    scan_files = candidate_files if candidate_files else all_py_files
+    scan_files = candidate_files if candidate_files else all_scan_files
 
     used_fallback = False
     call_records: list[SgRecord] = []
@@ -1336,13 +1444,16 @@ def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
                 paths=scan_files,
                 record_types={"call"},
                 root=root_path,
+                lang=target_language,
             )
         except (OSError, RuntimeError, ValueError):
             used_fallback = True
     else:
         used_fallback = True
 
-    signature_info = _find_function_signature(root_path, function_name)
+    signature_info = (
+        _find_function_signature(root_path, function_name) if target_language == "python" else ""
+    )
 
     if not used_fallback:
         all_sites, files_with_calls = _collect_call_sites_from_records(
@@ -1352,7 +1463,11 @@ def _scan_call_sites(root_path: Path, function_name: str) -> CallScanResult:
         )
         rg_candidates = 0
     else:
-        candidates = _rg_find_candidates(function_name, root_path)
+        candidates = _rg_find_candidates(
+            function_name,
+            root_path,
+            lang_scope=target_language,
+        )
         by_file = _group_candidates(candidates)
         all_sites = _collect_call_sites(root_path, by_file, function_name)
         files_with_calls = len({site.file for site in all_sites})
@@ -1603,12 +1718,8 @@ def _apply_calls_lsp(
     insight: FrontDoorInsightV1,
     result: CqResult,
     request: CallsLspRequest,
-) -> tuple[FrontDoorInsightV1, QueryLanguage | None, int, int, int, int]:
+) -> tuple[FrontDoorInsightV1, QueryLanguage | None, int, int, int, int, tuple[str, ...]]:
     from tools.cq.core.front_door_insight import augment_insight_with_lsp
-    from tools.cq.search.lsp_contract_state import (
-        LspContractStateInputV1,
-        derive_lsp_contract_state,
-    )
     from tools.cq.search.lsp_front_door_adapter import (
         LanguageLspEnrichmentRequest,
         enrich_with_language_lsp,
@@ -1617,7 +1728,6 @@ def _apply_calls_lsp(
     )
 
     target_language = request.target_language
-    lsp_available = target_language in {"python", "rust"}
     lsp_attempted = 0
     lsp_applied = 0
     lsp_failed = 0
@@ -1641,12 +1751,17 @@ def _apply_calls_lsp(
             lsp_attempted = 1
             lsp_timed_out = int(timed_out)
             if lsp_payload is not None:
-                lsp_applied = 1
-                insight = augment_insight_with_lsp(
-                    insight,
-                    lsp_payload,
-                    preview_per_slice=request.preview_per_slice,
-                )
+                payload_has_signal = _calls_payload_has_signal(target_language, lsp_payload)
+                if payload_has_signal:
+                    lsp_applied = 1
+                    insight = augment_insight_with_lsp(
+                        insight,
+                        lsp_payload,
+                        preview_per_slice=request.preview_per_slice,
+                    )
+                else:
+                    lsp_failed = 1
+                    lsp_reasons.append(_calls_payload_reason(target_language, lsp_payload))
                 advanced_planes = lsp_payload.get("advanced_planes")
                 if isinstance(advanced_planes, dict):
                     result.summary["lsp_advanced_planes"] = dict(advanced_planes)
@@ -1657,27 +1772,67 @@ def _apply_calls_lsp(
             lsp_reasons.append("not_attempted_runtime_disabled")
     elif lsp_provider == "none":
         lsp_reasons.append("provider_unavailable")
-
-    lsp_state = derive_lsp_contract_state(
-        LspContractStateInputV1(
-            provider=lsp_provider,
-            available=lsp_available,
-            attempted=lsp_attempted,
-            applied=lsp_applied,
-            failed=max(lsp_failed, lsp_attempted - lsp_applied),
-            timed_out=lsp_timed_out,
-            reasons=tuple(dict.fromkeys(lsp_reasons)),
-        )
-    )
-    insight = msgspec.structs.replace(
+    return (
         insight,
-        degradation=msgspec.structs.replace(
-            insight.degradation,
-            lsp=lsp_state.status,
-            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
-        ),
+        target_language,
+        lsp_attempted,
+        lsp_applied,
+        lsp_failed,
+        lsp_timed_out,
+        tuple(dict.fromkeys(lsp_reasons)),
     )
-    return insight, target_language, lsp_attempted, lsp_applied, lsp_failed, lsp_timed_out
+
+
+def _calls_payload_has_signal(
+    language: QueryLanguage,
+    payload: dict[str, object],
+) -> bool:
+    if language == "python":
+        coverage = payload.get("coverage")
+        if isinstance(coverage, dict):
+            status = coverage.get("status")
+            if isinstance(status, str) and status == "applied":
+                return True
+        return False
+
+    for key in ("symbol_grounding", "call_graph", "type_hierarchy"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            for nested in value.values():
+                if isinstance(nested, list) and any(isinstance(item, dict) for item in nested):
+                    return True
+    diagnostics = payload.get("diagnostics")
+    if isinstance(diagnostics, list) and any(isinstance(item, dict) for item in diagnostics):
+        return True
+    hover = payload.get("hover_text")
+    return isinstance(hover, str) and bool(hover.strip())
+
+
+def _calls_payload_reason(
+    language: QueryLanguage,
+    payload: dict[str, object],
+) -> str:
+    if language == "python":
+        coverage = payload.get("coverage")
+        if isinstance(coverage, dict):
+            reason = coverage.get("reason")
+            if isinstance(reason, str) and reason:
+                return reason
+        return "no_signal"
+    advanced = payload.get("advanced_planes")
+    if isinstance(advanced, dict):
+        reason = advanced.get("reason")
+        if isinstance(reason, str) and reason:
+            return reason
+    degrade_events = payload.get("degrade_events")
+    if isinstance(degrade_events, list):
+        for event in degrade_events:
+            if not isinstance(event, dict):
+                continue
+            category = event.get("category")
+            if isinstance(category, str) and category:
+                return category
+    return "no_signal"
 
 
 def _init_calls_result(
@@ -1743,12 +1898,14 @@ def _build_calls_front_door_state(
     from tools.cq.core.front_door_insight import InsightNeighborhoodV1
     from tools.cq.search.lsp_front_door_adapter import infer_language_for_path
 
-    target_location, target_callees = attach_target_metadata(
+    resolved_target_language = infer_target_language(ctx.root, ctx.function_name)
+    target_location, target_callees, target_language_hint = attach_target_metadata(
         result,
         root=ctx.root,
         function_name=ctx.function_name,
         score=score,
         preview_limit=_CALLS_TARGET_CALLEE_PREVIEW,
+        target_language=resolved_target_language,
     )
     neighborhood, neighborhood_findings, degradation_notes = _build_calls_neighborhood(
         CallsNeighborhoodRequest(
@@ -1764,7 +1921,9 @@ def _build_calls_front_door_state(
     _attach_calls_neighborhood_section(result, neighborhood_findings)
     target_file_path, target_line = _target_file_path_and_line(ctx.root, target_location)
     target_language = (
-        infer_language_for_path(target_file_path) if target_file_path is not None else None
+        infer_language_for_path(target_file_path)
+        if target_file_path is not None
+        else target_language_hint
     )
     return CallsFrontDoorState(
         target_location=target_location,
@@ -1874,8 +2033,8 @@ def _apply_calls_lsp_with_telemetry(
     insight: FrontDoorInsightV1,
     state: CallsFrontDoorState,
     symbol_hint: str,
-) -> tuple[FrontDoorInsightV1, tuple[int, int, int, int]]:
-    insight, _language, attempted, applied, failed, timed_out = _apply_calls_lsp(
+) -> tuple[FrontDoorInsightV1, tuple[int, int, int, int], tuple[str, ...]]:
+    insight, _language, attempted, applied, failed, timed_out, reasons = _apply_calls_lsp(
         insight=insight,
         result=result,
         request=CallsLspRequest(
@@ -1887,7 +2046,7 @@ def _apply_calls_lsp_with_telemetry(
             preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
         ),
     )
-    return insight, (attempted, applied, failed, timed_out)
+    return insight, (attempted, applied, failed, timed_out), reasons
 
 
 def _attach_calls_lsp_summary(
@@ -1914,6 +2073,63 @@ def _attach_calls_lsp_summary(
     }
 
 
+def _finalize_calls_lsp_state(
+    *,
+    insight: FrontDoorInsightV1,
+    summary: dict[str, object],
+    target_language: QueryLanguage | None,
+    top_level_attempted: int,
+    top_level_applied: int,
+    reasons: tuple[str, ...],
+) -> FrontDoorInsightV1:
+    from tools.cq.search.lsp_contract_state import (
+        LspContractStateInputV1,
+        derive_lsp_contract_state,
+    )
+    from tools.cq.search.lsp_front_door_adapter import provider_for_language
+
+    telemetry_key = "pyrefly_telemetry" if target_language == "python" else "rust_lsp_telemetry"
+    telemetry = summary.get(telemetry_key)
+    attempted = 0
+    applied = 0
+    failed = 0
+    timed_out = 0
+    if isinstance(telemetry, dict):
+        attempted = int(telemetry.get("attempted", 0) or 0)
+        applied = int(telemetry.get("applied", 0) or 0)
+        failed = int(telemetry.get("failed", 0) or 0)
+        timed_out = int(telemetry.get("timed_out", 0) or 0)
+
+    provider = provider_for_language(target_language) if target_language else "none"
+    state_reasons = list(reasons)
+    if provider == "none":
+        state_reasons.append("provider_unavailable")
+    elif attempted <= 0 and "not_attempted_runtime_disabled" not in state_reasons:
+        state_reasons.append("not_attempted_by_design")
+    if top_level_attempted > 0 and top_level_applied <= 0 and applied > 0:
+        state_reasons.append("top_target_failed")
+
+    lsp_state = derive_lsp_contract_state(
+        LspContractStateInputV1(
+            provider=provider,
+            available=provider != "none",
+            attempted=attempted,
+            applied=applied,
+            failed=max(failed, attempted - applied if attempted > applied else 0),
+            timed_out=timed_out,
+            reasons=tuple(dict.fromkeys(state_reasons)),
+        )
+    )
+    return msgspec.structs.replace(
+        insight,
+        degradation=msgspec.structs.replace(
+            insight.degradation,
+            lsp=lsp_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+        ),
+    )
+
+
 def _build_calls_result(
     ctx: CallsContext,
     scan_result: CallScanResult,
@@ -1933,13 +2149,21 @@ def _build_calls_result(
         confidence=confidence,
         state=state,
     )
-    insight, lsp_telemetry = _apply_calls_lsp_with_telemetry(
+    insight, lsp_telemetry, lsp_reasons = _apply_calls_lsp_with_telemetry(
         result,
         insight=insight,
         state=state,
         symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
     )
     _attach_calls_lsp_summary(result, state.target_language, lsp_telemetry)
+    insight = _finalize_calls_lsp_state(
+        insight=insight,
+        summary=result.summary,
+        target_language=state.target_language,
+        top_level_attempted=lsp_telemetry[0],
+        top_level_applied=lsp_telemetry[1],
+        reasons=lsp_reasons,
+    )
     result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
     return result
 

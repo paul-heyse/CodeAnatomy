@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.multilang_orchestrator import (
@@ -58,11 +59,58 @@ def _missing_languages_from_summary(summary: dict[str, object]) -> list[str]:
     return missing
 
 
+def _coerce_lsp_telemetry(payload: object) -> tuple[int, int, int, int]:
+    if not isinstance(payload, dict):
+        return 0, 0, 0, 0
+    attempted = payload.get("attempted")
+    applied = payload.get("applied")
+    failed = payload.get("failed")
+    timed_out = payload.get("timed_out")
+    return (
+        attempted if isinstance(attempted, int) else 0,
+        applied if isinstance(applied, int) else 0,
+        failed if isinstance(failed, int) else 0,
+        timed_out if isinstance(timed_out, int) else 0,
+    )
+
+
+def _merge_lsp_contract_inputs(
+    summary: dict[str, object],
+) -> tuple[str, bool, int, int, int, int]:
+    py_attempted, py_applied, py_failed, py_timed_out = _coerce_lsp_telemetry(
+        summary.get("pyrefly_telemetry")
+    )
+    rust_attempted, rust_applied, rust_failed, rust_timed_out = _coerce_lsp_telemetry(
+        summary.get("rust_lsp_telemetry")
+    )
+    provider = "none"
+    if rust_attempted > 0 and py_attempted <= 0:
+        provider = "rust_analyzer"
+    elif py_attempted > 0:
+        provider = "pyrefly"
+    elif rust_attempted > 0:
+        provider = "rust_analyzer"
+    elif summary.get("lang_scope") == "auto":
+        provider = "pyrefly"
+    attempted = py_attempted + rust_attempted
+    applied = py_applied + rust_applied
+    failed = py_failed + rust_failed
+    timed_out = py_timed_out + rust_timed_out
+    return provider, provider != "none", attempted, applied, failed, timed_out
+
+
 def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
+    import msgspec
+
     from tools.cq.core.front_door_insight import (
         coerce_front_door_insight,
         mark_partial_for_missing_languages,
         to_public_front_door_insight_dict,
+    )
+    from tools.cq.search.lsp_contract_state import (
+        LspContractStateInputV1,
+        LspProvider,
+        derive_lsp_contract_state,
     )
 
     insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
@@ -73,6 +121,27 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
         missing = _missing_languages_from_summary(result.summary)
         if missing:
             insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
+    provider, available, attempted, applied, failed, timed_out = _merge_lsp_contract_inputs(
+        result.summary
+    )
+    lsp_state = derive_lsp_contract_state(
+        LspContractStateInputV1(
+            provider=cast("LspProvider", provider),
+            available=available,
+            attempted=attempted,
+            applied=applied,
+            failed=max(failed, attempted - applied if attempted > applied else 0),
+            timed_out=timed_out,
+        )
+    )
+    insight = msgspec.structs.replace(
+        insight,
+        degradation=msgspec.structs.replace(
+            insight.degradation,
+            lsp=lsp_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+        ),
+    )
     result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
 

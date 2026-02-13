@@ -17,8 +17,8 @@
     {
       "count": 2,
       "messages": [
-        "Sibling Definitions: 5 (top: pub mod engine;, pub mod traits;, mod macros;, mod tests {\n    use super::compile_target;\n\n    #[test]\n    fn smoke_compile_target, smoke_compile_target)",
-        "Functions Called: 2 (top: Engine::new, compile)"
+        "Sibling Definitions: 5 (top: engine, traits, macros, tests, smoke_compile_target)",
+        "Functions Called: 2 (top: new, compile)"
       ],
       "title": "Neighborhood Preview"
     },

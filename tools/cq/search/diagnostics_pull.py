@@ -6,6 +6,10 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import cast
 
 from tools.cq.search.lsp.capabilities import coerce_capabilities, supports_method
+from tools.cq.search.lsp.contracts import (
+    resolve_capabilities_snapshot,
+    resolve_request_callable,
+)
 
 _FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, TimeoutError, ValueError, TypeError)
 
@@ -211,10 +215,7 @@ def _extract_data_mapping(value: object) -> dict[str, object] | None:
 
 
 def _request_fn(session: object) -> Callable[[str, dict[str, object]], object] | None:
-    request = getattr(session, "_send_request", None)
-    if callable(request):
-        return cast("Callable[[str, dict[str, object]], object]", request)
-    return None
+    return resolve_request_callable(session)
 
 
 def _supports_diagnostic_method(session: object, method: str) -> bool:
@@ -225,9 +226,9 @@ def _supports_diagnostic_method(session: object, method: str) -> bool:
 
 
 def _resolve_server_caps(session: object) -> dict[str, object]:
-    raw_caps = getattr(session, "_server_capabilities", None)
-    if isinstance(raw_caps, Mapping):
-        return coerce_capabilities(raw_caps)
+    snapshot = resolve_capabilities_snapshot(session)
+    if snapshot:
+        return coerce_capabilities(snapshot)
 
     env = getattr(session, "_session_env", None)
     caps = getattr(env, "capabilities", None)

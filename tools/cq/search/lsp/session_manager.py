@@ -45,13 +45,23 @@ class LspSessionManager[SessionT]:
             if session is None:
                 session = self._make_session(root)
                 self._sessions[root_key] = session
-            try:
-                self._ensure_started(session, startup_timeout_seconds)
-            except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
-                self._close_session(session)
-                session = self._make_session(root)
-                self._sessions[root_key] = session
-                self._ensure_started(session, startup_timeout_seconds)
+        try:
+            self._ensure_started(session, startup_timeout_seconds)
+        except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
+            with self._lock:
+                current = self._sessions.get(root_key)
+                if current is session:
+                    self._close_session(session)
+                    session = self._make_session(root)
+                    self._sessions[root_key] = session
+                elif current is None:
+                    session = self._make_session(root)
+                    self._sessions[root_key] = session
+                else:
+                    session = current
+            self._ensure_started(session, startup_timeout_seconds)
+            return session
+        else:
             return session
 
     def close_all(self) -> None:

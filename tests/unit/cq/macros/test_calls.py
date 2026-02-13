@@ -208,6 +208,43 @@ def test_cmd_calls_includes_target_callees_and_insight_counters(tmp_path: Path) 
     assert forwarding_count >= 0
 
 
+def test_cmd_calls_rust_target_metadata_and_callees(tmp_path: Path) -> None:
+    """Rust calls flow should resolve target metadata and emit target-callee preview."""
+    tc = Toolchain.detect()
+    if not tc.has_sgpy:
+        pytest.skip("ast-grep-py not available")
+
+    repo = tmp_path / "repo"
+    _write_file(
+        repo / "src/lib.rs",
+        textwrap.dedent(
+            """\
+            fn helper(value: usize) -> usize {
+                value + 1
+            }
+
+            pub(crate) fn compile_target(input: usize) -> usize {
+                helper(input)
+            }
+
+            pub fn driver() -> usize {
+                compile_target(1)
+            }
+            """
+        ),
+    )
+
+    result = cmd_calls(tc, repo, ["cq", "calls", "compile_target"], "compile_target")
+    target_file = result.summary.get("target_file")
+    target_line = result.summary.get("target_line")
+    assert isinstance(target_file, str)
+    assert target_file.endswith(".rs")
+    assert isinstance(target_line, int)
+    target_callees = [section for section in result.sections if section.title == "Target Callees"]
+    assert target_callees
+    assert any("helper" in finding.message for finding in target_callees[0].findings)
+
+
 def test_extract_context_snippet_prioritizes_anchor_block() -> None:
     """Context snippet should include function top and matched anchor block."""
     source = textwrap.dedent(

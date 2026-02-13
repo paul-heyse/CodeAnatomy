@@ -107,3 +107,23 @@ def test_pull_workspace_diagnostics_fail_open_on_exception() -> None:
 
     session = _session(request=request, workspace_diagnostic_provider=True)
     assert pull_workspace_diagnostics(session) is None
+
+
+def test_pull_diagnostics_uses_capabilities_snapshot_when_present() -> None:
+    class _SnapshotSession:
+        def capabilities_snapshot(self) -> dict[str, object]:
+            return {"diagnosticProvider": True, "workspaceDiagnosticProvider": True}
+
+        def _send_request(self, method: str, _params: object) -> object:
+            empty_items: list[dict[str, object]] = []
+            empty_related_documents: dict[str, dict[str, object]] = {}
+            empty_payload: dict[str, object] = {}
+            if method == "textDocument/diagnostic":
+                return {"items": empty_items}
+            if method == "workspace/diagnostic":
+                return {"relatedDocuments": empty_related_documents}
+            return empty_payload
+
+    session = _SnapshotSession()
+    assert pull_text_document_diagnostics(session, uri="file:///x.py") == ()
+    assert pull_workspace_diagnostics(session) == ()

@@ -41,6 +41,9 @@ class WorkerScheduler:
         self._lock = threading.Lock()
         self._cpu_pool: ProcessPoolExecutor | None = None
         self._io_pool: ThreadPoolExecutor | None = None
+        self._lsp_semaphore = threading.BoundedSemaphore(
+            value=max(1, int(self._policy.lsp_request_workers))
+        )
 
     @property
     def policy(self) -> ParallelismPolicy:
@@ -96,6 +99,29 @@ class WorkerScheduler:
         if self._policy.enable_process_pool:
             return self.cpu_pool().submit(callable_fn, *args, **kwargs)
         return self.io_pool().submit(callable_fn, *args, **kwargs)
+
+    def submit_lsp(
+        self,
+        fn: Callable[P, R],
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> Future[R]:
+        """Submit an LSP task with policy-bounded concurrency.
+
+        Returns:
+            Future representing the scheduled task.
+        """
+        callable_fn = cast("Callable[..., R]", fn)
+
+        def _run() -> R:
+            self._lsp_semaphore.acquire()
+            try:
+                return callable_fn(*args, **kwargs)
+            finally:
+                self._lsp_semaphore.release()
+
+        return self.io_pool().submit(_run)
 
     @staticmethod
     def collect_bounded(

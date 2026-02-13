@@ -59,7 +59,13 @@ class RustRunnableV1(CqStruct, frozen=True):
 
 
 class _LspRequestFn(Protocol):
-    def __call__(self, method: str, params: Mapping[str, object]) -> object: ...
+    def __call__(
+        self,
+        method: str,
+        params: Mapping[str, object],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> object: ...
 
 
 def expand_macro(

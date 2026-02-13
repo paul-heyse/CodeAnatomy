@@ -7,6 +7,10 @@ from typing import cast
 
 from tools.cq.core.structs import CqStruct
 from tools.cq.search.lsp.capabilities import coerce_capabilities, supports_method
+from tools.cq.search.lsp.contracts import (
+    resolve_capabilities_snapshot,
+    resolve_request_callable,
+)
 
 _FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, TimeoutError, ValueError, TypeError)
 
@@ -212,13 +216,14 @@ def _request_params(payload: Mapping[str, object]) -> dict[str, object]:
 
 
 def _request_fn(session: object) -> Callable[[str, dict[str, object]], object] | None:
-    request = getattr(session, "_send_request", None)
-    if callable(request):
-        return cast("Callable[[str, dict[str, object]], object]", request)
-    return None
+    return resolve_request_callable(session)
 
 
 def _server_caps(session: object) -> dict[str, object]:
+    snapshot = resolve_capabilities_snapshot(session)
+    if snapshot:
+        return coerce_capabilities(snapshot)
+
     env = getattr(session, "_session_env", None)
     if env is None:
         return {}

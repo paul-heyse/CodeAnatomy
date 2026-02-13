@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.core.definition_parser import (
+    extract_definition_kind,
+    extract_definition_name,
+    is_definition_like_text,
+)
 from tools.cq.core.schema import DetailPayload, Finding
 
 if TYPE_CHECKING:
@@ -26,26 +30,13 @@ _DEFINITION_NODE_KINDS = {
 }
 
 
-def is_definition_like_text(text: str) -> bool:
-    """Return whether source line text appears to be a definition."""
-    stripped = text.lstrip()
-    return stripped.startswith(
-        (
-            "def ",
-            "async def ",
-            "class ",
-            "fn ",
-            "pub fn ",
-            "struct ",
-            "enum ",
-            "trait ",
-        )
-    )
-
-
 def is_definition_candidate_match(match: EnrichedMatch) -> bool:
     """Return whether an enriched match is a definition candidate."""
-    return is_definition_like_text(match.text) or match.node_kind in _DEFINITION_NODE_KINDS
+    if is_definition_like_text(match.text):
+        return True
+    if match.category == "definition":
+        return True
+    return match.node_kind in _DEFINITION_NODE_KINDS
 
 
 def definition_kind_from_text(text: str) -> str:
@@ -54,11 +45,9 @@ def definition_kind_from_text(text: str) -> str:
     Returns:
         Normalized target kind string.
     """
-    trimmed = text.lstrip()
-    if trimmed.startswith("class "):
-        return "class"
-    if trimmed.startswith(("struct ", "enum ", "trait ", "impl ")):
-        return "type"
+    kind = extract_definition_kind(text)
+    if kind in {"function", "class", "type"}:
+        return kind
     return "function"
 
 
@@ -68,13 +57,8 @@ def definition_name_from_text(text: str, *, fallback: str) -> str:
     Returns:
         Parsed symbol name when detected, otherwise fallback.
     """
-    match = re.search(
-        r"(?:async\\s+def|def|class|pub\\s+fn|fn|struct|enum|trait|impl)\\s+([A-Za-z_][A-Za-z0-9_]*)",
-        text,
-    )
-    if match is None:
-        return fallback
-    return match.group(1)
+    parsed = extract_definition_name(text)
+    return parsed if parsed is not None else fallback
 
 
 def build_definition_candidate_finding(
@@ -93,6 +77,8 @@ def build_definition_candidate_finding(
     finding = build_finding_fn(match, root)
     symbol = definition_name_from_text(match.text, fallback=match.match_text or "target")
     kind = definition_kind_from_text(match.text)
+    if kind == "module":
+        kind = "type"
     data = dict(finding.details.data)
     data["name"] = symbol
     data["kind"] = kind

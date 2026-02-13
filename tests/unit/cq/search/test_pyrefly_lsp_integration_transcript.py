@@ -65,6 +65,13 @@ def test_pyrefly_lsp_stdio_transcript_lifecycle(
     assert isinstance(diagnostics, list)
     assert diagnostics
 
+    advanced_planes = payload.get("advanced_planes")
+    assert isinstance(advanced_planes, dict)
+    assert int(advanced_planes.get("semantic_tokens_count", 0)) > 0
+    assert int(advanced_planes.get("inlay_hints_count", 0)) > 0
+    assert int(advanced_planes.get("document_diagnostics_count", 0)) > 0
+    assert int(advanced_planes.get("workspace_diagnostics_count", 0)) > 0
+
     file_path.write_text(
         "def resolve(payload: str) -> str:\n    return payload.upper()\n",
         encoding="utf-8",
@@ -83,3 +90,49 @@ def test_pyrefly_lsp_stdio_transcript_lifecycle(
 
     session.close()
     assert session.is_running is False
+
+
+def test_pyrefly_lsp_transcript_position_encoding_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    file_path = repo / "module.py"
+    file_path.write_text("symbol = '𝄞value'\n", encoding="utf-8")
+
+    server_script = (Path(__file__).parent / "lsp_harness" / "fake_stdio_lsp_server.py").resolve()
+    real_popen = subprocess.Popen
+
+    def fake_popen(_cmd: object, **kwargs: Any) -> subprocess.Popen[str]:
+        return real_popen(
+            [sys.executable, str(server_script), "--mode", "pyrefly"],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(pyrefly_lsp.subprocess, "Popen", fake_popen)
+
+    session = _PyreflyLspSession(repo)
+    session.ensure_started(timeout_seconds=1.0)
+
+    payload = session.probe(
+        PyreflyLspRequest(
+            root=repo,
+            file_path=file_path,
+            line=1,
+            col=1,
+            symbol_hint="symbol",
+            timeout_seconds=0.8,
+        )
+    )
+    assert payload is not None
+    grounding = payload.get("symbol_grounding")
+    assert isinstance(grounding, dict)
+    definition_targets = grounding.get("definition_targets")
+    assert isinstance(definition_targets, list)
+    assert definition_targets
+    first = definition_targets[0]
+    assert isinstance(first, dict)
+    assert int(first.get("col", -1)) == 1
+
+    session.close()

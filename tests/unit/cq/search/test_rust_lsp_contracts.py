@@ -45,7 +45,12 @@ def test_lsp_capability_snapshot_roundtrip() -> None:
     caps = LspCapabilitySnapshotV1(
         server_caps=LspServerCapabilitySnapshotV1(definition_provider=True),
         client_caps=LspClientCapabilitySnapshotV1(
-            publish_diagnostics=LspClientPublishDiagnosticsCapsV1(enabled=True)
+            publish_diagnostics=LspClientPublishDiagnosticsCapsV1(enabled=True),
+            inlay_hint_refresh_support=True,
+            semantic_tokens_refresh_support=True,
+            code_lens_refresh_support=True,
+            diagnostics_refresh_support=True,
+            position_encodings=("utf-8", "utf-16"),
         ),
         experimental_caps=LspExperimentalCapabilitySnapshotV1(server_status_notification=True),
     )
@@ -54,6 +59,8 @@ def test_lsp_capability_snapshot_roundtrip() -> None:
     decoded = msgspec.convert(data, LspCapabilitySnapshotV1)
     assert decoded.server_caps.definition_provider is True
     assert decoded.client_caps.publish_diagnostics.enabled is True
+    assert decoded.client_caps.inlay_hint_refresh_support is True
+    assert decoded.client_caps.position_encodings == ("utf-8", "utf-16")
     assert decoded.experimental_caps.server_status_notification is True
 
 

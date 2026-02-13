@@ -39,6 +39,7 @@ class LspServerCapabilitySnapshotV1(CqStruct, frozen=True):
     workspace_symbol_provider_raw: object | None = None
     diagnostic_provider_raw: object | None = None
     workspace_diagnostic_provider_raw: object | None = None
+    position_encoding: str = "utf-16"
 
 
 class LspClientPublishDiagnosticsCapsV1(CqStruct, frozen=True):
@@ -57,6 +58,11 @@ class LspClientCapabilitySnapshotV1(CqStruct, frozen=True):
     publish_diagnostics: LspClientPublishDiagnosticsCapsV1 = msgspec.field(
         default_factory=LspClientPublishDiagnosticsCapsV1
     )
+    inlay_hint_refresh_support: bool = False
+    semantic_tokens_refresh_support: bool = False
+    code_lens_refresh_support: bool = False
+    diagnostics_refresh_support: bool = False
+    position_encodings: tuple[str, ...] = ()
 
 
 class LspExperimentalCapabilitySnapshotV1(CqStruct, frozen=True):

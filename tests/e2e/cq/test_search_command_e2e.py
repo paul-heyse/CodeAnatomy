@@ -70,6 +70,9 @@ def test_search_rust_workspace_golden(
     assert_result_matches_spec(result, spec)
     insight = result.summary.get("front_door_insight")
     assert isinstance(insight, dict)
+    target = insight.get("target")
+    assert isinstance(target, dict)
+    assert target.get("kind") in {"function", "class", "type"}
     rust_lsp_telemetry = result.summary.get("rust_lsp_telemetry")
     assert isinstance(rust_lsp_telemetry, dict)
     assert {"attempted", "applied", "failed", "timed_out"}.issubset(rust_lsp_telemetry.keys())

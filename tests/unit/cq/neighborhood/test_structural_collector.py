@@ -480,8 +480,8 @@ def test_target_resolution_normalizes_dot_slash_path() -> None:
     assert isinstance(slices, tuple)
 
 
-def test_rust_pub_fn_name_extraction_for_target_resolution() -> None:
-    """Rust 'pub fn' definitions should resolve by function name."""
+def test_rust_pub_crate_fn_name_extraction_for_target_resolution() -> None:
+    """Rust visibility-qualified definitions should resolve by function name."""
     rust_def = SgRecord(
         record="def",
         kind="function_item",
@@ -490,7 +490,7 @@ def test_rust_pub_fn_name_extraction_for_target_resolution() -> None:
         start_col=0,
         end_line=20,
         end_col=1,
-        text="pub fn compile_target(input: &str) -> String {",
+        text="pub(crate) fn compile_target(input: &str) -> String {",
         rule_id="rust_function_item",
     )
     snapshot = ScanSnapshot.from_records([rust_def])

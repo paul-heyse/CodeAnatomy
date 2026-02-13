@@ -294,13 +294,24 @@
         "truncated": false
       }
     },
-    "lsp_advanced_planes": {},
+    "lsp_advanced_planes": {
+      "document_diagnostics_count": 0,
+      "document_diagnostics_preview": [],
+      "inlay_hints_count": 0,
+      "inlay_hints_preview": [],
+      "plane_timed_out_methods": [],
+      "plane_timeouts": 0,
+      "semantic_tokens_count": 0,
+      "semantic_tokens_preview": [],
+      "workspace_diagnostics_count": 0,
+      "workspace_diagnostics_preview": []
+    },
     "mode": "entity",
     "pyrefly_diagnostics": [],
     "pyrefly_overview": {},
     "pyrefly_telemetry": {
-      "applied": 0,
-      "attempted": 0,
+      "applied": 1,
+      "attempted": 1,
       "failed": 0,
       "skipped": 0,
       "timed_out": 0

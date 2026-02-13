@@ -152,6 +152,90 @@ def _result_match_count(result: CqResult) -> int:
     return len(result.key_findings)
 
 
+def _zero_lsp_telemetry() -> dict[str, int]:
+    return {
+        "attempted": 0,
+        "applied": 0,
+        "failed": 0,
+        "skipped": 0,
+        "timed_out": 0,
+    }
+
+
+def _coerce_lsp_telemetry(value: object) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return _zero_lsp_telemetry()
+    telemetry = _zero_lsp_telemetry()
+    for key in telemetry:
+        raw = value.get(key)
+        telemetry[key] = raw if isinstance(raw, int) and not isinstance(raw, bool) else 0
+    return telemetry
+
+
+def _sum_lsp_telemetry(*payloads: Mapping[str, int]) -> dict[str, int]:
+    total = _zero_lsp_telemetry()
+    for payload in payloads:
+        for key in total:
+            total[key] += int(payload.get(key, 0))
+    return total
+
+
+def _aggregate_lsp_telemetry(
+    results: Mapping[QueryLanguage, CqResult],
+    *,
+    key: str,
+) -> dict[str, int]:
+    aggregate = _zero_lsp_telemetry()
+    for result in results.values():
+        telemetry = _coerce_lsp_telemetry(result.summary.get(key))
+        aggregate = _sum_lsp_telemetry(aggregate, telemetry)
+    return aggregate
+
+
+def _aggregate_pyrefly_diagnostics(
+    *,
+    order: list[QueryLanguage],
+    results: Mapping[QueryLanguage, CqResult],
+) -> list[dict[str, object]]:
+    merged: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for lang in order:
+        result = results.get(lang)
+        if result is None:
+            continue
+        rows = result.summary.get("pyrefly_diagnostics")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = repr(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(dict(row))
+    return merged
+
+
+def _select_advanced_planes_payload(
+    *,
+    order: list[QueryLanguage],
+    results: Mapping[QueryLanguage, CqResult],
+) -> dict[str, object]:
+    for lang in order:
+        result = results.get(lang)
+        if result is None:
+            continue
+        planes = result.summary.get("lsp_advanced_planes")
+        if isinstance(planes, dict) and planes:
+            return dict(planes)
+    for result in results.values():
+        planes = result.summary.get("lsp_advanced_planes")
+        if isinstance(planes, dict) and planes:
+            return dict(planes)
+    return {}
+
+
 def _select_front_door_insight(
     scope: QueryLanguageScope,
     results: Mapping[QueryLanguage, CqResult],
@@ -324,28 +408,26 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
         ]
     summary_common = dict(request.summary_common or {})
     summary_common.setdefault("pyrefly_overview", {})
-    summary_common.setdefault(
-        "pyrefly_telemetry",
-        {
-            "attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-        },
+
+    pyrefly_aggregate = _aggregate_lsp_telemetry(request.results, key="pyrefly_telemetry")
+    rust_aggregate = _aggregate_lsp_telemetry(request.results, key="rust_lsp_telemetry")
+    summary_common["pyrefly_telemetry"] = _sum_lsp_telemetry(
+        _coerce_lsp_telemetry(summary_common.get("pyrefly_telemetry")),
+        pyrefly_aggregate,
     )
-    summary_common.setdefault(
-        "rust_lsp_telemetry",
-        {
-            "attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-        },
+    summary_common["rust_lsp_telemetry"] = _sum_lsp_telemetry(
+        _coerce_lsp_telemetry(summary_common.get("rust_lsp_telemetry")),
+        rust_aggregate,
     )
-    summary_common.setdefault("pyrefly_diagnostics", [])
-    summary_common.setdefault("lsp_advanced_planes", {})
+
+    summary_common["pyrefly_diagnostics"] = _aggregate_pyrefly_diagnostics(
+        order=order,
+        results=request.results,
+    )
+    summary_common["lsp_advanced_planes"] = _select_advanced_planes_payload(
+        order=order,
+        results=request.results,
+    )
 
     merged.summary = build_multilang_summary(
         SummaryBuildRequest(

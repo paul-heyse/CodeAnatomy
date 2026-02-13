@@ -17,6 +17,7 @@ from tools.cq.search.smart_search import (
     RawMatch,
     SearchStats,
     _attach_pyrefly_enrichment,
+    _pyrefly_no_signal_diagnostic,
     _PyreflyPrefetchResult,
     _resolve_search_worker_count,
     _run_single_partition,
@@ -1083,6 +1084,27 @@ class TestSmartSearch:  # noqa: PLR0904
         # Key is always present when Pyrefly enrichment is materialized.
         if "pyrefly" in enrichment:
             assert isinstance(enrichment["pyrefly"], dict)
+
+    def test_pyrefly_no_signal_diagnostic_normalizes_capability_reason(self) -> None:
+        """Capability-specific coverage reasons should remain explicit."""
+        diagnostic = _pyrefly_no_signal_diagnostic(
+            ("no_pyrefly_signal",),
+            coverage_reason="no_pyrefly_signal:unsupported_capability",
+        )
+        assert diagnostic["reason"] == "unsupported_capability"
+
+    def test_pyrefly_no_signal_diagnostic_normalizes_request_interface_reason(self) -> None:
+        """Request-interface failures should not be collapsed into generic no-signal."""
+        diagnostic = _pyrefly_no_signal_diagnostic(
+            ("no_pyrefly_signal",),
+            coverage_reason="request_interface_unavailable",
+        )
+        assert diagnostic["reason"] == "request_interface_unavailable"
+
+    def test_pyrefly_no_signal_diagnostic_defaults_to_no_signal(self) -> None:
+        """Unexpected/noisy reasons should collapse to canonical no_signal."""
+        diagnostic = _pyrefly_no_signal_diagnostic(("empty_payload",), coverage_reason=None)
+        assert diagnostic["reason"] == "no_signal"
 
     def test_attach_pyrefly_uses_prefetched_payload(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -211,3 +211,62 @@ def test_merge_language_results_marks_partial_when_language_missing_insight() ->
     notes = degradation.get("notes")
     assert isinstance(notes, list)
     assert any("missing_languages=rust" in str(note) for note in notes)
+
+
+def test_merge_language_results_aggregates_lsp_telemetry() -> None:
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=1.0,
+        toolchain={},
+    )
+    py_result = CqResult(
+        run=run,
+        summary={
+            "matches": 2,
+            "pyrefly_telemetry": {
+                "attempted": 2,
+                "applied": 1,
+                "failed": 1,
+                "skipped": 0,
+                "timed_out": 0,
+            },
+        },
+        key_findings=[Finding(category="definition", message="py")],
+    )
+    rust_result = CqResult(
+        run=run,
+        summary={
+            "matches": 1,
+            "rust_lsp_telemetry": {
+                "attempted": 1,
+                "applied": 1,
+                "failed": 0,
+                "skipped": 0,
+                "timed_out": 0,
+            },
+        },
+        key_findings=[Finding(category="definition", message="rs")],
+    )
+
+    merged = merge_language_cq_results(
+        MergeResultsRequest(
+            scope="auto",
+            results={"python": py_result, "rust": rust_result},
+            run=run,
+            summary_common={"query": "entity=function name=target", "mode": "entity"},
+        )
+    )
+
+    pyrefly = merged.summary.get("pyrefly_telemetry")
+    rust = merged.summary.get("rust_lsp_telemetry")
+    assert isinstance(pyrefly, dict)
+    assert isinstance(rust, dict)
+    assert pyrefly.get("attempted") == 2
+    assert pyrefly.get("applied") == 1
+    assert pyrefly.get("failed") == 1
+    assert rust.get("attempted") == 1
+    assert rust.get("applied") == 1
+    assert rust.get("failed") == 0

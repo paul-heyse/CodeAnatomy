@@ -62,7 +62,9 @@ The CQ search subsystem (`tools/cq/search/`) provides semantically-enriched code
 Located in `tools/cq/search/lsp/`:
 
 - `lsp/capabilities.py` — Capability gating and feature checking (`supports_method()`, `coerce_capabilities()`)
-- `lsp/request_queue.py` — LSP request queueing infrastructure (`run_lsp_requests()` with bounded timeout)
+- `lsp/contracts.py` — Shared request/capability protocol (`LspRequestClient`) and resolver helpers
+- `lsp/position_encoding.py` — Conversion helpers for UTF-8/UTF-16/UTF-32 position units
+- `lsp/request_queue.py` — Keyed request execution with deterministic mapping and timeout tracking
 - `lsp/session_manager.py` — Generic LSP session lifecycle (thread-safe, root-keyed, restart-on-failure): `LspSessionManager[T]`
 - `lsp/status.py` — `LspStatus` StrEnum with state derivation: `unavailable | skipped | failed | partial | ok`
 
@@ -790,7 +792,7 @@ def _prefetch_pyrefly_in_background(
     return future
 ```
 
-**Concurrency model:** Runs in parallel with classification phase. Main thread continues classification while background thread prefetches LSP data.
+**Concurrency model:** Prefetch runs in parallel with classification, but each workspace-bound pyrefly session serializes stdio JSON-RPC access internally to avoid framing corruption under concurrent callers.
 
 **Polling:** Result is polled after classification completes via `future.result(timeout=0.1)`.
 
@@ -1141,7 +1143,7 @@ class SearchLimits(CqStruct, frozen=True):
 
 **Location:** `pyrefly_lsp.py`
 
-**Purpose:** Enrich Python matches with Pyrefly LSP hover data and diagnostics.
+**Purpose:** Enrich Python matches with Pyrefly LSP grounding, type/call context, diagnostics, and advanced capability-gated planes.
 
 ### PyreflyLspRequest
 
@@ -1164,11 +1166,12 @@ def enrich_with_pyrefly_lsp(
 ```
 
 **Returns:**
-- `hover` - Hover text (signature, docstring)
-- `diagnostics` - LSP diagnostics at position
-- `references` - Reference count
-- `implementations` - Implementation count
-- `pyrefly_status` - "applied" / "degraded" / "failed"
+- `symbol_grounding` - definition/declaration/type-definition/implementation targets
+- `type_contract` - normalized resolved type + signature metadata
+- `call_graph` - incoming/outgoing call slices
+- `anchor_diagnostics` - diagnostics intersecting anchor span
+- `advanced_planes` - semantic tokens, inlay hints, text/workspace diagnostics previews
+- `coverage` - applied/not_resolved with explicit reason + negotiated position encoding
 
 **Timeout:** 2 seconds per request (configurable).
 
@@ -1176,7 +1179,7 @@ def enrich_with_pyrefly_lsp(
 
 ### Integration Point
 
-**Prefetch phase:** `_prefetch_pyrefly_for_raw_matches()` runs in background ThreadPool during classification.
+**Prefetch phase:** `_prefetch_pyrefly_for_raw_matches()` runs in background ThreadPool during classification. Session requests remain serialized within each root-keyed pyrefly session.
 
 **Merge phase:** Pyrefly data is merged into enriched matches after classification completes.
 

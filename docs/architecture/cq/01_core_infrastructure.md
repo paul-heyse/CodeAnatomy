@@ -85,7 +85,7 @@ tools/cq/
 │   ├── runtime/            # Execution policy and worker scheduling
 │   │   ├── __init__.py     # Re-exports: RuntimeExecutionPolicy, WorkerScheduler
 │   │   ├── execution_policy.py # 3-level policy hierarchy, CQ_RUNTIME_* env vars
-│   │   └── worker_scheduler.py # Dual CPU/IO pools, lazy singleton, bounded collection
+│   │   └── worker_scheduler.py # Dual CPU/IO pools + LSP-bounded lane (`submit_lsp`)
 │   ├── schema.py           # Core schema: CqResult, Finding, Section, Anchor, RunMeta, DetailPayload, ScoreDetails
 │   ├── schema_export.py    # Schema introspection utilities
 │   ├── scoring.py          # Impact/confidence scoring system
@@ -154,8 +154,10 @@ tools/cq/
 │   │   └── core.py         # Enrichment normalization
 │   ├── lsp/                # LSP session infrastructure
 │   │   ├── capabilities.py # Capability gating and checking
-│   │   ├── request_queue.py # LSP request queueing
-│   │   ├── session_manager.py # Generic LSP session lifecycle management
+│   │   ├── contracts.py    # LspRequestClient protocol + request/capability resolvers
+│   │   ├── position_encoding.py # UTF-8/UTF-16/UTF-32 position conversions
+│   │   ├── request_queue.py # Keyed deterministic request batches (session-safe default)
+│   │   ├── session_manager.py # Root-keyed session lifecycle + restart-on-failure
 │   │   └── status.py       # LspStatus StrEnum, derive_lsp_status()
 │   ├── lsp_contract_state.py # LspContractStateV1, derive_lsp_contract_state()
 │   ├── lsp_front_door_adapter.py # Language-aware LSP routing adapter

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -11,13 +12,20 @@ import msgspec
 from tools.cq.core.cache import build_cache_key, build_cache_tag, get_cq_cache_backend
 from tools.cq.core.cache.contracts import CallsTargetCacheV1
 from tools.cq.core.contracts import contract_to_builtins
+from tools.cq.core.definition_parser import extract_definition_name, extract_symbol_name
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding, ScoreDetails, Section
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.query.language import QueryLanguage
+from tools.cq.query.sg_parser import SgRecord, sg_scan
 from tools.cq.search import INTERACTIVE
 from tools.cq.search.adapter import find_files_with_pattern
 
 _CALLS_TARGET_CALLEE_PREVIEW = 10
+_RUST_DEF_RE = re.compile(
+    r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?"
+    r"(?:extern(?:\s+\"[^\"]+\")?\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+)
 
 
 def _get_call_name(func: ast.expr) -> tuple[str, bool, str | None]:
@@ -35,6 +43,8 @@ def _get_call_name(func: ast.expr) -> tuple[str, bool, str | None]:
 def resolve_target_definition(
     root: Path,
     function_name: str,
+    *,
+    target_language: QueryLanguage | None = None,
 ) -> tuple[str, int] | None:
     """Resolve concrete definition location for a target function.
 
@@ -42,8 +52,54 @@ def resolve_target_definition(
         ``(relative_file, line)`` for the target definition, or ``None``.
     """
     base_name = function_name.rsplit(".", maxsplit=1)[-1]
+    if target_language == "rust":
+        return _resolve_rust_target_definition(root=root, base_name=base_name)
+
+    if target_language == "python":
+        return _resolve_python_target_definition(root=root, base_name=base_name)
+
+    python_target = _resolve_python_target_definition(root=root, base_name=base_name)
+    if python_target is not None:
+        return python_target
+    return _resolve_rust_target_definition(root=root, base_name=base_name)
+
+
+def infer_target_language(
+    root: Path,
+    function_name: str,
+) -> QueryLanguage | None:
+    """Infer likely calls target language from available definitions.
+
+    Returns:
+        ``python``, ``rust``, or ``None`` when no target definition is found.
+    """
+    base_name = function_name.rsplit(".", maxsplit=1)[-1]
+    py_files = find_files_with_pattern(
+        root,
+        rf"\bdef {base_name}\s*\(",
+        limits=INTERACTIVE,
+        lang_scope="python",
+    )
+    if py_files:
+        return "python"
+    rust_files = find_files_with_pattern(
+        root,
+        rf"\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s+{base_name}\s*\(",
+        limits=INTERACTIVE,
+        lang_scope="rust",
+    )
+    if rust_files:
+        return "rust"
+    return None
+
+
+def _resolve_python_target_definition(
+    *,
+    root: Path,
+    base_name: str,
+) -> tuple[str, int] | None:
     pattern = rf"\bdef {base_name}\s*\("
-    def_files = find_files_with_pattern(root, pattern, limits=INTERACTIVE)
+    def_files = find_files_with_pattern(root, pattern, limits=INTERACTIVE, lang_scope="python")
     if not def_files:
         return None
     scheduler = get_worker_scheduler()
@@ -59,6 +115,66 @@ def resolve_target_definition(
     if parallel_match is not None:
         return parallel_match
     return _resolve_target_sequential(def_files, root=root, base_name=base_name)
+
+
+def _resolve_rust_target_definition(
+    *,
+    root: Path,
+    base_name: str,
+) -> tuple[str, int] | None:
+    pattern = (
+        rf"\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?"
+        rf"(?:extern(?:\s+\"[^\"]+\")?\s+)?fn\s+{base_name}\s*\("
+    )
+    def_files = find_files_with_pattern(root, pattern, limits=INTERACTIVE, lang_scope="rust")
+    if not def_files:
+        return None
+    try:
+        records: list[SgRecord] = sg_scan(
+            paths=def_files,
+            record_types={"def"},
+            root=root,
+            lang="rust",
+        )
+    except (OSError, RuntimeError, TimeoutError, ValueError):
+        records = []
+    candidates: list[tuple[str, int]] = []
+    for record in records:
+        if extract_definition_name(record.text) != base_name:
+            continue
+        candidates.append((record.file, int(record.start_line)))
+    if candidates:
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        return candidates[0]
+    for file_path in def_files:
+        fallback = _resolve_rust_target_in_file(file_path, root=root, base_name=base_name)
+        if fallback is not None:
+            return fallback
+    return None
+
+
+def _resolve_rust_target_in_file(
+    file_path: Path,
+    *,
+    root: Path,
+    base_name: str,
+) -> tuple[str, int] | None:
+    try:
+        lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line_no, line_text in enumerate(lines, start=1):
+        match = _RUST_DEF_RE.match(line_text.strip())
+        if match is None:
+            continue
+        if match.group(1) != base_name:
+            continue
+        try:
+            rel_path = file_path.relative_to(root).as_posix()
+        except ValueError:
+            rel_path = file_path.as_posix()
+        return rel_path, line_no
+    return None
 
 
 def _resolve_target_sequential(
@@ -128,12 +244,24 @@ def scan_target_callees(
     root: Path,
     function_name: str,
     target_location: tuple[str, int] | None,
+    *,
+    target_language: QueryLanguage | None = None,
 ) -> Counter[str]:
     """Collect callees from the resolved target definition body.
 
     Returns:
         Counter mapping callee names to occurrence counts.
     """
+    if target_language == "rust":
+        return _scan_rust_target_callees(root, function_name, target_location)
+    return _scan_python_target_callees(root, function_name, target_location)
+
+
+def _scan_python_target_callees(
+    root: Path,
+    function_name: str,
+    target_location: tuple[str, int] | None,
+) -> Counter[str]:
     if target_location is None:
         return Counter()
     rel_path, line = target_location
@@ -151,6 +279,87 @@ def scan_target_callees(
         function_name=function_name,
         base_name=base_name,
     )
+
+
+def _scan_rust_target_callees(
+    root: Path,
+    function_name: str,
+    target_location: tuple[str, int] | None,
+) -> Counter[str]:
+    if target_location is None:
+        return Counter()
+    rel_path, line = target_location
+    file_path = root / rel_path
+    base_name = function_name.rsplit(".", maxsplit=1)[-1]
+    records = _scan_rust_records(root=root, file_path=file_path)
+    if not records:
+        return Counter()
+    target_record = _select_rust_target_record(records, base_name=base_name, line=line)
+    if target_record is None:
+        return Counter()
+    return _count_rust_callees(
+        records=records,
+        target_record=target_record,
+        function_name=function_name,
+        base_name=base_name,
+    )
+
+
+def _scan_rust_records(*, root: Path, file_path: Path) -> list[SgRecord]:
+    try:
+        return list(
+            sg_scan(
+                paths=[file_path],
+                record_types={"def", "call"},
+                root=root,
+                lang="rust",
+            )
+        )
+    except (OSError, RuntimeError, TimeoutError, ValueError):
+        return []
+
+
+def _select_rust_target_record(
+    records: list[SgRecord],
+    *,
+    base_name: str,
+    line: int,
+) -> SgRecord | None:
+    fallback: SgRecord | None = None
+    for record in records:
+        if record.record != "def":
+            continue
+        if extract_definition_name(record.text) != base_name:
+            continue
+        if int(record.start_line) == int(line):
+            return record
+        if fallback is None:
+            fallback = record
+    return fallback
+
+
+def _count_rust_callees(
+    *,
+    records: list[SgRecord],
+    target_record: SgRecord,
+    function_name: str,
+    base_name: str,
+) -> Counter[str]:
+    target_start = int(target_record.start_line)
+    target_end = int(target_record.end_line)
+    counts: Counter[str] = Counter()
+    for record in records:
+        if record.record != "call":
+            continue
+        if not (target_start <= int(record.start_line) <= target_end):
+            continue
+        callee_name = extract_symbol_name(record.text).strip()
+        if not callee_name:
+            continue
+        if callee_name in {function_name, base_name}:
+            continue
+        counts[callee_name] += 1
+    return counts
 
 
 def _parse_python_file(file_path: Path) -> ast.AST | None:
@@ -231,18 +440,20 @@ def attach_target_metadata(
     function_name: str,
     score: ScoreDetails | None,
     preview_limit: int = _CALLS_TARGET_CALLEE_PREVIEW,
-) -> tuple[tuple[str, int] | None, Counter[str]]:
+    target_language: QueryLanguage | None = None,
+) -> tuple[tuple[str, int] | None, Counter[str], QueryLanguage | None]:
     """Resolve target location, collect target callees, and update result payload.
 
     Returns:
         Resolved target location and counted target-body callees.
     """
+    resolved_language = target_language or infer_target_language(root, function_name)
     cache = get_cq_cache_backend(root=root)
     cache_key = build_cache_key(
         "calls_target_metadata",
-        version="v1",
+        version="v2",
         workspace=str(root.resolve()),
-        language="python",
+        language=(resolved_language or "auto"),
         target=function_name,
         extras={"preview_limit": preview_limit},
     )
@@ -254,12 +465,30 @@ def attach_target_metadata(
             target_location = cached_payload.target_location
             target_callees = Counter(cached_payload.target_callees)
         except (RuntimeError, TypeError, ValueError):
-            target_location = resolve_target_definition(root, function_name)
-            target_callees = scan_target_callees(root, function_name, target_location)
+            target_location = resolve_target_definition(
+                root,
+                function_name,
+                target_language=resolved_language,
+            )
+            target_callees = scan_target_callees(
+                root,
+                function_name,
+                target_location,
+                target_language=resolved_language,
+            )
             should_write_cache = True
     else:
-        target_location = resolve_target_definition(root, function_name)
-        target_callees = scan_target_callees(root, function_name, target_location)
+        target_location = resolve_target_definition(
+            root,
+            function_name,
+            target_language=resolved_language,
+        )
+        target_callees = scan_target_callees(
+            root,
+            function_name,
+            target_location,
+            target_language=resolved_language,
+        )
         should_write_cache = True
     if should_write_cache:
         cache_payload = CallsTargetCacheV1(
@@ -270,7 +499,10 @@ def attach_target_metadata(
             cache_key,
             contract_to_builtins(cache_payload),
             expire=900,
-            tag=build_cache_tag(workspace=str(root.resolve()), language="python"),
+            tag=build_cache_tag(
+                workspace=str(root.resolve()),
+                language=(resolved_language or "python"),
+            ),
         )
     if target_location is not None:
         result.summary["target_file"] = target_location[0]
@@ -281,12 +513,13 @@ def attach_target_metadata(
         score,
         preview_limit=preview_limit,
     )
-    return target_location, target_callees
+    return target_location, target_callees, resolved_language
 
 
 __all__ = [
     "add_target_callees_section",
     "attach_target_metadata",
+    "infer_target_language",
     "resolve_target_definition",
     "scan_target_callees",
 ]

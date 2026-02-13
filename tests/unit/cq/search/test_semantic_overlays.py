@@ -176,3 +176,22 @@ def test_fetch_inlay_hints_range_handles_non_list_fail_open() -> None:
         inlay_hint_provider=True,
     )
     assert fetch_inlay_hints_range(session, "file:///test.py", 0, 20) is None
+
+
+def test_fetch_semantic_tokens_uses_capabilities_snapshot_when_present() -> None:
+    class _SnapshotSession:
+        def capabilities_snapshot(self) -> dict[str, object]:
+            return {
+                "semanticTokensProvider": {
+                    "full": True,
+                    "legend": {"tokenTypes": ["function"], "tokenModifiers": ["declaration"]},
+                }
+            }
+
+        def _send_request(self, method: str, _params: object) -> object:
+            assert method == "textDocument/semanticTokens/full"
+            return {"data": [0, 0, 3, 0, 1]}
+
+    tokens = fetch_semantic_tokens_range(_SnapshotSession(), "file:///test.py", 0, 10)
+    assert tokens is not None
+    assert len(tokens) == 1

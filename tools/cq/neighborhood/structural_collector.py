@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from tools.cq.utils.interval_index import IntervalIndex
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord
+from tools.cq.core.definition_parser import extract_symbol_name
 from tools.cq.core.snb_schema import (
     DegradeEventV1,
     NeighborhoodSliceKind,
@@ -423,26 +424,7 @@ def _apply_limit(
 
 def _extract_name(record: SgRecord) -> str:
     text = record.text.strip()
-    extracted = text
-    if text.startswith(("def ", "async def ", "class ")):
-        if text.startswith("async def "):
-            text = text[len("async ") :]
-        parts = text.split("(", 1)
-        if parts:
-            extracted = parts[0].split()[-1]
-    elif text.startswith(("pub fn ", "fn ")):
-        head = text.split("(", 1)[0].strip()
-        if head.startswith("pub fn "):
-            extracted = head[len("pub fn ") :].strip()
-        elif head.startswith("fn "):
-            extracted = head[len("fn ") :].strip()
-    elif text.startswith(("struct ", "enum ", "trait ", "impl ")):
-        head = text.split("{", 1)[0].strip()
-        extracted = head.split()[-1]
-    elif "(" in text:
-        call_part = text.split("(", 1)[0]
-        extracted = call_part.split(".")[-1] if "." in call_part else call_part.strip()
-    return extracted
+    return extract_symbol_name(text, fallback=text)
 
 
 def _normalize_file_path(path: str) -> str:

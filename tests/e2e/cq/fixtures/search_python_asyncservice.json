@@ -5,14 +5,14 @@
     "./tests/e2e/cq/_golden_workspace/python_project/app/services.py"
   ],
   "key_findings": [
-    "function: AsyncService",
+    "function: build_pipeline",
     "class: AsyncService"
   ],
   "sections": [
     {
       "count": 2,
       "messages": [
-        "function: AsyncService",
+        "function: build_pipeline",
         "class: AsyncService"
       ],
       "title": "Target Candidates"
@@ -125,7 +125,7 @@
           "line": 18
         },
         "selection_reason": "top_definition",
-        "symbol": "AsyncService"
+        "symbol": "build_pipeline"
       }
     },
     "lang_scope": "python",

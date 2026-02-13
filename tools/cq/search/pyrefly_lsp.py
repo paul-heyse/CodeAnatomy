@@ -13,13 +13,16 @@ import json
 import os
 import selectors
 import subprocess
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import Literal, cast
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.lsp.capabilities import supports_method
+from tools.cq.search.lsp.position_encoding import from_lsp_character, to_lsp_character
 from tools.cq.search.lsp.session_manager import LspSessionManager
 from tools.cq.search.lsp_advanced_planes import collect_advanced_lsp_planes
 from tools.cq.search.pyrefly_contracts import (
@@ -49,6 +52,8 @@ _PYREFLY_FAIL_OPEN_EXCEPTIONS = (
     TypeError,
     ValueError,
 )
+
+_CharacterConverterFn = Callable[[str, int, int], int]
 
 
 class PyreflyLspRequest(CqStruct, frozen=True):
@@ -93,6 +98,16 @@ class _PositionPayload:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class _ProbePayloadContext:
+    uri: str
+    responses: Mapping[str, object]
+    call_item: Mapping[str, object] | None
+    incoming: list[dict[str, object]]
+    outgoing: list[dict[str, object]]
+    convert_character: _CharacterConverterFn
+
+
 class _LspProtocolError(RuntimeError):
     """Raised when framing/protocol invariants are violated."""
 
@@ -102,6 +117,7 @@ class _PyreflyLspSession:
 
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
+        self._lock = threading.RLock()
         self._proc: subprocess.Popen[bytes] | None = None
         self._selector: selectors.BaseSelector | None = None
         self._buffer = bytearray()
@@ -116,71 +132,107 @@ class _PyreflyLspSession:
         return self._proc is not None and self._proc.poll() is None
 
     def ensure_started(self, *, timeout_seconds: float) -> None:
-        if self.is_running:
-            return
-        self._start(timeout_seconds=timeout_seconds)
+        with self._lock:
+            if self.is_running:
+                return
+            self._start(timeout_seconds=timeout_seconds)
 
     def close(self) -> None:
-        proc = self._proc
-        selector = self._selector
-        self._proc = None
-        self._selector = None
-        self._buffer = bytearray()
-        self._docs.clear()
-        self._diagnostics_by_uri.clear()
-        self._server_capabilities = {}
-        if selector is not None:
-            with contextlib.suppress(OSError):
-                selector.close()
-        if proc is None:
-            return
-        if proc.poll() is None:
-            try:
-                shutdown_id = self._request("shutdown", None)
-                self._wait_for_response(shutdown_id, timeout_seconds=0.2)
-            except _PYREFLY_FAIL_OPEN_EXCEPTIONS:
-                pass
-            with contextlib.suppress(*_PYREFLY_FAIL_OPEN_EXCEPTIONS):
-                self._notify("exit", None)
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=0.4)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                with contextlib.suppress(subprocess.TimeoutExpired):
+        with self._lock:
+            proc = self._proc
+            selector = self._selector
+            if proc is None:
+                return
+            if proc.poll() is None:
+                try:
+                    shutdown_id = self._request("shutdown", None)
+                    self._wait_for_response(shutdown_id, timeout_seconds=0.2)
+                except _PYREFLY_FAIL_OPEN_EXCEPTIONS:
+                    pass
+                with contextlib.suppress(*_PYREFLY_FAIL_OPEN_EXCEPTIONS):
+                    self._notify("exit", None)
+            if proc.poll() is None:
+                proc.terminate()
+                try:
                     proc.wait(timeout=0.4)
-        if proc.stdin is not None:
-            with contextlib.suppress(OSError):
-                proc.stdin.close()
-        if proc.stdout is not None:
-            with contextlib.suppress(OSError):
-                proc.stdout.close()
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.wait(timeout=0.4)
+            if proc.stdin is not None:
+                with contextlib.suppress(OSError):
+                    proc.stdin.close()
+            if proc.stdout is not None:
+                with contextlib.suppress(OSError):
+                    proc.stdout.close()
+            if selector is not None:
+                with contextlib.suppress(OSError):
+                    selector.close()
+            self._proc = None
+            self._selector = None
+            self._buffer = bytearray()
+            self._docs.clear()
+            self._diagnostics_by_uri.clear()
+            self._server_capabilities = {}
 
     def probe(self, request: PyreflyLspRequest) -> dict[str, object] | None:
         self.ensure_started(timeout_seconds=request.timeout_seconds)
         proc = self._proc
         if proc is None or proc.poll() is not None:
-            return None
+            return _empty_probe_payload(
+                reason="session_unavailable",
+                position_encoding=self._position_encoding,
+            )
 
         try:
-            uri = self._open_or_update_document(request.file_path)
+            uri, text = self._open_or_update_document(request.file_path)
         except _PYREFLY_FAIL_OPEN_EXCEPTIONS:
-            return None
+            return _empty_probe_payload(
+                reason="document_open_failed",
+                position_encoding=self._position_encoding,
+            )
 
-        position_payload = _build_position_payload(request, uri=uri)
+        if not callable(getattr(self, "_send_request", None)):
+            return _empty_probe_payload(
+                reason="request_interface_unavailable",
+                position_encoding=self._position_encoding,
+            )
+        if not self._supports_probe_methods():
+            return _empty_probe_payload(
+                reason="unsupported_capability",
+                position_encoding=self._position_encoding,
+            )
+
+        position_payload = _build_position_payload(
+            request,
+            uri=uri,
+            document_text=text,
+            position_encoding=self._position_encoding,
+        )
+        character_converter = _CharacterPositionConverter(
+            root=self.root,
+            position_encoding=self._position_encoding,
+            documents={uri: text},
+        )
         responses = self._collect_probe_responses(
             position_payload,
             timeout_seconds=request.timeout_seconds,
         )
-        incoming, outgoing, call_item = self._collect_probe_call_graph(request, responses=responses)
+        incoming, outgoing, call_item = self._collect_probe_call_graph(
+            request,
+            responses=responses,
+            convert_character=character_converter.from_lsp,
+        )
         payload = self._build_probe_payload(
             request,
-            uri=uri,
-            responses=responses,
-            call_item=call_item,
-            incoming=incoming,
-            outgoing=outgoing,
+            context=_ProbePayloadContext(
+                uri=uri,
+                responses=responses,
+                call_item=call_item,
+                incoming=incoming,
+                outgoing=outgoing,
+                convert_character=character_converter.from_lsp,
+            ),
         )
         payload["advanced_planes"] = self._collect_advanced_planes(
             uri=uri,
@@ -203,46 +255,33 @@ class _PyreflyLspSession:
         *,
         timeout_seconds: float,
     ) -> dict[str, object]:
-        request_ids = {
-            "hover": self._request("textDocument/hover", position_payload.as_tdp()),
-            "definition": self._request("textDocument/definition", position_payload.as_tdp()),
-            "declaration": self._request("textDocument/declaration", position_payload.as_tdp()),
-            "type_definition": self._request(
-                "textDocument/typeDefinition", position_payload.as_tdp()
-            ),
-            "implementation": self._request(
-                "textDocument/implementation", position_payload.as_tdp()
-            ),
-            "signature_help": self._request(
-                "textDocument/signatureHelp", position_payload.as_tdp()
-            ),
-            "references": self._request(
-                "textDocument/references",
-                position_payload.references_payload(),
-            ),
-            "call_prepare": self._request(
-                "textDocument/prepareCallHierarchy",
-                position_payload.as_tdp(),
-            ),
+        request_map = {
+            "hover": ("textDocument/hover", position_payload.as_tdp()),
+            "definition": ("textDocument/definition", position_payload.as_tdp()),
+            "declaration": ("textDocument/declaration", position_payload.as_tdp()),
+            "type_definition": ("textDocument/typeDefinition", position_payload.as_tdp()),
+            "implementation": ("textDocument/implementation", position_payload.as_tdp()),
+            "signature_help": ("textDocument/signatureHelp", position_payload.as_tdp()),
+            "references": ("textDocument/references", position_payload.references_payload()),
+            "call_prepare": ("textDocument/prepareCallHierarchy", position_payload.as_tdp()),
         }
-        return self._collect_responses(request_ids, timeout_seconds=timeout_seconds)
+        return self._request_many(request_map, timeout_seconds=timeout_seconds)
 
     def _collect_probe_call_graph(
         self,
         request: PyreflyLspRequest,
         *,
         responses: Mapping[str, object],
+        convert_character: _CharacterConverterFn,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object] | None]:
         call_item = _first_call_hierarchy_item(responses.get("call_prepare"))
         if call_item is None:
             return [], [], None
         try:
-            incoming_id = self._request("callHierarchy/incomingCalls", {"item": call_item})
-            outgoing_id = self._request("callHierarchy/outgoingCalls", {"item": call_item})
-            call_responses = self._collect_responses(
+            call_responses = self._request_many(
                 {
-                    "incoming": incoming_id,
-                    "outgoing": outgoing_id,
+                    "incoming": ("callHierarchy/incomingCalls", {"item": call_item}),
+                    "outgoing": ("callHierarchy/outgoingCalls", {"item": call_item}),
                 },
                 timeout_seconds=request.timeout_seconds,
             )
@@ -251,10 +290,12 @@ class _PyreflyLspSession:
         incoming = _normalize_call_hierarchy_incoming(
             call_responses.get("incoming"),
             limit=request.max_callers,
+            convert_character=convert_character,
         )
         outgoing = _normalize_call_hierarchy_outgoing(
             call_responses.get("outgoing"),
             limit=request.max_callees,
+            convert_character=convert_character,
         )
         return incoming, outgoing, call_item
 
@@ -262,52 +303,58 @@ class _PyreflyLspSession:
         self,
         request: PyreflyLspRequest,
         *,
-        uri: str,
-        responses: Mapping[str, object],
-        call_item: Mapping[str, object] | None,
-        incoming: list[dict[str, object]],
-        outgoing: list[dict[str, object]],
+        context: _ProbePayloadContext,
     ) -> dict[str, object]:
         references = _normalize_reference_locations(
-            responses.get("references"),
+            context.responses.get("references"),
             limit=request.max_references,
+            convert_character=context.convert_character,
         )
-        declaration_targets = _normalize_targets(responses.get("declaration"), kind="declaration")
+        declaration_targets = _normalize_targets(
+            context.responses.get("declaration"),
+            kind="declaration",
+            convert_character=context.convert_character,
+        )
         implementation_targets = _normalize_targets(
-            responses.get("implementation"),
+            context.responses.get("implementation"),
             kind="implementation",
+            convert_character=context.convert_character,
         )
         diagnostics = _normalize_anchor_diagnostics(
-            self._diagnostics_by_uri.get(uri, []),
+            self._diagnostics_by_uri.get(context.uri, []),
             line=max(0, request.line - 1),
             max_items=request.max_diagnostics,
+            uri=context.uri,
+            convert_character=context.convert_character,
         )
         return {
             "symbol_grounding": {
                 "definition_targets": _normalize_targets(
-                    responses.get("definition"),
+                    context.responses.get("definition"),
                     kind="definition",
+                    convert_character=context.convert_character,
                 ),
                 "declaration_targets": declaration_targets,
                 "type_definition_targets": _normalize_targets(
-                    responses.get("type_definition"),
+                    context.responses.get("type_definition"),
                     kind="type_definition",
+                    convert_character=context.convert_character,
                 ),
                 "implementation_targets": implementation_targets,
             },
             "type_contract": _normalize_type_contract(
-                hover=responses.get("hover"),
-                signature_help=responses.get("signature_help"),
+                hover=context.responses.get("hover"),
+                signature_help=context.responses.get("signature_help"),
             ),
             "call_graph": {
-                "incoming_callers": incoming,
-                "outgoing_callees": outgoing,
-                "incoming_total": len(incoming),
-                "outgoing_total": len(outgoing),
+                "incoming_callers": context.incoming,
+                "outgoing_callees": context.outgoing,
+                "incoming_total": len(context.incoming),
+                "outgoing_total": len(context.outgoing),
             },
             "class_method_context": _normalize_class_method_context(
-                hover=responses.get("hover"),
-                call_item=call_item,
+                hover=context.responses.get("hover"),
+                call_item=context.call_item,
                 implementations=implementation_targets,
             ),
             "local_scope_context": {
@@ -370,7 +417,7 @@ class _PyreflyLspSession:
                 "rootUri": self.root.as_uri(),
                 "capabilities": {
                     "general": {
-                        "positionEncodings": ["utf-16", "utf-8"],
+                        "positionEncodings": ["utf-8", "utf-16"],
                     },
                     "textDocument": {
                         "definition": {"linkSupport": True},
@@ -378,7 +425,17 @@ class _PyreflyLspSession:
                         "typeDefinition": {"linkSupport": True},
                         "implementation": {"linkSupport": True},
                         "documentSymbol": {"hierarchicalDocumentSymbolSupport": True},
+                        "inlayHint": {"dynamicRegistration": False},
+                        "semanticTokens": {
+                            "dynamicRegistration": False,
+                            "requests": {"full": True, "range": True},
+                            "tokenTypes": [],
+                            "tokenModifiers": [],
+                            "formats": ["relative"],
+                        },
+                        "diagnostic": {"dynamicRegistration": False},
                     },
+                    "workspace": {"diagnostics": {"refreshSupport": True}},
                 },
             },
         )
@@ -397,63 +454,108 @@ class _PyreflyLspSession:
         """Return negotiated server capabilities for this session."""
         return dict(self._server_capabilities)
 
-    def _open_or_update_document(self, file_path: Path) -> str:
-        proc = self._proc
-        if proc is None or proc.poll() is not None:
-            msg = "pyrefly lsp process not running"
-            raise _LspProtocolError(msg)
+    def _supports_probe_methods(self) -> bool:
+        capabilities = self.capabilities_snapshot()
+        required = (
+            "textDocument/hover",
+            "textDocument/definition",
+            "textDocument/references",
+        )
+        return all(supports_method(capabilities, method) for method in required)
 
-        absolute = file_path.resolve()
-        uri = absolute.as_uri()
-        text = absolute.read_text(encoding="utf-8", errors="replace")
-        content_hash = hash(text)
-        state = self._docs.get(uri)
-        if state is None:
-            self._notify(
-                "textDocument/didOpen",
-                {
-                    "textDocument": {
-                        "uri": uri,
-                        "languageId": "python",
-                        "version": 1,
-                        "text": text,
-                    }
-                },
-            )
-            self._docs[uri] = _SessionDocState(version=1, content_hash=content_hash)
-            return uri
+    def _open_or_update_document(self, file_path: Path) -> tuple[str, str]:
+        with self._lock:
+            proc = self._proc
+            if proc is None or proc.poll() is not None:
+                msg = "pyrefly lsp process not running"
+                raise _LspProtocolError(msg)
 
-        if state.content_hash != content_hash:
-            version = state.version + 1
-            self._notify(
-                "textDocument/didChange",
-                {
-                    "textDocument": {"uri": uri, "version": version},
-                    "contentChanges": [{"text": text}],
-                },
+            absolute = file_path.resolve()
+            uri = absolute.as_uri()
+            text = absolute.read_text(encoding="utf-8", errors="replace")
+            content_hash = hash(text)
+            state = self._docs.get(uri)
+            if state is None:
+                self._notify(
+                    "textDocument/didOpen",
+                    {
+                        "textDocument": {
+                            "uri": uri,
+                            "languageId": "python",
+                            "version": 1,
+                            "text": text,
+                        }
+                    },
+                )
+                self._docs[uri] = _SessionDocState(version=1, content_hash=content_hash)
+                return uri, text
+
+            if state.content_hash != content_hash:
+                version = state.version + 1
+                self._notify(
+                    "textDocument/didChange",
+                    {
+                        "textDocument": {"uri": uri, "version": version},
+                        "contentChanges": [{"text": text}],
+                    },
+                )
+                self._docs[uri] = _SessionDocState(version=version, content_hash=content_hash)
+            return uri, text
+
+    def _send_request(
+        self,
+        method: str,
+        params: dict[str, object],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> object:
+        with self._lock:
+            request_id = self._request(method, params)
+            response = self._wait_for_response(
+                request_id,
+                timeout_seconds=timeout_seconds
+                if timeout_seconds is not None
+                else _DEFAULT_TIMEOUT_SECONDS,
             )
-            self._docs[uri] = _SessionDocState(version=version, content_hash=content_hash)
-        return uri
+            if isinstance(response.get("error"), Mapping):
+                return None
+            return response.get("result")
+
+    def _request_many(
+        self,
+        requests: Mapping[str, tuple[str, dict[str, object]]],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        with self._lock:
+            request_ids = {
+                key: self._request(method, params) for key, (method, params) in requests.items()
+            }
+            responses = self._collect_responses(request_ids, timeout_seconds=timeout_seconds)
+        return dict(responses)
 
     def _request(self, method: str, params: object) -> int:
-        self._next_id += 1
-        request_id = self._next_id
-        self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-        return request_id
+        with self._lock:
+            self._next_id += 1
+            request_id = self._next_id
+            self._send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+            return request_id
 
     def _notify(self, method: str, params: object) -> None:
-        self._send({"jsonrpc": "2.0", "method": method, "params": params})
+        with self._lock:
+            self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
     def _send(self, payload: Mapping[str, object]) -> None:
-        proc = self._proc
-        if proc is None or proc.stdin is None or proc.poll() is not None:
-            msg = "Cannot send LSP message: process unavailable"
-            raise _LspProtocolError(msg)
-        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
-        proc.stdin.write(header)
-        proc.stdin.write(body)
-        proc.stdin.flush()
+        with self._lock:
+            proc = self._proc
+            if proc is None or proc.stdin is None or proc.poll() is not None:
+                msg = "Cannot send LSP message: process unavailable"
+                raise _LspProtocolError(msg)
+            body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+            proc.stdin.write(header)
+            proc.stdin.write(body)
+            proc.stdin.flush()
 
     def _collect_responses(
         self,
@@ -461,75 +563,79 @@ class _PyreflyLspSession:
         *,
         timeout_seconds: float,
     ) -> dict[str, object | None]:
-        pending = {rid: name for name, rid in request_ids.items()}
-        responses: dict[str, object | None] = dict.fromkeys(request_ids)
-        deadline = monotonic() + max(0.05, timeout_seconds)
-        while pending:
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                break
-            message = self._read_message(timeout_seconds=remaining)
-            if message is None:
-                continue
-            message_id = message.get("id")
-            if not isinstance(message_id, int):
-                self._handle_notification(message)
-                continue
-            name = pending.pop(message_id, None)
-            if name is None:
-                continue
-            if isinstance(message.get("error"), Mapping):
-                responses[name] = None
-            else:
-                responses[name] = message.get("result")
-        return responses
+        with self._lock:
+            pending = {rid: name for name, rid in request_ids.items()}
+            responses: dict[str, object | None] = dict.fromkeys(request_ids)
+            deadline = monotonic() + max(0.05, timeout_seconds)
+            while pending:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    break
+                message = self._read_message(timeout_seconds=remaining)
+                if message is None:
+                    continue
+                message_id = message.get("id")
+                if not isinstance(message_id, int):
+                    self._handle_notification(message)
+                    continue
+                name = pending.pop(message_id, None)
+                if name is None:
+                    continue
+                if isinstance(message.get("error"), Mapping):
+                    responses[name] = None
+                else:
+                    responses[name] = message.get("result")
+            return responses
 
     def _wait_for_response(self, request_id: int, *, timeout_seconds: float) -> dict[str, object]:
-        deadline = monotonic() + max(0.05, timeout_seconds)
-        while True:
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                msg = f"Timed out waiting for LSP response id={request_id}"
-                raise TimeoutError(msg)
-            message = self._read_message(timeout_seconds=remaining)
-            if message is None:
-                continue
-            message_id = message.get("id")
-            if isinstance(message_id, int) and message_id == request_id:
-                return message
-            self._handle_notification(message)
+        with self._lock:
+            deadline = monotonic() + max(0.05, timeout_seconds)
+            while True:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    msg = f"Timed out waiting for LSP response id={request_id}"
+                    raise TimeoutError(msg)
+                message = self._read_message(timeout_seconds=remaining)
+                if message is None:
+                    continue
+                message_id = message.get("id")
+                if isinstance(message_id, int) and message_id == request_id:
+                    return message
+                self._handle_notification(message)
 
     def _read_message(self, *, timeout_seconds: float) -> dict[str, object] | None:
-        selector = self._selector
-        proc = self._proc
-        if selector is None or proc is None or proc.stdout is None or proc.poll() is not None:
-            return None
-
-        while True:
-            parsed = _try_parse_message(self._buffer)
-            if parsed is not None:
-                return parsed
-            events = selector.select(timeout=max(0.0, timeout_seconds))
-            if not events:
+        with self._lock:
+            selector = self._selector
+            proc = self._proc
+            if selector is None or proc is None or proc.stdout is None or proc.poll() is not None:
                 return None
-            chunk = os.read(proc.stdout.fileno(), 65536)
-            if not chunk:
-                msg = "pyrefly lsp stream closed unexpectedly"
-                raise _LspProtocolError(msg)
-            self._buffer.extend(chunk)
+
+            while True:
+                parsed = _try_parse_message(self._buffer)
+                if parsed is not None:
+                    return parsed
+                events = selector.select(timeout=max(0.0, timeout_seconds))
+                if not events:
+                    return None
+                chunk = os.read(proc.stdout.fileno(), 65536)
+                if not chunk:
+                    msg = "pyrefly lsp stream closed unexpectedly"
+                    raise _LspProtocolError(msg)
+                self._buffer.extend(chunk)
 
     def _handle_notification(self, message: Mapping[str, object]) -> None:
-        method = message.get("method")
-        if method != "textDocument/publishDiagnostics":
-            return
-        params = message.get("params")
-        if not isinstance(params, Mapping):
-            return
-        uri = params.get("uri")
-        diagnostics = params.get("diagnostics")
-        if isinstance(uri, str) and isinstance(diagnostics, list):
-            normalized = [item for item in diagnostics if isinstance(item, dict)]
-            self._diagnostics_by_uri[uri] = cast("list[dict[str, object]]", normalized)
+        with self._lock:
+            method = message.get("method")
+            if method != "textDocument/publishDiagnostics":
+                return
+            params = message.get("params")
+            if not isinstance(params, Mapping):
+                return
+            uri = params.get("uri")
+            diagnostics = params.get("diagnostics")
+            if isinstance(uri, str) and isinstance(diagnostics, list):
+                normalized = [item for item in diagnostics if isinstance(item, dict)]
+                self._diagnostics_by_uri[uri] = cast("list[dict[str, object]]", normalized)
 
 
 def _try_parse_message(buffer: bytearray) -> dict[str, object] | None:
@@ -566,6 +672,105 @@ def _try_parse_message(buffer: bytearray) -> dict[str, object] | None:
     return cast("dict[str, object]", payload)
 
 
+class _CharacterPositionConverter:
+    """Convert LSP character units to CQ character indices."""
+
+    def __init__(
+        self,
+        *,
+        root: Path,
+        position_encoding: str,
+        documents: Mapping[str, str],
+    ) -> None:
+        self._root = root
+        self._position_encoding = position_encoding
+        self._documents = dict(documents)
+        self._line_cache: dict[tuple[str, int], str] = {}
+
+    def from_lsp(self, uri: str, line: int, character: int) -> int:
+        line_text = self._line_text(uri=uri, line=max(0, line))
+        if not line_text and character > 0:
+            return max(0, character)
+        return from_lsp_character(
+            line_text=line_text,
+            character=max(0, character),
+            encoding=self._position_encoding,
+        )
+
+    def _line_text(self, *, uri: str, line: int) -> str:
+        cache_key = (uri, line)
+        cached = self._line_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        text = self._documents.get(uri)
+        if text is None:
+            path = _uri_to_path(uri, root=self._root)
+            if path is not None:
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    text = ""
+            else:
+                text = ""
+            self._documents[uri] = text
+        lines = text.splitlines()
+        line_text = lines[line] if 0 <= line < len(lines) else ""
+        self._line_cache[cache_key] = line_text
+        return line_text
+
+
+def _empty_probe_payload(*, reason: str, position_encoding: str) -> dict[str, object]:
+    return {
+        "symbol_grounding": {
+            "definition_targets": [],
+            "declaration_targets": [],
+            "type_definition_targets": [],
+            "implementation_targets": [],
+        },
+        "type_contract": {
+            "resolved_type": None,
+            "callable_signature": None,
+            "parameters": [],
+            "active_signature_index": 0,
+            "active_parameter_index": 0,
+            "return_type": None,
+            "generic_params": [],
+            "is_async": False,
+            "is_generator": False,
+            "hover_summary": None,
+        },
+        "call_graph": {
+            "incoming_callers": [],
+            "outgoing_callees": [],
+            "incoming_total": 0,
+            "outgoing_total": 0,
+        },
+        "class_method_context": {
+            "enclosing_class": None,
+            "base_classes": [],
+            "overridden_methods": [],
+            "overriding_methods": [],
+        },
+        "local_scope_context": {
+            "same_scope_symbols": [],
+            "nearest_assignments": [],
+            "narrowing_hints": [],
+            "reference_locations": [],
+        },
+        "import_alias_resolution": {
+            "resolved_path": None,
+            "alias_chain": [],
+        },
+        "anchor_diagnostics": [],
+        "coverage": {
+            "status": "not_resolved",
+            "reason": reason,
+            "position_encoding": position_encoding,
+        },
+        "advanced_planes": {},
+    }
+
+
 def _first_call_hierarchy_item(value: object) -> dict[str, object] | None:
     if isinstance(value, list) and value:
         first = value[0]
@@ -575,7 +780,12 @@ def _first_call_hierarchy_item(value: object) -> dict[str, object] | None:
     return None
 
 
-def _normalize_targets(value: object, *, kind: str) -> list[dict[str, object]]:
+def _normalize_targets(
+    value: object,
+    *,
+    kind: str,
+    convert_character: _CharacterConverterFn,
+) -> list[dict[str, object]]:
     targets: list[dict[str, object]] = []
     if value is None:
         return targets
@@ -589,13 +799,18 @@ def _normalize_targets(value: object, *, kind: str) -> list[dict[str, object]]:
     for item in values:
         if not isinstance(item, Mapping):
             continue
-        target = _normalize_target(item, kind=kind)
+        target = _normalize_target(item, kind=kind, convert_character=convert_character)
         if target is not None:
             targets.append(target)
     return targets
 
 
-def _normalize_target(item: Mapping[str, object], *, kind: str) -> dict[str, object] | None:
+def _normalize_target(
+    item: Mapping[str, object],
+    *,
+    kind: str,
+    convert_character: _CharacterConverterFn,
+) -> dict[str, object] | None:
     uri = item.get("uri")
     range_obj = item.get("range")
     if not isinstance(uri, str):
@@ -616,14 +831,16 @@ def _normalize_target(item: Mapping[str, object], *, kind: str) -> dict[str, obj
     end_line = _to_int(end.get("line"))
     end_col = _to_int(end.get("character"))
     file_value = _uri_to_file(uri)
+    normalized_col = convert_character(uri, line, col)
+    normalized_end_col = convert_character(uri, end_line, end_col)
     return {
         "kind": kind,
         "uri": uri,
         "file": file_value,
         "line": line + 1,
-        "col": col,
+        "col": normalized_col,
         "end_line": end_line + 1,
-        "end_col": end_col,
+        "end_col": normalized_end_col,
     }
 
 
@@ -670,12 +887,31 @@ def _extract_hover_text(hover: object) -> str:
     return _render_hover_contents(contents)
 
 
-def _build_position_payload(request: PyreflyLspRequest, *, uri: str) -> _PositionPayload:
+def _build_position_payload(
+    request: PyreflyLspRequest,
+    *,
+    uri: str,
+    document_text: str,
+    position_encoding: str,
+) -> _PositionPayload:
+    line_index = max(0, request.line - 1)
+    line_text = _line_text_at(document_text=document_text, line=line_index)
     return _PositionPayload(
         uri=uri,
-        line=max(0, request.line - 1),
-        character=max(0, request.col),
+        line=line_index,
+        character=to_lsp_character(
+            line_text=line_text,
+            column=max(0, request.col),
+            encoding=position_encoding,
+        ),
     )
+
+
+def _line_text_at(*, document_text: str, line: int) -> str:
+    lines = document_text.splitlines()
+    if 0 <= line < len(lines):
+        return lines[line]
+    return ""
 
 
 def _render_hover_contents(contents: object) -> str:
@@ -792,7 +1028,12 @@ def _extract_generic_params(signature: str | None) -> list[str]:
     return parts[:8]
 
 
-def _normalize_call_hierarchy_incoming(value: object, *, limit: int) -> list[dict[str, object]]:
+def _normalize_call_hierarchy_incoming(
+    value: object,
+    *,
+    limit: int,
+    convert_character: _CharacterConverterFn,
+) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     rows: list[dict[str, object]] = []
@@ -800,7 +1041,10 @@ def _normalize_call_hierarchy_incoming(value: object, *, limit: int) -> list[dic
         if not isinstance(item, Mapping):
             continue
         from_item = item.get("from")
-        row = _normalize_call_hierarchy_item(from_item)
+        row = _normalize_call_hierarchy_item(
+            from_item,
+            convert_character=convert_character,
+        )
         if row is not None:
             rows.append(row)
         if len(rows) >= limit:
@@ -808,7 +1052,12 @@ def _normalize_call_hierarchy_incoming(value: object, *, limit: int) -> list[dic
     return rows
 
 
-def _normalize_call_hierarchy_outgoing(value: object, *, limit: int) -> list[dict[str, object]]:
+def _normalize_call_hierarchy_outgoing(
+    value: object,
+    *,
+    limit: int,
+    convert_character: _CharacterConverterFn,
+) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     rows: list[dict[str, object]] = []
@@ -816,7 +1065,10 @@ def _normalize_call_hierarchy_outgoing(value: object, *, limit: int) -> list[dic
         if not isinstance(item, Mapping):
             continue
         to_item = item.get("to")
-        row = _normalize_call_hierarchy_item(to_item)
+        row = _normalize_call_hierarchy_item(
+            to_item,
+            convert_character=convert_character,
+        )
         if row is not None:
             rows.append(row)
         if len(rows) >= limit:
@@ -824,7 +1076,11 @@ def _normalize_call_hierarchy_outgoing(value: object, *, limit: int) -> list[dic
     return rows
 
 
-def _normalize_call_hierarchy_item(value: object) -> dict[str, object] | None:
+def _normalize_call_hierarchy_item(
+    value: object,
+    *,
+    convert_character: _CharacterConverterFn,
+) -> dict[str, object] | None:
     if not isinstance(value, Mapping):
         return None
     name = value.get("name")
@@ -841,18 +1097,27 @@ def _normalize_call_hierarchy_item(value: object) -> dict[str, object] | None:
         "symbol": name,
         "file": _uri_to_file(uri),
         "line": line + 1,
-        "col": col,
+        "col": convert_character(uri, line, col),
     }
 
 
-def _normalize_reference_locations(value: object, *, limit: int) -> list[dict[str, object]]:
+def _normalize_reference_locations(
+    value: object,
+    *,
+    limit: int,
+    convert_character: _CharacterConverterFn,
+) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
     refs: list[dict[str, object]] = []
     for item in value:
         if not isinstance(item, Mapping):
             continue
-        normalized = _normalize_target(item, kind="reference")
+        normalized = _normalize_target(
+            item,
+            kind="reference",
+            convert_character=convert_character,
+        )
         if normalized is None:
             continue
         refs.append(
@@ -915,6 +1180,8 @@ def _normalize_anchor_diagnostics(
     *,
     line: int,
     max_items: int,
+    uri: str,
+    convert_character: _CharacterConverterFn,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for item in diagnostics:
@@ -940,7 +1207,7 @@ def _normalize_anchor_diagnostics(
                 "code": str(code) if code is not None else "",
                 "message": str(message) if isinstance(message, str) else "",
                 "line": start_line + 1,
-                "col": _to_int(start.get("character")),
+                "col": convert_character(uri, start_line, _to_int(start.get("character"))),
             }
         )
         if len(rows) >= max_items:
@@ -972,6 +1239,19 @@ def _uri_to_file(uri: str) -> str:
     if uri.startswith("file://"):
         return uri.removeprefix("file://")
     return uri
+
+
+def _uri_to_path(uri: str, *, root: Path) -> Path | None:
+    file_path = _uri_to_file(uri)
+    if not file_path:
+        return None
+    try:
+        path = Path(file_path)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if path.is_absolute():
+        return path
+    return root / path
 
 
 _SESSION_MANAGER = LspSessionManager[_PyreflyLspSession](
@@ -1008,16 +1288,21 @@ def enrich_with_pyrefly_lsp(request: PyreflyLspRequest) -> dict[str, object] | N
     if request.file_path.suffix not in {".py", ".pyi"}:
         return None
     attempts = max(1, _DEFAULT_ENRICH_ATTEMPTS)
+    last_position_encoding = "utf-16"
     for attempt in range(attempts):
         try:
             session = _session_for_root(
                 request.root,
                 startup_timeout_seconds=request.startup_timeout_seconds,
             )
+            last_position_encoding = str(getattr(session, "_position_encoding", "utf-16"))
             payload = session.probe(request)
         except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
             if attempt + 1 >= attempts:
-                return None
+                return _empty_probe_payload(
+                    reason="session_unavailable",
+                    position_encoding=last_position_encoding,
+                )
             _SESSION_MANAGER.reset_root(request.root)
             continue
 
@@ -1026,9 +1311,15 @@ def enrich_with_pyrefly_lsp(request: PyreflyLspRequest) -> dict[str, object] | N
             return pyrefly_payload_to_dict(typed_payload)
 
         if session.is_running or attempt + 1 >= attempts:
-            return None
+            return _empty_probe_payload(
+                reason="no_signal",
+                position_encoding=last_position_encoding,
+            )
         _SESSION_MANAGER.reset_root(request.root)
-    return None
+    return _empty_probe_payload(
+        reason="session_unavailable",
+        position_encoding=last_position_encoding,
+    )
 
 
 def get_pyrefly_lsp_capabilities(

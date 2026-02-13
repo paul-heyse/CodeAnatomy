@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 from tools.cq.core.cache import (
@@ -10,6 +12,7 @@ from tools.cq.core.cache import (
     build_cache_tag,
     get_cq_cache_backend,
 )
+from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage
 from tools.cq.search.lsp_contract_state import LspProvider
@@ -100,6 +103,21 @@ def _cache_key_for_request(request: LanguageLspEnrichmentRequest) -> str:
     )
 
 
+def _execute_lsp_task(
+    fn: Callable[[], dict[str, object] | None],
+    *,
+    timeout_seconds: float,
+) -> dict[str, object] | None:
+    scheduler = get_worker_scheduler()
+    future = scheduler.submit_lsp(fn)
+    try:
+        return future.result(timeout=max(0.05, timeout_seconds))
+    except FutureTimeoutError as exc:
+        future.cancel()
+        msg = "lsp_enrichment_timeout"
+        raise TimeoutError(msg) from exc
+
+
 def enrich_with_language_lsp(
     request: LanguageLspEnrichmentRequest,
 ) -> tuple[dict[str, object] | None, bool]:
@@ -130,7 +148,10 @@ def enrich_with_language_lsp(
             startup_timeout_seconds=budget.startup_timeout_seconds,
         )
         payload, timed_out = call_with_retry(
-            lambda: enrich_with_pyrefly_lsp(py_request),
+            lambda: _execute_lsp_task(
+                lambda: enrich_with_pyrefly_lsp(py_request),
+                timeout_seconds=budget.startup_timeout_seconds + budget.probe_timeout_seconds,
+            ),
             max_attempts=budget.max_attempts,
             retry_backoff_ms=budget.retry_backoff_ms,
         )
@@ -155,10 +176,13 @@ def enrich_with_language_lsp(
         query_intent="symbol_grounding",
     )
     payload, timed_out = call_with_retry(
-        lambda: enrich_with_rust_lsp(
-            rust_request,
-            root=request.root,
-            startup_timeout_seconds=budget.startup_timeout_seconds,
+        lambda: _execute_lsp_task(
+            lambda: enrich_with_rust_lsp(
+                rust_request,
+                root=request.root,
+                startup_timeout_seconds=budget.startup_timeout_seconds,
+            ),
+            timeout_seconds=budget.startup_timeout_seconds + budget.probe_timeout_seconds,
         ),
         max_attempts=budget.max_attempts,
         retry_backoff_ms=budget.retry_backoff_ms,

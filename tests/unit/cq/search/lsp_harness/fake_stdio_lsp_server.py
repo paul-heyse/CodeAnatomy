@@ -1,4 +1,4 @@
-# ruff: noqa: C901, PLR0911, PLR0912
+# ruff: noqa: C901, PLR0911, PLR0912, PLR0915
 """Scripted stdio JSON-RPC test server for CQ LSP session integration tests."""
 
 from __future__ import annotations
@@ -7,6 +7,12 @@ import argparse
 import json
 import sys
 from collections.abc import Mapping
+
+_RUST_RUNTIME_STATE = {
+    "refresh_acknowledged": False,
+    "refresh_sent": False,
+}
+_RUST_REFRESH_REQUEST_ID = 91001
 
 
 def _read_message() -> dict[str, object] | None:
@@ -57,6 +63,16 @@ def _location(uri: str, line: int, col: int = 0) -> dict[str, object]:
     }
 
 
+def _position_char(params: dict[str, object]) -> int:
+    position = params.get("position")
+    if not isinstance(position, dict):
+        return 0
+    raw_char = position.get("character")
+    if isinstance(raw_char, int) and raw_char >= 0:
+        return raw_char
+    return 0
+
+
 def _pyrefly_result(method: str, params: dict[str, object]) -> object:
     uri = "file:///tmp/module.py"
     text_document = params.get("textDocument")
@@ -64,6 +80,7 @@ def _pyrefly_result(method: str, params: dict[str, object]) -> object:
         uri_value = text_document.get("uri")
         if isinstance(uri_value, str):
             uri = uri_value
+    position_char = _position_char(params)
 
     if method == "initialize":
         return {
@@ -76,32 +93,92 @@ def _pyrefly_result(method: str, params: dict[str, object]) -> object:
                 "referencesProvider": True,
                 "hoverProvider": True,
                 "callHierarchyProvider": True,
+                "inlayHintProvider": {"resolveProvider": True},
+                "semanticTokensProvider": {
+                    "legend": {
+                        "tokenTypes": ["function"],
+                        "tokenModifiers": ["declaration"],
+                    },
+                    "range": True,
+                    "full": True,
+                },
+                "diagnosticProvider": {"identifier": "cq", "workspaceDiagnostics": True},
+                "workspaceDiagnosticProvider": True,
             }
         }
     if method == "textDocument/hover":
         return {"contents": "resolve(payload: str) -> str"}
     if method == "textDocument/definition":
-        return [_location(uri, 12)]
+        return [_location(uri, 12, col=position_char)]
     if method == "textDocument/declaration":
-        return [_location(uri, 11)]
+        return [_location(uri, 11, col=position_char)]
     if method == "textDocument/typeDefinition":
-        return [_location(uri, 10)]
+        return [_location(uri, 10, col=position_char)]
     if method == "textDocument/implementation":
-        return [_location(uri, 20)]
+        return [_location(uri, 20, col=position_char)]
     if method == "textDocument/signatureHelp":
         return {"signatures": [{"label": "resolve(payload: str) -> str"}], "activeSignature": 0}
     if method == "textDocument/references":
-        return [_location(uri, 25), _location(uri, 30)]
+        return [_location(uri, 25, col=position_char), _location(uri, 30, col=position_char)]
     if method == "textDocument/prepareCallHierarchy":
         return [
             {
                 "name": "resolve",
                 "kind": 12,
                 "uri": uri,
-                "range": _location(uri, 12)["range"],
-                "selectionRange": _location(uri, 12)["range"],
+                "range": _location(uri, 12, col=position_char)["range"],
+                "selectionRange": _location(uri, 12, col=position_char)["range"],
             }
         ]
+    if method == "textDocument/semanticTokens/range":
+        return {"data": [0, max(0, position_char), 4, 0, 1]}
+    if method == "textDocument/semanticTokens/full":
+        return {"data": [0, max(0, position_char), 4, 0, 1]}
+    if method == "textDocument/inlayHint":
+        return [
+            {
+                "position": {"line": 0, "character": position_char},
+                "label": [{"value": ": str"}],
+                "data": {"kind": "type"},
+            }
+        ]
+    if method == "inlayHint/resolve":
+        return {
+            "position": {"line": 0, "character": position_char},
+            "label": ": str",
+            "paddingLeft": False,
+            "paddingRight": True,
+        }
+    if method == "textDocument/diagnostic":
+        return {
+            "items": [
+                {
+                    "uri": uri,
+                    "version": 1,
+                    "diagnostics": [
+                        {
+                            "range": _location(uri, 0, col=position_char)["range"],
+                            "severity": 2,
+                            "message": "fixture textDocument diagnostic",
+                        }
+                    ],
+                }
+            ]
+        }
+    if method == "workspace/diagnostic":
+        return {
+            "relatedDocuments": {
+                uri: {
+                    "diagnostics": [
+                        {
+                            "range": _location(uri, 0, col=position_char)["range"],
+                            "severity": 2,
+                            "message": "fixture workspace diagnostic",
+                        }
+                    ]
+                }
+            }
+        }
     if method == "callHierarchy/incomingCalls":
         return [
             {
@@ -240,6 +317,8 @@ def _rust_result(method: str, params: dict[str, object]) -> object:
         ]
     if method == "shutdown":
         return {"ok": True}
+    if method == "cq/testStatus":
+        return dict(_RUST_RUNTIME_STATE)
     return None
 
 
@@ -328,9 +407,27 @@ def main() -> int:
                         },
                     }
                 )
+                if method == "initialized" and not bool(_RUST_RUNTIME_STATE["refresh_sent"]):
+                    _write_message(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": _RUST_REFRESH_REQUEST_ID,
+                            "method": "workspace/inlayHint/refresh",
+                            "params": {},
+                        }
+                    )
+                    _RUST_RUNTIME_STATE["refresh_sent"] = True
 
             if method == "exit":
                 running = False
+
+        if (
+            mode == "rust"
+            and isinstance(message_id := message.get("id"), int)
+            and message_id == _RUST_REFRESH_REQUEST_ID
+            and not isinstance(method, str)
+        ):
+            _RUST_RUNTIME_STATE["refresh_acknowledged"] = True
 
         message_id = message.get("id")
         if isinstance(message_id, int) and isinstance(method, str):

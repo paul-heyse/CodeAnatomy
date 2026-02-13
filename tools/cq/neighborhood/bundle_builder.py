@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
 
+from tools.cq.core.definition_parser import extract_symbol_name
 from tools.cq.core.schema import ms
 from tools.cq.core.snb_schema import (
     ArtifactPointerV1,
@@ -648,17 +649,7 @@ def _build_subject_node(request: BundleBuildRequest) -> SemanticNodeRefV1 | None
 
 
 def _extract_name_from_text(text: str) -> str:
-    raw = text.strip()
-    if raw.startswith(("def ", "class ")):
-        head = raw.split("(", 1)[0]
-        if head:
-            return head.split()[-1]
-    if "(" in raw:
-        call_head = raw.split("(", 1)[0]
-        if "." in call_head:
-            return call_head.split(".")[-1]
-        return call_head.strip()
-    return raw
+    return extract_symbol_name(text, fallback=text.strip())
 
 
 def _build_graph_summary(

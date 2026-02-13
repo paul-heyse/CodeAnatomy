@@ -81,6 +81,13 @@ from tools.cq.search.contracts import (
     coerce_pyrefly_telemetry,
 )
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
+from tools.cq.search.lsp_contract_state import derive_lsp_contract_state
+from tools.cq.search.lsp_front_door_adapter import (
+    enrich_with_language_lsp,
+    infer_language_for_path,
+    lsp_runtime_enabled,
+    provider_for_language,
+)
 from tools.cq.search.models import (
     CandidateSearchRequest,
     SearchConfig,
@@ -93,7 +100,7 @@ from tools.cq.search.multilang_diagnostics import (
     is_python_oriented_query_text,
 )
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
-from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_lsp
+from tools.cq.search.pyrefly_signal import evaluate_pyrefly_signal_from_mapping
 from tools.cq.search.python_analysis_session import get_python_analysis_session
 from tools.cq.search.python_enrichment import (
     _ENRICHMENT_ERRORS as _PYTHON_ENRICHMENT_ERRORS,
@@ -950,17 +957,20 @@ def _maybe_pyrefly_enrichment(
     if file_path.suffix not in {".py", ".pyi"}:
         return None
     try:
-        return enrich_with_pyrefly_lsp(
-            PyreflyLspRequest(
-                root=root,
-                file_path=file_path,
-                line=raw.line,
-                col=raw.col,
-                symbol_hint=raw.match_text,
-            )
+        payload, timed_out = enrich_with_language_lsp(
+            language="python",
+            mode="search",
+            root=root,
+            file_path=file_path,
+            line=raw.line,
+            col=raw.col,
+            symbol_hint=raw.match_text,
         )
     except Exception:  # noqa: BLE001 - fail-open
         return None
+    if timed_out and payload is None:
+        return None
+    return payload
 
 
 def _classify_file_role(file_path: str) -> str:
@@ -1417,6 +1427,14 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
             "skipped": 0,
             "timed_out": 0,
         },
+        "rust_lsp_telemetry": {
+            "attempted": 0,
+            "applied": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+        },
+        "lsp_advanced_planes": dict[str, object](),
         "pyrefly_diagnostics": list[dict[str, object]](),
     }
     return build_multilang_summary(
@@ -2097,13 +2115,23 @@ def _pyrefly_failure_diagnostic() -> dict[str, object]:
     }
 
 
+def _pyrefly_no_signal_diagnostic(reasons: tuple[str, ...]) -> dict[str, object]:
+    reason_text = ",".join(reasons) if reasons else "no_pyrefly_signal"
+    return {
+        "code": "PYREFLY002",
+        "severity": "info",
+        "message": "Pyrefly payload resolved but contained no actionable signal",
+        "reason": reason_text,
+    }
+
+
 def _prefetch_pyrefly_for_raw_matches(
     ctx: SmartSearchContext,
     *,
     lang: QueryLanguage,
     raw_matches: list[RawMatch],
 ) -> _PyreflyPrefetchResult:
-    if lang != "python" or not raw_matches:
+    if lang != "python" or not raw_matches or not lsp_runtime_enabled():
         return _PyreflyPrefetchResult(telemetry=_new_pyrefly_telemetry())
 
     telemetry = _new_pyrefly_telemetry()
@@ -2141,8 +2169,13 @@ def _prefetch_pyrefly_for_raw_matches(
             payload = None
 
         if isinstance(payload, dict) and payload:
-            telemetry["applied"] += 1
-            payloads[key] = payload
+            has_signal, reasons = evaluate_pyrefly_signal_from_mapping(payload)
+            if has_signal:
+                telemetry["applied"] += 1
+                payloads[key] = payload
+            else:
+                telemetry["failed"] += 1
+                diagnostics.append(_pyrefly_no_signal_diagnostic(reasons))
         else:
             telemetry["failed"] += 1
             diagnostics.append(_pyrefly_failure_diagnostic())
@@ -2161,18 +2194,24 @@ def _pyrefly_enrich_match(
 ) -> dict[str, object] | None:
     if match.language != "python":
         return None
+    if not lsp_runtime_enabled():
+        return None
     file_path = ctx.root / match.file
     if file_path.suffix not in {".py", ".pyi"}:
         return None
-    return enrich_with_pyrefly_lsp(
-        PyreflyLspRequest(
-            root=ctx.root,
-            file_path=file_path,
-            line=match.line,
-            col=match.col,
-            symbol_hint=match.match_text,
-        )
+    payload, timed_out = enrich_with_language_lsp(
+        language="python",
+        mode="search",
+        root=ctx.root,
+        file_path=file_path,
+        line=match.line,
+        col=match.col,
+        symbol_hint=match.match_text,
     )
+    if timed_out and payload is None:
+        msg = "pyrefly_timeout"
+        raise TimeoutError(msg)
+    return payload
 
 
 def _seed_pyrefly_state(
@@ -2205,6 +2244,8 @@ def _fetch_pyrefly_payload(
     prefetched: _PyreflyPrefetchResult | None,
     telemetry: dict[str, int],
 ) -> tuple[dict[str, object] | None, bool]:
+    if not lsp_runtime_enabled():
+        return None, False
     key = _pyrefly_anchor_key_from_match(match)
     prefetched_payload = _pyrefly_payload_from_prefetch(prefetched, key)
     if prefetched is not None and key in prefetched.attempted_keys:
@@ -2229,6 +2270,12 @@ def _merge_match_with_pyrefly_payload(
     diagnostics: list[dict[str, object]],
 ) -> EnrichedMatch:
     if isinstance(payload, dict) and payload:
+        has_signal, reasons = evaluate_pyrefly_signal_from_mapping(payload)
+        if not has_signal:
+            if attempted_in_place:
+                telemetry["failed"] += 1
+                diagnostics.append(_pyrefly_no_signal_diagnostic(reasons))
+            return match
         if attempted_in_place:
             telemetry["applied"] += 1
         return msgspec.structs.replace(match, pyrefly_enrichment=payload)
@@ -2260,6 +2307,9 @@ def _attach_pyrefly_enrichment(
     matches: list[EnrichedMatch],
     prefetched: _PyreflyPrefetchResult | None = None,
 ) -> tuple[list[EnrichedMatch], dict[str, object], dict[str, object], list[dict[str, object]]]:
+    if not lsp_runtime_enabled():
+        return matches, {}, cast("dict[str, object]", _new_pyrefly_telemetry()), []
+
     telemetry, diagnostics = _seed_pyrefly_state(prefetched)
 
     if not matches:
@@ -2456,7 +2506,7 @@ def _build_pyrefly_overview(matches: list[EnrichedMatch]) -> dict[str, object]: 
     }
 
 
-def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
+def _assemble_smart_search_result(  # noqa: C901, PLR0912, PLR0914, PLR0915
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
 ) -> CqResult:
@@ -2524,6 +2574,16 @@ def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
     summary["enrichment_telemetry"] = _build_enrichment_telemetry(enriched_matches)
     summary["pyrefly_overview"] = pyrefly_overview
     summary["pyrefly_telemetry"] = pyrefly_telemetry
+    summary.setdefault(
+        "rust_lsp_telemetry",
+        {
+            "attempted": 0,
+            "applied": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+        },
+    )
     summary["pyrefly_diagnostics"] = pyrefly_diagnostics
     if dropped_by_scope:
         summary["dropped_by_scope"] = dropped_by_scope
@@ -2564,6 +2624,7 @@ def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
 
     from tools.cq.core.front_door_insight import (
         InsightRiskCountersV1,
+        augment_insight_with_lsp,
         build_neighborhood_from_slices,
         build_search_insight,
         risk_from_counters,
@@ -2672,10 +2733,104 @@ def _assemble_smart_search_result(  # noqa: C901,PLR0912,PLR0914,PLR0915
             ),
         )
     top_def_match = definition_matches[0] if definition_matches else None
-    if top_def_match is not None and isinstance(top_def_match.pyrefly_enrichment, dict):
-        from tools.cq.core.front_door_insight import augment_insight_with_lsp
+    lsp_provider = "none"
+    lsp_attempted = 0
+    lsp_applied = 0
+    lsp_failed = 0
+    lsp_timed_out = 0
+    lsp_reasons: list[str] = []
+    if top_def_match is not None and primary_target_finding is not None:  # noqa: PLR1702
+        anchor = primary_target_finding.anchor
+        if anchor is not None:
+            target_file_path = ctx.root / anchor.file
+            inferred_language = infer_language_for_path(target_file_path)
+            target_language = (
+                top_def_match.language
+                if top_def_match.language in {"python", "rust"}
+                else inferred_language
+            )
+            if target_language in {"python", "rust"}:
+                lsp_provider = provider_for_language(target_language)
+                lsp_payload: dict[str, object] | None = None
+                if not lsp_runtime_enabled():
+                    lsp_reasons.append("not_attempted_runtime_disabled")
+                else:
+                    lsp_attempted = 1
+                    if target_language == "python" and isinstance(
+                        top_def_match.pyrefly_enrichment, dict
+                    ):
+                        lsp_payload = top_def_match.pyrefly_enrichment
+                        lsp_applied = 1
+                    else:
+                        lsp_payload, timed_out = enrich_with_language_lsp(
+                            language=target_language,
+                            mode="search",
+                            root=ctx.root,
+                            file_path=target_file_path,
+                            line=max(1, int(anchor.line)),
+                            col=int(anchor.col or 0),
+                            symbol_hint=(
+                                str(primary_target_finding.details.get("name"))
+                                if isinstance(primary_target_finding.details.get("name"), str)
+                                else top_def_match.match_text
+                            ),
+                        )
+                        lsp_timed_out = int(timed_out)
+                        if lsp_payload is not None:
+                            lsp_applied = 1
+                        else:
+                            lsp_failed = 1
+                            lsp_reasons.append("request_timeout" if timed_out else "request_failed")
+                if lsp_payload is not None:
+                    insight = augment_insight_with_lsp(insight, lsp_payload)
+                    advanced_planes = lsp_payload.get("advanced_planes")
+                    if isinstance(advanced_planes, dict):
+                        summary["lsp_advanced_planes"] = dict(advanced_planes)
 
-        insight = augment_insight_with_lsp(insight, top_def_match.pyrefly_enrichment)
+                if lsp_attempted > 0:
+                    telemetry_key = (
+                        "pyrefly_telemetry" if target_language == "python" else "rust_lsp_telemetry"
+                    )
+                    telemetry = summary.get(telemetry_key)
+                    if isinstance(telemetry, dict):
+                        telemetry["attempted"] = (
+                            int(telemetry.get("attempted", 0) or 0) + lsp_attempted
+                        )
+                        telemetry["applied"] = int(telemetry.get("applied", 0) or 0) + lsp_applied
+                        telemetry["failed"] = int(telemetry.get("failed", 0) or 0) + lsp_failed
+                        telemetry["timed_out"] = (
+                            int(telemetry.get("timed_out", 0) or 0) + lsp_timed_out
+                        )
+            else:
+                lsp_reasons.append("provider_unavailable")
+
+    if lsp_provider == "pyrefly":
+        provider_value = "pyrefly"
+    elif lsp_provider == "rust_analyzer":
+        provider_value = "rust_analyzer"
+    else:
+        provider_value = "none"
+    if lsp_provider == "none":
+        lsp_reasons.append("provider_unavailable")
+    elif lsp_attempted <= 0 and "not_attempted_runtime_disabled" not in lsp_reasons:
+        lsp_reasons.append("not_attempted_by_design")
+    lsp_state = derive_lsp_contract_state(
+        provider=provider_value,
+        available=lsp_provider != "none",
+        attempted=lsp_attempted,
+        applied=lsp_applied,
+        failed=lsp_failed,
+        timed_out=lsp_timed_out,
+        reasons=tuple(dict.fromkeys(lsp_reasons)),
+    )
+    insight = msgspec.structs.replace(
+        insight,
+        degradation=msgspec.structs.replace(
+            insight.degradation,
+            lsp=lsp_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+        ),
+    )
     summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
     return CqResult(

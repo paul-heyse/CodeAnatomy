@@ -65,6 +65,8 @@ def test_q_rust_compile_target_golden(
     assert_result_matches_spec(result, spec)
     insight = result.summary.get("front_door_insight")
     assert isinstance(insight, dict)
+    rust_lsp_telemetry = result.summary.get("rust_lsp_telemetry")
+    assert isinstance(rust_lsp_telemetry, dict)
     neighborhood = insight.get("neighborhood")
     assert isinstance(neighborhood, dict)
     callers = neighborhood.get("callers")

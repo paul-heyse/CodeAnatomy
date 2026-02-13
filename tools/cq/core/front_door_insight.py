@@ -16,6 +16,10 @@ import msgspec
 
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.lsp_contract_state import (
+    LspStatus,
+    derive_lsp_contract_state,
+)
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import Finding
@@ -24,7 +28,6 @@ InsightSource = Literal["search", "calls", "entity"]
 Availability = Literal["full", "partial", "unavailable"]
 NeighborhoodSource = Literal["structural", "lsp", "heuristic", "none"]
 RiskLevel = Literal["low", "med", "high"]
-LspStatus = Literal["unavailable", "skipped", "failed", "partial", "ok", "none"]
 
 _DEFAULT_TOP_CANDIDATES = 3
 _DEFAULT_PREVIEW_PER_SLICE = 5
@@ -100,7 +103,7 @@ class InsightConfidenceV1(CqStruct, frozen=True):
 class InsightDegradationV1(CqStruct, frozen=True):
     """Compact degradation status for front-door rendering."""
 
-    lsp: LspStatus = "none"
+    lsp: LspStatus = "unavailable"
     scan: str = "ok"
     scope_filter: str = "none"
     notes: tuple[str, ...] = ()
@@ -656,19 +659,27 @@ def _confidence_from_findings(findings: Sequence[Finding]) -> InsightConfidenceV
 
 
 def _degradation_from_summary(summary: dict[str, object]) -> InsightDegradationV1:
-    lsp_available = _python_lsp_available(summary)
-    lsp = derive_lsp_status(available=lsp_available)
-    pyrefly = summary.get("pyrefly_telemetry")
-    if isinstance(pyrefly, dict):
-        attempted = _int_or_none(pyrefly.get("attempted")) or 0
-        applied = _int_or_none(pyrefly.get("applied")) or 0
-        failed = _int_or_none(pyrefly.get("failed")) or 0
-        lsp = derive_lsp_status(
-            available=lsp_available,
-            attempted=attempted,
-            applied=applied,
-            failed=failed,
-        )
+    provider, lsp_available = _lsp_provider_and_availability(summary)
+    attempted, applied, failed, timed_out = _read_lsp_telemetry(summary)
+    lsp_reasons: list[str] = []
+    if not lsp_available:
+        lsp_reasons.append("provider_unavailable")
+    elif attempted <= 0:
+        lsp_reasons.append("not_attempted_by_design")
+    elif applied <= 0:
+        if timed_out > 0:
+            lsp_reasons.append("request_timeout")
+        if failed > 0:
+            lsp_reasons.append("request_failed")
+    lsp_state = derive_lsp_contract_state(
+        provider=provider,
+        available=lsp_available,
+        attempted=attempted,
+        applied=applied,
+        failed=failed,
+        timed_out=timed_out,
+        reasons=tuple(dict.fromkeys(lsp_reasons)),
+    )
 
     scan = "ok"
     if bool(summary.get("timed_out")):
@@ -686,10 +697,10 @@ def _degradation_from_summary(summary: dict[str, object]) -> InsightDegradationV
         notes.append(f"dropped_by_scope={dropped}")
 
     return InsightDegradationV1(
-        lsp=lsp,
+        lsp=lsp_state.status,
         scan=scan,
         scope_filter=scope_filter,
-        notes=tuple(notes),
+        notes=tuple(dict.fromkeys([*notes, *lsp_state.reasons])),
     )
 
 
@@ -815,6 +826,11 @@ def _node_refs_from_lsp_entries(payload: object, limit: int) -> tuple[SemanticNo
 def _read_reference_total(payload: dict[str, object]) -> int | None:
     local_scope = payload.get("local_scope_context")
     if not isinstance(local_scope, dict):
+        symbol_grounding = payload.get("symbol_grounding")
+        if isinstance(symbol_grounding, dict):
+            refs = symbol_grounding.get("references")
+            if isinstance(refs, list):
+                return len([item for item in refs if isinstance(item, dict)])
         return None
     refs = local_scope.get("reference_locations")
     if isinstance(refs, list):
@@ -876,28 +892,6 @@ def _empty_neighborhood() -> InsightNeighborhoodV1:
         references=InsightSliceV1(availability="unavailable", source="none"),
         hierarchy_or_scope=InsightSliceV1(availability="unavailable", source="none"),
     )
-
-
-def derive_lsp_status(
-    *,
-    available: bool,
-    attempted: int | None = None,
-    applied: int | None = None,
-    failed: int | None = None,
-) -> LspStatus:
-    """Derive canonical LSP status from capability + attempt counters."""
-    if not available:
-        return "unavailable"
-    attempted_count = attempted or 0
-    applied_count = applied or 0
-    failed_count = failed or 0
-    if attempted_count <= 0:
-        return "skipped"
-    if applied_count <= 0:
-        return "failed"
-    if failed_count > 0 or applied_count < attempted_count:
-        return "partial"
-    return "ok"
 
 
 def to_public_front_door_insight_dict(insight: FrontDoorInsightV1) -> dict[str, object]:
@@ -978,15 +972,53 @@ def _serialize_risk_counters(counters: InsightRiskCountersV1) -> dict[str, int]:
     }
 
 
-def _python_lsp_available(summary: dict[str, object]) -> bool:
-    scope = _string_or_none(summary.get("lang_scope"))
-    if scope == "rust":
-        return False
-    order = summary.get("language_order")
-    if isinstance(order, list):
-        languages = {str(item) for item in order}
-        return "python" in languages
-    return True
+def _lsp_provider_and_availability(
+    summary: dict[str, object],
+) -> tuple[Literal["pyrefly", "rust_analyzer", "none"], bool]:
+    py_attempted = 0
+    rust_attempted = 0
+    py_telemetry = summary.get("pyrefly_telemetry")
+    if isinstance(py_telemetry, dict):
+        py_attempted = _int_or_none(py_telemetry.get("attempted")) or 0
+    rust_telemetry = summary.get("rust_lsp_telemetry")
+    if isinstance(rust_telemetry, dict):
+        rust_attempted = _int_or_none(rust_telemetry.get("attempted")) or 0
+    if rust_attempted > 0 and py_attempted <= 0:
+        return "rust_analyzer", True
+    if py_attempted > 0:
+        return "pyrefly", True
+
+    scope = _string_or_none(summary.get("lang_scope")) or "auto"
+    order_raw = summary.get("language_order")
+    order: tuple[str, ...]
+    if isinstance(order_raw, list):
+        order = tuple(str(item) for item in order_raw)
+    else:
+        order = ("python", "rust") if scope == "auto" else (scope,)
+
+    has_python = "python" in order
+    has_rust = "rust" in order
+    if has_python:
+        return "pyrefly", True
+    if has_rust:
+        return "rust_analyzer", True
+    return "none", False
+
+
+def _read_lsp_telemetry(summary: dict[str, object]) -> tuple[int, int, int, int]:
+    attempted = 0
+    applied = 0
+    failed = 0
+    timed_out = 0
+    for key in ("pyrefly_telemetry", "rust_lsp_telemetry"):
+        telemetry = summary.get(key)
+        if not isinstance(telemetry, dict):
+            continue
+        attempted += _int_or_none(telemetry.get("attempted")) or 0
+        applied += _int_or_none(telemetry.get("applied")) or 0
+        failed += _int_or_none(telemetry.get("failed")) or 0
+        timed_out += _int_or_none(telemetry.get("timed_out")) or 0
+    return attempted, applied, failed, timed_out
 
 
 __all__ = [
@@ -1014,7 +1046,6 @@ __all__ = [
     "build_neighborhood_from_slices",
     "build_search_insight",
     "coerce_front_door_insight",
-    "derive_lsp_status",
     "mark_partial_for_missing_languages",
     "render_insight_card",
     "risk_from_counters",

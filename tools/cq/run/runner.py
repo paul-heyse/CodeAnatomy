@@ -153,6 +153,17 @@ def _populate_run_summary_metadata(
             "timed_out": 0,
         },
     )
+    merged.summary.setdefault(
+        "rust_lsp_telemetry",
+        {
+            "attempted": 0,
+            "applied": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+        },
+    )
+    merged.summary.setdefault("lsp_advanced_planes", {})
     merged.summary.setdefault("pyrefly_diagnostics", [])
 
 

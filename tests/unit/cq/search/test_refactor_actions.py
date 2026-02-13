@@ -26,6 +26,8 @@ def _session(*, request, code_action_provider: object = True) -> object:
             capabilities=SimpleNamespace(
                 server_caps=SimpleNamespace(
                     publish_diagnostics=True,
+                    diagnostic_provider_raw={"workspaceDiagnostics": True},
+                    workspace_diagnostic_provider_raw=True,
                     code_action_provider=code_action_provider,
                     code_action_provider_raw={"resolveProvider": True},
                 )

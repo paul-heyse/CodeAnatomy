@@ -70,6 +70,9 @@ def test_search_rust_workspace_golden(
     assert_result_matches_spec(result, spec)
     insight = result.summary.get("front_door_insight")
     assert isinstance(insight, dict)
+    rust_lsp_telemetry = result.summary.get("rust_lsp_telemetry")
+    assert isinstance(rust_lsp_telemetry, dict)
+    assert {"attempted", "applied", "failed", "timed_out"}.issubset(rust_lsp_telemetry.keys())
     neighborhood = insight.get("neighborhood")
     assert isinstance(neighborhood, dict)
     for key in ("callers", "callees", "references", "hierarchy_or_scope"):

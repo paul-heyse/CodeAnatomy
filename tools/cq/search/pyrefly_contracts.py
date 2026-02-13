@@ -410,6 +410,7 @@ class PyreflyEnrichmentPayload(CqStruct, frozen=True):
     )
     anchor_diagnostics: list[PyreflyAnchorDiagnostic] = msgspec.field(default_factory=list)
     coverage: PyreflyCoverage = msgspec.field(default_factory=PyreflyCoverage)
+    advanced_planes: dict[str, object] = msgspec.field(default_factory=dict)
 
 
 def _coerce_targets(payload: Mapping[str, object] | None, key: str) -> list[PyreflyTarget]:
@@ -465,6 +466,11 @@ def coerce_pyrefly_payload(
         ),
         anchor_diagnostics=diagnostics,
         coverage=PyreflyCoverage.from_mapping(_as_mapping(payload.get("coverage"))),
+        advanced_planes=(
+            dict(planes)
+            if isinstance((planes := _as_mapping(payload.get("advanced_planes"))), Mapping)
+            else {}
+        ),
     )
 
 

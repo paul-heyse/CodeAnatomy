@@ -1299,3 +1299,37 @@ class TestCandidateSearcher:
             SMART_SEARCH_LIMITS,
         )
         assert pattern == "build.*graph"
+
+
+def test_search_rust_front_door_uses_rust_lsp_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rust searches should report non-unavailable LSP when adapter resolves payload."""
+    (tmp_path / "lib.rs").write_text("pub fn compile_target() -> i32 { 1 }\n", encoding="utf-8")
+    clear_caches()
+
+    monkeypatch.setattr(
+        "tools.cq.search.smart_search.enrich_with_language_lsp",
+        lambda **_kwargs: (
+            {
+                "call_graph": {
+                    "incoming_total": 1,
+                    "outgoing_total": 0,
+                    "incoming_callers": [{"name": "caller", "uri": "file:///x.rs"}],
+                    "outgoing_callees": [],
+                },
+                "symbol_grounding": {"references": [{"uri": "file:///x.rs"}]},
+            },
+            False,
+        ),
+    )
+
+    result = smart_search(tmp_path, "compile_target", lang_scope="rust")
+    insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
+    degradation = cast("dict[str, object]", insight.get("degradation", {}))
+    assert degradation.get("lsp") in {"ok", "partial"}
+    rust_lsp = cast("dict[str, object]", result.summary.get("rust_lsp_telemetry", {}))
+    attempted = rust_lsp.get("attempted", 0)
+    assert isinstance(attempted, int)
+    assert attempted >= 1

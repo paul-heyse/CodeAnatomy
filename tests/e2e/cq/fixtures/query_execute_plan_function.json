@@ -6,9 +6,9 @@
       "anchor": {
         "col": 0,
         "end_col": 39,
-        "end_line": 569,
+        "end_line": 579,
         "file": "tools/cq/query/executor.py",
-        "line": 523
+        "line": 533
       },
       "category": "definition",
       "details": {
@@ -53,9 +53,9 @@
           "anchor": {
             "col": 0,
             "end_col": 39,
-            "end_line": 569,
+            "end_line": 579,
             "file": "tools/cq/query/executor.py",
-            "line": 523
+            "line": 533
           },
           "category": "entity_neighborhood",
           "details": {
@@ -118,7 +118,7 @@
               "file_path": "tools/cq/query/executor.py",
               "kind": "definition",
               "name": "execute_plan",
-              "node_id": "entity:callee:tools/cq/query/executor.py:523:execute_plan"
+              "node_id": "entity:callee:tools/cq/query/executor.py:533:execute_plan"
             }
           ],
           "source": "lsp",
@@ -166,7 +166,7 @@
         "location": {
           "col": 0,
           "file": "tools/cq/query/executor.py",
-          "line": 523
+          "line": 533
         },
         "qualname": null,
         "selection_reason": "top_entity_result",
@@ -292,6 +292,7 @@
         "truncated": false
       }
     },
+    "lsp_advanced_planes": {},
     "mode": "entity",
     "pyrefly_diagnostics": [],
     "pyrefly_overview": {},
@@ -302,6 +303,13 @@
       "skipped": 0,
       "timed_out": 0
     },
-    "query": "entity=function name=execute_plan"
+    "query": "entity=function name=execute_plan",
+    "rust_lsp_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    }
   }
 }

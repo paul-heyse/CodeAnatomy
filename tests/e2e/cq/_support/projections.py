@@ -101,6 +101,10 @@ def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
         "total_nodes": summary.get("total_nodes"),
         "total_edges": summary.get("total_edges"),
         "total_diagnostics": summary.get("total_diagnostics"),
+        "pyrefly_telemetry": summary.get("pyrefly_telemetry"),
+        "rust_lsp_telemetry": summary.get("rust_lsp_telemetry"),
+        "lsp_advanced_planes_present": isinstance(summary.get("lsp_advanced_planes"), dict)
+        and bool(summary.get("lsp_advanced_planes")),
         "front_door_insight": _project_front_door_insight(summary),
     }
 

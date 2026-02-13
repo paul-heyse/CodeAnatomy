@@ -48,11 +48,17 @@ def normalize_capability_snapshot(
                     ),
                     "inlay_hint_provider": _provider_enabled(mapping, "inlayHintProvider"),
                     "code_action_provider": _provider_enabled(mapping, "codeActionProvider"),
+                    "diagnostic_provider": _provider_enabled(mapping, "diagnosticProvider"),
+                    "workspace_diagnostic_provider": _provider_enabled(
+                        mapping, "workspaceDiagnosticProvider"
+                    ),
                     "semantic_tokens_provider_raw": _mapping_or_none(
                         mapping.get("semanticTokensProvider")
                     ),
                     "workspace_symbol_provider_raw": mapping.get("workspaceSymbolProvider"),
                     "code_action_provider_raw": mapping.get("codeActionProvider"),
+                    "diagnostic_provider_raw": mapping.get("diagnosticProvider"),
+                    "workspace_diagnostic_provider_raw": mapping.get("workspaceDiagnosticProvider"),
                 },
                 type=type(LspCapabilitySnapshotV1().server_caps),
             )

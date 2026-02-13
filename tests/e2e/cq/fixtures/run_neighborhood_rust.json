@@ -52,9 +52,24 @@
       "python",
       "rust"
     ],
+    "lsp_advanced_planes_present": false,
     "mode": "run",
     "plan_version": 1,
+    "pyrefly_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "query": "multi-step plan (1 step)",
+    "rust_lsp_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "steps": [
       "neighborhood_0"
     ],

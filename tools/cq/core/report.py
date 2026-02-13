@@ -53,6 +53,8 @@ SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
     "enrichment_telemetry",
     "pyrefly_overview",
     "pyrefly_telemetry",
+    "rust_lsp_telemetry",
+    "lsp_advanced_planes",
     "pyrefly_diagnostics",
 )
 DETAILS_SUPPRESS_KEYS: frozenset[str] = frozenset(
@@ -71,6 +73,8 @@ ARTIFACT_ONLY_KEYS: frozenset[str] = frozenset(
     {
         "enrichment_telemetry",
         "pyrefly_telemetry",
+        "rust_lsp_telemetry",
+        "lsp_advanced_planes",
         "pyrefly_diagnostics",
         "language_capabilities",
         "cross_language_diagnostics",
@@ -1396,6 +1400,41 @@ def _derive_pyrefly_telemetry_status(value: object) -> str:
     return f"Pyrefly: {applied}/{attempted} applied"
 
 
+def _derive_rust_lsp_telemetry_status(value: object) -> str:
+    """Derive compact rust LSP telemetry status.
+
+    Returns:
+    -------
+    str
+        Compact status line.
+    """
+    if not isinstance(value, dict):
+        return "Rust LSP: skipped"
+    applied = value.get("applied", 0)
+    attempted = value.get("attempted", 0)
+    if not attempted:
+        return "Rust LSP: skipped"
+    return f"Rust LSP: {applied}/{attempted} applied"
+
+
+def _derive_lsp_advanced_status(value: object) -> str:
+    """Derive compact status for advanced LSP planes.
+
+    Returns:
+    -------
+    str
+        Compact status line.
+    """
+    if not isinstance(value, dict) or not value:
+        return "LSP advanced: none"
+    tokens = int(value.get("semantic_tokens_count", 0) or 0)
+    hints = int(value.get("inlay_hints_count", 0) or 0)
+    diagnostics = int(value.get("document_diagnostics_count", 0) or 0) + int(
+        value.get("workspace_diagnostics_count", 0) or 0
+    )
+    return f"LSP advanced: tokens={tokens}, hints={hints}, diagnostics={diagnostics}"
+
+
 def _derive_pyrefly_diagnostics_status(value: object) -> str:
     """Derive compact pyrefly diagnostics status.
 
@@ -1448,6 +1487,8 @@ _CompactDeriver = Callable[[object], str]
 _COMPACT_STATUS_DERIVERS: dict[str, _CompactDeriver] = {
     "enrichment_telemetry": _derive_enrichment_status,
     "pyrefly_telemetry": _derive_pyrefly_telemetry_status,
+    "rust_lsp_telemetry": _derive_rust_lsp_telemetry_status,
+    "lsp_advanced_planes": _derive_lsp_advanced_status,
     "pyrefly_diagnostics": _derive_pyrefly_diagnostics_status,
     "language_capabilities": _derive_capabilities_status,
     "cross_language_diagnostics": _derive_cross_lang_status,

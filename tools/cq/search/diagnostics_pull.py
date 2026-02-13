@@ -1,4 +1,4 @@
-# ruff: noqa: DOC201,C901,PLR0914,ANN202,SIM103
+# ruff: noqa: DOC201, C901, PLR0914, ANN202
 """Shared diagnostics pull helpers for LSP clients."""
 
 from __future__ import annotations
@@ -9,7 +9,6 @@ from typing import cast
 
 def pull_text_document_diagnostics(
     session: object,
-    *,
     uri: str,
 ) -> tuple[dict[str, object], ...] | None:
     """Pull diagnostics via `textDocument/diagnostic` when available."""
@@ -170,18 +169,51 @@ def _request_fn(session: object):
     return None
 
 
-def _supports_method(session: object, method: str) -> bool:
-    env = getattr(session, "_session_env", None)
-    caps = getattr(env, "capabilities", None)
-    server_caps = getattr(caps, "server_caps", None)
+def _supports_method(session: object, method: str) -> bool:  # noqa: PLR0911
+    server_caps = _resolve_server_caps(session)
     if server_caps is None:
         return False
 
     if method == "textDocument/diagnostic":
-        return bool(getattr(server_caps, "publish_diagnostics", True))
+        provider = server_caps.get("diagnosticProvider")
+        if isinstance(provider, Mapping):
+            return True
+        return bool(provider)
+
     if method == "workspace/diagnostic":
-        return True
+        workspace_provider = server_caps.get("workspaceDiagnosticProvider")
+        if workspace_provider is not None:
+            return bool(workspace_provider)
+        provider = server_caps.get("diagnosticProvider")
+        if isinstance(provider, Mapping):
+            workspace = provider.get("workspaceDiagnostics")
+            return bool(workspace)
+        return False
     return False
+
+
+def _resolve_server_caps(session: object) -> Mapping[str, object] | None:
+    raw_caps = getattr(session, "_server_capabilities", None)
+    if isinstance(raw_caps, Mapping):
+        return cast("Mapping[str, object]", raw_caps)
+
+    env = getattr(session, "_session_env", None)
+    caps = getattr(env, "capabilities", None)
+    server_caps = getattr(caps, "server_caps", None)
+    if server_caps is None:
+        return None
+
+    out: dict[str, object] = {
+        "definitionProvider": bool(getattr(server_caps, "definition_provider", False)),
+        "referencesProvider": bool(getattr(server_caps, "references_provider", False)),
+    }
+    diagnostic_provider = getattr(server_caps, "diagnostic_provider_raw", None)
+    if diagnostic_provider is not None:
+        out["diagnosticProvider"] = diagnostic_provider
+    workspace_diagnostic_provider = getattr(server_caps, "workspace_diagnostic_provider_raw", None)
+    if workspace_diagnostic_provider is not None:
+        out["workspaceDiagnosticProvider"] = workspace_diagnostic_provider
+    return out
 
 
 __all__ = [

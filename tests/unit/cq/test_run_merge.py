@@ -72,6 +72,8 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
     assert isinstance(merged.summary["language_capabilities"], dict)
     assert "pyrefly_overview" in merged.summary
     assert "pyrefly_telemetry" in merged.summary
+    assert "rust_lsp_telemetry" in merged.summary
+    assert "lsp_advanced_planes" in merged.summary
     assert "pyrefly_diagnostics" in merged.summary
 
 

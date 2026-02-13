@@ -23,8 +23,10 @@
         "telemetry": false
       },
       "degradation": {
-        "lsp": "unavailable",
-        "notes": [],
+        "lsp": "skipped",
+        "notes": [
+          "not_attempted_runtime_disabled"
+        ],
         "scan": "ok",
         "scope_filter": "none"
       },
@@ -71,9 +73,24 @@
     "language_order": [
       "rust"
     ],
+    "lsp_advanced_planes_present": false,
     "mode": "entity",
     "plan_version": null,
+    "pyrefly_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "query": "entity=function name=compile_target lang=rust in=tests/e2e/cq/_golden_workspace/rust_workspace",
+    "rust_lsp_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "steps": null,
     "target": null,
     "target_file": null,

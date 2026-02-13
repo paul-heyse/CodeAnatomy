@@ -75,18 +75,21 @@
         "telemetry": false
       },
       "degradation": {
-        "lsp": "ok",
-        "notes": [],
+        "lsp": "skipped",
+        "notes": [
+          "not_attempted_by_design",
+          "not_attempted_runtime_disabled"
+        ],
         "scan": "ok",
         "scope_filter": "none"
       },
       "neighborhood": {
         "callees": {
-          "availability": "partial",
+          "availability": "unavailable",
           "total": 0
         },
         "callers": {
-          "availability": "partial",
+          "availability": "unavailable",
           "total": 0
         },
         "hierarchy_or_scope": {
@@ -124,9 +127,24 @@
       "python",
       "rust"
     ],
+    "lsp_advanced_planes_present": false,
     "mode": "identifier",
     "plan_version": null,
+    "pyrefly_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "query": "mixed_symbol",
+    "rust_lsp_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "steps": null,
     "target": null,
     "target_file": null,

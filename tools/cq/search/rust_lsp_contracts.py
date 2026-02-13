@@ -32,9 +32,13 @@ class LspServerCapabilitySnapshotV1(CqStruct, frozen=True):
     code_action_provider: bool = False
     semantic_tokens_provider: bool = False
     inlay_hint_provider: bool = False
+    diagnostic_provider: bool = False
+    workspace_diagnostic_provider: bool = False
     semantic_tokens_provider_raw: dict[str, object] | None = None
     code_action_provider_raw: object | None = None
     workspace_symbol_provider_raw: object | None = None
+    diagnostic_provider_raw: object | None = None
+    workspace_diagnostic_provider_raw: object | None = None
 
 
 class LspClientPublishDiagnosticsCapsV1(CqStruct, frozen=True):
@@ -192,6 +196,7 @@ class RustLspEnrichmentPayload(CqStruct, frozen=True):
     document_symbols: tuple[RustDocSymbol, ...] = ()
     diagnostics: tuple[RustDiagnosticV1, ...] = ()
     hover_text: str | None = None
+    advanced_planes: dict[str, object] = msgspec.field(default_factory=dict)
 
 
 def _as_str(value: object) -> str | None:
@@ -627,6 +632,7 @@ def coerce_rust_lsp_payload(
     document_symbols = _coerce_document_symbols(payload.get("document_symbols"))
     diagnostics = _coerce_diagnostics(payload.get("diagnostics"))
     hover_text = payload.get("hover_text")
+    advanced_planes = payload.get("advanced_planes")
 
     return RustLspEnrichmentPayload(
         session_env=session_env,
@@ -636,6 +642,7 @@ def coerce_rust_lsp_payload(
         document_symbols=document_symbols,
         diagnostics=diagnostics,
         hover_text=hover_text if isinstance(hover_text, str) else None,
+        advanced_planes=dict(advanced_planes) if isinstance(advanced_planes, Mapping) else {},
     )
 
 

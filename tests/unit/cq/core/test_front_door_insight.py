@@ -16,7 +16,6 @@ from tools.cq.core.front_door_insight import (
     build_neighborhood_from_slices,
     build_search_insight,
     coerce_front_door_insight,
-    derive_lsp_status,
     mark_partial_for_missing_languages,
     render_insight_card,
     risk_from_counters,
@@ -24,6 +23,7 @@ from tools.cq.core.front_door_insight import (
 )
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
+from tools.cq.search.lsp_contract_state import derive_lsp_contract_state
 
 
 def _definition_finding(name: str = "target") -> Finding:
@@ -258,8 +258,38 @@ def test_to_public_front_door_insight_dict_emits_full_shape() -> None:
 
 
 def test_derive_lsp_status_contract() -> None:
-    assert derive_lsp_status(available=False) == "unavailable"
-    assert derive_lsp_status(available=True, attempted=0, applied=0) == "skipped"
-    assert derive_lsp_status(available=True, attempted=2, applied=0, failed=2) == "failed"
-    assert derive_lsp_status(available=True, attempted=3, applied=1, failed=2) == "partial"
-    assert derive_lsp_status(available=True, attempted=2, applied=2, failed=0) == "ok"
+    assert derive_lsp_contract_state(provider="pyrefly", available=False).status == "unavailable"
+    assert (
+        derive_lsp_contract_state(provider="pyrefly", available=True, attempted=0, applied=0).status
+        == "skipped"
+    )
+    assert (
+        derive_lsp_contract_state(
+            provider="pyrefly",
+            available=True,
+            attempted=2,
+            applied=0,
+            failed=2,
+        ).status
+        == "failed"
+    )
+    assert (
+        derive_lsp_contract_state(
+            provider="pyrefly",
+            available=True,
+            attempted=3,
+            applied=1,
+            failed=2,
+        ).status
+        == "partial"
+    )
+    assert (
+        derive_lsp_contract_state(
+            provider="pyrefly",
+            available=True,
+            attempted=2,
+            applied=2,
+            failed=0,
+        ).status
+        == "ok"
+    )

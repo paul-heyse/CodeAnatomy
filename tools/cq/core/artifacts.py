@@ -8,17 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from tools.cq.core.codec import dumps_json_value
+from tools.cq.core.diagnostics_contracts import build_diagnostics_artifact_payload
 from tools.cq.core.schema import Artifact, CqResult
 from tools.cq.core.serialization import to_builtins
 
 DEFAULT_ARTIFACT_DIR = ".cq/artifacts"
-_DIAGNOSTIC_SUMMARY_KEYS: tuple[str, ...] = (
-    "enrichment_telemetry",
-    "pyrefly_telemetry",
-    "pyrefly_diagnostics",
-    "language_capabilities",
-    "cross_language_diagnostics",
-)
 
 
 def _resolve_artifact_dir(result: CqResult, artifact_dir: str | Path | None) -> Path:
@@ -91,17 +85,9 @@ def save_diagnostics_artifact(
     filename: str | None = None,
 ) -> Artifact | None:
     """Persist offloaded diagnostics summary payload for artifact-first rendering."""
-    payload: dict[str, object] = {}
-    for key in _DIAGNOSTIC_SUMMARY_KEYS:
-        if key in result.summary:
-            payload[key] = result.summary[key]
-    if not payload:
+    payload = build_diagnostics_artifact_payload(result)
+    if payload is None:
         return None
-    payload["run_meta"] = {
-        "macro": result.run.macro,
-        "root": result.run.root,
-        "run_id": result.run.run_id,
-    }
     artifact_name = filename or _default_filename(result, "diagnostics")
     return _write_json_artifact(
         result=result,

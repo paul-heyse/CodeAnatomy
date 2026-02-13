@@ -57,6 +57,7 @@
       "degradation": {
         "lsp": "unavailable",
         "notes": [
+          "provider_unavailable",
           "missing_languages=rust"
         ],
         "scan": "ok",
@@ -238,6 +239,7 @@
         "truncated": false
       }
     },
+    "lsp_advanced_planes": {},
     "mode": "entity",
     "pyrefly_diagnostics": [],
     "pyrefly_overview": {},
@@ -248,6 +250,13 @@
       "skipped": 0,
       "timed_out": 0
     },
-    "query": "entity=import name=Path"
+    "query": "entity=import name=Path",
+    "rust_lsp_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    }
   }
 }

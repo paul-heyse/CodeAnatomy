@@ -81,8 +81,11 @@
         "telemetry": false
       },
       "degradation": {
-        "lsp": "ok",
-        "notes": [],
+        "lsp": "skipped",
+        "notes": [
+          "not_attempted_by_design",
+          "not_attempted_runtime_disabled"
+        ],
         "scan": "ok",
         "scope_filter": "none"
       },
@@ -129,9 +132,24 @@
     "language_order": [
       "python"
     ],
+    "lsp_advanced_planes_present": false,
     "mode": "identifier",
     "plan_version": null,
+    "pyrefly_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "query": "AsyncService",
+    "rust_lsp_telemetry": {
+      "applied": 0,
+      "attempted": 0,
+      "failed": 0,
+      "skipped": 0,
+      "timed_out": 0
+    },
     "steps": null,
     "target": null,
     "target_file": null,

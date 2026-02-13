@@ -11,12 +11,20 @@ from tools.cq.search.diagnostics_pull import (
 )
 
 
-def _session(*, request, publish_diagnostics: bool = True) -> object:
+def _session(
+    *,
+    request,
+    diagnostic_provider: object = True,
+    workspace_diagnostic_provider: object = False,
+) -> object:
     return SimpleNamespace(
         _send_request=request,
         _session_env=SimpleNamespace(
             capabilities=SimpleNamespace(
-                server_caps=SimpleNamespace(publish_diagnostics=publish_diagnostics)
+                server_caps=SimpleNamespace(
+                    diagnostic_provider_raw=diagnostic_provider,
+                    workspace_diagnostic_provider_raw=workspace_diagnostic_provider,
+                )
             )
         ),
     )
@@ -26,7 +34,7 @@ def test_pull_text_document_diagnostics_returns_none_when_unsupported() -> None:
     def request(_method: str, _params: object) -> object:
         return {"ok": True}
 
-    session = _session(request=request, publish_diagnostics=False)
+    session = _session(request=request, diagnostic_provider=False)
     assert pull_text_document_diagnostics(session, uri="file:///x.py") is None
 
 
@@ -55,7 +63,7 @@ def test_pull_text_document_diagnostics_normalizes_items() -> None:
             ]
         }
 
-    session = _session(request=request, publish_diagnostics=True)
+    session = _session(request=request, diagnostic_provider=True)
     rows = pull_text_document_diagnostics(session, uri="file:///x.py")
     assert rows is not None
     assert len(rows) == 1
@@ -85,7 +93,7 @@ def test_pull_workspace_diagnostics_normalizes_related_documents() -> None:
             }
         }
 
-    session = _session(request=request)
+    session = _session(request=request, workspace_diagnostic_provider=True)
     rows = pull_workspace_diagnostics(session)
     assert rows is not None
     assert len(rows) == 1
@@ -97,5 +105,5 @@ def test_pull_workspace_diagnostics_fail_open_on_exception() -> None:
     def request(_method: str, _params: object) -> object:
         raise RuntimeError("boom")
 
-    session = _session(request=request)
+    session = _session(request=request, workspace_diagnostic_provider=True)
     assert pull_workspace_diagnostics(session) is None

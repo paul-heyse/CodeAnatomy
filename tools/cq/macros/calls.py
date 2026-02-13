@@ -53,7 +53,6 @@ _TRIPLE_QUOTE_RE = re.compile(r"^[rRuUbBfF]*(?P<quote>'''|\"\"\")")
 _CALLS_TARGET_CALLEE_PREVIEW = 10
 _FRONT_DOOR_TOP_CANDIDATES = 3
 _FRONT_DOOR_PREVIEW_PER_SLICE = 5
-_CALLS_LSP_TIMEOUT_SECONDS = 2.0
 
 
 class CallAnalysis(msgspec.Struct, frozen=True):
@@ -1445,13 +1444,18 @@ def _build_calls_result(
         augment_insight_with_lsp,
         build_calls_insight,
         build_neighborhood_from_slices,
-        derive_lsp_status,
         to_public_front_door_insight_dict,
     )
     from tools.cq.core.snb_schema import SemanticNodeRefV1
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
     from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
-    from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_lsp
+    from tools.cq.search.lsp_contract_state import derive_lsp_contract_state
+    from tools.cq.search.lsp_front_door_adapter import (
+        enrich_with_language_lsp,
+        infer_language_for_path,
+        lsp_runtime_enabled,
+        provider_for_language,
+    )
 
     run_ctx = RunContext.from_parts(
         root=ctx.root,
@@ -1611,9 +1615,16 @@ def _build_calls_result(
         target_file_path = ctx.root / target_location[0]
         target_line = int(target_location[1])
 
-    lsp_available = bool(target_file_path and target_file_path.suffix in {".py", ".pyi"})
+    target_language = (
+        infer_language_for_path(target_file_path) if target_file_path is not None else None
+    )
+    lsp_available = target_language in {"python", "rust"}
     lsp_attempted = 0
     lsp_applied = 0
+    lsp_failed = 0
+    lsp_timed_out = 0
+    lsp_provider = provider_for_language(target_language) if target_language else "none"
+    lsp_reasons: list[str] = []
 
     insight = build_calls_insight(
         function_name=ctx.function_name,
@@ -1635,46 +1646,81 @@ def _build_calls_result(
             lsp_targets=1,
         ),
         degradation=InsightDegradationV1(
-            lsp=derive_lsp_status(available=lsp_available),
+            lsp=derive_lsp_contract_state(
+                provider=lsp_provider,
+                available=lsp_available,
+            ).status,
             scan="fallback" if scan_result.used_fallback else "ok",
             scope_filter="none",
             notes=tuple(degradation_notes),
         ),
     )
 
-    if target_file_path is not None and lsp_available:
-        lsp_payload: dict[str, object] | None = enrich_with_pyrefly_lsp(
-            PyreflyLspRequest(
+    if target_file_path is not None and target_language in {"python", "rust"}:
+        if lsp_runtime_enabled():
+            lsp_payload, timed_out = enrich_with_language_lsp(
+                language=target_language,
+                mode="calls",
                 root=ctx.root,
                 file_path=target_file_path,
                 line=max(1, target_line),
                 col=0,
                 symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
-                timeout_seconds=_CALLS_LSP_TIMEOUT_SECONDS,
-                startup_timeout_seconds=_CALLS_LSP_TIMEOUT_SECONDS,
-                max_callers=_FRONT_DOOR_PREVIEW_PER_SLICE,
-                max_callees=_FRONT_DOOR_PREVIEW_PER_SLICE,
             )
-        )
-        lsp_attempted = 1
-        if lsp_payload is not None:
-            lsp_applied = 1
-            insight = augment_insight_with_lsp(
-                insight,
-                lsp_payload,
-                preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
-            )
+            lsp_attempted = 1
+            lsp_timed_out = int(timed_out)
+            if lsp_payload is not None:
+                lsp_applied = 1
+                insight = augment_insight_with_lsp(
+                    insight,
+                    lsp_payload,
+                    preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+                )
+                advanced_planes = lsp_payload.get("advanced_planes")
+                if isinstance(advanced_planes, dict):
+                    result.summary["lsp_advanced_planes"] = dict(advanced_planes)
+            else:
+                lsp_failed = 1
+                lsp_reasons.append("request_timeout" if timed_out else "request_failed")
+        else:
+            lsp_reasons.append("not_attempted_runtime_disabled")
+    elif lsp_provider == "none":
+        lsp_reasons.append("provider_unavailable")
 
-    lsp_status = derive_lsp_status(
+    lsp_state = derive_lsp_contract_state(
+        provider=lsp_provider,
         available=lsp_available,
         attempted=lsp_attempted,
         applied=lsp_applied,
-        failed=max(0, lsp_attempted - lsp_applied),
+        failed=max(lsp_failed, lsp_attempted - lsp_applied),
+        timed_out=lsp_timed_out,
+        reasons=tuple(dict.fromkeys(lsp_reasons)),
     )
     insight = msgspec.structs.replace(
         insight,
-        degradation=msgspec.structs.replace(insight.degradation, lsp=lsp_status),
+        degradation=msgspec.structs.replace(
+            insight.degradation,
+            lsp=lsp_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+        ),
     )
+
+    result.summary["pyrefly_telemetry"] = {
+        "attempted": lsp_attempted if target_language == "python" else 0,
+        "applied": lsp_applied if target_language == "python" else 0,
+        "failed": max(lsp_failed, lsp_attempted - lsp_applied)
+        if target_language == "python"
+        else 0,
+        "skipped": 0,
+        "timed_out": lsp_timed_out if target_language == "python" else 0,
+    }
+    result.summary["rust_lsp_telemetry"] = {
+        "attempted": lsp_attempted if target_language == "rust" else 0,
+        "applied": lsp_applied if target_language == "rust" else 0,
+        "failed": max(lsp_failed, lsp_attempted - lsp_applied) if target_language == "rust" else 0,
+        "skipped": 0,
+        "timed_out": lsp_timed_out if target_language == "rust" else 0,
+    }
 
     result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
@@ -1695,9 +1741,8 @@ def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> Cq
     from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
 
     existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
-    existing_insight = existing_summary.get("front_door_insight")
     fallback_matches = existing_summary.get("total_sites")
-    merged = apply_rust_macro_fallback(
+    return apply_rust_macro_fallback(
         result=result,
         root=root,
         pattern=function_name,
@@ -1705,9 +1750,6 @@ def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> Cq
         fallback_matches=fallback_matches if isinstance(fallback_matches, int) else 0,
         query=function_name,
     )
-    if existing_insight is not None and "front_door_insight" not in merged.summary:
-        merged.summary["front_door_insight"] = existing_insight
-    return merged
 
 
 def cmd_calls(

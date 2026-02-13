@@ -80,6 +80,8 @@ from tools.cq.index.files import FileTabulationResult, build_repo_file_index, ta
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.ir import Query, Scope
 
+_ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
+
 
 @dataclass
 class ScanContext:
@@ -249,6 +251,14 @@ def _summary_common_for_query(
             "skipped": 0,
             "timed_out": 0,
         },
+        "rust_lsp_telemetry": {
+            "attempted": 0,
+            "applied": 0,
+            "failed": 0,
+            "skipped": 0,
+            "timed_out": 0,
+        },
+        "lsp_advanced_planes": dict[str, object](),
         "pyrefly_diagnostics": list[dict[str, object]](),
     }
     if query.pattern_spec is not None:
@@ -725,7 +735,7 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
     result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
 
-def _attach_entity_insight(result: CqResult) -> None:
+def _attach_entity_insight(result: CqResult) -> None:  # noqa: PLR0912
     """Build and attach front-door insight card to entity result."""
     from tools.cq.core.front_door_insight import (
         InsightBudgetV1,
@@ -736,13 +746,18 @@ def _attach_entity_insight(result: CqResult) -> None:
         InsightSliceV1,
         augment_insight_with_lsp,
         build_entity_insight,
-        derive_lsp_status,
         mark_partial_for_missing_languages,
         risk_from_counters,
         to_public_front_door_insight_dict,
     )
     from tools.cq.core.snb_schema import SemanticNodeRefV1
-    from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_lsp
+    from tools.cq.search.lsp_contract_state import LspProvider, derive_lsp_contract_state
+    from tools.cq.search.lsp_front_door_adapter import (
+        enrich_with_language_lsp,
+        infer_language_for_path,
+        lsp_runtime_enabled,
+        provider_for_language,
+    )
 
     mode_value = result.summary.get("mode")
     if isinstance(mode_value, str) and mode_value == "pattern":
@@ -869,15 +884,43 @@ def _attach_entity_insight(result: CqResult) -> None:
 
     lsp_attempted = 0
     lsp_applied = 0
-    for finding in candidates:
-        if finding.anchor is None:
-            continue
-        target_file = Path(result.run.root) / finding.anchor.file
-        if target_file.suffix not in {".py", ".pyi"}:
-            continue
-        lsp_attempted += 1
-        payload = enrich_with_pyrefly_lsp(
-            PyreflyLspRequest(
+    lsp_failed = 0
+    lsp_timed_out = 0
+    lsp_provider: LspProvider = "none"
+    py_attempted = 0
+    py_applied = 0
+    py_failed = 0
+    py_timed_out = 0
+    rust_attempted = 0
+    rust_applied = 0
+    rust_failed = 0
+    rust_timed_out = 0
+    lsp_reasons: list[str] = []
+    summary_matches = result.summary.get("matches")
+    match_count = summary_matches if isinstance(summary_matches, int) else len(result.key_findings)
+    runtime_lsp_enabled = lsp_runtime_enabled()
+    run_entity_lsp = runtime_lsp_enabled and (
+        match_count <= _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES
+    )
+    if run_entity_lsp:
+        for finding in candidates:
+            if finding.anchor is None:
+                continue
+            target_file = Path(result.run.root) / finding.anchor.file
+            target_language = infer_language_for_path(target_file)
+            if target_language not in {"python", "rust"}:
+                lsp_reasons.append("provider_unavailable")
+                continue
+            if lsp_provider == "none":
+                lsp_provider = provider_for_language(target_language)
+            lsp_attempted += 1
+            if target_language == "python":
+                py_attempted += 1
+            else:
+                rust_attempted += 1
+            payload, timed_out = enrich_with_language_lsp(
+                language=target_language,
+                mode="entity",
                 root=Path(result.run.root),
                 file_path=target_file,
                 line=max(1, int(finding.anchor.line)),
@@ -887,36 +930,94 @@ def _attach_entity_insight(result: CqResult) -> None:
                     if isinstance(finding.details.get("name"), str)
                     else None
                 ),
-                timeout_seconds=2.0,
-                startup_timeout_seconds=2.0,
-                max_callers=5,
-                max_callees=5,
             )
-        )
-        if payload is None:
-            continue
-        lsp_applied += 1
-        insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
+            lsp_timed_out += int(timed_out)
+            if target_language == "python":
+                py_timed_out += int(timed_out)
+            else:
+                rust_timed_out += int(timed_out)
+            if payload is None:
+                lsp_failed += 1
+                if target_language == "python":
+                    py_failed += 1
+                else:
+                    rust_failed += 1
+                lsp_reasons.append("request_timeout" if timed_out else "request_failed")
+                continue
+            lsp_applied += 1
+            if target_language == "python":
+                py_applied += 1
+            else:
+                rust_applied += 1
+            insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
+            advanced_planes = payload.get("advanced_planes")
+            if isinstance(advanced_planes, dict):
+                result.summary["lsp_advanced_planes"] = dict(advanced_planes)
+    elif not runtime_lsp_enabled:
+        for finding in candidates:
+            if finding.anchor is None:
+                continue
+            target_file = Path(result.run.root) / finding.anchor.file
+            target_language = infer_language_for_path(target_file)
+            if target_language in {"python", "rust"}:
+                lsp_provider = provider_for_language(target_language)
+                lsp_reasons.append("not_attempted_runtime_disabled")
+                break
+    else:
+        for finding in candidates:
+            if finding.anchor is None:
+                continue
+            target_file = Path(result.run.root) / finding.anchor.file
+            target_language = infer_language_for_path(target_file)
+            if target_language in {"python", "rust"}:
+                lsp_provider = provider_for_language(target_language)
+                lsp_reasons.append("not_attempted_by_budget")
+                break
 
-    lsp_available = any(
-        finding.anchor is not None
-        and (Path(result.run.root) / finding.anchor.file).suffix in {".py", ".pyi"}
-        for finding in candidates
-    )
-    lsp_status = derive_lsp_status(
+    lsp_available = lsp_provider != "none"
+    if lsp_provider == "none":
+        lsp_reasons.append("provider_unavailable")
+    elif (
+        lsp_attempted <= 0
+        and "not_attempted_by_budget" not in lsp_reasons
+        and "not_attempted_runtime_disabled" not in lsp_reasons
+    ):
+        lsp_reasons.append("not_attempted_by_design")
+    lsp_state = derive_lsp_contract_state(
+        provider=lsp_provider,
         available=lsp_available,
         attempted=lsp_attempted,
         applied=lsp_applied,
-        failed=max(0, lsp_attempted - lsp_applied),
+        failed=max(lsp_failed, lsp_attempted - lsp_applied),
+        timed_out=lsp_timed_out,
+        reasons=tuple(dict.fromkeys(lsp_reasons)),
     )
     insight = msgspec.structs.replace(
         insight,
-        degradation=msgspec.structs.replace(insight.degradation, lsp=lsp_status),
+        degradation=msgspec.structs.replace(
+            insight.degradation,
+            lsp=lsp_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+        ),
     )
     missing = _missing_languages_from_summary(result.summary)
     if missing:
         insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
 
+    result.summary["pyrefly_telemetry"] = {
+        "attempted": py_attempted,
+        "applied": py_applied,
+        "failed": max(py_failed, py_attempted - py_applied),
+        "skipped": 0,
+        "timed_out": py_timed_out,
+    }
+    result.summary["rust_lsp_telemetry"] = {
+        "attempted": rust_attempted,
+        "applied": rust_applied,
+        "failed": max(rust_failed, rust_attempted - rust_applied),
+        "skipped": 0,
+        "timed_out": rust_timed_out,
+    }
     result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
 
@@ -1599,15 +1700,29 @@ def _process_def_query(
     candidate_records = def_candidates if def_candidates is not None else scan_ctx.def_records
     matching_defs = _filter_to_matching(candidate_records, query)
     matching_records = list(matching_defs)  # Keep copy for scope filtering
+    has_scope_constraints = bool(query.scope.in_dir or query.scope.exclude or query.scope.globs)
+    compute_relationship_details = (
+        len(matching_records) <= _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES
+        or query.name is not None
+        or has_scope_constraints
+        or "callers" in query.fields
+        or "callees" in query.fields
+    )
 
     for def_record in matching_defs:
-        calls_within = scan_ctx.calls_by_def.get(def_record, [])
-        caller_count = _count_callers_for_definition(
-            def_record,
-            scan_ctx.call_records,
-            scan_ctx.file_index,
-        )
-        enclosing_scope = _resolve_enclosing_scope(def_record, scan_ctx.file_index)
+        calls_within: list[SgRecord]
+        if compute_relationship_details:
+            calls_within = scan_ctx.calls_by_def.get(def_record, [])
+            caller_count = _count_callers_for_definition(
+                def_record,
+                scan_ctx.call_records,
+                scan_ctx.file_index,
+            )
+            enclosing_scope = _resolve_enclosing_scope(def_record, scan_ctx.file_index)
+        else:
+            calls_within = []
+            caller_count = 0
+            enclosing_scope = "<module>"
         finding = _def_to_finding(
             def_record,
             calls_within,

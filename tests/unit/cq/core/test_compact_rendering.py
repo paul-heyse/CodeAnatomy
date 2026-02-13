@@ -42,6 +42,8 @@ def _result_with_diagnostics() -> CqResult:
             }
         },
         "pyrefly_telemetry": {"attempted": 2, "applied": 1, "failed": 1},
+        "rust_lsp_telemetry": {"attempted": 1, "applied": 1, "failed": 0},
+        "lsp_advanced_planes": {"semantic_tokens_count": 4, "inlay_hints_count": 2},
         "pyrefly_diagnostics": [{"message": "diag"}],
         "language_capabilities": {"python": {}, "rust": {}, "shared": {}},
         "cross_language_diagnostics": [{"code": "ML001", "message": "info"}],

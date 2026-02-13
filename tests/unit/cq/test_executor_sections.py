@@ -68,6 +68,7 @@ def test_auto_scope_summary_uses_multilang_partitions(tmp_path: Path) -> None:
     assert result.summary["mode"] == "entity"
     assert "pyrefly_overview" in result.summary
     assert "pyrefly_telemetry" in result.summary
+    assert "rust_lsp_telemetry" in result.summary
     assert "pyrefly_diagnostics" in result.summary
     assert result.summary["lang_scope"] == "auto"
     assert result.summary["language_order"] == ["python", "rust"]
@@ -92,6 +93,7 @@ def test_single_scope_summary_uses_canonical_multilang_keys(tmp_path: Path) -> N
     assert result.summary["language_order"] == ["python"]
     assert "pyrefly_overview" in result.summary
     assert "pyrefly_telemetry" in result.summary
+    assert "rust_lsp_telemetry" in result.summary
     assert "pyrefly_diagnostics" in result.summary
     languages = result.summary["languages"]
     assert isinstance(languages, dict)
@@ -164,3 +166,32 @@ def test_query_text_preserved_when_provided(tmp_path: Path) -> None:
 
     assert result.summary["query"] == query_text
     assert result.summary["mode"] == "entity"
+
+
+def test_entity_insight_skips_lsp_for_high_cardinality_query(tmp_path: Path) -> None:
+    """Broad entity queries should skip LSP augmentation within front-door budget."""
+    lines = []
+    for idx in range(60):
+        lines.append(f"def fn_{idx}():\n")
+        lines.append(f"    return {idx}\n\n")
+    (tmp_path / "many.py").write_text("".join(lines), encoding="utf-8")
+
+    tc = Toolchain.detect()
+    query = parse_query("entity=function lang=python")
+    plan = compile_query(query)
+    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+
+    insight = result.summary.get("front_door_insight")
+    assert isinstance(insight, dict)
+    degradation = insight.get("degradation")
+    assert isinstance(degradation, dict)
+    assert degradation.get("lsp") == "skipped"
+    notes = degradation.get("notes")
+    assert isinstance(notes, list)
+    assert any("not_attempted_by_budget" in str(note) for note in notes)
+
+    pyrefly_telemetry = result.summary.get("pyrefly_telemetry")
+    assert isinstance(pyrefly_telemetry, dict)
+    attempted = pyrefly_telemetry.get("attempted")
+    assert isinstance(attempted, int)
+    assert attempted == 0

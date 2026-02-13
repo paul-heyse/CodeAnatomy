@@ -19,6 +19,7 @@ from typing import Literal, cast
 
 from tools.cq.core.serialization import to_builtins
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.lsp_advanced_planes import collect_advanced_lsp_planes
 from tools.cq.search.rust_lsp_contracts import (
     LspCapabilitySnapshotV1,
     LspClientCapabilitySnapshotV1,
@@ -32,8 +33,8 @@ from tools.cq.search.rust_lsp_contracts import (
     rust_lsp_payload_to_dict,
 )
 
-_DEFAULT_TIMEOUT_SECONDS = 0.35
-_DEFAULT_STARTUP_TIMEOUT_SECONDS = 2.5
+_DEFAULT_TIMEOUT_SECONDS = 1.0
+_DEFAULT_STARTUP_TIMEOUT_SECONDS = 3.0
 _DEFAULT_QUIESCENCE_TIMEOUT_SECONDS = 8.0
 
 
@@ -555,6 +556,16 @@ class _RustLspSession:
             "hover_text": _normalize_hover_text(responses.get("hover")),
             "degrade_events": degrade_events,
         }
+        try:
+            raw_payload["advanced_planes"] = collect_advanced_lsp_planes(
+                session=self,
+                language="rust",
+                uri=uri_str,
+                line=max(0, request.line),
+                col=max(0, request.col),
+            )
+        except Exception:  # noqa: BLE001 - fail-open advanced enrichment
+            raw_payload["advanced_planes"] = dict[str, object]()
 
         return coerce_rust_lsp_payload(raw_payload)
 
@@ -739,6 +750,8 @@ def get_rust_lsp_capabilities(
         "codeActionProvider": server.code_action_provider,
         "semanticTokensProvider": server.semantic_tokens_provider_raw,
         "inlayHintProvider": server.inlay_hint_provider,
+        "diagnosticProvider": server.diagnostic_provider_raw,
+        "workspaceDiagnosticProvider": server.workspace_diagnostic_provider_raw,
     }
 
 
@@ -828,6 +841,8 @@ def _capability_snapshot_from_server_caps(
             code_action_provider=bool(server_caps.get("codeActionProvider")),
             semantic_tokens_provider=bool(server_caps.get("semanticTokensProvider")),
             inlay_hint_provider=bool(server_caps.get("inlayHintProvider")),
+            diagnostic_provider=bool(server_caps.get("diagnosticProvider")),
+            workspace_diagnostic_provider=bool(server_caps.get("workspaceDiagnosticProvider")),
             semantic_tokens_provider_raw=(
                 dict(raw)
                 if isinstance((raw := server_caps.get("semanticTokensProvider")), dict)
@@ -835,6 +850,8 @@ def _capability_snapshot_from_server_caps(
             ),
             code_action_provider_raw=server_caps.get("codeActionProvider"),
             workspace_symbol_provider_raw=server_caps.get("workspaceSymbolProvider"),
+            diagnostic_provider_raw=server_caps.get("diagnosticProvider"),
+            workspace_diagnostic_provider_raw=server_caps.get("workspaceDiagnosticProvider"),
         ),
         client_caps=LspClientCapabilitySnapshotV1(
             publish_diagnostics=LspClientPublishDiagnosticsCapsV1(

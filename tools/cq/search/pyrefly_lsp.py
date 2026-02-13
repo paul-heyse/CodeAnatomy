@@ -21,15 +21,17 @@ from time import monotonic
 from typing import Literal, cast
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.lsp_advanced_planes import collect_advanced_lsp_planes
 from tools.cq.search.pyrefly_contracts import (
     coerce_pyrefly_payload,
     pyrefly_payload_to_dict,
 )
+from tools.cq.search.pyrefly_signal import evaluate_pyrefly_signal_from_mapping
 
 LspSeverity = Literal["error", "warning", "info", "hint"]
 
-_DEFAULT_TIMEOUT_SECONDS = 0.35
-_DEFAULT_STARTUP_TIMEOUT_SECONDS = 2.5
+_DEFAULT_TIMEOUT_SECONDS = 1.0
+_DEFAULT_STARTUP_TIMEOUT_SECONDS = 3.0
 _DEFAULT_MAX_CALLERS = 8
 _DEFAULT_MAX_CALLEES = 8
 _DEFAULT_MAX_DIAGNOSTICS = 6
@@ -248,10 +250,21 @@ class _PyreflyLspSession:
             ),
             "anchor_diagnostics": diagnostics,
         }
+        try:
+            payload["advanced_planes"] = collect_advanced_lsp_planes(
+                session=self,
+                language="python",
+                uri=uri,
+                line=max(0, request.line - 1),
+                col=max(0, request.col),
+            )
+        except Exception:  # noqa: BLE001 - fail-open advanced enrichment
+            payload["advanced_planes"] = dict[str, object]()
 
-        coverage_reason = _coverage_reason(payload)
+        has_signal, signal_reasons = evaluate_pyrefly_signal_from_mapping(payload)
+        coverage_reason = None if has_signal else f"no_pyrefly_signal:{','.join(signal_reasons)}"
         payload["coverage"] = {
-            "status": "applied" if coverage_reason is None else "not_resolved",
+            "status": "applied" if has_signal else "not_resolved",
             "reason": coverage_reason,
             "position_encoding": self._position_encoding,
         }
@@ -832,24 +845,6 @@ def _normalize_anchor_diagnostics(
         if len(rows) >= max_items:
             break
     return rows
-
-
-def _coverage_reason(payload: Mapping[str, object]) -> str | None:
-    for key in (
-        "symbol_grounding",
-        "type_contract",
-        "call_graph",
-        "class_method_context",
-        "local_scope_context",
-        "import_alias_resolution",
-        "anchor_diagnostics",
-    ):
-        value = payload.get(key)
-        if isinstance(value, Mapping) and value:
-            return None
-        if isinstance(value, list) and value:
-            return None
-    return "no_pyrefly_signal"
 
 
 def _normalize_severity(value: object) -> LspSeverity:

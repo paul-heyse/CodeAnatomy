@@ -1,4 +1,3 @@
-# ruff: noqa: C901,PLR0912,SLF001,DOC201
 """Rust LSP session with environment capture and capability tracking."""
 
 from __future__ import annotations
@@ -10,7 +9,6 @@ import json
 import os
 import selectors
 import subprocess
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +17,7 @@ from typing import Literal, cast
 
 from tools.cq.core.serialization import to_builtins
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.lsp.session_manager import LspSessionManager
 from tools.cq.search.lsp_advanced_planes import collect_advanced_lsp_planes
 from tools.cq.search.rust_lsp_contracts import (
     LspCapabilitySnapshotV1,
@@ -36,6 +35,7 @@ from tools.cq.search.rust_lsp_contracts import (
 _DEFAULT_TIMEOUT_SECONDS = 1.0
 _DEFAULT_STARTUP_TIMEOUT_SECONDS = 3.0
 _DEFAULT_QUIESCENCE_TIMEOUT_SECONDS = 8.0
+_FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, TimeoutError, ValueError, TypeError)
 
 
 class RustLspRequest(CqStruct, frozen=True):
@@ -347,7 +347,7 @@ class _RustLspSession:
             self._docs[uri] = _SessionDocState(version=version, content_hash=content_hash)
         return uri
 
-    def probe(self, request: RustLspRequest) -> RustLspEnrichmentPayload | None:  # noqa: PLR0915
+    def probe(self, request: RustLspRequest) -> RustLspEnrichmentPayload | None:
         if self._process is None:
             return None
         poll_result = self._process.poll()
@@ -357,7 +357,7 @@ class _RustLspSession:
         degrade_events: list[dict[str, object]] = []
         try:
             uri_str = self._open_or_update_document(Path(request.file_path))
-        except Exception as exc:  # noqa: BLE001 - keep fail-open payload
+        except Exception as exc:
             uri_str = Path(request.file_path).resolve().as_uri()
             degrade_events.append(
                 {
@@ -453,7 +453,7 @@ class _RustLspSession:
         for name, method, params in (*tier_a_requests, *tier_b_requests, *tier_c_requests):
             try:
                 responses[name] = self._send_request(method, params)
-            except Exception as exc:  # noqa: BLE001 - fail-open by design
+            except Exception as exc:
                 responses[name] = None
                 degrade_events.append(
                     {
@@ -470,7 +470,7 @@ class _RustLspSession:
                 responses["incoming_calls"] = self._send_request(
                     "callHierarchy/incomingCalls", {"item": call_item}
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 responses["incoming_calls"] = None
                 degrade_events.append(
                     {
@@ -484,7 +484,7 @@ class _RustLspSession:
                 responses["outgoing_calls"] = self._send_request(
                     "callHierarchy/outgoingCalls", {"item": call_item}
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 responses["outgoing_calls"] = None
                 degrade_events.append(
                     {
@@ -501,7 +501,7 @@ class _RustLspSession:
                 responses["supertypes"] = self._send_request(
                     "typeHierarchy/supertypes", {"item": type_item}
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 responses["supertypes"] = None
                 degrade_events.append(
                     {
@@ -515,7 +515,7 @@ class _RustLspSession:
                 responses["subtypes"] = self._send_request(
                     "typeHierarchy/subtypes", {"item": type_item}
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 responses["subtypes"] = None
                 degrade_events.append(
                     {
@@ -564,7 +564,7 @@ class _RustLspSession:
                 line=max(0, request.line),
                 col=max(0, request.col),
             )
-        except Exception:  # noqa: BLE001 - fail-open advanced enrichment
+        except Exception:
             raw_payload["advanced_planes"] = dict[str, object]()
 
         return coerce_rust_lsp_payload(raw_payload)
@@ -595,6 +595,27 @@ class _RustLspSession:
             with contextlib.suppress(OSError):
                 process.stdout.close()
         self._process = None
+
+    def capabilities_snapshot(self) -> dict[str, object]:
+        """Return normalized rust-analyzer capability snapshot."""
+        server = self._session_env.capabilities.server_caps
+        return {
+            "definitionProvider": server.definition_provider,
+            "typeDefinitionProvider": server.type_definition_provider,
+            "implementationProvider": server.implementation_provider,
+            "referencesProvider": server.references_provider,
+            "documentSymbolProvider": server.document_symbol_provider,
+            "callHierarchyProvider": server.call_hierarchy_provider,
+            "typeHierarchyProvider": server.type_hierarchy_provider,
+            "hoverProvider": server.hover_provider,
+            "workspaceSymbolProvider": server.workspace_symbol_provider,
+            "renameProvider": server.rename_provider,
+            "codeActionProvider": server.code_action_provider,
+            "semanticTokensProvider": server.semantic_tokens_provider_raw,
+            "inlayHintProvider": server.inlay_hint_provider,
+            "diagnosticProvider": server.diagnostic_provider_raw,
+            "workspaceDiagnosticProvider": server.workspace_diagnostic_provider_raw,
+        }
 
     def _send_request(self, method: str, params: dict[str, object]) -> object:
         request_id = self._request(method, params)
@@ -700,8 +721,11 @@ class _RustLspSession:
             self._buffer.extend(chunk)
 
 
-_SESSION_LOCK = threading.Lock()
-_SESSIONS: dict[str, _RustLspSession] = {}
+_SESSION_MANAGER = LspSessionManager[_RustLspSession](
+    make_session=_RustLspSession,
+    close_session=lambda session: session.close(),
+    ensure_started=lambda session, timeout: session.ensure_started(timeout_seconds=timeout),
+)
 
 
 def _session_for_root(
@@ -709,20 +733,7 @@ def _session_for_root(
     *,
     startup_timeout_seconds: float = _DEFAULT_STARTUP_TIMEOUT_SECONDS,
 ) -> _RustLspSession:
-    root_key = str(root.resolve())
-    with _SESSION_LOCK:
-        session = _SESSIONS.get(root_key)
-        if session is None:
-            session = _RustLspSession(root)
-            _SESSIONS[root_key] = session
-        try:
-            session.ensure_started(timeout_seconds=startup_timeout_seconds)
-        except Exception:  # noqa: BLE001 - fail-open session restart
-            session.close()
-            session = _RustLspSession(root)
-            _SESSIONS[root_key] = session
-            session.ensure_started(timeout_seconds=startup_timeout_seconds)
-        return session
+    return _SESSION_MANAGER.for_root(root, startup_timeout_seconds=startup_timeout_seconds)
 
 
 def get_rust_lsp_capabilities(
@@ -733,26 +744,9 @@ def get_rust_lsp_capabilities(
     """Return negotiated rust-analyzer capabilities for workspace root."""
     try:
         session = _session_for_root(root, startup_timeout_seconds=startup_timeout_seconds)
-    except Exception:  # noqa: BLE001 - fail-open
+    except _FAIL_OPEN_EXCEPTIONS:
         return {}
-    server = session._session_env.capabilities.server_caps
-    return {
-        "definitionProvider": server.definition_provider,
-        "typeDefinitionProvider": server.type_definition_provider,
-        "implementationProvider": server.implementation_provider,
-        "referencesProvider": server.references_provider,
-        "documentSymbolProvider": server.document_symbol_provider,
-        "callHierarchyProvider": server.call_hierarchy_provider,
-        "typeHierarchyProvider": server.type_hierarchy_provider,
-        "hoverProvider": server.hover_provider,
-        "workspaceSymbolProvider": server.workspace_symbol_provider,
-        "renameProvider": server.rename_provider,
-        "codeActionProvider": server.code_action_provider,
-        "semanticTokensProvider": server.semantic_tokens_provider_raw,
-        "inlayHintProvider": server.inlay_hint_provider,
-        "diagnosticProvider": server.diagnostic_provider_raw,
-        "workspaceDiagnosticProvider": server.workspace_diagnostic_provider_raw,
-    }
+    return session.capabilities_snapshot()
 
 
 def enrich_with_rust_lsp(
@@ -761,7 +755,11 @@ def enrich_with_rust_lsp(
     root: Path | None = None,
     startup_timeout_seconds: float = _DEFAULT_STARTUP_TIMEOUT_SECONDS,
 ) -> dict[str, object] | None:
-    """Fetch Rust LSP enrichment for one file anchor."""
+    """Fetch Rust LSP enrichment for one file anchor.
+
+    Returns:
+        Rust LSP enrichment payload for `.rs` anchors, or `None`.
+    """
     file_path = Path(request.file_path)
     if file_path.suffix != ".rs":
         return None
@@ -769,7 +767,7 @@ def enrich_with_rust_lsp(
     try:
         session = _session_for_root(effective_root, startup_timeout_seconds=startup_timeout_seconds)
         payload = session.probe(request)
-    except Exception:  # noqa: BLE001 - fail-open by design
+    except _FAIL_OPEN_EXCEPTIONS:
         return None
     if not isinstance(payload, RustLspEnrichmentPayload):
         return None
@@ -778,11 +776,7 @@ def enrich_with_rust_lsp(
 
 def close_rust_lsp_sessions() -> None:
     """Close all cached Rust LSP sessions."""
-    with _SESSION_LOCK:
-        sessions = list(_SESSIONS.values())
-        _SESSIONS.clear()
-    for session in sessions:
-        session.close()
+    _SESSION_MANAGER.close_all()
 
 
 def _try_parse_message(buffer: bytearray) -> dict[str, object] | None:

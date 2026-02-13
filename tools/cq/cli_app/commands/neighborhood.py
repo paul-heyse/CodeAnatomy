@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201,DOC501
 """Neighborhood command for cq CLI."""
 
 from __future__ import annotations
@@ -25,7 +24,14 @@ def neighborhood(
     no_lsp: Annotated[bool, Parameter(name="--no-lsp", help="Disable LSP enrichment")] = False,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
 ) -> CliResult:
-    """Analyze semantic neighborhood of a target symbol or location."""
+    """Analyze semantic neighborhood of a target symbol or location.
+
+    Returns:
+        CLI result containing rendered neighborhood findings.
+
+    Raises:
+        RuntimeError: If CLI context is not injected.
+    """
     from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
     from tools.cq.neighborhood.snb_renderer import render_snb_result
@@ -94,6 +100,11 @@ def neighborhood(
 
 
 def _lsp_env_from_bundle(bundle: SemanticNeighborhoodBundleV1) -> dict[str, object]:
+    """Extract compact LSP environment flags from bundle metadata.
+
+    Returns:
+        Mapping of normalized LSP environment flags.
+    """
     if bundle.meta is None or not bundle.meta.lsp_servers:
         return {}
     first = bundle.meta.lsp_servers[0]

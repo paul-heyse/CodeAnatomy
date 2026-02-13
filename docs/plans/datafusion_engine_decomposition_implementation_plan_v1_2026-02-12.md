@@ -1,24 +1,39 @@
 # DataFusion Engine Decomposition Implementation Plan
 
-**Date:** 2026-02-12
-**Status:** DRAFT
+**Date:** 2026-02-12 (revised 2026-02-13)
+**Status:** DRAFT — Review Integrated
 **Owner:** Engineering Team
-**Assessment Source:** `/Users/paulheyse/CodeAnatomy/docs/plans/datafusion_engine_decomposition_assessment_v1_2026-02-12.md`
+**Assessment Source:** `docs/plans/datafusion_engine_decomposition_assessment_v1_2026-02-12.md`
+**Review Source:** `docs/plans/datafusion_engine_decomposition_plan_review_v2_2026-02-13.md`
+
+---
+
+## Design-Phase Posture
+
+This is a **design-phase hard cutover**, not a conservative migration:
+
+1. **No shims.** No compatibility bridges. No dual-path runtime behavior.
+2. **No deprecation holding period** for internal architecture modules.
+3. **Break old internal import paths** in the same wave they are replaced.
+4. **Single extension surface:** `datafusion_ext` only — remove `datafusion._internal` fallback code paths and runtime probing.
+5. **Prefer Rust ownership** for execution-critical paths now. Python remains orchestration/control plane only where necessary.
+
+If a wave lands, legacy path(s) are removed immediately in that wave.
 
 ---
 
 ## Executive Summary
 
-This plan operationalizes the decomposition of `src/datafusion_engine/` (73,655 LOC) by removing dead code (~1,670 LOC), pruning dead exports (~530 LOC), simplifying Rust adapter layers (~600 LOC), and restructuring monolithic files for maintainability. Total immediate actionable scope: ~2,800 LOC removal + 12,648 LOC restructuring across 5 waves.
+This plan operationalizes the decomposition of `src/datafusion_engine/` (73,655 LOC) by removing dead code (~1,670 LOC), pruning dead exports (~530 LOC), performing hard cutover of UDF and extension surfaces (~600 LOC), and restructuring monolithic files for maintainability. Total immediate actionable scope: ~2,800 LOC removal + 12,648 LOC restructuring across 5 waves.
 
 **Execution waves:**
-1. **Wave 0** — Dead code deletion (zero production callers): ~1,040 LOC removed
-2. **Wave 1** — Dead export pruning from live files: ~530 LOC removed
-3. **Wave 2** — UDF bridge simplification: ~300 LOC simplified
-4. **Wave 3** — Delta control-plane thinning: ~500 LOC removed
-5. **Wave 4** — Monolith decomposition: 12,648 LOC restructured (0 net change)
+1. **Wave 0** — Hard delete dead paths (zero production callers): ~1,040 LOC removed
+2. **Wave 1** — Dead export pruning from live files (corrected dead-set): ~530 LOC removed
+3. **Wave 2** — UDF runtime hard cutover (standardize on `datafusion_ext`): ~300 LOC simplified
+4. **Wave 3** — Delta control-plane consolidation (protocol migration already complete): ~300 LOC removed
+5. **Wave 4** — Monolith decomposition with direct import rewrite (no compat modules): 12,648 LOC restructured
 
-**Wave 5** (future scope) depends on extraction transitioning to Rust: ~7,567 LOC removal.
+**Wave 5** — Rust-first completion (execution runtime, lineage, dataset registration): ~7,567 LOC removal.
 
 ---
 
@@ -57,17 +72,21 @@ graph LR
 
 ## Wave 0: Dead Code Deletion
 
-**Scope:** Delete files with zero production callers. No callsite changes required.
+**Scope:** Hard delete files with zero production callers. No callsite changes required. Explicit binary decisions for borderline modules.
 
 ### Files to Delete
 
-#### 1. `src/datafusion_engine/workload/` subpackage (307 LOC)
+#### 1. `src/datafusion_engine/workload/` subpackage (307 LOC) — DECISION REQUIRED
 
-**Evidence:** Zero imports from `src/` or `tests/`. Only internal cross-references between the two files.
+**Evidence:** Zero imports from `src/` runtime call paths. Test-backed but not wired into pipeline.
 
 **What it was:** Planned feature for dynamic session tuning based on workload classification (BATCH_INGEST, INTERACTIVE_QUERY, etc.). Never wired into the pipeline.
 
-**Files:**
+**Binary decision (must be made in this wave):**
+- **Option A (recommended): Delete all workload modules + tests now.** The feature was never wired in, and the go-forward Rust engine owns session tuning via `SessionBuildOverrides`.
+- **Option B: Keep and wire into go-forward runtime now.** Only choose this if workload classification is an active requirement for extraction-phase session tuning.
+
+**Files (delete if Option A):**
 - `src/datafusion_engine/workload/__init__.py` (~10 LOC)
 - `src/datafusion_engine/workload/classifier.py` (~170 LOC)
 - `src/datafusion_engine/workload/session_profiles.py` (~137 LOC)
@@ -161,11 +180,14 @@ If found, remove the re-export.
   - [ ] Run `/cq calls plugin_options` to confirm zero src/ callers
   - [ ] Run full test suite: `uv run pytest tests/ -m "not e2e" -q`
 
-- [ ] **Delete workload subpackage**
-  - [ ] Delete `src/datafusion_engine/workload/__init__.py`
-  - [ ] Delete `src/datafusion_engine/workload/classifier.py`
-  - [ ] Delete `src/datafusion_engine/workload/session_profiles.py`
-  - [ ] Remove directory if empty: `rmdir src/datafusion_engine/workload/`
+- [ ] **Decide and execute workload subpackage (binary decision)**
+  - [ ] Confirm decision: delete (recommended) or keep-and-wire
+  - [ ] If deleting:
+    - [ ] Delete `src/datafusion_engine/workload/__init__.py`
+    - [ ] Delete `src/datafusion_engine/workload/classifier.py`
+    - [ ] Delete `src/datafusion_engine/workload/session_profiles.py`
+    - [ ] Delete any associated test files under `tests/unit/datafusion_engine/workload/`
+    - [ ] Remove directory: `rmdir src/datafusion_engine/workload/`
 
 - [ ] **Delete pipeline_runtime**
   - [ ] Delete `src/datafusion_engine/plan/pipeline_runtime.py`
@@ -192,13 +214,22 @@ If found, remove the re-export.
 
 ---
 
-## Wave 1: Dead Export Pruning
+## Wave 1: Dead Export Pruning (Corrected Dead-Set)
 
-**Scope:** Remove dead exports from live files. Requires verifying zero callers with `/cq calls`.
+**Scope:** Remove dead exports from live files. Requires verifying zero callers with `/cq calls`. Do not preserve legacy exports for compatibility — this is a hard cutover.
 
-### 1A: `schema/registry.py` — 56 dead exports (~300-400 LOC)
+> **REVIEW CORRECTION (2026-02-13):** The original dead-export candidate lists contained false positives — symbols initially classified as dead that are actually live internal dependencies. The corrected lists below exclude these. Each symbol must still be verified with `/cq calls` before deletion. See specific correction notes per file.
 
-This is the second-largest file in the module (4,166 LOC). Approximately 59% of its exports are dead.
+### 1A: `schema/registry.py` — dead exports (~300-400 LOC, corrected count)
+
+This is the second-largest file in the module (4,166 LOC).
+
+> **CORRECTION:** The following symbols were incorrectly classified as dead but are live. **Do NOT delete:**
+> - Code at lines 1721, 1739 — live internal callers
+> - Code at lines 2136, 2170 — live internal callers
+> - Code at line 4017 — referenced by `session/runtime.py` (lines 112, 6350)
+>
+> Re-verify all candidates with `/cq calls` before proceeding.
 
 #### Dead Schema View-Name Constants (6 constants)
 
@@ -385,9 +416,16 @@ AST_CORE_VIEW_NAMES: frozenset[str] = frozenset({...})
 AST_OPTIONAL_VIEW_NAMES: frozenset[str] = frozenset({...})
 ```
 
-### 1B: `dataset/registration.py` — 6 dead exports (~193 LOC)
+### 1B: `dataset/registration.py` — dead exports (~193 LOC, corrected)
 
-**Dead exports:**
+> **CORRECTION:** The original candidate list contained live internals. The following lines are **NOT dead** and must be preserved:
+> - Line 230 — live internal caller
+> - Line 571 — live internal caller
+> - Line 1114, 1122, 1222 — live internal callers
+>
+> Re-verify each candidate with `/cq calls` before deletion.
+
+**Dead exports (verified subset):**
 
 **Code snippet:**
 ```python
@@ -462,9 +500,16 @@ def input_plugin_prefixes() -> frozenset[str]:
     ...
 ```
 
-### 1C: `extract/templates.py` — 5 dead exports (~20-30 LOC)
+### 1C: `extract/templates.py` — dead exports (~20-30 LOC, corrected)
 
-**Dead exports:**
+> **CORRECTION:** The original candidate list contained live internals. The following lines are **NOT dead** and must be preserved:
+> - Line 251 — live internal caller
+> - Line 461 — live internal caller
+> - Lines 1413, 1424 — live internal callers
+>
+> Re-verify each candidate with `/cq calls` before deletion.
+
+**Dead exports (verified subset):**
 
 **Code snippet:**
 ```python
@@ -578,9 +623,9 @@ __all__ = [
 
 ---
 
-## Wave 2: UDF Bridge Simplification
+## Wave 2: UDF Runtime Hard Cutover
 
-**Scope:** Simplify the UDF adapter layer by removing fallback paths. All UDFs are now Rust-native via `datafusion._internal` — no Python fallback exists.
+**Scope:** Standardize on `datafusion_ext` as the single extension surface. Remove all `datafusion._internal` fallback code paths, runtime probing, and mixed-module contract resolution. Enforce fail-fast behavior for missing Rust UDF entrypoints — no Python soft-fail retries, no compatibility fallback modules.
 
 ### Architecture Context: DataFusion UDF Best Practices
 
@@ -629,9 +674,9 @@ impl ScalarUDFImpl for MyUDF {
 - Optional `simplify()` for expression rewriting
 - `FunctionFactory` support for `CREATE FUNCTION` (already implemented)
 
-### Current Problem: Python Fallback Paths
+### Current Problem: Dual Extension Surfaces and Fallback Paths
 
-The Python UDF platform installer has fallback detection and retry logic that was needed during the Python→Rust transition but is no longer necessary.
+The Python UDF platform installer has fallback detection, retry logic, and dual-module probing (`datafusion._internal` + `datafusion_ext`) that was needed during the Python→Rust transition. This violates the single-extension-surface contract and must be eliminated.
 
 **Code snippet showing current fallback logic:**
 ```python
@@ -675,11 +720,11 @@ def install_rust_udf_platform(
     # ... 200+ more lines of fallback handling ...
 ```
 
-### Target Architecture: Simplified UDF Platform
+### Target Architecture: Single Extension Surface (`datafusion_ext`)
 
 **Code snippet for simplified installation:**
 ```python
-# src/datafusion_engine/udf/platform.py (SIMPLIFIED - ~200 LOC)
+# src/datafusion_engine/udf/platform.py (HARD CUTOVER - ~200 LOC)
 
 def install_rust_udf_platform(
     ctx: SessionContext,
@@ -688,7 +733,7 @@ def install_rust_udf_platform(
 ) -> RustUdfPlatform:
     """Install Rust UDF platform into a DataFusion session.
 
-    All UDFs are Rust-native via datafusion._internal. No Python
+    All UDFs are Rust-native via datafusion_ext. No Python
     fallback paths exist — Rust UDF availability is a hard requirement.
 
     DataFusion best practice: UDFs use ScalarUDFImpl Layer 3 with
@@ -754,16 +799,17 @@ def install_rust_udf_platform(
     )
 ```
 
-### Target: Simplified UDF Runtime
+### Target: Hard-Cutover UDF Runtime
 
-**Code snippet for simplified runtime:**
+**Code snippet for hard-cutover runtime:**
 ```python
-# src/datafusion_engine/udf/runtime.py (SIMPLIFIED)
+# src/datafusion_engine/udf/runtime.py (HARD CUTOVER)
 
 def register_rust_udfs(ctx: SessionContext) -> Mapping[str, object]:
     """Register all Rust-native UDFs into the session.
 
-    This is now a hard requirement — no Python fallback exists.
+    This is a hard requirement — no Python fallback exists.
+    Uses datafusion_ext as the single extension surface.
 
     DataFusion best practice: UDFs use ScalarUDFImpl Layer 3 with
     return_type_from_exprs for metadata-aware return types, Volatility.Immutable
@@ -782,11 +828,11 @@ def register_rust_udfs(ctx: SessionContext) -> Mapping[str, object]:
     Raises
     ------
     ImportError
-        If datafusion._internal is unavailable.
+        If datafusion_ext is unavailable.
     RuntimeError
         If UDF registration fails.
     """
-    module = importlib.import_module("datafusion._internal")
+    module = importlib.import_module("datafusion_ext")
     snapshot = module.register_codeanatomy_udfs(ctx)
 
     # Track registration for cleanup
@@ -833,34 +879,41 @@ def register_rust_udfs(ctx: SessionContext) -> Mapping[str, object]:
 
 - [ ] **Pre-flight checks**
   - [ ] Verify all UDFs are Rust-native: `rg "def.*udf" src/datafusion_engine/udf/` should return zero Python UDF implementations
-  - [ ] Verify `datafusion._internal.register_codeanatomy_udfs` exists: `uv run python -c "from datafusion._internal import register_codeanatomy_udfs"`
+  - [ ] Verify `datafusion_ext.register_codeanatomy_udfs` exists: `uv run python -c "from datafusion_ext import register_codeanatomy_udfs"`
+  - [ ] Audit all `datafusion._internal` references: `rg "datafusion._internal" src/datafusion_engine/`
   - [ ] Run full test suite: `uv run pytest tests/ -m "not e2e" -q`
 
-- [ ] **Simplify udf/platform.py**
+- [ ] **Standardize on `datafusion_ext` extension surface**
+  - [ ] Replace all `datafusion._internal` imports with `datafusion_ext` across `src/datafusion_engine/`
+  - [ ] Remove runtime probing that keeps both module contracts alive
+  - [ ] Remove fallback resolution and mixed-module detection logic
+
+- [ ] **Hard cutover udf/platform.py**
   - [ ] Remove `_is_native_available()` function
   - [ ] Remove `native_udf_platform_available()` function
   - [ ] Remove `_build_fallback_platform()` function
   - [ ] Remove `_SOFT_FAIL_LOGGED` module-level tracking dict
-  - [ ] Simplify `install_rust_udf_platform()`: remove fallback paths, retry loops
+  - [ ] Rewrite `install_rust_udf_platform()`: direct registration, no fallback paths, no retry loops
   - [ ] Keep function factory installation logic
   - [ ] Keep expr planner installation logic
-  - [ ] Update docstring to document hard requirement
+  - [ ] Update docstring to document hard requirement and single extension surface
 
-- [ ] **Simplify udf/runtime.py**
+- [ ] **Hard cutover udf/runtime.py**
   - [ ] Change `register_rust_udfs()` to raise ImportError instead of returning None
-  - [ ] Remove any `try: ... except ImportError: return None` patterns
+  - [ ] Remove all `try: ... except ImportError: return None` patterns
   - [ ] Remove Python UDF fallback detection
-  - [ ] Simplify snapshot validation (remove retry logic)
+  - [ ] Remove snapshot validation retry logic
   - [ ] Update docstring to document hard requirement
 
-- [ ] **Simplify udf/factory.py**
-  - [ ] Remove retry loops if present
-  - [ ] Use direct Rust registration
+- [ ] **Hard cutover udf/factory.py**
+  - [ ] Remove retry loops
+  - [ ] Use direct Rust registration via `datafusion_ext`
   - [ ] Keep `FunctionFactory` protocol (still needed for CREATE FUNCTION)
 
-- [ ] **Update callers if needed**
+- [ ] **Update callers — fail-fast enforcement**
   - [ ] Check if any caller swallows ImportError from `install_rust_udf_platform()`
-  - [ ] Update caller to propagate error (Rust UDF is hard requirement)
+  - [ ] Update all callers to propagate error (Rust UDF is hard requirement)
+  - [ ] Zero remaining `except ImportError` branches for UDF registration
 
 - [ ] **Post-flight checks**
   - [ ] Run `uv run ruff format`
@@ -868,15 +921,16 @@ def register_rust_udfs(ctx: SessionContext) -> Mapping[str, object]:
   - [ ] Run `uv run pyrefly check`
   - [ ] Run `uv run pyright`
   - [ ] Run full test suite: `uv run pytest tests/ -m "not e2e" -q`
-  - [ ] Run extraction pipeline smoke test: `uv run python -m extraction.orchestrator --repo-root . --work-dir /tmp/test`
+  - [ ] Verify zero `datafusion._internal` references remain: `rg "datafusion._internal" src/datafusion_engine/` returns empty
+  - [ ] Run extraction pipeline smoke test
 
-**Expected outcome:** ~300 LOC simplified, clearer error messages, all tests pass.
+**Expected outcome:** ~300 LOC simplified, single extension surface, fail-fast semantics, all tests pass.
 
 ---
 
-## Wave 3: Delta Control-Plane Thinning
+## Wave 3: Delta Control-Plane Consolidation
 
-**Scope:** Thin the Python Delta control plane by moving protocol validation to Rust and evaluating scan policy inference for removal.
+**Scope:** Consolidate the Python Delta control plane. Protocol validation migration to Rust is already complete — no new Rust work required. Focus on scan policy inference evaluation, Python wrapper simplification, and conformance validation.
 
 ### Architecture Context: DataFusion Delta Integration Best Practices
 
@@ -924,161 +978,15 @@ impl TableProvider for DeltaTableProvider {
 - `parquet.pushdown_filters = true` + `parquet.enable_page_index = true` for late materialization
 - Schema is authoritative from Delta transaction log (no Python inference needed)
 
-### 3A: Move Protocol Gate Validation to Rust
+### 3A: Protocol Validation — Already Complete (Conformance Only)
 
-**Current state:** `src/datafusion_engine/delta/protocol.py` implements Delta protocol gate validation in Python. The Rust side already has the validation logic in `rust/datafusion_ext/src/delta_protocol.rs` but Python re-implements it.
+> **REVIEW CORRECTION (2026-02-13):** Protocol move-to-Rust is already complete. The Rust implementation at `rust/datafusion_python/src/codeanatomy_ext.rs:2401` already provides protocol gate validation, and Python at `src/datafusion_engine/delta/protocol.py:194,212,217` already delegates to the Rust side. **Do not allocate migration effort here.**
 
-**Code snippet showing Python validation (CURRENT):**
-```python
-# src/datafusion_engine/delta/protocol.py (CURRENT)
-
-@dataclass(frozen=True)
-class DeltaFeatureGate:
-    """Delta protocol feature gate requirements."""
-    min_reader_version: int
-    min_writer_version: int
-    required_reader_features: frozenset[str] = field(default_factory=frozenset)
-    required_writer_features: frozenset[str] = field(default_factory=frozenset)
-
-def validate_delta_protocol(
-    snapshot: DeltaSnapshotInfo,
-    gate: DeltaFeatureGate,
-) -> str | None:
-    """Validate Delta protocol version against feature gate.
-
-    Returns
-    -------
-    str | None
-        Error message if validation fails, None if passes.
-    """
-    if snapshot.min_reader_version < gate.min_reader_version:
-        return (
-            f"Reader version {snapshot.min_reader_version} < "
-            f"required {gate.min_reader_version}"
-        )
-
-    if snapshot.min_writer_version < gate.min_writer_version:
-        return (
-            f"Writer version {snapshot.min_writer_version} < "
-            f"required {gate.min_writer_version}"
-        )
-
-    # Feature checks...
-    missing_reader = gate.required_reader_features - snapshot.reader_features
-    if missing_reader:
-        return f"Missing reader features: {missing_reader}"
-
-    missing_writer = gate.required_writer_features - snapshot.writer_features
-    if missing_writer:
-        return f"Missing writer features: {missing_writer}"
-
-    return None
-```
-
-**Rust side already has the implementation:**
-```rust
-// rust/datafusion_ext/src/delta_protocol.rs (EXISTING)
-
-pub fn protocol_gate(
-    snapshot: &DeltaSnapshotInfo,
-    gate: &DeltaFeatureGate,
-) -> Result<(), String> {
-    if snapshot.min_reader_version < gate.min_reader_version {
-        return Err(format!(
-            "Reader version {} < required {}",
-            snapshot.min_reader_version, gate.min_reader_version
-        ));
-    }
-
-    if snapshot.min_writer_version < gate.min_writer_version {
-        return Err(format!(
-            "Writer version {} < required {}",
-            snapshot.min_writer_version, gate.min_writer_version
-        ));
-    }
-
-    // Feature checks (same logic as Python)
-    let missing_reader: Vec<_> = gate.required_reader_features
-        .difference(&snapshot.reader_features)
-        .collect();
-    if !missing_reader.is_empty() {
-        return Err(format!("Missing reader features: {:?}", missing_reader));
-    }
-
-    let missing_writer: Vec<_> = gate.required_writer_features
-        .difference(&snapshot.writer_features)
-        .collect();
-    if !missing_writer.is_empty() {
-        return Err(format!("Missing writer features: {:?}", missing_writer));
-    }
-
-    Ok(())
-}
-```
-
-**Target: Expose Rust validation via PyO3 (NEW):**
-```rust
-// rust/datafusion_ext/src/delta_protocol.rs (ADD PyO3 binding)
-
-use pyo3::prelude::*;
-
-#[pyfunction]
-fn validate_delta_protocol_py(
-    snapshot_json: &str,
-    gate_json: &str,
-) -> PyResult<Option<String>> {
-    let snapshot: DeltaSnapshotInfo = serde_json::from_str(snapshot_json)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let gate: DeltaFeatureGate = serde_json::from_str(gate_json)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-
-    match protocol_gate(&snapshot, &gate) {
-        Ok(()) => Ok(None),
-        Err(msg) => Ok(Some(msg)),
-    }
-}
-
-#[pymodule]
-fn datafusion_ext(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(validate_delta_protocol_py, m)?)?;
-    Ok(())
-}
-```
-
-**Python side becomes a thin wrapper:**
-```python
-# src/datafusion_engine/delta/protocol.py (SIMPLIFIED)
-
-from datafusion._internal import validate_delta_protocol_py
-import msgspec
-
-@dataclass(frozen=True)
-class DeltaFeatureGate:
-    """Delta protocol feature gate requirements."""
-    min_reader_version: int
-    min_writer_version: int
-    required_reader_features: frozenset[str] = field(default_factory=frozenset)
-    required_writer_features: frozenset[str] = field(default_factory=frozenset)
-
-def validate_delta_protocol(
-    snapshot: DeltaSnapshotInfo,
-    gate: DeltaFeatureGate,
-) -> str | None:
-    """Validate Delta protocol version against feature gate.
-
-    Validation is performed by Rust implementation in datafusion_ext.
-
-    Returns
-    -------
-    str | None
-        Error message if validation fails, None if passes.
-    """
-    encoder = msgspec.json.Encoder()
-    snapshot_json = encoder.encode(snapshot).decode("utf-8")
-    gate_json = encoder.encode(gate).decode("utf-8")
-
-    return validate_delta_protocol_py(snapshot_json, gate_json)
-```
+**Action:** Replace protocol migration tasks with conformance/performance validation:
+- Verify Python protocol path delegates to Rust (not reimplementing)
+- Add integration test confirming Rust-backed validation returns expected results
+- Remove any remaining Python-side duplicate validation logic if found
+- Document that protocol validation is Rust-owned in module docstring
 
 ### 3B: Evaluate `scan_policy_inference.py` for Deletion
 
@@ -1109,9 +1017,9 @@ def compile_runtime_profile(...) -> RuntimeProfile:
 
 **If dead, estimated LOC removed:** ~499
 
-### 3C: Thin `delta/control_plane.py` Facade
+### 3C: Simplify `delta/control_plane.py` Facade
 
-**Current state:** 2,337 LOC Python facade that marshals parameters to Rust. After moving protocol validation to Rust, evaluate if more functionality can be absorbed by Rust.
+**Current state:** 2,337 LOC Python facade that marshals parameters to Rust. With protocol validation confirmed as Rust-owned, simplify Python wrappers to minimal orchestration only.
 
 **Code snippet showing typical facade pattern:**
 ```python
@@ -1135,8 +1043,8 @@ def create_delta_provider(
         "predicate_str": options.predicate_str,
     }
 
-    # Call Rust implementation
-    provider = datafusion._internal.create_delta_table_provider(
+    # Call Rust implementation (via datafusion_ext, per Wave 2 cutover)
+    provider = datafusion_ext.create_delta_table_provider(
         ctx,
         table_uri,
         rust_options,
@@ -1149,38 +1057,32 @@ def create_delta_provider(
     )
 ```
 
-**Target:** Evaluate if `_marshal_scan_overrides()` and other helper functions can be moved to Rust, further thinning the Python facade.
+**Target:** Evaluate if `_marshal_scan_overrides()` and similar helpers can be moved to Rust. Remove any duplicate validation already handled by Rust. Simplify to minimal orchestration only.
 
 **Estimated reduction:** ~200-300 LOC (2,337 → ~2,050)
 
 ### Files to Edit
 
-#### 1. `rust/datafusion_ext/src/delta_protocol.rs`
+#### 1. `src/datafusion_engine/delta/protocol.py`
 
-**Add PyO3 binding for protocol validation:**
-- Add `validate_delta_protocol_py()` function
-- Export in module initialization
+**Conformance verification (no migration needed):**
+- Verify `validate_delta_protocol()` delegates to Rust (not reimplementing)
+- Remove any remaining Python-side duplicate validation logic
+- Update module docstring to state Rust ownership explicitly
 
-#### 2. `src/datafusion_engine/delta/protocol.py`
-
-**Simplify to thin wrapper:**
-- Keep `DeltaFeatureGate` dataclass
-- Replace `validate_delta_protocol()` body with Rust call
-- Update docstring to note Rust implementation
-
-#### 3. `src/datafusion_engine/delta/scan_policy_inference.py`
+#### 2. `src/datafusion_engine/delta/scan_policy_inference.py`
 
 **Evaluate for deletion:**
 - After Wave 0, check remaining callers
-- If only TYPE_CHECKING imports, delete file
+- If only TYPE_CHECKING imports remain, delete file
 - If runtime usage exists, document why it's needed
 
-#### 4. `src/datafusion_engine/delta/control_plane.py`
+#### 3. `src/datafusion_engine/delta/control_plane.py`
 
-**Thin facade (optional):**
-- Evaluate `_marshal_scan_overrides()` and similar helpers
-- Move to Rust if feasible
+**Simplify Python wrappers to minimal orchestration only:**
+- Evaluate `_marshal_scan_overrides()` and similar helpers for Rust absorption
 - Document facade responsibilities in docstring
+- Remove any duplicate validation already handled by Rust
 
 ### Wave 3 Implementation Checklist
 
@@ -1190,18 +1092,11 @@ def create_delta_provider(
   - [ ] Run `/cq calls validate_delta_protocol` to find all callers
   - [ ] Run full test suite: `uv run pytest tests/ -m "not e2e" -q`
 
-- [ ] **Add Rust PyO3 binding**
-  - [ ] Edit `rust/datafusion_ext/src/delta_protocol.rs`:
-    - [ ] Add `use pyo3::prelude::*;`
-    - [ ] Add `validate_delta_protocol_py()` function with PyO3 annotations
-    - [ ] Export in module initialization
-  - [ ] Rebuild Rust: `bash scripts/rebuild_rust_artifacts.sh`
-  - [ ] Verify binding available: `uv run python -c "from datafusion._internal import validate_delta_protocol_py"`
-
-- [ ] **Simplify delta/protocol.py**
-  - [ ] Keep `DeltaFeatureGate` dataclass (used by callers)
-  - [ ] Replace `validate_delta_protocol()` body with Rust call via `datafusion._internal.validate_delta_protocol_py()`
-  - [ ] Update docstring to document Rust implementation
+- [ ] **Protocol conformance verification (no Rust changes needed)**
+  - [ ] Verify `delta/protocol.py` delegates to Rust implementation
+  - [ ] Remove any remaining Python-side reimplementation of protocol validation
+  - [ ] Update module docstring to document Rust ownership
+  - [ ] Add integration test confirming Rust-backed validation returns expected results
   - [ ] Run tests: `uv run pytest tests/unit/datafusion_engine/delta/test_protocol.py -v`
 
 - [ ] **Evaluate scan_policy_inference.py**
@@ -1213,10 +1108,10 @@ def create_delta_provider(
     - [ ] Remove TYPE_CHECKING import from `src/relspec/policy_compiler.py`
   - [ ] If not safe, document why it's still needed
 
-- [ ] **Optional: Thin control_plane.py**
+- [ ] **Simplify control_plane.py**
   - [ ] Identify helper functions that could move to Rust
+  - [ ] Remove duplicate validation already handled by Rust
   - [ ] Document facade responsibilities in module docstring
-  - [ ] Defer deeper refactoring to future work (not blocking)
 
 - [ ] **Post-flight checks**
   - [ ] Run `uv run ruff format`
@@ -1226,13 +1121,13 @@ def create_delta_provider(
   - [ ] Run full test suite: `uv run pytest tests/ -m "not e2e" -q`
   - [ ] Run Delta integration test: `uv run pytest tests/integration/delta/ -v`
 
-**Expected outcome:** ~500-800 LOC removed, protocol validation moved to Rust, all tests pass.
+**Expected outcome:** ~300 LOC removed, protocol conformance verified, scan policy evaluated, all tests pass.
 
 ---
 
-## Wave 4: Monolith Decomposition
+## Wave 4: Monolith Decomposition (Direct Import Rewrite)
 
-**Scope:** Restructure the two largest files for maintainability. Zero net LOC change — this is code organization only.
+**Scope:** Restructure the two largest files for maintainability with direct import rewrite. Zero net LOC change — this is code organization only. **No compatibility re-export modules.** Bulk-update all imports repo-wide in the same wave. Delete legacy modules once replacements compile and tests pass.
 
 ### 4A: Split `session/runtime.py` (8,482 LOC → 4 files)
 
@@ -1528,63 +1423,33 @@ def registered_udfs(ctx: SessionContext) -> frozenset[str]:
 # ... more functions extracted from runtime.py ...
 ```
 
-#### Update `session/__init__.py`
+#### Update `session/__init__.py` (No Compat Re-Exports)
 
-**Code snippet for updated public API:**
+Per the hard-cutover posture, `session/__init__.py` should **not** re-export symbols from the new submodules. Instead, all callers across the repo must be bulk-updated to import directly from the new module locations.
+
+**Code snippet for updated `__init__.py`:**
 ```python
 """DataFusion session construction and runtime for extraction phase.
 
-This module provides session construction, configuration, feature gates,
-and introspection for the extraction phase. The Rust engine owns session
-construction for CPG execution.
-
-Public API (unchanged after decomposition):
-- DataFusionRuntimeProfile (now in config.py)
-- SessionConfigOptions (now in config.py)
-- FeatureGateSnapshot (now in features.py)
-- registered_tables() (now in introspection.py)
-- table_schema() (now in introspection.py)
-- ... (all existing public exports maintained)
+After Wave 4 decomposition, import directly from submodules:
+- datafusion_engine.session.config (profiles, config types)
+- datafusion_engine.session.features (feature gates)
+- datafusion_engine.session.introspection (dataset/schema/UDF queries)
+- datafusion_engine.session.runtime (core session construction)
 """
 from __future__ import annotations
+```
 
-# Re-export from decomposed modules (maintain existing API)
-from datafusion_engine.session.config import (
-    DataFusionRuntimeProfile,
-    SessionConfigOptions,
-    default_extraction_profile,
-)
-from datafusion_engine.session.features import (
-    FeatureGateSnapshot,
-    resolve_feature_gates,
-)
-from datafusion_engine.session.introspection import (
-    registered_tables,
-    table_schema,
-    registered_udfs,
-)
-from datafusion_engine.session.runtime import (
-    # Core session construction remains in runtime.py
-    build_extraction_session,
-    # ... other runtime exports ...
-)
+**Bulk-update strategy:**
+```bash
+# Find all callers to update
+rg "from datafusion_engine.session.runtime import" src/ tests/
+rg "from datafusion_engine.session import" src/ tests/
 
-__all__ = [
-    # Config
-    "DataFusionRuntimeProfile",
-    "SessionConfigOptions",
-    "default_extraction_profile",
-    # Features
-    "FeatureGateSnapshot",
-    "resolve_feature_gates",
-    # Introspection
-    "registered_tables",
-    "table_schema",
-    "registered_udfs",
-    # Runtime
-    "build_extraction_session",
-    # ... (maintain all existing public exports)
-]
+# Update imports in-wave (no holding period)
+# Example: DataFusionRuntimeProfile moves to session.config
+# Old: from datafusion_engine.session.runtime import DataFusionRuntimeProfile
+# New: from datafusion_engine.session.config import DataFusionRuntimeProfile
 ```
 
 ### 4B: Split `schema/registry.py` (4,166 LOC → 3 files after Wave 1 pruning)
@@ -1843,56 +1708,32 @@ DATAFUSION_PLAN_ARTIFACTS_SCHEMA: pa.Schema = pa.schema([
 # ... more schemas extracted from registry.py ...
 ```
 
-#### Update `schema/__init__.py`
+#### Update `schema/__init__.py` (No Compat Re-Exports)
 
-**Code snippet for updated public API:**
+Per the hard-cutover posture, `schema/__init__.py` should **not** re-export symbols from the new submodules. All callers must be bulk-updated to import directly from the new module locations.
+
+**Code snippet for updated `__init__.py`:**
 ```python
 """DataFusion schema definitions and registry.
 
-This module provides schema definitions for extraction tables, nested
-views, and observability artifacts.
-
-Public API (unchanged after decomposition):
-- extract_schema_for() (now in extraction_schemas.py)
-- nested_view_specs() (now in nested_views.py)
-- DATAFUSION_PLAN_ARTIFACTS_SCHEMA (now in observability_schemas.py)
-- ... (all existing public exports maintained)
+After Wave 4 decomposition, import directly from submodules:
+- datafusion_engine.schema.extraction_schemas (extract_schema_for, table schemas)
+- datafusion_engine.schema.nested_views (NestedViewSpec, nested_view_specs)
+- datafusion_engine.schema.observability_schemas (pipeline events, plan artifacts)
 """
 from __future__ import annotations
+```
 
-# Re-export from decomposed modules (maintain existing API)
-from datafusion_engine.schema.extraction_schemas import (
-    extract_schema_for,
-    AST_NODES_SCHEMA,
-    AST_EDGES_SCHEMA,
-    # ... other extraction schemas ...
-)
-from datafusion_engine.schema.nested_views import (
-    NestedViewSpec,
-    nested_view_specs,
-    nested_view_spec,
-    nested_path_for,
-)
-from datafusion_engine.schema.observability_schemas import (
-    DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA,
-    DATAFUSION_PLAN_ARTIFACTS_SCHEMA,
-)
+**Bulk-update strategy:**
+```bash
+# Find all callers to update
+rg "from datafusion_engine.schema.registry import" src/ tests/
+rg "from datafusion_engine.schema import" src/ tests/
 
-__all__ = [
-    # Extraction schemas
-    "extract_schema_for",
-    "AST_NODES_SCHEMA",
-    "AST_EDGES_SCHEMA",
-    # Nested views
-    "NestedViewSpec",
-    "nested_view_specs",
-    "nested_view_spec",
-    "nested_path_for",
-    # Observability schemas
-    "DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA",
-    "DATAFUSION_PLAN_ARTIFACTS_SCHEMA",
-    # ... (maintain all existing public exports)
-]
+# Update imports in-wave (no holding period)
+# Example: extract_schema_for moves to schema.extraction_schemas
+# Old: from datafusion_engine.schema.registry import extract_schema_for
+# New: from datafusion_engine.schema.extraction_schemas import extract_schema_for
 ```
 
 ### Wave 4 Implementation Checklist
@@ -1940,11 +1781,17 @@ __all__ = [
     - [ ] Add re-exports from new modules
     - [ ] Maintain existing public API surface
 
-- [ ] **Update imports across codebase**
-  - [ ] Run `uv run ruff check --fix` to auto-fix some imports
-  - [ ] Manually fix remaining imports if needed
-  - [ ] Verify no broken imports: `uv run python -c "from datafusion_engine.session import *"`
-  - [ ] Verify no broken imports: `uv run python -c "from datafusion_engine.schema import *"`
+- [ ] **Bulk-update imports across codebase (no compat re-exports)**
+  - [ ] Find all `from datafusion_engine.session.runtime import` in `src/` and `tests/`
+  - [ ] Find all `from datafusion_engine.schema.registry import` in `src/` and `tests/`
+  - [ ] Rewrite all imports to point to new submodule locations
+  - [ ] Run `uv run ruff check --fix` to auto-fix remaining imports
+  - [ ] Manually fix any remaining broken imports
+  - [ ] Verify zero remaining imports of old module paths: `rg "from datafusion_engine.schema.registry import" src/ tests/`
+
+- [ ] **Delete legacy modules immediately**
+  - [ ] Delete `src/datafusion_engine/schema/registry.py` (fully decomposed into 3 files)
+  - [ ] Verify no remaining references: `rg "schema.registry" src/datafusion_engine/`
 
 - [ ] **Post-flight checks**
   - [ ] Run `uv run ruff format`
@@ -1952,18 +1799,23 @@ __all__ = [
   - [ ] Run `uv run pyrefly check`
   - [ ] Run `uv run pyright`
   - [ ] Run full test suite: `uv run pytest tests/ -m "not e2e" -q`
-  - [ ] Run extraction pipeline smoke test: `uv run python -m extraction.orchestrator --repo-root . --work-dir /tmp/test`
-  - [ ] Verify public API unchanged: Document any breaking changes (should be none)
+  - [ ] Verify zero remaining imports of deleted module paths
+  - [ ] Verify zero references to removed symbols
 
-**Expected outcome:** 12,648 LOC restructured (0 net change), improved maintainability, all tests pass, public API unchanged.
+**Expected outcome:** 12,648 LOC restructured (0 net change), legacy modules deleted, all imports updated, all tests pass.
 
 ---
 
-## Wave 5: Rust Transition Preparation (Future Scope)
+## Wave 5: Rust-First Completion
 
-**Scope:** Prepare the codebase for extraction phase transition to Rust. This wave does NOT implement the transition but marks code boundaries and creates Rust-side stubs.
+**Scope:** Direct cutover of execution-critical paths to Rust ownership. Python remains for orchestration/control plane only where necessary. Prioritized by runtime criticality and DataFusion-native leverage.
 
-### 5A: Session Factory Transition Preparation
+**Rust transition priority order:**
+1. `src/datafusion_engine/plan/execution_runtime.py` — Direct cutover to Rust-backed execution path; remove Python legacy internals.
+2. `src/datafusion_engine/lineage/datafusion.py` and `lineage/scan.py` — Move lineage scan/planning internals to Rust.
+3. `src/datafusion_engine/dataset/registration.py` — Split orchestration (Python) vs provider/catalog mechanics (Rust), then remove old Python mechanics.
+
+### 5A: Session Factory Transition
 
 **Rust side already implements best-in-class session construction:**
 
@@ -2072,26 +1924,11 @@ pub fn build_extraction_session(
 }
 ```
 
-**Mark Python session factory for transition:**
+**Python session factory — direct cutover target:**
 
-```python
-# src/datafusion_engine/session/factory.py (ADD MARKER COMMENT)
+When extraction transitions to Rust, `src/datafusion_engine/session/factory.py` is deleted. The Rust side already has best-in-class session construction in `rust/codeanatomy_engine/src/session/factory.rs`. The extraction-specific session builder will be added to `rust/codeanatomy_engine/src/session/extraction.rs`.
 
-# RUST_TRANSITION: This module will become dead when extraction transitions
-# to Rust. The Rust side already has best-in-class session construction
-# in rust/codeanatomy_engine/src/session/factory.rs. The extraction-specific
-# session builder will be added to rust/codeanatomy_engine/src/session/extraction.rs.
-#
-# Key DataFusion APIs to use in Rust:
-# - SessionStateBuilder::new() for deterministic construction
-# - RuntimeEnvBuilder with extraction-specific memory pool
-# - register_table() for Delta extraction inputs
-# - DataFrame.cache() for hot extraction intermediates
-#
-# Estimated transition: Wave 5 (future scope, requires extraction → Rust)
-```
-
-### 5B: Lineage Transition Preparation
+### 5B: Lineage Direct Cutover
 
 **Rust lineage extraction stub (future):**
 
@@ -2149,31 +1986,37 @@ pub fn referenced_columns(plan: &LogicalPlan) -> Result<Vec<(String, String)>> {
 }
 ```
 
-**Mark Python lineage for transition:**
+**Python lineage — direct cutover target:**
 
-```python
-# src/datafusion_engine/lineage/datafusion.py (ADD MARKER COMMENT)
+`src/datafusion_engine/lineage/datafusion.py` and `lineage/scan.py` are cutover targets. The Rust side will use DataFusion's `TreeNode` trait for plan walking and `LogicalPlan` introspection. Python's `lineage/diagnostics.py` stays (observability concern).
 
-# RUST_TRANSITION: This module's core lineage extraction logic will move
-# to Rust when scheduling fully transitions. The Rust side will use
-# DataFusion's TreeNode trait for plan walking and LogicalPlan introspection.
-#
-# Key DataFusion APIs to use in Rust:
-# - LogicalPlan::inputs() — child plan references
-# - LogicalPlan.apply() / TreeNode trait — recursive plan walking
-# - LogicalPlan::TableScan variant — extract table references
-# - Expr::Column — extract column references
-#
-# Python's lineage/diagnostics.py will stay (observability concern).
-#
-# Estimated transition: Wave 5 (future scope, requires scheduling → Rust)
-```
+### 5C: Dataset Registration Split
 
-### Wave 5 Implementation Checklist (FUTURE)
+**Split `dataset/registration.py` by ownership:**
+- **Python keeps:** Extraction orchestration, request shaping
+- **Rust takes:** Provider/catalog mechanics, Delta table provider construction, identity hashing
 
-This checklist is for future reference when extraction transitions to Rust.
+This is the highest-complexity cutover but also the highest payoff.
 
-- [ ] **Extraction session transition**
+### Wave 5 Implementation Checklist
+
+Prioritized by runtime criticality.
+
+- [ ] **Priority 1: Plan execution direct cutover**
+  - [ ] Move extraction plan execution to Rust-backed path
+  - [ ] Remove Python legacy internals from `plan/execution_runtime.py`
+  - [ ] Delete `src/datafusion_engine/plan/execution_runtime.py` (~348 LOC)
+
+- [ ] **Priority 2: Lineage direct cutover**
+  - [ ] Create `rust/codeanatomy_engine/src/compiler/lineage.rs`
+  - [ ] Implement `referenced_tables()` using TreeNode trait
+  - [ ] Implement `referenced_columns()` using plan introspection
+  - [ ] Expose via PyO3 if Python needs lineage data
+  - [ ] Delete `src/datafusion_engine/lineage/datafusion.py` (~570 LOC)
+  - [ ] Delete `src/datafusion_engine/lineage/scan.py` (~824 LOC)
+  - [ ] Keep `src/datafusion_engine/lineage/diagnostics.py` (observability)
+
+- [ ] **Priority 3: Extraction session cutover**
   - [ ] Create `rust/codeanatomy_engine/src/session/extraction.rs`
   - [ ] Implement `build_extraction_session()` with extraction-specific config
   - [ ] Register extraction-specific UDFs (col_to_byte, span_id, etc.)
@@ -2182,29 +2025,17 @@ This checklist is for future reference when extraction transitions to Rust.
   - [ ] Update Python extraction to call Rust session builder
   - [ ] Delete `src/datafusion_engine/session/factory.py` (~433 LOC)
 
-- [ ] **Plan execution transition**
-  - [ ] Move extraction plan execution to Rust
-  - [ ] Delete `src/datafusion_engine/plan/execution_runtime.py` (~348 LOC)
+- [ ] **Priority 4: Dataset registration split**
+  - [ ] Split orchestration (Python) from provider/catalog mechanics (Rust)
+  - [ ] Move Delta table provider construction and identity hashing to Rust
+  - [ ] Delete remaining Python registration mechanics (~2,500 LOC)
 
-- [ ] **Lineage transition**
-  - [ ] Create `rust/codeanatomy_engine/src/compiler/lineage.rs`
-  - [ ] Implement `referenced_tables()` using TreeNode trait
-  - [ ] Implement `referenced_columns()` using plan introspection
-  - [ ] Expose via PyO3 if Python needs lineage data
-  - [ ] Delete `src/datafusion_engine/lineage/datafusion.py` (~570 LOC)
-  - [ ] Evaluate `src/datafusion_engine/lineage/scan.py` for deletion (~824 LOC)
-  - [ ] Keep `src/datafusion_engine/lineage/diagnostics.py` (observability)
-
-- [ ] **Dataset registration transition**
-  - [ ] Move extraction input registration to Rust
-  - [ ] Delete remaining Python registration code (~2,500 LOC)
-
-- [ ] **UDF metadata transition**
+- [ ] **Priority 5: UDF metadata cleanup**
   - [ ] Remove Python UDF metadata layer (no longer needed)
   - [ ] Delete `src/datafusion_engine/udf/catalog.py` (~1,215 LOC)
   - [ ] Delete `src/datafusion_engine/udf/runtime.py` (~1,577 LOC post-Wave 2)
 
-**Expected outcome (when complete):** ~7,567 LOC removed, extraction phase fully in Rust.
+**Expected outcome (when complete):** ~7,567 LOC removed, Python remains orchestration/control plane only.
 
 ---
 
@@ -2246,17 +2077,17 @@ This checklist is for future reference when extraction transitions to Rust.
 
 **Action:** Review test files, remove tests for deleted exports.
 
-#### Wave 2: UDF Bridge Simplification
+#### Wave 2: UDF Runtime Hard Cutover
 
 **Test files affected:**
 - `tests/unit/datafusion_engine/udf/test_platform.py` — Remove fallback path tests
 - `tests/unit/datafusion_engine/udf/test_runtime.py` — Update tests for hard requirement
 - `tests/integration/udf/` — Update integration tests if needed
 
-#### Wave 3: Delta Control-Plane Thinning
+#### Wave 3: Delta Control-Plane Consolidation
 
 **Test files affected:**
-- `tests/unit/datafusion_engine/delta/test_protocol.py` — Update for Rust-backed validation
+- `tests/unit/datafusion_engine/delta/test_protocol.py` — Add conformance test for Rust-backed validation
 - `tests/integration/delta/` — Verify Delta integration still works
 
 #### Wave 4: Monolith Decomposition
@@ -2305,12 +2136,12 @@ uv run pytest tests/ -m "not e2e" -q
 
 ```mermaid
 graph TD
-    W0[Wave 0: Dead Code Deletion]
+    W0[Wave 0: Hard Delete Dead Paths]
     W1[Wave 1: Dead Export Pruning]
-    W2[Wave 2: UDF Bridge Simplification]
-    W3[Wave 3: Delta Control-Plane Thinning]
+    W2[Wave 2: UDF Runtime Hard Cutover]
+    W3[Wave 3: Delta Consolidation]
     W4[Wave 4: Monolith Decomposition]
-    W5[Wave 5: Rust Transition Prep]
+    W5[Wave 5: Rust-First Completion]
 
     W0 --> W3
     W1 --> W4
@@ -2333,22 +2164,22 @@ graph TD
 - Solid arrows: Hard dependency (must complete before dependent wave)
 - Dashed arrows: Independent (can run in parallel)
 - Green: Zero risk (deletions only)
-- Yellow: Low risk (simplifications)
+- Yellow: Low risk (hard cutover)
 - Red: Medium risk (structural changes)
-- Blue: Future scope (preparation only)
+- Blue: Rust-first completion
 
 **Execution order:**
 1. **Wave 0** must complete before **Wave 3** (scan_policy_inference.py evaluation depends on pipeline_runtime.py deletion)
 2. **Wave 1** must complete before **Wave 4** (schema/registry.py split depends on dead export removal)
 3. All other waves can proceed independently
 
-**Recommended sequence for minimal risk:**
-1. Wave 0 (dead code deletion) — Safest, highest impact
-2. Wave 1 (dead export pruning) — Low risk, enables Wave 4
-3. Wave 2 (UDF simplification) — Independent, medium impact
-4. Wave 3 (Delta thinning) — Depends on Wave 0, medium impact
-5. Wave 4 (monolith decomposition) — Depends on Wave 1, highest effort
-6. Wave 5 (Rust transition prep) — Future scope, documentation only
+**Recommended sequence:**
+1. Wave 0 (hard delete) — Safest, highest impact
+2. Wave 1 (dead export pruning, corrected) — Low risk, enables Wave 4
+3. Wave 2 (UDF hard cutover to `datafusion_ext`) — Independent, medium impact
+4. Wave 3 (Delta consolidation, protocol already done) — Depends on Wave 0
+5. Wave 4 (monolith decomposition, direct import rewrite) — Depends on Wave 1, highest effort
+6. Wave 5 (Rust-first completion) — Prioritized by runtime criticality
 
 ---
 
@@ -2375,63 +2206,78 @@ graph TD
 
 ### Wave 2 Success
 
-- [ ] UDF platform simplified (no fallback paths)
-- [ ] UDF runtime simplified (hard requirement)
-- [ ] UDF factory simplified (no retry loops)
+- [ ] Single extension surface: `datafusion_ext` only
+- [ ] Zero `datafusion._internal` references remain in `src/datafusion_engine/`
+- [ ] UDF platform: no fallback paths, no retry loops
+- [ ] UDF runtime: fail-fast on missing Rust entrypoints
 - [ ] ~300 LOC simplified
 - [ ] All tests pass
-- [ ] Extraction pipeline smoke test passes
 
 ### Wave 3 Success
 
-- [ ] Protocol validation moved to Rust
+- [ ] Protocol conformance verified (already Rust-backed)
 - [ ] `scan_policy_inference.py` evaluated for deletion
-- [ ] Control plane facade thinned
-- [ ] ~500-800 LOC removed
+- [ ] Control plane simplified (minimal orchestration only)
+- [ ] ~300 LOC removed
 - [ ] All tests pass
 - [ ] Delta integration tests pass
 
 ### Wave 4 Success
 
 - [ ] `session/runtime.py` split into 4 files (8,482 → 4,000 + 1,500 + 1,000 + 2,000)
-- [ ] `schema/registry.py` split into 3 files (~3,850 → 1,500 + 500 + 300)
-- [ ] Public API unchanged (all existing imports still work)
+- [ ] `schema/registry.py` split into 3 files and deleted (~3,850 → 1,500 + 500 + 300)
+- [ ] Zero remaining imports of old module paths
+- [ ] No compat re-export modules
 - [ ] 12,648 LOC restructured (0 net change)
 - [ ] All tests pass
-- [ ] No breaking changes
 
-### Wave 5 Success (Future)
+### Wave 5 Success
 
-- [ ] Rust session extraction stub created
-- [ ] Rust lineage stub created
-- [ ] Python code marked with RUST_TRANSITION comments
-- [ ] Documentation updated with transition plan
-- [ ] No implementation work (preparation only)
+- [ ] Plan execution cutover to Rust complete
+- [ ] Lineage cutover to Rust complete
+- [ ] Session factory cutover to Rust complete
+- [ ] Dataset registration split (Python orchestration / Rust mechanics)
+- [ ] Python remains orchestration/control plane only
 
 ### Overall Success
 
-- [ ] ~2,800 LOC removed (Waves 0-3)
+- [ ] ~2,400 LOC removed (Waves 0-3)
 - [ ] 12,648 LOC restructured (Wave 4)
 - [ ] All quality gates pass
-- [ ] No regressions
-- [ ] Improved maintainability
-- [ ] Clear path for Rust transition (Wave 5)
+- [ ] Zero remaining imports of deleted module paths
+- [ ] Zero runtime branches for compatibility/fallback module resolution
+- [ ] Benchmarks not worse than baseline on target workloads
+
+---
+
+## Hard-Cutover Acceptance Gates
+
+Use these explicit execution gates per wave. All must pass before a wave is considered complete.
+
+1. **Zero remaining imports** of deleted module paths.
+2. **Zero references** to removed symbols.
+3. **Zero runtime branches** for compatibility/fallback module resolution.
+4. **Benchmarks not worse** than baseline on target workloads.
+5. **Full repo quality gate passes:**
+
+```bash
+uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright && uv run pytest -q
+```
+
+6. **Config reproducibility:** Persist `SHOW ALL` / `information_schema.df_settings` snapshots alongside benchmark plans for each wave.
 
 ---
 
 ## Document Metadata
 
-**Version:** 1.0
-**Date:** 2026-02-12
+**Version:** 1.1 (review integrated)
+**Date:** 2026-02-12 (revised 2026-02-13)
 **Authors:** Engineering Team
-**Status:** DRAFT
+**Status:** DRAFT — Review Integrated
 **Related Documents:**
-- `/Users/paulheyse/CodeAnatomy/docs/plans/datafusion_engine_decomposition_assessment_v1_2026-02-12.md`
-- `/Users/paulheyse/CodeAnatomy/AGENTS.md`
-- `/Users/paulheyse/CodeAnatomy/CLAUDE.md`
+- `docs/plans/datafusion_engine_decomposition_assessment_v1_2026-02-12.md`
+- `docs/plans/datafusion_engine_decomposition_plan_review_v2_2026-02-13.md`
 
 **Next Steps:**
-1. Review this plan with the team
-2. Approve execution order
-3. Assign waves to engineers
-4. Begin Wave 0 execution
+1. Begin Wave 0 execution (hard delete dead paths)
+2. Proceed to Wave 1 with corrected dead-export lists

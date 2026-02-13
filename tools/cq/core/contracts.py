@@ -7,6 +7,7 @@ from typing import cast
 
 import msgspec
 
+from tools.cq.core.public_serialization import to_public_dict
 from tools.cq.core.serialization import to_builtins
 from tools.cq.search.contracts import SearchSummaryContract, summary_contract_to_dict
 
@@ -23,6 +24,14 @@ def contract_to_builtins(value: object) -> object:
     Returns:
         object: Builtins-only representation safe for JSON rendering.
     """
+    if isinstance(value, msgspec.Struct):
+        return to_public_dict(value)
+    if (
+        isinstance(value, list)
+        and value
+        and all(isinstance(item, msgspec.Struct) for item in value)
+    ):
+        return [to_public_dict(cast("msgspec.Struct", item)) for item in value]
     return to_builtins(value)
 
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from tools.cq.search.lsp_front_door_adapter import (
+    LanguageLspEnrichmentRequest,
     enrich_with_language_lsp,
     infer_language_for_path,
     provider_for_language,
@@ -34,13 +35,15 @@ def test_enrich_with_language_lsp_python(monkeypatch: pytest.MonkeyPatch) -> Non
         lambda _request: {"call_graph": {"incoming_total": 1, "outgoing_total": 0}},
     )
     payload, timed_out = enrich_with_language_lsp(
-        language="python",
-        mode="search",
-        root=Path(),
-        file_path=Path("foo.py"),
-        line=10,
-        col=0,
-        symbol_hint="foo",
+        LanguageLspEnrichmentRequest(
+            language="python",
+            mode="search",
+            root=Path(),
+            file_path=Path("foo.py"),
+            line=10,
+            col=0,
+            symbol_hint="foo",
+        )
     )
     assert isinstance(payload, dict)
     assert timed_out is False
@@ -56,13 +59,15 @@ def test_enrich_with_language_lsp_rust(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *_args, **_kwargs: {"call_graph": {"incoming_callers": []}},
     )
     payload, timed_out = enrich_with_language_lsp(
-        language="rust",
-        mode="search",
-        root=Path(),
-        file_path=Path("foo.rs"),
-        line=10,
-        col=0,
-        symbol_hint="foo",
+        LanguageLspEnrichmentRequest(
+            language="rust",
+            mode="search",
+            root=Path(),
+            file_path=Path("foo.rs"),
+            line=10,
+            col=0,
+            symbol_hint="foo",
+        )
     )
     assert isinstance(payload, dict)
     assert timed_out is False

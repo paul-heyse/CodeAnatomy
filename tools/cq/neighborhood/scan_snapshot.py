@@ -71,7 +71,7 @@ class ScanSnapshot(CqStruct, frozen=True):
     def from_records(cls, records: list[SgRecord]) -> ScanSnapshot:
         """Build snapshot from raw SgRecords.
 
-        Uses internal _build_scan_context to construct indexes.
+        Uses query scan-context builder to construct indexes.
 
         Parameters
         ----------
@@ -83,9 +83,9 @@ class ScanSnapshot(CqStruct, frozen=True):
         ScanSnapshot
             Snapshot adapter for neighborhood collection.
         """
-        from tools.cq.query.executor import _build_scan_context
+        from tools.cq.query.executor import build_scan_context
 
-        ctx = _build_scan_context(records)
+        ctx = build_scan_context(records)
         return cls.from_scan_context(ctx)
 
     @classmethod

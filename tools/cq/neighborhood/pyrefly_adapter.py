@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201,PLR0913
 """Pyrefly-to-SNB neighborhood slice adapter."""
 
 from __future__ import annotations
@@ -28,7 +27,11 @@ def collect_pyrefly_slices(
     top_k: int,
     symbol_hint: str | None = None,
 ) -> tuple[tuple[NeighborhoodSliceV1, ...], tuple[DegradeEventV1, ...], dict[str, object]]:
-    """Collect Pyrefly-derived LSP slices for feasible neighborhood kinds."""
+    """Collect Pyrefly-derived LSP slices for feasible neighborhood kinds.
+
+    Returns:
+        Collected slices, degrade events, and LSP environment metadata.
+    """
     if not target_file or target_line is None:
         return (
             (),

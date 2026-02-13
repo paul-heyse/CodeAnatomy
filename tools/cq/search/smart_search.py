@@ -5,7 +5,7 @@ from __future__ import annotations
 import multiprocessing
 import re
 from collections import Counter
-from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
+from tools.cq.core.cache import build_cache_key, build_cache_tag, get_cq_cache_backend
+from tools.cq.core.cache.contracts import SearchPartitionCacheV1
+from tools.cq.core.contracts import contract_to_builtins, require_mapping
 from tools.cq.core.locations import (
     SourceSpan,
     line_relative_byte_range_to_absolute,
@@ -25,8 +28,10 @@ from tools.cq.core.multilang_summary import (
     assert_multilang_summary,
     build_multilang_summary,
 )
+from tools.cq.core.public_serialization import to_public_dict, to_public_list
 from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
+from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
@@ -50,6 +55,7 @@ from tools.cq.query.language import (
     ripgrep_type_for_language,
     ripgrep_types_for_scope,
 )
+from tools.cq.search.candidate_normalizer import build_definition_candidate_finding
 from tools.cq.search.classifier import (
     HeuristicResult,
     MatchCategory,
@@ -81,8 +87,13 @@ from tools.cq.search.contracts import (
     coerce_pyrefly_telemetry,
 )
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
-from tools.cq.search.lsp_contract_state import derive_lsp_contract_state
+from tools.cq.search.lsp_contract_state import (
+    LspContractStateInputV1,
+    LspContractStateV1,
+    derive_lsp_contract_state,
+)
 from tools.cq.search.lsp_front_door_adapter import (
+    LanguageLspEnrichmentRequest,
     enrich_with_language_lsp,
     infer_language_for_path,
     lsp_runtime_enabled,
@@ -99,6 +110,7 @@ from tools.cq.search.multilang_diagnostics import (
     diagnostics_to_summary_payload,
     is_python_oriented_query_text,
 )
+from tools.cq.search.pipeline import SearchPipeline
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
 from tools.cq.search.pyrefly_signal import evaluate_pyrefly_signal_from_mapping
 from tools.cq.search.python_analysis_session import get_python_analysis_session
@@ -113,12 +125,17 @@ from tools.cq.search.requests import (
 )
 from tools.cq.search.rg_native import build_rg_command, run_rg_json
 from tools.cq.search.rust_enrichment import enrich_rust_context_by_byte_range
+from tools.cq.search.section_builder import (
+    insert_neighborhood_preview,
+    insert_target_candidates,
+)
 from tools.cq.search.tree_sitter_python import get_tree_sitter_python_cache_stats
 from tools.cq.search.tree_sitter_rust import get_tree_sitter_rust_cache_stats
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
 
+    from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightNeighborhoodV1
     from tools.cq.core.toolchain import Toolchain
 
 # Derive smart search limits from INTERACTIVE profile
@@ -958,15 +975,17 @@ def _maybe_pyrefly_enrichment(
         return None
     try:
         payload, timed_out = enrich_with_language_lsp(
-            language="python",
-            mode="search",
-            root=root,
-            file_path=file_path,
-            line=raw.line,
-            col=raw.col,
-            symbol_hint=raw.match_text,
+            LanguageLspEnrichmentRequest(
+                language="python",
+                mode="search",
+                root=root,
+                file_path=file_path,
+                line=raw.line,
+                col=raw.col,
+                symbol_hint=raw.match_text,
+            )
         )
-    except Exception:  # noqa: BLE001 - fail-open
+    except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
         return None
     if timed_out and payload is None:
         return None
@@ -1766,15 +1785,31 @@ def _run_classification_phase(
     tasks = [
         ClassificationBatchTask(root=str(ctx.root), lang=lang, batch=batch) for batch in batches
     ]
+    scheduler = get_worker_scheduler()
     try:
-        with ProcessPoolExecutor(
-            max_workers=workers,
-            mp_context=multiprocessing.get_context("spawn"),
-        ) as pool:
-            indexed_results: list[tuple[int, EnrichedMatch]] = []
-            for batch_results in pool.map(_classify_partition_batch, tasks):
-                indexed_results.extend((item.index, item.match) for item in batch_results)
-    except Exception:  # noqa: BLE001 - fail-open to sequential classification
+        futures = [
+            scheduler.submit_cpu(_classify_partition_batch, task) for task in tasks[:workers]
+        ]
+        futures.extend(
+            scheduler.submit_cpu(_classify_partition_batch, task) for task in tasks[workers:]
+        )
+        batch = scheduler.collect_bounded(
+            futures,
+            timeout_seconds=max(1.0, float(len(tasks))),
+        )
+        if batch.timed_out > 0:
+            return [classify_match(raw, ctx.root, lang=lang) for raw in filtered_raw_matches]
+        indexed_results: list[tuple[int, EnrichedMatch]] = []
+        for batch_results in batch.done:
+            indexed_results.extend((item.index, item.match) for item in batch_results)
+    except (
+        multiprocessing.ProcessError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        ValueError,
+        TypeError,
+    ):
         return [classify_match(raw, ctx.root, lang=lang) for raw in filtered_raw_matches]
 
     indexed_results.sort(key=lambda pair: pair[0])
@@ -1833,16 +1868,49 @@ def _run_single_partition(
     *,
     mode: QueryMode,
 ) -> _LanguageSearchResult:
+    cache = get_cq_cache_backend(root=ctx.root)
+    cache_key = build_cache_key(
+        "search_partition",
+        version="v1",
+        workspace=str(ctx.root.resolve()),
+        language=lang,
+        target=ctx.query,
+        extras={
+            "mode": mode.value,
+            "include_strings": ctx.include_strings,
+            "include_globs": list(ctx.include_globs or []),
+            "exclude_globs": list(ctx.exclude_globs or []),
+            "max_total_matches": ctx.limits.max_total_matches,
+        },
+    )
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        try:
+            cache_payload = msgspec.convert(cached, type=SearchPartitionCacheV1)
+            raw_matches = [
+                msgspec.convert(item, type=RawMatch) for item in cache_payload.raw_matches
+            ]
+            stats = msgspec.convert(cache_payload.stats, type=SearchStats)
+            enriched = [
+                msgspec.convert(item, type=EnrichedMatch) for item in cache_payload.enriched_matches
+            ]
+            return _LanguageSearchResult(
+                lang=lang,
+                raw_matches=raw_matches,
+                stats=stats,
+                pattern=cache_payload.pattern,
+                enriched_matches=enriched,
+                dropped_by_scope=stats.dropped_by_scope,
+                pyrefly_prefetch=None,
+            )
+        except (RuntimeError, TypeError, ValueError):
+            pass
+
     raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang, mode=mode)
     pyrefly_prefetch_future: Future[_PyreflyPrefetchResult] | None = None
-    pyrefly_prefetch_pool: ThreadPoolExecutor | None = None
     pyrefly_prefetch: _PyreflyPrefetchResult | None = None
     if lang == "python" and raw_matches:
-        pyrefly_prefetch_pool = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="cq-pyrefly-prefetch",
-        )
-        pyrefly_prefetch_future = pyrefly_prefetch_pool.submit(
+        pyrefly_prefetch_future = get_worker_scheduler().submit_io(
             _prefetch_pyrefly_for_raw_matches,
             ctx,
             lang=lang,
@@ -1852,10 +1920,26 @@ def _run_single_partition(
     if pyrefly_prefetch_future is not None:
         try:
             pyrefly_prefetch = pyrefly_prefetch_future.result()
-        except Exception:  # noqa: BLE001 - fail-open
+        except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
             pyrefly_prefetch = _PyreflyPrefetchResult(telemetry=_new_pyrefly_telemetry())
-    if pyrefly_prefetch_pool is not None:
-        pyrefly_prefetch_pool.shutdown(wait=False)
+    cache_payload = SearchPartitionCacheV1(
+        pattern=pattern,
+        raw_matches=cast(
+            "list[dict[str, object]]",
+            contract_to_builtins(raw_matches),
+        ),
+        stats=require_mapping(stats),
+        enriched_matches=cast(
+            "list[dict[str, object]]",
+            contract_to_builtins(enriched),
+        ),
+    )
+    cache.set(
+        cache_key,
+        contract_to_builtins(cache_payload),
+        expire=900,
+        tag=build_cache_tag(workspace=str(ctx.root.resolve()), language=lang),
+    )
     return _LanguageSearchResult(
         lang=lang,
         raw_matches=raw_matches,
@@ -2164,7 +2248,7 @@ def _prefetch_pyrefly_for_raw_matches(
         except TimeoutError:
             telemetry["timed_out"] += 1
             payload = None
-        except Exception:  # noqa: BLE001 - fail-open
+        except Exception:
             telemetry["failed"] += 1
             payload = None
 
@@ -2200,13 +2284,15 @@ def _pyrefly_enrich_match(
     if file_path.suffix not in {".py", ".pyi"}:
         return None
     payload, timed_out = enrich_with_language_lsp(
-        language="python",
-        mode="search",
-        root=ctx.root,
-        file_path=file_path,
-        line=match.line,
-        col=match.col,
-        symbol_hint=match.match_text,
+        LanguageLspEnrichmentRequest(
+            language="python",
+            mode="search",
+            root=ctx.root,
+            file_path=file_path,
+            line=match.line,
+            col=match.col,
+            symbol_hint=match.match_text,
+        )
     )
     if timed_out and payload is None:
         msg = "pyrefly_timeout"
@@ -2257,7 +2343,7 @@ def _fetch_pyrefly_payload(
     except TimeoutError:
         telemetry["timed_out"] += 1
         return None, True
-    except Exception:  # noqa: BLE001 - fail-open
+    except Exception:
         return None, True
 
 
@@ -2295,9 +2381,9 @@ def _pyrefly_summary_payload(
     telemetry_payload = coerce_pyrefly_telemetry(telemetry)
     diagnostics_payload = coerce_pyrefly_diagnostics(diagnostics)
     return (
-        cast("dict[str, object]", msgspec.to_builtins(coerce_pyrefly_overview(overview))),
-        cast("dict[str, object]", msgspec.to_builtins(telemetry_payload)),
-        cast("list[dict[str, object]]", msgspec.to_builtins(diagnostics_payload)),
+        to_public_dict(coerce_pyrefly_overview(overview)),
+        to_public_dict(telemetry_payload),
+        to_public_list(diagnostics_payload),
     )
 
 
@@ -2364,86 +2450,6 @@ def _first_string(*values: object) -> str | None:
     return None
 
 
-def _is_definition_like_match(match: EnrichedMatch) -> bool:
-    text = match.text.lstrip()
-    return text.startswith(
-        (
-            "def ",
-            "async def ",
-            "class ",
-            "fn ",
-            "pub fn ",
-            "struct ",
-            "enum ",
-            "trait ",
-        )
-    )
-
-
-def _is_definition_candidate_match(match: EnrichedMatch) -> bool:
-    if _is_definition_like_match(match):
-        return True
-    return match.node_kind in {
-        "function_definition",
-        "class_definition",
-        "decorated_definition",
-        "function_item",
-        "struct_item",
-        "enum_item",
-        "trait_item",
-        "impl_item",
-        "mod_item",
-    }
-
-
-def _definition_kind_from_text(text: str) -> str:
-    trimmed = text.lstrip()
-    if trimmed.startswith("class "):
-        return "class"
-    if trimmed.startswith(("struct ", "enum ", "trait ")):
-        return "type"
-    if trimmed.startswith("impl "):
-        return "type"
-    return "function"
-
-
-def _extract_definition_name_from_text(text: str, fallback: str) -> str:
-    match = re.search(
-        r"(?:async\\s+def|def|class|pub\\s+fn|fn|struct|enum|trait|impl)\\s+([A-Za-z_][A-Za-z0-9_]*)",
-        text,
-    )
-    if match is None:
-        return fallback
-    return match.group(1)
-
-
-def _build_definition_candidate_finding(match: EnrichedMatch, root: Path) -> Finding | None:
-    if not _is_definition_candidate_match(match):
-        return None
-    finding = build_finding(match, root)
-    symbol = _extract_definition_name_from_text(
-        match.text,
-        match.match_text or "target",
-    )
-    kind = _definition_kind_from_text(match.text)
-    signature = match.text.strip()
-    data = dict(finding.details.data)
-    data["name"] = symbol
-    data["kind"] = kind
-    data["signature"] = signature
-    return Finding(
-        category="definition",
-        message=f"{kind}: {symbol}",
-        anchor=finding.anchor,
-        severity=finding.severity,
-        details=DetailPayload(
-            kind=kind,
-            score=finding.details.score,
-            data=data,
-        ),
-    )
-
-
 def _normalize_neighborhood_file_path(path: str) -> str:
     normalized = path.strip()
     if normalized.startswith("./"):
@@ -2451,80 +2457,102 @@ def _normalize_neighborhood_file_path(path: str) -> str:
     return Path(normalized).as_posix()
 
 
-def _build_pyrefly_overview(matches: list[EnrichedMatch]) -> dict[str, object]:  # noqa: C901, PLR0914
+@dataclass(slots=True)
+class _PyreflyOverviewAccumulator:
     primary_symbol: str | None = None
     enclosing_class: str | None = None
-    total_incoming = 0
-    total_outgoing = 0
-    total_implementations = 0
-    diagnostics = 0
-    enriched_count = 0
+    total_incoming: int = 0
+    total_outgoing: int = 0
+    total_implementations: int = 0
+    diagnostics: int = 0
+    enriched_count: int = 0
 
+
+def _count_mapping_rows(value: object) -> int:
+    if not isinstance(value, list):
+        return 0
+    return sum(1 for row in value if isinstance(row, dict))
+
+
+def _accumulate_pyrefly_overview(
+    *,
+    acc: _PyreflyOverviewAccumulator,
+    payload: dict[str, object],
+    match_text: str,
+) -> None:
+    acc.enriched_count += 1
+    type_contract = payload.get("type_contract")
+    if isinstance(type_contract, dict):
+        acc.primary_symbol = _first_string(
+            acc.primary_symbol,
+            type_contract.get("callable_signature"),
+            type_contract.get("resolved_type"),
+            match_text,
+        )
+    class_ctx = payload.get("class_method_context")
+    if isinstance(class_ctx, dict):
+        acc.enclosing_class = _first_string(acc.enclosing_class, class_ctx.get("enclosing_class"))
+    call_graph = payload.get("call_graph")
+    if isinstance(call_graph, dict):
+        incoming = call_graph.get("incoming_total")
+        outgoing = call_graph.get("outgoing_total")
+        if isinstance(incoming, int):
+            acc.total_incoming += incoming
+        if isinstance(outgoing, int):
+            acc.total_outgoing += outgoing
+    grounding = payload.get("symbol_grounding")
+    if isinstance(grounding, dict):
+        acc.total_implementations += _count_mapping_rows(grounding.get("implementation_targets"))
+    acc.diagnostics += _count_mapping_rows(payload.get("anchor_diagnostics"))
+
+
+def _build_pyrefly_overview(matches: list[EnrichedMatch]) -> dict[str, object]:
+    acc = _PyreflyOverviewAccumulator()
     for match in matches:
         payload = match.pyrefly_enrichment
-        if not isinstance(payload, dict):
-            continue
-        enriched_count += 1
-        type_contract = payload.get("type_contract")
-        if isinstance(type_contract, dict):
-            primary_symbol = _first_string(
-                primary_symbol,
-                type_contract.get("callable_signature"),
-                type_contract.get("resolved_type"),
-                match.match_text,
-            )
-        class_ctx = payload.get("class_method_context")
-        if isinstance(class_ctx, dict):
-            enclosing_class = _first_string(enclosing_class, class_ctx.get("enclosing_class"))
-        call_graph = payload.get("call_graph")
-        if isinstance(call_graph, dict):
-            incoming = call_graph.get("incoming_total")
-            outgoing = call_graph.get("outgoing_total")
-            if isinstance(incoming, int):
-                total_incoming += incoming
-            if isinstance(outgoing, int):
-                total_outgoing += outgoing
-        grounding = payload.get("symbol_grounding")
-        if isinstance(grounding, dict):
-            implementations = grounding.get("implementation_targets")
-            if isinstance(implementations, list):
-                total_implementations += len(
-                    [row for row in implementations if isinstance(row, dict)]
-                )
-        anchor_diagnostics = payload.get("anchor_diagnostics")
-        if isinstance(anchor_diagnostics, list):
-            diagnostics += len([row for row in anchor_diagnostics if isinstance(row, dict)])
-
+        if isinstance(payload, dict):
+            _accumulate_pyrefly_overview(acc=acc, payload=payload, match_text=match.match_text)
     return {
-        "primary_symbol": primary_symbol,
-        "enclosing_class": enclosing_class,
-        "total_incoming_callers": total_incoming,
-        "total_outgoing_callees": total_outgoing,
-        "total_implementations": total_implementations,
-        "targeted_diagnostics": diagnostics,
-        "matches_enriched": enriched_count,
+        "primary_symbol": acc.primary_symbol,
+        "enclosing_class": acc.enclosing_class,
+        "total_incoming_callers": acc.total_incoming,
+        "total_outgoing_callees": acc.total_outgoing,
+        "total_implementations": acc.total_implementations,
+        "targeted_diagnostics": acc.diagnostics,
+        "matches_enriched": acc.enriched_count,
     }
 
 
-def _assemble_smart_search_result(  # noqa: C901, PLR0912, PLR0914, PLR0915
+def _merge_matches_and_pyrefly(
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
-) -> CqResult:
+) -> tuple[
+    list[EnrichedMatch],
+    dict[str, object],
+    dict[str, object],
+    list[dict[str, object]],
+]:
     enriched_matches = _merge_language_matches(
         partition_results=partition_results,
         lang_scope=ctx.lang_scope,
     )
     prefetched_pyrefly = _merge_pyrefly_prefetch_results(partition_results)
-    (
-        enriched_matches,
-        pyrefly_overview,
-        pyrefly_telemetry,
-        pyrefly_diagnostics,
-    ) = _attach_pyrefly_enrichment(
+    return _attach_pyrefly_enrichment(
         ctx=ctx,
         matches=enriched_matches,
         prefetched=prefetched_pyrefly,
     )
+
+
+def _build_search_summary(
+    ctx: SmartSearchContext,
+    partition_results: list[_LanguageSearchResult],
+    enriched_matches: list[EnrichedMatch],
+    *,
+    pyrefly_overview: dict[str, object],
+    pyrefly_telemetry: dict[str, object],
+    pyrefly_diagnostics: list[dict[str, object]],
+) -> tuple[dict[str, object], list[Finding]]:
     language_stats: dict[QueryLanguage, SearchStats] = {
         result.lang: result.stats for result in partition_results
     }
@@ -2565,9 +2593,7 @@ def _assemble_smart_search_result(  # noqa: C901, PLR0912, PLR0914, PLR0915
         python_matches=python_matches,
         rust_matches=rust_matches,
     )
-    capability_diagnostics = _build_capability_diagnostics_for_search(
-        lang_scope=ctx.lang_scope,
-    )
+    capability_diagnostics = _build_capability_diagnostics_for_search(lang_scope=ctx.lang_scope)
     all_diagnostics = diagnostics + capability_diagnostics
     summary["cross_language_diagnostics"] = diagnostics_to_summary_payload(all_diagnostics)
     summary["language_capabilities"] = build_language_capabilities(lang_scope=ctx.lang_scope)
@@ -2576,18 +2602,284 @@ def _assemble_smart_search_result(  # noqa: C901, PLR0912, PLR0914, PLR0915
     summary["pyrefly_telemetry"] = pyrefly_telemetry
     summary.setdefault(
         "rust_lsp_telemetry",
-        {
-            "attempted": 0,
-            "applied": 0,
-            "failed": 0,
-            "skipped": 0,
-            "timed_out": 0,
-        },
+        {"attempted": 0, "applied": 0, "failed": 0, "skipped": 0, "timed_out": 0},
     )
     summary["pyrefly_diagnostics"] = pyrefly_diagnostics
     if dropped_by_scope:
         summary["dropped_by_scope"] = dropped_by_scope
     assert_multilang_summary(summary)
+    return summary, all_diagnostics
+
+
+def _collect_definition_candidates(
+    ctx: SmartSearchContext,
+    enriched_matches: list[EnrichedMatch],
+) -> tuple[list[EnrichedMatch], list[Finding]]:
+    ranked_matches = sorted(enriched_matches, key=compute_relevance_score, reverse=True)
+    definition_pairs: list[tuple[EnrichedMatch, Finding]] = []
+    for match in ranked_matches:
+        candidate = build_definition_candidate_finding(
+            match,
+            ctx.root,
+            build_finding_fn=build_finding,
+        )
+        if candidate is None:
+            continue
+        definition_pairs.append((match, candidate))
+        if len(definition_pairs) >= MAX_TARGET_CANDIDATES:
+            break
+    definition_matches = [match for match, _finding in definition_pairs]
+    candidate_findings = [finding for _match, finding in definition_pairs]
+    return definition_matches, candidate_findings
+
+
+def _build_structural_neighborhood_preview(
+    ctx: SmartSearchContext,
+    *,
+    primary_target_finding: Finding | None,
+    definition_matches: list[EnrichedMatch],
+) -> tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]:
+    from tools.cq.core.front_door_insight import build_neighborhood_from_slices
+    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
+    from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
+
+    if primary_target_finding is None or primary_target_finding.anchor is None:
+        return None, [], []
+
+    target_name = (
+        str(primary_target_finding.details.get("name", "")).strip()
+        or primary_target_finding.message.split(":")[-1].strip()
+        or ctx.query
+    )
+    target_file = _normalize_neighborhood_file_path(primary_target_finding.anchor.file)
+    target_language = (
+        definition_matches[0].language
+        if definition_matches
+        else str(primary_target_finding.details.get("language", "python"))
+    )
+    snapshot_language: QueryLanguage = "rust" if target_language == "rust" else "python"
+    try:
+        snapshot = ScanSnapshot.build_from_repo(ctx.root, lang=snapshot_language)
+        slices, degrades = collect_structural_neighborhood(
+            target_name=target_name,
+            target_file=target_file,
+            target_line=primary_target_finding.anchor.line,
+            target_col=int(primary_target_finding.anchor.col or 0),
+            snapshot=snapshot,
+            max_per_slice=5,
+        )
+    except (OSError, RuntimeError, TimeoutError, ValueError, TypeError) as exc:
+        return None, [], [f"structural_scan_unavailable:{type(exc).__name__}"]
+
+    neighborhood = build_neighborhood_from_slices(
+        slices,
+        preview_per_slice=5,
+        source="structural",
+    )
+    findings: list[Finding] = []
+    for slice_item in slices:
+        labels = [
+            node.display_label or node.name
+            for node in slice_item.preview[:5]
+            if (node.display_label or node.name)
+        ]
+        message = f"{slice_item.title}: {slice_item.total}"
+        if labels:
+            message += f" (top: {', '.join(labels)})"
+        findings.append(
+            Finding(
+                category="neighborhood",
+                message=message,
+                severity="info",
+                details=DetailPayload(
+                    kind="neighborhood",
+                    data={
+                        "slice_kind": slice_item.kind,
+                        "total": slice_item.total,
+                        "preview": labels,
+                    },
+                ),
+            )
+        )
+    notes = [f"{degrade.stage}:{degrade.category or degrade.severity}" for degrade in degrades]
+    return neighborhood, findings, list(dict.fromkeys(notes))
+
+
+def _apply_search_lsp_insight(
+    *,
+    ctx: SmartSearchContext,
+    insight: FrontDoorInsightV1,
+    summary: dict[str, object],
+    primary_target_finding: Finding | None,
+    top_definition_match: EnrichedMatch | None,
+) -> FrontDoorInsightV1:
+    from tools.cq.core.front_door_insight import augment_insight_with_lsp
+
+    outcome = _collect_search_lsp_outcome(
+        ctx=ctx,
+        primary_target_finding=primary_target_finding,
+        top_definition_match=top_definition_match,
+    )
+    if outcome.payload is not None:
+        insight = augment_insight_with_lsp(insight, outcome.payload)
+        advanced_planes = outcome.payload.get("advanced_planes")
+        if isinstance(advanced_planes, dict):
+            summary["lsp_advanced_planes"] = dict(advanced_planes)
+    _update_search_summary_lsp_telemetry(summary, outcome)
+    lsp_state = _derive_search_lsp_state(outcome)
+    return msgspec.structs.replace(
+        insight,
+        degradation=msgspec.structs.replace(
+            insight.degradation,
+            lsp=lsp_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+        ),
+    )
+
+
+@dataclass(slots=True)
+class _SearchLspOutcome:
+    provider: str = "none"
+    target_language: str | None = None
+    payload: dict[str, object] | None = None
+    attempted: int = 0
+    applied: int = 0
+    failed: int = 0
+    timed_out: int = 0
+    reasons: list[str] = dataclass_field(default_factory=list)
+
+
+def _collect_search_lsp_outcome(
+    *,
+    ctx: SmartSearchContext,
+    primary_target_finding: Finding | None,
+    top_definition_match: EnrichedMatch | None,
+) -> _SearchLspOutcome:
+    outcome = _SearchLspOutcome()
+    if (
+        primary_target_finding is None
+        or primary_target_finding.anchor is None
+        or top_definition_match is None
+    ):
+        return outcome
+
+    anchor = primary_target_finding.anchor
+    target_file_path = ctx.root / anchor.file
+    inferred_language = infer_language_for_path(target_file_path)
+    target_language = (
+        top_definition_match.language
+        if top_definition_match.language in {"python", "rust"}
+        else inferred_language
+    )
+    if target_language not in {"python", "rust"}:
+        outcome.reasons.append("provider_unavailable")
+        return outcome
+
+    outcome.provider = provider_for_language(target_language)
+    outcome.target_language = target_language
+    if not lsp_runtime_enabled():
+        outcome.reasons.append("not_attempted_runtime_disabled")
+        return outcome
+
+    outcome.attempted = 1
+    if target_language == "python" and isinstance(top_definition_match.pyrefly_enrichment, dict):
+        outcome.payload = top_definition_match.pyrefly_enrichment
+        outcome.applied = 1
+        return outcome
+
+    payload, timed_out = enrich_with_language_lsp(
+        LanguageLspEnrichmentRequest(
+            language=target_language,
+            mode="search",
+            root=ctx.root,
+            file_path=target_file_path,
+            line=max(1, int(anchor.line)),
+            col=int(anchor.col or 0),
+            symbol_hint=(
+                str(primary_target_finding.details.get("name"))
+                if isinstance(primary_target_finding.details.get("name"), str)
+                else top_definition_match.match_text
+            ),
+        )
+    )
+    outcome.payload = payload
+    outcome.timed_out = int(timed_out)
+    if payload is None:
+        outcome.failed = 1
+        outcome.reasons.append("request_timeout" if timed_out else "request_failed")
+        return outcome
+    outcome.applied = 1
+    return outcome
+
+
+def _update_search_summary_lsp_telemetry(
+    summary: dict[str, object],
+    outcome: _SearchLspOutcome,
+) -> None:
+    if outcome.attempted <= 0 or outcome.target_language not in {"python", "rust"}:
+        return
+    telemetry_key = (
+        "pyrefly_telemetry" if outcome.target_language == "python" else "rust_lsp_telemetry"
+    )
+    telemetry = summary.get(telemetry_key)
+    if not isinstance(telemetry, dict):
+        return
+    telemetry["attempted"] = int(telemetry.get("attempted", 0) or 0) + outcome.attempted
+    telemetry["applied"] = int(telemetry.get("applied", 0) or 0) + outcome.applied
+    telemetry["failed"] = int(telemetry.get("failed", 0) or 0) + outcome.failed
+    telemetry["timed_out"] = int(telemetry.get("timed_out", 0) or 0) + outcome.timed_out
+
+
+def _derive_search_lsp_state(outcome: _SearchLspOutcome) -> LspContractStateV1:
+    if outcome.provider == "none":
+        outcome.reasons.append("provider_unavailable")
+    elif outcome.attempted <= 0 and "not_attempted_runtime_disabled" not in outcome.reasons:
+        outcome.reasons.append("not_attempted_by_design")
+    provider_value = (
+        "pyrefly"
+        if outcome.provider == "pyrefly"
+        else "rust_analyzer"
+        if outcome.provider == "rust_analyzer"
+        else "none"
+    )
+    return derive_lsp_contract_state(
+        LspContractStateInputV1(
+            provider=provider_value,
+            available=outcome.provider != "none",
+            attempted=outcome.attempted,
+            applied=outcome.applied,
+            failed=outcome.failed,
+            timed_out=outcome.timed_out,
+            reasons=tuple(dict.fromkeys(outcome.reasons)),
+        )
+    )
+
+
+def _assemble_smart_search_result(
+    ctx: SmartSearchContext,
+    partition_results: list[_LanguageSearchResult],
+) -> CqResult:
+    from tools.cq.core.front_door_insight import (
+        InsightRiskCountersV1,
+        build_search_insight,
+        risk_from_counters,
+        to_public_front_door_insight_dict,
+    )
+
+    (
+        enriched_matches,
+        pyrefly_overview,
+        pyrefly_telemetry,
+        pyrefly_diagnostics,
+    ) = _merge_matches_and_pyrefly(ctx, partition_results)
+    summary, all_diagnostics = _build_search_summary(
+        ctx,
+        partition_results,
+        enriched_matches,
+        pyrefly_overview=pyrefly_overview,
+        pyrefly_telemetry=pyrefly_telemetry,
+        pyrefly_diagnostics=pyrefly_diagnostics,
+    )
     sections = build_sections(
         enriched_matches,
         ctx.root,
@@ -2598,111 +2890,22 @@ def _assemble_smart_search_result(  # noqa: C901, PLR0912, PLR0914, PLR0915
     if all_diagnostics:
         sections.append(Section(title="Cross-Language Diagnostics", findings=all_diagnostics))
 
-    run_ctx = RunContext.from_parts(
-        root=ctx.root,
-        argv=ctx.argv,
-        tc=ctx.tc,
-        started_ms=ctx.started_ms,
-    )
-    run = run_ctx.to_runmeta("search")
-
-    ranked_matches = sorted(enriched_matches, key=compute_relevance_score, reverse=True)
-    definition_pairs: list[tuple[EnrichedMatch, Finding]] = []
-    for match in ranked_matches:
-        candidate = _build_definition_candidate_finding(match, ctx.root)
-        if candidate is None:
-            continue
-        definition_pairs.append((match, candidate))
-        if len(definition_pairs) >= MAX_TARGET_CANDIDATES:
-            break
-
-    definition_matches = [match for match, _finding in definition_pairs]
-    candidate_findings = [finding for _match, finding in definition_pairs]
-    if candidate_findings:
-        sections.insert(0, Section(title="Target Candidates", findings=candidate_findings))
+    definition_matches, candidate_findings = _collect_definition_candidates(ctx, enriched_matches)
+    insert_target_candidates(sections, candidates=candidate_findings)
     primary_target_finding = candidate_findings[0] if candidate_findings else None
 
-    from tools.cq.core.front_door_insight import (
-        InsightRiskCountersV1,
-        augment_insight_with_lsp,
-        build_neighborhood_from_slices,
-        build_search_insight,
-        risk_from_counters,
-        to_public_front_door_insight_dict,
+    insight_neighborhood, neighborhood_findings, neighborhood_notes = (
+        _build_structural_neighborhood_preview(
+            ctx,
+            primary_target_finding=primary_target_finding,
+            definition_matches=definition_matches,
+        )
     )
-    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-    from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
-
-    insight_neighborhood = None
-    neighborhood_slice_findings: list[Finding] = []
-    neighborhood_notes: list[str] = []
-    if primary_target_finding is not None and primary_target_finding.anchor is not None:
-        target_name = (
-            str(primary_target_finding.details.get("name", "")).strip()
-            or primary_target_finding.message.split(":")[-1].strip()
-            or ctx.query
-        )
-        target_file = _normalize_neighborhood_file_path(primary_target_finding.anchor.file)
-        target_language = (
-            definition_matches[0].language
-            if definition_matches
-            else str(primary_target_finding.details.get("language", "python"))
-        )
-        snapshot_language: QueryLanguage = "rust" if target_language == "rust" else "python"
-        try:
-            snapshot = ScanSnapshot.build_from_repo(ctx.root, lang=snapshot_language)
-            slices, degrades = collect_structural_neighborhood(
-                target_name=target_name,
-                target_file=target_file,
-                target_line=primary_target_finding.anchor.line,
-                target_col=int(primary_target_finding.anchor.col or 0),
-                snapshot=snapshot,
-                max_per_slice=5,
-            )
-            insight_neighborhood = build_neighborhood_from_slices(
-                slices,
-                preview_per_slice=5,
-                source="structural",
-            )
-            for slice_item in slices:
-                labels = [
-                    node.display_label or node.name
-                    for node in slice_item.preview[:5]
-                    if (node.display_label or node.name)
-                ]
-                message = f"{slice_item.title}: {slice_item.total}"
-                if labels:
-                    message += f" (top: {', '.join(labels)})"
-                neighborhood_slice_findings.append(
-                    Finding(
-                        category="neighborhood",
-                        message=message,
-                        severity="info",
-                        details=DetailPayload(
-                            kind="neighborhood",
-                            data={
-                                "slice_kind": slice_item.kind,
-                                "total": slice_item.total,
-                                "preview": labels,
-                            },
-                        ),
-                    )
-                )
-            for degrade in degrades:
-                note = f"{degrade.stage}:{degrade.category or degrade.severity}"
-                if note not in neighborhood_notes:
-                    neighborhood_notes.append(note)
-        except Exception as exc:  # noqa: BLE001 - fail-open for insight enrichment
-            note = f"structural_scan_unavailable:{type(exc).__name__}"
-            if note not in neighborhood_notes:
-                neighborhood_notes.append(note)
-
-    if neighborhood_slice_findings:
-        insert_idx = 1 if candidate_findings else 0
-        sections.insert(
-            insert_idx,
-            Section(title="Neighborhood Preview", findings=neighborhood_slice_findings),
-        )
+    insert_neighborhood_preview(
+        sections,
+        findings=neighborhood_findings,
+        has_target_candidates=bool(candidate_findings),
+    )
 
     search_risk = None
     if insight_neighborhood is not None:
@@ -2724,115 +2927,30 @@ def _assemble_smart_search_result(  # noqa: C901, PLR0912, PLR0914, PLR0915
         risk=search_risk,
     )
     if neighborhood_notes:
-        merged_notes = tuple(dict.fromkeys([*insight.degradation.notes, *neighborhood_notes]))
         insight = msgspec.structs.replace(
             insight,
             degradation=msgspec.structs.replace(
                 insight.degradation,
-                notes=merged_notes,
+                notes=tuple(dict.fromkeys([*insight.degradation.notes, *neighborhood_notes])),
             ),
         )
     top_def_match = definition_matches[0] if definition_matches else None
-    lsp_provider = "none"
-    lsp_attempted = 0
-    lsp_applied = 0
-    lsp_failed = 0
-    lsp_timed_out = 0
-    lsp_reasons: list[str] = []
-    if top_def_match is not None and primary_target_finding is not None:  # noqa: PLR1702
-        anchor = primary_target_finding.anchor
-        if anchor is not None:
-            target_file_path = ctx.root / anchor.file
-            inferred_language = infer_language_for_path(target_file_path)
-            target_language = (
-                top_def_match.language
-                if top_def_match.language in {"python", "rust"}
-                else inferred_language
-            )
-            if target_language in {"python", "rust"}:
-                lsp_provider = provider_for_language(target_language)
-                lsp_payload: dict[str, object] | None = None
-                if not lsp_runtime_enabled():
-                    lsp_reasons.append("not_attempted_runtime_disabled")
-                else:
-                    lsp_attempted = 1
-                    if target_language == "python" and isinstance(
-                        top_def_match.pyrefly_enrichment, dict
-                    ):
-                        lsp_payload = top_def_match.pyrefly_enrichment
-                        lsp_applied = 1
-                    else:
-                        lsp_payload, timed_out = enrich_with_language_lsp(
-                            language=target_language,
-                            mode="search",
-                            root=ctx.root,
-                            file_path=target_file_path,
-                            line=max(1, int(anchor.line)),
-                            col=int(anchor.col or 0),
-                            symbol_hint=(
-                                str(primary_target_finding.details.get("name"))
-                                if isinstance(primary_target_finding.details.get("name"), str)
-                                else top_def_match.match_text
-                            ),
-                        )
-                        lsp_timed_out = int(timed_out)
-                        if lsp_payload is not None:
-                            lsp_applied = 1
-                        else:
-                            lsp_failed = 1
-                            lsp_reasons.append("request_timeout" if timed_out else "request_failed")
-                if lsp_payload is not None:
-                    insight = augment_insight_with_lsp(insight, lsp_payload)
-                    advanced_planes = lsp_payload.get("advanced_planes")
-                    if isinstance(advanced_planes, dict):
-                        summary["lsp_advanced_planes"] = dict(advanced_planes)
-
-                if lsp_attempted > 0:
-                    telemetry_key = (
-                        "pyrefly_telemetry" if target_language == "python" else "rust_lsp_telemetry"
-                    )
-                    telemetry = summary.get(telemetry_key)
-                    if isinstance(telemetry, dict):
-                        telemetry["attempted"] = (
-                            int(telemetry.get("attempted", 0) or 0) + lsp_attempted
-                        )
-                        telemetry["applied"] = int(telemetry.get("applied", 0) or 0) + lsp_applied
-                        telemetry["failed"] = int(telemetry.get("failed", 0) or 0) + lsp_failed
-                        telemetry["timed_out"] = (
-                            int(telemetry.get("timed_out", 0) or 0) + lsp_timed_out
-                        )
-            else:
-                lsp_reasons.append("provider_unavailable")
-
-    if lsp_provider == "pyrefly":
-        provider_value = "pyrefly"
-    elif lsp_provider == "rust_analyzer":
-        provider_value = "rust_analyzer"
-    else:
-        provider_value = "none"
-    if lsp_provider == "none":
-        lsp_reasons.append("provider_unavailable")
-    elif lsp_attempted <= 0 and "not_attempted_runtime_disabled" not in lsp_reasons:
-        lsp_reasons.append("not_attempted_by_design")
-    lsp_state = derive_lsp_contract_state(
-        provider=provider_value,
-        available=lsp_provider != "none",
-        attempted=lsp_attempted,
-        applied=lsp_applied,
-        failed=lsp_failed,
-        timed_out=lsp_timed_out,
-        reasons=tuple(dict.fromkeys(lsp_reasons)),
-    )
-    insight = msgspec.structs.replace(
-        insight,
-        degradation=msgspec.structs.replace(
-            insight.degradation,
-            lsp=lsp_state.status,
-            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
-        ),
+    insight = _apply_search_lsp_insight(
+        ctx=ctx,
+        insight=insight,
+        summary=summary,
+        primary_target_finding=primary_target_finding,
+        top_definition_match=top_def_match,
     )
     summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
+    run_ctx = RunContext.from_parts(
+        root=ctx.root,
+        argv=ctx.argv,
+        tc=ctx.tc,
+        started_ms=ctx.started_ms,
+    )
+    run = run_ctx.to_runmeta("search")
     return CqResult(
         run=run,
         summary=summary,
@@ -2866,7 +2984,11 @@ def smart_search(
     """
     request = _coerce_search_request(root=root, query=query, kwargs=kwargs)
     ctx = _build_search_context(request)
-    partition_results = _run_language_partitions(ctx)
+    pipeline = SearchPipeline(ctx)
+    partition_results = cast(
+        "list[_LanguageSearchResult]",
+        pipeline.run_partitions(_run_language_partitions),
+    )
     mode_chain = [ctx.mode]
     if _should_fallback_to_literal(
         request=request,
@@ -2878,15 +3000,17 @@ def smart_search(
             mode=QueryMode.LITERAL,
             fallback_applied=True,
         )
-        fallback_partitions = _run_language_partitions(fallback_ctx)
+        fallback_partitions = cast(
+            "list[_LanguageSearchResult]",
+            SearchPipeline(fallback_ctx).run_partitions(_run_language_partitions),
+        )
         mode_chain.append(QueryMode.LITERAL)
         ctx = msgspec.structs.replace(fallback_ctx, mode_chain=tuple(mode_chain))
         if _partition_total_matches(fallback_partitions) > 0:
             partition_results = fallback_partitions
     elif not ctx.mode_chain:
         ctx = msgspec.structs.replace(ctx, mode_chain=(ctx.mode,))
-
-    return _assemble_smart_search_result(ctx, partition_results)
+    return SearchPipeline(ctx).assemble(partition_results, _assemble_smart_search_result)
 
 
 __all__ = [

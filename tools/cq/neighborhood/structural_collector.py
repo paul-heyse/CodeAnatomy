@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201,PLR0913,C409
 """Structural neighborhood collector.
 
 Collects structural relationships (parents, children, siblings, callers,
@@ -36,7 +35,7 @@ class StructuralNeighborhood(CqStruct, frozen=True):
     callees: tuple[SgRecord, ...] = ()
 
 
-def collect_structural_neighborhood(  # noqa: PLR0914
+def collect_structural_neighborhood(
     target_name: str,
     target_file: str,
     snapshot: ScanSnapshot,
@@ -46,7 +45,11 @@ def collect_structural_neighborhood(  # noqa: PLR0914
     max_per_slice: int = 50,
     slice_limits: Mapping[str, int] | None = None,
 ) -> tuple[tuple[NeighborhoodSliceV1, ...], tuple[DegradeEventV1, ...]]:
-    """Collect structural neighborhood slices from scan snapshot."""
+    """Collect structural neighborhood slices from scan snapshot.
+
+    Returns:
+        Structural neighborhood slices and degrade events.
+    """
     target_def, target_degrades = _find_target_definition(
         name=target_name,
         file=target_file,
@@ -61,7 +64,7 @@ def collect_structural_neighborhood(  # noqa: PLR0914
             category="not_found",
             message=f"Target definition '{target_name}' not found in {target_file}",
         )
-        return (), tuple([*target_degrades, degrade])
+        return (), (*target_degrades, degrade)
 
     neighborhood = _collect_neighborhood(target_def, snapshot)
     subject_node_id = _node_id_from_record(target_def)

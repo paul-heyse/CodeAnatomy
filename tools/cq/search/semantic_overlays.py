@@ -1,31 +1,18 @@
-# ruff: noqa: C901,PLR0911,BLE001,ANN202
-"""Semantic overlay plane for CQ enrichment (tokens, hints).
-
-This module provides typed structures and stub functions for semantic token
-and inlay hint enrichment. All functions are capability-gated and fail-open.
-"""
+"""Semantic overlay plane for CQ enrichment (tokens, hints)."""
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
+from typing import cast
+
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.lsp.capabilities import coerce_capabilities, supports_method
+
+_FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, TimeoutError, ValueError, TypeError)
 
 
 class SemanticTokenSpanV1(CqStruct, frozen=True):
-    """Normalized semantic token with resolved type/modifier names.
-
-    Parameters
-    ----------
-    line
-        Token line (0-indexed).
-    start_char
-        Token start column.
-    length
-        Token length in characters.
-    token_type
-        Resolved token type string from legend (e.g., "function", "variable").
-    modifiers
-        Resolved token modifier strings from legend (e.g., "declaration", "readonly").
-    """
+    """Normalized semantic token with resolved type/modifier names."""
 
     line: int
     start_char: int
@@ -35,33 +22,7 @@ class SemanticTokenSpanV1(CqStruct, frozen=True):
 
 
 class SemanticTokenBundleV1(CqStruct, frozen=True):
-    """Atomic semantic token bundle with legend and encoding metadata.
-
-    Must always store negotiated position encoding, server legend (token types
-    and modifiers arrays), raw data stream (or delta edits), and decoded rows
-    with resolved names.
-
-    References:
-    - rust_lsp.md: semantic tokens require legend + encoding to decode
-    - pyrefly_lsp_data.md: same requirement
-
-    Parameters
-    ----------
-    position_encoding
-        Negotiated position encoding (utf-8, utf-16, utf-32).
-    legend_token_types
-        Token type legend from server capabilities.
-    legend_token_modifiers
-        Token modifier legend from server capabilities.
-    result_id
-        Cache result ID from server (for incremental updates).
-    previous_result_id
-        Previous cache result ID (for delta requests).
-    tokens
-        Decoded semantic tokens with resolved names.
-    raw_data
-        Original integer array for recomputation and caching.
-    """
+    """Atomic semantic token bundle with legend and encoding metadata."""
 
     position_encoding: str = "utf-16"
     legend_token_types: tuple[str, ...] = ()
@@ -73,23 +34,7 @@ class SemanticTokenBundleV1(CqStruct, frozen=True):
 
 
 class InlayHintV1(CqStruct, frozen=True):
-    """Normalized inlay hint from LSP server.
-
-    Parameters
-    ----------
-    line
-        Hint line (0-indexed).
-    character
-        Hint character position.
-    label
-        Hint label text.
-    kind
-        Hint kind: "type", "parameter", or None.
-    padding_left
-        Whether to add padding before the hint.
-    padding_right
-        Whether to add padding after the hint.
-    """
+    """Normalized inlay hint from LSP server."""
 
     line: int
     character: int
@@ -105,75 +50,40 @@ def fetch_semantic_tokens_range(
     start_line: int,
     end_line: int,
 ) -> tuple[SemanticTokenSpanV1, ...] | None:
-    """Fetch semantic tokens for a range. Fail-open. Capability-gated.
-
-    Parameters
-    ----------
-    session
-        LSP session (_PyreflyLspSession or _RustLspSession).
-    uri
-        Document URI.
-    start_line
-        Range start line (0-indexed).
-    end_line
-        Range end line (0-indexed).
+    """Fetch semantic tokens for a range with fail-open capability gates.
 
     Returns:
-    -------
-    tuple[SemanticTokenSpanV1, ...] | None
-        Semantic tokens for the range, or None if unavailable.
+        Normalized semantic tokens for the requested range, or `None`.
     """
     request = _request_fn(session)
     if request is None:
         return None
 
     caps = _server_caps(session)
-    semantic_caps = caps.get("semanticTokensProvider")
-    if not semantic_caps:
+    if not supports_method(caps, "textDocument/semanticTokens/range") and not bool(
+        caps.get("semanticTokensProvider")
+    ):
         return None
 
-    params_range = {
-        "textDocument": {"uri": uri},
-        "range": {
-            "start": {"line": max(0, start_line), "character": 0},
-            "end": {"line": max(start_line, end_line), "character": 0},
-        },
-    }
-    params_full = {
-        "textDocument": {"uri": uri},
-    }
+    token_caps = caps.get("semanticTokensProvider")
+    use_range = isinstance(token_caps, Mapping) and bool(token_caps.get("range"))
+    method, params = _semantic_request(
+        uri, start_line=start_line, end_line=end_line, use_range=use_range
+    )
 
     try:
-        if isinstance(semantic_caps, dict) and semantic_caps.get("range"):
-            result = request("textDocument/semanticTokens/range", params_range)
-        else:
-            result = request("textDocument/semanticTokens/full", params_full)
-    except Exception:
+        result = request(method, _request_params(params))
+    except _FAIL_OPEN_EXCEPTIONS:
         return None
 
-    if not isinstance(result, dict):
+    raw_data = _semantic_raw_data(result)
+    if raw_data is None:
         return None
-    raw_data = result.get("data")
-    if not isinstance(raw_data, (list, tuple)) or len(raw_data) % 5 != 0:
-        return None
-    if not all(isinstance(item, int) for item in raw_data):
-        return None
-
-    legend = semantic_caps.get("legend") if isinstance(semantic_caps, dict) else None
-    token_types: list[str] = []
-    token_modifiers: list[str] = []
-    if isinstance(legend, dict):
-        raw_types = legend.get("tokenTypes")
-        raw_modifiers = legend.get("tokenModifiers")
-        if isinstance(raw_types, (list, tuple)):
-            token_types = [item for item in raw_types if isinstance(item, str)]
-        if isinstance(raw_modifiers, (list, tuple)):
-            token_modifiers = [item for item in raw_modifiers if isinstance(item, str)]
-
+    token_types, token_modifiers = _semantic_legend(token_caps)
     decoded = _decode_semantic_tokens(raw_data, token_types, token_modifiers)
-    return tuple(
-        token for token in decoded if max(0, start_line) <= token.line <= max(start_line, end_line)
-    )
+    low = max(0, start_line)
+    high = max(start_line, end_line)
+    return tuple(token for token in decoded if low <= token.line <= high)
 
 
 def fetch_inlay_hints_range(
@@ -182,31 +92,17 @@ def fetch_inlay_hints_range(
     start_line: int,
     end_line: int,
 ) -> tuple[InlayHintV1, ...] | None:
-    """Fetch inlay hints for a range. Fail-open. Capability-gated.
-
-    Parameters
-    ----------
-    session
-        LSP session (_PyreflyLspSession or _RustLspSession).
-    uri
-        Document URI.
-    start_line
-        Range start line (0-indexed).
-    end_line
-        Range end line (0-indexed).
+    """Fetch inlay hints for a range with fail-open capability gates.
 
     Returns:
-    -------
-    tuple[InlayHintV1, ...] | None
-        Inlay hints for the range, or None if unavailable.
+        Normalized inlay hints for the requested range, or `None`.
     """
     request = _request_fn(session)
     if request is None:
         return None
 
     caps = _server_caps(session)
-    inlay_caps = caps.get("inlayHintProvider")
-    if not inlay_caps:
+    if not supports_method(caps, "textDocument/inlayHint"):
         return None
 
     params = {
@@ -217,36 +113,108 @@ def fetch_inlay_hints_range(
         },
     }
     try:
-        response = request("textDocument/inlayHint", params)
-    except Exception:
+        response = request("textDocument/inlayHint", _request_params(params))
+    except _FAIL_OPEN_EXCEPTIONS:
         return None
 
     if not isinstance(response, (list, tuple)):
         return None
 
-    supports_resolve = isinstance(inlay_caps, dict) and bool(inlay_caps.get("resolveProvider"))
+    inlay_caps = caps.get("inlayHintProvider")
+    supports_resolve = isinstance(inlay_caps, Mapping) and bool(inlay_caps.get("resolveProvider"))
     hints: list[InlayHintV1] = []
     for item in response:
-        if not isinstance(item, dict):
-            continue
-        mapping = item
-        if supports_resolve and mapping.get("data") is not None:
-            try:
-                resolved = request("inlayHint/resolve", mapping)
-                if isinstance(resolved, dict):
-                    mapping = resolved
-            except Exception:
-                pass
-        normalized = _normalize_inlay_hint(mapping)
+        normalized = _normalize_maybe_resolved_hint(
+            request,
+            item,
+            supports_resolve=supports_resolve,
+        )
         if normalized is not None:
             hints.append(normalized)
     return tuple(hints)
 
 
-def _request_fn(session: object):
+def _semantic_request(
+    uri: str,
+    *,
+    start_line: int,
+    end_line: int,
+    use_range: bool,
+) -> tuple[str, dict[str, object]]:
+    if use_range:
+        return (
+            "textDocument/semanticTokens/range",
+            {
+                "textDocument": {"uri": uri},
+                "range": {
+                    "start": {"line": max(0, start_line), "character": 0},
+                    "end": {"line": max(start_line, end_line), "character": 0},
+                },
+            },
+        )
+    return "textDocument/semanticTokens/full", {"textDocument": {"uri": uri}}
+
+
+def _semantic_raw_data(result: object) -> list[int] | tuple[int, ...] | None:
+    if not isinstance(result, Mapping):
+        return None
+    raw_data = result.get("data")
+    if not isinstance(raw_data, (list, tuple)) or len(raw_data) % 5 != 0:
+        return None
+    if not all(isinstance(item, int) for item in raw_data):
+        return None
+    return cast("list[int] | tuple[int, ...]", raw_data)
+
+
+def _semantic_legend(token_caps: object) -> tuple[list[str], list[str]]:
+    if not isinstance(token_caps, Mapping):
+        return [], []
+    legend = token_caps.get("legend")
+    if not isinstance(legend, Mapping):
+        return [], []
+
+    raw_types = legend.get("tokenTypes")
+    raw_modifiers = legend.get("tokenModifiers")
+    token_types = (
+        [item for item in raw_types if isinstance(item, str)]
+        if isinstance(raw_types, Sequence)
+        else []
+    )
+    token_modifiers = (
+        [item for item in raw_modifiers if isinstance(item, str)]
+        if isinstance(raw_modifiers, Sequence)
+        else []
+    )
+    return token_types, token_modifiers
+
+
+def _normalize_maybe_resolved_hint(
+    request: Callable[[str, dict[str, object]], object],
+    item: object,
+    *,
+    supports_resolve: bool,
+) -> InlayHintV1 | None:
+    if not isinstance(item, Mapping):
+        return None
+    mapping: Mapping[str, object] = item
+    if supports_resolve and mapping.get("data") is not None:
+        try:
+            resolved = request("inlayHint/resolve", dict(mapping))
+        except _FAIL_OPEN_EXCEPTIONS:
+            resolved = None
+        if isinstance(resolved, Mapping):
+            mapping = resolved
+    return _normalize_inlay_hint(dict(mapping))
+
+
+def _request_params(payload: Mapping[str, object]) -> dict[str, object]:
+    return dict(payload)
+
+
+def _request_fn(session: object) -> Callable[[str, dict[str, object]], object] | None:
     request = getattr(session, "_send_request", None)
     if callable(request):
-        return request
+        return cast("Callable[[str, dict[str, object]], object]", request)
     return None
 
 
@@ -260,15 +228,17 @@ def _server_caps(session: object) -> dict[str, object]:
     server_caps = getattr(caps, "server_caps", None)
     if server_caps is None:
         return {}
+
     semantic_raw = getattr(server_caps, "semantic_tokens_provider_raw", None)
-    inlay_provider = getattr(server_caps, "inlay_hint_provider", False)
-    return {
-        "semanticTokensProvider": semantic_raw
-        if semantic_raw is not None
-        else getattr(server_caps, "semantic_tokens_provider", False),
-        "inlayHintProvider": inlay_provider,
-        "positionEncoding": getattr(env, "position_encoding", "utf-16"),
-    }
+    return coerce_capabilities(
+        {
+            "semanticTokensProvider": semantic_raw
+            if semantic_raw is not None
+            else getattr(server_caps, "semantic_tokens_provider", False),
+            "inlayHintProvider": getattr(server_caps, "inlay_hint_provider", False),
+            "positionEncoding": getattr(env, "position_encoding", "utf-16"),
+        }
+    )
 
 
 def _decode_semantic_tokens(

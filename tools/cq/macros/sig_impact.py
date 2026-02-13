@@ -29,7 +29,7 @@ from tools.cq.core.scoring import (
     confidence_score,
     impact_score,
 )
-from tools.cq.macros.calls import _collect_call_sites, _group_candidates, _rg_find_candidates
+from tools.cq.macros.calls import collect_call_sites, group_candidates, rg_find_candidates
 from tools.cq.search import INTERACTIVE, SearchLimits
 
 if TYPE_CHECKING:
@@ -236,9 +236,9 @@ def _collect_sites(
         Collected call sites.
     """
     limits = limits or INTERACTIVE
-    candidates = _rg_find_candidates(symbol, root, limits=limits)
-    by_file = _group_candidates(candidates)
-    return _collect_call_sites(root, by_file, symbol)
+    candidates = rg_find_candidates(symbol, root, limits=limits)
+    by_file = group_candidates(candidates)
+    return collect_call_sites(root, by_file, symbol)
 
 
 def _classify_sites(

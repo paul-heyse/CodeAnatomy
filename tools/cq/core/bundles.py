@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms
+from tools.cq.core.services import CallsServiceRequest
 from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
-from tools.cq.macros.calls import cmd_calls
 from tools.cq.macros.exceptions import cmd_exceptions
 from tools.cq.macros.impact import ImpactRequest, cmd_impact
 from tools.cq.macros.imports import ImportRequest, cmd_imports
@@ -267,11 +268,19 @@ def _bundle_steps(preset: str, ctx: BundleContext) -> list[BundleStepResult]:
 def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
     target = ctx.target
+    services = resolve_runtime_services(ctx.root)
 
     if target.kind in {"function", "method"}:
         results.append(
             BundleStepResult(
-                result=cmd_calls(ctx.tc, ctx.root, ctx.argv, target.value),
+                result=services.calls.execute(
+                    CallsServiceRequest(
+                        root=ctx.root,
+                        function_name=target.value,
+                        tc=ctx.tc,
+                        argv=ctx.argv,
+                    )
+                ),
                 apply_scope=False,
             )
         )
@@ -366,6 +375,7 @@ def _run_safety_reliability(ctx: BundleContext) -> list[BundleStepResult]:
 def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
     target = ctx.target
+    services = resolve_runtime_services(ctx.root)
 
     if target.kind in {"function", "method"}:
         if ctx.param:
@@ -387,7 +397,14 @@ def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
             results.append(BundleStepResult(result=_skip_result(ctx, "impact", "missing --param")))
         results.append(
             BundleStepResult(
-                result=cmd_calls(ctx.tc, ctx.root, ctx.argv, target.value),
+                result=services.calls.execute(
+                    CallsServiceRequest(
+                        root=ctx.root,
+                        function_name=target.value,
+                        tc=ctx.tc,
+                        argv=ctx.argv,
+                    )
+                ),
                 apply_scope=False,
             )
         )

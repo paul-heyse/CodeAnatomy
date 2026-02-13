@@ -6,7 +6,7 @@
       "anchor": {
         "col": 0,
         "end_col": 32,
-        "end_line": 128,
+        "end_line": 142,
         "file": "tools/cq/core/toolchain.py",
         "line": 48
       },
@@ -40,6 +40,8 @@
     "root": "<repo_root>",
     "schema_version": "cq.v2",
     "toolchain": {
+      "diskcache": "5.6.3",
+      "msgspec": "0.20.0",
       "python": "3.13.12",
       "rg": "<ripgrep>",
       "sgpy": "0.40.5"
@@ -53,7 +55,7 @@
           "anchor": {
             "col": 0,
             "end_col": 32,
-            "end_line": 128,
+            "end_line": 142,
             "file": "tools/cq/core/toolchain.py",
             "line": 48
           },

@@ -1,5 +1,4 @@
 """LDMD writer with preview/body separation."""
-# ruff: noqa: DOC201
 
 from __future__ import annotations
 
@@ -284,7 +283,11 @@ def _emit_summary(lines: list[str], result: CqResult) -> None:
 
 
 def _extract_insight_artifact_refs(summary: dict[str, object]) -> dict[str, str]:
-    """Extract artifact refs from front_door_insight summary payload."""
+    """Extract artifact refs from front_door_insight summary payload.
+
+    Returns:
+        Mapping of artifact reference keys to paths.
+    """
     from tools.cq.core.front_door_insight import coerce_front_door_insight
 
     insight = coerce_front_door_insight(summary.get("front_door_insight"))

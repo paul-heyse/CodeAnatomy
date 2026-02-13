@@ -13,7 +13,6 @@ import json
 import os
 import selectors
 import subprocess
-import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +20,7 @@ from time import monotonic
 from typing import Literal, cast
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.lsp.session_manager import LspSessionManager
 from tools.cq.search.lsp_advanced_planes import collect_advanced_lsp_planes
 from tools.cq.search.pyrefly_contracts import (
     coerce_pyrefly_payload,
@@ -110,7 +110,7 @@ class _PyreflyLspSession:
             try:
                 shutdown_id = self._request("shutdown", None)
                 self._wait_for_response(shutdown_id, timeout_seconds=0.2)
-            except Exception:  # noqa: BLE001 - fail-open cleanup
+            except Exception:
                 pass
             with contextlib.suppress(Exception):
                 self._notify("exit", None)
@@ -129,7 +129,7 @@ class _PyreflyLspSession:
             with contextlib.suppress(OSError):
                 proc.stdout.close()
 
-    def probe(self, request: PyreflyLspRequest) -> dict[str, object] | None:  # noqa: PLR0914
+    def probe(self, request: PyreflyLspRequest) -> dict[str, object] | None:
         self.ensure_started(timeout_seconds=request.timeout_seconds)
         proc = self._proc
         if proc is None or proc.poll() is not None:
@@ -137,7 +137,7 @@ class _PyreflyLspSession:
 
         try:
             uri = self._open_or_update_document(request.file_path)
-        except Exception:  # noqa: BLE001 - fail-open for transport/parsing issues
+        except Exception:
             return None
 
         pos = {
@@ -188,7 +188,7 @@ class _PyreflyLspSession:
                     call_responses.get("outgoing"),
                     limit=request.max_callees,
                 )
-            except Exception:  # noqa: BLE001 - fail-open for optional call hierarchy
+            except Exception:
                 incoming = []
                 outgoing = []
 
@@ -258,7 +258,7 @@ class _PyreflyLspSession:
                 line=max(0, request.line - 1),
                 col=max(0, request.col),
             )
-        except Exception:  # noqa: BLE001 - fail-open advanced enrichment
+        except Exception:
             payload["advanced_planes"] = dict[str, object]()
 
         has_signal, signal_reasons = evaluate_pyrefly_signal_from_mapping(payload)
@@ -631,7 +631,7 @@ def _extract_resolved_type(hover_text: str) -> str | None:
     return None
 
 
-def _extract_signature_list(signature_help: object) -> list[dict[str, object]]:  # noqa: C901
+def _extract_signature_list(signature_help: object) -> list[dict[str, object]]:
     if not isinstance(signature_help, Mapping):
         return []
     signatures = signature_help.get("signatures")
@@ -873,8 +873,11 @@ def _uri_to_file(uri: str) -> str:
     return uri
 
 
-_SESSION_LOCK = threading.Lock()
-_SESSIONS: dict[str, _PyreflyLspSession] = {}
+_SESSION_MANAGER = LspSessionManager[_PyreflyLspSession](
+    make_session=_PyreflyLspSession,
+    close_session=lambda session: session.close(),
+    ensure_started=lambda session, timeout: session.ensure_started(timeout_seconds=timeout),
+)
 
 
 def _session_for_root(
@@ -890,20 +893,7 @@ def _session_for_root(
         if timeout_seconds is not None
         else _DEFAULT_STARTUP_TIMEOUT_SECONDS
     )
-    root_key = str(root.resolve())
-    with _SESSION_LOCK:
-        session = _SESSIONS.get(root_key)
-        if session is None:
-            session = _PyreflyLspSession(root)
-            _SESSIONS[root_key] = session
-        try:
-            session.ensure_started(timeout_seconds=effective_timeout)
-        except Exception:  # noqa: BLE001 - fail-open session restart
-            session.close()
-            session = _PyreflyLspSession(root)
-            _SESSIONS[root_key] = session
-            session.ensure_started(timeout_seconds=effective_timeout)
-        return session
+    return _SESSION_MANAGER.for_root(root, startup_timeout_seconds=effective_timeout)
 
 
 def enrich_with_pyrefly_lsp(request: PyreflyLspRequest) -> dict[str, object] | None:
@@ -922,7 +912,7 @@ def enrich_with_pyrefly_lsp(request: PyreflyLspRequest) -> dict[str, object] | N
             startup_timeout_seconds=request.startup_timeout_seconds,
         )
         payload = session.probe(request)
-    except Exception:  # noqa: BLE001 - fail-open by design
+    except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
         return None
     if not isinstance(payload, Mapping):
         return None
@@ -941,18 +931,14 @@ def get_pyrefly_lsp_capabilities(
             root,
             startup_timeout_seconds=startup_timeout_seconds,
         )
-    except Exception:  # noqa: BLE001 - fail-open by design
+    except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
         return {}
     return session.capabilities_snapshot()
 
 
 def close_pyrefly_lsp_sessions() -> None:
     """Close all cached Pyrefly LSP sessions (used by tests)."""
-    with _SESSION_LOCK:
-        sessions = list(_SESSIONS.values())
-        _SESSIONS.clear()
-    for session in sessions:
-        session.close()
+    _SESSION_MANAGER.close_all()
 
 
 atexit.register(close_pyrefly_lsp_sessions)

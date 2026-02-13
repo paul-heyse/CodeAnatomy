@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201,PLR0913
 """Canonical SNB-to-CqResult rendering."""
 
 from __future__ import annotations
@@ -28,7 +27,11 @@ def render_snb_result(
     enable_lsp: bool,
     lsp_env: Mapping[str, object] | None = None,
 ) -> CqResult:
-    """Render a semantic neighborhood bundle into `CqResult`."""
+    """Render a semantic neighborhood bundle into `CqResult`.
+
+    Returns:
+        Rendered CQ result payload for neighborhood output.
+    """
     result = mk_result(run)
     view = materialize_section_layout(bundle)
 

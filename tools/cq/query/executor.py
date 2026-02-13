@@ -2,7 +2,6 @@
 
 Executes ToolPlans and returns CqResult objects.
 """
-# ruff: noqa: DOC201,C901,PLR0914,PLR0915
 
 from __future__ import annotations
 
@@ -16,17 +15,19 @@ import msgspec
 from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
+from tools.cq.core.bootstrap import resolve_runtime_services
+from tools.cq.core.cache import build_cache_key, build_cache_tag, get_cq_cache_backend
+from tools.cq.core.cache.contracts import QueryEntityScanCacheV1
+from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.multilang_orchestrator import (
     execute_by_language_scope,
-    merge_language_cq_results,
-    runmeta_for_scope_merge,
 )
 from tools.cq.core.multilang_summary import (
     build_multilang_summary,
     partition_stats_from_result_summary,
 )
-from tools.cq.core.requests import MergeResultsRequest, SummaryBuildRequest
+from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -43,7 +44,6 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
-from tools.cq.core.serialization import to_builtins
 from tools.cq.query.enrichment import SymtableEnricher, filter_by_scope
 from tools.cq.query.execution_context import QueryExecutionContext
 from tools.cq.query.execution_requests import (
@@ -62,12 +62,7 @@ from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_
 from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
 from tools.cq.search import SearchLimits, find_files_with_pattern
 from tools.cq.search.multilang_diagnostics import (
-    build_capability_diagnostics,
-    build_cross_language_diagnostics,
     build_language_capabilities,
-    diagnostics_to_summary_payload,
-    features_from_query,
-    is_python_oriented_query_ir,
 )
 from tools.cq.utils.interval_index import FileIntervalIndex, IntervalIndex
 
@@ -79,6 +74,7 @@ if TYPE_CHECKING:
 from tools.cq.index.files import FileTabulationResult, build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.ir import Query, Scope
+from tools.cq.query.merge import merge_auto_scope_query_results
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
 
@@ -318,12 +314,76 @@ def _scan_entity_records(
     paths: list[Path],
     scope_globs: list[str] | None,
 ) -> list[SgRecord]:
-    return sg_scan(
+    cache = get_cq_cache_backend(root=ctx.root)
+    cache_key = build_cache_key(
+        "query_entity_scan",
+        version="v1",
+        workspace=str(ctx.root.resolve()),
+        language=ctx.plan.lang,
+        target=ctx.query.entity or "entity",
+        extras={
+            "paths": [str(path) for path in paths],
+            "scope_globs": list(scope_globs or []),
+            "record_types": list(ctx.plan.sg_record_types),
+            "name": ctx.query.name or "",
+            "pattern": (
+                ctx.query.pattern_spec.pattern if ctx.query.pattern_spec is not None else ""
+            ),
+        },
+    )
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        try:
+            payload = msgspec.convert(cached, type=QueryEntityScanCacheV1)
+            return [_cache_dict_to_record(row) for row in payload.records]
+        except (RuntimeError, TypeError, ValueError):
+            pass
+
+    records = sg_scan(
         paths=paths,
         record_types=ctx.plan.sg_record_types,
         root=ctx.root,
         globs=scope_globs,
         lang=ctx.plan.lang,
+    )
+    cache.set(
+        cache_key,
+        contract_to_builtins(
+            QueryEntityScanCacheV1(
+                records=[_record_to_cache_dict(record) for record in records],
+            )
+        ),
+        expire=900,
+        tag=build_cache_tag(workspace=str(ctx.root.resolve()), language=ctx.plan.lang),
+    )
+    return records
+
+
+def _record_to_cache_dict(record: SgRecord) -> dict[str, object]:
+    return {
+        "record": record.record,
+        "kind": record.kind,
+        "file": record.file,
+        "start_line": record.start_line,
+        "start_col": record.start_col,
+        "end_line": record.end_line,
+        "end_col": record.end_col,
+        "text": record.text,
+        "rule_id": record.rule_id,
+    }
+
+
+def _cache_dict_to_record(payload: dict[str, object]) -> SgRecord:
+    return SgRecord(
+        record=cast("str", payload.get("record", "def")),
+        kind=str(payload.get("kind", "")),
+        file=str(payload.get("file", "")),
+        start_line=int(payload.get("start_line", 0)),
+        start_col=int(payload.get("start_col", 0)),
+        end_line=int(payload.get("end_line", 0)),
+        end_col=int(payload.get("end_col", 0)),
+        text=str(payload.get("text", "")),
+        rule_id=str(payload.get("rule_id", "")),
     )
 
 
@@ -341,6 +401,11 @@ def _build_scan_context(records: list[SgRecord]) -> ScanContext:
         calls_by_def=calls_by_def,
         all_records=records,
     )
+
+
+def build_scan_context(records: list[SgRecord]) -> ScanContext:
+    """Public wrapper for scan-context construction."""
+    return _build_scan_context(records)
 
 
 def _build_entity_candidates(scan: ScanContext, records: list[SgRecord]) -> EntityCandidates:
@@ -448,9 +513,7 @@ def _prepare_pattern_state(ctx: QueryExecutionContext) -> PatternExecutionState 
     if not file_result.files:
         result = _empty_result(ctx, "No files match scope after filtering")
         if ctx.plan.explain:
-            result.summary["file_filters"] = [
-                to_builtins(decision) for decision in file_result.decisions
-            ]
+            result.summary["file_filters"] = list(file_result.decisions)
         return result
 
     return PatternExecutionState(
@@ -506,7 +569,7 @@ def _maybe_add_entity_explain(state: EntityExecutionState, result: CqResult) -> 
         lang=state.ctx.plan.lang,
         explain=True,
     )
-    result.summary["file_filters"] = [to_builtins(decision) for decision in file_result.decisions]
+    result.summary["file_filters"] = list(file_result.decisions)
 
 
 def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -> None:
@@ -525,9 +588,7 @@ def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -
         "rules_count": len(plan.sg_rules),
         "metavar_filters": len(query.metavar_filters),
     }
-    result.summary["file_filters"] = [
-        to_builtins(decision) for decision in state.file_result.decisions
-    ]
+    result.summary["file_filters"] = list(state.file_result.decisions)
 
 
 def execute_plan(
@@ -604,13 +665,13 @@ def _execute_auto_scope_plan(
             argv=argv,
         ),
     )
-    return _merge_auto_scope_results(
-        query,
-        results,
+    return merge_auto_scope_query_results(
+        query=query,
+        results=results,
         root=root,
         argv=argv,
         tc=tc,
-        query_text=query_text,
+        summary_common=_summary_common_for_query(query, query_text=query_text),
     )
 
 
@@ -649,376 +710,17 @@ def _count_result_matches(result: CqResult | None) -> int:
     return len(result.key_findings)
 
 
-def _merge_auto_scope_results(
-    query: Query,
-    results: dict[QueryLanguage, CqResult],
-    *,
-    root: Path,
-    argv: list[str],
-    tc: Toolchain,
-    query_text: str | None = None,
-) -> CqResult:
-    diagnostics = build_cross_language_diagnostics(
-        lang_scope=query.lang_scope,
-        python_matches=_count_result_matches(results.get("python")),
-        rust_matches=_count_result_matches(results.get("rust")),
-        python_oriented=is_python_oriented_query_ir(query),
-    )
-    capability_diagnostics = build_capability_diagnostics(
-        features=features_from_query(query),
-        lang_scope=query.lang_scope,
-    )
-    diagnostics = list(diagnostics) + capability_diagnostics
-    diagnostic_payloads = diagnostics_to_summary_payload(diagnostics)
-    language_capabilities = build_language_capabilities(lang_scope=query.lang_scope)
-    run = runmeta_for_scope_merge(
-        macro="q",
-        root=root,
-        argv=argv,
-        tc=tc,
-    )
-    merged = merge_language_cq_results(
-        MergeResultsRequest(
-            scope=query.lang_scope,
-            results=results,
-            run=run,
-            diagnostics=diagnostics,
-            diagnostic_payloads=diagnostic_payloads,
-            language_capabilities=language_capabilities,
-            summary_common=_summary_common_for_query(query, query_text=query_text),
-        )
-    )
-    if not query.is_pattern_query:
-        if "front_door_insight" not in merged.summary:
-            _attach_entity_insight(merged)
-        else:
-            _mark_entity_insight_partial_from_summary(merged)
-    return merged
-
-
-def _missing_languages_from_summary(summary: dict[str, object]) -> list[str]:
-    languages = summary.get("languages")
-    if not isinstance(languages, dict):
-        return []
-    missing: list[str] = []
-    for lang, payload in languages.items():
-        lang_name = str(lang)
-        if not isinstance(payload, dict):
-            missing.append(lang_name)
-            continue
-        total = payload.get("total_matches")
-        if isinstance(total, int):
-            if total <= 0:
-                missing.append(lang_name)
-            continue
-        matches = payload.get("matches")
-        if isinstance(matches, int) and matches <= 0:
-            missing.append(lang_name)
-    return missing
-
-
-def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
-    from tools.cq.core.front_door_insight import (
-        coerce_front_door_insight,
-        mark_partial_for_missing_languages,
-        to_public_front_door_insight_dict,
-    )
-
-    insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
-    if insight is None:
-        return
-    lang_scope = result.summary.get("lang_scope")
-    if isinstance(lang_scope, str) and lang_scope == "auto":
-        missing = _missing_languages_from_summary(result.summary)
-        if missing:
-            insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
-    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
-
-
-def _attach_entity_insight(result: CqResult) -> None:  # noqa: PLR0912
+def _attach_entity_insight(result: CqResult, *, root: Path) -> None:
     """Build and attach front-door insight card to entity result."""
-    from tools.cq.core.front_door_insight import (
-        InsightBudgetV1,
-        InsightConfidenceV1,
-        InsightDegradationV1,
-        InsightNeighborhoodV1,
-        InsightRiskCountersV1,
-        InsightSliceV1,
-        augment_insight_with_lsp,
-        build_entity_insight,
-        mark_partial_for_missing_languages,
-        risk_from_counters,
-        to_public_front_door_insight_dict,
-    )
-    from tools.cq.core.snb_schema import SemanticNodeRefV1
-    from tools.cq.search.lsp_contract_state import LspProvider, derive_lsp_contract_state
-    from tools.cq.search.lsp_front_door_adapter import (
-        enrich_with_language_lsp,
-        infer_language_for_path,
-        lsp_runtime_enabled,
-        provider_for_language,
-    )
+    from tools.cq.core.services import EntityFrontDoorRequest
 
-    mode_value = result.summary.get("mode")
-    if isinstance(mode_value, str) and mode_value == "pattern":
-        return
-
-    definition_findings = [f for f in result.key_findings if f.category == "definition"]
-    primary_target = definition_findings[0] if definition_findings else None
-    candidates = definition_findings[:3]
-
-    def _detail_int(finding: Finding, key: str) -> int:
-        value = finding.details.get(key)
-        return value if isinstance(value, int) else 0
-
-    def _preview_node(finding: Finding, suffix: str, label: str | None = None) -> SemanticNodeRefV1:
-        anchor = finding.anchor
-        name = str(finding.details.get("name") or finding.message)
-        file_path = anchor.file if anchor else ""
-        line = anchor.line if anchor else 0
-        node_id = f"entity:{suffix}:{file_path}:{line}:{name}"
-        return SemanticNodeRefV1(
-            node_id=node_id,
-            kind="definition",
-            name=name,
-            display_label=label or name,
-            file_path=file_path,
+    services = resolve_runtime_services(root)
+    services.entity.attach_front_door(
+        EntityFrontDoorRequest(
+            result=result,
+            relationship_detail_max_matches=_ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES,
         )
-
-    callers_total = sum(_detail_int(finding, "caller_count") for finding in candidates)
-    caller_preview = tuple(
-        _preview_node(finding, "caller")
-        for finding in candidates
-        if _detail_int(finding, "caller_count") > 0
     )
-    callees_total = sum(_detail_int(finding, "callee_count") for finding in candidates)
-    callee_preview = tuple(
-        _preview_node(finding, "callee")
-        for finding in candidates
-        if _detail_int(finding, "callee_count") > 0
-    )
-    scope_values = {
-        str(finding.details.get("enclosing_scope"))
-        for finding in candidates
-        if isinstance(finding.details.get("enclosing_scope"), str)
-        and str(finding.details.get("enclosing_scope")) not in {"", "<module>"}
-    }
-    scope_preview = tuple(
-        SemanticNodeRefV1(
-            node_id=f"scope:{value}",
-            kind="scope",
-            name=value,
-            display_label=value,
-            file_path="",
-        )
-        for value in sorted(scope_values)
-    )
-    neighborhood = InsightNeighborhoodV1(
-        callers=InsightSliceV1(
-            total=callers_total,
-            preview=caller_preview,
-            availability="partial" if callers_total > 0 else "unavailable",
-            source="heuristic",
-        ),
-        callees=InsightSliceV1(
-            total=callees_total,
-            preview=callee_preview,
-            availability="partial" if callees_total > 0 else "unavailable",
-            source="heuristic",
-        ),
-        references=InsightSliceV1(availability="unavailable", source="none"),
-        hierarchy_or_scope=InsightSliceV1(
-            total=len(scope_preview),
-            preview=scope_preview,
-            availability="partial" if scope_preview else "unavailable",
-            source="heuristic",
-        ),
-    )
-    counters = InsightRiskCountersV1(
-        callers=callers_total,
-        callees=callees_total,
-        closure_capture_count=len(scope_preview),
-    )
-    risk = risk_from_counters(counters)
-
-    confidence = InsightConfidenceV1(evidence_kind="resolved_ast", score=0.8, bucket="high")
-    for finding in candidates:
-        score = finding.details.score
-        if score is None:
-            continue
-        confidence = InsightConfidenceV1(
-            evidence_kind=score.evidence_kind or confidence.evidence_kind,
-            score=float(score.confidence_score) if score.confidence_score is not None else 0.8,
-            bucket=score.confidence_bucket or confidence.bucket,
-        )
-        break
-
-    scope_filter_status = "none"
-    dropped = result.summary.get("dropped_by_scope")
-    if isinstance(dropped, dict) and dropped:
-        scope_filter_status = "dropped"
-    notes: list[str] = []
-    if isinstance(dropped, dict) and dropped:
-        notes.append(f"dropped_by_scope={dropped}")
-    degradation = InsightDegradationV1(
-        lsp="skipped",
-        scan=(
-            "timed_out"
-            if bool(result.summary.get("timed_out"))
-            else "truncated"
-            if bool(result.summary.get("truncated"))
-            else "ok"
-        ),
-        scope_filter=scope_filter_status,
-        notes=tuple(notes),
-    )
-    insight = build_entity_insight(
-        summary=result.summary,
-        primary_target=primary_target,
-        neighborhood=neighborhood,
-        risk=risk,
-        confidence=confidence,
-        degradation=degradation,
-        budget=InsightBudgetV1(top_candidates=3, preview_per_slice=5, lsp_targets=3),
-    )
-
-    lsp_attempted = 0
-    lsp_applied = 0
-    lsp_failed = 0
-    lsp_timed_out = 0
-    lsp_provider: LspProvider = "none"
-    py_attempted = 0
-    py_applied = 0
-    py_failed = 0
-    py_timed_out = 0
-    rust_attempted = 0
-    rust_applied = 0
-    rust_failed = 0
-    rust_timed_out = 0
-    lsp_reasons: list[str] = []
-    summary_matches = result.summary.get("matches")
-    match_count = summary_matches if isinstance(summary_matches, int) else len(result.key_findings)
-    runtime_lsp_enabled = lsp_runtime_enabled()
-    run_entity_lsp = runtime_lsp_enabled and (
-        match_count <= _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES
-    )
-    if run_entity_lsp:
-        for finding in candidates:
-            if finding.anchor is None:
-                continue
-            target_file = Path(result.run.root) / finding.anchor.file
-            target_language = infer_language_for_path(target_file)
-            if target_language not in {"python", "rust"}:
-                lsp_reasons.append("provider_unavailable")
-                continue
-            if lsp_provider == "none":
-                lsp_provider = provider_for_language(target_language)
-            lsp_attempted += 1
-            if target_language == "python":
-                py_attempted += 1
-            else:
-                rust_attempted += 1
-            payload, timed_out = enrich_with_language_lsp(
-                language=target_language,
-                mode="entity",
-                root=Path(result.run.root),
-                file_path=target_file,
-                line=max(1, int(finding.anchor.line)),
-                col=int(finding.anchor.col or 0),
-                symbol_hint=(
-                    str(finding.details.get("name"))
-                    if isinstance(finding.details.get("name"), str)
-                    else None
-                ),
-            )
-            lsp_timed_out += int(timed_out)
-            if target_language == "python":
-                py_timed_out += int(timed_out)
-            else:
-                rust_timed_out += int(timed_out)
-            if payload is None:
-                lsp_failed += 1
-                if target_language == "python":
-                    py_failed += 1
-                else:
-                    rust_failed += 1
-                lsp_reasons.append("request_timeout" if timed_out else "request_failed")
-                continue
-            lsp_applied += 1
-            if target_language == "python":
-                py_applied += 1
-            else:
-                rust_applied += 1
-            insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
-            advanced_planes = payload.get("advanced_planes")
-            if isinstance(advanced_planes, dict):
-                result.summary["lsp_advanced_planes"] = dict(advanced_planes)
-    elif not runtime_lsp_enabled:
-        for finding in candidates:
-            if finding.anchor is None:
-                continue
-            target_file = Path(result.run.root) / finding.anchor.file
-            target_language = infer_language_for_path(target_file)
-            if target_language in {"python", "rust"}:
-                lsp_provider = provider_for_language(target_language)
-                lsp_reasons.append("not_attempted_runtime_disabled")
-                break
-    else:
-        for finding in candidates:
-            if finding.anchor is None:
-                continue
-            target_file = Path(result.run.root) / finding.anchor.file
-            target_language = infer_language_for_path(target_file)
-            if target_language in {"python", "rust"}:
-                lsp_provider = provider_for_language(target_language)
-                lsp_reasons.append("not_attempted_by_budget")
-                break
-
-    lsp_available = lsp_provider != "none"
-    if lsp_provider == "none":
-        lsp_reasons.append("provider_unavailable")
-    elif (
-        lsp_attempted <= 0
-        and "not_attempted_by_budget" not in lsp_reasons
-        and "not_attempted_runtime_disabled" not in lsp_reasons
-    ):
-        lsp_reasons.append("not_attempted_by_design")
-    lsp_state = derive_lsp_contract_state(
-        provider=lsp_provider,
-        available=lsp_available,
-        attempted=lsp_attempted,
-        applied=lsp_applied,
-        failed=max(lsp_failed, lsp_attempted - lsp_applied),
-        timed_out=lsp_timed_out,
-        reasons=tuple(dict.fromkeys(lsp_reasons)),
-    )
-    insight = msgspec.structs.replace(
-        insight,
-        degradation=msgspec.structs.replace(
-            insight.degradation,
-            lsp=lsp_state.status,
-            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
-        ),
-    )
-    missing = _missing_languages_from_summary(result.summary)
-    if missing:
-        insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
-
-    result.summary["pyrefly_telemetry"] = {
-        "attempted": py_attempted,
-        "applied": py_applied,
-        "failed": max(py_failed, py_attempted - py_applied),
-        "skipped": 0,
-        "timed_out": py_timed_out,
-    }
-    result.summary["rust_lsp_telemetry"] = {
-        "attempted": rust_attempted,
-        "applied": rust_applied,
-        "failed": max(rust_failed, rust_attempted - rust_applied),
-        "skipped": 0,
-        "timed_out": rust_timed_out,
-    }
-    result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
 
 
 def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
@@ -1039,7 +741,7 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     result.summary["files_scanned"] = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
-    _attach_entity_insight(result)
+    _attach_entity_insight(result, root=ctx.root)
     return result
 
 
@@ -1083,7 +785,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     result.summary["files_scanned"] = len({r.file for r in state.records})
     _maybe_add_entity_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
-    _attach_entity_insight(result)
+    _attach_entity_insight(result, root=ctx.root)
     return result
 
 
@@ -1150,9 +852,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     if not request.files:
         result = _empty_result(ctx, "No files match scope after filtering")
         if request.plan.explain and request.decisions is not None:
-            result.summary["file_filters"] = [
-                to_builtins(decision) for decision in request.decisions
-            ]
+            result.summary["file_filters"] = list(request.decisions)
         return result
 
     state = PatternExecutionState(
@@ -1895,7 +1595,11 @@ def _count_callers_for_definition(
     all_calls: list[SgRecord],
     index: FileIntervalIndex,
 ) -> int:
-    """Count callsites that target the given definition."""
+    """Count callsites that target the given definition.
+
+    Returns:
+        Number of matching callsites.
+    """
     target_name = _extract_def_name(def_record)
     if not target_name:
         return 0
@@ -1923,7 +1627,11 @@ def _count_callers_for_definition(
 
 
 def _resolve_enclosing_scope(def_record: SgRecord, index: FileIntervalIndex) -> str:
-    """Resolve human-readable enclosing scope for a definition."""
+    """Resolve human-readable enclosing scope for a definition.
+
+    Returns:
+        Enclosing scope name, or `<module>` when no parent scope exists.
+    """
     file_index = index.by_file.get(def_record.file)
     if file_index is None:
         return "<module>"
@@ -1943,7 +1651,11 @@ def _resolve_enclosing_scope(def_record: SgRecord, index: FileIntervalIndex) -> 
 def _build_entity_neighborhood_preview_section(
     findings: list[Finding],
 ) -> Section:
-    """Build bounded neighborhood preview for entity query top results."""
+    """Build bounded neighborhood preview for entity query top results.
+
+    Returns:
+        Section containing bounded neighborhood preview findings.
+    """
     preview_findings: list[Finding] = []
     definition_findings = [finding for finding in findings if finding.category == "definition"][:3]
     for finding in definition_findings:

@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201
 """Capability-gated neighborhood slice planning helpers."""
 
 from __future__ import annotations
@@ -16,7 +15,11 @@ SlicePredicate = Callable[[LspCapabilitySnapshotV1], bool]
 def normalize_capability_snapshot(
     capabilities: LspCapabilitySnapshotV1 | Mapping[str, object] | None,
 ) -> LspCapabilitySnapshotV1:
-    """Normalize typed/raw capability maps into a typed snapshot."""
+    """Normalize typed/raw capability maps into a typed snapshot.
+
+    Returns:
+        Typed capability snapshot for gating checks.
+    """
     if isinstance(capabilities, LspCapabilitySnapshotV1):
         return capabilities
     if isinstance(capabilities, Mapping):
@@ -72,7 +75,11 @@ def plan_feasible_slices(
     *,
     stage: str = "lsp.planning",
 ) -> tuple[tuple[NeighborhoodSliceKind, ...], tuple[DegradeEventV1, ...]]:
-    """Plan capability-feasible LSP slices."""
+    """Plan capability-feasible LSP slices.
+
+    Returns:
+        Feasible slice tuple and synthesized degrade events.
+    """
     snapshot = normalize_capability_snapshot(capabilities)
     feasible: list[NeighborhoodSliceKind] = []
     degrades: list[DegradeEventV1] = []

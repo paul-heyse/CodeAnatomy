@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-# ruff: noqa: DOC201
 from collections.abc import Mapping, Sequence
 from typing import Literal, cast
 
 import msgspec
 
-from tools.cq.core.serialization import to_builtins
+from tools.cq.core.public_serialization import to_public_dict
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope
 
 Severity = Literal["info", "warning", "error"]
@@ -53,7 +52,11 @@ class LanguagePartitionStats(msgspec.Struct, omit_defaults=True):
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object] | None) -> LanguagePartitionStats:
-        """Create a partition stats payload from a raw mapping."""
+        """Create a partition stats payload from a raw mapping.
+
+        Returns:
+            Normalized language partition statistics.
+        """
         if payload is None:
             return cls()
         payload_map: Mapping[str, object] = payload
@@ -103,7 +106,11 @@ class LanguageCapabilities(msgspec.Struct, omit_defaults=True):
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object] | None) -> LanguageCapabilities:
-        """Create typed capabilities from a loose mapping payload."""
+        """Create typed capabilities from a loose mapping payload.
+
+        Returns:
+            Normalized language capability payload.
+        """
         if payload is None:
             return cls()
         payload_map: Mapping[str, object] = payload
@@ -155,7 +162,11 @@ class CrossLanguageDiagnostic(msgspec.Struct, omit_defaults=True):
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object] | None) -> CrossLanguageDiagnostic:
-        """Create a typed diagnostic from a loose mapping."""
+        """Create a typed diagnostic from a loose mapping.
+
+        Returns:
+            Normalized cross-language diagnostic row.
+        """
         if payload is None:
             return cls()
         payload_map: Mapping[str, object] = payload
@@ -198,7 +209,8 @@ class EnrichmentTelemetry(msgspec.Struct, omit_defaults=True):
     def from_mapping(cls, payload: Mapping[str, object] | None) -> EnrichmentTelemetry | None:
         """Create telemetry from a mapping payload.
 
-        Returns ``None`` when payload is missing or malformed.
+        Returns:
+            Normalized telemetry payload, or `None` when input is absent.
         """
         if payload is None:
             return None
@@ -263,7 +275,11 @@ class PyreflyDiagnostic(msgspec.Struct, omit_defaults=True):
 
 
 def coerce_pyrefly_overview(value: Mapping[str, object] | None) -> PyreflyOverview:
-    """Normalize loose overview mapping into typed contract."""
+    """Normalize loose overview mapping into typed contract.
+
+    Returns:
+        Normalized Pyrefly overview contract.
+    """
     if value is None:
         return PyreflyOverview()
     primary_symbol_value = value.get("primary_symbol")
@@ -289,7 +305,11 @@ def coerce_pyrefly_overview(value: Mapping[str, object] | None) -> PyreflyOvervi
 
 
 def coerce_pyrefly_telemetry(value: Mapping[str, object] | None) -> PyreflyTelemetry:
-    """Normalize loose telemetry mapping into typed contract."""
+    """Normalize loose telemetry mapping into typed contract.
+
+    Returns:
+        Normalized Pyrefly telemetry contract.
+    """
     if value is None:
         return PyreflyTelemetry()
     attempted_value = value.get("attempted")
@@ -309,7 +329,11 @@ def coerce_pyrefly_telemetry(value: Mapping[str, object] | None) -> PyreflyTelem
 def coerce_pyrefly_diagnostics(
     value: Sequence[Mapping[str, object] | PyreflyDiagnostic] | None,
 ) -> list[PyreflyDiagnostic]:
-    """Normalize loose diagnostics into typed rows."""
+    """Normalize loose diagnostics into typed rows.
+
+    Returns:
+        Normalized list of Pyrefly diagnostic rows.
+    """
     if not value:
         return []
     rows: list[PyreflyDiagnostic] = []
@@ -355,7 +379,11 @@ def coerce_language_partitions(
     language_order: Sequence[QueryLanguage],
     partitions: Mapping[QueryLanguage, Mapping[str, object]],
 ) -> dict[QueryLanguage, LanguagePartitionStats]:
-    """Normalize language partition payloads using typed stats structs."""
+    """Normalize language partition payloads using typed stats structs.
+
+    Returns:
+        Normalized per-language partition statistics mapping.
+    """
     normalized: dict[QueryLanguage, LanguagePartitionStats] = {}
     for lang in language_order:
         normalized[lang] = LanguagePartitionStats.from_mapping(partitions.get(lang))
@@ -368,7 +396,11 @@ def coerce_language_partitions(
 def coerce_diagnostics(
     diagnostics: Sequence[CrossLanguageDiagnostic | Mapping[str, object]] | None,
 ) -> list[CrossLanguageDiagnostic]:
-    """Normalize diagnostics into typed contract rows."""
+    """Normalize diagnostics into typed contract rows.
+
+    Returns:
+        Normalized diagnostic rows.
+    """
     if not diagnostics:
         return []
     rows: list[CrossLanguageDiagnostic] = []
@@ -383,7 +415,11 @@ def coerce_diagnostics(
 def coerce_language_capabilities(
     value: LanguageCapabilities | Mapping[str, object] | None,
 ) -> LanguageCapabilities:
-    """Normalize language capability payload into typed contract."""
+    """Normalize language capability payload into typed contract.
+
+    Returns:
+        Normalized typed language capability payload.
+    """
     if isinstance(value, LanguageCapabilities):
         return value
     if isinstance(value, Mapping):
@@ -396,7 +432,11 @@ def summary_contract_to_dict(
     *,
     common: Mapping[str, object] | None,
 ) -> dict[str, object]:
-    """Serialize summary contract to a builtins mapping and merge common keys."""
+    """Serialize summary contract to a builtins mapping and merge common keys.
+
+    Returns:
+        Builtins summary payload map.
+    """
     summary: dict[str, object] = dict(common) if common is not None else {}
     summary["lang_scope"] = contract.lang_scope
     summary["language_order"] = list(contract.language_order)
@@ -411,9 +451,7 @@ def summary_contract_to_dict(
         contract.language_capabilities
     )
     if contract.enrichment_telemetry is not None:
-        summary["enrichment_telemetry"] = cast(
-            "dict[str, object]", to_builtins(contract.enrichment_telemetry)
-        )
+        summary["enrichment_telemetry"] = to_public_dict(contract.enrichment_telemetry)
     return summary
 
 
@@ -454,14 +492,22 @@ def _language_capabilities_to_dict(
 
 
 def diagnostic_to_dict(diagnostic: CrossLanguageDiagnostic) -> dict[str, object]:
-    """Serialize a diagnostic row to a builtins mapping."""
-    return cast("dict[str, object]", to_builtins(diagnostic))
+    """Serialize a diagnostic row to a builtins mapping.
+
+    Returns:
+        Builtins dictionary for one diagnostic row.
+    """
+    return to_public_dict(diagnostic)
 
 
 def diagnostics_to_dicts(
     diagnostics: Sequence[CrossLanguageDiagnostic],
 ) -> list[dict[str, object]]:
-    """Serialize typed diagnostics to list of builtins mappings."""
+    """Serialize typed diagnostics to list of builtins mappings.
+
+    Returns:
+        Builtins dictionary rows for all diagnostics.
+    """
     return [diagnostic_to_dict(item) for item in diagnostics]
 
 

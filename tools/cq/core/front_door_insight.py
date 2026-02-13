@@ -5,7 +5,6 @@ search, calls, and entity outputs. The schema is intentionally front-door
 focused: concise target grounding, neighborhood previews, risk drivers,
 confidence, degradation status, budgets, and artifact references.
 """
-# ruff: noqa: DOC201,PLR0913,PLR0914,PLR1714,PLR2004,PERF401
 
 from __future__ import annotations
 
@@ -17,6 +16,7 @@ import msgspec
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
 from tools.cq.core.structs import CqStruct
 from tools.cq.search.lsp_contract_state import (
+    LspContractStateInputV1,
     LspStatus,
     derive_lsp_contract_state,
 )
@@ -31,6 +31,12 @@ RiskLevel = Literal["low", "med", "high"]
 
 _DEFAULT_TOP_CANDIDATES = 3
 _DEFAULT_PREVIEW_PER_SLICE = 5
+_HIGH_CALLER_THRESHOLD = 10
+_HIGH_CALLER_STRICT_THRESHOLD = 10
+_MEDIUM_CALLER_THRESHOLD = 4
+_MEDIUM_CALLER_STRICT_THRESHOLD = 3
+_ARG_VARIANCE_THRESHOLD = 3
+_FILES_WITH_CALLS_THRESHOLD = 3
 _DEFAULT_LSP_TARGETS = 1
 
 
@@ -140,7 +146,11 @@ class FrontDoorInsightV1(CqStruct, frozen=True):
 
 
 def render_insight_card(insight: FrontDoorInsightV1) -> list[str]:
-    """Render a compact markdown card from a front-door insight."""
+    """Render a compact markdown card from a front-door insight.
+
+    Returns:
+        Markdown lines representing the insight card.
+    """
     lines: list[str] = ["## Insight Card"]
 
     target = insight.target
@@ -225,7 +235,11 @@ def build_neighborhood_from_slices(
     source: NeighborhoodSource = "structural",
     overflow_artifact_ref: str | None = None,
 ) -> InsightNeighborhoodV1:
-    """Map structural neighborhood slices into insight neighborhood schema."""
+    """Map structural neighborhood slices into insight neighborhood schema.
+
+    Returns:
+        Insight neighborhood payload composed from matching slices.
+    """
     callers = _collect_slice_group(
         slices,
         kinds={"callers"},
@@ -278,7 +292,11 @@ def augment_insight_with_lsp(
     *,
     preview_per_slice: int | None = None,
 ) -> FrontDoorInsightV1:
-    """Overlay LSP data on top of an existing insight payload."""
+    """Overlay LSP data on top of an existing insight payload.
+
+    Returns:
+        Insight payload augmented with LSP-derived data.
+    """
     limit = preview_per_slice or insight.budget.preview_per_slice
     neighborhood = insight.neighborhood
 
@@ -356,7 +374,11 @@ def build_search_insight(
     degradation: InsightDegradationV1 | None = None,
     budget: InsightBudgetV1 | None = None,
 ) -> FrontDoorInsightV1:
-    """Build search front-door insight payload."""
+    """Build search front-door insight payload.
+
+    Returns:
+        Front-door insight payload for search macro results.
+    """
     target = _target_from_finding(
         primary_target,
         fallback_symbol=_string_or_none(summary.get("query")) or "search target",
@@ -416,7 +438,11 @@ def build_calls_insight(
     budget: InsightBudgetV1 | None = None,
     degradation: InsightDegradationV1 | None = None,
 ) -> FrontDoorInsightV1:
-    """Build calls front-door insight payload."""
+    """Build calls front-door insight payload.
+
+    Returns:
+        Front-door insight payload for calls macro results.
+    """
     target = InsightTargetV1(
         symbol=function_name,
         kind="function",
@@ -466,7 +492,11 @@ def build_entity_insight(
     degradation: InsightDegradationV1 | None = None,
     budget: InsightBudgetV1 | None = None,
 ) -> FrontDoorInsightV1:
-    """Build entity front-door insight payload."""
+    """Build entity front-door insight payload.
+
+    Returns:
+        Front-door insight payload for entity query results.
+    """
     target = _target_from_finding(
         primary_target,
         fallback_symbol=_string_or_none(summary.get("query"))
@@ -513,7 +543,11 @@ def attach_artifact_refs(
     telemetry: str | None = None,
     neighborhood_overflow: str | None = None,
 ) -> FrontDoorInsightV1:
-    """Attach artifact refs to an existing insight object."""
+    """Attach artifact refs to an existing insight object.
+
+    Returns:
+        Insight payload with updated artifact references.
+    """
     refs = msgspec.structs.replace(
         insight.artifact_refs,
         diagnostics=diagnostics or insight.artifact_refs.diagnostics,
@@ -528,7 +562,11 @@ def attach_neighborhood_overflow_ref(
     *,
     overflow_ref: str,
 ) -> FrontDoorInsightV1:
-    """Attach overflow artifact ref to truncated neighborhood slices."""
+    """Attach overflow artifact ref to truncated neighborhood slices.
+
+    Returns:
+        Insight payload with overflow references on truncated slices.
+    """
 
     def _with_ref(slice_payload: InsightSliceV1) -> InsightSliceV1:
         if slice_payload.total <= len(slice_payload.preview):
@@ -554,14 +592,18 @@ def mark_partial_for_missing_languages(
     *,
     missing_languages: Sequence[str],
 ) -> FrontDoorInsightV1:
-    """Mark insight slices partial when language partitions are missing."""
+    """Mark insight slices partial when language partitions are missing.
+
+    Returns:
+        Insight payload updated with partial availability/degradation notes.
+    """
     missing = tuple(sorted({lang.strip() for lang in missing_languages if lang.strip()}))
     if not missing:
         return insight
 
     def _downgrade(slice_payload: InsightSliceV1) -> InsightSliceV1:
         availability: Availability
-        if slice_payload.availability == "unavailable" or slice_payload.availability == "full":
+        if slice_payload.availability in {"unavailable", "full"}:
             availability = "partial"
         else:
             availability = slice_payload.availability
@@ -585,7 +627,11 @@ def mark_partial_for_missing_languages(
 
 
 def coerce_front_door_insight(payload: object) -> FrontDoorInsightV1 | None:
-    """Best-effort conversion from summary payload to insight struct."""
+    """Best-effort conversion from summary payload to insight struct.
+
+    Returns:
+        Parsed insight payload when conversion succeeds, otherwise `None`.
+    """
     if isinstance(payload, FrontDoorInsightV1):
         return payload
     if not isinstance(payload, dict):
@@ -597,11 +643,15 @@ def coerce_front_door_insight(payload: object) -> FrontDoorInsightV1 | None:
 
 
 def risk_from_counters(counters: InsightRiskCountersV1) -> InsightRiskV1:
-    """Build risk payload from deterministic counters."""
+    """Build risk payload from deterministic counters.
+
+    Returns:
+        Risk payload with level and driver labels.
+    """
     drivers: list[str] = []
-    if counters.callers >= 10:
+    if counters.callers >= _HIGH_CALLER_THRESHOLD:
         drivers.append("high_call_surface")
-    elif counters.callers >= 4:
+    elif counters.callers >= _MEDIUM_CALLER_THRESHOLD:
         drivers.append("medium_call_surface")
 
     if counters.forwarding_count > 0:
@@ -610,7 +660,7 @@ def risk_from_counters(counters: InsightRiskCountersV1) -> InsightRiskV1:
     if counters.hazard_count > 0:
         drivers.append("dynamic_hazards")
 
-    if counters.arg_shape_count > 3:
+    if counters.arg_shape_count > _ARG_VARIANCE_THRESHOLD:
         drivers.append("arg_shape_variance")
 
     if counters.closure_capture_count > 0:
@@ -622,15 +672,15 @@ def risk_from_counters(counters: InsightRiskCountersV1) -> InsightRiskV1:
 
 def _risk_level_from_counters(counters: InsightRiskCountersV1) -> RiskLevel:
     if (
-        counters.callers > 10
+        counters.callers > _HIGH_CALLER_STRICT_THRESHOLD
         or counters.hazard_count > 0
         or (counters.forwarding_count > 0 and counters.callers > 0)
     ):
         return "high"
     if (
-        counters.callers > 3
-        or counters.arg_shape_count > 3
-        or counters.files_with_calls > 3
+        counters.callers > _MEDIUM_CALLER_STRICT_THRESHOLD
+        or counters.arg_shape_count > _ARG_VARIANCE_THRESHOLD
+        or counters.files_with_calls > _FILES_WITH_CALLS_THRESHOLD
         or counters.closure_capture_count > 0
     ):
         return "med"
@@ -672,13 +722,15 @@ def _degradation_from_summary(summary: dict[str, object]) -> InsightDegradationV
         if failed > 0:
             lsp_reasons.append("request_failed")
     lsp_state = derive_lsp_contract_state(
-        provider=provider,
-        available=lsp_available,
-        attempted=attempted,
-        applied=applied,
-        failed=failed,
-        timed_out=timed_out,
-        reasons=tuple(dict.fromkeys(lsp_reasons)),
+        LspContractStateInputV1(
+            provider=provider,
+            available=lsp_available,
+            attempted=attempted,
+            applied=applied,
+            failed=failed,
+            timed_out=timed_out,
+            reasons=tuple(dict.fromkeys(lsp_reasons)),
+        )
     )
 
     scan = "ok"
@@ -849,9 +901,7 @@ def _extract_symbol_from_message(message: str) -> str | None:
 
 
 def _preview_labels(nodes: Iterable[SemanticNodeRefV1]) -> list[str]:
-    labels: list[str] = []
-    for node in nodes:
-        labels.append(node.display_label or node.name)
+    labels: list[str] = [node.display_label or node.name for node in nodes]
     return labels[:3]
 
 
@@ -895,7 +945,11 @@ def _empty_neighborhood() -> InsightNeighborhoodV1:
 
 
 def to_public_front_door_insight_dict(insight: FrontDoorInsightV1) -> dict[str, object]:
-    """Serialize insight with explicit/full schema fields for public JSON output."""
+    """Serialize insight with explicit/full schema fields for public JSON output.
+
+    Returns:
+        Public JSON-compatible dictionary representation of insight.
+    """
     return {
         "source": insight.source,
         "schema_version": insight.schema_version,

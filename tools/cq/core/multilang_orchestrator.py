@@ -1,5 +1,4 @@
 """Shared multi-language orchestration and merge helpers."""
-# ruff: noqa: C901
 
 from __future__ import annotations
 
@@ -13,6 +12,7 @@ from tools.cq.core.multilang_summary import (
 )
 from tools.cq.core.requests import MergeResultsRequest, SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
+from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, DetailPayload, Finding, Section, mk_result
 from tools.cq.query.language import (
     QueryLanguage,
@@ -50,10 +50,24 @@ def execute_by_language_scope[T](
     dict[QueryLanguage, T]
         Per-language execution outputs.
     """
-    results: dict[QueryLanguage, T] = {}
-    for lang in expand_language_scope(scope):
-        results[lang] = run_one(lang)
-    return results
+    languages = tuple(expand_language_scope(scope))
+    if len(languages) <= 1:
+        lang = languages[0]
+        return {lang: run_one(lang)}
+
+    scheduler = get_worker_scheduler()
+    policy = scheduler.policy
+    if policy.query_partition_workers <= 1:
+        return {lang: run_one(lang) for lang in languages}
+
+    futures = [scheduler.submit_io(run_one, lang) for lang in languages]
+    batch = scheduler.collect_bounded(
+        futures,
+        timeout_seconds=max(1.0, float(len(languages)) * 5.0),
+    )
+    if batch.timed_out > 0:
+        return {lang: run_one(lang) for lang in languages}
+    return dict(zip(languages, batch.done, strict=False))
 
 
 def merge_partitioned_items(
@@ -146,38 +160,25 @@ def _select_front_door_insight(
     )
 
     order = list(expand_language_scope(scope))
-    by_language: dict[QueryLanguage, FrontDoorInsightV1] = {}
-    for lang in order:
-        result = results.get(lang)
-        if result is None:
-            continue
-        raw = result.summary.get("front_door_insight")
-        insight = coerce_front_door_insight(raw)
-        if insight is not None:
-            by_language[lang] = insight
+    by_language = _collect_insights_by_language(
+        order=order,
+        results=results,
+        coerce_front_door_insight=coerce_front_door_insight,
+    )
     if not by_language:
         return None
 
-    def _is_grounded(insight: FrontDoorInsightV1) -> bool:
-        location = insight.target.location
-        if location.file:
-            return True
-        return insight.target.kind not in {"query", "unknown", "entity"}
-
-    selected: FrontDoorInsightV1 | None = None
-    for lang in order:
-        candidate = by_language.get(lang)
-        if candidate is None:
-            continue
-        if _is_grounded(candidate):
-            selected = candidate
-            break
+    selected = _select_ordered_insight(
+        order=order,
+        by_language=by_language,
+        require_grounded=True,
+    )
     if selected is None:
-        for lang in order:
-            candidate = by_language.get(lang)
-            if candidate is not None:
-                selected = candidate
-                break
+        selected = _select_ordered_insight(
+            order=order,
+            by_language=by_language,
+            require_grounded=False,
+        )
     if selected is None:
         return None
 
@@ -188,6 +189,45 @@ def _select_front_door_insight(
             missing_languages=missing_languages,
         )
     return selected
+
+
+def _collect_insights_by_language(
+    *,
+    order: list[QueryLanguage],
+    results: Mapping[QueryLanguage, CqResult],
+    coerce_front_door_insight: Callable[[object], FrontDoorInsightV1 | None],
+) -> dict[QueryLanguage, FrontDoorInsightV1]:
+    by_language: dict[QueryLanguage, FrontDoorInsightV1] = {}
+    for lang in order:
+        result = results.get(lang)
+        if result is None:
+            continue
+        insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
+        if insight is not None:
+            by_language[lang] = insight
+    return by_language
+
+
+def _is_grounded_insight(insight: FrontDoorInsightV1) -> bool:
+    location = insight.target.location
+    if location.file:
+        return True
+    return insight.target.kind not in {"query", "unknown", "entity"}
+
+
+def _select_ordered_insight(
+    *,
+    order: list[QueryLanguage],
+    by_language: Mapping[QueryLanguage, FrontDoorInsightV1],
+    require_grounded: bool,
+) -> FrontDoorInsightV1 | None:
+    for lang in order:
+        candidate = by_language.get(lang)
+        if candidate is None:
+            continue
+        if not require_grounded or _is_grounded_insight(candidate):
+            return candidate
+    return None
 
 
 def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:

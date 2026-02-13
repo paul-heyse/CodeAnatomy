@@ -1,5 +1,4 @@
 """Artifact saving for cq results."""
-# ruff: noqa: DOC201
 
 from __future__ import annotations
 
@@ -56,19 +55,13 @@ def save_artifact_json(
 ) -> Artifact:
     """Save result as JSON artifact.
 
-    Parameters
-    ----------
-    result : CqResult
-        Result to save.
-    artifact_dir : str | Path | None
-        Directory for artifacts. Defaults to .cq/artifacts/.
-    filename : str | None
-        Explicit filename. If None, generates timestamped name.
+    Args:
+        result: Result to save.
+        artifact_dir: Destination directory. Defaults to `.cq/artifacts`.
+        filename: Explicit filename. When omitted, a timestamped name is used.
 
     Returns:
-    -------
-    Artifact
-        Reference to saved artifact.
+        Reference to the saved artifact.
     """
     artifact_name = filename or _default_filename(result, "result")
     return _write_json_artifact(
@@ -84,7 +77,11 @@ def save_diagnostics_artifact(
     artifact_dir: str | Path | None = None,
     filename: str | None = None,
 ) -> Artifact | None:
-    """Persist offloaded diagnostics summary payload for artifact-first rendering."""
+    """Persist offloaded diagnostics summary payload for artifact-first rendering.
+
+    Returns:
+        Artifact reference when diagnostics payload exists, otherwise `None`.
+    """
     payload = build_diagnostics_artifact_payload(result)
     if payload is None:
         return None
@@ -102,7 +99,11 @@ def save_neighborhood_overflow_artifact(
     artifact_dir: str | Path | None = None,
     filename: str | None = None,
 ) -> Artifact | None:
-    """Persist neighborhood overflow payload when insight preview is truncated."""
+    """Persist neighborhood overflow payload when insight preview is truncated.
+
+    Returns:
+        Artifact reference when overflow rows are present, otherwise `None`.
+    """
     from tools.cq.core.front_door_insight import coerce_front_door_insight
 
     insight = coerce_front_door_insight(result.summary.get("front_door_insight"))

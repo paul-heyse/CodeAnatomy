@@ -3,7 +3,6 @@
 Finds all call sites for a function, analyzing argument patterns,
 keyword usage, and forwarding behavior.
 """
-# ruff: noqa: DOC201,C901,PLR0912,PLR0914,PLR0915
 
 from __future__ import annotations
 
@@ -17,6 +16,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from tools.cq.core.run_context import RunContext
+from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import (
     Anchor,
     CqResult,
@@ -32,13 +32,16 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
+from tools.cq.macros.calls_target import attach_target_metadata
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file, list_scan_files, sg_scan
 from tools.cq.search import INTERACTIVE, find_call_candidates
 from tools.cq.search.adapter import find_def_lines, find_files_with_pattern
 from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
+    from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightNeighborhoodV1
     from tools.cq.core.toolchain import Toolchain
+    from tools.cq.query.language import QueryLanguage
     from tools.cq.search import SearchLimits
 
 _ARG_PREVIEW_LIMIT = 3
@@ -160,6 +163,31 @@ class CallAnalysisSummary:
     forwarding_count: int
     contexts: Counter[str]
     hazard_counts: Counter[str]
+
+
+@dataclass(frozen=True)
+class CallsNeighborhoodRequest:
+    """Request envelope for neighborhood construction in calls front door."""
+
+    root: Path
+    function_name: str
+    target_location: tuple[str, int] | None
+    target_callees: Counter[str]
+    analysis: CallAnalysisSummary
+    score: ScoreDetails | None
+    preview_per_slice: int
+
+
+@dataclass(frozen=True)
+class CallsLspRequest:
+    """Request envelope for calls-mode LSP overlay application."""
+
+    root: Path
+    target_file_path: Path | None
+    target_line: int
+    target_language: QueryLanguage | None
+    symbol_hint: str
+    preview_per_slice: int
 
 
 @dataclass(frozen=True)
@@ -381,100 +409,6 @@ def _find_function_signature(
                 return f"({', '.join(params)})"
 
     return ""
-
-
-def _resolve_target_definition(
-    root: Path,
-    function_name: str,
-) -> tuple[str, int] | None:
-    """Resolve concrete definition location for a target function."""
-    base_name = function_name.rsplit(".", maxsplit=1)[-1]
-    pattern = rf"\bdef {base_name}\s*\("
-    def_files = find_files_with_pattern(root, pattern, limits=INTERACTIVE)
-    for filepath in def_files:
-        try:
-            source = filepath.read_text(encoding="utf-8")
-            tree = ast.parse(source)
-        except (SyntaxError, OSError, UnicodeDecodeError):
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == base_name:
-                try:
-                    rel_path = filepath.relative_to(root).as_posix()
-                except ValueError:
-                    rel_path = filepath.as_posix()
-                return rel_path, int(node.lineno)
-    return None
-
-
-def _scan_target_callees(
-    root: Path,
-    function_name: str,
-    target_location: tuple[str, int] | None,
-) -> Counter[str]:
-    """Collect callees from the resolved target definition body."""
-    if target_location is None:
-        return Counter()
-    rel_path, line = target_location
-    file_path = root / rel_path
-    try:
-        source = file_path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-    except (SyntaxError, OSError, UnicodeDecodeError):
-        return Counter()
-
-    base_name = function_name.rsplit(".", maxsplit=1)[-1]
-    target_node: ast.FunctionDef | ast.AsyncFunctionDef | None = None
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == base_name
-            and int(node.lineno) == int(line)
-        ):
-            target_node = node
-            break
-    if target_node is None:
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == base_name:
-                target_node = node
-                break
-    if target_node is None:
-        return Counter()
-
-    callee_counts: Counter[str] = Counter()
-    for node in ast.walk(target_node):
-        if not isinstance(node, ast.Call):
-            continue
-        callee_name, _is_method, _receiver = _get_call_name(node.func)
-        if callee_name and callee_name not in {function_name, base_name}:
-            callee_counts[callee_name] += 1
-    return callee_counts
-
-
-def _add_target_callees_section(
-    result: CqResult,
-    target_callees: Counter[str],
-    score: ScoreDetails | None,
-) -> None:
-    """Append bounded target-callee preview section."""
-    if not target_callees:
-        return
-    findings = [
-        Finding(
-            category="target_callee",
-            message=f"{name}: {count} calls",
-            severity="info",
-            details=build_detail_payload(
-                data={
-                    "callee": name,
-                    "count": count,
-                },
-                score=score,
-            ),
-        )
-        for name, count in target_callees.most_common(_CALLS_TARGET_CALLEE_PREVIEW)
-    ]
-    result.sections.append(Section(title="Target Callees", findings=findings))
 
 
 def _detect_hazards(call: ast.Call, info: CallAnalysis) -> list[str]:
@@ -926,39 +860,125 @@ def _collect_call_sites(
     list[CallSite]
         Collected call sites.
     """
+    filepaths = list(by_file)
+    if len(filepaths) <= 1:
+        return _collect_call_sites_sequential(root, filepaths, function_name)
+    scheduler = get_worker_scheduler()
+    workers = max(1, int(scheduler.policy.calls_file_workers))
+    if workers <= 1:
+        return _collect_call_sites_sequential(root, filepaths, function_name)
+    futures = [
+        scheduler.submit_io(_collect_call_sites_for_file, root, filepath, function_name)
+        for filepath in filepaths
+    ]
+    batch = scheduler.collect_bounded(
+        futures,
+        timeout_seconds=max(1.0, float(len(filepaths)) * 10.0),
+    )
+    if batch.timed_out > 0:
+        return _collect_call_sites_sequential(root, filepaths, function_name)
     all_sites: list[CallSite] = []
-    for filepath in by_file:
-        if not filepath.exists():
-            continue
-        try:
-            source = filepath.read_text(encoding="utf-8")
-            # Use relative path for filename in AST for consistent reporting
-            rel_path = str(filepath.relative_to(root))
-            tree = ast.parse(source, filename=rel_path)
-        except (SyntaxError, OSError, UnicodeDecodeError, ValueError):
-            continue
-        # Split source for snippet extraction and context window computation
-        source_lines = source.splitlines()
-        def_lines = find_def_lines(filepath)
-        total_lines = len(source_lines)
-        finder = CallFinder(rel_path, function_name, tree)
-        finder.visit(tree)
-        # Enrich sites with context window and snippet
-        for site in finder.sites:
-            context_window = _compute_context_window(site.line, def_lines, total_lines)
-            context_snippet = _extract_context_snippet(
-                source_lines,
-                context_window["start_line"],
-                context_window["end_line"],
-                match_line=site.line,
-            )
-            enriched_site = msgspec.structs.replace(
+    for per_file_sites in batch.done:
+        all_sites.extend(per_file_sites)
+    return all_sites
+
+
+def _collect_call_sites_sequential(
+    root: Path,
+    filepaths: list[Path],
+    function_name: str,
+) -> list[CallSite]:
+    all_sites: list[CallSite] = []
+    for filepath in filepaths:
+        all_sites.extend(_collect_call_sites_for_file(root, filepath, function_name))
+    return all_sites
+
+
+def _collect_call_sites_for_file(
+    root: Path,
+    filepath: Path,
+    function_name: str,
+) -> list[CallSite]:
+    if not filepath.exists():
+        return []
+    try:
+        source = filepath.read_text(encoding="utf-8")
+        rel_path = str(filepath.relative_to(root))
+        tree = ast.parse(source, filename=rel_path)
+    except (SyntaxError, OSError, UnicodeDecodeError, ValueError):
+        return []
+
+    source_lines = source.splitlines()
+    def_lines = find_def_lines(filepath)
+    total_lines = len(source_lines)
+    finder = CallFinder(rel_path, function_name, tree)
+    finder.visit(tree)
+    all_sites: list[CallSite] = []
+    for site in finder.sites:
+        context_window = _compute_context_window(site.line, def_lines, total_lines)
+        context_snippet = _extract_context_snippet(
+            source_lines,
+            context_window["start_line"],
+            context_window["end_line"],
+            match_line=site.line,
+        )
+        all_sites.append(
+            msgspec.structs.replace(
                 site,
                 context_window=context_window,
                 context_snippet=context_snippet,
             )
-            all_sites.append(enriched_site)
+        )
     return all_sites
+
+
+def rg_find_candidates(
+    function_name: str,
+    root: Path,
+    *,
+    limits: SearchLimits | None = None,
+) -> list[tuple[Path, int]]:
+    """Public wrapper for ripgrep candidate discovery."""
+    return _rg_find_candidates(function_name, root, limits=limits)
+
+
+def group_candidates(candidates: list[tuple[Path, int]]) -> dict[Path, list[int]]:
+    """Public wrapper for candidate grouping."""
+    return _group_candidates(candidates)
+
+
+def collect_call_sites(
+    root: Path,
+    by_file: dict[Path, list[int]],
+    function_name: str,
+) -> list[CallSite]:
+    """Public wrapper for callsite collection."""
+    return _collect_call_sites(root, by_file, function_name)
+
+
+def compute_calls_context_window(
+    line: int,
+    def_lines: list[tuple[int, int]],
+    total_lines: int,
+) -> dict[str, int]:
+    """Public wrapper for callsite context window calculation."""
+    return _compute_context_window(line, def_lines, total_lines)
+
+
+def extract_calls_context_snippet(
+    source_lines: list[str],
+    start_line: int,
+    end_line: int,
+    *,
+    match_line: int | None = None,
+) -> str | None:
+    """Public wrapper for callsite context snippet extraction."""
+    return _extract_context_snippet(
+        source_lines,
+        start_line,
+        end_line,
+        match_line=match_line,
+    )
 
 
 def _collect_call_sites_from_records(
@@ -1428,6 +1448,196 @@ def _append_calls_findings(
     _add_sites_section(result, function_name, all_sites, score)
 
 
+def _build_calls_neighborhood(
+    request: CallsNeighborhoodRequest,
+) -> tuple[InsightNeighborhoodV1, list[Finding], list[str]]:
+    from tools.cq.core.front_door_insight import (
+        InsightNeighborhoodV1,
+        InsightSliceV1,
+        build_neighborhood_from_slices,
+    )
+    from tools.cq.core.snb_schema import SemanticNodeRefV1
+    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
+    from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
+
+    neighborhood = InsightNeighborhoodV1()
+    neighborhood_findings: list[Finding] = []
+    degradation_notes: list[str] = []
+    if request.target_location is None:
+        degradation_notes.append("target_definition_unresolved")
+    else:
+        target_file, target_line = request.target_location
+        try:
+            snapshot = ScanSnapshot.build_from_repo(request.root, lang="python")
+            slices, degrades = collect_structural_neighborhood(
+                target_name=request.function_name.rsplit(".", maxsplit=1)[-1],
+                target_file=target_file,
+                target_line=target_line,
+                target_col=0,
+                snapshot=snapshot,
+                max_per_slice=request.preview_per_slice,
+            )
+            neighborhood = build_neighborhood_from_slices(
+                slices,
+                preview_per_slice=request.preview_per_slice,
+                source="structural",
+            )
+            for slice_item in slices:
+                labels = [
+                    node.display_label or node.name
+                    for node in slice_item.preview[: request.preview_per_slice]
+                    if (node.display_label or node.name)
+                ]
+                message = f"{slice_item.title}: {slice_item.total}"
+                if labels:
+                    message += f" (top: {', '.join(labels)})"
+                neighborhood_findings.append(
+                    Finding(
+                        category="neighborhood",
+                        message=message,
+                        severity="info",
+                        details=build_detail_payload(
+                            data={
+                                "slice_kind": slice_item.kind,
+                                "total": slice_item.total,
+                                "preview": labels,
+                            },
+                            score=request.score,
+                        ),
+                    )
+                )
+            degradation_notes.extend(
+                f"{degrade.stage}:{degrade.category or degrade.severity}" for degrade in degrades
+            )
+        except (OSError, RuntimeError, TimeoutError, ValueError, TypeError) as exc:
+            degradation_notes.append(f"structural_scan_unavailable:{type(exc).__name__}")
+
+    if neighborhood.callers.total == 0 and request.analysis.contexts:
+        preview_nodes = tuple(
+            SemanticNodeRefV1(
+                node_id=f"context:{name}",
+                kind="function",
+                name=name,
+                display_label=name,
+                file_path="",
+            )
+            for name, _count in request.analysis.contexts.most_common(request.preview_per_slice)
+        )
+        neighborhood = msgspec.structs.replace(
+            neighborhood,
+            callers=InsightSliceV1(
+                total=sum(request.analysis.contexts.values()),
+                preview=preview_nodes,
+                availability="partial",
+                source="heuristic",
+            ),
+        )
+
+    if neighborhood.callees.total == 0 and request.target_callees:
+        preview_nodes = tuple(
+            SemanticNodeRefV1(
+                node_id=f"callee:{name}",
+                kind="callsite",
+                name=name,
+                display_label=name,
+                file_path=request.target_location[0] if request.target_location is not None else "",
+            )
+            for name, _count in request.target_callees.most_common(request.preview_per_slice)
+        )
+        neighborhood = msgspec.structs.replace(
+            neighborhood,
+            callees=InsightSliceV1(
+                total=sum(request.target_callees.values()),
+                preview=preview_nodes,
+                availability="partial",
+                source="heuristic",
+            ),
+        )
+    return neighborhood, neighborhood_findings, degradation_notes
+
+
+def _apply_calls_lsp(
+    *,
+    insight: FrontDoorInsightV1,
+    result: CqResult,
+    request: CallsLspRequest,
+) -> tuple[FrontDoorInsightV1, QueryLanguage | None, int, int, int, int]:
+    from tools.cq.core.front_door_insight import augment_insight_with_lsp
+    from tools.cq.search.lsp_contract_state import (
+        LspContractStateInputV1,
+        derive_lsp_contract_state,
+    )
+    from tools.cq.search.lsp_front_door_adapter import (
+        LanguageLspEnrichmentRequest,
+        enrich_with_language_lsp,
+        lsp_runtime_enabled,
+        provider_for_language,
+    )
+
+    target_language = request.target_language
+    lsp_available = target_language in {"python", "rust"}
+    lsp_attempted = 0
+    lsp_applied = 0
+    lsp_failed = 0
+    lsp_timed_out = 0
+    lsp_provider = provider_for_language(target_language) if target_language else "none"
+    lsp_reasons: list[str] = []
+
+    if request.target_file_path is not None and target_language in {"python", "rust"}:
+        if lsp_runtime_enabled():
+            lsp_payload, timed_out = enrich_with_language_lsp(
+                LanguageLspEnrichmentRequest(
+                    language=target_language,
+                    mode="calls",
+                    root=request.root,
+                    file_path=request.target_file_path,
+                    line=max(1, request.target_line),
+                    col=0,
+                    symbol_hint=request.symbol_hint,
+                )
+            )
+            lsp_attempted = 1
+            lsp_timed_out = int(timed_out)
+            if lsp_payload is not None:
+                lsp_applied = 1
+                insight = augment_insight_with_lsp(
+                    insight,
+                    lsp_payload,
+                    preview_per_slice=request.preview_per_slice,
+                )
+                advanced_planes = lsp_payload.get("advanced_planes")
+                if isinstance(advanced_planes, dict):
+                    result.summary["lsp_advanced_planes"] = dict(advanced_planes)
+            else:
+                lsp_failed = 1
+                lsp_reasons.append("request_timeout" if timed_out else "request_failed")
+        else:
+            lsp_reasons.append("not_attempted_runtime_disabled")
+    elif lsp_provider == "none":
+        lsp_reasons.append("provider_unavailable")
+
+    lsp_state = derive_lsp_contract_state(
+        LspContractStateInputV1(
+            provider=lsp_provider,
+            available=lsp_available,
+            attempted=lsp_attempted,
+            applied=lsp_applied,
+            failed=max(lsp_failed, lsp_attempted - lsp_applied),
+            timed_out=lsp_timed_out,
+            reasons=tuple(dict.fromkeys(lsp_reasons)),
+        )
+    )
+    insight = msgspec.structs.replace(
+        insight,
+        degradation=msgspec.structs.replace(
+            insight.degradation,
+            lsp=lsp_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+        ),
+    )
+    return insight, target_language, lsp_attempted, lsp_applied, lsp_failed, lsp_timed_out
+
+
 def _build_calls_result(
     ctx: CallsContext,
     scan_result: CallScanResult,
@@ -1439,21 +1649,15 @@ def _build_calls_result(
         InsightConfidenceV1,
         InsightDegradationV1,
         InsightLocationV1,
-        InsightNeighborhoodV1,
-        InsightSliceV1,
-        augment_insight_with_lsp,
         build_calls_insight,
-        build_neighborhood_from_slices,
         to_public_front_door_insight_dict,
     )
-    from tools.cq.core.snb_schema import SemanticNodeRefV1
-    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-    from tools.cq.neighborhood.structural_collector import collect_structural_neighborhood
-    from tools.cq.search.lsp_contract_state import derive_lsp_contract_state
+    from tools.cq.search.lsp_contract_state import (
+        LspContractStateInputV1,
+        derive_lsp_contract_state,
+    )
     from tools.cq.search.lsp_front_door_adapter import (
-        enrich_with_language_lsp,
         infer_language_for_path,
-        lsp_runtime_enabled,
         provider_for_language,
     )
 
@@ -1495,107 +1699,24 @@ def _build_calls_result(
         )
         _append_calls_findings(result, ctx, scan_result, analysis, score)
 
-    target_location = _resolve_target_definition(ctx.root, ctx.function_name)
-    if target_location is not None:
-        result.summary["target_file"] = target_location[0]
-        result.summary["target_line"] = target_location[1]
-    target_callees = _scan_target_callees(ctx.root, ctx.function_name, target_location)
-    _add_target_callees_section(result, target_callees, score)
-
-    neighborhood = InsightNeighborhoodV1()
-    neighborhood_findings: list[Finding] = []
-    degradation_notes: list[str] = []
-    if target_location is not None:
-        target_file, target_line = target_location
-        target_symbol = ctx.function_name.rsplit(".", maxsplit=1)[-1]
-        try:
-            snapshot = ScanSnapshot.build_from_repo(ctx.root, lang="python")
-            slices, degrades = collect_structural_neighborhood(
-                target_name=target_symbol,
-                target_file=target_file,
-                target_line=target_line,
-                target_col=0,
-                snapshot=snapshot,
-                max_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
-            )
-            neighborhood = build_neighborhood_from_slices(
-                slices,
-                preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
-                source="structural",
-            )
-            for slice_item in slices:
-                labels = [
-                    node.display_label or node.name
-                    for node in slice_item.preview[:_FRONT_DOOR_PREVIEW_PER_SLICE]
-                    if (node.display_label or node.name)
-                ]
-                message = f"{slice_item.title}: {slice_item.total}"
-                if labels:
-                    message += f" (top: {', '.join(labels)})"
-                neighborhood_findings.append(
-                    Finding(
-                        category="neighborhood",
-                        message=message,
-                        severity="info",
-                        details=build_detail_payload(
-                            data={
-                                "slice_kind": slice_item.kind,
-                                "total": slice_item.total,
-                                "preview": labels,
-                            },
-                            score=score,
-                        ),
-                    )
-                )
-            degradation_notes.extend(
-                f"{degrade.stage}:{degrade.category or degrade.severity}" for degrade in degrades
-            )
-        except Exception as exc:  # noqa: BLE001 - fail-open front-door enrichment
-            degradation_notes.append(f"structural_scan_unavailable:{type(exc).__name__}")
-    else:
-        degradation_notes.append("target_definition_unresolved")
-
-    if neighborhood.callers.total == 0 and analysis.contexts:
-        preview_nodes = tuple(
-            SemanticNodeRefV1(
-                node_id=f"context:{name}",
-                kind="function",
-                name=name,
-                display_label=name,
-                file_path="",
-            )
-            for name, _count in analysis.contexts.most_common(_FRONT_DOOR_PREVIEW_PER_SLICE)
+    target_location, target_callees = attach_target_metadata(
+        result,
+        root=ctx.root,
+        function_name=ctx.function_name,
+        score=score,
+        preview_limit=_CALLS_TARGET_CALLEE_PREVIEW,
+    )
+    neighborhood, neighborhood_findings, degradation_notes = _build_calls_neighborhood(
+        CallsNeighborhoodRequest(
+            root=ctx.root,
+            function_name=ctx.function_name,
+            target_location=target_location,
+            target_callees=target_callees,
+            analysis=analysis,
+            score=score,
+            preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
         )
-        neighborhood = msgspec.structs.replace(
-            neighborhood,
-            callers=InsightSliceV1(
-                total=sum(analysis.contexts.values()),
-                preview=preview_nodes,
-                availability="partial",
-                source="heuristic",
-            ),
-        )
-
-    if neighborhood.callees.total == 0 and target_callees:
-        preview_nodes = tuple(
-            SemanticNodeRefV1(
-                node_id=f"callee:{name}",
-                kind="callsite",
-                name=name,
-                display_label=name,
-                file_path=target_location[0] if target_location is not None else "",
-            )
-            for name, _count in target_callees.most_common(_FRONT_DOOR_PREVIEW_PER_SLICE)
-        )
-        neighborhood = msgspec.structs.replace(
-            neighborhood,
-            callees=InsightSliceV1(
-                total=sum(target_callees.values()),
-                preview=preview_nodes,
-                availability="partial",
-                source="heuristic",
-            ),
-        )
+    )
 
     if neighborhood_findings:
         result.sections.insert(
@@ -1624,7 +1745,6 @@ def _build_calls_result(
     lsp_failed = 0
     lsp_timed_out = 0
     lsp_provider = provider_for_language(target_language) if target_language else "none"
-    lsp_reasons: list[str] = []
 
     insight = build_calls_insight(
         function_name=ctx.function_name,
@@ -1647,8 +1767,10 @@ def _build_calls_result(
         ),
         degradation=InsightDegradationV1(
             lsp=derive_lsp_contract_state(
-                provider=lsp_provider,
-                available=lsp_available,
+                LspContractStateInputV1(
+                    provider=lsp_provider,
+                    available=lsp_available,
+                )
             ).status,
             scan="fallback" if scan_result.used_fallback else "ok",
             scope_filter="none",
@@ -1656,52 +1778,23 @@ def _build_calls_result(
         ),
     )
 
-    if target_file_path is not None and target_language in {"python", "rust"}:
-        if lsp_runtime_enabled():
-            lsp_payload, timed_out = enrich_with_language_lsp(
-                language=target_language,
-                mode="calls",
-                root=ctx.root,
-                file_path=target_file_path,
-                line=max(1, target_line),
-                col=0,
-                symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
-            )
-            lsp_attempted = 1
-            lsp_timed_out = int(timed_out)
-            if lsp_payload is not None:
-                lsp_applied = 1
-                insight = augment_insight_with_lsp(
-                    insight,
-                    lsp_payload,
-                    preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
-                )
-                advanced_planes = lsp_payload.get("advanced_planes")
-                if isinstance(advanced_planes, dict):
-                    result.summary["lsp_advanced_planes"] = dict(advanced_planes)
-            else:
-                lsp_failed = 1
-                lsp_reasons.append("request_timeout" if timed_out else "request_failed")
-        else:
-            lsp_reasons.append("not_attempted_runtime_disabled")
-    elif lsp_provider == "none":
-        lsp_reasons.append("provider_unavailable")
-
-    lsp_state = derive_lsp_contract_state(
-        provider=lsp_provider,
-        available=lsp_available,
-        attempted=lsp_attempted,
-        applied=lsp_applied,
-        failed=max(lsp_failed, lsp_attempted - lsp_applied),
-        timed_out=lsp_timed_out,
-        reasons=tuple(dict.fromkeys(lsp_reasons)),
-    )
-    insight = msgspec.structs.replace(
+    (
         insight,
-        degradation=msgspec.structs.replace(
-            insight.degradation,
-            lsp=lsp_state.status,
-            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+        target_language,
+        lsp_attempted,
+        lsp_applied,
+        lsp_failed,
+        lsp_timed_out,
+    ) = _apply_calls_lsp(
+        insight=insight,
+        result=result,
+        request=CallsLspRequest(
+            root=ctx.root,
+            target_file_path=target_file_path,
+            target_line=target_line,
+            target_language=target_language,
+            symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
+            preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
         ),
     )
 

@@ -170,7 +170,9 @@ max-complexity = 10
 [tool.ruff.lint.pylint]
 max-args = 6
 max-branches = 12
+max-locals = 15
 max-returns = 6
+max-statements = 50
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

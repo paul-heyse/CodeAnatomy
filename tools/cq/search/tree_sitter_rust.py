@@ -49,9 +49,18 @@ _SCOPE_KINDS: tuple[str, ...] = (
 _MAX_TREE_CACHE_ENTRIES = 64
 _TREE_CACHE: dict[str, tuple[Tree, str]] = {}
 
-_cache_hits: int = 0
-_cache_misses: int = 0
-_cache_evictions: int = 0
+
+class _CacheStats:
+    """Mutable cache counter holder."""
+
+    def __init__(self) -> None:
+        """Initialize zeroed cache counters."""
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+
+
+_CACHE_STATS = _CacheStats()
 
 _DEFAULT_SCOPE_DEPTH = 24
 _MAX_SCOPE_NODES = 256
@@ -269,11 +278,9 @@ def _parse_tree(source_bytes: bytes) -> Tree:
 
 
 def _get_tree(source: str, *, cache_key: str | None) -> tuple[Tree, bytes]:
-    global _cache_hits, _cache_misses, _cache_evictions  # noqa: PLW0603
-
     source_bytes = source.encode("utf-8", errors="replace")
     if cache_key is None:
-        _cache_misses += 1
+        _CACHE_STATS.misses += 1
         return _parse_tree(source_bytes), source_bytes
 
     content_hash = _source_hash(source_bytes)
@@ -281,18 +288,18 @@ def _get_tree(source: str, *, cache_key: str | None) -> tuple[Tree, bytes]:
     if cached is not None:
         cached_tree, cached_hash = cached
         if cached_hash == content_hash:
-            _cache_hits += 1
+            _CACHE_STATS.hits += 1
             return cached_tree, source_bytes
         # Stale entry -- fall through to re-parse
 
-    _cache_misses += 1
+    _CACHE_STATS.misses += 1
     tree = _parse_tree(source_bytes)
 
     # Evict oldest entry (FIFO) when at capacity
     if len(_TREE_CACHE) >= _MAX_TREE_CACHE_ENTRIES and cache_key not in _TREE_CACHE:
         oldest_key = next(iter(_TREE_CACHE))
         del _TREE_CACHE[oldest_key]
-        _cache_evictions += 1
+        _CACHE_STATS.evictions += 1
 
     _TREE_CACHE[cache_key] = (tree, content_hash)
     return tree, source_bytes
@@ -300,20 +307,19 @@ def _get_tree(source: str, *, cache_key: str | None) -> tuple[Tree, bytes]:
 
 def clear_tree_sitter_rust_cache() -> None:
     """Clear per-process Rust parser caches and reset debug counters."""
-    global _cache_hits, _cache_misses, _cache_evictions  # noqa: PLW0603
     _TREE_CACHE.clear()
     _rust_language.cache_clear()
-    _cache_hits = 0
-    _cache_misses = 0
-    _cache_evictions = 0
+    _CACHE_STATS.hits = 0
+    _CACHE_STATS.misses = 0
+    _CACHE_STATS.evictions = 0
 
 
 def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
     """Return cache counters for observability/debugging."""
     return {
-        "cache_hits": _cache_hits,
-        "cache_misses": _cache_misses,
-        "cache_evictions": _cache_evictions,
+        "cache_hits": _CACHE_STATS.hits,
+        "cache_misses": _CACHE_STATS.misses,
+        "cache_evictions": _CACHE_STATS.evictions,
     }
 
 

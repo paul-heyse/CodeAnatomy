@@ -7,6 +7,8 @@ from collections.abc import Callable
 
 from tools.cq.core.structs import CqStruct
 
+_FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, ValueError, TypeError)
+
 
 class LspRequestBudgetV1(CqStruct, frozen=True):
     """Timeout and retry budget for one LSP request envelope."""
@@ -42,7 +44,7 @@ def call_with_retry(
                 return None, timed_out
             if backoff_ms > 0:
                 time.sleep((backoff_ms / 1000.0) * (attempt + 1))
-        except Exception:  # noqa: BLE001 - fail-open at adapter boundary by design
+        except _FAIL_OPEN_EXCEPTIONS:
             return None, timed_out
     return None, timed_out
 

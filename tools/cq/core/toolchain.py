@@ -52,6 +52,10 @@ class Toolchain(CqStruct, frozen=True):
     rg_version: str | None
     sgpy_available: bool
     sgpy_version: str | None
+    msgspec_available: bool
+    msgspec_version: str | None
+    diskcache_available: bool
+    diskcache_version: str | None
     py_path: str
     py_version: str
 
@@ -69,6 +73,10 @@ class Toolchain(CqStruct, frozen=True):
         rg_available, rg_version = _detect_rg()
         sgpy_version = _package_version("ast-grep-py")
         sgpy_available = sgpy_version is not None
+        msgspec_version = _package_version("msgspec")
+        msgspec_available = msgspec_version is not None
+        diskcache_version = _package_version("diskcache")
+        diskcache_available = diskcache_version is not None
         py_path = sys.executable
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         return Toolchain(
@@ -76,6 +84,10 @@ class Toolchain(CqStruct, frozen=True):
             rg_version=rg_version,
             sgpy_available=sgpy_available,
             sgpy_version=sgpy_version,
+            msgspec_available=msgspec_available,
+            msgspec_version=msgspec_version,
+            diskcache_available=diskcache_available,
+            diskcache_version=diskcache_version,
             py_path=py_path,
             py_version=py_version,
         )
@@ -91,6 +103,8 @@ class Toolchain(CqStruct, frozen=True):
         return {
             "rg": self.rg_version,
             "sgpy": self.sgpy_version,
+            "msgspec": self.msgspec_version,
+            "diskcache": self.diskcache_version,
             "python": self.py_version,
         }
 

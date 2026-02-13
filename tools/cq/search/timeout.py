@@ -6,9 +6,10 @@ Provides synchronous and asynchronous timeout wrappers for ripgrep operations.
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import TYPE_CHECKING
+
+from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -43,13 +44,13 @@ def search_sync_with_timeout[T](
     args = args or ()
     kwargs = kwargs or {}
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(fn, *args, **kwargs)
-        try:
-            return future.result(timeout=timeout if timeout > 0 else None)
-        except FuturesTimeoutError as e:
-            msg = f"Search operation timed out after {timeout:.1f} seconds"
-            raise TimeoutError(msg) from e
+    scheduler = get_worker_scheduler()
+    future = scheduler.submit_io(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=timeout if timeout > 0 else None)
+    except FuturesTimeoutError as e:
+        msg = f"Search operation timed out after {timeout:.1f} seconds"
+        raise TimeoutError(msg) from e
 
 
 async def search_async_with_timeout[T](

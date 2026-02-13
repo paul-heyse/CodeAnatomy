@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-# ruff: noqa: DOC201
 from collections.abc import Mapping, Sequence
-from typing import cast
 
 import msgspec
 
-from tools.cq.core.serialization import to_builtins
 from tools.cq.search.enrichment.contracts import (
     EnrichmentMeta,
     PythonEnrichmentPayload,
@@ -21,12 +18,20 @@ _DEFAULT_METADATA_KEYS: frozenset[str] = frozenset(
 
 
 def payload_size_hint(payload: Mapping[str, object]) -> int:
-    """Estimate payload size using msgspec JSON encoding."""
+    """Estimate payload size using msgspec JSON encoding.
+
+    Returns:
+        Estimated serialized payload size in bytes.
+    """
     return len(msgspec.json.encode(payload))
 
 
 def has_value(value: object) -> bool:
-    """Return whether a payload value is considered non-empty."""
+    """Return whether a payload value is considered non-empty.
+
+    Returns:
+        `True` when value is non-empty for merge purposes.
+    """
     if value is None:
         return False
     if isinstance(value, str):
@@ -63,7 +68,11 @@ def merge_gap_fill_payload(
     *,
     metadata_keys: Sequence[str] | None = None,
 ) -> dict[str, object]:
-    """Merge secondary payload values only when primary is missing/empty."""
+    """Merge secondary payload values only when primary is missing/empty.
+
+    Returns:
+        Merged payload preserving existing populated primary values.
+    """
     merged = dict(primary)
     protected = set(metadata_keys) if metadata_keys is not None else set(_DEFAULT_METADATA_KEYS)
     for key, value in secondary.items():
@@ -80,7 +89,11 @@ def enforce_payload_budget(
     max_payload_bytes: int,
     drop_order: Sequence[str],
 ) -> tuple[list[str], int]:
-    """Prune optional keys until payload fits the size budget."""
+    """Prune optional keys until payload fits the size budget.
+
+    Returns:
+        Dropped keys and resulting payload size in bytes.
+    """
     dropped: list[str] = []
     size = payload_size_hint(payload)
     if size <= max_payload_bytes:
@@ -274,14 +287,18 @@ def _build_python_meta(
 
 
 def normalize_python_payload(payload: dict[str, object] | None) -> dict[str, object] | None:
-    """Normalize Python enrichment payload via typed wrapper contract."""
+    """Normalize Python enrichment payload via typed wrapper contract.
+
+    Returns:
+        Structured Python payload envelope, or `None` when input is `None`.
+    """
     if payload is None:
         return None
     wrapper = PythonEnrichmentPayload(
         meta=_meta_from_flat(payload, language="python"),
         data=_to_python_wrapper_data(payload),
     )
-    flat_data = cast("dict[str, object]", to_builtins(wrapper.data))
+    flat_data = dict(wrapper.data)
     resolution, behavior, structural, parse_quality, agreement = _partition_python_payload_fields(
         flat_data
     )
@@ -299,7 +316,11 @@ def normalize_python_payload(payload: dict[str, object] | None) -> dict[str, obj
 
 
 def normalize_rust_payload(payload: dict[str, object] | None) -> dict[str, object] | None:
-    """Normalize Rust enrichment payload via typed wrapper contract."""
+    """Normalize Rust enrichment payload via typed wrapper contract.
+
+    Returns:
+        Structured Rust payload envelope, or `None` when input is `None`.
+    """
     if payload is None:
         return None
     wrapper = RustEnrichmentPayload(
@@ -319,7 +340,7 @@ def normalize_rust_payload(payload: dict[str, object] | None) -> dict[str, objec
             }
         },
     )
-    out = cast("dict[str, object]", to_builtins(wrapper.data))
+    out = dict(wrapper.data)
     out["language"] = wrapper.meta.language
     out["enrichment_status"] = wrapper.meta.enrichment_status
     out["enrichment_sources"] = wrapper.meta.enrichment_sources

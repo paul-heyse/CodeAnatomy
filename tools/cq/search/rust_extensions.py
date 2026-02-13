@@ -1,4 +1,3 @@
-# ruff: noqa: ANN202
 """Rust-analyzer deep extension plane for CQ enrichment.
 
 This module provides typed structures and stub functions for rust-analyzer
@@ -9,6 +8,8 @@ and fail-open.
 from __future__ import annotations
 
 from tools.cq.core.structs import CqStruct
+
+_FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, TimeoutError, ValueError, TypeError)
 
 
 class RustMacroExpansionV1(CqStruct, frozen=True):
@@ -92,7 +93,7 @@ def expand_macro(
         try:
             response = request(method, params)
             break
-        except Exception:  # noqa: BLE001 - fail-open by design
+        except _FAIL_OPEN_EXCEPTIONS:
             continue
 
     if not isinstance(response, dict):
@@ -136,7 +137,7 @@ def get_runnables(
         try:
             response = request(method, params)
             break
-        except Exception:  # noqa: BLE001 - fail-open by design
+        except _FAIL_OPEN_EXCEPTIONS:
             continue
 
     if not isinstance(response, list):
@@ -152,7 +153,7 @@ def get_runnables(
     return tuple(runnables)
 
 
-def _request_fn(session: object):
+def _request_fn(session: object) -> object | None:
     request = getattr(session, "_send_request", None)
     if callable(request):
         return request

@@ -84,9 +84,9 @@ def compute_search_context_window(
             def_lines=def_lines,
         )
 
-    from tools.cq.macros.calls import _compute_context_window
+    from tools.cq.macros.calls import compute_calls_context_window
 
-    return _compute_context_window(match_line, def_lines, total_lines)
+    return compute_calls_context_window(match_line, def_lines, total_lines)
 
 
 def extract_search_context_snippet(
@@ -102,9 +102,9 @@ def extract_search_context_snippet(
     str | None
         Extracted snippet text or ``None`` when rendering is unavailable.
     """
-    from tools.cq.macros.calls import _extract_context_snippet
+    from tools.cq.macros.calls import extract_calls_context_snippet
 
-    return _extract_context_snippet(
+    return extract_calls_context_snippet(
         source_lines,
         context_window["start_line"],
         context_window["end_line"],

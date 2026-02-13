@@ -11,6 +11,7 @@ from typing import cast
 import msgspec
 
 from tools.cq.cli_app.context import CliContext
+from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
@@ -18,6 +19,7 @@ from tools.cq.core.multilang_orchestrator import (
 )
 from tools.cq.core.requests import MergeResultsRequest
 from tools.cq.core.run_context import RunContext
+from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding, mk_result, ms
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
 from tools.cq.query.batch_spans import collect_span_filters
@@ -63,7 +65,7 @@ from tools.cq.search.multilang_diagnostics import (
     diagnostics_to_summary_payload,
     is_python_oriented_query_text,
 )
-from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
+from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
 
 
 @dataclass(frozen=True)
@@ -108,17 +110,12 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = Fa
         merge_step_results(merged, step_id, result)
         executed_results.append((step_id, result))
 
-    for step in other_steps:
-        step_id = step.id or step_type(step)
-        try:
-            result = _execute_non_q_step(step, plan, ctx)
-        except Exception as exc:  # noqa: BLE001 - deliberate boundary
-            result = _error_result(step_id, step_type(step), exc, ctx)
-            merge_step_results(merged, step_id, result)
-            executed_results.append((step_id, result))
-            if stop_on_error:
-                break
-            continue
+    non_q_results = (
+        _execute_non_q_steps_serial(other_steps, plan, ctx, stop_on_error=stop_on_error)
+        if stop_on_error
+        else _execute_non_q_steps_parallel(other_steps, plan, ctx)
+    )
+    for step_id, result in non_q_results:
         merge_step_results(merged, step_id, result)
         executed_results.append((step_id, result))
 
@@ -462,7 +459,7 @@ def _execute_entity_q_steps(
         )
         try:
             result = execute_entity_query_from_records(request)
-        except Exception as exc:  # noqa: BLE001 - defensive boundary
+        except Exception as exc:
             result = _error_result(step.parent_step_id, "q", exc, ctx)
             result.summary["lang"] = step.plan.lang
             result.summary["query_text"] = step.step.query
@@ -521,7 +518,7 @@ def _execute_pattern_q_steps(
         )
         try:
             result = execute_pattern_query_with_files(request)
-        except Exception as exc:  # noqa: BLE001 - defensive boundary
+        except Exception as exc:
             result = _error_result(step.parent_step_id, "q", exc, ctx)
             result.summary["lang"] = step.plan.lang
             result.summary["query_text"] = step.step.query
@@ -731,6 +728,50 @@ def _execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext) -> CqResu
     return _apply_run_scope_filter(result, ctx.root, plan.in_dir, plan.exclude)
 
 
+def _execute_non_q_step_safe(step: RunStep, plan: RunPlan, ctx: CliContext) -> tuple[str, CqResult]:
+    step_id = step.id or step_type(step)
+    try:
+        return step_id, _execute_non_q_step(step, plan, ctx)
+    except Exception as exc:
+        return step_id, _error_result(step_id, step_type(step), exc, ctx)
+
+
+def _execute_non_q_steps_serial(
+    steps: list[RunStep],
+    plan: RunPlan,
+    ctx: CliContext,
+    *,
+    stop_on_error: bool,
+) -> list[tuple[str, CqResult]]:
+    results: list[tuple[str, CqResult]] = []
+    for step in steps:
+        step_id, result = _execute_non_q_step_safe(step, plan, ctx)
+        results.append((step_id, result))
+        if stop_on_error and result.summary.get("error"):
+            break
+    return results
+
+
+def _execute_non_q_steps_parallel(
+    steps: list[RunStep],
+    plan: RunPlan,
+    ctx: CliContext,
+) -> list[tuple[str, CqResult]]:
+    if len(steps) <= 1:
+        return _execute_non_q_steps_serial(steps, plan, ctx, stop_on_error=False)
+    scheduler = get_worker_scheduler()
+    if scheduler.policy.run_step_workers <= 1:
+        return _execute_non_q_steps_serial(steps, plan, ctx, stop_on_error=False)
+    futures = [scheduler.submit_io(_execute_non_q_step_safe, step, plan, ctx) for step in steps]
+    batch = scheduler.collect_bounded(
+        futures,
+        timeout_seconds=max(1.0, float(len(steps)) * 60.0),
+    )
+    if batch.timed_out > 0:
+        return _execute_non_q_steps_serial(steps, plan, ctx, stop_on_error=False)
+    return batch.done
+
+
 def _execute_search_step(step: SearchStep, plan: RunPlan, ctx: CliContext) -> CqResult:
     if step.regex and step.literal:
         msg = "search step cannot set both regex and literal"
@@ -749,45 +790,58 @@ def _execute_search_step(step: SearchStep, plan: RunPlan, ctx: CliContext) -> Cq
     include_globs = _build_search_includes(plan.in_dir, step.in_dir)
     exclude_globs = list(plan.exclude) if plan.exclude else None
 
-    return smart_search(
-        ctx.root,
-        step.query,
-        mode=mode,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        include_strings=step.include_strings,
-        lang_scope=step.lang_scope,
-        limits=SMART_SEARCH_LIMITS,
-        tc=ctx.toolchain,
-        argv=ctx.argv,
+    from tools.cq.core.services import SearchServiceRequest
+
+    services = resolve_runtime_services(ctx.root)
+    return services.search.execute(
+        SearchServiceRequest(
+            root=ctx.root,
+            query=step.query,
+            mode=mode,
+            include_globs=include_globs,
+            exclude_globs=exclude_globs,
+            include_strings=step.include_strings,
+            lang_scope=step.lang_scope,
+            limits=SMART_SEARCH_LIMITS,
+            tc=ctx.toolchain,
+            argv=ctx.argv,
+        )
     )
 
 
 def _execute_search_fallback(query: str, plan: RunPlan, ctx: CliContext) -> CqResult:
     include_globs = _build_search_includes(plan.in_dir, None)
     exclude_globs = list(plan.exclude) if plan.exclude else None
-    return smart_search(
-        ctx.root,
-        query,
-        mode=None,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        include_strings=False,
-        lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-        limits=SMART_SEARCH_LIMITS,
-        tc=ctx.toolchain,
-        argv=ctx.argv,
+    from tools.cq.core.services import SearchServiceRequest
+
+    services = resolve_runtime_services(ctx.root)
+    return services.search.execute(
+        SearchServiceRequest(
+            root=ctx.root,
+            query=query,
+            mode=None,
+            include_globs=include_globs,
+            exclude_globs=exclude_globs,
+            include_strings=False,
+            lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+            limits=SMART_SEARCH_LIMITS,
+            tc=ctx.toolchain,
+            argv=ctx.argv,
+        )
     )
 
 
 def _execute_calls(step: CallsStep, ctx: CliContext) -> CqResult:
-    from tools.cq.macros.calls import cmd_calls
+    from tools.cq.core.services import CallsServiceRequest
 
-    return cmd_calls(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        function_name=step.function,
+    services = resolve_runtime_services(ctx.root)
+    return services.calls.execute(
+        CallsServiceRequest(
+            root=ctx.root,
+            function_name=step.function,
+            tc=ctx.toolchain,
+            argv=ctx.argv,
+        )
     )
 
 

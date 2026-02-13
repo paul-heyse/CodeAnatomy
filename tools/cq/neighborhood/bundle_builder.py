@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201,PLR0913,PLR0914,C901
 """Semantic neighborhood bundle assembler with capability-gated enrichment.
 
 This module orchestrates assembly of ``SemanticNeighborhoodBundleV1`` artifacts
@@ -66,7 +65,11 @@ class BundleBuildRequest(CqStruct, frozen=True):
 def build_neighborhood_bundle(
     request: BundleBuildRequest,
 ) -> SemanticNeighborhoodBundleV1:
-    """Build semantic neighborhood bundle with capability-gated assembly."""
+    """Build semantic neighborhood bundle with capability-gated assembly.
+
+    Returns:
+        Fully assembled semantic neighborhood bundle.
+    """
     started = ms()
     degrade_events: list[DegradeEventV1] = list(request.target_degrade_events)
 
@@ -119,7 +122,11 @@ def plan_feasible_slices(
     requested_slices: tuple[NeighborhoodSliceKind, ...],
     capabilities: Mapping[str, object] | LspCapabilitySnapshotV1 | None,
 ) -> tuple[tuple[NeighborhoodSliceKind, ...], tuple[DegradeEventV1, ...]]:
-    """Plan which LSP slices are feasible given server capabilities."""
+    """Plan which LSP slices are feasible given server capabilities.
+
+    Returns:
+        Feasible slices and degrade events for unavailable capabilities.
+    """
     return plan_capability_feasible_slices(
         requested_slices=requested_slices,
         capabilities=capabilities,
@@ -157,7 +164,7 @@ def _get_negotiated_caps(request: BundleBuildRequest) -> dict[str, object]:
             from tools.cq.search.pyrefly_lsp import get_pyrefly_lsp_capabilities
 
             return get_pyrefly_lsp_capabilities(request.root)
-        except Exception:  # noqa: BLE001 - fail-open
+        except Exception:
             return {}
 
     if request.language == "rust":
@@ -165,7 +172,7 @@ def _get_negotiated_caps(request: BundleBuildRequest) -> dict[str, object]:
             from tools.cq.search.rust_lsp import get_rust_lsp_capabilities
 
             return get_rust_lsp_capabilities(request.root)
-        except Exception:  # noqa: BLE001 - fail-open
+        except Exception:
             return {}
 
     return {}

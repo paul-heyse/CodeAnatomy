@@ -5,7 +5,6 @@ from __future__ import annotations
 import multiprocessing
 import os
 from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import cast
 
@@ -20,6 +19,7 @@ from tools.cq.core.front_door_insight import (
     FrontDoorInsightV1,
     render_insight_card,
 )
+from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 from tools.cq.core.serialization import to_builtins
 from tools.cq.core.structs import CqStruct
@@ -508,7 +508,7 @@ def _summary_string(
     return _na(missing_reason)
 
 
-def _format_language_scope(summary: dict[str, object]) -> str:  # noqa: C901
+def _format_language_scope(summary: dict[str, object]) -> str:
     lang_scope = summary.get("lang_scope")
     if isinstance(lang_scope, str) and lang_scope:
         return f"`{lang_scope}`"
@@ -517,26 +517,37 @@ def _format_language_scope(summary: dict[str, object]) -> str:  # noqa: C901
         return f"`{', '.join(str(item) for item in language_order)}`"
     step_summaries = summary.get("step_summaries")
     if isinstance(step_summaries, dict):
-        scopes: set[str] = set()
-        ordered: list[str] = []
-        for step_summary in step_summaries.values():
-            if not isinstance(step_summary, dict):
-                continue
-            step_scope = step_summary.get("lang_scope")
-            if isinstance(step_scope, str) and step_scope:
-                scopes.add(step_scope)
-            step_order = step_summary.get("language_order")
-            if isinstance(step_order, list):
-                for item in step_order:
-                    if isinstance(item, str) and item in {"python", "rust"} and item not in ordered:
-                        ordered.append(item)
-        if len(scopes) == 1:
-            return f"`{next(iter(scopes))}`"
-        if len(scopes) > 1:
-            return "`auto`"
-        if ordered:
-            return f"`{', '.join(ordered)}`"
+        inferred_scope = _scope_from_step_summaries(step_summaries)
+        if inferred_scope is not None:
+            return f"`{inferred_scope}`"
     return _na("language_scope_missing")
+
+
+def _scope_from_step_summaries(step_summaries: dict[str, object]) -> str | None:
+    scopes: set[str] = set()
+    ordered: list[str] = []
+    for step_summary in step_summaries.values():
+        if not isinstance(step_summary, dict):
+            continue
+        step_scope = step_summary.get("lang_scope")
+        if isinstance(step_scope, str) and step_scope:
+            scopes.add(step_scope)
+        _merge_language_order(ordered, step_summary.get("language_order"))
+    if len(scopes) == 1:
+        return next(iter(scopes))
+    if len(scopes) > 1:
+        return "auto"
+    if ordered:
+        return ", ".join(ordered)
+    return None
+
+
+def _merge_language_order(ordered: list[str], raw_order: object) -> None:
+    if not isinstance(raw_order, list):
+        return
+    for item in raw_order:
+        if isinstance(item, str) and item in {"python", "rust"} and item not in ordered:
+            ordered.append(item)
 
 
 def _collect_top_symbols(findings: list[Finding]) -> str:
@@ -751,7 +762,7 @@ def _compute_render_enrichment_payload_from_anchor(
         )
         enriched_finding = build_finding(enriched, root)
         payload = to_builtins(enriched_finding.details.data)
-    except Exception:  # noqa: BLE001 - fail-open render enrichment
+    except (OSError, RuntimeError, TypeError, ValueError):
         return {}
     if isinstance(payload, dict):
         return payload
@@ -899,14 +910,26 @@ def _populate_render_enrichment_cache(
     if workers <= 1:
         _populate_render_enrichment_cache_sequential(cache, tasks)
         return
+    scheduler = get_worker_scheduler()
     try:
-        with ProcessPoolExecutor(
-            max_workers=workers,
-            mp_context=multiprocessing.get_context("spawn"),
-        ) as pool:
-            for result in pool.map(_compute_render_enrichment_worker, tasks):
-                cache[result.file, result.line, result.col, result.language] = result.payload
-    except Exception:  # noqa: BLE001 - fail-open to sequential mode
+        futures = [scheduler.submit_cpu(_compute_render_enrichment_worker, task) for task in tasks]
+        batch = scheduler.collect_bounded(
+            futures,
+            timeout_seconds=max(1.0, float(len(tasks))),
+        )
+        if batch.timed_out > 0:
+            _populate_render_enrichment_cache_sequential(cache, tasks)
+            return
+        for result in batch.done:
+            cache[result.file, result.line, result.col, result.language] = result.payload
+    except (
+        multiprocessing.ProcessError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        ValueError,
+        TypeError,
+    ):
         _populate_render_enrichment_cache_sequential(cache, tasks)
 
 

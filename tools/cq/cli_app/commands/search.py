@@ -34,9 +34,11 @@ def search(
     Raises:
         RuntimeError: If command context is not injected.
     """
+    from tools.cq.core.bootstrap import resolve_runtime_services
+    from tools.cq.core.services import SearchServiceRequest
     from tools.cq.query.language import parse_query_language_scope
     from tools.cq.search.classifier import QueryMode
-    from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
+    from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
 
     if ctx is None:
         msg = "Context not injected"
@@ -62,17 +64,20 @@ def search(
         looks_like_file = candidate.is_file() or (requested.suffix and not in_value.endswith("/"))
         include_globs.append(in_value if looks_like_file else f"{in_value}/**")
 
-    result = smart_search(
-        ctx.root,
-        query,
-        mode=mode,
-        lang_scope=parse_query_language_scope(options.lang),
-        include_globs=include_globs if include_globs else None,
-        exclude_globs=list(options.exclude) if options.exclude else None,
-        include_strings=options.include_strings,
-        limits=SMART_SEARCH_LIMITS,
-        tc=ctx.toolchain,
-        argv=ctx.argv,
+    services = resolve_runtime_services(ctx.root)
+    result = services.search.execute(
+        SearchServiceRequest(
+            root=ctx.root,
+            query=query,
+            mode=mode,
+            lang_scope=parse_query_language_scope(options.lang),
+            include_globs=include_globs if include_globs else None,
+            exclude_globs=list(options.exclude) if options.exclude else None,
+            include_strings=options.include_strings,
+            limits=SMART_SEARCH_LIMITS,
+            tc=ctx.toolchain,
+            argv=ctx.argv,
+        )
     )
 
     return CliResult(result=result, context=ctx, filters=options)

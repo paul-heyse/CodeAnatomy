@@ -97,7 +97,8 @@ def calls(
         RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.macros.calls import cmd_calls
+    from tools.cq.core.bootstrap import resolve_runtime_services
+    from tools.cq.core.services import CallsServiceRequest
 
     if ctx is None:
         msg = "Context not injected"
@@ -107,11 +108,14 @@ def calls(
         opts = FilterParams()
     options = options_from_params(opts, type_=CommonFilters)
 
-    result = cmd_calls(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        function_name=function,
+    services = resolve_runtime_services(ctx.root)
+    result = services.calls.execute(
+        CallsServiceRequest(
+            root=ctx.root,
+            function_name=function,
+            tc=ctx.toolchain,
+            argv=ctx.argv,
+        )
     )
 
     return CliResult(result=result, context=ctx, filters=options)

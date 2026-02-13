@@ -1,4 +1,3 @@
-# ruff: noqa: DOC201,PLR2004,C901
 """Target parsing and resolution for neighborhood assembly.
 
 Provides one canonical resolver used by both CLI command execution and run-plan
@@ -13,6 +12,9 @@ from tools.cq.astgrep.sgpy_scanner import SgRecord
 from tools.cq.core.snb_schema import DegradeEventV1
 from tools.cq.core.structs import CqStruct
 from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
+
+_TARGET_PARTS_WITH_COL = 3
+_TARGET_PARTS_WITH_LINE = 2
 
 
 class TargetSpec(CqStruct, frozen=True):
@@ -45,13 +47,16 @@ def parse_target_spec(target: str) -> TargetSpec:
     - `path/to/file.py:line`
     - `path/to/file.py:line:col`
     - `symbol_name`
+
+    Returns:
+        Parsed target specification.
     """
     text = target.strip()
     if not text:
         return TargetSpec(raw=target)
 
     parts = text.split(":")
-    if len(parts) >= 3 and parts[-1].isdigit() and parts[-2].isdigit():
+    if len(parts) >= _TARGET_PARTS_WITH_COL and parts[-1].isdigit() and parts[-2].isdigit():
         file_part = ":".join(parts[:-2]).strip()
         if file_part:
             return TargetSpec(
@@ -61,7 +66,7 @@ def parse_target_spec(target: str) -> TargetSpec:
                 target_col=max(0, int(parts[-1])),
             )
 
-    if len(parts) >= 2 and parts[-1].isdigit():
+    if len(parts) >= _TARGET_PARTS_WITH_LINE and parts[-1].isdigit():
         file_part = ":".join(parts[:-1]).strip()
         if file_part:
             return TargetSpec(
@@ -73,14 +78,18 @@ def parse_target_spec(target: str) -> TargetSpec:
     return TargetSpec(raw=target, target_name=text)
 
 
-def resolve_target(  # noqa: PLR0912
+def resolve_target(
     spec: TargetSpec,
     snapshot: ScanSnapshot,
     *,
     root: Path | None = None,
     allow_symbol_fallback: bool = True,
 ) -> ResolvedTarget:
-    """Resolve a parsed target to file/name/anchor coordinates."""
+    """Resolve a parsed target to file/name/anchor coordinates.
+
+    Returns:
+        Resolved target with coordinates, symbol hint, and degrade events.
+    """
     degrades: list[DegradeEventV1] = []
     def_records = tuple(snapshot.def_records)
 

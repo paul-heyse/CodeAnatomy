@@ -1,4 +1,3 @@
-# ruff: noqa: ANN202,PLR0914
 """Edit and refactor action plane for CQ enrichment.
 
 This module provides typed structures and stub functions for LSP code actions,
@@ -7,7 +6,13 @@ diagnostics, and workspace edits. All functions are capability-gated and fail-op
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import cast
+
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.lsp.capabilities import coerce_capabilities, supports_method
+
+_FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, TimeoutError, ValueError, TypeError)
 
 
 class PrepareRenameResultV1(CqStruct, frozen=True):
@@ -219,7 +224,7 @@ def resolve_code_action(session: object, action: CodeActionV1) -> CodeActionV1 |
     payload = action.raw_payload or {"title": action.title}
     try:
         resolved = request("codeAction/resolve", payload)
-    except Exception:  # noqa: BLE001 - fail-open by design
+    except _FAIL_OPEN_EXCEPTIONS:
         return None
     if not isinstance(resolved, dict):
         return None
@@ -260,15 +265,15 @@ def execute_code_action_command(session: object, action: CodeActionV1) -> bool:
 
     try:
         request("workspace/executeCommand", params)
-    except Exception:  # noqa: BLE001 - fail-open by design
+    except _FAIL_OPEN_EXCEPTIONS:
         return False
     return True
 
 
-def _request_fn(session: object):
+def _request_fn(session: object) -> Callable[[str, dict[str, object]], object] | None:
     request = getattr(session, "_send_request", None)
     if callable(request):
-        return request
+        return cast("Callable[[str, dict[str, object]], object]", request)
     return None
 
 
@@ -280,50 +285,65 @@ def _supports_code_action_resolve(session: object) -> bool:
         return False
 
     provider_raw = getattr(server_caps, "code_action_provider_raw", None)
-    if isinstance(provider_raw, dict):
-        return bool(provider_raw.get("resolveProvider"))
-    return bool(getattr(server_caps, "code_action_provider", False))
+    caps = coerce_capabilities(
+        {
+            "codeActionProvider": provider_raw
+            if provider_raw is not None
+            else getattr(server_caps, "code_action_provider", False)
+        }
+    )
+    if supports_method(caps, "textDocument/codeAction"):
+        provider = caps.get("codeActionProvider")
+        if isinstance(provider, dict):
+            return bool(provider.get("resolveProvider"))
+        return True
+    return False
 
 
 def _diagnostic_from_row(row: dict[str, object]) -> DiagnosticItemV1:
-    uri_raw = row.get("uri")
-    uri = uri_raw if isinstance(uri_raw, str) else ""
-    message_raw = row.get("message")
-    message = message_raw if isinstance(message_raw, str) else ""
-
-    severity_raw = row.get("severity")
-    severity = severity_raw if isinstance(severity_raw, int) else 0
-
-    code_raw = row.get("code")
-    code = code_raw if isinstance(code_raw, str) else None
-
-    href_raw = row.get("code_description_href")
-    code_description_href = href_raw if isinstance(href_raw, str) else None
-
-    version_raw = row.get("version")
-    version = version_raw if isinstance(version_raw, int) else None
-
-    tags_raw = row.get("tags")
-    tags: tuple[int, ...] = ()
-    if isinstance(tags_raw, (tuple, list)):
-        tags = tuple(tag for tag in tags_raw if isinstance(tag, int))
-
-    related_raw = row.get("related_information")
-    related_information: tuple[dict[str, object], ...] = ()
-    if isinstance(related_raw, (tuple, list)):
-        related_information = tuple(info for info in related_raw if isinstance(info, dict))
-
     return DiagnosticItemV1(
-        uri=uri,
-        message=message,
-        severity=severity,
-        code=code,
-        code_description_href=code_description_href,
-        tags=tags,
-        version=version,
-        related_information=related_information,
+        uri=_row_str(row, "uri"),
+        message=_row_str(row, "message"),
+        severity=_row_int(row, "severity"),
+        code=_row_opt_str(row, "code"),
+        code_description_href=_row_opt_str(row, "code_description_href"),
+        tags=_row_int_tuple(row.get("tags")),
+        version=_row_opt_int(row, "version"),
+        related_information=_row_dict_tuple(row.get("related_information")),
         data=dict(data) if isinstance((data := row.get("data")), dict) else None,
     )
+
+
+def _row_str(row: dict[str, object], key: str) -> str:
+    value = row.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _row_opt_str(row: dict[str, object], key: str) -> str | None:
+    value = row.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _row_int(row: dict[str, object], key: str) -> int:
+    value = row.get(key)
+    return value if isinstance(value, int) else 0
+
+
+def _row_opt_int(row: dict[str, object], key: str) -> int | None:
+    value = row.get(key)
+    return value if isinstance(value, int) else None
+
+
+def _row_int_tuple(value: object) -> tuple[int, ...]:
+    if isinstance(value, (tuple, list)):
+        return tuple(tag for tag in value if isinstance(tag, int))
+    return ()
+
+
+def _row_dict_tuple(value: object) -> tuple[dict[str, object], ...]:
+    if isinstance(value, (tuple, list)):
+        return tuple(info for info in value if isinstance(info, dict))
+    return ()
 
 
 def _normalize_code_action(payload: dict[str, object]) -> CodeActionV1:

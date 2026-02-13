@@ -47,8 +47,10 @@ def q(
         RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
+    from tools.cq.core.bootstrap import resolve_runtime_services
     from tools.cq.core.run_context import RunContext
     from tools.cq.core.schema import mk_result, ms
+    from tools.cq.core.services import SearchServiceRequest
     from tools.cq.query.executor import execute_plan
     from tools.cq.query.parser import QueryParseError, parse_query
     from tools.cq.query.planner import compile_query
@@ -68,22 +70,25 @@ def q(
     except QueryParseError as e:
         if not has_tokens:
             from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
-            from tools.cq.search.smart_search import SMART_SEARCH_LIMITS, smart_search
+            from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
 
             # Build include globs from include patterns
             include_globs = options.include if options.include else None
 
-            result = smart_search(
-                ctx.root,
-                query_string,
-                mode=None,  # Auto-detect
-                lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-                include_globs=include_globs,
-                exclude_globs=options.exclude if options.exclude else None,
-                include_strings=False,
-                limits=SMART_SEARCH_LIMITS,
-                tc=ctx.toolchain,
-                argv=ctx.argv,
+            services = resolve_runtime_services(ctx.root)
+            result = services.search.execute(
+                SearchServiceRequest(
+                    root=ctx.root,
+                    query=query_string,
+                    mode=None,  # Auto-detect
+                    lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+                    include_globs=include_globs,
+                    exclude_globs=options.exclude if options.exclude else None,
+                    include_strings=False,
+                    limits=SMART_SEARCH_LIMITS,
+                    tc=ctx.toolchain,
+                    argv=ctx.argv,
+                )
             )
             return CliResult(result=result, context=ctx, filters=options)
         started_ms = ms()

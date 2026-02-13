@@ -31,15 +31,26 @@ except ImportError:  # pragma: no cover - optional dependency
 _QUERY_ROOT = Path(__file__).with_suffix("").parent / "queries" / "python"
 _MAX_TREE_CACHE_ENTRIES = 64
 _TREE_CACHE: dict[str, tuple[Tree, str]] = {}
-_CACHE_HITS = 0
-_CACHE_MISSES = 0
-_CACHE_EVICTIONS = 0
 _MAX_SOURCE_BYTES = 5 * 1024 * 1024
 _MAX_CAPTURE_ITEMS = 8
 _MAX_CAPTURE_TEXT_LEN = 120
 _DEFAULT_MATCH_LIMIT = 4_096
 _QUERY_TIMEOUT_SECONDS = 0.035
 _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
+_COMPILE_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError)
+
+
+class _CacheStats:
+    """Mutable cache counter holder."""
+
+    def __init__(self) -> None:
+        """Initialize zeroed cache counters."""
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+
+
+_CACHE_STATS = _CacheStats()
 
 
 def _source_hash(source_bytes: bytes) -> str:
@@ -85,11 +96,9 @@ def _parse_tree(source_bytes: bytes) -> Tree:
 
 
 def _get_tree(source: str, *, cache_key: str | None) -> tuple[Tree, bytes]:
-    global _CACHE_HITS, _CACHE_MISSES, _CACHE_EVICTIONS  # noqa: PLW0603
-
     source_bytes = source.encode("utf-8", errors="replace")
     if cache_key is None:
-        _CACHE_MISSES += 1
+        _CACHE_STATS.misses += 1
         return _parse_tree(source_bytes), source_bytes
 
     content_hash = _source_hash(source_bytes)
@@ -97,15 +106,15 @@ def _get_tree(source: str, *, cache_key: str | None) -> tuple[Tree, bytes]:
     if cached is not None:
         cached_tree, cached_hash = cached
         if cached_hash == content_hash:
-            _CACHE_HITS += 1
+            _CACHE_STATS.hits += 1
             return cached_tree, source_bytes
 
-    _CACHE_MISSES += 1
+    _CACHE_STATS.misses += 1
     tree = _parse_tree(source_bytes)
     if len(_TREE_CACHE) >= _MAX_TREE_CACHE_ENTRIES and cache_key not in _TREE_CACHE:
         oldest = next(iter(_TREE_CACHE))
         del _TREE_CACHE[oldest]
-        _CACHE_EVICTIONS += 1
+        _CACHE_STATS.evictions += 1
     _TREE_CACHE[cache_key] = (tree, content_hash)
     return tree, source_bytes
 
@@ -129,21 +138,20 @@ def parse_python_tree(source: str, *, cache_key: str | None = None) -> Tree | No
 
 def clear_tree_sitter_python_cache() -> None:
     """Clear parser/query caches and reset observability counters."""
-    global _CACHE_HITS, _CACHE_MISSES, _CACHE_EVICTIONS  # noqa: PLW0603
     _TREE_CACHE.clear()
     _python_language.cache_clear()
     _compile_query.cache_clear()
-    _CACHE_HITS = 0
-    _CACHE_MISSES = 0
-    _CACHE_EVICTIONS = 0
+    _CACHE_STATS.hits = 0
+    _CACHE_STATS.misses = 0
+    _CACHE_STATS.evictions = 0
 
 
 def get_tree_sitter_python_cache_stats() -> dict[str, int]:
     """Return tree-sitter Python cache counters."""
     return {
-        "cache_hits": _CACHE_HITS,
-        "cache_misses": _CACHE_MISSES,
-        "cache_evictions": _CACHE_EVICTIONS,
+        "cache_hits": _CACHE_STATS.hits,
+        "cache_misses": _CACHE_STATS.misses,
+        "cache_evictions": _CACHE_STATS.evictions,
     }
 
 
@@ -401,7 +409,7 @@ def lint_python_query_packs() -> list[str]:
     for filename, source in _query_sources().items():
         try:
             _compile_query(filename, source)
-        except Exception as exc:  # noqa: BLE001 - lint surface
+        except _COMPILE_ERRORS as exc:
             errors.append(f"{filename}: compile_error:{type(exc).__name__}")
             continue
 

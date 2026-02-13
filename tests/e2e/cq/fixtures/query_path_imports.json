@@ -30,6 +30,8 @@
     "root": "<repo_root>",
     "schema_version": "cq.v2",
     "toolchain": {
+      "diskcache": "5.6.3",
+      "msgspec": "0.20.0",
       "python": "3.13.12",
       "rg": "<ripgrep>",
       "sgpy": "0.40.5"

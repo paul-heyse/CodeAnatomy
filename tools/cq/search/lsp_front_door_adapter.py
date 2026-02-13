@@ -5,6 +5,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from tools.cq.core.cache import (
+    build_cache_key,
+    build_cache_tag,
+    get_cq_cache_backend,
+)
+from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage
 from tools.cq.search.lsp_contract_state import LspProvider
 from tools.cq.search.lsp_request_budget import budget_for_mode, call_with_retry
@@ -12,6 +18,18 @@ from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_l
 from tools.cq.search.rust_lsp import RustLspRequest, enrich_with_rust_lsp
 
 _LSP_DISABLED_VALUES = {"0", "false", "no", "off"}
+
+
+class LanguageLspEnrichmentRequest(CqStruct, frozen=True):
+    """Request envelope for language-aware front-door LSP enrichment."""
+
+    language: QueryLanguage
+    mode: str
+    root: Path
+    file_path: Path
+    line: int
+    col: int
+    symbol_hint: str | None = None
 
 
 def lsp_runtime_enabled() -> bool:
@@ -58,15 +76,32 @@ def provider_for_language(language: QueryLanguage | str) -> LspProvider:
     return "none"
 
 
-def enrich_with_language_lsp(  # noqa: PLR0913
-    *,
-    language: QueryLanguage,
-    mode: str,
-    root: Path,
-    file_path: Path,
-    line: int,
-    col: int,
-    symbol_hint: str | None,
+def _safe_file_mtime_ns(file_path: Path) -> int:
+    try:
+        return file_path.stat().st_mtime_ns
+    except (OSError, RuntimeError, ValueError):
+        return 0
+
+
+def _cache_key_for_request(request: LanguageLspEnrichmentRequest) -> str:
+    return build_cache_key(
+        "lsp_front_door",
+        version="v2",
+        workspace=str(request.root.resolve()),
+        language=request.language,
+        target=str(request.file_path),
+        extras={
+            "mode": request.mode,
+            "line": max(1, int(request.line)),
+            "col": max(0, int(request.col)),
+            "symbol_hint": request.symbol_hint or "",
+            "mtime_ns": _safe_file_mtime_ns(request.file_path),
+        },
+    )
+
+
+def enrich_with_language_lsp(
+    request: LanguageLspEnrichmentRequest,
 ) -> tuple[dict[str, object] | None, bool]:
     """Return language-appropriate LSP payload and timeout marker.
 
@@ -77,43 +112,74 @@ def enrich_with_language_lsp(  # noqa: PLR0913
     """
     if not lsp_runtime_enabled():
         return None, False
-    budget = budget_for_mode(mode)
-    if language == "python":
-        request = PyreflyLspRequest(
-            root=root,
-            file_path=file_path,
-            line=max(1, int(line)),
-            col=max(0, int(col)),
-            symbol_hint=symbol_hint,
+    budget = budget_for_mode(request.mode)
+    cache = get_cq_cache_backend(root=request.root)
+    cache_key = _cache_key_for_request(request)
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        return dict(cached), False
+
+    if request.language == "python":
+        py_request = PyreflyLspRequest(
+            root=request.root,
+            file_path=request.file_path,
+            line=max(1, int(request.line)),
+            col=max(0, int(request.col)),
+            symbol_hint=request.symbol_hint,
             timeout_seconds=budget.probe_timeout_seconds,
             startup_timeout_seconds=budget.startup_timeout_seconds,
         )
         payload, timed_out = call_with_retry(
-            lambda: enrich_with_pyrefly_lsp(request),
+            lambda: enrich_with_pyrefly_lsp(py_request),
             max_attempts=budget.max_attempts,
             retry_backoff_ms=budget.retry_backoff_ms,
         )
-        return payload if isinstance(payload, dict) else None, timed_out
+        if isinstance(payload, dict):
+            expire_seconds = int(max(1.0, budget.probe_timeout_seconds * 300.0))
+            cache.set(
+                cache_key,
+                payload,
+                expire=expire_seconds,
+                tag=build_cache_tag(
+                    workspace=str(request.root.resolve()),
+                    language="python",
+                ),
+            )
+            return payload, timed_out
+        return None, timed_out
 
-    request = RustLspRequest(
-        file_path=str(file_path),
-        line=max(0, int(line) - 1),
-        col=max(0, int(col)),
+    rust_request = RustLspRequest(
+        file_path=str(request.file_path),
+        line=max(0, int(request.line) - 1),
+        col=max(0, int(request.col)),
         query_intent="symbol_grounding",
     )
     payload, timed_out = call_with_retry(
         lambda: enrich_with_rust_lsp(
-            request,
-            root=root,
+            rust_request,
+            root=request.root,
             startup_timeout_seconds=budget.startup_timeout_seconds,
         ),
         max_attempts=budget.max_attempts,
         retry_backoff_ms=budget.retry_backoff_ms,
     )
-    return payload if isinstance(payload, dict) else None, timed_out
+    if isinstance(payload, dict):
+        expire_seconds = int(max(1.0, budget.probe_timeout_seconds * 300.0))
+        cache.set(
+            cache_key,
+            payload,
+            expire=expire_seconds,
+            tag=build_cache_tag(
+                workspace=str(request.root.resolve()),
+                language="rust",
+            ),
+        )
+        return payload, timed_out
+    return None, timed_out
 
 
 __all__ = [
+    "LanguageLspEnrichmentRequest",
     "enrich_with_language_lsp",
     "infer_language_for_path",
     "lsp_runtime_enabled",

@@ -6,7 +6,7 @@ import pyarrow as pa
 
 from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.io.adapter import DataFusionIOAdapter
-from datafusion_engine.schema.registry import (
+from datafusion_engine.schema import (
     LIBCST_FILES_SCHEMA,
     SCIP_DOCUMENT_SYMBOLS_SCHEMA,
     SCIP_METADATA_SCHEMA,

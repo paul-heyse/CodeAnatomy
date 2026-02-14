@@ -18,7 +18,7 @@ from datafusion_engine.arrow.metadata import (
 )
 from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from datafusion_engine.schema.contracts import SchemaContract
-from datafusion_engine.udf.runtime import validate_rust_udf_snapshot
+from datafusion_engine.udf.extension_runtime import validate_rust_udf_snapshot
 from datafusion_engine.views.bundle_extraction import (
     extract_lineage_from_bundle,
     resolve_required_udfs_from_bundle,
@@ -344,7 +344,7 @@ def _nested_view_nodes(
     runtime_profile: DataFusionRuntimeProfile | None = None,
 ) -> list[ViewNode]:
     from datafusion_engine.io.adapter import DataFusionIOAdapter
-    from datafusion_engine.schema.registry import extract_schema_for, nested_view_specs
+    from datafusion_engine.schema import extract_schema_for, nested_view_specs
 
     if runtime_profile is None:
         msg = "Runtime profile is required for nested view planning."

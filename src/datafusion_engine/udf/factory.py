@@ -25,7 +25,7 @@ from storage.ipc_utils import payload_ipc_bytes
 
 if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from datafusion_engine.udf.catalog import DataFusionUdfSpec
+    from datafusion_engine.udf.metadata import DataFusionUdfSpec
 
 UdfVolatility = Literal["immutable", "stable", "volatile"]
 

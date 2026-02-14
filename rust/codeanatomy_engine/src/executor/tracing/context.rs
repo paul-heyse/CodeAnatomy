@@ -97,10 +97,7 @@ pub fn execution_span(info: &ExecutionSpanInfo, config: &TracingConfig) -> traci
     if let Some(envelope_hash) = info.envelope_hash.as_ref() {
         span.record("envelope_hash", envelope_hash.as_str());
     }
-    span.record(
-        "rulepack_fingerprint",
-        info.rulepack_fingerprint.as_str(),
-    );
+    span.record("rulepack_fingerprint", info.rulepack_fingerprint.as_str());
     span.record("profile", info.profile_name.as_str());
     span.record("tracing_rule_mode", rule_mode.as_str());
     span.record("tracing_plan_diff", config.plan_diff);

@@ -151,8 +151,8 @@ async fn build_span_containment_join(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::array::{Int64Array, RecordBatch};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::MemTable;
     use std::sync::Arc;
 
@@ -305,8 +305,14 @@ mod tests {
             right_key: "id".to_string(),
         }];
 
-        let result = build_join(&ctx, "left_table", "right_table", &JoinType::Inner, &join_keys)
-            .await;
+        let result = build_join(
+            &ctx,
+            "left_table",
+            "right_table",
+            &JoinType::Inner,
+            &join_keys,
+        )
+        .await;
 
         assert!(result.is_ok());
     }

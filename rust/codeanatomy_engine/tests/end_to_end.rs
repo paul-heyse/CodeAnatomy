@@ -16,7 +16,9 @@ use codeanatomy_engine::session::factory::SessionFactory;
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::spec::join_graph::JoinGraph;
 use codeanatomy_engine::spec::outputs::{MaterializationMode, OutputTarget};
-use codeanatomy_engine::spec::relations::{InputRelation, SchemaContract, ViewDefinition, ViewTransform};
+use codeanatomy_engine::spec::relations::{
+    InputRelation, SchemaContract, ViewDefinition, ViewTransform,
+};
 use codeanatomy_engine::spec::rule_intents::RulepackProfile;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
@@ -85,14 +87,20 @@ async fn seed_delta_input(location: &str) {
         RulepackProfile::Default,
     );
 
-    let output_plans = SemanticPlanCompiler::new(&ctx, &spec).compile().await.unwrap();
+    let output_plans = SemanticPlanCompiler::new(&ctx, &spec)
+        .compile()
+        .await
+        .unwrap();
     let lineage = test_lineage([7u8; 32], [8u8; 32]);
     execute_and_materialize(&ctx, output_plans, &lineage)
         .await
         .unwrap();
 }
 
-fn build_delta_parity_spec(input_location: String, output_location: String) -> SemanticExecutionSpec {
+fn build_delta_parity_spec(
+    input_location: String,
+    output_location: String,
+) -> SemanticExecutionSpec {
     let mut columns = BTreeMap::new();
     columns.insert("id".to_string(), "Int64".to_string());
     let mut spec = SemanticExecutionSpec::new(
@@ -135,11 +143,8 @@ fn build_delta_parity_spec(input_location: String, output_location: String) -> S
 async fn test_end_to_end_compile_and_materialize() {
     let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-    let input_batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![1, 2]))],
-    )
-    .unwrap();
+    let input_batch =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![1, 2]))]).unwrap();
     let output_batch = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(Int64Array::from(Vec::<i64>::new()))],
@@ -197,7 +202,9 @@ async fn test_end_to_end_compile_and_materialize() {
     let spec_hash = [0u8; 32];
     let envelope_hash = [0u8; 32];
     let lineage = test_lineage(spec_hash, envelope_hash);
-    let results = execute_and_materialize(&ctx, output_plans, &lineage).await.unwrap();
+    let results = execute_and_materialize(&ctx, output_plans, &lineage)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
 }
 
@@ -226,7 +233,7 @@ fn test_materialization_result_has_extended_fields() {
 #[test]
 fn test_commit_properties_include_hashes() {
     use codeanatomy_engine::executor::delta_writer::build_commit_properties;
-    use codeanatomy_engine::spec::outputs::{OutputTarget, MaterializationMode};
+    use codeanatomy_engine::spec::outputs::{MaterializationMode, OutputTarget};
     use std::collections::BTreeMap;
 
     let mut metadata = BTreeMap::new();
@@ -252,18 +259,18 @@ fn test_commit_properties_include_hashes() {
     assert!(props.contains_key("codeanatomy.envelope_hash"));
     assert!(props.contains_key("user.tag"));
     assert_eq!(props.get("user.tag").unwrap(), "v1");
-    assert_eq!(props.get("codeanatomy.spec_hash").unwrap(), &hex::encode([0xABu8; 32]));
+    assert_eq!(
+        props.get("codeanatomy.spec_hash").unwrap(),
+        &hex::encode([0xABu8; 32])
+    );
 }
 
 #[tokio::test]
 async fn test_delta_history_contains_lineage_metadata() {
     let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-    let input_batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![1, 2]))],
-    )
-    .unwrap();
+    let input_batch =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![1, 2]))]).unwrap();
     ctx.register_table(
         "input",
         Arc::new(MemTable::try_new(schema.clone(), vec![vec![input_batch]]).unwrap()),
@@ -418,7 +425,9 @@ async fn test_write_idempotency_append_mode() {
     let compiler = SemanticPlanCompiler::new(&ctx, &spec);
     let output_plans = compiler.compile().await.unwrap();
     let lineage1 = test_lineage(spec.spec_hash, [0u8; 32]);
-    let results1 = execute_and_materialize(&ctx, output_plans, &lineage1).await.unwrap();
+    let results1 = execute_and_materialize(&ctx, output_plans, &lineage1)
+        .await
+        .unwrap();
     assert_eq!(results1.len(), 1);
     let first_row_count = results1[0].rows_written;
 
@@ -452,7 +461,9 @@ async fn test_write_idempotency_append_mode() {
     let compiler2 = SemanticPlanCompiler::new(&ctx, &spec);
     let output_plans2 = compiler2.compile().await.unwrap();
     let lineage2 = test_lineage(spec.spec_hash, [0u8; 32]);
-    let results2 = execute_and_materialize(&ctx, output_plans2, &lineage2).await.unwrap();
+    let results2 = execute_and_materialize(&ctx, output_plans2, &lineage2)
+        .await
+        .unwrap();
     assert_eq!(results2.len(), 1);
 
     // Both runs should write the same number of rows (deterministic behavior)
@@ -502,7 +513,9 @@ fn test_run_result_warnings_can_be_populated() {
         .build();
 
     assert_eq!(result.warnings.len(), 2);
-    assert!(result.warnings[0].message.contains("plan bundle capture failed"));
+    assert!(result.warnings[0]
+        .message
+        .contains("plan bundle capture failed"));
     assert!(result.warnings[1].message.contains("maintenance skipped"));
 }
 
@@ -510,11 +523,8 @@ fn test_run_result_warnings_can_be_populated() {
 async fn test_pipeline_includes_preflight_warnings() {
     let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-    let input_batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![1, 2]))],
-    )
-    .unwrap();
+    let input_batch =
+        RecordBatch::try_new(schema.clone(), vec![Arc::new(Int64Array::from(vec![1, 2]))]).unwrap();
     let output_batch = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(Int64Array::from(Vec::<i64>::new()))],
@@ -581,24 +591,20 @@ async fn test_pipeline_includes_preflight_warnings() {
     )
     .await
     .unwrap();
-    assert!(
-        outcome
-            .run_result
-            .warnings
-            .iter()
-            .any(|warning| warning.message.contains("reserved knob warning"))
-    );
+    assert!(outcome
+        .run_result
+        .warnings
+        .iter()
+        .any(|warning| warning.message.contains("reserved knob warning")));
     let summary = outcome
         .run_result
         .trace_metrics_summary
         .as_ref()
         .expect("trace metrics summary should exist for executed plans");
     assert!(summary.warning_count_total >= 1);
-    assert!(
-        summary
-            .warning_counts_by_code
-            .contains_key("reserved_profile_knob_ignored")
-    );
+    assert!(summary
+        .warning_counts_by_code
+        .contains_key("reserved_profile_knob_ignored"));
 }
 
 // ---------------------------------------------------------------------------
@@ -693,7 +699,10 @@ async fn test_prepared_context_and_pipeline_identity_surfaces_are_stable() {
         prepared_a.envelope.planning_surface_hash,
         prepared_b.envelope.planning_surface_hash
     );
-    assert_eq!(prepared_a.provider_identities, prepared_b.provider_identities);
+    assert_eq!(
+        prepared_a.provider_identities,
+        prepared_b.provider_identities
+    );
     assert!(
         !prepared_a.provider_identities.is_empty(),
         "expected at least one provider identity from registered input relations"

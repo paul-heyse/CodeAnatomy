@@ -406,7 +406,10 @@ mod tests {
         assert!(!runtime.capture_substrait);
         assert!(!runtime.capture_optimizer_lab);
         assert!(!runtime.capture_delta_codec);
-        assert_eq!(runtime.pushdown_enforcement_mode, PushdownEnforcementMode::Warn);
+        assert_eq!(
+            runtime.pushdown_enforcement_mode,
+            PushdownEnforcementMode::Warn
+        );
         assert_eq!(
             runtime.extension_governance_mode,
             ExtensionGovernanceMode::Permissive

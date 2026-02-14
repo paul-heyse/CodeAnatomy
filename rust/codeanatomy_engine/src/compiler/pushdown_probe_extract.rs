@@ -160,7 +160,8 @@ pub async fn extract_input_filter_predicates(
             continue;
         };
 
-        let resolved = resolve_filter_source(source, &input_names, &view_by_name, &mut HashSet::new());
+        let resolved =
+            resolve_filter_source(source, &input_names, &view_by_name, &mut HashSet::new());
         match resolved {
             ResolvedFilterSource::Input(input_name) => {
                 let source_df = match ctx.table(&input_name).await {

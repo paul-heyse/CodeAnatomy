@@ -15,7 +15,7 @@ from datafusion_engine.delta.control_plane import DeltaProviderRequest, delta_pr
 from datafusion_engine.delta.service import delta_service_for_profile
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
-from datafusion_engine.schema.registry import extract_schema_for
+from datafusion_engine.schema import extract_schema_for
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from datafusion_engine.tables.metadata import TableProviderCapsule
 from utils.uuid_factory import uuid7_hex

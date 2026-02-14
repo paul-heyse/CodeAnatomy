@@ -765,7 +765,7 @@ def view_udf_parity_payload(
     dict[str, object]
         Diagnostics payload describing required/missing UDFs per view.
     """
-    from datafusion_engine.udf.runtime import udf_names_from_snapshot
+    from datafusion_engine.udf.extension_runtime import udf_names_from_snapshot
 
     def _required_udfs(node: ViewNode) -> tuple[str, ...]:
         return tuple(node.required_udfs)
@@ -861,7 +861,10 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, objec
     dict[str, object]
         Summary payload with counts and metadata coverage.
     """
-    from datafusion_engine.udf.runtime import rust_udf_snapshot_hash, udf_names_from_snapshot
+    from datafusion_engine.udf.extension_runtime import (
+        rust_udf_snapshot_hash,
+        udf_names_from_snapshot,
+    )
 
     def _plugin_manifest() -> Mapping[str, object] | None:
         from datafusion_engine.extensions.plugin_manifest import resolve_plugin_manifest

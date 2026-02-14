@@ -145,10 +145,7 @@ fn run_build(py: Python<'_>, request_json: &str) -> PyResult<Py<pyo3::types::PyA
             "normalize_outputs_delta".to_string(),
             normalize_path.map_or(Value::Null, Value::String),
         );
-        auxiliary_outputs.insert(
-            "extract_error_artifacts_delta".to_string(),
-            Value::Null,
-        );
+        auxiliary_outputs.insert("extract_error_artifacts_delta".to_string(), Value::Null);
         let manifest_aux = output_root
             .as_ref()
             .filter(|_| include_manifest)

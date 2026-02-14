@@ -32,7 +32,7 @@ from datafusion_engine.extract.registry import (
 )
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
-from datafusion_engine.schema.registry import (
+from datafusion_engine.schema import (
     extract_nested_dataset_names,
     extract_schema_for,
     relationship_schema_for,

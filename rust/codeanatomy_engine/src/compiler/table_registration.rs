@@ -19,4 +19,3 @@ pub fn register_or_replace_table(
     ctx.register_table(name, provider)?;
     Ok(())
 }
-

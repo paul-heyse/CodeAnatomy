@@ -12,7 +12,9 @@ use codeanatomy_engine::compiler::plan_compiler::SemanticPlanCompiler;
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::spec::join_graph::JoinGraph;
 use codeanatomy_engine::spec::outputs::MaterializationMode;
-use codeanatomy_engine::spec::relations::{InputRelation, SchemaContract, ViewDefinition, ViewTransform};
+use codeanatomy_engine::spec::relations::{
+    InputRelation, SchemaContract, ViewDefinition, ViewTransform,
+};
 use codeanatomy_engine::spec::rule_intents::RulepackProfile;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
@@ -147,7 +149,10 @@ async fn test_plan_compiler_builds_multi_output_plan() {
     let output_plans = compiler.compile().await.unwrap();
     assert_eq!(output_plans.len(), 2);
     // Verify both output targets are present
-    let table_names: Vec<&str> = output_plans.iter().map(|(t, _)| t.table_name.as_str()).collect();
+    let table_names: Vec<&str> = output_plans
+        .iter()
+        .map(|(t, _)| t.table_name.as_str())
+        .collect();
     assert!(table_names.contains(&"ids_out"));
     assert!(table_names.contains(&"names_out"));
 }
@@ -187,7 +192,9 @@ async fn test_plan_compiler_rejects_cyclic_dependencies() {
                     source: "view_b".to_string(),
                     columns: vec!["id".to_string()],
                 },
-                output_schema: SchemaContract { columns: columns.clone() },
+                output_schema: SchemaContract {
+                    columns: columns.clone(),
+                },
             },
             ViewDefinition {
                 name: "view_b".to_string(),
@@ -215,7 +222,10 @@ async fn test_plan_compiler_rejects_cyclic_dependencies() {
     let result = compiler.compile().await;
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("Cycle detected"), "Expected cycle detection error, got: {err_msg}");
+    assert!(
+        err_msg.contains("Cycle detected"),
+        "Expected cycle detection error, got: {err_msg}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -274,13 +284,11 @@ fn test_plan_bundle_artifact_has_required_scope4_fields() {
         explain_verbose: vec![],
         explain_analyze: vec![],
         rulepack_fingerprint: [0u8; 32],
-        provider_identities: vec![
-            ProviderIdentity {
-                table_name: "test_table".to_string(),
-                identity_hash: [42u8; 32],
-                delta_compatibility: None,
-            },
-        ],
+        provider_identities: vec![ProviderIdentity {
+            table_name: "test_table".to_string(),
+            identity_hash: [42u8; 32],
+            delta_compatibility: None,
+        }],
         schema_fingerprints: codeanatomy_engine::compiler::plan_bundle::SchemaFingerprints {
             p0_schema_hash: [0u8; 32],
             p1_schema_hash: [0u8; 32],
@@ -296,7 +304,8 @@ fn test_plan_bundle_artifact_has_required_scope4_fields() {
         provider_lineage: vec![],
         referenced_tables: vec![],
         required_udfs: vec![],
-        replay_flags: codeanatomy_engine::compiler::plan_bundle::ReplayCompatibilityFlags::default(),
+        replay_flags: codeanatomy_engine::compiler::plan_bundle::ReplayCompatibilityFlags::default(
+        ),
         portability: codeanatomy_engine::compiler::plan_bundle::PortableArtifactPolicy::default(),
         stats_quality: None,
     };

@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
 
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from datafusion_engine.sql.options import SQLOptions
     from semantics.program_manifest import ManifestDatasetResolver
@@ -1003,7 +1003,7 @@ def _udf_planner_snapshot(snapshot: Mapping[str, object]) -> Mapping[str, object
         Normalized UDF planner metadata payload.
     """
     try:
-        from datafusion_engine.udf.catalog import udf_planner_snapshot
+        from datafusion_engine.udf.metadata import udf_planner_snapshot
     except ImportError:
         return {"status": "unavailable"}
     try:
@@ -1209,7 +1209,7 @@ def _validate_bundle_required_udfs(
 ) -> None:
     if not options.validate_udfs or not required.required_udfs:
         return
-    from datafusion_engine.udf.runtime import validate_required_udfs
+    from datafusion_engine.udf.extension_runtime import validate_required_udfs
 
     validate_required_udfs(snapshot, required=required.required_udfs)
 
@@ -1885,12 +1885,13 @@ def _scan_units_for_bundle(
     if session_runtime is None or plan is None:
         return scan_units
     try:
-        from datafusion_engine.lineage.datafusion import extract_lineage
-        from datafusion_engine.lineage.scan import plan_scan_units
+        from datafusion_engine.lineage.reporting import extract_lineage
+        from datafusion_engine.lineage.scheduling import plan_scan_units
     except ImportError:
         return scan_units
     lineage = extract_lineage(plan)
-    if lineage.scans:
+    lineage_scans = getattr(lineage, "scans", ())
+    if lineage_scans:
         locations = _manifest_dataset_locations(
             dataset_resolver=dataset_resolver,
             session_runtime=session_runtime,
@@ -1900,7 +1901,7 @@ def _scan_units_for_bundle(
                 scan_units, _ = plan_scan_units(
                     ctx,
                     dataset_locations=locations,
-                    scans_by_task={"plan_bundle": lineage.scans},
+                    scans_by_task={"plan_bundle": lineage_scans},
                     runtime_profile=session_runtime.profile,
                 )
             except (RuntimeError, TypeError, ValueError):
@@ -2544,12 +2545,15 @@ def _udf_artifacts(
             domain_planner_names=session_runtime.domain_planner_names,
         )
     else:
-        from datafusion_engine.udf.runtime import rust_udf_snapshot
+        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
 
         snapshot = rust_udf_snapshot(ctx)
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.catalog import rewrite_tag_index
-    from datafusion_engine.udf.runtime import rust_udf_snapshot_hash, validate_rust_udf_snapshot
+    from datafusion_engine.udf.extension_runtime import (
+        rust_udf_snapshot_hash,
+        validate_rust_udf_snapshot,
+    )
+    from datafusion_engine.udf.metadata import rewrite_tag_index
 
     validate_rust_udf_snapshot(snapshot)
     snapshot_hash = rust_udf_snapshot_hash(snapshot)
@@ -2571,7 +2575,7 @@ def _required_udf_artifacts(
 ) -> _RequiredUdfArtifacts:
     if plan is None:
         return _RequiredUdfArtifacts(required_udfs=(), required_rewrite_tags=())
-    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.lineage.reporting import extract_lineage
 
     lineage = extract_lineage(plan, udf_snapshot=snapshot)
     return _RequiredUdfArtifacts(

@@ -68,8 +68,8 @@ fn test_otlp_protocol_variants_deserialize() {
                 "otlp_protocol": value
             }
         }));
-        let spec: SemanticExecutionSpec = serde_json::from_value(payload)
-            .expect("spec with otlp protocol should deserialize");
+        let spec: SemanticExecutionSpec =
+            serde_json::from_value(payload).expect("spec with otlp protocol should deserialize");
         let tracing = spec.runtime.effective_tracing();
         assert_eq!(tracing.otlp_protocol, Some(expected));
     }

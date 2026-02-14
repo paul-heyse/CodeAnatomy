@@ -75,7 +75,8 @@ pub async fn compile_request(request: CompileRequest<'_>) -> Result<CompileRespo
         tracing_config,
     } = request;
 
-    let prepared = prepare_execution_context(session_factory, spec, ruleset, tracing_config).await?;
+    let prepared =
+        prepare_execution_context(session_factory, spec, ruleset, tracing_config).await?;
     let mut warnings = prepared.preflight_warnings;
 
     let compiler = SemanticPlanCompiler::new(&prepared.ctx, spec);
@@ -167,7 +168,13 @@ pub async fn compile_request(request: CompileRequest<'_>) -> Result<CompileRespo
                     capture_plan_diffs: true,
                 };
                 let mut optimizer_traces = Vec::new();
-                match run_optimizer_compile_only(&prepared.ctx, runtime.p0_logical.clone(), &optimizer_config).await {
+                match run_optimizer_compile_only(
+                    &prepared.ctx,
+                    runtime.p0_logical.clone(),
+                    &optimizer_config,
+                )
+                .await
+                {
                     Ok(report) => {
                         optimizer_traces = report.pass_traces;
                         warnings.extend(report.warnings);

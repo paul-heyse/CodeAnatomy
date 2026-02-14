@@ -4,7 +4,9 @@ use codeanatomy_engine::compiler::graph_validator::validate_graph;
 use codeanatomy_engine::spec::execution_spec::SemanticExecutionSpec;
 use codeanatomy_engine::spec::join_graph::JoinGraph;
 use codeanatomy_engine::spec::outputs::MaterializationMode;
-use codeanatomy_engine::spec::relations::{InputRelation, SchemaContract, ViewDefinition, ViewTransform};
+use codeanatomy_engine::spec::relations::{
+    InputRelation, SchemaContract, ViewDefinition, ViewTransform,
+};
 use codeanatomy_engine::spec::rule_intents::RulepackProfile;
 
 fn minimal_schema() -> SchemaContract {

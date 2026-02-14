@@ -7,10 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from datafusion_engine.dataset.registration import (
-    DatasetRegistrationOptions,
-    register_dataset_df,
-)
+from datafusion_engine.dataset.registration import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.session.runtime import (
     settings_snapshot_for_profile,
@@ -47,7 +44,7 @@ def test_scan_policy_applies_stats_settings(tmp_path: Path) -> None:
             datafusion_provider="listing",
             overrides=DatasetLocationOverrides(datafusion_scan=scan),
         ),
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        runtime_profile=profile,
     )
     settings = settings_snapshot_for_profile(profile, ctx).to_pydict()
     values = dict(zip(settings.get("name", []), settings.get("value", []), strict=False))
@@ -76,7 +73,7 @@ def test_scan_policy_applies_listing_cache_and_projection(tmp_path: Path) -> Non
             datafusion_provider="listing",
             overrides=DatasetLocationOverrides(datafusion_scan=scan),
         ),
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        runtime_profile=profile,
     )
     settings = settings_snapshot_for_profile(profile, ctx).to_pydict()
     values = dict(zip(settings.get("name", []), settings.get("value", []), strict=False))
@@ -110,7 +107,7 @@ def test_listing_schema_evolution_adds_missing_columns(tmp_path: Path) -> None:
                 table_spec=table_spec_from_schema("events", expected_schema),
             ),
         ),
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        runtime_profile=profile,
     )
     result = ctx.table("events").to_arrow_table()
     assert "extra" in result.column_names

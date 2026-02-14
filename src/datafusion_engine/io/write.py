@@ -2155,7 +2155,7 @@ def _delta_lineage_columns(df: DataFrame) -> tuple[str, ...]:
     if plan is None:
         return ()
     try:
-        from datafusion_engine.lineage.datafusion import extract_lineage
+        from datafusion_engine.lineage.reporting import extract_lineage
     except ImportError:
         return ()
     try:

@@ -30,3 +30,4 @@ Cargo.lock
 
 # CQ analysis artifacts
 .cq/
+.cq_cache/

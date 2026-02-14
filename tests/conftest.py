@@ -238,7 +238,10 @@ def diagnostic_profile() -> tuple[object, object]:
 
 
 def _validate_native_runtime_contract(ctx: SessionContext) -> None:
-    from datafusion_engine.udf.runtime import rust_runtime_install_payload, validate_required_udfs
+    from datafusion_engine.udf.extension_runtime import (
+        rust_runtime_install_payload,
+        validate_required_udfs,
+    )
 
     runtime_payload = rust_runtime_install_payload(ctx)
     runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")
@@ -268,7 +271,7 @@ def require_native_runtime() -> None:
     """Require the Rust-first DataFusion runtime contract for native-path tests."""
     from datafusion_engine.extensions.schema_runtime import load_schema_runtime
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from datafusion_engine.udf.runtime import validate_extension_capabilities
+    from datafusion_engine.udf.extension_runtime import validate_extension_capabilities
 
     try:
         profile = DataFusionRuntimeProfile()

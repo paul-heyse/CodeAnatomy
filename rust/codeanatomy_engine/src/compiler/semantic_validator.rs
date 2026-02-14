@@ -202,16 +202,14 @@ pub async fn validate_semantics(
                     if needs_fallback_column_check {
                         for token in referenced_identifiers(predicate) {
                             if !source_schema.contains_key(&token) {
-                                errors.push(
-                                    SemanticValidationError::UnresolvedColumnReference {
-                                        view_name: view.name.clone(),
-                                        column: token,
-                                        context: format!(
-                                            "Filter predicate references unknown column in source '{}'",
-                                            source
-                                        ),
-                                    },
-                                );
+                                errors.push(SemanticValidationError::UnresolvedColumnReference {
+                                    view_name: view.name.clone(),
+                                    column: token,
+                                    context: format!(
+                                        "Filter predicate references unknown column in source '{}'",
+                                        source
+                                    ),
+                                });
                             }
                         }
                     }
@@ -332,8 +330,8 @@ fn referenced_identifiers(predicate: &str) -> Vec<String> {
     let mut token = String::new();
     let mut in_string = false;
     let keywords: HashSet<&str> = HashSet::from([
-        "and", "or", "not", "is", "null", "true", "false", "in", "like", "between", "case",
-        "when", "then", "else", "end", "as", "cast", "extract", "from", "distinct",
+        "and", "or", "not", "is", "null", "true", "false", "in", "like", "between", "case", "when",
+        "then", "else", "end", "as", "cast", "extract", "from", "distinct",
     ]);
 
     for ch in predicate.chars() {

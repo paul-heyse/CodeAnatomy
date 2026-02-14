@@ -209,6 +209,60 @@ def capabilities_snapshot() -> dict[str, object]:
     }
 
 
+def replay_substrait_plan(ctx: SessionContext, payload_bytes: bytes) -> object:
+    """Replay Substrait bytes through public DataFusion Python APIs in stub mode.
+
+    Returns:
+    -------
+    object
+        DataFusion DataFrame-like object produced by public Substrait APIs.
+
+    Raises:
+        RuntimeError: If the local DataFusion build does not expose substrait support.
+    """
+    try:
+        from datafusion.substrait import Consumer, Serde
+    except ImportError as exc:
+        msg = "Stub replay_substrait_plan requires datafusion.substrait support."
+        raise RuntimeError(msg) from exc
+    plan = Serde.deserialize_bytes(payload_bytes)
+    return Consumer.from_substrait_plan(ctx, plan)
+
+
+def lineage_from_substrait(payload_bytes: bytes) -> dict[str, object]:
+    """Return a minimal lineage payload for a Substrait plan in stub mode."""
+    _ = payload_bytes
+    return {
+        "scans": [],
+        "required_columns_by_dataset": {},
+        "filters": [],
+        "referenced_tables": [],
+        "required_udfs": [],
+        "required_rewrite_tags": [],
+        "referenced_udfs": [],
+    }
+
+
+def build_extraction_session(config_payload: object) -> SessionContext:
+    """Return a default SessionContext for extraction in stub mode."""
+    _ = config_payload
+    return SessionContext()
+
+
+def register_dataset_provider(ctx: SessionContext, request_payload: object) -> dict[str, object]:
+    """Return a minimal dataset-provider registration payload in stub mode."""
+    table_name = "dataset"
+    if isinstance(request_payload, dict):
+        table_name = str(request_payload.get("table_name", table_name))
+    _ = ctx
+    return {
+        "table_name": table_name,
+        "registered": False,
+        "snapshot": {},
+        "scan_config": delta_scan_config_from_session(ctx),
+    }
+
+
 def arrow_stream_to_batches(obj: object) -> object:
     """Return a stub Arrow stream conversion result.
 

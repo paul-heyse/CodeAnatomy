@@ -8,10 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from datafusion_engine.dataset.registration import (
-    DatasetRegistrationOptions,
-    register_dataset_df,
-)
+from datafusion_engine.dataset.registration import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation, DatasetLocationOverrides
 from datafusion_engine.schema.introspection import SchemaIntrospector
 from schema_spec.arrow_types import arrow_type_from_pyarrow
@@ -55,7 +52,7 @@ def test_information_schema_column_defaults(tmp_path: Path) -> None:
             format="parquet",
             overrides=DatasetLocationOverrides(table_spec=table_spec),
         ),
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        runtime_profile=profile,
     )
     defaults = SchemaIntrospector(ctx).table_column_defaults("defaults_tbl")
     assert defaults.get("status") is not None

@@ -12,7 +12,10 @@ use url::{Position, Url};
 use crate::spec::runtime::TracingConfig;
 
 /// Register instrumented `file://` object store when enabled.
-pub fn register_instrumented_file_store(ctx: &SessionContext, config: &TracingConfig) -> Result<()> {
+pub fn register_instrumented_file_store(
+    ctx: &SessionContext,
+    config: &TracingConfig,
+) -> Result<()> {
     if !config.enabled || !config.instrument_object_store {
         return Ok(());
     }
@@ -52,9 +55,7 @@ pub fn register_instrumented_stores_for_locations(
 
 fn register_instrumented_store(ctx: &SessionContext, store_url: &ObjectStoreUrl) -> Result<()> {
     let runtime_env = ctx.runtime_env();
-    let base_store = runtime_env
-        .object_store(store_url)
-        .map_err(|error| {
+    let base_store = runtime_env.object_store(store_url).map_err(|error| {
         DataFusionError::Plan(format!(
             "Unable to resolve object store '{}' for tracing instrumentation: {error}",
             AsRef::<str>::as_ref(store_url)
@@ -78,7 +79,9 @@ fn sanitize_label(value: &str) -> String {
 
 fn object_store_url_for_location(location: &str) -> Result<ObjectStoreUrl> {
     let table_url = ensure_table_uri(location).map_err(|error| {
-        DataFusionError::Plan(format!("Invalid Delta table location '{location}': {error}"))
+        DataFusionError::Plan(format!(
+            "Invalid Delta table location '{location}': {error}"
+        ))
     })?;
     validate_supported_scheme(&table_url)?;
     let base = match table_url.scheme() {

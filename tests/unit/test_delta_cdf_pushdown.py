@@ -37,11 +37,10 @@ def _create_cdf_table(path: Path) -> None:
 def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
     """Ensure CDF providers honor projection and filter pushdown."""
     from datafusion_engine.dataset.registration import (
-        DatasetRegistrationOptions,
         register_dataset_df,
     )
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.lineage.reporting import extract_lineage
     from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
     from storage.deltalake import DeltaCdfOptions
 
@@ -57,7 +56,7 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
             format="delta",
             delta_cdf_options=DeltaCdfOptions(starting_version=0),
         ),
-        options=DatasetRegistrationOptions(runtime_profile=runtime),
+        runtime_profile=runtime,
     )
     df = ctx.sql("SELECT id FROM cdf_table WHERE id > 1")
     bundle = build_plan_artifact(
@@ -68,8 +67,9 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
         ),
     )
     lineage = extract_lineage(bundle.optimized_logical_plan)
+    scans = getattr(lineage, "scans", ())
     scan = next(
-        (scan for scan in lineage.scans if scan.dataset_name == "cdf_table"),
+        (scan for scan in scans if scan.dataset_name == "cdf_table"),
         None,
     )
     assert scan is not None
@@ -81,7 +81,6 @@ def test_delta_cdf_projection_and_filter_pushdown(tmp_path: Path) -> None:
 def test_delta_cdf_facade_registration(tmp_path: Path) -> None:
     """Expose CDF providers via the execution facade."""
     from datafusion_engine.dataset.registration import (
-        DatasetRegistrationOptions,
         register_dataset_df,
     )
     from datafusion_engine.dataset.registry import DatasetLocation
@@ -104,7 +103,7 @@ def test_delta_cdf_facade_registration(tmp_path: Path) -> None:
             format="delta",
             delta_cdf_options=DeltaCdfOptions(starting_version=0),
         ),
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        runtime_profile=profile,
     )
     facade = DataFusionExecutionFacade(ctx=ctx, runtime_profile=profile)
     mapping = facade.register_cdf_inputs(

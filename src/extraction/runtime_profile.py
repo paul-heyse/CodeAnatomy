@@ -20,7 +20,7 @@ from storage.ipc_utils import payload_hash
 
 if TYPE_CHECKING:
     from datafusion_engine.lineage.diagnostics import DiagnosticsSink
-    from datafusion_engine.udf.runtime import RustUdfSnapshot
+    from datafusion_engine.udf.extension_runtime import RustUdfSnapshot
 
 
 PROFILE_HASH_VERSION: int = 3
@@ -288,12 +288,12 @@ def engine_runtime_artifact(
         except (RuntimeError, TypeError, ValueError):
             session = None
         if session is not None:
-            from datafusion_engine.udf.runtime import rust_udf_snapshot
+            from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
 
             registry_snapshot = rust_udf_snapshot(session)
     registry_hash = None
     if registry_snapshot is not None:
-        from datafusion_engine.udf.runtime import rust_udf_snapshot_hash
+        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot_hash
 
         registry_hash = rust_udf_snapshot_hash(registry_snapshot)
     datafusion_settings = profile.settings_payload()

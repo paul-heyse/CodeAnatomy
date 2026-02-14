@@ -22,15 +22,14 @@ pub fn hash_spec(spec: &SemanticExecutionSpec) -> [u8; 32] {
 /// Build canonical byte representation of spec.
 fn build_canonical_form(spec: &SemanticExecutionSpec) -> Vec<u8> {
     // Convert spec to serde_json::Value
-    let json_value = serde_json::to_value(spec)
-        .expect("SemanticExecutionSpec must serialize to JSON");
+    let json_value =
+        serde_json::to_value(spec).expect("SemanticExecutionSpec must serialize to JSON");
 
     // Canonicalize to ensure deterministic ordering
     let canonical = canonicalize_value(json_value);
 
     // Serialize to bytes (compact, no whitespace)
-    serde_json::to_vec(&canonical)
-        .expect("CanonicalValue must serialize to bytes")
+    serde_json::to_vec(&canonical).expect("CanonicalValue must serialize to bytes")
 }
 
 /// Canonical value representation with sorted keys.
@@ -53,11 +52,7 @@ fn canonicalize_value(value: serde_json::Value) -> CanonicalValue {
         serde_json::Value::Number(n) => CanonicalValue::Number(n),
         serde_json::Value::String(s) => CanonicalValue::String(s),
         serde_json::Value::Array(arr) => {
-            CanonicalValue::Array(
-                arr.into_iter()
-                    .map(canonicalize_value)
-                    .collect()
-            )
+            CanonicalValue::Array(arr.into_iter().map(canonicalize_value).collect())
         }
         serde_json::Value::Object(obj) => {
             let mut canonical_map = BTreeMap::new();
@@ -87,10 +82,10 @@ impl DeterminismContract {
 mod tests {
     use super::*;
     use crate::spec::execution_spec::SemanticExecutionSpec;
-    use crate::spec::relations::{InputRelation, ViewDefinition, ViewTransform, SchemaContract};
     use crate::spec::join_graph::JoinGraph;
-    use crate::spec::runtime::RuntimeConfig;
+    use crate::spec::relations::{InputRelation, SchemaContract, ViewDefinition, ViewTransform};
     use crate::spec::rule_intents::RulepackProfile;
+    use crate::spec::runtime::RuntimeConfig;
     use std::collections::BTreeMap;
 
     #[test]
@@ -101,7 +96,10 @@ mod tests {
         let hash1 = hash_spec(&spec1);
         let hash2 = hash_spec(&spec2);
 
-        assert_eq!(hash1, hash2, "Identical specs must produce identical hashes");
+        assert_eq!(
+            hash1, hash2,
+            "Identical specs must produce identical hashes"
+        );
     }
 
     #[test]
@@ -115,7 +113,10 @@ mod tests {
         let hash1 = hash_spec(&spec1);
         let hash2 = hash_spec(&spec2);
 
-        assert_ne!(hash1, hash2, "Different specs must produce different hashes");
+        assert_ne!(
+            hash1, hash2,
+            "Different specs must produce different hashes"
+        );
     }
 
     #[test]
@@ -144,26 +145,22 @@ mod tests {
 
         SemanticExecutionSpec {
             version: 1,
-            input_relations: vec![
-                InputRelation {
-                    logical_name: "test_input".to_string(),
-                    delta_location: "/tmp/delta".to_string(),
-                    requires_lineage: false,
-                    version_pin: None,
-                }
-            ],
-            view_definitions: vec![
-                ViewDefinition {
-                    name: "test_view".to_string(),
-                    view_kind: "normalize".to_string(),
-                    view_dependencies: vec![],
-                    transform: ViewTransform::Project {
-                        source: "test_input".to_string(),
-                        columns: vec!["id".to_string()],
-                    },
-                    output_schema: SchemaContract { columns: schema },
-                }
-            ],
+            input_relations: vec![InputRelation {
+                logical_name: "test_input".to_string(),
+                delta_location: "/tmp/delta".to_string(),
+                requires_lineage: false,
+                version_pin: None,
+            }],
+            view_definitions: vec![ViewDefinition {
+                name: "test_view".to_string(),
+                view_kind: "normalize".to_string(),
+                view_dependencies: vec![],
+                transform: ViewTransform::Project {
+                    source: "test_input".to_string(),
+                    columns: vec!["id".to_string()],
+                },
+                output_schema: SchemaContract { columns: schema },
+            }],
             join_graph: JoinGraph::default(),
             output_targets: vec![],
             rule_intents: vec![],

@@ -9,7 +9,7 @@ This module is the capstone integration point for:
 - File identity fields (schema_spec.file_identity)
 - Span fields (schema_spec.specs, datafusion_engine.arrow.semantic)
 - Evidence metadata (schema_spec.evidence_metadata)
-- Schema inference via DataFusion lineage (datafusion_engine.lineage.datafusion)
+- Schema inference via DataFusion lineage (datafusion_engine.lineage.reporting)
 - Nested type builders (datafusion_engine.arrow.nested)
 
 Example:
@@ -58,7 +58,7 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.arrow.interop import DataTypeLike, SchemaLike
-    from datafusion_engine.lineage.datafusion import LineageReport
+    from datafusion_engine.lineage.reporting import LineageReport
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +512,7 @@ def _derive_schema_info_from_plan(
     DerivedSchemaInfo
         Schema information derived from plan analysis.
     """
-    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.lineage.reporting import extract_lineage
 
     lineage = extract_lineage(plan, udf_snapshot=udf_snapshot)
 

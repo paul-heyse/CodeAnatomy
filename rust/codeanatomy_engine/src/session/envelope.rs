@@ -408,14 +408,8 @@ mod tests {
 
     #[test]
     fn test_provider_identity_hash_deterministic() {
-        let ids = vec![
-            ("b".to_string(), [2u8; 32]),
-            ("a".to_string(), [1u8; 32]),
-        ];
-        let ids_reordered = vec![
-            ("a".to_string(), [1u8; 32]),
-            ("b".to_string(), [2u8; 32]),
-        ];
+        let ids = vec![("b".to_string(), [2u8; 32]), ("a".to_string(), [1u8; 32])];
+        let ids_reordered = vec![("a".to_string(), [1u8; 32]), ("b".to_string(), [2u8; 32])];
         assert_eq!(
             SessionEnvelope::hash_provider_identities(&ids),
             SessionEnvelope::hash_provider_identities(&ids_reordered)

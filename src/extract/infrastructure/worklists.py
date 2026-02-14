@@ -205,7 +205,7 @@ def _worklist_stream(
     )
     if output_location is not None and output_location.format == "delta":
         from datafusion_engine.dataset.resolution import apply_scan_unit_overrides
-        from datafusion_engine.lineage.scan import ScanLineage, plan_scan_unit
+        from datafusion_engine.lineage.scheduling import ScanLineage, plan_scan_unit
 
         scan_unit = plan_scan_unit(
             df_ctx,

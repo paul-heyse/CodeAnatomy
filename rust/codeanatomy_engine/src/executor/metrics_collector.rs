@@ -104,7 +104,12 @@ pub fn collect_plan_metrics(plan: &dyn ExecutionPlan) -> CollectedMetrics {
     let mut scan_input_rows: u64 = 0;
     let mut scan_output_rows: u64 = 0;
 
-    collect_recursive(plan, &mut collected, &mut scan_input_rows, &mut scan_output_rows);
+    collect_recursive(
+        plan,
+        &mut collected,
+        &mut scan_input_rows,
+        &mut scan_output_rows,
+    );
 
     // Compute scan selectivity from leaf scan nodes.
     // If no scan nodes were found (e.g., in-memory only plans), default to 1.0.

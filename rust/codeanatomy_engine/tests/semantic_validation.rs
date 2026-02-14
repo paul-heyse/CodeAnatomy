@@ -129,4 +129,3 @@ async fn test_semantic_validator_warns_on_numeric_join_coercion() {
     let result = validate_semantics(&spec, &ctx).await.unwrap();
     assert!(result.errors.is_empty());
 }
-

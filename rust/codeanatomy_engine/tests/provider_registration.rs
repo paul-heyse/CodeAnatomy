@@ -1,8 +1,6 @@
 mod common;
 
-use codeanatomy_engine::providers::pushdown_contract::{
-    FilterPushdownStatus, PushdownProbe,
-};
+use codeanatomy_engine::providers::pushdown_contract::{FilterPushdownStatus, PushdownProbe};
 use codeanatomy_engine::providers::scan_config::{
     has_lineage_tracking, standard_scan_config, validate_scan_config,
 };
@@ -143,14 +141,8 @@ fn test_provider_identity_different_hashes_differ() {
 fn test_pushdown_probe_construction_and_status_queries() {
     let probe = PushdownProbe {
         provider: "test_table".to_string(),
-        filter_sql: vec![
-            "id > 10".to_string(),
-            "name = 'test'".to_string(),
-        ],
-        statuses: vec![
-            FilterPushdownStatus::Exact,
-            FilterPushdownStatus::Inexact,
-        ],
+        filter_sql: vec!["id > 10".to_string(), "name = 'test'".to_string()],
+        statuses: vec![FilterPushdownStatus::Exact, FilterPushdownStatus::Inexact],
     };
 
     assert!(!probe.all_exact(), "mixed statuses must not be all exact");

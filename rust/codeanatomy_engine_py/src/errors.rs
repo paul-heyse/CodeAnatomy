@@ -24,13 +24,11 @@ pub fn engine_execution_error(
         let _ = instance.setattr("message", message.clone());
         let _ = match details {
             Some(value) => {
-                let details_obj = serde_json::to_string(&value)
-                    .ok()
-                    .and_then(|serialized| {
-                        py.import("json")
-                            .ok()
-                            .and_then(|json| json.call_method1("loads", (serialized,)).ok())
-                    });
+                let details_obj = serde_json::to_string(&value).ok().and_then(|serialized| {
+                    py.import("json")
+                        .ok()
+                        .and_then(|json| json.call_method1("loads", (serialized,)).ok())
+                });
                 match details_obj {
                     Some(obj) => instance.setattr("details", obj),
                     None => instance.setattr("details", py.None()),

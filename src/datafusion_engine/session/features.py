@@ -113,7 +113,7 @@ def named_args_supported(profile: DataFusionRuntimeProfile) -> bool:
         return True
     if not profile.policies.expr_planner_names:
         return False
-    from datafusion_engine.udf.runtime import extension_capabilities_report
+    from datafusion_engine.udf.extension_runtime import extension_capabilities_report
 
     try:
         report = extension_capabilities_report()

@@ -19,7 +19,6 @@ from utils.hashing import hash_json_canonical
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.delta.scan_policy_inference import ScanPolicyOverride
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
     from relspec.pipeline_policy import DiagnosticsPolicy
@@ -33,6 +32,13 @@ class _OutDegreeGraph(Protocol):
 class _TaskGraphLike(Protocol):
     task_idx: Mapping[str, object]
     graph: _OutDegreeGraph
+
+
+class _ScanOverrideLike(Protocol):
+    dataset_name: str
+    policy: object
+    reasons: object
+    inference_confidence: object | None
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -291,7 +297,7 @@ def _workload_adjusted_cache_policy(
 
 
 def _scan_overrides_to_mapping(
-    overrides: tuple[ScanPolicyOverride, ...],
+    overrides: tuple[_ScanOverrideLike, ...],
 ) -> dict[str, object]:
     """Convert scan policy overrides to a serializable mapping.
 

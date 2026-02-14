@@ -141,17 +141,14 @@ impl TableProvider for MismatchedStatusProvider {
 fn test_pushdown_probe_all_exact_statuses() {
     let probe = PushdownProbe {
         provider: "parquet_table".to_string(),
-        filter_sql: vec![
-            "id > 100".to_string(),
-            "category = 'A'".to_string(),
-        ],
-        statuses: vec![
-            FilterPushdownStatus::Exact,
-            FilterPushdownStatus::Exact,
-        ],
+        filter_sql: vec!["id > 100".to_string(), "category = 'A'".to_string()],
+        statuses: vec![FilterPushdownStatus::Exact, FilterPushdownStatus::Exact],
     };
 
-    assert!(probe.all_exact(), "all Exact statuses must report all_exact");
+    assert!(
+        probe.all_exact(),
+        "all Exact statuses must report all_exact"
+    );
     assert!(!probe.has_unsupported());
     assert!(!probe.has_inexact());
 }
@@ -263,7 +260,8 @@ async fn test_inexact_pushdown_preserves_residual_filter() {
         vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
     )
     .unwrap();
-    let inner = Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()) as Arc<dyn TableProvider>;
+    let inner =
+        Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()) as Arc<dyn TableProvider>;
     let provider = Arc::new(InexactPushdownProvider { inner });
     ctx.register_table("inexact_t", provider).unwrap();
 
@@ -306,7 +304,8 @@ async fn test_projection_pushdown_reaches_provider_scan() {
         ],
     )
     .unwrap();
-    let inner = Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()) as Arc<dyn TableProvider>;
+    let inner =
+        Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()) as Arc<dyn TableProvider>;
     let projections = Arc::new(Mutex::new(Vec::<Option<Vec<usize>>>::new()));
     let provider = Arc::new(ProjectionAwareProvider {
         inner,
@@ -335,13 +334,15 @@ fn test_probe_pushdown_rejects_status_count_mismatch() {
         vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
     )
     .unwrap();
-    let inner = Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()) as Arc<dyn TableProvider>;
+    let inner =
+        Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()) as Arc<dyn TableProvider>;
     let provider = MismatchedStatusProvider { inner };
     let filters = vec![col("id")];
 
     let err = probe_pushdown("mismatch_t", &provider, &filters).unwrap_err();
     assert!(
-        err.to_string().contains("returned 0 pushdown statuses for 1 filters"),
+        err.to_string()
+            .contains("returned 0 pushdown statuses for 1 filters"),
         "unexpected error: {err}"
     );
 }

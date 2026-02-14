@@ -146,7 +146,7 @@ def _fallback_substrait_plan(
     ctx: SessionContext,
     plan: DataFusionLogicalPlan,
 ) -> DataFusionLogicalPlan:
-    from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
+    from datafusion_engine.lineage.reporting import referenced_tables_from_plan
 
     tables = referenced_tables_from_plan(plan)
     available = _available_substrait_tables(ctx, tables)

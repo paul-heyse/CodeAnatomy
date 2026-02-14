@@ -103,7 +103,7 @@ _TYPED_SCHEMA_OVERRIDES: dict[str, pa.Schema] = {
 
 def _static_root_extract_schema(name: str) -> pa.Schema | None:
     """Return static typed schemas for core root extract datasets."""
-    from datafusion_engine.schema.registry import (
+    from datafusion_engine.schema import (
         AST_FILES_SCHEMA,
         BYTECODE_FILES_SCHEMA,
         LIBCST_FILES_SCHEMA,
@@ -153,7 +153,7 @@ def dataset_schema(name: str) -> SchemaLike:
     if static_schema is not None:
         return static_schema
     try:
-        from datafusion_engine.schema.registry import extract_schema_for
+        from datafusion_engine.schema import extract_schema_for
 
         return extract_schema_for(resolved_name)
     except KeyError:

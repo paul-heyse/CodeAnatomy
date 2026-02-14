@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::compiler::cost_model::StatsQuality;
-use crate::compiler::scheduling::TaskSchedule;
 use crate::compiler::plan_bundle::PlanBundleArtifact;
+use crate::compiler::scheduling::TaskSchedule;
 use crate::executor::maintenance::MaintenanceReport;
 use crate::executor::metrics_collector::{CollectedMetrics, TraceMetricsSummary};
 use crate::executor::warnings::RunWarning;
@@ -163,10 +163,7 @@ impl RunResultBuilder {
         self
     }
 
-    pub fn with_trace_metrics_summary(
-        mut self,
-        summary: Option<TraceMetricsSummary>,
-    ) -> Self {
+    pub fn with_trace_metrics_summary(mut self, summary: Option<TraceMetricsSummary>) -> Self {
         self.trace_metrics_summary = summary;
         self
     }

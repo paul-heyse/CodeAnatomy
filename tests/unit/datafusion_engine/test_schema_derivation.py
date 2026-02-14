@@ -2,7 +2,7 @@
 
 Gate 2 of Phase H (Schema Derivation) -- verify that schemas derived from
 ``ExtractMetadata`` field descriptors match the schemas resolved by
-``datafusion_engine.schema.registry.extract_schema_for``.
+``datafusion_engine.schema.extract_schema_for``.
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.extract.metadata import extract_metadata_by_name
+from datafusion_engine.schema import extract_schema_for
 from datafusion_engine.schema.derivation import derive_extract_schema
-from datafusion_engine.schema.registry import extract_schema_for
 
 # ---------------------------------------------------------------------------
 # Helpers

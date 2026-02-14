@@ -107,10 +107,7 @@ pub fn hash_arrow_schema(schema: &Schema) -> [u8; 32] {
 /// assert!(removed.is_empty());
 /// assert!(changed.is_empty());
 /// ```
-pub fn schema_diff(
-    old: &Schema,
-    new: &Schema,
-) -> SchemaDiff {
+pub fn schema_diff(old: &Schema, new: &Schema) -> SchemaDiff {
     let old_fields: BTreeMap<String, &Field> = old
         .fields()
         .iter()
@@ -343,7 +340,10 @@ mod tests {
         let hash1 = hash_arrow_schema(&schema1);
         let hash2 = hash_arrow_schema(&schema2);
 
-        assert_ne!(hash1, hash2, "Different schemas should have different hashes");
+        assert_ne!(
+            hash1, hash2,
+            "Different schemas should have different hashes"
+        );
     }
 
     #[test]
@@ -361,10 +361,7 @@ mod tests {
         let hash1 = hash_arrow_schema(&schema1);
         let hash2 = hash_arrow_schema(&schema2);
 
-        assert_ne!(
-            hash1, hash2,
-            "Field order should affect schema hash"
-        );
+        assert_ne!(hash1, hash2, "Field order should affect schema hash");
     }
 
     #[test]
@@ -493,7 +490,10 @@ mod tests {
 
         let casts = cast_alignment_exprs(&schema, &schema).unwrap();
 
-        assert!(casts.is_empty(), "No casts should be needed for identical schemas");
+        assert!(
+            casts.is_empty(),
+            "No casts should be needed for identical schemas"
+        );
     }
 
     #[test]

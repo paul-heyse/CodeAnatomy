@@ -1,6 +1,5 @@
 //! Root SemanticExecutionSpec — the immutable contract between Python and Rust.
 
-use serde::{Deserialize, Serialize};
 use crate::compiler::cache_policy::CachePlacementPolicy;
 use crate::executor::maintenance::MaintenanceSchedule;
 use crate::rules::overlay::RuleOverlayProfile;
@@ -9,8 +8,9 @@ use crate::spec::join_graph::JoinGraph;
 use crate::spec::outputs::OutputTarget;
 use crate::spec::parameters::TypedParameter;
 use crate::spec::relations::{InputRelation, ViewDefinition};
-use crate::spec::runtime::RuntimeConfig;
 use crate::spec::rule_intents::{RuleIntent, RulepackProfile};
+use crate::spec::runtime::RuntimeConfig;
+use serde::{Deserialize, Serialize};
 
 /// Current semantic spec schema version.
 pub const SPEC_SCHEMA_VERSION: u32 = 4;
@@ -33,7 +33,6 @@ pub struct SemanticExecutionSpec {
     pub runtime: RuntimeConfig,
 
     // --- Wave 3 expansion fields (all default for backward compatibility) ---
-
     /// Typed parameter bindings for parametric plan compilation.
     #[serde(default)]
     pub typed_parameters: Vec<TypedParameter>,
@@ -103,7 +102,7 @@ impl SemanticExecutionSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::relations::{ViewDefinition, ViewTransform, SchemaContract};
+    use crate::spec::relations::{SchemaContract, ViewDefinition, ViewTransform};
     use std::collections::BTreeMap;
 
     #[test]
@@ -111,7 +110,10 @@ mod tests {
         let spec = create_minimal_spec();
 
         // Hash should be computed (not all zeros)
-        assert_ne!(spec.spec_hash, [0u8; 32], "Hash must be computed on creation");
+        assert_ne!(
+            spec.spec_hash, [0u8; 32],
+            "Hash must be computed on creation"
+        );
     }
 
     #[test]
@@ -119,7 +121,10 @@ mod tests {
         let spec1 = create_minimal_spec();
         let spec2 = create_minimal_spec();
 
-        assert_eq!(spec1.spec_hash, spec2.spec_hash, "Identical specs must have identical hashes");
+        assert_eq!(
+            spec1.spec_hash, spec2.spec_hash,
+            "Identical specs must have identical hashes"
+        );
     }
 
     #[test]
@@ -136,7 +141,10 @@ mod tests {
         // Hash is skipped in serialization, so recompute
         deserialized.spec_hash = crate::spec::hashing::hash_spec(&deserialized);
 
-        assert_eq!(original_hash, deserialized.spec_hash, "Roundtrip must preserve hash");
+        assert_eq!(
+            original_hash, deserialized.spec_hash,
+            "Roundtrip must preserve hash"
+        );
     }
 
     fn create_minimal_spec() -> SemanticExecutionSpec {
@@ -146,18 +154,16 @@ mod tests {
         SemanticExecutionSpec::new(
             1,
             vec![],
-            vec![
-                ViewDefinition {
-                    name: "test_view".to_string(),
-                    view_kind: "project".to_string(),
-                    view_dependencies: vec![],
-                    transform: ViewTransform::Project {
-                        source: "input".to_string(),
-                        columns: vec!["id".to_string()],
-                    },
-                    output_schema: SchemaContract { columns: schema },
-                }
-            ],
+            vec![ViewDefinition {
+                name: "test_view".to_string(),
+                view_kind: "project".to_string(),
+                view_dependencies: vec![],
+                transform: ViewTransform::Project {
+                    source: "input".to_string(),
+                    columns: vec!["id".to_string()],
+                },
+                output_schema: SchemaContract { columns: schema },
+            }],
             JoinGraph::default(),
             vec![],
             vec![],

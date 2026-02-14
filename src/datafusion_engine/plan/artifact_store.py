@@ -40,8 +40,8 @@ from utils.hashing import hash_json_default, hash_sha256_hex
 if TYPE_CHECKING:
     from datafusion import SessionContext, SQLOptions
 
-    from datafusion_engine.lineage.datafusion import LineageReport
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.reporting import LineageReport
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.views.graph import ViewNode
@@ -1181,7 +1181,7 @@ def _profile_name(profile: DataFusionRuntimeProfile) -> str | None:
 
 
 def _plan_artifacts_schema() -> pa.Schema:
-    from datafusion_engine.schema.registry import DATAFUSION_PLAN_ARTIFACTS_SCHEMA
+    from datafusion_engine.schema import DATAFUSION_PLAN_ARTIFACTS_SCHEMA
 
     schema = DATAFUSION_PLAN_ARTIFACTS_SCHEMA
     if isinstance(schema, pa.Schema):
@@ -1266,7 +1266,7 @@ def _record_plan_artifact_summary(
 
 
 def _pipeline_events_schema() -> pa.Schema:
-    from datafusion_engine.schema.registry import DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA
+    from datafusion_engine.schema import DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA
 
     schema = DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA
     if isinstance(schema, pa.Schema):
@@ -1583,7 +1583,7 @@ def _udf_compatibility(
     ctx: SessionContext,
     bundle: DataFusionPlanArtifact,
 ) -> tuple[bool, Mapping[str, object]]:
-    from datafusion_engine.udf.runtime import (
+    from datafusion_engine.udf.extension_runtime import (
         rust_udf_snapshot,
         rust_udf_snapshot_hash,
         udf_names_from_snapshot,

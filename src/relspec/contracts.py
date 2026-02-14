@@ -13,7 +13,7 @@ from datafusion_engine.arrow.metadata import (
     merge_metadata_specs,
     ordering_metadata_spec,
 )
-from datafusion_engine.schema.registry import SCHEMA_META_NAME, SCHEMA_META_VERSION
+from datafusion_engine.schema import SCHEMA_META_NAME, SCHEMA_META_VERSION
 from relspec.view_defs import (
     REL_CALLSITE_SYMBOL_OUTPUT,
     REL_DEF_SYMBOL_OUTPUT,

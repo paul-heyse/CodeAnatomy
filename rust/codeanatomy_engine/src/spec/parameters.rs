@@ -58,7 +58,9 @@ pub enum ParameterValue {
     /// ISO 8601 timestamp string.
     Timestamp(String),
     /// Typed null with explicit data type name.
-    Null { data_type: String },
+    Null {
+        data_type: String,
+    },
 }
 
 impl ParameterValue {

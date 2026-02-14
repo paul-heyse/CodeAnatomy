@@ -20,10 +20,8 @@ use codeanatomy_engine::spec::relations::{
     AggregationExpr, InputRelation, JoinKeyPair, JoinType, SchemaContract, ViewDefinition,
     ViewTransform,
 };
+use codeanatomy_engine::spec::rule_intents::{RuleClass, RuleIntent, RulepackProfile};
 use codeanatomy_engine::spec::runtime::RuntimeTunerMode;
-use codeanatomy_engine::spec::rule_intents::{
-    RuleClass, RuleIntent, RulepackProfile,
-};
 use std::collections::BTreeMap;
 
 /// Test 1: Basic spec construction and field access
@@ -570,7 +568,10 @@ fn create_full_spec() -> SemanticExecutionSpec {
             ViewDefinition {
                 name: "joined_data".to_string(),
                 view_kind: "relate".to_string(),
-                view_dependencies: vec!["normalized_nodes".to_string(), "filtered_edges".to_string()],
+                view_dependencies: vec![
+                    "normalized_nodes".to_string(),
+                    "filtered_edges".to_string(),
+                ],
                 transform: ViewTransform::Relate {
                     left: "normalized_nodes".to_string(),
                     right: "filtered_edges".to_string(),

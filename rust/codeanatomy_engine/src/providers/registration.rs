@@ -17,7 +17,9 @@ use deltalake::delta_datafusion::DeltaScanConfig;
 use serde::{Deserialize, Serialize};
 
 use crate::providers::pushdown_contract::{self, PushdownProbe};
-use crate::providers::scan_config::{infer_capabilities, standard_scan_config, validate_scan_config};
+use crate::providers::scan_config::{
+    infer_capabilities, standard_scan_config, validate_scan_config,
+};
 use crate::schema::introspection::hash_arrow_schema;
 use crate::spec::relations::InputRelation;
 

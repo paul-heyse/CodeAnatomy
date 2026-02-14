@@ -9,7 +9,7 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.schema import nested_views as _nested_mod
-from datafusion_engine.schema import registry as schema_registry
+from datafusion_engine.schema import validate_nested_types
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
@@ -41,7 +41,7 @@ def test_validate_nested_types_is_noop_for_non_nested_dataset() -> None:
     """Non-nested datasets should bypass nested-type validation entirely."""
     ctx = _ExplodingContext()
 
-    schema_registry.validate_nested_types(cast("SessionContext", ctx), "file_line_index_v1")
+    validate_nested_types(cast("SessionContext", ctx), "file_line_index_v1")
 
 
 def test_validate_nested_types_skips_when_schema_authority_is_missing(
@@ -57,7 +57,7 @@ def test_validate_nested_types_skips_when_schema_authority_is_missing(
     monkeypatch.setattr(_nested_mod, "extract_schema_for", _raise_missing)
 
     with caplog.at_level(logging.WARNING):
-        schema_registry.validate_nested_types(cast("SessionContext", ctx), "ast_nodes")
+        validate_nested_types(cast("SessionContext", ctx), "ast_nodes")
 
     assert any("no derived schema authority" in rec.message for rec in caplog.records)
 
@@ -71,6 +71,6 @@ def test_validate_nested_types_keeps_mismatch_diagnostics(
     monkeypatch.setattr(_nested_mod, "extract_schema_for", lambda _name: expected)
 
     with caplog.at_level(logging.WARNING):
-        schema_registry.validate_nested_types(cast("SessionContext", ctx), "ast_nodes")
+        validate_nested_types(cast("SessionContext", ctx), "ast_nodes")
 
     assert any("Nested type validation mismatch" in rec.message for rec in caplog.records)

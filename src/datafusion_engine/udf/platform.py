@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import cast
 from weakref import WeakSet
 
@@ -43,20 +43,20 @@ from datafusion_engine.expr.planner import (
     expr_planner_payloads,
     install_expr_planners,
 )
-from datafusion_engine.udf.catalog import rewrite_tag_index
 from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
+from datafusion_engine.udf.extension_runtime import (
+    register_rust_udfs,
+    rust_runtime_install_payload,
+    rust_udf_docs,
+    rust_udf_snapshot_hash,
+)
 from datafusion_engine.udf.factory import (
     FunctionFactoryPolicy,
     function_factory_payloads,
     function_factory_policy_from_snapshot,
     install_function_factory,
 )
-from datafusion_engine.udf.runtime import (
-    register_rust_udfs,
-    rust_runtime_install_payload,
-    rust_udf_docs,
-    rust_udf_snapshot_hash,
-)
+from datafusion_engine.udf.metadata import rewrite_tag_index
 
 
 @dataclass(frozen=True)
@@ -132,7 +132,6 @@ def _install_function_factory(
     available = True
     installed = False
     error: str | None = None
-    payload_policy = policy
     try:
         if hook is None:
             install_function_factory(ctx, policy=policy)
@@ -144,26 +143,10 @@ def _install_function_factory(
         available = False
         error = str(exc)
     except (RuntimeError, TypeError, ValueError) as exc:
-        message = str(exc)
-        # Some wheel combinations expose async UDF registration but do not
-        # support async-aware FunctionFactory policies yet.
-        if policy is not None and policy.allow_async and "async-udf feature" in message.lower():
-            fallback_policy = replace(policy, allow_async=False)
-            try:
-                if hook is None:
-                    install_function_factory(ctx, policy=fallback_policy)
-                else:
-                    hook(ctx)
-                installed = True
-                payload_policy = fallback_policy
-                _FUNCTION_FACTORY_CTXS.add(ctx)
-            except (ImportError, RuntimeError, TypeError, ValueError) as retry_exc:
-                error = str(retry_exc)
-        else:
-            error = message
+        error = str(exc)
     return ExtensionInstallStatus(
         available=available, installed=installed, error=error
-    ), function_factory_payloads(payload_policy)
+    ), function_factory_payloads(policy)
 
 
 def _install_expr_planners(
@@ -214,17 +197,12 @@ def _resolve_udf_snapshot(
     rewrite_tags: tuple[str, ...] = ()
     if not resolved.enable_udfs:
         return snapshot, snapshot_hash, rewrite_tags, docs
-    try:
-        snapshot = register_rust_udfs(
-            ctx,
-            enable_async=resolved.enable_async_udfs,
-            async_udf_timeout_ms=resolved.async_udf_timeout_ms,
-            async_udf_batch_size=resolved.async_udf_batch_size,
-        )
-    except (RuntimeError, TypeError, ValueError):
-        if resolved.strict:
-            raise
-        return snapshot, snapshot_hash, rewrite_tags, docs
+    snapshot = register_rust_udfs(
+        ctx,
+        enable_async=resolved.enable_async_udfs,
+        async_udf_timeout_ms=resolved.async_udf_timeout_ms,
+        async_udf_batch_size=resolved.async_udf_batch_size,
+    )
     snapshot_hash = rust_udf_snapshot_hash(snapshot)
     tag_index = rewrite_tag_index(snapshot)
     rewrite_tags = tuple(sorted(tag_index))
@@ -256,13 +234,10 @@ def _resolve_function_factory_policy(
 ) -> FunctionFactoryPolicy | None:
     if resolved.function_factory_policy is not None or snapshot is None:
         return resolved.function_factory_policy
-    try:
-        return function_factory_policy_from_snapshot(
-            snapshot,
-            allow_async=resolved.enable_async_udfs,
-        )
-    except RuntimeError:
-        return FunctionFactoryPolicy(allow_async=resolved.enable_async_udfs)
+    return function_factory_policy_from_snapshot(
+        snapshot,
+        allow_async=resolved.enable_async_udfs,
+    )
 
 
 def _strict_failure_message(
@@ -372,8 +347,8 @@ def install_rust_udf_platform(
     """Install planning-critical extension platform before plan-bundle construction.
 
     Args:
+        request: Serializable platform installation request payload.
         ctx: DataFusion session context.
-        options: Optional platform installation options.
 
     Returns:
         RustUdfPlatform: Result.
@@ -386,7 +361,7 @@ def install_rust_udf_platform(
         if isinstance(request.options, dict)
         else RustUdfPlatformOptions()
     )
-    from datafusion_engine.udf.runtime import validate_extension_capabilities
+    from datafusion_engine.udf.extension_runtime import validate_extension_capabilities
 
     _ = validate_extension_capabilities(strict=resolved.strict, ctx=ctx)
     state = _resolve_platform_install_state(ctx=ctx, resolved=resolved)

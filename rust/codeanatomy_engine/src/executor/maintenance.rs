@@ -171,9 +171,7 @@ pub async fn execute_maintenance(
                 table_name: table_name.clone(),
                 operation: "compact".to_string(),
                 success: true,
-                message: Some(
-                    "Compact scheduled via delta_optimize_compact (stub)".to_string(),
-                ),
+                message: Some("Compact scheduled via delta_optimize_compact (stub)".to_string()),
             });
         }
 

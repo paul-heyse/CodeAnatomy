@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.lineage.datafusion import extract_lineage
-from datafusion_engine.lineage.scan import ScanUnit, plan_scan_unit
+from datafusion_engine.lineage.reporting import extract_lineage
+from datafusion_engine.lineage.scheduling import ScanUnit, plan_scan_unit
 from datafusion_engine.plan.result_types import (
     PlanExecutionOptions,
     PlanScanOverrides,

@@ -3,7 +3,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{new_null_array, ArrayRef, LargeStringArray, RecordBatch, StringArray};
+use datafusion::arrow::array::{
+    new_null_array, ArrayRef, LargeStringArray, RecordBatch, StringArray,
+};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::error::ArrowError;
 use datafusion_tracing::pretty_format_compact_batch;
@@ -13,9 +15,7 @@ use crate::spec::runtime::{PreviewRedactionMode, TracingConfig};
 pub type PreviewFormatter = dyn Fn(&RecordBatch) -> Result<String, ArrowError> + Send + Sync;
 
 /// Build compact preview formatter from runtime config.
-pub fn build_preview_formatter(
-    config: &TracingConfig,
-) -> Arc<PreviewFormatter> {
+pub fn build_preview_formatter(config: &TracingConfig) -> Arc<PreviewFormatter> {
     let max_width = config.preview_max_width;
     let max_row_height = config.preview_max_row_height;
     let min_compacted_col_width = config.preview_min_compacted_col_width;
@@ -134,13 +134,9 @@ mod tests {
 
         let mut deny = BTreeSet::new();
         deny.insert("token".to_string());
-        let redacted = redact_preview_batch(
-            &batch,
-            PreviewRedactionMode::DenyList,
-            &deny,
-            "[REDACTED]",
-        )
-        .expect("redacted");
+        let redacted =
+            redact_preview_batch(&batch, PreviewRedactionMode::DenyList, &deny, "[REDACTED]")
+                .expect("redacted");
 
         let rendered = pretty_format_compact_batch(&redacted, 120, 10, 10)
             .expect("format")

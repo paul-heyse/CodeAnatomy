@@ -10,14 +10,14 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
-from datafusion_engine.lineage.datafusion import ScanLineage
+from datafusion_engine.lineage.reporting import ScanLineage
 from schema_spec.contracts import dataset_spec_name
 from serde_msgspec import StructBaseStrict
 
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.lineage.datafusion import ScanLineage
+    from datafusion_engine.lineage.reporting import ScanLineage
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.schema.contracts import SchemaContract
     from datafusion_engine.views.graph import ViewNode
@@ -118,7 +118,7 @@ def infer_deps_from_plan_bundle(
         Inferred dependencies extracted from DataFusion plan.
 
     """
-    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.lineage.reporting import extract_lineage
 
     plan_bundle = inputs.plan_bundle
 
@@ -159,7 +159,7 @@ def infer_deps_from_plan_bundle(
             )
 
     if resolved_udfs:
-        from datafusion_engine.udf.runtime import validate_required_udfs
+        from datafusion_engine.udf.extension_runtime import validate_required_udfs
 
         validate_required_udfs(resolved_snapshot, required=resolved_udfs)
 
@@ -176,7 +176,7 @@ def infer_deps_from_plan_bundle(
         plan_fingerprint=fingerprint,
         required_udfs=resolved_udfs,
         required_rewrite_tags=lineage.required_rewrite_tags,
-        scans=lineage.scans,
+        scans=getattr(lineage, "scans", ()),
     )
 
 
@@ -185,7 +185,7 @@ def _expand_nested_inputs(inputs: Sequence[str]) -> tuple[str, ...]:
     seen: set[str] = set()
     if not inputs:
         return ()
-    from datafusion_engine.schema.registry import nested_path_for
+    from datafusion_engine.schema import nested_path_for
 
     for name in inputs:
         if name not in seen:

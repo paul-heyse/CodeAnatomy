@@ -68,10 +68,7 @@ pub fn compile_positional_param_values(params: &[TypedParameter]) -> Result<Para
     }
 
     Ok(ParamValues::List(
-        positional
-            .into_iter()
-            .map(|(_, v)| v.into())
-            .collect(),
+        positional.into_iter().map(|(_, v)| v.into()).collect(),
     ))
 }
 
@@ -91,10 +88,7 @@ pub fn compile_positional_param_values(params: &[TypedParameter]) -> Result<Para
 /// # Returns
 ///
 /// DataFrame with all parameters applied
-pub async fn apply_typed_parameters(
-    df: DataFrame,
-    params: &[TypedParameter],
-) -> Result<DataFrame> {
+pub async fn apply_typed_parameters(df: DataFrame, params: &[TypedParameter]) -> Result<DataFrame> {
     if params.is_empty() {
         return Ok(df);
     }
@@ -174,8 +168,14 @@ mod tests {
         let result = compile_positional_param_values(&params).unwrap();
         if let ParamValues::List(values) = result {
             assert_eq!(values.len(), 3);
-            assert_eq!(values[0].value, ScalarValue::Utf8(Some("hello".to_string())));
-            assert_eq!(values[1].value, ScalarValue::Utf8(Some("world".to_string())));
+            assert_eq!(
+                values[0].value,
+                ScalarValue::Utf8(Some("hello".to_string()))
+            );
+            assert_eq!(
+                values[1].value,
+                ScalarValue::Utf8(Some("world".to_string()))
+            );
             assert_eq!(values[2].value, ScalarValue::Int64(Some(99)));
         } else {
             panic!("Expected ParamValues::List");
@@ -271,7 +271,10 @@ mod tests {
     async fn test_apply_filter_eq_utf8() {
         let ctx = setup_test_table().await;
         let df = ctx.table("test_table").await.unwrap();
-        let params = vec![make_filter_eq("name", ParameterValue::Utf8("bob".to_string()))];
+        let params = vec![make_filter_eq(
+            "name",
+            ParameterValue::Utf8("bob".to_string()),
+        )];
         let result = apply_typed_parameters(df, &params).await.unwrap();
         let batches = result.collect().await.unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();

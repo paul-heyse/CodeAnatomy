@@ -8,5 +8,5 @@ pub mod join_graph;
 pub mod outputs;
 pub mod parameters;
 pub mod relations;
-pub mod runtime;
 pub mod rule_intents;
+pub mod runtime;

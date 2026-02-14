@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 if TYPE_CHECKING:
-    from datafusion_engine.lineage.datafusion import LineageReport
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.reporting import LineageReport
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 
 # Conservative per-predicate selectivity decay factor.  Each independent
@@ -286,7 +286,8 @@ def _estimate_predicate_selectivity(
     """
     if lineage is None or stats is None or stats.num_rows is None:
         return None
-    total_pushed = sum(len(scan.pushed_filters) for scan in lineage.scans)
+    scans = getattr(lineage, "scans", ())
+    total_pushed = sum(len(scan.pushed_filters) for scan in scans)
     if total_pushed == 0:
         return None
     # Each independent predicate is conservatively modeled as halving rows.
@@ -323,7 +324,7 @@ def _compute_projection_ratio(
         return None
     # Collect all distinct projected columns across scans.
     projected: set[str] = set()
-    for scan in lineage.scans:
+    for scan in getattr(lineage, "scans", ()):
         projected.update(scan.projected_columns)
     if not projected:
         return None

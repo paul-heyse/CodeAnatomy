@@ -42,7 +42,10 @@ pub(crate) fn compute_fanout(spec: &SemanticExecutionSpec) -> HashMap<String, us
 
 /// Check if a transform is expensive (join or aggregate).
 fn is_expensive_transform(transform: &ViewTransform) -> bool {
-    matches!(transform, ViewTransform::Relate { .. } | ViewTransform::Aggregate { .. })
+    matches!(
+        transform,
+        ViewTransform::Relate { .. } | ViewTransform::Aggregate { .. }
+    )
 }
 
 /// Determine if a view should be cached based on fanout and transform cost.
@@ -132,14 +135,8 @@ pub async fn insert_cache_boundaries_with_policy(
     let fanout = compute_fanout(spec);
 
     // Delegate view selection to the policy-aware cache boundary computation.
-    let views_to_cache = compute_cache_boundaries(
-        ctx,
-        &spec.view_definitions,
-        &fanout,
-        policy,
-        metrics_store,
-    )
-    .await;
+    let views_to_cache =
+        compute_cache_boundaries(ctx, &spec.view_definitions, &fanout, policy, metrics_store).await;
 
     let mut cached_count = 0;
 

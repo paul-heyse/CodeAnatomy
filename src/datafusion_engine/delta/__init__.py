@@ -8,31 +8,17 @@ from typing import TYPE_CHECKING
 __all__ = [
     "DeltaMutationRequest",
     "DeltaService",
-    "delta_plugin_options_from_session",
-    "delta_plugin_options_json",
     "enforce_schema_evolution",
 ]
 
 _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "DeltaMutationRequest": ("datafusion_engine.delta.service", "DeltaMutationRequest"),
     "DeltaService": ("datafusion_engine.delta.service", "DeltaService"),
-    "delta_plugin_options_from_session": (
-        "datafusion_engine.delta.plugin_options",
-        "delta_plugin_options_from_session",
-    ),
-    "delta_plugin_options_json": (
-        "datafusion_engine.delta.plugin_options",
-        "delta_plugin_options_json",
-    ),
     "enforce_schema_evolution": ("datafusion_engine.delta.contracts", "enforce_schema_evolution"),
 }
 
 if TYPE_CHECKING:
     from datafusion_engine.delta.contracts import enforce_schema_evolution
-    from datafusion_engine.delta.plugin_options import (
-        delta_plugin_options_from_session,
-        delta_plugin_options_json,
-    )
     from datafusion_engine.delta.service import DeltaMutationRequest, DeltaService
 
 

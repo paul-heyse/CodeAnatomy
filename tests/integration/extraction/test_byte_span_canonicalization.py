@@ -219,7 +219,7 @@ def test_span_normalization_with_missing_udf() -> None:
     Verifies that attempting span normalization without the col_to_byte UDF
     raises ValueError with a clear UDF-missing message.
     """
-    from datafusion_engine.udf.runtime import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
 
     ctx = df_ctx()
 

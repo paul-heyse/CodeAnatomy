@@ -31,18 +31,18 @@ if TYPE_CHECKING:
         WritePipeline,
         WriteRequest,
     )
-    from datafusion_engine.lineage.datafusion import (
-        LineageReport,
-        ScanLineage,
-        extract_lineage,
-        referenced_tables_from_plan,
-        required_columns_by_table,
-    )
     from datafusion_engine.lineage.diagnostics import (
         DiagnosticsContext,
         DiagnosticsRecorder,
         DiagnosticsSink,
         InMemoryDiagnosticsSink,
+    )
+    from datafusion_engine.lineage.reporting import (
+        LineageReport,
+        ScanLineage,
+        extract_lineage,
+        referenced_tables_from_plan,
+        required_columns_by_table,
     )
     from datafusion_engine.plan.udf_analysis import (
         derive_required_udfs_from_plans,
@@ -53,6 +53,13 @@ if TYPE_CHECKING:
         validate_required_udfs_from_bundle,
         validate_required_udfs_from_plan,
     )
+    from datafusion_engine.schema import (
+        extract_nested_dataset_names,
+        extract_nested_schema_names,
+        nested_base_df,
+        nested_dataset_names,
+        nested_schema_names,
+    )
     from datafusion_engine.schema.contracts import (
         ContractRegistry,
         EvolutionPolicy,
@@ -61,13 +68,6 @@ if TYPE_CHECKING:
         ViolationType,
     )
     from datafusion_engine.schema.introspection import SchemaIntrospector
-    from datafusion_engine.schema.registry import (
-        extract_nested_dataset_names,
-        extract_nested_schema_names,
-        nested_base_df,
-        nested_dataset_names,
-        nested_schema_names,
-    )
     from datafusion_engine.session.facade import (
         DataFusionExecutionFacade,
         ExecutionResult,
@@ -186,15 +186,15 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "datafusion_engine.catalog.provider",
         "register_registry_catalog",
     ),
-    "nested_base_df": ("datafusion_engine.schema.registry", "nested_base_df"),
-    "nested_dataset_names": ("datafusion_engine.schema.registry", "nested_dataset_names"),
-    "nested_schema_names": ("datafusion_engine.schema.registry", "nested_schema_names"),
+    "nested_base_df": ("datafusion_engine.schema.nested_views", "nested_base_df"),
+    "nested_dataset_names": ("datafusion_engine.schema.nested_views", "nested_dataset_names"),
+    "nested_schema_names": ("datafusion_engine.schema.nested_views", "nested_schema_names"),
     "extract_nested_dataset_names": (
-        "datafusion_engine.schema.registry",
+        "datafusion_engine.schema.nested_views",
         "extract_nested_dataset_names",
     ),
     "extract_nested_schema_names": (
-        "datafusion_engine.schema.registry",
+        "datafusion_engine.schema.nested_views",
         "extract_nested_schema_names",
     ),
     "SchemaIntrospector": ("datafusion_engine.schema.introspection", "SchemaIntrospector"),
@@ -240,15 +240,15 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ValidationViolation": ("datafusion_engine.schema.contracts", "ValidationViolation"),
     "ViolationType": ("datafusion_engine.schema.contracts", "ViolationType"),
     # Lineage.
-    "LineageReport": ("datafusion_engine.lineage.datafusion", "LineageReport"),
-    "ScanLineage": ("datafusion_engine.lineage.datafusion", "ScanLineage"),
-    "extract_lineage": ("datafusion_engine.lineage.datafusion", "extract_lineage"),
+    "LineageReport": ("datafusion_engine.lineage.reporting", "LineageReport"),
+    "ScanLineage": ("datafusion_engine.lineage.reporting", "ScanLineage"),
+    "extract_lineage": ("datafusion_engine.lineage.reporting", "extract_lineage"),
     "referenced_tables_from_plan": (
-        "datafusion_engine.lineage.datafusion",
+        "datafusion_engine.lineage.reporting",
         "referenced_tables_from_plan",
     ),
     "required_columns_by_table": (
-        "datafusion_engine.lineage.datafusion",
+        "datafusion_engine.lineage.reporting",
         "required_columns_by_table",
     ),
     # Plan UDF Analysis

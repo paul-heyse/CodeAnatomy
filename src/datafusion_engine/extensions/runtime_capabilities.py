@@ -191,14 +191,7 @@ def collect_runtime_execution_metrics(
     Mapping[str, object] | None
         Structured metrics payload, or None when unavailable.
     """
-    module_candidates = (
-        (module_name,)
-        if module_name is not None
-        else (
-            "datafusion._internal",
-            "datafusion_ext",
-        )
-    )
+    module_candidates = (module_name,) if module_name is not None else ("datafusion_ext",)
     errors: list[str] = []
     for candidate in module_candidates:
         try:
@@ -298,7 +291,7 @@ def runtime_capabilities_payload(snapshot: RuntimeCapabilitiesSnapshot) -> dict[
 
 def _extension_capabilities_report() -> dict[str, object]:
     try:
-        from datafusion_engine.udf.runtime import extension_capabilities_report
+        from datafusion_engine.udf.extension_runtime import extension_capabilities_report
     except ImportError:
         return {}
     try:

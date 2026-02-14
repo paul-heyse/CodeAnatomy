@@ -63,4 +63,3 @@ pub fn apply_delta_scan_policy(delta_scan_policy: &Value, defaults: &Value) -> V
     merge_json(&mut merged, delta_scan_policy.clone());
     merged
 }
-

@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 
 import pyarrow as pa
 
-from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
 from datafusion_engine.lineage.diagnostics import DiagnosticsSink
+from datafusion_engine.lineage.reporting import referenced_tables_from_plan
 from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from datafusion_engine.plan.udf_analysis import extract_udfs_from_plan_bundle
 from datafusion_engine.session.runtime import (

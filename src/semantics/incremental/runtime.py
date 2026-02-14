@@ -86,7 +86,7 @@ class IncrementalRuntime:
         from datafusion_engine.catalog.provider_registry import ProviderRegistry
         from datafusion_engine.dataset.registry import DatasetCatalog
         from datafusion_engine.registry_facade import RegistryFacade
-        from datafusion_engine.udf.catalog import UdfCatalogAdapter
+        from datafusion_engine.udf.metadata import UdfCatalogAdapter
 
         dataset_catalog = DatasetCatalog()
         for name in self._dataset_resolver.names():

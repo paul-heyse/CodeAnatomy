@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from datafusion_engine.dataset.registration import DataFusionCachePolicy
     from datafusion_engine.dataset.registry import DatasetCatalog, DatasetLocation
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, DataFusionViewRegistry
-    from datafusion_engine.udf.catalog import DataFusionUdfSpec, UdfCatalogAdapter
+    from datafusion_engine.udf.metadata import DataFusionUdfSpec, UdfCatalogAdapter
     from datafusion_engine.views.artifacts import DataFusionViewArtifact
     from semantics.program_manifest import ManifestDatasetResolver
 
@@ -105,7 +105,7 @@ class RegistrationPhaseOrchestrator:
 
 
 def _default_registry_adapters() -> dict[str, Registry[object, object]]:
-    from datafusion_engine.schema.registry import (
+    from datafusion_engine.schema import (
         base_extract_schema_registry,
         nested_dataset_registry,
         relationship_schema_registry,
@@ -386,7 +386,7 @@ def registry_facade_for_context(
     """
     from datafusion_engine.catalog.provider_registry import ProviderRegistry
     from datafusion_engine.dataset.registry import DatasetCatalog
-    from datafusion_engine.udf.catalog import UdfCatalogAdapter
+    from datafusion_engine.udf.metadata import UdfCatalogAdapter
 
     dataset_catalog = DatasetCatalog()
     for name in dataset_resolver.names():

@@ -384,20 +384,20 @@ mod tests {
         let warnings = reserved_profile_warnings(&profile);
 
         assert_eq!(warnings.len(), 5);
-        assert!(warnings.iter().any(|w| {
-            w.context.get("field") == Some(&"meta_fetch_concurrency".to_string())
-        }));
-        assert!(warnings.iter().any(|w| {
-            w.context.get("field") == Some(&"max_predicate_cache_size".to_string())
-        }));
-        assert!(warnings.iter().any(|w| {
-            w.context.get("field") == Some(&"list_files_cache_limit".to_string())
-        }));
-        assert!(warnings.iter().any(|w| {
-            w.context.get("field") == Some(&"list_files_cache_ttl".to_string())
-        }));
-        assert!(warnings.iter().any(|w| {
-            w.context.get("field") == Some(&"metadata_cache_limit".to_string())
-        }));
+        assert!(warnings
+            .iter()
+            .any(|w| { w.context.get("field") == Some(&"meta_fetch_concurrency".to_string()) }));
+        assert!(warnings
+            .iter()
+            .any(|w| { w.context.get("field") == Some(&"max_predicate_cache_size".to_string()) }));
+        assert!(warnings
+            .iter()
+            .any(|w| { w.context.get("field") == Some(&"list_files_cache_limit".to_string()) }));
+        assert!(warnings
+            .iter()
+            .any(|w| { w.context.get("field") == Some(&"list_files_cache_ttl".to_string()) }));
+        assert!(warnings
+            .iter()
+            .any(|w| { w.context.get("field") == Some(&"metadata_cache_limit".to_string()) }));
     }
 }

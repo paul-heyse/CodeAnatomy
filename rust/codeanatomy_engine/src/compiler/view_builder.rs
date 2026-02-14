@@ -120,8 +120,8 @@ pub async fn build_aggregate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::MemTable;
     use std::sync::Arc;
 
@@ -148,8 +148,7 @@ mod tests {
         .unwrap();
 
         let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-        ctx.register_table("test_source", Arc::new(table))
-            .unwrap();
+        ctx.register_table("test_source", Arc::new(table)).unwrap();
 
         ctx
     }
@@ -158,11 +157,7 @@ mod tests {
     async fn test_build_project() {
         let ctx = setup_test_context().await;
 
-        let df = build_project(
-            &ctx,
-            "test_source",
-            &["id".to_string(), "text".to_string()],
-        )
+        let df = build_project(&ctx, "test_source", &["id".to_string(), "text".to_string()])
             .await
             .unwrap();
 
@@ -176,9 +171,7 @@ mod tests {
     async fn test_build_filter() {
         let ctx = setup_test_context().await;
 
-        let df = build_filter(&ctx, "test_source", "id > 1")
-            .await
-            .unwrap();
+        let df = build_filter(&ctx, "test_source", "id > 1").await.unwrap();
 
         let batches = df.collect().await.unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();

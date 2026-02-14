@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     )
     from datafusion_engine.dataset.registration import DataFusionCachePolicy
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.schema.introspection import SchemaIntrospector
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile, SessionRuntime
     from semantics.program_manifest import ManifestDatasetResolver, SemanticProgramManifest
@@ -60,7 +60,7 @@ def _validate_required_rewrite_tags(
 ) -> None:
     if not required_tags:
         return
-    from datafusion_engine.udf.catalog import rewrite_tag_index
+    from datafusion_engine.udf.metadata import rewrite_tag_index
 
     tag_index = rewrite_tag_index(snapshot)
     validate_required_items(
@@ -81,7 +81,7 @@ def _ensure_udf_compatibility(ctx: SessionContext, bundle: DataFusionPlanArtifac
     Raises:
         RuntimeError: If the operation cannot be completed.
     """
-    from datafusion_engine.udf.runtime import (
+    from datafusion_engine.udf.extension_runtime import (
         rust_udf_snapshot,
         rust_udf_snapshot_hash,
         validate_required_udfs,
@@ -138,11 +138,11 @@ class DataFusionExecutionFacade:
 
         """
         from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
+        from datafusion_engine.udf.extension_runtime import extension_capabilities_report
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
         )
-        from datafusion_engine.udf.runtime import extension_capabilities_report
 
         try:
             capabilities = extension_capabilities_report()

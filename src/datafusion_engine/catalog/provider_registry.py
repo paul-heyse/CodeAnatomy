@@ -310,7 +310,7 @@ class ProviderRegistry(
         """
         if self._udf_snapshot_hash is not None:
             return self._udf_snapshot_hash
-        from datafusion_engine.udf.runtime import rust_udf_snapshot
+        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
 
         try:
             snapshot = rust_udf_snapshot(self.ctx)

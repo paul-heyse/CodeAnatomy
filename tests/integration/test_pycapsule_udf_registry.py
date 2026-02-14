@@ -8,7 +8,7 @@ import pyarrow as pa
 import pytest
 
 from datafusion_engine.io.adapter import DataFusionIOAdapter
-from datafusion_engine.schema.registry import TREE_SITTER_CHECK_VIEWS
+from datafusion_engine.schema import TREE_SITTER_CHECK_VIEWS
 from datafusion_engine.session.runtime import (
     DataFusionRuntimeProfile,
     DiagnosticsConfig,

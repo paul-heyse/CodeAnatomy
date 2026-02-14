@@ -70,11 +70,7 @@ pub fn append_execution_instrumentation_rule(
     config: &TracingConfig,
     trace_ctx: &TraceRuleContext,
 ) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
-    exec_instrumentation::append_execution_instrumentation_rule(
-        physical_rules,
-        config,
-        trace_ctx,
-    )
+    exec_instrumentation::append_execution_instrumentation_rule(physical_rules, config, trace_ctx)
 }
 
 #[cfg(not(feature = "tracing"))]
@@ -87,7 +83,10 @@ pub fn append_execution_instrumentation_rule(
 }
 
 #[cfg(feature = "tracing")]
-pub fn register_instrumented_file_store(ctx: &SessionContext, config: &TracingConfig) -> Result<()> {
+pub fn register_instrumented_file_store(
+    ctx: &SessionContext,
+    config: &TracingConfig,
+) -> Result<()> {
     object_store::register_instrumented_file_store(ctx, config)
 }
 

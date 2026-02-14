@@ -98,7 +98,10 @@ impl PyRunResult {
     }
 
     fn __repr__(&self) -> String {
-        format!("RunResult({})", &self.inner_json[..self.inner_json.len().min(100)])
+        format!(
+            "RunResult({})",
+            &self.inner_json[..self.inner_json.len().min(100)]
+        )
     }
 }
 

@@ -161,7 +161,7 @@ def validate_semantic_input_columns(
 
 
 def _semantic_input_column_specs() -> tuple[ColumnValidationSpec, ...]:
-    from datafusion_engine.schema.registry import extract_schema_for
+    from datafusion_engine.schema import extract_schema_for
     from semantics.registry import SEMANTIC_TABLE_SPECS
 
     specs: list[ColumnValidationSpec] = []

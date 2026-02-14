@@ -408,9 +408,7 @@ fn hash_table_options(options: Option<&TableOptions>) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-fn hash_identity_parts<'a>(
-    parts: impl IntoIterator<Item = &'a str>,
-) -> [u8; 32] {
+fn hash_identity_parts<'a>(parts: impl IntoIterator<Item = &'a str>) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     for part in parts {
         hasher.update(part.as_bytes());
@@ -457,10 +455,12 @@ mod tests {
     #[test]
     fn test_hash_order_independence() {
         let mut manifest_a = sample_manifest();
-        manifest_a.file_format_names = vec!["csv".to_string(), "parquet".to_string(), "json".to_string()];
+        manifest_a.file_format_names =
+            vec!["csv".to_string(), "parquet".to_string(), "json".to_string()];
 
         let mut manifest_b = sample_manifest();
-        manifest_b.file_format_names = vec!["json".to_string(), "csv".to_string(), "parquet".to_string()];
+        manifest_b.file_format_names =
+            vec!["json".to_string(), "csv".to_string(), "parquet".to_string()];
 
         assert_eq!(
             manifest_a.hash(),

@@ -147,6 +147,10 @@ path = "../df_plugin_host"
 [dependencies.datafusion_ext]
 path = "../datafusion_ext"
 
+[dependencies.codeanatomy-engine]
+path = "../codeanatomy_engine"
+features = ["substrait"]
+
 [dependencies.deltalake]
 version = "0.30.1"
 features = ["datafusion"]

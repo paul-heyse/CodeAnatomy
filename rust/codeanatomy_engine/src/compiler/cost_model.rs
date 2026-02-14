@@ -208,11 +208,7 @@ fn critical_path(
         let mut next: Option<(String, f64)> = None;
         for node in graph.downstream_closure(&current) {
             let score = bottom_levels.get(&node).copied().unwrap_or(0.0);
-            if next
-                .as_ref()
-                .map(|(_, best)| score > *best)
-                .unwrap_or(true)
-            {
+            if next.as_ref().map(|(_, best)| score > *best).unwrap_or(true) {
                 next = Some((node, score));
             }
         }
@@ -246,8 +242,7 @@ mod tests {
     fn test_schedule_tasks_with_unknown_stats_uses_topological_order() {
         let graph = tiny_graph();
         let outcome = derive_task_costs(&graph, None, &CostModelConfig::default());
-        let schedule =
-            schedule_tasks_with_quality(&graph, &outcome.costs, outcome.stats_quality);
+        let schedule = schedule_tasks_with_quality(&graph, &outcome.costs, outcome.stats_quality);
         assert_eq!(outcome.stats_quality, StatsQuality::Unknown);
         assert_eq!(schedule.execution_order, graph.topological_order);
     }

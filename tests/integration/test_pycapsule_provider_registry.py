@@ -7,10 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.dataset.registration import (
-    DatasetRegistrationOptions,
-    register_dataset_df,
-)
+from datafusion_engine.dataset.registration import register_dataset_df
 from datafusion_engine.dataset.registry import DatasetLocation
 from datafusion_engine.expr.spec import ExprSpec
 from schema_spec.contracts import DatasetSpec
@@ -48,7 +45,7 @@ def test_table_provider_registry_records_delta_capsule(tmp_path: Path) -> None:
         ctx,
         name="delta_tbl",
         location=DatasetLocation(path=str(delta_path), format="delta"),
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        runtime_profile=profile,
     )
     df = ctx.sql("SELECT COUNT(*) AS row_count FROM delta_tbl")
     result = df.to_arrow_table()
@@ -96,7 +93,7 @@ def test_delta_pruning_predicate_from_dataset_spec(tmp_path: Path) -> None:
             format="delta",
             dataset_spec=dataset_spec,
         ),
-        options=DatasetRegistrationOptions(runtime_profile=profile),
+        runtime_profile=profile,
     )
     artifacts = sink.artifacts_snapshot().get("datafusion_table_providers_v1", [])
     entry = next((item for item in artifacts if item.get("name") == "delta_tbl"), None)

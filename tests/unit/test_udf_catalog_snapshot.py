@@ -5,7 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.udf.catalog import DataFusionUdfSpec, UdfCatalog, UdfCatalogAdapter
+from datafusion_engine.udf.metadata import DataFusionUdfSpec, UdfCatalog, UdfCatalogAdapter
 
 
 def _sample_spec(func_id: str) -> DataFusionUdfSpec:

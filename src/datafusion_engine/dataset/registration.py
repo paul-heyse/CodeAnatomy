@@ -90,8 +90,8 @@ from datafusion_engine.delta.provider_artifacts import (
 from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.identity import schema_identity_hash
 from datafusion_engine.io.adapter import DataFusionIOAdapter
-from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
 from datafusion_engine.lineage.diagnostics import record_artifact
+from datafusion_engine.lineage.reporting import referenced_tables_from_plan
 from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from datafusion_engine.schema.contracts import (
     EvolutionPolicy,
@@ -227,7 +227,7 @@ else:
     _INPUT_PLUGIN_AVAILABLE = True
 
 
-class DatasetInputSource:
+class _DatasetInputSource:
     """Resolve dataset handles into registered tables."""
 
     def __init__(
@@ -294,7 +294,7 @@ class DatasetInputSource:
             self._ctx,
             name=table_name,
             location=location,
-            options=DatasetRegistrationOptions(runtime_profile=self._runtime_profile),
+            runtime_profile=self._runtime_profile,
         )
 
 
@@ -327,7 +327,7 @@ def dataset_input_plugin(
         if not callable(register):
             return
         register(
-            DatasetInputSource(
+            _DatasetInputSource(
                 ctx,
                 catalog=catalog,
                 runtime_profile=runtime_profile,
@@ -405,7 +405,7 @@ class DataFusionCachePolicy(FingerprintableConfig):
 
 
 @dataclass(frozen=True)
-class DataFusionCacheSettings:
+class _DataFusionCacheSettings:
     """Resolved cache settings for DataFusion registration."""
 
     enabled: bool
@@ -421,7 +421,7 @@ class DataFusionRegistrationContext:
     name: str
     location: DatasetLocation
     options: DataFusionRegistryOptions
-    cache: DataFusionCacheSettings
+    cache: _DataFusionCacheSettings
     runtime_profile: DataFusionRuntimeProfile | None = None
 
 
@@ -568,7 +568,9 @@ def _apply_scan_defaults(name: str, location: DatasetLocation) -> DatasetLocatio
     return msgspec.structs.replace(updated, overrides=overrides)
 
 
-def resolve_registry_options(location: DatasetLocation) -> DataFusionRegistryOptions:
+def _resolve_registry_options_for_location(
+    location: DatasetLocation,
+) -> DataFusionRegistryOptions:
     """Resolve DataFusion registration hints for a dataset location.
 
     Args:
@@ -1110,21 +1112,14 @@ def _resolve_dataset_spec(name: str, location: DatasetLocation) -> DatasetSpec |
     return dataset_spec_from_schema(name, schema)
 
 
-@dataclass(frozen=True)
-class DatasetRegistrationOptions:
-    """Configure DataFusion dataset registration."""
-
-    cache_policy: DataFusionCachePolicy | None = None
-    runtime_profile: DataFusionRuntimeProfile | None = None
-    overwrite: bool = True
-
-
 def register_dataset_df(
     ctx: SessionContext,
     *,
     name: str,
     location: DatasetLocation,
-    options: DatasetRegistrationOptions | None = None,
+    cache_policy: DataFusionCachePolicy | None = None,
+    runtime_profile: DataFusionRuntimeProfile | None = None,
+    overwrite: bool = True,
 ) -> DataFrame:
     """Register a dataset location with DataFusion and return a DataFrame.
 
@@ -1141,8 +1136,12 @@ def register_dataset_df(
         Dataset name to register.
     location
         Dataset location descriptor.
-    options
-        Registration options including runtime profile and cache policy.
+    cache_policy
+        Cache policy overrides for registration.
+    runtime_profile
+        Optional runtime profile for session-scoped registration behaviors.
+    overwrite
+        Whether to replace an existing table binding.
 
     Returns:
     -------
@@ -1155,24 +1154,23 @@ def register_dataset_df(
         register_table,
     )
 
-    resolved = options or DatasetRegistrationOptions()
-    if resolved.runtime_profile is not None:
+    if runtime_profile is not None:
         from datafusion_engine.registry_facade import registry_facade_for_context
         from semantics.program_manifest import ManifestDatasetBindings
 
         facade = registry_facade_for_context(
             ctx,
-            runtime_profile=resolved.runtime_profile,
+            runtime_profile=runtime_profile,
             dataset_resolver=ManifestDatasetBindings(locations={}),
         )
         return facade.register_dataset_df(
             name=name,
             location=location,
-            cache_policy=resolved.cache_policy,
-            overwrite=resolved.overwrite,
+            cache_policy=cache_policy,
+            overwrite=overwrite,
         )
     existing = False
-    if resolved.overwrite:
+    if overwrite:
         from datafusion_engine.schema.introspection import table_names_snapshot
 
         existing = name in table_names_snapshot(ctx)
@@ -1182,22 +1180,17 @@ def register_dataset_df(
         TableRegistrationRequest(
             name=name,
             location=location,
-            cache_policy=resolved.cache_policy,
-            runtime_profile=resolved.runtime_profile,
+            cache_policy=cache_policy,
+            runtime_profile=runtime_profile,
         ),
     )
     scan = location.resolved.datafusion_scan
-    if (
-        existing
-        and scan is not None
-        and scan.listing_mutable
-        and resolved.runtime_profile is not None
-    ):
+    if existing and scan is not None and scan.listing_mutable and runtime_profile is not None:
         from datafusion_engine.lineage.diagnostics import record_artifact
         from serde_artifact_specs import DATAFUSION_LISTING_REFRESH_SPEC
 
         record_artifact(
-            resolved.runtime_profile,
+            runtime_profile,
             DATAFUSION_LISTING_REFRESH_SPEC,
             {
                 "name": name,
@@ -1207,68 +1200,6 @@ def register_dataset_df(
             },
         )
     return df
-
-
-@dataclass(frozen=True)
-class DatasetRegistration:
-    """Define inputs for dataset registration."""
-
-    name: str
-    spec: DatasetSpec
-    location: str
-    file_format: str = "delta"
-
-
-def register_dataset_spec(
-    ctx: SessionContext,
-    registration: DatasetRegistration,
-    *,
-    runtime_profile: DataFusionRuntimeProfile | None = None,
-) -> None:
-    """Register a dataset using non-DDL DataFusion APIs.
-
-    Parameters
-    ----------
-    ctx : SessionContext
-        DataFusion session context to register the table in.
-    registration : DatasetRegistration
-        Registration inputs including name, spec, location, and file format.
-    runtime_profile : DataFusionRuntimeProfile | None
-        Optional runtime profile used for registration defaults.
-
-    Notes:
-    -----
-    This function preserves the DatasetSpec's scan configuration without
-    executing SQL DDL statements.
-
-    Examples:
-    --------
-    Register a Delta dataset spec:
-
-    >>> from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    >>> from schema_spec.contracts import DatasetSpec
-    >>> ctx = DataFusionRuntimeProfile().io_ops.ephemeral_context()
-    >>> spec = DatasetSpec(table_spec=table_spec)
-    >>> register_dataset_spec(
-    ...     ctx,
-    ...     DatasetRegistration(
-    ...         name="events",
-    ...         spec=spec,
-    ...         location="s3://bucket/events/",
-    ...     ),
-    ... )
-    """
-    location = DatasetLocation(
-        path=registration.location,
-        format=registration.file_format,
-        dataset_spec=registration.spec,
-    )
-    register_dataset_df(
-        ctx,
-        name=registration.name,
-        location=location,
-        options=DatasetRegistrationOptions(runtime_profile=runtime_profile),
-    )
 
 
 def _build_registration_context(
@@ -1376,7 +1307,7 @@ def _resolve_registry_options(
     *,
     runtime_profile: DataFusionRuntimeProfile | None,
 ) -> DataFusionRegistryOptions:
-    options = resolve_registry_options(location)
+    options = _resolve_registry_options_for_location(location)
     return _apply_runtime_scan_hardening(options, runtime_profile=runtime_profile)
 
 
@@ -2724,7 +2655,7 @@ def _requires_schema_evolution_adapter(evolution: object) -> bool:
 
 def _schema_evolution_adapter_factory() -> object:
     module = None
-    for module_name in ("datafusion._internal", "datafusion_ext"):
+    for module_name in ("datafusion_ext",):
         try:
             candidate = importlib.import_module(module_name)
         except ImportError:
@@ -2733,7 +2664,7 @@ def _schema_evolution_adapter_factory() -> object:
             module = candidate
             break
     if module is None:
-        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
+        msg = "Schema evolution adapter requires datafusion_ext."
         raise RuntimeError(msg)
     factory = getattr(module, "schema_evolution_adapter_factory", None)
     if not callable(factory):
@@ -3366,7 +3297,7 @@ def _resolve_cache_policy(
     *,
     cache_policy: DataFusionCachePolicy | None,
     runtime_profile: DataFusionRuntimeProfile | None,
-) -> DataFusionCacheSettings:
+) -> _DataFusionCacheSettings:
     enabled = cache_policy.enabled if cache_policy is not None else None
     max_columns = cache_policy.max_columns if cache_policy is not None else None
     storage = cache_policy.storage if cache_policy is not None else "memory"
@@ -3380,7 +3311,7 @@ def _resolve_cache_policy(
         enabled = True
     if max_columns is None:
         max_columns = DEFAULT_CACHE_MAX_COLUMNS
-    return DataFusionCacheSettings(
+    return _DataFusionCacheSettings(
         enabled=base_cache_enabled and enabled,
         max_columns=max_columns,
         storage=storage,
@@ -3412,14 +3343,8 @@ def _filter_kwargs(fn: Callable[..., object], kwargs: Mapping[str, object]) -> d
 
 __all__ = [
     "DataFusionCachePolicy",
-    "DataFusionCacheSettings",
     "DataFusionRegistryOptions",
-    "DatasetInputSource",
-    "DatasetRegistration",
-    "DatasetRegistrationOptions",
     "dataset_input_plugin",
     "input_plugin_prefixes",
     "register_dataset_df",
-    "register_dataset_spec",
-    "resolve_registry_options",
 ]

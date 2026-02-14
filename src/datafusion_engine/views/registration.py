@@ -25,7 +25,7 @@ from serde_artifact_specs import (
 )
 
 if TYPE_CHECKING:
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from datafusion_engine.udf.platform import RustUdfPlatformOptions
     from datafusion_engine.views.graph import ViewNode
@@ -60,8 +60,8 @@ class _ViewGraphRegistrationContext:
 
     def install_udf_platform(self) -> None:
         from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
+        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
         from datafusion_engine.udf.platform import install_rust_udf_platform
-        from datafusion_engine.udf.runtime import rust_udf_snapshot
 
         options = _platform_options(self.runtime_profile)
         platform = install_rust_udf_platform(

@@ -60,7 +60,7 @@ from datafusion_engine.plan.diagnostics import (
 )
 from datafusion_engine.schema.alignment import SchemaEvolutionSpec
 from datafusion_engine.schema.validation import ArrowValidationOptions
-from datafusion_engine.udf.catalog import DataFusionUdfSpecSnapshot, UdfCatalogSnapshot
+from datafusion_engine.udf.metadata import DataFusionUdfSpecSnapshot, UdfCatalogSnapshot
 from obs.otel.config import OtelConfigSpec
 from relspec.inferred_deps import InferredDeps
 from schema_spec.arrow_types import (

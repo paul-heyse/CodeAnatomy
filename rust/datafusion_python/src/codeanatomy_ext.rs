@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::context::{PyRuntimeEnvBuilder, PySessionContext};
+use crate::dataframe::PyDataFrame;
 use crate::delta_control_plane::{
     delta_add_actions as delta_add_actions_native, delta_cdf_provider as delta_cdf_provider_native,
     delta_provider_from_session_request as delta_provider_from_session_native,
@@ -35,12 +36,10 @@ use crate::delta_maintenance::{
 };
 use crate::delta_mutations::{
     delta_data_check_request as delta_data_check_native,
-    delta_delete_request as delta_delete_native,
-    delta_merge_request as delta_merge_native,
-    delta_update_request as delta_update_native,
-    delta_write_ipc_request as delta_write_ipc_native, DeltaDataCheckRequest,
-    DeltaDeleteRequest, DeltaMergeRequest, DeltaMutationReport, DeltaUpdateRequest,
-    DeltaWriteIpcRequest,
+    delta_delete_request as delta_delete_native, delta_merge_request as delta_merge_native,
+    delta_update_request as delta_update_native, delta_write_ipc_request as delta_write_ipc_native,
+    DeltaDataCheckRequest, DeltaDeleteRequest, DeltaMergeRequest, DeltaMutationReport,
+    DeltaUpdateRequest, DeltaWriteIpcRequest,
 };
 use crate::delta_observability::{
     add_action_payloads, maintenance_report_payload, mutation_report_payload, scan_config_payload,
@@ -63,6 +62,7 @@ use datafusion::catalog::{
     TableFunctionImpl, TableProvider,
 };
 use datafusion::config::ConfigOptions;
+use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
 use datafusion::execution::config::SessionConfig;
 use datafusion::execution::context::SessionContext;
@@ -87,7 +87,6 @@ use datafusion_expr::{
     lit, CreateExternalTable, DdlStatement, Expr, LogicalPlan, SortExpr,
     TableProviderFilterPushDown, TableType,
 };
-use datafusion_ext::{install_expr_planners_native, install_sql_macro_factory_native};
 use datafusion_ext::physical_rules::{
     ensure_physical_config, install_physical_rules as install_physical_rules_native,
 };
@@ -97,6 +96,7 @@ use datafusion_ext::planner_rules::{
 use datafusion_ext::udf_config::{CodeAnatomyUdfConfig, UdfConfigValue};
 use datafusion_ext::udf_expr as udf_expr_mod;
 use datafusion_ext::udf_registry;
+use datafusion_ext::{install_expr_planners_native, install_sql_macro_factory_native};
 use datafusion_ext::{DeltaAppTransaction, DeltaCommitOptions, DeltaFeatureGate};
 use datafusion_ffi;
 use datafusion_ffi::table_provider::FFI_TableProvider;
@@ -113,8 +113,15 @@ use pyo3::prelude::*;
 use pyo3::types::{
     PyBool, PyBytes, PyCapsule, PyCapsuleMethods, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple,
 };
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use tokio::runtime::Runtime;
+
+use codeanatomy_engine::compiler::lineage::lineage_from_substrait as lineage_from_substrait_native;
+use codeanatomy_engine::session::extraction::{
+    build_extraction_session as build_extraction_session_native, ExtractionConfig,
+};
 
 const DELTA_SCAN_CONFIG_VERSION: u32 = 1;
 
@@ -238,6 +245,47 @@ fn inject_delta_scan_defaults(
 fn runtime() -> PyResult<Runtime> {
     Runtime::new()
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))
+}
+
+fn parse_python_payload<T: DeserializeOwned>(
+    py: Python<'_>,
+    payload: &Bound<'_, PyAny>,
+    label: &str,
+) -> PyResult<T> {
+    let json_module = py.import("json")?;
+    let payload_json: String = json_module
+        .call_method1("dumps", (payload,))?
+        .extract()
+        .map_err(|err| PyValueError::new_err(format!("Invalid {label} payload: {err}")))?;
+    serde_json::from_str::<T>(&payload_json)
+        .map_err(|err| PyValueError::new_err(format!("Invalid {label} payload: {err}")))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ExtractionSessionPayload {
+    parallelism: Option<usize>,
+    memory_limit_bytes: Option<u64>,
+    batch_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DatasetProviderRequestPayload {
+    table_name: String,
+    table_uri: String,
+    storage_options: Option<HashMap<String, String>>,
+    version: Option<i64>,
+    timestamp: Option<String>,
+    predicate: Option<String>,
+    overwrite: Option<bool>,
+    file_column_name: Option<String>,
+    enable_parquet_pushdown: Option<bool>,
+    schema_force_view_types: Option<bool>,
+    wrap_partition_values: Option<bool>,
+    schema_ipc: Option<Vec<u8>>,
+    min_reader_version: Option<i32>,
+    min_writer_version: Option<i32>,
+    required_reader_features: Option<Vec<String>>,
+    required_writer_features: Option<Vec<String>>,
 }
 
 fn provider_capsule(py: Python<'_>, provider: DeltaTableProvider) -> PyResult<Py<PyAny>> {
@@ -550,12 +598,18 @@ fn _dtype_for_param(
 }
 
 #[pyfunction]
-fn derive_function_factory_policy(py: Python<'_>, snapshot: &Bound<'_, PyAny>, allow_async: bool) -> PyResult<Py<PyAny>> {
+fn derive_function_factory_policy(
+    py: Python<'_>,
+    snapshot: &Bound<'_, PyAny>,
+    allow_async: bool,
+) -> PyResult<Py<PyAny>> {
     let json_module = py.import("json")?;
     let dumped = json_module.call_method1("dumps", (snapshot,))?;
     let snapshot_json: String = dumped.extract()?;
     let parsed: JsonValue = serde_json::from_str(&snapshot_json).map_err(|err| {
-        PyValueError::new_err(format!("Invalid snapshot payload for FunctionFactory policy: {err}"))
+        PyValueError::new_err(format!(
+            "Invalid snapshot payload for FunctionFactory policy: {err}"
+        ))
     })?;
     let snapshot_obj = parsed.as_object().ok_or_else(|| {
         PyValueError::new_err("FunctionFactory policy derivation requires a mapping snapshot.")
@@ -661,6 +715,18 @@ fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
         },
         "substrait": {
             "available": cfg!(feature = "substrait"),
+            "entrypoints": [
+                "replay_substrait_plan",
+                "lineage_from_substrait",
+            ],
+        },
+        "extraction_session": {
+            "available": true,
+            "entrypoint": "build_extraction_session",
+        },
+        "dataset_provider_registration": {
+            "available": true,
+            "entrypoint": "register_dataset_provider",
         },
         "async_udf": {
             "available": cfg!(feature = "async-udf"),
@@ -675,6 +741,152 @@ fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
         },
     });
     json_to_py(py, &payload)
+}
+
+#[pyfunction]
+fn replay_substrait_plan(
+    ctx: PyRef<PySessionContext>,
+    payload_bytes: &Bound<'_, PyBytes>,
+) -> PyResult<PyDataFrame> {
+    #[cfg(feature = "substrait")]
+    {
+        use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+        use datafusion_substrait::substrait::proto::Plan;
+        use prost::Message;
+
+        let plan = Plan::decode(payload_bytes.as_bytes()).map_err(|err| {
+            PyValueError::new_err(format!("Failed to decode Substrait payload: {err}"))
+        })?;
+        let state = ctx.ctx.state();
+        let runtime = runtime()?;
+        let logical_plan = runtime
+            .block_on(from_substrait_plan(&state, &plan))
+            .map_err(|err| PyRuntimeError::new_err(format!("Substrait replay failed: {err}")))?;
+        Ok(PyDataFrame::new(DataFrame::new(state, logical_plan)))
+    }
+    #[cfg(not(feature = "substrait"))]
+    {
+        let _ = (ctx, payload_bytes);
+        Err(PyRuntimeError::new_err(
+            "Substrait replay requires datafusion-python built with the `substrait` feature.",
+        ))
+    }
+}
+
+#[pyfunction]
+fn lineage_from_substrait(
+    py: Python<'_>,
+    payload_bytes: &Bound<'_, PyBytes>,
+) -> PyResult<Py<PyAny>> {
+    let ctx = SessionContext::new();
+    let report = lineage_from_substrait_native(&ctx, payload_bytes.as_bytes())
+        .map_err(|err| PyRuntimeError::new_err(format!("Lineage extraction failed: {err}")))?;
+    let payload = serde_json::to_value(report).map_err(|err| {
+        PyRuntimeError::new_err(format!("Failed to encode lineage payload: {err}"))
+    })?;
+    json_to_py(py, &payload)
+}
+
+#[pyfunction]
+fn build_extraction_session(
+    py: Python<'_>,
+    config_payload: &Bound<'_, PyAny>,
+) -> PyResult<PySessionContext> {
+    let payload: ExtractionSessionPayload =
+        parse_python_payload(py, config_payload, "extraction session config")?;
+    let mut config = ExtractionConfig::default();
+    if let Some(parallelism) = payload.parallelism {
+        if parallelism == 0 {
+            return Err(PyValueError::new_err(
+                "extraction session config parallelism must be >= 1",
+            ));
+        }
+        config.parallelism = parallelism;
+    }
+    if let Some(batch_size) = payload.batch_size {
+        if batch_size == 0 {
+            return Err(PyValueError::new_err(
+                "extraction session config batch_size must be >= 1",
+            ));
+        }
+        config.batch_size = batch_size;
+    }
+    if let Some(memory_limit_bytes) = payload.memory_limit_bytes {
+        config.memory_limit_bytes = Some(usize::try_from(memory_limit_bytes).map_err(|_| {
+            PyValueError::new_err(format!(
+                "extraction session config memory_limit_bytes exceeds usize: {memory_limit_bytes}"
+            ))
+        })?);
+    }
+    let ctx = build_extraction_session_native(&config).map_err(|err| {
+        PyRuntimeError::new_err(format!("Extraction session build failed: {err}"))
+    })?;
+    Ok(PySessionContext { ctx })
+}
+
+#[pyfunction]
+fn register_dataset_provider(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+    request_payload: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let request: DatasetProviderRequestPayload =
+        parse_python_payload(py, request_payload, "dataset provider registration")?;
+    let storage_options = request.storage_options;
+    let gate = delta_gate_from_params(
+        request.min_reader_version,
+        request.min_writer_version,
+        request.required_reader_features,
+        request.required_writer_features,
+    );
+    let overrides = scan_overrides_from_params(
+        request.file_column_name,
+        request.enable_parquet_pushdown,
+        request.schema_force_view_types,
+        request.wrap_partition_values,
+        request.schema_ipc,
+    )?;
+    let runtime = runtime()?;
+    let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
+        .block_on(delta_provider_from_session_native(
+            DeltaProviderFromSessionRequest {
+                session_ctx: &ctx.ctx,
+                table_uri: &request.table_uri,
+                storage_options,
+                version: request.version,
+                timestamp: request.timestamp.clone(),
+                predicate: request.predicate.clone(),
+                overrides,
+                gate,
+            },
+        ))
+        .map_err(|err| PyRuntimeError::new_err(format!("Dataset provider build failed: {err}")))?;
+
+    let table_name = request.table_name;
+    if request.overwrite.unwrap_or(true) {
+        let _ = ctx.ctx.deregister_table(table_name.as_str());
+    }
+    ctx.ctx
+        .register_table(table_name.as_str(), Arc::new(provider))
+        .map_err(|err| {
+            PyRuntimeError::new_err(format!(
+                "Failed to register dataset provider for table {table_name:?}: {err}"
+            ))
+        })?;
+
+    let payload = PyDict::new(py);
+    payload.set_item("table_name", table_name)?;
+    payload.set_item("registered", true)?;
+    payload.set_item("snapshot", snapshot_to_pydict(py, &snapshot)?)?;
+    payload.set_item("scan_config", scan_config_to_pydict(py, &scan_config)?)?;
+    if let Some(add_actions) = add_actions {
+        let add_payload = add_action_payloads(&add_actions);
+        payload.set_item("add_actions", json_to_py(py, &add_payload)?)?;
+    }
+    if let Some(error) = predicate_error {
+        payload.set_item("predicate_error", error)?;
+    }
+    Ok(payload.into())
 }
 
 #[pyfunction]
@@ -905,7 +1117,10 @@ fn register_codeanatomy_udfs(
 }
 
 #[pyfunction]
-fn session_context_contract_probe(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<Py<PyAny>> {
+fn session_context_contract_probe(
+    py: Python<'_>,
+    ctx: PyRef<PySessionContext>,
+) -> PyResult<Py<PyAny>> {
     let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
     let hash = registry_snapshot_hash(&snapshot)?;
     let payload = json!({
@@ -962,7 +1177,9 @@ fn install_codeanatomy_runtime(
     })?;
     let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
     let snapshot_json = serde_json::to_value(&snapshot).map_err(|err| {
-        PyRuntimeError::new_err(format!("Failed to serialize runtime snapshot payload: {err}"))
+        PyRuntimeError::new_err(format!(
+            "Failed to serialize runtime snapshot payload: {err}"
+        ))
     })?;
     let payload = json!({
         "contract_version": 3,
@@ -3197,6 +3414,10 @@ pub fn init_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
         module,
         [
             crate::codeanatomy_ext::capabilities_snapshot,
+            crate::codeanatomy_ext::replay_substrait_plan,
+            crate::codeanatomy_ext::lineage_from_substrait,
+            crate::codeanatomy_ext::build_extraction_session,
+            crate::codeanatomy_ext::register_dataset_provider,
             crate::codeanatomy_ext::session_context_contract_probe,
             crate::codeanatomy_ext::install_codeanatomy_runtime,
             crate::codeanatomy_ext::install_function_factory,
@@ -3277,6 +3498,10 @@ pub fn init_internal_module(_py: Python<'_>, module: &Bound<'_, PyModule>) -> Py
             crate::codeanatomy_ext::install_function_factory,
             crate::codeanatomy_ext::derive_function_factory_policy,
             crate::codeanatomy_ext::capabilities_snapshot,
+            crate::codeanatomy_ext::replay_substrait_plan,
+            crate::codeanatomy_ext::lineage_from_substrait,
+            crate::codeanatomy_ext::build_extraction_session,
+            crate::codeanatomy_ext::register_dataset_provider,
             crate::codeanatomy_ext::session_context_contract_probe,
             crate::codeanatomy_ext::install_codeanatomy_runtime,
             crate::codeanatomy_ext::arrow_stream_to_batches,

@@ -50,7 +50,9 @@ impl RulepackFactory {
         let mut analyzer_rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = Vec::new();
         let mut optimizer_rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> = Vec::new();
         let mut physical_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = Vec::new();
-        analyzer_rules.push(Arc::new(datafusion_ext::planner_rules::CodeAnatomyPolicyRule));
+        analyzer_rules.push(Arc::new(
+            datafusion_ext::planner_rules::CodeAnatomyPolicyRule,
+        ));
 
         // Process each intent using the intent compiler
         for intent in intents {
@@ -242,16 +244,10 @@ mod tests {
             params: serde_json::Value::Null,
         }];
 
-        let default_ruleset = RulepackFactory::build_ruleset(
-            &RulepackProfile::Default,
-            &intents,
-            &env_profile,
-        );
-        let strict_ruleset = RulepackFactory::build_ruleset(
-            &RulepackProfile::Strict,
-            &intents,
-            &env_profile,
-        );
+        let default_ruleset =
+            RulepackFactory::build_ruleset(&RulepackProfile::Default, &intents, &env_profile);
+        let strict_ruleset =
+            RulepackFactory::build_ruleset(&RulepackProfile::Strict, &intents, &env_profile);
 
         assert_ne!(default_ruleset.fingerprint, strict_ruleset.fingerprint);
     }
@@ -282,6 +278,9 @@ mod tests {
         assert_eq!(snapshot.fingerprint, ruleset.fingerprint);
         assert!(!snapshot.analyzer_rules.is_empty());
         // Verify the snapshot contains the policy rule
-        assert!(snapshot.analyzer_rules.iter().any(|r| r == "codeanatomy_policy_rule"));
+        assert!(snapshot
+            .analyzer_rules
+            .iter()
+            .any(|r| r == "codeanatomy_policy_rule"));
     }
 }

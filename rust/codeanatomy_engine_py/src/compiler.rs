@@ -81,46 +81,46 @@ impl SemanticPlanCompiler {
             &env_profile,
         );
         let tracing = spec.runtime.effective_tracing();
-        self.runtime
-            .block_on(async {
-                let response = compile_request(CompileRequest {
-                    session_factory: session_factory.inner(),
-                    spec: &spec,
-                    ruleset: &ruleset,
-                    tracing_config: Some(&tracing),
-                })
-                .await
-                .map_err(|err| {
-                    engine_execution_error(
-                        "compilation",
-                        "COMPILE_METADATA_CAPTURE_FAILED",
-                        format!("Compile metadata capture failed: {err}"),
-                        None,
-                    )
-                })?;
-                compile_response_to_json(&response).map_err(|err| {
-                    engine_execution_error(
-                        "compilation",
-                        "COMPILE_METADATA_SERIALIZE_FAILED",
-                        format!("Failed to serialize compile metadata: {err}"),
-                        None,
-                    )
-                })
+        self.runtime.block_on(async {
+            let response = compile_request(CompileRequest {
+                session_factory: session_factory.inner(),
+                spec: &spec,
+                ruleset: &ruleset,
+                tracing_config: Some(&tracing),
             })
+            .await
+            .map_err(|err| {
+                engine_execution_error(
+                    "compilation",
+                    "COMPILE_METADATA_CAPTURE_FAILED",
+                    format!("Compile metadata capture failed: {err}"),
+                    None,
+                )
+            })?;
+            compile_response_to_json(&response).map_err(|err| {
+                engine_execution_error(
+                    "compilation",
+                    "COMPILE_METADATA_SERIALIZE_FAILED",
+                    format!("Failed to serialize compile metadata: {err}"),
+                    None,
+                )
+            })
+        })
     }
 
     /// Build a canonical SemanticExecutionSpec JSON payload from semantic IR + request.
     ///
     /// This is the Rust-authoritative replacement for Python-side spec derivation.
     fn build_spec_json(&self, semantic_ir_json: &str, request_json: &str) -> PyResult<String> {
-        let semantic_ir: SemanticIrPayload = serde_json::from_str(semantic_ir_json).map_err(|err| {
-            engine_execution_error(
-                "validation",
-                "INVALID_SEMANTIC_IR_JSON",
-                format!("Invalid semantic IR JSON: {err}"),
-                Some(json!({"error": err.to_string()})),
-            )
-        })?;
+        let semantic_ir: SemanticIrPayload =
+            serde_json::from_str(semantic_ir_json).map_err(|err| {
+                engine_execution_error(
+                    "validation",
+                    "INVALID_SEMANTIC_IR_JSON",
+                    format!("Invalid semantic IR JSON: {err}"),
+                    Some(json!({"error": err.to_string()})),
+                )
+            })?;
         let request: BuildSpecRequest = serde_json::from_str(request_json).map_err(|err| {
             engine_execution_error(
                 "validation",

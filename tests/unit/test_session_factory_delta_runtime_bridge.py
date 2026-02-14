@@ -8,11 +8,11 @@ from types import ModuleType
 import pytest
 from datafusion import RuntimeEnvBuilder, SessionContext
 
+from datafusion_engine.session.context_pool import _build_delta_session_context
 from datafusion_engine.session.delta_session_builder import (
     build_runtime_policy_options,
     parse_runtime_size,
 )
-from datafusion_engine.session.factory import _build_delta_session_context
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
 
 

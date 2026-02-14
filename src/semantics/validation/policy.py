@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
-from datafusion_engine.schema.registry import validate_semantic_types
+from datafusion_engine.schema import validate_semantic_types
 from semantics.validation.catalog_validation import (
     SemanticInputValidationResult,
     validate_semantic_input_columns,

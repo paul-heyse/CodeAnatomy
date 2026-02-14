@@ -8,22 +8,24 @@ use codeanatomy_engine::compiler::plan_compiler::SemanticPlanCompiler;
 use codeanatomy_engine::compiler::pushdown_probe_extract::{
     extract_input_filter_predicates, verify_pushdown_contracts,
 };
-use codeanatomy_engine::compliance::capture::{capture_explain_verbose, ComplianceCapture, RetentionPolicy, RulepackSnapshot};
+use codeanatomy_engine::compliance::capture::{
+    capture_explain_verbose, ComplianceCapture, RetentionPolicy, RulepackSnapshot,
+};
 use codeanatomy_engine::executor::orchestration::prepare_execution_context;
 use codeanatomy_engine::executor::pipeline;
 use codeanatomy_engine::executor::result::TuningHint;
-use codeanatomy_engine::executor::warnings::{RunWarning, WarningCode, WarningStage};
+#[cfg(feature = "tracing")]
+use codeanatomy_engine::executor::tracing as engine_tracing;
 #[cfg(feature = "tracing")]
 use codeanatomy_engine::executor::warnings::warning_counts_by_code;
-use codeanatomy_engine::providers::registration::probe_provider_pushdown;
+use codeanatomy_engine::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use codeanatomy_engine::providers::pushdown_contract::PushdownEnforcementMode as ContractEnforcementMode;
+use codeanatomy_engine::providers::registration::probe_provider_pushdown;
 use codeanatomy_engine::rules::rulepack::RulepackFactory;
 use codeanatomy_engine::spec::runtime::PushdownEnforcementMode;
 use codeanatomy_engine::spec::runtime::RuntimeTunerMode;
 use codeanatomy_engine::stability::optimizer_lab::run_lab_from_ruleset;
 use codeanatomy_engine::tuner::adaptive::{AdaptiveTuner, ExecutionMetrics, TunerConfig};
-#[cfg(feature = "tracing")]
-use codeanatomy_engine::executor::tracing as engine_tracing;
 
 use super::compiler::CompiledPlan;
 use super::errors::engine_execution_error;
@@ -116,16 +118,14 @@ impl CpgMaterializer {
             let start_time = chrono::Utc::now();
 
             // Parse spec from compiled plan
-            let spec = compiled_plan
-                .parse_spec()
-                .map_err(|e| {
-                    engine_execution_error(
-                        "validation",
-                        "PARSE_COMPILED_SPEC_FAILED",
-                        format!("Failed to parse spec: {e}"),
-                        None,
-                    )
-                })?;
+            let spec = compiled_plan.parse_spec().map_err(|e| {
+                engine_execution_error(
+                    "validation",
+                    "PARSE_COMPILED_SPEC_FAILED",
+                    format!("Failed to parse spec: {e}"),
+                    None,
+                )
+            })?;
 
             // Get environment profile for rule compilation
             let env_profile = session_factory.get_profile();
@@ -138,15 +138,14 @@ impl CpgMaterializer {
             );
             let tracing_config = spec.runtime.effective_tracing();
             #[cfg(feature = "tracing")]
-            engine_tracing::init_otel_tracing(&tracing_config)
-                .map_err(|e| {
-                    engine_execution_error(
-                        "runtime",
-                        "TRACING_INIT_FAILED",
-                        format!("Failed to initialize tracing: {e}"),
-                        None,
-                    )
-                })?;
+            engine_tracing::init_otel_tracing(&tracing_config).map_err(|e| {
+                engine_execution_error(
+                    "runtime",
+                    "TRACING_INIT_FAILED",
+                    format!("Failed to initialize tracing: {e}"),
+                    None,
+                )
+            })?;
 
             #[cfg(feature = "tracing")]
             let execution_span = {
@@ -218,8 +217,7 @@ impl CpgMaterializer {
             // Python-specific: Compliance capture (EXPLAIN VERBOSE, rulepack snapshot)
             // ---------------------------------------------------------------
             let runtime_config = &spec.runtime;
-            let compliance_enabled =
-                resolve_compliance_enabled(runtime_config.compliance_capture);
+            let compliance_enabled = resolve_compliance_enabled(runtime_config.compliance_capture);
             let tuner_mode = resolve_tuner_mode(runtime_config.tuner_mode);
 
             // Collect non-fatal warnings from Python-specific best-effort operations.
@@ -231,17 +229,14 @@ impl CpgMaterializer {
                 // compliance capture is explicitly enabled and is acceptable
                 // because compilation is cheap relative to materialization.
                 let compliance_compiler = SemanticPlanCompiler::new(&prepared.ctx, &spec);
-                let compliance_plans = compliance_compiler
-                    .compile()
-                    .await
-                    .map_err(|e| {
-                        engine_execution_error(
-                            "compilation",
-                            "COMPLIANCE_COMPILE_FAILED",
-                            format!("Failed to compile plans for compliance: {e}"),
-                            None,
-                        )
-                    })?;
+                let compliance_plans = compliance_compiler.compile().await.map_err(|e| {
+                    engine_execution_error(
+                        "compilation",
+                        "COMPLIANCE_COMPILE_FAILED",
+                        format!("Failed to compile plans for compliance: {e}"),
+                        None,
+                    )
+                })?;
 
                 let mut capture = ComplianceCapture::new(RetentionPolicy::Short);
                 capture.capture_rulepack(RulepackSnapshot {
@@ -268,10 +263,7 @@ impl CpgMaterializer {
                     "compliance_capture".to_string(),
                     compliance_enabled.to_string(),
                 );
-                config_snapshot.insert(
-                    "tuner_mode".to_string(),
-                    format!("{tuner_mode:?}"),
-                );
+                config_snapshot.insert("tuner_mode".to_string(), format!("{tuner_mode:?}"));
                 config_snapshot.insert(
                     "capture_optimizer_lab".to_string(),
                     runtime_config.capture_optimizer_lab.to_string(),
@@ -361,7 +353,8 @@ impl CpgMaterializer {
                         PushdownEnforcementMode::Disabled => ContractEnforcementMode::Disabled,
                     };
                     for (target, df) in &compliance_plans {
-                        let optimized_plan = match prepared.ctx.state().optimize(df.logical_plan()) {
+                        let optimized_plan = match prepared.ctx.state().optimize(df.logical_plan())
+                        {
                             Ok(plan) => plan,
                             Err(err) => {
                                 py_warnings.push(
@@ -494,9 +487,7 @@ impl CpgMaterializer {
                         AdaptiveTuner::observe_only(initial_config.clone())
                     }
                 };
-                let elapsed_ms = (chrono::Utc::now() - start_time)
-                    .num_milliseconds()
-                    .max(0) as u64;
+                let elapsed_ms = (chrono::Utc::now() - start_time).num_milliseconds().max(0) as u64;
                 let rows_processed = run_result
                     .outputs
                     .iter()

@@ -1,7 +1,7 @@
 //! Join graph specification for semantic execution planning.
 
-use serde::{Deserialize, Serialize};
 use crate::spec::relations::JoinType;
+use serde::{Deserialize, Serialize};
 
 /// Join graph encoding cross-relation dependencies.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

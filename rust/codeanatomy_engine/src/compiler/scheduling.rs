@@ -134,8 +134,11 @@ impl TaskGraph {
     }
 
     pub fn topological_sort(&mut self) -> Result<()> {
-        let mut in_degree: BTreeMap<String, usize> =
-            self.nodes.keys().map(|name| (name.clone(), 0usize)).collect();
+        let mut in_degree: BTreeMap<String, usize> = self
+            .nodes
+            .keys()
+            .map(|name| (name.clone(), 0usize))
+            .collect();
         let mut outgoing: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (node, deps) in &self.dependencies {
             for dep in deps {
@@ -145,7 +148,13 @@ impl TaskGraph {
         }
         let mut queue: VecDeque<String> = in_degree
             .iter()
-            .filter_map(|(name, degree)| if *degree == 0 { Some(name.clone()) } else { None })
+            .filter_map(|(name, degree)| {
+                if *degree == 0 {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
         let mut order = Vec::with_capacity(self.nodes.len());
 
@@ -192,10 +201,7 @@ impl TaskGraph {
         let mut reverse: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for (node, deps) in &self.dependencies {
             for dep in deps {
-                reverse
-                    .entry(dep.as_str())
-                    .or_default()
-                    .push(node.as_str());
+                reverse.entry(dep.as_str()).or_default().push(node.as_str());
             }
         }
         let mut out = HashSet::new();
@@ -214,11 +220,13 @@ impl TaskGraph {
     }
 
     fn upsert_node(&mut self, name: &str, task_type: TaskType) {
-        self.nodes.entry(name.to_string()).or_insert_with(|| TaskNode {
-            name: name.to_string(),
-            task_type,
-            estimated_cost: 1.0,
-        });
+        self.nodes
+            .entry(name.to_string())
+            .or_insert_with(|| TaskNode {
+                name: name.to_string(),
+                task_type,
+                estimated_cost: 1.0,
+            });
         self.dependencies.entry(name.to_string()).or_default();
     }
 

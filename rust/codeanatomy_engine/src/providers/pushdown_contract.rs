@@ -207,8 +207,7 @@ pub fn probe_pushdown(
             filters.len()
         )));
     }
-    let statuses: Vec<FilterPushdownStatus> =
-        raw_statuses.into_iter().map(Into::into).collect();
+    let statuses: Vec<FilterPushdownStatus> = raw_statuses.into_iter().map(Into::into).collect();
     Ok(PushdownProbe {
         provider: provider_name.to_string(),
         filter_sql: filters.iter().map(ToString::to_string).collect(),

@@ -39,13 +39,11 @@ pub fn compile_intent_to_analyzer(
                 None
             }
         }
-        RuleClass::Safety => {
-            match intent.name.as_str() {
-                "safety" => Some(Arc::new(SafetyRule)),
-                "strict_safety" => Some(Arc::new(StrictSafetyRule)),
-                _ => None,
-            }
-        }
+        RuleClass::Safety => match intent.name.as_str() {
+            "safety" => Some(Arc::new(SafetyRule)),
+            "strict_safety" => Some(Arc::new(StrictSafetyRule)),
+            _ => None,
+        },
         // Other rule classes don't produce analyzer rules
         RuleClass::DeltaScanAware | RuleClass::CostShape => None,
     }

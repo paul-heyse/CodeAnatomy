@@ -16,7 +16,7 @@ from schema_spec.contracts import DeltaScanPolicyDefaults, ScanPolicyConfig, Sca
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 

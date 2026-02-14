@@ -12,7 +12,7 @@ from datafusion import functions as f
 from datafusion_engine.arrow.interop import empty_table_for_schema
 from datafusion_engine.schema.introspection import table_names_snapshot
 from datafusion_engine.udf.expr import udf_expr
-from datafusion_engine.udf.runtime import rust_udf_snapshot, validate_required_udfs
+from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
 from obs.otel.scopes import SCOPE_SEMANTICS
 from obs.otel.tracing import stage_span
 

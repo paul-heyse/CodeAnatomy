@@ -49,10 +49,7 @@ pub fn encode_substrait(ctx: &SessionContext, plan: &LogicalPlan) -> Result<Vec<
 /// Stub implementation when the `substrait` feature is not enabled.
 /// Returns `DataFusionError::NotImplemented`.
 #[cfg(not(feature = "substrait"))]
-pub fn encode_substrait(
-    _ctx: &SessionContext,
-    _plan: &LogicalPlan,
-) -> Result<Vec<u8>> {
+pub fn encode_substrait(_ctx: &SessionContext, _plan: &LogicalPlan) -> Result<Vec<u8>> {
     Err(DataFusionError::NotImplemented(
         "substrait feature not enabled".into(),
     ))
@@ -63,10 +60,7 @@ pub fn encode_substrait(
 /// The decoded plan is bound to the provided SessionContext, which must
 /// have compatible catalog/schema registrations.
 #[cfg(feature = "substrait")]
-pub async fn decode_substrait(
-    ctx: &SessionContext,
-    bytes: &[u8],
-) -> Result<LogicalPlan> {
+pub async fn decode_substrait(ctx: &SessionContext, bytes: &[u8]) -> Result<LogicalPlan> {
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use prost::Message;
 
@@ -82,10 +76,7 @@ pub async fn decode_substrait(
 /// Stub implementation when the `substrait` feature is not enabled.
 /// Returns `DataFusionError::NotImplemented`.
 #[cfg(not(feature = "substrait"))]
-pub async fn decode_substrait(
-    _ctx: &SessionContext,
-    _bytes: &[u8],
-) -> Result<LogicalPlan> {
+pub async fn decode_substrait(_ctx: &SessionContext, _bytes: &[u8]) -> Result<LogicalPlan> {
     Err(DataFusionError::NotImplemented(
         "substrait feature not enabled".into(),
     ))
@@ -110,10 +101,7 @@ pub fn substrait_plan_hash(bytes: &[u8]) -> [u8; 32] {
 /// or Ok(None) when the feature is disabled. Propagates real encoding errors.
 ///
 /// This is the integration point used by `build_plan_bundle_artifact`.
-pub fn try_substrait_encode(
-    ctx: &SessionContext,
-    plan: &LogicalPlan,
-) -> Result<Vec<u8>> {
+pub fn try_substrait_encode(ctx: &SessionContext, plan: &LogicalPlan) -> Result<Vec<u8>> {
     encode_substrait(ctx, plan)
 }
 

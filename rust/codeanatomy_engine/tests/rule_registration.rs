@@ -43,7 +43,10 @@ fn test_compliance_capture_populated() {
 
     let mut capture = ComplianceCapture::new(RetentionPolicy::Short);
     capture.capture_rulepack(snapshot.clone());
-    capture.record_explain("test_output", vec!["PhysicalPlan".to_string(), "Filter".to_string()]);
+    capture.record_explain(
+        "test_output",
+        vec!["PhysicalPlan".to_string(), "Filter".to_string()],
+    );
 
     assert!(!capture.is_empty());
     assert_eq!(capture.rulepack_snapshot.profile, "Default");
@@ -76,10 +79,7 @@ fn test_optimizer_lab_empty_rules_produce_empty_steps() {
         lab.steps.is_empty(),
         "empty rules must produce empty step trace"
     );
-    assert_eq!(
-        lab.rules_with_changes, 0,
-        "no rules means no changes"
-    );
+    assert_eq!(lab.rules_with_changes, 0, "no rules means no changes");
 }
 
 /// Scope 5: RuleStep type is constructible and has expected fields.

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
-from datafusion_engine.lineage.datafusion import LineageReport, extract_lineage
+from datafusion_engine.lineage.reporting import LineageReport, extract_lineage
 from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.optional_deps import require_datafusion

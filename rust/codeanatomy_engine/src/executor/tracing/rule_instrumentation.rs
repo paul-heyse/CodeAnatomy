@@ -479,13 +479,11 @@ impl InstrumentedOptimizerRule {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         match self.inner.apply_order() {
-            Some(apply_order) => {
-                plan.rewrite_with_subqueries(&mut SingleSpanTreeTraverser::new(
-                    apply_order,
-                    self.inner.as_ref(),
-                    config,
-                ))
-            }
+            Some(apply_order) => plan.rewrite_with_subqueries(&mut SingleSpanTreeTraverser::new(
+                apply_order,
+                self.inner.as_ref(),
+                config,
+            )),
             None => self.inner.rewrite(plan, config),
         }
     }

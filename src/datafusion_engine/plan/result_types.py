@@ -13,7 +13,6 @@ Dependency hierarchy:
 
 from __future__ import annotations
 
-import importlib
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -30,7 +29,7 @@ if TYPE_CHECKING:
 
     from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
     from datafusion_engine.io.write import WriteResult
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from schema_spec.policies import DataFusionWritePolicy
@@ -309,110 +308,6 @@ def _telemetry_payload(start_time: float, *, emit_telemetry: bool) -> dict[str, 
     return {"duration_ms": duration_ms}
 
 
-def _internal_substrait_logical_plan(
-    ctx: SessionContext,
-    payload: bytes,
-) -> object | None:
-    """Build a logical plan via ``datafusion._internal.substrait`` when available.
-
-    Returns:
-    -------
-    object | None
-        Decoded logical plan, or ``None`` when internal APIs are unavailable.
-
-    Raises:
-        ValueError: If internal Substrait replay fails at runtime.
-    """
-    try:
-        datafusion_internal = importlib.import_module("datafusion._internal")
-    except ImportError:
-        return None
-
-    internal_substrait = getattr(datafusion_internal, "substrait", None)
-    internal_serde = getattr(internal_substrait, "Serde", None)
-    internal_consumer = getattr(internal_substrait, "Consumer", None)
-    deserialize = getattr(internal_serde, "deserialize_bytes", None)
-    from_substrait = getattr(internal_consumer, "from_substrait_plan", None)
-    if not callable(deserialize) or not callable(from_substrait):
-        return None
-    try:
-        decoded_plan = deserialize(payload)
-        raw_logical_plan = from_substrait(ctx.ctx, decoded_plan)
-        from datafusion.plan import LogicalPlan as DataFusionLogicalPlan
-
-        return DataFusionLogicalPlan(raw_logical_plan)
-    except Exception as exc:
-        msg = f"Substrait replay failed: {exc}"
-        raise ValueError(msg) from exc
-
-
-def _public_substrait_logical_plan(
-    ctx: SessionContext,
-    payload: bytes,
-) -> object:
-    """Build a logical plan via public ``datafusion.substrait`` APIs.
-
-    Returns:
-    -------
-    object
-        Decoded logical plan from public Substrait APIs.
-
-    Raises:
-        TypeError: If required public Substrait callables are unavailable.
-        ValueError: If public Substrait APIs are unavailable or replay fails.
-    """
-    try:
-        from datafusion.substrait import Consumer as SubstraitConsumer
-        from datafusion.substrait import Serde as SubstraitSerde
-    except ImportError as exc:
-        msg = "Substrait replay requires datafusion.substrait support."
-        raise ValueError(msg) from exc
-
-    deserialize = getattr(SubstraitSerde, "deserialize_bytes", None)
-    if not callable(deserialize):
-        msg = "Substrait replay requires Serde.deserialize_bytes."
-        raise TypeError(msg)
-    from_substrait = getattr(SubstraitConsumer, "from_substrait_plan", None)
-    if not callable(from_substrait):
-        msg = "Substrait replay requires Consumer.from_substrait_plan."
-        raise TypeError(msg)
-    try:
-        plan = deserialize(payload)
-        return from_substrait(ctx, plan)
-    except Exception as exc:
-        msg = f"Substrait replay failed: {exc}"
-        raise ValueError(msg) from exc
-
-
-def _dataframe_from_logical_plan(ctx: SessionContext, logical_plan: object) -> DataFrame:
-    """Construct a DataFrame from a logical plan with type-contract checks.
-
-    Returns:
-    -------
-    DataFrame
-        DataFusion dataframe created from the logical plan.
-
-    Raises:
-        TypeError: If dataframe construction APIs are unavailable or return the wrong type.
-        ValueError: If logical-plan execution fails while constructing the dataframe.
-    """
-    create = getattr(ctx, "create_dataframe_from_logical_plan", None)
-    if not callable(create):
-        msg = "SessionContext.create_dataframe_from_logical_plan is unavailable."
-        raise TypeError(msg)
-    from datafusion.dataframe import DataFrame as DataFusionDataFrame
-
-    try:
-        candidate = create(logical_plan)
-    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-        msg = f"Substrait DataFrame construction failed: {exc}"
-        raise ValueError(msg) from exc
-    if not isinstance(candidate, DataFusionDataFrame):
-        msg = f"Expected DataFrame from Substrait replay, got {type(candidate).__name__}."
-        raise TypeError(msg)
-    return candidate
-
-
 def replay_substrait_bytes(ctx: SessionContext, payload: bytes) -> DataFrame:
     """Replay Substrait bytes into a DataFusion DataFrame.
 
@@ -423,11 +318,38 @@ def replay_substrait_bytes(ctx: SessionContext, payload: bytes) -> DataFrame:
     Returns:
         DataFrame: Result.
 
+    Raises:
+        RuntimeError: If datafusion_ext is unavailable.
+        TypeError: If replay entrypoint is unavailable or returns the wrong type.
+        ValueError: If extension replay execution fails.
+
     """
-    logical_plan = _internal_substrait_logical_plan(ctx, payload)
-    if logical_plan is None:
-        logical_plan = _public_substrait_logical_plan(ctx, payload)
-    return _dataframe_from_logical_plan(ctx, logical_plan)
+    try:
+        import datafusion_ext
+    except ImportError as exc:
+        msg = (
+            "Substrait replay requires datafusion_ext.replay_substrait_plan. "
+            "Rebuild and install matching datafusion/datafusion_ext wheels "
+            "(scripts/build_datafusion_wheels.sh + uv sync)."
+        )
+        raise RuntimeError(msg) from exc
+
+    replay = getattr(datafusion_ext, "replay_substrait_plan", None)
+    if not callable(replay):
+        msg = "Substrait replay requires datafusion_ext.replay_substrait_plan."
+        raise TypeError(msg)
+
+    from datafusion.dataframe import DataFrame as DataFusionDataFrame
+
+    try:
+        candidate = replay(ctx, payload)
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+        msg = f"Substrait replay failed: {exc}"
+        raise ValueError(msg) from exc
+    if not isinstance(candidate, DataFusionDataFrame):
+        msg = f"Expected DataFrame from Substrait replay, got {type(candidate).__name__}."
+        raise TypeError(msg)
+    return candidate
 
 
 def validate_substrait_plan(
@@ -453,7 +375,7 @@ def validate_substrait_plan(
         return {"status": "error", "match": False, "diagnostics": diagnostics}
     try:
         replay_df = replay_substrait_bytes(resolved_ctx, substrait_bytes)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, RuntimeError) as exc:
         diagnostics["reason"] = "substrait_replay_failed"
         diagnostics["error"] = str(exc)
         return {"status": "error", "match": False, "diagnostics": diagnostics}

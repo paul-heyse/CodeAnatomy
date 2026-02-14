@@ -26,9 +26,9 @@ pub enum SnapshotMode {
 /// # Errors
 /// Returns error if snapshot access fails.
 pub fn table_version(table: &DeltaTable) -> DFResult<i64> {
-    let snapshot = table.snapshot().map_err(|e| {
-        datafusion_common::DataFusionError::External(Box::new(e))
-    })?;
+    let snapshot = table
+        .snapshot()
+        .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
     Ok(snapshot.version())
 }
 
@@ -69,9 +69,9 @@ pub fn validate_version_pin(table: &DeltaTable, expected: i64) -> DFResult<()> {
 /// # Errors
 /// Returns error if snapshot access fails.
 pub fn snapshot_metadata(table: &DeltaTable) -> DFResult<(i64, usize, i64)> {
-    let snapshot = table.snapshot().map_err(|e| {
-        datafusion_common::DataFusionError::External(Box::new(e))
-    })?;
+    let snapshot = table
+        .snapshot()
+        .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
     let version = snapshot.version();
     let eager = snapshot.snapshot();
 

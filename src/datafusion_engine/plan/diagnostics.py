@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 import msgspec
 from opentelemetry import trace
 
-from datafusion_engine.lineage.datafusion import referenced_tables_from_plan
 from datafusion_engine.lineage.diagnostics import recorder_for_profile
+from datafusion_engine.lineage.reporting import referenced_tables_from_plan
 from obs.otel.run_context import get_run_id
 from obs.otel.tracing import set_span_attributes
 from serde_msgspec import StructBaseHotPath, to_builtins_mapping

@@ -1,11 +1,11 @@
 mod common;
 
+use codeanatomy_engine::session::envelope::SessionEnvelope;
 use codeanatomy_engine::session::factory::SessionFactory;
 use codeanatomy_engine::session::format_policy::{build_table_options, FormatPolicySpec};
 use codeanatomy_engine::session::planning_manifest::PlanningSurfaceManifest;
 use codeanatomy_engine::session::planning_surface::PlanningSurfaceSpec;
 use codeanatomy_engine::session::profile_coverage::{evaluate_profile_coverage, CoverageState};
-use codeanatomy_engine::session::envelope::SessionEnvelope;
 use codeanatomy_engine::session::profiles::{EnvironmentClass, EnvironmentProfile};
 
 #[tokio::test]
@@ -187,8 +187,7 @@ async fn test_envelope_includes_planning_surface_hash() {
     // because other envelope fields (versions, config) contribute.
     let _hash: [u8; 32] = envelope.planning_surface_hash;
     assert_ne!(
-        envelope.envelope_hash,
-        [0u8; 32],
+        envelope.envelope_hash, [0u8; 32],
         "envelope hash must be non-zero even with zeroed planning_surface_hash"
     );
 }
@@ -262,33 +261,35 @@ async fn test_planning_hash_propagates_to_envelope_and_plan_bundle() {
     .unwrap();
 
     let df = state.ctx.sql("SELECT 1 AS id").await.unwrap();
-    let runtime = codeanatomy_engine::compiler::plan_bundle::capture_plan_bundle_runtime(
-        &state.ctx,
-        &df,
-    )
-    .await
-    .unwrap();
-    let (artifact, _warnings) = codeanatomy_engine::compiler::plan_bundle::build_plan_bundle_artifact_with_warnings(
-        codeanatomy_engine::compiler::plan_bundle::PlanBundleArtifactBuildRequest {
-            ctx: &state.ctx,
-            runtime: &runtime,
-            rulepack_fingerprint: ruleset.fingerprint,
-            provider_identities: vec![],
-            optimizer_traces: vec![],
-            pushdown_report: None,
-            deterministic_inputs: false,
-            no_volatile_udfs: true,
-            deterministic_optimizer: true,
-            stats_quality: None,
-            capture_substrait: false,
-            capture_sql: false,
-            capture_delta_codec: false,
-            planning_surface_hash: state.planning_surface_hash,
-        },
-    )
-    .await
-    .unwrap();
+    let runtime =
+        codeanatomy_engine::compiler::plan_bundle::capture_plan_bundle_runtime(&state.ctx, &df)
+            .await
+            .unwrap();
+    let (artifact, _warnings) =
+        codeanatomy_engine::compiler::plan_bundle::build_plan_bundle_artifact_with_warnings(
+            codeanatomy_engine::compiler::plan_bundle::PlanBundleArtifactBuildRequest {
+                ctx: &state.ctx,
+                runtime: &runtime,
+                rulepack_fingerprint: ruleset.fingerprint,
+                provider_identities: vec![],
+                optimizer_traces: vec![],
+                pushdown_report: None,
+                deterministic_inputs: false,
+                no_volatile_udfs: true,
+                deterministic_optimizer: true,
+                stats_quality: None,
+                capture_substrait: false,
+                capture_sql: false,
+                capture_delta_codec: false,
+                planning_surface_hash: state.planning_surface_hash,
+            },
+        )
+        .await
+        .unwrap();
 
-    assert_eq!(artifact.planning_surface_hash, envelope.planning_surface_hash);
+    assert_eq!(
+        artifact.planning_surface_hash,
+        envelope.planning_surface_hash
+    );
     assert_ne!(artifact.planning_surface_hash, [0u8; 32]);
 }

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 
 from datafusion_engine.arrow.interop import SchemaLike
-from datafusion_engine.schema.registry import registered_table_names
+from datafusion_engine.schema import registered_table_names
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, dataset_schema_from_context
 from schema_spec.contracts import (
     DatasetSpec,

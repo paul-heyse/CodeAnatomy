@@ -3,8 +3,8 @@
 use datafusion::execution::context::SessionContext;
 use datafusion_common::Result;
 
-use crate::compiler::plan_bundle::{DeltaProviderCompatibility, ProviderIdentity};
 use crate::compiler::graph_validator;
+use crate::compiler::plan_bundle::{DeltaProviderCompatibility, ProviderIdentity};
 use crate::executor::warnings::RunWarning;
 use crate::providers::registration::register_extraction_inputs;
 use crate::rules::registry::CpgRuleSet;
@@ -56,13 +56,13 @@ pub async fn prepare_execution_context(
 
     let registrations = register_extraction_inputs(&state.ctx, &spec.input_relations).await?;
     for warning in graph_validator::validate_delta_compatibility(spec, &registrations)? {
-        state.build_warnings.push(
-            crate::executor::warnings::RunWarning::new(
+        state
+            .build_warnings
+            .push(crate::executor::warnings::RunWarning::new(
                 crate::executor::warnings::WarningCode::DeltaCompatibilityDrift,
                 crate::executor::warnings::WarningStage::Preflight,
                 warning,
-            ),
-        );
+            ));
     }
     let mut provider_identities: Vec<ProviderIdentity> = registrations
         .iter()

@@ -74,8 +74,8 @@ pub async fn build_union(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::MemTable;
     use std::sync::Arc;
 
@@ -184,9 +184,7 @@ mod tests {
 
         let sources = vec!["table1".to_string(), "table2".to_string()];
         let disc_col = Some("source".to_string());
-        let df = build_union(&ctx, &sources, &disc_col, false)
-            .await
-            .unwrap();
+        let df = build_union(&ctx, &sources, &disc_col, false).await.unwrap();
 
         let schema = df.schema();
         // Should have original columns + discriminator

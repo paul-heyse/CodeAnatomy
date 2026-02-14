@@ -100,7 +100,7 @@ def parse_runtime_size(value: object) -> int | None:
 
 
 def resolve_delta_session_builder(
-    module_names: tuple[str, ...] = ("datafusion_ext", "datafusion._internal"),
+    module_names: tuple[str, ...] = ("datafusion_ext",),
 ) -> DeltaSessionBuilderResolution:
     """Resolve an installed Delta session builder with diagnostics.
 

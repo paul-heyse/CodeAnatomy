@@ -47,11 +47,8 @@ impl CpgRuleSet {
         optimizer_rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
         physical_rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
     ) -> Self {
-        let fingerprint = compute_ruleset_fingerprint(
-            &analyzer_rules,
-            &optimizer_rules,
-            &physical_rules,
-        );
+        let fingerprint =
+            compute_ruleset_fingerprint(&analyzer_rules, &optimizer_rules, &physical_rules);
 
         Self {
             analyzer_rules,

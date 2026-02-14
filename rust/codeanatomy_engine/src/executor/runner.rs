@@ -21,12 +21,12 @@ use crate::executor::delta_writer::{
     build_delta_commit_options, ensure_output_table, extract_row_count, read_write_outcome,
     validate_output_schema, LineageContext,
 };
-#[cfg(feature = "tracing")]
-use crate::executor::warnings::warning_counts_by_code;
 use crate::executor::pipeline;
 use crate::executor::result::{MaterializationResult, RunResult};
 #[cfg(feature = "tracing")]
 use crate::executor::tracing as engine_tracing;
+#[cfg(feature = "tracing")]
+use crate::executor::warnings::warning_counts_by_code;
 use crate::spec::outputs::{MaterializationMode, OutputTarget};
 
 /// Execute compiled output plans and materialize results to Delta tables.
@@ -55,7 +55,8 @@ pub async fn execute_and_materialize(
         };
         let expected_schema = Arc::new(df.schema().as_arrow().clone());
         let pre_registered_target = ctx.table(&target.table_name).await.ok();
-        let use_native_delta_writer = target.delta_location.is_some() || pre_registered_target.is_none();
+        let use_native_delta_writer =
+            target.delta_location.is_some() || pre_registered_target.is_none();
         if pre_registered_target.is_none() || target.delta_location.is_some() {
             if pre_registered_target.is_some() && target.delta_location.is_some() {
                 let _ = ctx.deregister_table(&target.table_name)?;
@@ -64,13 +65,7 @@ pub async fn execute_and_materialize(
                 .delta_location
                 .as_deref()
                 .unwrap_or(target.table_name.as_str());
-            ensure_output_table(
-                ctx,
-                &target.table_name,
-                delta_location,
-                &expected_schema,
-            )
-            .await?;
+            ensure_output_table(ctx, &target.table_name, delta_location, &expected_schema).await?;
         }
         let existing_df = match pre_registered_target {
             Some(df) => Some(df),
@@ -121,7 +116,10 @@ pub async fn execute_and_materialize(
                 write_options = write_options.with_partition_by(target.partition_by.clone());
             }
             let write_result = df.write_table(&target.table_name, write_options).await?;
-            (extract_row_count(&write_result), read_write_outcome(delta_location).await)
+            (
+                extract_row_count(&write_result),
+                read_write_outcome(delta_location).await,
+            )
         };
 
         results.push(MaterializationResult {
@@ -170,7 +168,8 @@ pub async fn execute_and_materialize_with_plans(
         };
         let expected_schema = Arc::new(df.schema().as_arrow().clone());
         let pre_registered_target = ctx.table(&target.table_name).await.ok();
-        let use_native_delta_writer = target.delta_location.is_some() || pre_registered_target.is_none();
+        let use_native_delta_writer =
+            target.delta_location.is_some() || pre_registered_target.is_none();
         if pre_registered_target.is_none() || target.delta_location.is_some() {
             if pre_registered_target.is_some() && target.delta_location.is_some() {
                 let _ = ctx.deregister_table(&target.table_name)?;
@@ -179,13 +178,7 @@ pub async fn execute_and_materialize_with_plans(
                 .delta_location
                 .as_deref()
                 .unwrap_or(target.table_name.as_str());
-            ensure_output_table(
-                ctx,
-                &target.table_name,
-                delta_location,
-                &expected_schema,
-            )
-            .await?;
+            ensure_output_table(ctx, &target.table_name, delta_location, &expected_schema).await?;
         }
         let existing_df = match pre_registered_target {
             Some(df) => Some(df),
@@ -236,7 +229,10 @@ pub async fn execute_and_materialize_with_plans(
                 write_options = write_options.with_partition_by(target.partition_by.clone());
             }
             let write_result = df.write_table(&target.table_name, write_options).await?;
-            (extract_row_count(&write_result), read_write_outcome(delta_location).await)
+            (
+                extract_row_count(&write_result),
+                read_write_outcome(delta_location).await,
+            )
         };
 
         results.push(MaterializationResult {

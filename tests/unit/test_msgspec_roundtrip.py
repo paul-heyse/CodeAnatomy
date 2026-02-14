@@ -20,7 +20,7 @@ from datafusion_engine.session.runtime import (
     FeatureGatesConfig,
     SchemaHardeningProfile,
 )
-from datafusion_engine.udf.catalog import DataFusionUdfSpecSnapshot, UdfCatalogSnapshot
+from datafusion_engine.udf.metadata import DataFusionUdfSpecSnapshot, UdfCatalogSnapshot
 from obs.otel.config import OtelConfigSpec
 from schema_spec.arrow_types import ArrowPrimitiveSpec
 from schema_spec.contracts import (

@@ -38,7 +38,7 @@ from utils.uuid_factory import uuid7_hex
 from utils.value_coercion import coerce_to_recordbatch_reader
 
 if TYPE_CHECKING:
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.session.runtime import SessionRuntime
     from datafusion_engine.views.artifacts import CachePolicy as SemanticCachePolicy
     from semantics.compile_context import SemanticExecutionContext
@@ -249,8 +249,8 @@ def _plan_view_scan_units(
     runtime_profile: DataFusionRuntimeProfile,
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
-    from datafusion_engine.lineage.datafusion import extract_lineage
-    from datafusion_engine.lineage.scan import plan_scan_unit
+    from datafusion_engine.lineage.reporting import extract_lineage
+    from datafusion_engine.lineage.scheduling import plan_scan_unit
 
     if dataset_resolver is None:
         msg = "dataset_resolver is required for _plan_view_scan_units; the dataset_catalog_from_profile fallback has been removed"
@@ -320,7 +320,7 @@ def build_view_product(
     if not session_runtime.ctx.table_exist(view_name):
         msg = f"View {view_name!r} is not registered for materialization."
         raise ValueError(msg)
-    from datafusion_engine.schema.registry import validate_nested_types
+    from datafusion_engine.schema import validate_nested_types
 
     validate_nested_types(session_runtime.ctx, view_name)
     bundle = _plan_view_bundle(

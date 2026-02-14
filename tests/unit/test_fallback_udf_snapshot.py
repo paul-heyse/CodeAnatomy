@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 from datafusion import SessionContext
 
-from datafusion_engine.udf import factory, runtime
+from datafusion_engine.udf import extension_runtime as runtime
+from datafusion_engine.udf import factory
 
 
 def test_register_rust_udfs_requires_native_backend(

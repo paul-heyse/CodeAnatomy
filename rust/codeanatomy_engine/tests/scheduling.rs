@@ -1,12 +1,17 @@
 use std::collections::HashSet;
 
-use codeanatomy_engine::compiler::cost_model::{derive_task_costs, schedule_tasks, CostModelConfig};
+use codeanatomy_engine::compiler::cost_model::{
+    derive_task_costs, schedule_tasks, CostModelConfig,
+};
 use codeanatomy_engine::compiler::scheduling::TaskGraph;
 
 #[test]
 fn test_task_graph_topological_sort_and_schedule() {
     let mut graph = TaskGraph::from_inferred_deps(
-        &[("v1".to_string(), vec![]), ("v2".to_string(), vec!["v1".to_string()])],
+        &[
+            ("v1".to_string(), vec![]),
+            ("v2".to_string(), vec!["v1".to_string()]),
+        ],
         &[("scan".to_string(), vec![])],
         &[("out".to_string(), vec!["v2".to_string()])],
     )
@@ -38,4 +43,3 @@ fn test_task_graph_prune() {
     assert!(graph.nodes.contains_key("b"));
     assert!(graph.nodes.contains_key("c"));
 }
-

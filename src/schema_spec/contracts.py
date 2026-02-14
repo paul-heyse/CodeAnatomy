@@ -39,10 +39,10 @@ from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
 from datafusion_engine.expr.spec import ExprSpec
 from datafusion_engine.extensions.schema_runtime import load_schema_runtime
 from datafusion_engine.kernels import DedupeSpec, SortKey
+from datafusion_engine.schema import extract_nested_dataset_names
 from datafusion_engine.schema.alignment import SchemaEvolutionSpec
 from datafusion_engine.schema.finalize import Contract
 from datafusion_engine.schema.introspection import SchemaIntrospector
-from datafusion_engine.schema.registry import extract_nested_dataset_names
 from datafusion_engine.schema.validation import ArrowValidationOptions, validate_table
 from schema_spec.arrow_types import (
     ArrowTypeBase,

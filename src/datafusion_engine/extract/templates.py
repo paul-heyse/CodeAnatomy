@@ -248,7 +248,7 @@ def _discover_templates() -> dict[str, ExtractorTemplate]:
     return {t.extractor_name: t for t in descriptors}
 
 
-TEMPLATES: dict[str, ExtractorTemplate] = _discover_templates()
+_TEMPLATES: dict[str, ExtractorTemplate] = _discover_templates()
 
 
 # ---------------------------------------------------------------------------
@@ -458,15 +458,7 @@ def _discover_configs() -> dict[str, ExtractorConfigSpec]:
     return {c.extractor_name: c for c in descriptors}
 
 
-CONFIGS: dict[str, ExtractorConfigSpec] = _discover_configs()
-
-_FLAG_DEFAULTS: dict[str, bool] = {
-    flag: value
-    for cfg in CONFIGS.values()
-    for flag, value in cfg.defaults.items()
-    if isinstance(value, bool)
-}
-
+_CONFIGS: dict[str, ExtractorConfigSpec] = _discover_configs()
 
 DatasetRowRecord = Mapping[str, object]
 
@@ -1418,7 +1410,7 @@ def template(name: str) -> ExtractorTemplate:
     ExtractorTemplate
         Template configuration for the extractor.
     """
-    return TEMPLATES[name]
+    return _TEMPLATES[name]
 
 
 def config(name: str) -> ExtractorConfigSpec:
@@ -1429,29 +1421,15 @@ def config(name: str) -> ExtractorConfigSpec:
     ExtractorConfigSpec
         Configuration for the extractor.
     """
-    return CONFIGS[name]
-
-
-def flag_default(flag: str, *, fallback: bool = True) -> bool:
-    """Return the default value for a feature flag.
-
-    Returns:
-    -------
-    bool
-        Default flag value when configured, else fallback.
-    """
-    return _FLAG_DEFAULTS.get(flag, fallback)
+    return _CONFIGS[name]
 
 
 __all__ = [
-    "CONFIGS",
-    "TEMPLATES",
     "DatasetTemplateSpec",
     "ExtractorConfigSpec",
     "ExtractorTemplate",
     "config",
     "dataset_template_specs",
     "expand_dataset_templates",
-    "flag_default",
     "template",
 ]

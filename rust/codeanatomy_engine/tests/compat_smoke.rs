@@ -51,7 +51,10 @@ fn test_runtime_env_builder_api() {
         .with_disk_manager_builder(disk_manager_builder)
         .build();
 
-    assert!(runtime_env_result.is_ok(), "RuntimeEnv build should succeed");
+    assert!(
+        runtime_env_result.is_ok(),
+        "RuntimeEnv build should succeed"
+    );
 }
 
 /// P0 Correction #2: SessionConfig typed mutation API
@@ -94,17 +97,32 @@ fn test_session_config_api() {
 fn test_version_capture_api() {
     // Verify DataFusion version constant
     let datafusion_version = datafusion::DATAFUSION_VERSION;
-    assert!(!datafusion_version.is_empty(), "DataFusion version should not be empty");
-    assert!(datafusion_version.starts_with("51."), "Expected DataFusion 51.x");
+    assert!(
+        !datafusion_version.is_empty(),
+        "DataFusion version should not be empty"
+    );
+    assert!(
+        datafusion_version.starts_with("51."),
+        "Expected DataFusion 51.x"
+    );
 
     // Verify DeltaLake crate_version function
     let deltalake_version = deltalake::crate_version();
-    assert!(!deltalake_version.is_empty(), "DeltaLake version should not be empty");
-    assert!(deltalake_version.starts_with("0.30."), "Expected DeltaLake 0.30.x");
+    assert!(
+        !deltalake_version.is_empty(),
+        "DeltaLake version should not be empty"
+    );
+    assert!(
+        deltalake_version.starts_with("0.30."),
+        "Expected DeltaLake 0.30.x"
+    );
 
     // Verify engine version from Cargo.toml
     let engine_version = env!("CARGO_PKG_VERSION");
-    assert!(!engine_version.is_empty(), "Engine version should not be empty");
+    assert!(
+        !engine_version.is_empty(),
+        "Engine version should not be empty"
+    );
 }
 
 /// P0 Correction #5: View registration API
@@ -118,7 +136,11 @@ async fn test_view_registration_api() -> datafusion::error::Result<()> {
     let ctx = SessionContext::new();
 
     // Create sample data
-    let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int32, false)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
@@ -180,7 +202,11 @@ async fn test_write_table_api() -> datafusion::error::Result<()> {
     let ctx = SessionContext::new();
 
     // Create sample data
-    let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Int32, false)]));
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "data",
+        DataType::Int32,
+        false,
+    )]));
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(Int32Array::from(vec![10, 20, 30]))],

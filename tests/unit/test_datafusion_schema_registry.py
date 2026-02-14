@@ -10,8 +10,7 @@ from datafusion_engine.arrow.build import empty_table
 from datafusion_engine.arrow.metadata_codec import encode_metadata_list
 from datafusion_engine.arrow.semantic import SEMANTIC_TYPE_META
 from datafusion_engine.io.adapter import DataFusionIOAdapter
-from datafusion_engine.schema import registry as schema_registry
-from datafusion_engine.schema.registry import (
+from datafusion_engine.schema import (
     AST_VIEW_NAMES,
     DATAFUSION_PIPELINE_EVENTS_V2_SCHEMA,
     LIBCST_FILES_SCHEMA,
@@ -20,6 +19,7 @@ from datafusion_engine.schema.registry import (
     PIPELINE_TASK_GROUPING_SCHEMA,
     PIPELINE_TASK_SUBMISSION_SCHEMA,
     SYMTABLE_FILES_SCHEMA,
+    _semantic_validation_tables,
     nested_view_spec,
     validate_ast_views,
     validate_required_bytecode_functions,
@@ -202,7 +202,7 @@ def test_semantic_type_validation_raises_when_metadata_missing_and_no_row_fallba
 
 def test_semantic_validation_table_names_use_canonical_cpg_outputs() -> None:
     """Semantic validation tables should only include canonical CPG outputs."""
-    tables = schema_registry._semantic_validation_tables()  # noqa: SLF001
+    tables = _semantic_validation_tables()
     assert "cpg_nodes" in tables
     assert "cpg_edges" in tables
     assert "cpg_nodes_v1" not in tables

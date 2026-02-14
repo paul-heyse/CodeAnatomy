@@ -1,7 +1,7 @@
 """Rust-backed Delta control-plane adapters.
 
 This module centralizes access to the Rust Delta control plane exposed via
-``datafusion._internal``. It provides a typed, canonical surface for:
+``datafusion_ext``. It provides a typed, canonical surface for:
 1. Snapshot and protocol-aware metadata.
 2. Provider construction with session-derived scan configuration.
 3. File-pruned provider construction for scan planning.
@@ -470,7 +470,7 @@ def _resolve_extension_module(
     required_attr: str | None = None,
     entrypoint: str | None = None,
 ) -> object:
-    """Return the Delta extension module (datafusion._internal or datafusion_ext).
+    """Return the Delta extension module (datafusion_ext).
 
     Args:
         required_attr: Description.
@@ -485,7 +485,7 @@ def _resolve_extension_module(
     )
     if resolved is not None:
         return resolved.module
-    msg = "Delta control-plane operations require datafusion._internal or datafusion_ext."
+    msg = "Delta control-plane operations require datafusion_ext."
     raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
 
 

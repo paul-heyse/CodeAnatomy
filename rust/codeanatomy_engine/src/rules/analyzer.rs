@@ -134,10 +134,7 @@ fn validate_semantic_integrity(plan: &LogicalPlan) -> Result<()> {
 /// # Returns
 ///
 /// Ok(()) if all columns exist, Err otherwise
-fn validate_expression_columns(
-    expr: &Expr,
-    schema: &datafusion_common::DFSchemaRef,
-) -> Result<()> {
+fn validate_expression_columns(expr: &Expr, schema: &datafusion_common::DFSchemaRef) -> Result<()> {
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 
     expr.apply(|candidate| {

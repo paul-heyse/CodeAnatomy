@@ -26,7 +26,12 @@ async fn context_with_table() -> SessionContext {
 #[tokio::test]
 async fn test_optimizer_pipeline_capture_traces() {
     let ctx = context_with_table().await;
-    let df = ctx.table("t").await.unwrap().filter(datafusion::prelude::col("id").gt_eq(datafusion::prelude::lit(2))).unwrap();
+    let df = ctx
+        .table("t")
+        .await
+        .unwrap()
+        .filter(datafusion::prelude::col("id").gt_eq(datafusion::prelude::lit(2)))
+        .unwrap();
     let config = OptimizerPipelineConfig {
         capture_pass_traces: true,
         capture_plan_diffs: true,
@@ -60,14 +65,9 @@ async fn test_optimizer_compile_report_is_deterministic() {
 async fn test_optimizer_compile_only_with_rules_uses_shared_trace_shape() {
     let ctx = context_with_table().await;
     let df = ctx.table("t").await.unwrap();
-    let report = run_optimizer_compile_only_with_rules(
-        df.logical_plan().clone(),
-        vec![],
-        3,
-        true,
-        true,
-    )
-    .unwrap();
+    let report =
+        run_optimizer_compile_only_with_rules(df.logical_plan().clone(), vec![], 3, true, true)
+            .unwrap();
     assert!(report.optimized_logical_digest != [0u8; 32]);
     assert!(report.pass_traces.is_empty());
 }

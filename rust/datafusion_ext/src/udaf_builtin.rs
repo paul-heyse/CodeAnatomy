@@ -1159,8 +1159,7 @@ impl Accumulator for StringAggDetAccumulator {
             .as_any()
             .downcast_ref::<ListArray>()
             .ok_or_else(|| DataFusionError::Plan("string_agg expects list state".into()))?;
-        let sep_array =
-            string_array_any(&states[1], "string_agg expects string separator state")?;
+        let sep_array = string_array_any(&states[1], "string_agg expects string separator state")?;
 
         // Capture separator from merge state if not yet set.
         if self.separator.is_none() {

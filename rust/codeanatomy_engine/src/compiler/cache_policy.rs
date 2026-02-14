@@ -300,10 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_min_fanout_filter() {
-        let views = vec![
-            make_test_view("low_fanout"),
-            make_test_view("high_fanout"),
-        ];
+        let views = vec![make_test_view("low_fanout"), make_test_view("high_fanout")];
         let ref_counts: HashMap<String, usize> = [
             ("low_fanout".to_string(), 1),
             ("high_fanout".to_string(), 5),
@@ -347,16 +344,11 @@ mod tests {
     #[tokio::test]
     async fn test_force_cache_has_highest_priority() {
         // ForceCache views should appear first (u64::MAX priority).
-        let views = vec![
-            make_test_view("forced"),
-            make_test_view("high_fanout"),
-        ];
-        let ref_counts: HashMap<String, usize> = [
-            ("forced".to_string(), 1),
-            ("high_fanout".to_string(), 100),
-        ]
-        .into_iter()
-        .collect();
+        let views = vec![make_test_view("forced"), make_test_view("high_fanout")];
+        let ref_counts: HashMap<String, usize> =
+            [("forced".to_string(), 1), ("high_fanout".to_string(), 100)]
+                .into_iter()
+                .collect();
 
         let policy = CachePlacementPolicy {
             min_fanout: 2,

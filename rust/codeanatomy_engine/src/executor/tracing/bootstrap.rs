@@ -69,9 +69,7 @@ fn build_tracer_provider(config: &TracingConfig) -> Result<SdkTracerProvider> {
             ))
             .build()
             .map_err(|error| {
-                DataFusionError::Plan(format!(
-                    "Failed to build OTLP gRPC span exporter: {error}"
-                ))
+                DataFusionError::Plan(format!("Failed to build OTLP gRPC span exporter: {error}"))
             })?,
         OtlpProtocol::HttpJson => SpanExporter::builder()
             .with_http()
@@ -194,9 +192,13 @@ mod tests {
     #[test]
     fn test_parse_sampler_traceidratio_is_clamped() {
         let sampler = parse_sampler("traceidratio", Some("2.5"));
-        assert!(matches!(sampler, Sampler::TraceIdRatioBased(value) if (value - 1.0).abs() < f64::EPSILON));
+        assert!(
+            matches!(sampler, Sampler::TraceIdRatioBased(value) if (value - 1.0).abs() < f64::EPSILON)
+        );
 
         let sampler = parse_sampler("traceidratio", Some("-1.0"));
-        assert!(matches!(sampler, Sampler::TraceIdRatioBased(value) if (value - 0.0).abs() < f64::EPSILON));
+        assert!(
+            matches!(sampler, Sampler::TraceIdRatioBased(value) if (value - 0.0).abs() < f64::EPSILON)
+        );
     }
 }

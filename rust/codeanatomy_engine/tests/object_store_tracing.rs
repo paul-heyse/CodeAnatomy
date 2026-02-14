@@ -23,7 +23,10 @@ async fn test_instrumented_file_store_registration_keeps_session_usable() {
         .expect("session should build with instrumented object store");
     let ctx = state.ctx;
 
-    let df = ctx.sql("SELECT 1 AS test").await.expect("query should parse");
+    let df = ctx
+        .sql("SELECT 1 AS test")
+        .await
+        .expect("query should parse");
     let batches = df.collect().await.expect("query should execute");
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0].num_rows(), 1);

@@ -107,8 +107,7 @@ pub fn build_overlaid_ruleset(
 
     // 3. Apply exclusions (filter at build time, not post-build removal)
     if !overlay.exclude_rules.is_empty() {
-        let exclude_set: HashSet<&str> =
-            overlay.exclude_rules.iter().map(|s| s.as_str()).collect();
+        let exclude_set: HashSet<&str> = overlay.exclude_rules.iter().map(|s| s.as_str()).collect();
         ruleset
             .analyzer_rules
             .retain(|r| !exclude_set.contains(r.name()));
@@ -264,12 +263,9 @@ fn parse_rule_deltas_from_explain_verbose(
             let rule_name = if let Some(after_part) = plan_type.strip_prefix("logical_plan after ")
             {
                 after_part.to_string()
-            } else if let Some(after_part) =
-                plan_type.strip_prefix("physical_plan after ")
-            {
+            } else if let Some(after_part) = plan_type.strip_prefix("physical_plan after ") {
                 after_part.to_string()
-            } else if let Some(after_part) =
-                plan_type.strip_prefix("optimized_logical_plan after ")
+            } else if let Some(after_part) = plan_type.strip_prefix("optimized_logical_plan after ")
             {
                 after_part.to_string()
             } else if let Some(after_part) =
@@ -465,7 +461,10 @@ mod tests {
 
         // New context should inherit the registered table
         let result = new_ctx.table("test_table").await;
-        assert!(result.is_ok(), "Overlaid session should inherit registered tables");
+        assert!(
+            result.is_ok(),
+            "Overlaid session should inherit registered tables"
+        );
     }
 
     #[tokio::test]
@@ -551,7 +550,10 @@ mod tests {
         let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
         ctx.register_table("test_table", Arc::new(table)).unwrap();
 
-        let df = ctx.sql("SELECT id FROM test_table WHERE id > 1").await.unwrap();
+        let df = ctx
+            .sql("SELECT id FROM test_table WHERE id > 1")
+            .await
+            .unwrap();
         let deltas = capture_per_rule_deltas(&df).await.unwrap();
 
         // Should produce some deltas (at least optimizer rules fire)
@@ -580,6 +582,9 @@ mod tests {
     fn test_compute_overlay_fingerprint_matches_registry() {
         let fp1 = compute_overlay_fingerprint(&[], &[], &[]);
         let fp2 = compute_ruleset_fingerprint(&[], &[], &[]);
-        assert_eq!(fp1, fp2, "Overlay fingerprint must match registry fingerprint");
+        assert_eq!(
+            fp1, fp2,
+            "Overlay fingerprint must match registry fingerprint"
+        );
     }
 }

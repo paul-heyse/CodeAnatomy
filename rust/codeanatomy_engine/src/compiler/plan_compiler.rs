@@ -15,9 +15,11 @@ use crate::compiler::cache_boundaries;
 use crate::compiler::cpg_builder;
 use crate::compiler::graph_validator;
 use crate::compiler::inline_policy::{compute_inline_policy, InlineDecision};
-use crate::compiler::semantic_validator::{self, SemanticValidationError, SemanticValidationWarning};
 use crate::compiler::join_builder;
 use crate::compiler::param_compiler;
+use crate::compiler::semantic_validator::{
+    self, SemanticValidationError, SemanticValidationWarning,
+};
 use crate::compiler::table_registration::register_or_replace_table;
 use crate::compiler::udtf_builder;
 use crate::compiler::union_builder;
@@ -75,7 +77,9 @@ impl<'a> SemanticPlanCompiler<'a> {
         graph_validator::validate_graph(self.spec)?;
         let semantic = semantic_validator::validate_semantics(self.spec, self.ctx).await?;
         if !semantic.is_clean() {
-            return Err(DataFusionError::Plan(render_semantic_errors(&semantic.errors)));
+            return Err(DataFusionError::Plan(render_semantic_errors(
+                &semantic.errors,
+            )));
         }
         let semantic_warnings = semantic
             .warnings
@@ -125,7 +129,9 @@ impl<'a> SemanticPlanCompiler<'a> {
         // 5. Build output DataFrames
         let mut outputs = Vec::new();
         for target in &self.spec.output_targets {
-            let df = self.resolve_source(&target.source_view, &inline_cache).await?;
+            let df = self
+                .resolve_source(&target.source_view, &inline_cache)
+                .await?;
             let projected = if target.columns.is_empty() {
                 df
             } else {
@@ -137,11 +143,8 @@ impl<'a> SemanticPlanCompiler<'a> {
             // expressions directly at the DataFrame level, bypassing SQL
             // literal interpolation entirely.
             let final_df = if !self.spec.typed_parameters.is_empty() {
-                param_compiler::apply_typed_parameters(
-                    projected,
-                    &self.spec.typed_parameters,
-                )
-                .await?
+                param_compiler::apply_typed_parameters(projected, &self.spec.typed_parameters)
+                    .await?
             } else {
                 projected
             };
@@ -168,7 +171,10 @@ impl<'a> SemanticPlanCompiler<'a> {
         let mut in_degree: HashMap<&str, usize> = HashMap::new();
 
         for view in &self.spec.view_definitions {
-            graph.insert(&view.name, view.view_dependencies.iter().map(|s| s.as_str()).collect());
+            graph.insert(
+                &view.name,
+                view.view_dependencies.iter().map(|s| s.as_str()).collect(),
+            );
             in_degree.insert(&view.name, view.view_dependencies.len());
         }
 
@@ -230,7 +236,10 @@ impl<'a> SemanticPlanCompiler<'a> {
             .map(|v| (v.name.as_str(), v))
             .collect();
 
-        Ok(ordered.iter().map(|name| (*name_to_view.get(name).unwrap()).clone()).collect())
+        Ok(ordered
+            .iter()
+            .map(|name| (*name_to_view.get(name).unwrap()).clone())
+            .collect())
     }
 
     /// Compile a single view definition into a DataFrame.
@@ -336,12 +345,16 @@ impl<'a> SemanticPlanCompiler<'a> {
                 udtf_builder::build_file_manifest(self.ctx, source).await
             }
 
-            ViewTransform::CpgEmit { output_kind, sources } => {
+            ViewTransform::CpgEmit {
+                output_kind,
+                sources,
+            } => {
                 let mut resolved_sources = Vec::with_capacity(sources.len());
                 for source in sources {
                     resolved_sources.push(self.resolve_source_name(source, inline_cache).await?);
                 }
-                cpg_builder::build_cpg_emit(self.ctx, *output_kind, resolved_sources.as_slice()).await
+                cpg_builder::build_cpg_emit(self.ctx, *output_kind, resolved_sources.as_slice())
+                    .await
             }
         }
     }
@@ -352,7 +365,8 @@ impl<'a> SemanticPlanCompiler<'a> {
         inline_cache: &HashMap<String, DataFrame>,
     ) -> Result<String> {
         if let Some(cached_df) = inline_cache.get(source) {
-            self.ctx.register_table(source, cached_df.clone().into_view())?;
+            self.ctx
+                .register_table(source, cached_df.clone().into_view())?;
         }
         Ok(source.to_string())
     }
@@ -411,8 +425,7 @@ impl<'a> SemanticPlanCompiler<'a> {
     /// outside the main `compile()` flow.
     pub async fn apply_parameters(&self, df: DataFrame) -> Result<DataFrame> {
         if !self.spec.typed_parameters.is_empty() {
-            return param_compiler::apply_typed_parameters(df, &self.spec.typed_parameters)
-                .await;
+            return param_compiler::apply_typed_parameters(df, &self.spec.typed_parameters).await;
         }
         // No typed parameters configured; leave DataFrame unchanged.
         Ok(df)
@@ -519,8 +532,8 @@ mod tests {
     use crate::spec::outputs::{MaterializationMode, OutputTarget};
     use crate::spec::relations::{InputRelation, SchemaContract, ViewDefinition, ViewTransform};
     use crate::spec::rule_intents::RulepackProfile;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::array::{Int64Array, RecordBatch};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::datasource::MemTable;
     use std::collections::BTreeMap;
     use std::sync::Arc;
@@ -543,8 +556,7 @@ mod tests {
         .unwrap();
 
         let table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
-        ctx.register_table("input_table", Arc::new(table))
-            .unwrap();
+        ctx.register_table("input_table", Arc::new(table)).unwrap();
 
         ctx
     }

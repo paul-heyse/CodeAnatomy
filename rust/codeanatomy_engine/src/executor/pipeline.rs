@@ -23,8 +23,8 @@
 //! - Post-materialization maintenance (when configured)
 //! - RunResult assembly with all artifacts and warnings
 
-use std::sync::Arc;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
@@ -44,7 +44,7 @@ use crate::compiler::pushdown_probe_extract::{
 use crate::compiler::scheduling::TaskGraph;
 use crate::executor::delta_writer::LineageContext;
 use crate::executor::maintenance;
-use crate::executor::metrics_collector::{self, CollectedMetrics, summarize_collected_metrics};
+use crate::executor::metrics_collector::{self, summarize_collected_metrics, CollectedMetrics};
 use crate::executor::result::RunResult;
 use crate::executor::runner::execute_and_materialize_with_plans;
 use crate::executor::warnings::{warning_counts_by_code, RunWarning, WarningCode, WarningStage};
@@ -426,7 +426,9 @@ fn aggregate_physical_metrics(physical_plans: &[Arc<dyn ExecutionPlan>]) -> Coll
         aggregated.elapsed_compute_nanos += plan_metrics.elapsed_compute_nanos;
         aggregated.peak_memory_bytes += plan_metrics.peak_memory_bytes;
         aggregated.partition_count += plan_metrics.partition_count;
-        aggregated.operator_metrics.extend(plan_metrics.operator_metrics);
+        aggregated
+            .operator_metrics
+            .extend(plan_metrics.operator_metrics);
         total_scan_selectivity_sum += plan_metrics.scan_selectivity;
         selectivity_samples += 1;
     }

@@ -14,7 +14,7 @@ from datafusion_engine.extensions.context_adaptation import (
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-_EXTENSION_MODULES: tuple[str, ...] = ("datafusion._internal", "datafusion_ext")
+_EXTENSION_MODULES: tuple[str, ...] = ("datafusion_ext",)
 
 
 def load_schema_evolution_adapter_factory() -> object:
@@ -29,7 +29,7 @@ def load_schema_evolution_adapter_factory() -> object:
         required_attr="schema_evolution_adapter_factory",
     )
     if resolved is None:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
+        msg = "Schema evolution adapter requires datafusion_ext."
         raise RuntimeError(msg)
     _module_name, module = resolved
     factory = getattr(module, "schema_evolution_adapter_factory", None)
@@ -46,7 +46,7 @@ def install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
         RuntimeError: If extension entrypoint invocation fails unexpectedly.
         TypeError: If invocation fails due to SessionContext ABI mismatch.
     """
-    from datafusion_engine.udf.runtime import extension_capabilities_report
+    from datafusion_engine.udf.extension_runtime import extension_capabilities_report
 
     try:
         capabilities = extension_capabilities_report()
@@ -59,7 +59,7 @@ def install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
         entrypoint="install_schema_evolution_adapter_factory",
     )
     if resolved is None:  # pragma: no cover - optional dependency
-        msg = "Schema evolution adapter requires datafusion._internal or datafusion_ext."
+        msg = "Schema evolution adapter requires datafusion_ext."
         raise RuntimeError(msg)
     module_name, module = resolved
     installer = getattr(module, "install_schema_evolution_adapter_factory", None)
@@ -78,7 +78,7 @@ def install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
             ),
         )
     except (RuntimeError, TypeError, ValueError) as exc:
-        from datafusion_engine.udf.runtime import rust_runtime_install_payload
+        from datafusion_engine.udf.extension_runtime import rust_runtime_install_payload
 
         runtime_payload = rust_runtime_install_payload(ctx)
         runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")

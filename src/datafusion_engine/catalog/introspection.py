@@ -658,7 +658,7 @@ def register_cache_introspection_functions(ctx: SessionContext) -> None:
         RuntimeError: If extension registration fails for non-ABI reasons.
         TypeError: If the extension entrypoint is unavailable.
     """
-    module_names = ("datafusion._internal", "datafusion_ext")
+    module_names = ("datafusion_ext",)
     resolved = resolve_extension_module(module_names, entrypoint="register_cache_tables")
     if resolved is None:
         msg = "Cache table registration hook is unavailable in the DataFusion extension module."

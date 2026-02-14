@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datafusion_engine.schema.introspection import SchemaIntrospector
-from datafusion_engine.udf.catalog import get_default_udf_catalog
+from datafusion_engine.udf.metadata import get_default_udf_catalog
 from datafusion_engine.udf.platform import ensure_rust_udfs
 from tests.test_helpers.datafusion_runtime import df_ctx
 from tests.test_helpers.optional_deps import require_datafusion_udfs

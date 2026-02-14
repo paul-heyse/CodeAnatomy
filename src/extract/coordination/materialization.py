@@ -62,7 +62,7 @@ from serde_msgspec import to_builtins
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.session.runtime import SessionRuntime
     from semantics.compile_context import SemanticExecutionContext
     from semantics.program_manifest import ManifestDatasetResolver
@@ -532,8 +532,8 @@ def _plan_scan_units_for_extract(
     runtime_profile: DataFusionRuntimeProfile,
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[tuple[ScanUnit, ...], tuple[str, ...]]:
-    from datafusion_engine.lineage.datafusion import extract_lineage
-    from datafusion_engine.lineage.scan import plan_scan_unit
+    from datafusion_engine.lineage.reporting import extract_lineage
+    from datafusion_engine.lineage.scheduling import plan_scan_unit
 
     if dataset_resolver is None:
         return (), ()
@@ -958,7 +958,7 @@ def _record_extract_view_artifact(
 ) -> None:
     """Record a deterministic view artifact for extract outputs."""
     profile = runtime_profile
-    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.lineage.reporting import extract_lineage
     from datafusion_engine.session.runtime import record_view_definition, session_runtime_hash
     from datafusion_engine.views.artifacts import (
         ViewArtifactLineage,

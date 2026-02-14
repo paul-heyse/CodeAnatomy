@@ -16,8 +16,8 @@ use datafusion_ext::delta_control_plane::{
 use datafusion_ext::DeltaFeatureGate;
 use deltalake::delta_datafusion::DeltaScanConfig;
 use deltalake::kernel::{
-    ArrayType as DeltaArrayType, DataType as DeltaDataType, MapType as DeltaMapType,
-    PrimitiveType, StructField as DeltaStructField, StructType as DeltaStructType,
+    ArrayType as DeltaArrayType, DataType as DeltaDataType, MapType as DeltaMapType, PrimitiveType,
+    StructField as DeltaStructField, StructType as DeltaStructType,
 };
 use deltalake::{ensure_table_uri, DeltaTable};
 
@@ -142,8 +142,8 @@ pub async fn ensure_output_table(
     delta_location: &str,
     expected_schema: &SchemaRef,
 ) -> Result<()> {
-    let table_uri = ensure_table_uri(delta_location)
-        .map_err(|err| DataFusionError::External(Box::new(err)))?;
+    let table_uri =
+        ensure_table_uri(delta_location).map_err(|err| DataFusionError::External(Box::new(err)))?;
     let mut table = DeltaTable::try_from_url(table_uri)
         .await
         .map_err(|err| DataFusionError::External(Box::new(err)))?;
@@ -324,7 +324,10 @@ pub fn build_commit_properties(
     lineage: &LineageContext,
 ) -> std::collections::BTreeMap<String, String> {
     let mut props = target.write_metadata.clone();
-    props.insert("codeanatomy.spec_hash".into(), hex::encode(lineage.spec_hash));
+    props.insert(
+        "codeanatomy.spec_hash".into(),
+        hex::encode(lineage.spec_hash),
+    );
     props.insert(
         "codeanatomy.envelope_hash".into(),
         hex::encode(lineage.envelope_hash),

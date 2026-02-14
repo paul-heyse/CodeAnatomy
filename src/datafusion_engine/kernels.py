@@ -130,7 +130,7 @@ def _ensure_required_udfs(
 ) -> bool:
     if not required:
         return True
-    from datafusion_engine.udf.runtime import rust_udf_snapshot, validate_required_udfs
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, validate_required_udfs
 
     try:
         snapshot = rust_udf_snapshot(ctx)

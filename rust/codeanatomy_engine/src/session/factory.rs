@@ -7,8 +7,8 @@
 //! The only post-build mutation is `install_rewrites()` for function
 //! rewrites that lack a builder API in DataFusion 51.
 
-use std::sync::Arc;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
@@ -19,8 +19,8 @@ use datafusion::prelude::SessionConfig;
 use datafusion_common::Result;
 
 use crate::compiler::plan_codec;
-use crate::executor::warnings::RunWarning;
 use crate::executor::tracing as engine_tracing;
+use crate::executor::warnings::RunWarning;
 use crate::rules::registry::CpgRuleSet;
 use crate::spec::runtime::TracingConfig;
 
@@ -332,8 +332,9 @@ impl SessionFactory {
         }
 
         if overrides.enable_function_factory {
-            planning_surface.function_factory =
-                Some(Arc::new(datafusion_ext::function_factory::SqlMacroFunctionFactory));
+            planning_surface.function_factory = Some(Arc::new(
+                datafusion_ext::function_factory::SqlMacroFunctionFactory,
+            ));
         }
         if overrides.enable_domain_planner {
             planning_surface.expr_planners = datafusion_ext::domain_expr_planners();
@@ -404,7 +405,8 @@ fn enforce_extension_governance(
 ) -> Result<()> {
     match surface.extension_policy {
         ExtensionGovernancePolicy::Permissive => {}
-        ExtensionGovernancePolicy::WarnOnUnregistered | ExtensionGovernancePolicy::StrictAllowlist => {
+        ExtensionGovernancePolicy::WarnOnUnregistered
+        | ExtensionGovernancePolicy::StrictAllowlist => {
             let allowlist: BTreeMap<&str, [u8; 32]> = surface
                 .table_factory_allowlist
                 .iter()
@@ -454,8 +456,8 @@ fn enforce_extension_governance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::envelope::SessionEnvelope;
     use crate::rules::registry::CpgRuleSet;
+    use crate::session::envelope::SessionEnvelope;
     use crate::session::profiles::{EnvironmentClass, EnvironmentProfile};
 
     #[tokio::test]

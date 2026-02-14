@@ -125,10 +125,7 @@ pub fn run_lab_from_ruleset(
 /// Returns a list of (ordinal, old_digest, new_digest) tuples for steps where
 /// the plan digest diverged. Useful for identifying which rule application
 /// caused a plan change between two experiment runs.
-pub fn diff_lab_results(
-    baseline: &LabResult,
-    candidate: &LabResult,
-) -> RuleStepDiff {
+pub fn diff_lab_results(baseline: &LabResult, candidate: &LabResult) -> RuleStepDiff {
     let max_len = baseline.steps.len().max(candidate.steps.len());
     let mut diffs = Vec::new();
 

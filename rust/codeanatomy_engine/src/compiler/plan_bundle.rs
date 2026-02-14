@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use crate::compiler::optimizer_pipeline::OptimizerPassTrace;
+use crate::executor::warnings::{RunWarning, WarningCode, WarningStage};
 use crate::providers::pushdown_contract::PushdownContractReport;
 
 use super::substrait::try_substrait_encode;
@@ -381,13 +381,11 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         match try_substrait_encode(ctx, &runtime.p1_optimized) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
-                warnings.push(
-                    RunWarning::new(
-                        WarningCode::OptionalSubstraitCaptureFailed,
-                        WarningStage::PlanBundle,
-                        format!("Optional plan capture failed for substrait: {err}"),
-                    ),
-                );
+                warnings.push(RunWarning::new(
+                    WarningCode::OptionalSubstraitCaptureFailed,
+                    WarningStage::PlanBundle,
+                    format!("Optional plan capture failed for substrait: {err}"),
+                ));
                 None
             }
         }
@@ -398,13 +396,11 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         match try_sql_unparse(&runtime.p1_optimized) {
             Ok(text) => Some(text),
             Err(err) => {
-                warnings.push(
-                    RunWarning::new(
-                        WarningCode::OptionalSqlCaptureFailed,
-                        WarningStage::PlanBundle,
-                        format!("Optional plan capture failed for sql_text: {err}"),
-                    ),
-                );
+                warnings.push(RunWarning::new(
+                    WarningCode::OptionalSqlCaptureFailed,
+                    WarningStage::PlanBundle,
+                    format!("Optional plan capture failed for sql_text: {err}"),
+                ));
                 None
             }
         }
@@ -418,13 +414,11 @@ pub async fn build_plan_bundle_artifact_with_warnings(
         ) {
             Ok((logical, physical)) => (Some(logical), Some(physical)),
             Err(err) => {
-                warnings.push(
-                    RunWarning::new(
-                        WarningCode::OptionalDeltaCodecCaptureFailed,
-                        WarningStage::PlanBundle,
-                        format!("Optional plan capture failed for delta_codec: {err}"),
-                    ),
-                );
+                warnings.push(RunWarning::new(
+                    WarningCode::OptionalDeltaCodecCaptureFailed,
+                    WarningStage::PlanBundle,
+                    format!("Optional plan capture failed for delta_codec: {err}"),
+                ));
                 (None, None)
             }
         }
@@ -444,41 +438,44 @@ pub async fn build_plan_bundle_artifact_with_warnings(
             .map(|payload| blake3_hash_bytes(payload)),
         portable_schema_version: substrait_bytes.as_ref().map(|_| 1u32),
     };
-    Ok((PlanBundleArtifact {
-        artifact_version: 2,
-        p0_digest: blake3_hash_bytes(p0_text.as_bytes()),
-        p1_digest: blake3_hash_bytes(p1_text.as_bytes()),
-        p2_digest: blake3_hash_bytes(p2_text.as_bytes()),
-        p0_text: Some(p0_text),
-        p1_text: Some(p1_text),
-        p2_text: Some(p2_text),
-        explain_verbose,
-        explain_analyze,
-        rulepack_fingerprint,
-        provider_identities,
-        schema_fingerprints: SchemaFingerprints {
-            p0_schema_hash: hash_schema(p0_arrow_schema),
-            p1_schema_hash: hash_schema(p1_arrow_schema),
-            p2_schema_hash: hash_schema(&runtime.p2_physical.schema()),
+    Ok((
+        PlanBundleArtifact {
+            artifact_version: 2,
+            p0_digest: blake3_hash_bytes(p0_text.as_bytes()),
+            p1_digest: blake3_hash_bytes(p1_text.as_bytes()),
+            p2_digest: blake3_hash_bytes(p2_text.as_bytes()),
+            p0_text: Some(p0_text),
+            p1_text: Some(p1_text),
+            p2_text: Some(p2_text),
+            explain_verbose,
+            explain_analyze,
+            rulepack_fingerprint,
+            provider_identities,
+            schema_fingerprints: SchemaFingerprints {
+                p0_schema_hash: hash_schema(p0_arrow_schema),
+                p1_schema_hash: hash_schema(p1_arrow_schema),
+                p2_schema_hash: hash_schema(&runtime.p2_physical.schema()),
+            },
+            planning_surface_hash,
+            substrait_bytes,
+            sql_text,
+            delta_codec_logical_bytes,
+            delta_codec_physical_bytes,
+            optimizer_traces,
+            pushdown_report,
+            provider_lineage,
+            referenced_tables,
+            required_udfs,
+            replay_flags: ReplayCompatibilityFlags {
+                deterministic_inputs,
+                no_volatile_udfs,
+                deterministic_optimizer,
+            },
+            portability,
+            stats_quality,
         },
-        planning_surface_hash,
-        substrait_bytes,
-        sql_text,
-        delta_codec_logical_bytes,
-        delta_codec_physical_bytes,
-        optimizer_traces,
-        pushdown_report,
-        provider_lineage,
-        referenced_tables,
-        required_udfs,
-        replay_flags: ReplayCompatibilityFlags {
-            deterministic_inputs,
-            no_volatile_udfs,
-            deterministic_optimizer,
-        },
-        portability,
-        stats_quality,
-    }, warnings))
+        warnings,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -492,17 +489,14 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
     let p0_changed = a.p0_digest != b.p0_digest;
     let p1_changed = a.p1_digest != b.p1_digest;
     let p2_changed = a.p2_digest != b.p2_digest;
-    let schema_drift = a.schema_fingerprints.p0_schema_hash
-        != b.schema_fingerprints.p0_schema_hash
+    let schema_drift = a.schema_fingerprints.p0_schema_hash != b.schema_fingerprints.p0_schema_hash
         || a.schema_fingerprints.p1_schema_hash != b.schema_fingerprints.p1_schema_hash
         || a.schema_fingerprints.p2_schema_hash != b.schema_fingerprints.p2_schema_hash;
     let rulepack_changed = a.rulepack_fingerprint != b.rulepack_fingerprint;
     let providers_changed = a.provider_identities != b.provider_identities;
     let planning_surface_changed = a.planning_surface_hash != b.planning_surface_hash;
-    let delta_codec_logical_changed =
-        a.delta_codec_logical_bytes != b.delta_codec_logical_bytes;
-    let delta_codec_physical_changed =
-        a.delta_codec_physical_bytes != b.delta_codec_physical_bytes;
+    let delta_codec_logical_changed = a.delta_codec_logical_bytes != b.delta_codec_logical_bytes;
+    let delta_codec_physical_changed = a.delta_codec_physical_bytes != b.delta_codec_physical_bytes;
     let optimizer_traces_changed = a.optimizer_traces != b.optimizer_traces;
     let pushdown_report_changed = a.pushdown_report != b.pushdown_report;
     let provider_lineage_changed = a.provider_lineage != b.provider_lineage;
@@ -510,14 +504,10 @@ pub fn diff_artifacts(a: &PlanBundleArtifact, b: &PlanBundleArtifact) -> PlanDif
     let required_udfs_changed = a.required_udfs != b.required_udfs;
     let replay_flags_changed = a.replay_flags != b.replay_flags;
     let portability_changed = a.portability != b.portability;
-    let delta_codec_logical_before =
-        codec_digest_summary(a.delta_codec_logical_bytes.as_deref());
-    let delta_codec_logical_after =
-        codec_digest_summary(b.delta_codec_logical_bytes.as_deref());
-    let delta_codec_physical_before =
-        codec_digest_summary(a.delta_codec_physical_bytes.as_deref());
-    let delta_codec_physical_after =
-        codec_digest_summary(b.delta_codec_physical_bytes.as_deref());
+    let delta_codec_logical_before = codec_digest_summary(a.delta_codec_logical_bytes.as_deref());
+    let delta_codec_logical_after = codec_digest_summary(b.delta_codec_logical_bytes.as_deref());
+    let delta_codec_physical_before = codec_digest_summary(a.delta_codec_physical_bytes.as_deref());
+    let delta_codec_physical_after = codec_digest_summary(b.delta_codec_physical_bytes.as_deref());
 
     let mut summary = Vec::new();
     if p0_changed {
@@ -1179,26 +1169,25 @@ mod tests {
         let df = ctx.table("test_table").await.unwrap();
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
-        let (_artifact, warnings) = build_plan_bundle_artifact_with_warnings(
-            PlanBundleArtifactBuildRequest {
+        let (_artifact, warnings) =
+            build_plan_bundle_artifact_with_warnings(PlanBundleArtifactBuildRequest {
                 ctx: &ctx,
                 runtime: &runtime,
                 rulepack_fingerprint: [0u8; 32],
                 provider_identities: vec![],
-            optimizer_traces: vec![],
-            pushdown_report: None,
-            deterministic_inputs: false,
-            no_volatile_udfs: true,
-            deterministic_optimizer: true,
-            stats_quality: None,
+                optimizer_traces: vec![],
+                pushdown_report: None,
+                deterministic_inputs: false,
+                no_volatile_udfs: true,
+                deterministic_optimizer: true,
+                stats_quality: None,
                 capture_substrait: true,
                 capture_sql: false,
                 capture_delta_codec: false,
                 planning_surface_hash: [0u8; 32],
-            },
-        )
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
 
         assert!(
             warnings
@@ -1215,26 +1204,25 @@ mod tests {
         let df = ctx.table("test_table").await.unwrap();
         let runtime = capture_plan_bundle_runtime(&ctx, &df).await.unwrap();
 
-        let (_artifact, warnings) = build_plan_bundle_artifact_with_warnings(
-            PlanBundleArtifactBuildRequest {
+        let (_artifact, warnings) =
+            build_plan_bundle_artifact_with_warnings(PlanBundleArtifactBuildRequest {
                 ctx: &ctx,
                 runtime: &runtime,
                 rulepack_fingerprint: [0u8; 32],
                 provider_identities: vec![],
-            optimizer_traces: vec![],
-            pushdown_report: None,
-            deterministic_inputs: false,
-            no_volatile_udfs: true,
-            deterministic_optimizer: true,
-            stats_quality: None,
+                optimizer_traces: vec![],
+                pushdown_report: None,
+                deterministic_inputs: false,
+                no_volatile_udfs: true,
+                deterministic_optimizer: true,
+                stats_quality: None,
                 capture_substrait: false,
                 capture_sql: false,
                 capture_delta_codec: true,
                 planning_surface_hash: [0u8; 32],
-            },
-        )
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
 
         assert!(
             warnings

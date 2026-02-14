@@ -86,13 +86,7 @@ from datafusion_engine.plan.perf_policy import (
     performance_policy_artifact_payload,
 )
 from datafusion_engine.registry_facade import RegistrationPhase, RegistrationPhaseOrchestrator
-from datafusion_engine.schema.introspection import (
-    SchemaIntrospector,
-    catalogs_snapshot,
-    constraint_rows,
-    table_constraint_rows,
-)
-from datafusion_engine.schema.registry import (
+from datafusion_engine.schema import (
     AST_CORE_VIEW_NAMES,
     AST_OPTIONAL_VIEW_NAMES,
     CST_VIEW_NAMES,
@@ -108,8 +102,14 @@ from datafusion_engine.schema.registry import (
     validate_semantic_types,
     validate_udf_info_schema_parity,
 )
+from datafusion_engine.schema.introspection import (
+    SchemaIntrospector,
+    catalogs_snapshot,
+    constraint_rows,
+    table_constraint_rows,
+)
 from datafusion_engine.session.cache_policy import CachePolicyConfig, cache_policy_settings
-from datafusion_engine.session.factory import SessionFactory
+from datafusion_engine.session.context_pool import SessionFactory
 from datafusion_engine.session.helpers import deregister_table, register_temp_table
 from datafusion_engine.sql.options import (
     planning_sql_options,
@@ -117,8 +117,8 @@ from datafusion_engine.sql.options import (
     statement_sql_options_for_profile,
 )
 from datafusion_engine.tables.metadata import table_provider_metadata
-from datafusion_engine.udf.catalog import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.udf.factory import function_factory_payloads, install_function_factory
+from datafusion_engine.udf.metadata import get_default_udf_catalog, get_strict_udf_catalog
 from datafusion_engine.views.artifacts import DataFusionViewArtifact
 from serde_msgspec import MSGPACK_ENCODER, StructBaseStrict
 from storage.deltalake.config import DeltaMutationPolicy
@@ -133,7 +133,7 @@ _MISSING = object()
 _COMPILE_RESOLVER_STRICT_ENV = "CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT"
 _CI_ENV = "CI"
 _DEFAULT_PERFORMANCE_POLICY = PerformancePolicy()
-_EXTENSION_MODULE_NAMES: tuple[str, ...] = ("datafusion_ext", "datafusion._internal")
+_EXTENSION_MODULE_NAMES: tuple[str, ...] = ("datafusion_ext",)
 # DataFusion Python currently raises plain ``Exception`` for many SQL/plan failures.
 _DATAFUSION_SQL_ERROR = Exception
 
@@ -145,8 +145,8 @@ if TYPE_CHECKING:
     from datafusion_engine.bootstrap.zero_row import ZeroRowBootstrapReport, ZeroRowBootstrapRequest
     from datafusion_engine.catalog.introspection import IntrospectionCache
     from datafusion_engine.delta.service import DeltaService
-    from datafusion_engine.session.factory import DataFusionContextPool
-    from datafusion_engine.udf.catalog import UdfCatalog
+    from datafusion_engine.session.context_pool import DataFusionContextPool
+    from datafusion_engine.udf.metadata import UdfCatalog
     from obs.datafusion_runs import DataFusionRun
     from semantics.program_manifest import ManifestDatasetResolver, SemanticProgramManifest
     from serde_schema_registry import ArtifactSpec
@@ -634,7 +634,7 @@ def delta_runtime_env_options(
         return None
     module = _resolve_runtime_extension_module(required_attr="DeltaRuntimeEnvOptions")
     if module is None:
-        msg = "Delta runtime env options require datafusion._internal or datafusion_ext."
+        msg = "Delta runtime env options require datafusion_ext."
         raise RuntimeError(msg)
     options_cls = getattr(module, "DeltaRuntimeEnvOptions", None)
     if not callable(options_cls):
@@ -1631,7 +1631,7 @@ def _prepare_statement_sql(statement: PreparedStatementSpec) -> str:
 
 def _table_logical_plan(ctx: SessionContext, *, name: str) -> str:
     try:
-        module = importlib.import_module("datafusion._internal")
+        module = importlib.import_module("datafusion_ext")
     except ImportError:
         module = None
     if module is not None:
@@ -1644,7 +1644,7 @@ def _table_logical_plan(ctx: SessionContext, *, name: str) -> str:
 
 def _table_dfschema_tree(ctx: SessionContext, *, name: str) -> str:
     try:
-        module = importlib.import_module("datafusion._internal")
+        module = importlib.import_module("datafusion_ext")
     except ImportError:
         module = None
     if module is not None:
@@ -3374,8 +3374,8 @@ def _build_session_runtime_from_context(
     profile: DataFusionRuntimeProfile,
 ) -> SessionRuntime:
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.catalog import rewrite_tag_index
-    from datafusion_engine.udf.runtime import rust_udf_snapshot, rust_udf_snapshot_hash
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, rust_udf_snapshot_hash
+    from datafusion_engine.udf.metadata import rewrite_tag_index
 
     try:
         snapshot = rust_udf_snapshot(ctx)
@@ -3519,8 +3519,8 @@ def build_session_runtime(
     if cached is not None and use_cache and cached.profile == profile and cached.ctx is ctx:
         return cached
     from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
-    from datafusion_engine.udf.catalog import rewrite_tag_index
-    from datafusion_engine.udf.runtime import rust_udf_snapshot, rust_udf_snapshot_hash
+    from datafusion_engine.udf.extension_runtime import rust_udf_snapshot, rust_udf_snapshot_hash
+    from datafusion_engine.udf.metadata import rewrite_tag_index
 
     snapshot = rust_udf_snapshot(ctx)
     snapshot_hash = rust_udf_snapshot_hash(snapshot)
@@ -3628,7 +3628,7 @@ class _PlannerRuleInstallers:
 
 def _resolve_planner_rule_installers() -> _PlannerRuleInstallers | None:
     imported_any = False
-    for module_name in ("datafusion._internal", "datafusion_ext"):
+    for module_name in ("datafusion_ext",):
         try:
             candidate = importlib.import_module(module_name)
         except ImportError:
@@ -3660,7 +3660,7 @@ def _resolve_planner_rule_installers() -> _PlannerRuleInstallers | None:
             physical_installer=cast("Callable[[SessionContext], None]", physical_installer),
         )
     if not imported_any:  # pragma: no cover - optional dependency
-        msg = "Planner policy rules require datafusion._internal or datafusion_ext."
+        msg = "Planner policy rules require datafusion_ext."
         raise RuntimeError(msg)
     return None
 
@@ -4697,7 +4697,7 @@ class DataFusionRuntimeProfile(
             return None
         module = _resolve_runtime_extension_module(required_attr="DeltaRuntimeEnvOptions")
         if module is None:
-            msg = "Delta runtime env options require datafusion._internal or datafusion_ext."
+            msg = "Delta runtime env options require datafusion_ext."
             raise RuntimeError(msg)
         options_cls = getattr(module, "DeltaRuntimeEnvOptions", None)
         if not callable(options_cls):
@@ -4950,7 +4950,7 @@ class DataFusionRuntimeProfile(
         DataFusionContextPool
             Reusable context pool configured for this runtime profile.
         """
-        from datafusion_engine.session.factory import DataFusionContextPool
+        from datafusion_engine.session.context_pool import DataFusionContextPool
 
         return DataFusionContextPool(
             self,
@@ -5119,7 +5119,7 @@ class DataFusionRuntimeProfile(
                 "routines_available": False,
                 "error": "information_schema disabled",
             }
-        from datafusion_engine.udf.runtime import extension_capabilities_report
+        from datafusion_engine.udf.extension_runtime import extension_capabilities_report
 
         try:
             capabilities = extension_capabilities_report()
@@ -5131,8 +5131,8 @@ class DataFusionRuntimeProfile(
                 "routines_available": False,
                 "error": "native_udf_platform unavailable",
             }
+        from datafusion_engine.udf.extension_runtime import rust_runtime_install_payload
         from datafusion_engine.udf.parity import udf_info_schema_parity_report
-        from datafusion_engine.udf.runtime import rust_runtime_install_payload
 
         report = udf_info_schema_parity_report(ctx)
         runtime_payload = rust_runtime_install_payload(ctx)
@@ -5206,11 +5206,11 @@ class DataFusionRuntimeProfile(
     def _install_udf_platform(self, ctx: SessionContext) -> None:
         """Install the unified Rust UDF platform on the session context."""
         from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
+        from datafusion_engine.udf.extension_runtime import extension_capabilities_report
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
         )
-        from datafusion_engine.udf.runtime import extension_capabilities_report
 
         try:
             capabilities = extension_capabilities_report()
@@ -5257,7 +5257,7 @@ class DataFusionRuntimeProfile(
             and platform.function_factory is not None
             and platform.function_factory.installed
         ):
-            from datafusion_engine.udf.runtime import register_udfs_via_ddl
+            from datafusion_engine.udf.extension_runtime import register_udfs_via_ddl
 
             try:
                 register_udfs_via_ddl(ctx, snapshot=platform.snapshot)
@@ -5370,7 +5370,10 @@ class DataFusionRuntimeProfile(
         Raises:
             ValueError: If the operation cannot be completed.
         """
-        from datafusion_engine.udf.runtime import rust_udf_snapshot, udf_names_from_snapshot
+        from datafusion_engine.udf.extension_runtime import (
+            rust_udf_snapshot,
+            udf_names_from_snapshot,
+        )
 
         registry_snapshot = rust_udf_snapshot(introspector.ctx)
         registered_udfs = self._registered_udf_names(registry_snapshot)
@@ -5476,8 +5479,8 @@ class DataFusionRuntimeProfile(
         """
         if not self.features.enable_function_factory:
             return None
+        from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
         from datafusion_engine.udf.factory import function_factory_policy_hash
-        from datafusion_engine.udf.runtime import rust_udf_snapshot
 
         snapshot = rust_udf_snapshot(ctx)
         return function_factory_policy_hash(
@@ -6250,7 +6253,7 @@ class DataFusionRuntimeProfile(
         ast_view_names: Sequence[str],
         allow_semantic_row_probe_fallback: bool = True,
     ) -> dict[str, str]:
-        from datafusion_engine.udf.runtime import extension_capabilities_report
+        from datafusion_engine.udf.extension_runtime import extension_capabilities_report
 
         _ = ast_view_names
         view_errors: dict[str, str] = {}
@@ -6374,7 +6377,7 @@ class DataFusionRuntimeProfile(
         if not isinstance(raw_view_errors, Mapping):
             return issues, advisory
 
-        from datafusion_engine.udf.runtime import rust_runtime_install_payload
+        from datafusion_engine.udf.extension_runtime import rust_runtime_install_payload
 
         runtime_payload = rust_runtime_install_payload(ctx)
         runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")
@@ -6596,7 +6599,7 @@ class DataFusionRuntimeProfile(
         payload["udf_info_schema_parity"] = self._validate_udf_info_schema_parity(ctx)
         if self.diagnostics.diagnostics_sink is None:
             return
-        from datafusion_engine.udf.runtime import extension_capabilities_report
+        from datafusion_engine.udf.extension_runtime import extension_capabilities_report
 
         payload["extension_capabilities"] = extension_capabilities_report()
         runtime_capabilities = self._runtime_capabilities_payload(ctx)
@@ -6750,7 +6753,7 @@ class DataFusionRuntimeProfile(
         try:
             _register_cache_introspection_functions(ctx)
         except ImportError as exc:
-            msg = "Cache table functions require datafusion._internal or datafusion_ext."
+            msg = "Cache table functions require datafusion_ext."
             raise RuntimeError(msg) from exc
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = f"Cache table function registration failed: {exc}"
@@ -6941,7 +6944,7 @@ class DataFusionRuntimeProfile(
         if self.diagnostics.tracing_hook is None:
             module = _resolve_runtime_extension_module(required_attr="install_tracing")
             if module is None:
-                msg = "Tracing enabled but datafusion._internal or datafusion_ext is unavailable."
+                msg = "Tracing enabled but datafusion_ext is unavailable."
                 raise ValueError(msg)
             install = getattr(module, "install_tracing", None)
             if not callable(install):

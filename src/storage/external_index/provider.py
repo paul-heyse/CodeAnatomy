@@ -16,7 +16,7 @@ from datafusion import SessionContext
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.lineage.datafusion import ScanLineage
+    from datafusion_engine.lineage.reporting import ScanLineage
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 
 _LOGGER = logging.getLogger(__name__)

@@ -118,7 +118,8 @@ fn try_rewrite_span_containment(predicate: &Expr) -> Option<Expr> {
         return None;
     };
 
-    if start_pair.0.relation != end_pair.1.relation || start_pair.1.relation != end_pair.0.relation {
+    if start_pair.0.relation != end_pair.1.relation || start_pair.1.relation != end_pair.0.relation
+    {
         return None;
     }
 
@@ -129,7 +130,9 @@ fn try_rewrite_span_containment(predicate: &Expr) -> Option<Expr> {
     Some(rewritten)
 }
 
-fn extract_leq_columns(expr: &Expr) -> Option<(datafusion_common::Column, datafusion_common::Column)> {
+fn extract_leq_columns(
+    expr: &Expr,
+) -> Option<(datafusion_common::Column, datafusion_common::Column)> {
     let Expr::BinaryExpr(binary) = expr else {
         return None;
     };

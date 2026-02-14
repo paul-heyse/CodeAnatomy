@@ -151,7 +151,10 @@ fn apply_post_filter_coalescing(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn 
 /// # Returns
 ///
 /// Plan with hash join hints applied
-fn apply_hash_join_hints(plan: Arc<dyn ExecutionPlan>, memory_hint: usize) -> Result<Arc<dyn ExecutionPlan>> {
+fn apply_hash_join_hints(
+    plan: Arc<dyn ExecutionPlan>,
+    memory_hint: usize,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let current = plan.output_partitioning().partition_count();
     if current <= 1 {
         return Ok(plan);

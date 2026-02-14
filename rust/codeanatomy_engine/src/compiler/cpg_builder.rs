@@ -20,10 +20,7 @@ fn require_sources(kind: CpgOutputKind, sources: &[String]) -> Result<()> {
     Ok(())
 }
 
-async fn table_or_union(
-    ctx: &SessionContext,
-    sources: &[String],
-) -> Result<DataFrame> {
+async fn table_or_union(ctx: &SessionContext, sources: &[String]) -> Result<DataFrame> {
     if sources.len() == 1 {
         return ctx.table(&sources[0]).await;
     }
@@ -34,10 +31,7 @@ fn has_column(df: &DataFrame, column: &str) -> bool {
     df.schema().field_with_name(None, column).is_ok()
 }
 
-async fn build_nodes_output(
-    ctx: &SessionContext,
-    sources: &[String],
-) -> Result<DataFrame> {
+async fn build_nodes_output(ctx: &SessionContext, sources: &[String]) -> Result<DataFrame> {
     let nodes_df = table_or_union(ctx, sources).await?;
     if has_column(&nodes_df, "entity_id")
         && has_column(&nodes_df, "path")
@@ -57,7 +51,12 @@ async fn build_nodes_output(
     )?;
     repo_df = repo_df.with_column("bstart", lit(0_i64))?;
     repo_df = repo_df.with_column("bend", col("size_bytes"))?;
-    repo_df.select(vec![col("entity_id"), col("path"), col("bstart"), col("bend")])
+    repo_df.select(vec![
+        col("entity_id"),
+        col("path"),
+        col("bstart"),
+        col("bend"),
+    ])
 }
 
 /// Build a canonical CPG output DataFrame from source views.

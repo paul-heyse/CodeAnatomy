@@ -33,8 +33,8 @@ from core_types import RowPermissive as Row
 from datafusion_engine.arrow.interop import RecordBatchReaderLike, TableLike
 from datafusion_engine.extract.registry import dataset_schema, normalize_options
 from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
+from datafusion_engine.schema import default_attrs_value
 from datafusion_engine.schema.introspection import find_struct_field_keys
-from datafusion_engine.schema.registry import default_attrs_value
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile
 from extract.coordination.context import (
     ExtractExecutionContext,

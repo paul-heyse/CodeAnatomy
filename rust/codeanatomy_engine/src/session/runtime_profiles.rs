@@ -120,7 +120,7 @@ impl RuntimeProfileSpec {
             batch_size: 4096,
             planning_concurrency: 4,
             meta_fetch_concurrency: 8,
-            memory_pool_bytes: 256 * 1024 * 1024,        // 256 MB
+            memory_pool_bytes: 256 * 1024 * 1024, // 256 MB
             max_temp_directory_bytes: 1024 * 1024 * 1024, // 1 GB
             repartition_joins: true,
             repartition_aggregations: true,
@@ -157,8 +157,8 @@ impl RuntimeProfileSpec {
         p.batch_size = 8192;
         p.planning_concurrency = 8;
         p.meta_fetch_concurrency = 32;
-        p.memory_pool_bytes = 1024 * 1024 * 1024;             // 1 GB
-        p.max_temp_directory_bytes = 10 * 1024 * 1024 * 1024;  // 10 GB
+        p.memory_pool_bytes = 1024 * 1024 * 1024; // 1 GB
+        p.max_temp_directory_bytes = 10 * 1024 * 1024 * 1024; // 10 GB
         p.repartition_file_min_size = 64 * 1024 * 1024;
         p
     }
@@ -170,10 +170,10 @@ impl RuntimeProfileSpec {
         p.target_partitions = 16;
         p.batch_size = 16384;
         p.planning_concurrency = 16;
-        p.memory_pool_bytes = 4 * 1024 * 1024 * 1024;          // 4 GB
-        p.max_temp_directory_bytes = 100 * 1024 * 1024 * 1024;  // 100 GB
+        p.memory_pool_bytes = 4 * 1024 * 1024 * 1024; // 4 GB
+        p.max_temp_directory_bytes = 100 * 1024 * 1024 * 1024; // 100 GB
         p.repartition_file_min_size = 128 * 1024 * 1024;
-        p.metadata_cache_limit = 200 * 1024 * 1024;             // 200 MB
+        p.metadata_cache_limit = 200 * 1024 * 1024; // 200 MB
         p
     }
 }

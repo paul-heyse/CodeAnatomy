@@ -213,7 +213,10 @@ class SemanticCompiler:
         self._config = config or SemanticConfig()
 
     def _require_udfs(self, required: tuple[str, ...]) -> None:
-        from datafusion_engine.udf.runtime import rust_udf_snapshot, validate_required_udfs
+        from datafusion_engine.udf.extension_runtime import (
+            rust_udf_snapshot,
+            validate_required_udfs,
+        )
 
         if not required:
             return

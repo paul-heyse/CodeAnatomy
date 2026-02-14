@@ -199,8 +199,7 @@ fn test_lab_rule_step_is_serializable() {
     assert!(json.contains("simplify_expressions"));
     assert!(json.contains("ordinal"));
 
-    let deserialized: RuleStep =
-        serde_json::from_str(&json).expect("RuleStep must deserialize");
+    let deserialized: RuleStep = serde_json::from_str(&json).expect("RuleStep must deserialize");
     assert_eq!(deserialized.ordinal, 5);
     assert_eq!(deserialized.rule_name, "simplify_expressions");
     assert_eq!(deserialized.plan_digest, [0xBBu8; 32]);

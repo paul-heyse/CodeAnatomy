@@ -19,7 +19,7 @@ from datafusion_engine.lineage.diagnostics import record_artifact
 from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import SchemaContract, ValidationViolation, ViolationType
 from datafusion_engine.schema.introspection import SchemaIntrospector
-from datafusion_engine.udf.runtime import (
+from datafusion_engine.udf.extension_runtime import (
     udf_names_from_snapshot,
     validate_required_udfs,
     validate_rust_udf_snapshot,
@@ -43,8 +43,8 @@ from utils.validation import validate_required_items
 
 if TYPE_CHECKING:
     from datafusion_engine.dataset.registry import DatasetLocation
-    from datafusion_engine.lineage.datafusion import LineageReport
-    from datafusion_engine.lineage.scan import ScanUnit
+    from datafusion_engine.lineage.reporting import LineageReport
+    from datafusion_engine.lineage.scheduling import ScanUnit
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from semantics.program_manifest import ManifestDatasetResolver
@@ -578,7 +578,7 @@ def _record_udf_audit(context: ViewGraphContext) -> None:
     profile = context.runtime.runtime_profile
     if profile is None:
         return
-    from datafusion_engine.udf.runtime import udf_audit_payload
+    from datafusion_engine.udf.extension_runtime import udf_audit_payload
     from serde_artifact_specs import UDF_AUDIT_SPEC
 
     payload = udf_audit_payload(context.snapshot)
@@ -1251,14 +1251,14 @@ def _plan_scan_units_for_bundle(
     bundle: DataFusionPlanArtifact,
     dataset_resolver: ManifestDatasetResolver | None = None,
 ) -> tuple[ScanUnit, ...]:
-    from datafusion_engine.lineage.scan import plan_scan_unit
+    from datafusion_engine.lineage.scheduling import plan_scan_unit
 
     lineage = extract_lineage_from_bundle(bundle)
     if dataset_resolver is None:
         msg = "dataset_resolver is required for scan unit planning from bundle."
         raise ValueError(msg)
     scan_units: dict[str, ScanUnit] = {}
-    for scan in lineage.scans:
+    for scan in getattr(lineage, "scans", ()):
         location = dataset_resolver.location(scan.dataset_name)
         if location is None:
             continue
@@ -1364,7 +1364,10 @@ def _validate_required_functions(ctx: SessionContext, required: Sequence[str]) -
         if isinstance(name, str):
             available.add(name.lower())
     try:
-        from datafusion_engine.udf.runtime import rust_udf_snapshot, udf_names_from_snapshot
+        from datafusion_engine.udf.extension_runtime import (
+            rust_udf_snapshot,
+            udf_names_from_snapshot,
+        )
 
         snapshot = rust_udf_snapshot(ctx)
         available.update(name.lower() for name in udf_names_from_snapshot(snapshot))

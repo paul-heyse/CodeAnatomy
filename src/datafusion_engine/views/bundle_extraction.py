@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from datafusion_engine.udf.runtime import udf_names_from_snapshot
+from datafusion_engine.udf.extension_runtime import udf_names_from_snapshot
 
 if TYPE_CHECKING:
     from datafusion.dataframe import DataFrame
 
-    from datafusion_engine.lineage.datafusion import LineageReport
+    from datafusion_engine.lineage.reporting import LineageReport
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
 
 
@@ -55,7 +55,7 @@ def extract_lineage_from_bundle(bundle: DataFusionPlanArtifact) -> LineageReport
     if bundle.optimized_logical_plan is None:
         msg = "DataFusion plan bundle missing optimized logical plan."
         raise ValueError(msg)
-    from datafusion_engine.lineage.datafusion import extract_lineage
+    from datafusion_engine.lineage.reporting import extract_lineage
 
     snapshot = bundle.artifacts.udf_snapshot
     return extract_lineage(bundle.optimized_logical_plan, udf_snapshot=snapshot)

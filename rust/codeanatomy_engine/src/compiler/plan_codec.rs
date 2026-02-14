@@ -71,13 +71,11 @@ pub fn encode_with_delta_codecs(
     physical: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
 ) -> Result<(Vec<u8>, Vec<u8>)> {
     use datafusion_proto::bytes::{
-        logical_plan_to_bytes_with_extension_codec,
-        physical_plan_to_bytes_with_extension_codec,
+        logical_plan_to_bytes_with_extension_codec, physical_plan_to_bytes_with_extension_codec,
     };
     use deltalake::delta_datafusion::{DeltaLogicalCodec, DeltaPhysicalCodec};
 
-    let logical_bytes =
-        logical_plan_to_bytes_with_extension_codec(logical, &DeltaLogicalCodec {})?;
+    let logical_bytes = logical_plan_to_bytes_with_extension_codec(logical, &DeltaLogicalCodec {})?;
     let physical_bytes =
         physical_plan_to_bytes_with_extension_codec(physical, &DeltaPhysicalCodec {})?;
     Ok((logical_bytes.to_vec(), physical_bytes.to_vec()))

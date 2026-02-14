@@ -297,7 +297,10 @@ mod tests {
         };
 
         let result = tuner.observe(&metrics);
-        assert!(result.is_none(), "ObserveOnly mode should not propose adjustments");
+        assert!(
+            result.is_none(),
+            "ObserveOnly mode should not propose adjustments"
+        );
         assert_eq!(tuner.current_config(), &config);
     }
 
@@ -427,7 +430,10 @@ mod tests {
         };
 
         let result = tuner.observe(&selective_metrics);
-        assert!(result.is_some(), "Should propose adjustment on selective scans");
+        assert!(
+            result.is_some(),
+            "Should propose adjustment on selective scans"
+        );
         let new_config = result.unwrap();
         assert!(
             new_config.batch_size < 8192,
@@ -465,7 +471,10 @@ mod tests {
         };
 
         let result = tuner.observe(&small_metrics);
-        assert!(result.is_some(), "Should propose adjustment for small results");
+        assert!(
+            result.is_some(),
+            "Should propose adjustment for small results"
+        );
         let new_config = result.unwrap();
         assert!(
             !new_config.repartition_joins && !new_config.repartition_aggregations,

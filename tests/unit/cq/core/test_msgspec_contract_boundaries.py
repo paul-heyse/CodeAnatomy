@@ -6,7 +6,7 @@ from tools.cq.core.cache.contracts import QueryEntityScanCacheV1, SgRecordCacheV
 from tools.cq.core.cache.policy import CqCachePolicyV1
 from tools.cq.core.runtime.execution_policy import ParallelismPolicy
 from tools.cq.core.structs import CqCacheStruct, CqOutputStruct, CqSettingsStruct
-from tools.cq.search.contracts import CrossLanguageDiagnostic, PyreflyOverview
+from tools.cq.search.contracts import CrossLanguageDiagnostic, PythonSemanticOverview
 
 
 def test_struct_bases_are_msgspec_contract_types() -> None:
@@ -38,7 +38,8 @@ def test_cache_policy_rejects_unknown_fields() -> None:
 def test_meta_constraints_reject_invalid_numeric_values() -> None:
     with pytest.raises(msgspec.ValidationError):
         msgspec.convert(
-            {"cpu_workers": 0, "io_workers": 8, "lsp_request_workers": 2}, type=ParallelismPolicy
+            {"cpu_workers": 0, "io_workers": 8, "semantic_request_workers": 2},
+            type=ParallelismPolicy,
         )
 
     with pytest.raises(msgspec.ValidationError):
@@ -47,14 +48,14 @@ def test_meta_constraints_reject_invalid_numeric_values() -> None:
 
 def test_unset_fields_are_omitted_by_default() -> None:
     diag_payload = msgspec.to_builtins(CrossLanguageDiagnostic())
-    overview_payload = msgspec.to_builtins(PyreflyOverview())
+    overview_payload = msgspec.to_builtins(PythonSemanticOverview())
     assert "feature" not in diag_payload
     assert "primary_symbol" not in overview_payload
 
 
 def test_explicit_none_is_distinct_from_unset() -> None:
     diag_payload = msgspec.to_builtins(CrossLanguageDiagnostic(feature=None))
-    overview_payload = msgspec.to_builtins(PyreflyOverview(primary_symbol=None))
+    overview_payload = msgspec.to_builtins(PythonSemanticOverview(primary_symbol=None))
     assert diag_payload["feature"] is None
     assert overview_payload["primary_symbol"] is None
 

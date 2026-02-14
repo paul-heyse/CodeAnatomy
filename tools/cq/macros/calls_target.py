@@ -681,7 +681,12 @@ def attach_target_metadata(
     result: CqResult,
     request: AttachTargetMetadataRequestV1,
 ) -> tuple[tuple[str, int] | None, Counter[str], QueryLanguage | None]:
-    """Resolve target location, collect target callees, and update result payload."""
+    """Resolve target location, collect target callees, and update result payload.
+
+    Returns:
+        tuple[tuple[str, int] | None, collections.Counter[str], QueryLanguage | None]:
+        Resolved target path/line, target callees counter, and detected language.
+    """
     resolved_language = request.target_language or infer_target_language(
         request.root,
         request.function_name,

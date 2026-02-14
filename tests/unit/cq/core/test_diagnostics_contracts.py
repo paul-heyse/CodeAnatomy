@@ -30,11 +30,11 @@ def test_build_diagnostics_artifact_payload_contains_rust_telemetry() -> None:
     result.summary.update(
         {
             "enrichment_telemetry": {"python": {"applied": 1}},
-            "rust_lsp_telemetry": {"attempted": 1, "applied": 1, "failed": 0, "timed_out": 0},
-            "lsp_advanced_planes": {"semantic_tokens_count": 2},
+            "rust_semantic_telemetry": {"attempted": 1, "applied": 1, "failed": 0, "timed_out": 0},
+            "semantic_planes": {"semantic_tokens_count": 2},
         }
     )
     payload = build_diagnostics_artifact_payload(result)
     assert payload is not None
-    assert payload.rust_lsp_telemetry["attempted"] == 1
-    assert payload.lsp_advanced_planes["semantic_tokens_count"] == 2
+    assert payload.rust_semantic_telemetry["attempted"] == 1
+    assert payload.semantic_planes["semantic_tokens_count"] == 2

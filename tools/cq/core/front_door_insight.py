@@ -15,10 +15,10 @@ import msgspec
 
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
 from tools.cq.core.structs import CqStruct
-from tools.cq.search.lsp_contract_state import (
-    LspContractStateInputV1,
-    LspStatus,
-    derive_lsp_contract_state,
+from tools.cq.search.semantic_contract_state import (
+    SemanticContractStateInputV1,
+    SemanticStatus,
+    derive_semantic_contract_state,
 )
 
 if TYPE_CHECKING:
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 InsightSource = Literal["search", "calls", "entity"]
 Availability = Literal["full", "partial", "unavailable"]
-NeighborhoodSource = Literal["structural", "lsp", "heuristic", "none"]
+NeighborhoodSource = Literal["structural", "semantic", "heuristic", "none"]
 RiskLevel = Literal["low", "med", "high"]
 
 _DEFAULT_TOP_CANDIDATES = 3
@@ -37,7 +37,7 @@ _MEDIUM_CALLER_THRESHOLD = 4
 _MEDIUM_CALLER_STRICT_THRESHOLD = 3
 _ARG_VARIANCE_THRESHOLD = 3
 _FILES_WITH_CALLS_THRESHOLD = 3
-_DEFAULT_LSP_TARGETS = 1
+_DEFAULT_SEMANTIC_TARGETS = 1
 
 
 class InsightLocationV1(CqStruct, frozen=True):
@@ -109,7 +109,7 @@ class InsightConfidenceV1(CqStruct, frozen=True):
 class InsightDegradationV1(CqStruct, frozen=True):
     """Compact degradation status for front-door rendering."""
 
-    lsp: LspStatus = "unavailable"
+    semantic: SemanticStatus = "unavailable"
     scan: str = "ok"
     scope_filter: str = "none"
     notes: tuple[str, ...] = ()
@@ -120,7 +120,7 @@ class InsightBudgetV1(CqStruct, frozen=True):
 
     top_candidates: int = _DEFAULT_TOP_CANDIDATES
     preview_per_slice: int = _DEFAULT_PREVIEW_PER_SLICE
-    lsp_targets: int = _DEFAULT_LSP_TARGETS
+    semantic_targets: int = _DEFAULT_SEMANTIC_TARGETS
 
 
 class InsightArtifactRefsV1(CqStruct, frozen=True):
@@ -266,7 +266,7 @@ def _render_degradation_line(degradation: InsightDegradationV1) -> str:
     notes = f" ({'; '.join(degradation.notes)})" if degradation.notes else ""
     return (
         "- Degradation: "
-        f"lsp={degradation.lsp}, "
+        f"semantic={degradation.semantic}, "
         f"scan={degradation.scan}, "
         f"scope_filter={degradation.scope_filter}{notes}"
     )
@@ -277,7 +277,7 @@ def _render_budget_line(budget: InsightBudgetV1) -> str:
         "- Budget: "
         f"top_candidates={budget.top_candidates}, "
         f"preview_per_slice={budget.preview_per_slice}, "
-        f"lsp_targets={budget.lsp_targets}"
+        f"semantic_targets={budget.semantic_targets}"
     )
 
 
@@ -353,24 +353,28 @@ def build_neighborhood_from_slices(
     )
 
 
-def augment_insight_with_lsp(
+def augment_insight_with_semantic(
     insight: FrontDoorInsightV1,
-    lsp_payload: dict[str, object],
+    semantic_payload: dict[str, object],
     *,
     preview_per_slice: int | None = None,
 ) -> FrontDoorInsightV1:
-    """Overlay LSP data on top of an existing insight payload.
+    """Overlay static semantic data on top of an existing insight payload.
 
     Returns:
-        Insight payload augmented with LSP-derived data.
+        Insight payload augmented with static-semantic derived data.
     """
     limit = preview_per_slice or insight.budget.preview_per_slice
     neighborhood = insight.neighborhood
 
-    call_graph = lsp_payload.get("call_graph")
+    call_graph = semantic_payload.get("call_graph")
     if isinstance(call_graph, dict):
-        callers_preview = _node_refs_from_lsp_entries(call_graph.get("incoming_callers"), limit)
-        callees_preview = _node_refs_from_lsp_entries(call_graph.get("outgoing_callees"), limit)
+        callers_preview = _node_refs_from_semantic_entries(
+            call_graph.get("incoming_callers"), limit
+        )
+        callees_preview = _node_refs_from_semantic_entries(
+            call_graph.get("outgoing_callees"), limit
+        )
         callers_total = _read_total(call_graph.get("incoming_total"), fallback=len(callers_preview))
         callees_total = _read_total(call_graph.get("outgoing_total"), fallback=len(callees_preview))
 
@@ -380,17 +384,17 @@ def augment_insight_with_lsp(
                 neighborhood.callers,
                 total=callers_total,
                 preview=callers_preview,
-                source="lsp",
+                source="semantic",
             ),
             callees=_merge_slice(
                 neighborhood.callees,
                 total=callees_total,
                 preview=callees_preview,
-                source="lsp",
+                source="semantic",
             ),
         )
 
-    references_total = _read_reference_total(lsp_payload)
+    references_total = _read_reference_total(semantic_payload)
     if references_total is not None:
         neighborhood = msgspec.structs.replace(
             neighborhood,
@@ -398,12 +402,12 @@ def augment_insight_with_lsp(
                 neighborhood.references,
                 total=references_total,
                 preview=neighborhood.references.preview,
-                source="lsp",
+                source="semantic",
             ),
         )
 
     target = insight.target
-    type_contract = lsp_payload.get("type_contract")
+    type_contract = semantic_payload.get("type_contract")
     if isinstance(type_contract, dict):
         signature = _string_or_none(type_contract.get("callable_signature"))
         resolved_type = _string_or_none(type_contract.get("resolved_type"))
@@ -416,11 +420,11 @@ def augment_insight_with_lsp(
         insight.confidence,
         evidence_kind=insight.confidence.evidence_kind
         if insight.confidence.evidence_kind != "unknown"
-        else "resolved_lsp",
+        else "resolved_static_semantic",
         score=max(insight.confidence.score, 0.8),
         bucket=_max_bucket(insight.confidence.bucket, "high"),
     )
-    degradation = msgspec.structs.replace(insight.degradation, lsp="ok")
+    degradation = msgspec.structs.replace(insight.degradation, semantic="ok")
 
     return msgspec.structs.replace(
         insight,
@@ -569,7 +573,7 @@ def _default_search_budget(*, target_candidate_count: int) -> InsightBudgetV1:
     return InsightBudgetV1(
         top_candidates=top_candidates,
         preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
-        lsp_targets=1,
+        semantic_targets=1,
     )
 
 
@@ -577,7 +581,7 @@ def _default_calls_budget() -> InsightBudgetV1:
     return InsightBudgetV1(
         top_candidates=_DEFAULT_TOP_CANDIDATES,
         preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
-        lsp_targets=1,
+        semantic_targets=1,
     )
 
 
@@ -585,7 +589,7 @@ def _default_entity_budget() -> InsightBudgetV1:
     return InsightBudgetV1(
         top_candidates=_DEFAULT_TOP_CANDIDATES,
         preview_per_slice=_DEFAULT_PREVIEW_PER_SLICE,
-        lsp_targets=3,
+        semantic_targets=3,
     )
 
 
@@ -762,27 +766,27 @@ def _confidence_from_findings(findings: Sequence[Finding]) -> InsightConfidenceV
 
 
 def _degradation_from_summary(summary: dict[str, object]) -> InsightDegradationV1:
-    provider, lsp_available = _lsp_provider_and_availability(summary)
-    attempted, applied, failed, timed_out = _read_lsp_telemetry(summary)
-    lsp_reasons: list[str] = []
-    if not lsp_available:
-        lsp_reasons.append("provider_unavailable")
+    provider, semantic_available = _semantic_provider_and_availability(summary)
+    attempted, applied, failed, timed_out = _read_semantic_telemetry(summary)
+    semantic_reasons: list[str] = []
+    if not semantic_available:
+        semantic_reasons.append("provider_unavailable")
     elif attempted <= 0:
-        lsp_reasons.append("not_attempted_by_design")
+        semantic_reasons.append("not_attempted_by_design")
     elif applied <= 0:
         if timed_out > 0:
-            lsp_reasons.append("request_timeout")
+            semantic_reasons.append("request_timeout")
         if failed > 0:
-            lsp_reasons.append("request_failed")
-    lsp_state = derive_lsp_contract_state(
-        LspContractStateInputV1(
+            semantic_reasons.append("request_failed")
+    semantic_state = derive_semantic_contract_state(
+        SemanticContractStateInputV1(
             provider=provider,
-            available=lsp_available,
+            available=semantic_available,
             attempted=attempted,
             applied=applied,
             failed=failed,
             timed_out=timed_out,
-            reasons=tuple(dict.fromkeys(lsp_reasons)),
+            reasons=tuple(dict.fromkeys(semantic_reasons)),
         )
     )
 
@@ -802,10 +806,10 @@ def _degradation_from_summary(summary: dict[str, object]) -> InsightDegradationV
         notes.append(f"dropped_by_scope={dropped}")
 
     return InsightDegradationV1(
-        lsp=lsp_state.status,
+        semantic=semantic_state.status,
         scan=scan,
         scope_filter=scope_filter,
-        notes=tuple(dict.fromkeys([*notes, *lsp_state.reasons])),
+        notes=tuple(dict.fromkeys([*notes, *semantic_state.reasons])),
     )
 
 
@@ -904,7 +908,10 @@ def _merge_slice(
     )
 
 
-def _node_refs_from_lsp_entries(payload: object, limit: int) -> tuple[SemanticNodeRefV1, ...]:
+def _node_refs_from_semantic_entries(
+    payload: object,
+    limit: int,
+) -> tuple[SemanticNodeRefV1, ...]:
     if not isinstance(payload, list):
         return ()
     refs: list[SemanticNodeRefV1] = []
@@ -916,7 +923,7 @@ def _node_refs_from_lsp_entries(payload: object, limit: int) -> tuple[SemanticNo
         kind = _string_or_none(entry.get("kind")) or "function"
         refs.append(
             SemanticNodeRefV1(
-                node_id=f"lsp:{file_path}:{name}",
+                node_id=f"semantic:{file_path}:{name}",
                 kind=kind,
                 name=name,
                 display_label=name,
@@ -1024,7 +1031,7 @@ def to_public_front_door_insight_dict(insight: FrontDoorInsightV1) -> dict[str, 
             "bucket": insight.confidence.bucket,
         },
         "degradation": {
-            "lsp": insight.degradation.lsp,
+            "semantic": insight.degradation.semantic,
             "scan": insight.degradation.scan,
             "scope_filter": insight.degradation.scope_filter,
             "notes": list(insight.degradation.notes),
@@ -1032,7 +1039,7 @@ def to_public_front_door_insight_dict(insight: FrontDoorInsightV1) -> dict[str, 
         "budget": {
             "top_candidates": int(insight.budget.top_candidates),
             "preview_per_slice": int(insight.budget.preview_per_slice),
-            "lsp_targets": int(insight.budget.lsp_targets),
+            "semantic_targets": int(insight.budget.semantic_targets),
         },
         "artifact_refs": {
             "diagnostics": insight.artifact_refs.diagnostics,
@@ -1079,21 +1086,21 @@ def _serialize_risk_counters(counters: InsightRiskCountersV1) -> dict[str, int]:
     }
 
 
-def _lsp_provider_and_availability(
+def _semantic_provider_and_availability(
     summary: dict[str, object],
-) -> tuple[Literal["pyrefly", "rust_analyzer", "none"], bool]:
+) -> tuple[Literal["python_static", "rust_static", "none"], bool]:
     py_attempted = 0
     rust_attempted = 0
-    py_telemetry = summary.get("pyrefly_telemetry")
+    py_telemetry = summary.get("python_semantic_telemetry")
     if isinstance(py_telemetry, dict):
         py_attempted = _int_or_none(py_telemetry.get("attempted")) or 0
-    rust_telemetry = summary.get("rust_lsp_telemetry")
+    rust_telemetry = summary.get("rust_semantic_telemetry")
     if isinstance(rust_telemetry, dict):
         rust_attempted = _int_or_none(rust_telemetry.get("attempted")) or 0
     if rust_attempted > 0 and py_attempted <= 0:
-        return "rust_analyzer", True
+        return "rust_static", True
     if py_attempted > 0:
-        return "pyrefly", True
+        return "python_static", True
 
     scope = _string_or_none(summary.get("lang_scope")) or "auto"
     order_raw = summary.get("language_order")
@@ -1106,18 +1113,18 @@ def _lsp_provider_and_availability(
     has_python = "python" in order
     has_rust = "rust" in order
     if has_python:
-        return "pyrefly", True
+        return "python_static", True
     if has_rust:
-        return "rust_analyzer", True
+        return "rust_static", True
     return "none", False
 
 
-def _read_lsp_telemetry(summary: dict[str, object]) -> tuple[int, int, int, int]:
+def _read_semantic_telemetry(summary: dict[str, object]) -> tuple[int, int, int, int]:
     attempted = 0
     applied = 0
     failed = 0
     timed_out = 0
-    for key in ("pyrefly_telemetry", "rust_lsp_telemetry"):
+    for key in ("python_semantic_telemetry", "rust_semantic_telemetry"):
         telemetry = summary.get(key)
         if not isinstance(telemetry, dict):
             continue
@@ -1144,13 +1151,13 @@ __all__ = [
     "InsightSliceV1",
     "InsightSource",
     "InsightTargetV1",
-    "LspStatus",
     "NeighborhoodSource",
     "RiskLevel",
     "SearchInsightBuildRequestV1",
+    "SemanticStatus",
     "attach_artifact_refs",
     "attach_neighborhood_overflow_ref",
-    "augment_insight_with_lsp",
+    "augment_insight_with_semantic",
     "build_calls_insight",
     "build_entity_insight",
     "build_neighborhood_from_slices",

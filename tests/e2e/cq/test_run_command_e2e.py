@@ -63,7 +63,7 @@ def test_run_inline_neighborhood_step_golden(
             (
                 '{"type":"neighborhood",'
                 '"target":"tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:9",'
-                '"lang":"rust","top_k":4,"no_lsp":true}'
+                '"lang":"rust","top_k":4,"no_semantic_enrichment":true}'
             ),
             "--format",
             "json",
@@ -85,7 +85,7 @@ def test_run_inline_neighborhood_step_golden(
 
 
 @pytest.mark.e2e
-def test_run_top_level_lsp_telemetry_matches_step_summaries(
+def test_run_top_level_semantic_telemetry_matches_step_summaries(
     run_cq_result: Callable[..., CqResult],
 ) -> None:
     result = run_cq_result(
@@ -126,5 +126,5 @@ def test_run_top_level_lsp_telemetry_matches_step_summaries(
                     totals[field] += value
         return totals
 
-    assert summary.get("pyrefly_telemetry") == sum_telemetry("pyrefly_telemetry")
-    assert summary.get("rust_lsp_telemetry") == sum_telemetry("rust_lsp_telemetry")
+    assert summary.get("python_semantic_telemetry") == sum_telemetry("python_semantic_telemetry")
+    assert summary.get("rust_semantic_telemetry") == sum_telemetry("rust_semantic_telemetry")

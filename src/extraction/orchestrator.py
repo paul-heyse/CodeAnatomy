@@ -211,13 +211,14 @@ def _run_repo_scan_fallback_stage(
             "Using non-git repo scan fallback with %d discovered files",
             repo_files.num_rows,
         )
-        return repo_files
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         state.timing["repo_scan_fallback"] = time.monotonic() - t0
         state.errors.append({"extractor": "repo_scan_fallback", "error": str(exc)})
         record_error("extraction", type(exc).__name__)
         logger.warning("repo_scan_fallback failed: %s", exc)
         return None
+    else:
+        return repo_files
 
 
 def _run_parallel_stage1_extractors(

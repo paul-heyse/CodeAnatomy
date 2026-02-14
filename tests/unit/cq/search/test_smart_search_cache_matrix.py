@@ -20,12 +20,12 @@ def _cache_env(tmp_path: Path) -> Generator[None]:
     reset_cache_telemetry()
     os.environ["CQ_CACHE_ENABLED"] = "1"
     os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
-    os.environ["CQ_ENABLE_LSP"] = "0"
+    os.environ["CQ_ENABLE_SEMANTIC_ENRICHMENT"] = "0"
     yield
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_ENABLED", None)
     os.environ.pop("CQ_CACHE_DIR", None)
-    os.environ.pop("CQ_ENABLE_LSP", None)
+    os.environ.pop("CQ_ENABLE_SEMANTIC_ENRICHMENT", None)
 
 
 def _normalize_result_payload(result: object) -> dict[str, object]:

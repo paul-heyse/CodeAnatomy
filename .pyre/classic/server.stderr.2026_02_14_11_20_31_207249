@@ -1,0 +1,33 @@
+2026-02-14 11:20:31 PERFORMANCE Initialized shared memory (heap size: 8589934592, dep table pow: 27, hash table pow: 26): 0.001s
+2026-02-14 11:20:31 PERFORMANCE Initialized multiprocessing workers (workers: 4): 0.048s
+2026-02-14 11:20:31 INFO Server has started listening on socket `/var/folders/70/h2nd1qjs1zngp8z6tt27_s9c0000gn/T/pyre_server_80872aea259d397a.sock`
+2026-02-14 11:20:31 INFO Initializing server state from scratch...
+2026-02-14 11:20:31 INFO Building module tracker...
+2026-02-14 11:20:33 PERFORMANCE Module tracker built: 2.503s
+2026-02-14 11:20:33 PERFORMANCE Full environment built: 2.504s
+2026-02-14 11:20:33 INFO Collecting all definitions...
+2026-02-14 11:20:38 PERFORMANCE Collected definitions (defines: 14497): 4.376s
+2026-02-14 11:20:38 INFO Checking 14497 functions...
+2026-02-14 11:21:13 PROGRESS Processed 1813 of 14497 functions
+2026-02-14 11:21:14 PROGRESS Processed 3626 of 14497 functions
+2026-02-14 11:21:15 PROGRESS Processed 5439 of 14497 functions
+2026-02-14 11:21:15 PROGRESS Processed 7252 of 14497 functions
+2026-02-14 11:21:31 PROGRESS Processed 9065 of 14497 functions
+2026-02-14 11:21:31 PROGRESS Processed 10878 of 14497 functions
+2026-02-14 11:21:32 PROGRESS Processed 12684 of 14497 functions
+2026-02-14 11:21:36 PROGRESS Processed 14497 of 14497 functions
+2026-02-14 11:21:36 PERFORMANCE Check_TypeCheck: 58.240s
+2026-02-14 11:21:36 MEMORY Shared memory size post-typecheck (size: 42)
+2026-02-14 11:21:36 PROGRESS Postprocessing 1137 sources...
+2026-02-14 11:21:37 PROGRESS Postprocessed 285 of 1137 sources
+2026-02-14 11:21:37 PROGRESS Postprocessed 570 of 1137 sources
+2026-02-14 11:21:37 PROGRESS Postprocessed 855 of 1137 sources
+2026-02-14 11:21:37 PROGRESS Postprocessed 1137 of 1137 sources
+2026-02-14 11:21:37 PERFORMANCE Check_Postprocessing: 1.057s
+2026-02-14 11:21:37 PERFORMANCE Initialization (binary_version: 7873fbf76ce7a1f3b02a527f4e2ee8ac50ca6843, initialization method: cold start): 66.179s
+2026-02-14 11:21:37 INFO Server state initialized.
+2026-02-14 11:21:37 SERVER Connection established
+2026-02-14 11:21:37 SERVER Processing request (DisplayTypeError())...
+2026-02-14 11:21:37 PERFORMANCE Server request (binary_version: 7873fbf76ce7a1f3b02a527f4e2ee8ac50ca6843, request kind: DisplayTypeErrors): 0.262s
+2026-02-14 11:21:37 SERVER Request `(DisplayTypeError())` processed
+2026-02-14 11:21:38 SERVER Connection closed

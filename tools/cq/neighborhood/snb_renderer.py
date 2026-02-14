@@ -26,8 +26,8 @@ class RenderSnbRequest(CqStruct, frozen=True):
     target: str
     language: str
     top_k: int
-    enable_lsp: bool
-    lsp_env: Mapping[str, object] | None = None
+    enable_semantic_enrichment: bool
+    semantic_env: Mapping[str, object] | None = None
 
 
 def render_snb_result(
@@ -45,7 +45,9 @@ def render_snb_result(
         result=result,
         request=request,
     )
-    _populate_findings(result=result, bundle=request.bundle, view=view, lsp_env=request.lsp_env)
+    _populate_findings(
+        result=result, bundle=request.bundle, view=view, semantic_env=request.semantic_env
+    )
     _populate_artifacts(result=result, bundle=request.bundle)
     return result
 
@@ -59,7 +61,7 @@ def _populate_summary(
     result.summary["target"] = request.target
     result.summary["language"] = request.language
     result.summary["top_k"] = request.top_k
-    result.summary["enable_lsp"] = request.enable_lsp
+    result.summary["enable_semantic_enrichment"] = request.enable_semantic_enrichment
     result.summary["bundle_id"] = bundle.bundle_id
     result.summary["total_slices"] = len(bundle.slices)
     result.summary["total_diagnostics"] = len(bundle.diagnostics)
@@ -69,9 +71,9 @@ def _populate_summary(
     if bundle.graph is not None:
         result.summary["total_nodes"] = bundle.graph.node_count
         result.summary["total_edges"] = bundle.graph.edge_count
-    if request.lsp_env:
-        for key in ("lsp_health", "lsp_quiescent", "lsp_position_encoding"):
-            value = request.lsp_env.get(key)
+    if request.semantic_env:
+        for key in ("semantic_health", "semantic_quiescent", "semantic_position_encoding"):
+            value = request.semantic_env.get(key)
             if value is not None:
                 result.summary[key] = value
 
@@ -81,7 +83,7 @@ def _populate_findings(
     result: CqResult,
     bundle: SemanticNeighborhoodBundleV1,
     view: object,
-    lsp_env: Mapping[str, object] | None,
+    semantic_env: Mapping[str, object] | None,
 ) -> None:
     from tools.cq.neighborhood.section_layout import BundleViewV1
 
@@ -119,9 +121,9 @@ def _populate_findings(
         },
         "degrade_events": [_degrade_event_dict(event) for event in bundle.diagnostics],
     }
-    if lsp_env:
-        for key in ("lsp_health", "lsp_quiescent", "lsp_position_encoding"):
-            value = lsp_env.get(key)
+    if semantic_env:
+        for key in ("semantic_health", "semantic_quiescent", "semantic_position_encoding"):
+            value = semantic_env.get(key)
             if value is not None:
                 enrichment_payload[key] = value
 

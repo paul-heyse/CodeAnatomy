@@ -27,7 +27,7 @@ def test_neighborhood_symbol_target_golden(
             "python",
             "--top-k",
             "5",
-            "--no-lsp",
+            "--no-semantic-enrichment",
             "--format",
             "json",
             "--no-save-artifact",
@@ -55,7 +55,7 @@ def test_neighborhood_cli_and_run_step_parity(
         "target": target,
         "lang": "python",
         "top_k": 5,
-        "no_lsp": True,
+        "no_semantic_enrichment": True,
     }
 
     direct = run_cq_result(
@@ -66,7 +66,7 @@ def test_neighborhood_cli_and_run_step_parity(
             "python",
             "--top-k",
             "5",
-            "--no-lsp",
+            "--no-semantic-enrichment",
             "--format",
             "json",
             "--no-save-artifact",

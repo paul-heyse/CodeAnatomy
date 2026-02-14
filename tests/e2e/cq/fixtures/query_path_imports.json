@@ -47,8 +47,8 @@
         "telemetry": null
       },
       "budget": {
-        "lsp_targets": 3,
         "preview_per_slice": 5,
+        "semantic_targets": 3,
         "top_candidates": 3
       },
       "confidence": {
@@ -57,13 +57,13 @@
         "score": 0.8
       },
       "degradation": {
-        "lsp": "skipped",
         "notes": [
           "provider_unavailable",
           "missing_languages=rust"
         ],
         "scan": "ok",
-        "scope_filter": "partial"
+        "scope_filter": "partial",
+        "semantic": "skipped"
       },
       "neighborhood": {
         "callees": {
@@ -241,11 +241,10 @@
         "truncated": false
       }
     },
-    "lsp_advanced_planes": {},
     "mode": "entity",
-    "pyrefly_diagnostics": [],
-    "pyrefly_overview": {},
-    "pyrefly_telemetry": {
+    "python_semantic_diagnostics": [],
+    "python_semantic_overview": {},
+    "python_semantic_telemetry": {
       "applied": 0,
       "attempted": 0,
       "failed": 0,
@@ -253,12 +252,13 @@
       "timed_out": 0
     },
     "query": "entity=import name=Path",
-    "rust_lsp_telemetry": {
+    "rust_semantic_telemetry": {
       "applied": 0,
       "attempted": 0,
       "failed": 0,
       "skipped": 0,
       "timed_out": 0
-    }
+    },
+    "semantic_planes": {}
   }
 }

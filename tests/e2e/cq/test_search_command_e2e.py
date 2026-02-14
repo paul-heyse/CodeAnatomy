@@ -73,9 +73,9 @@ def test_search_rust_workspace_golden(
     target = insight.get("target")
     assert isinstance(target, dict)
     assert target.get("kind") in {"function", "class", "type"}
-    rust_lsp_telemetry = result.summary.get("rust_lsp_telemetry")
-    assert isinstance(rust_lsp_telemetry, dict)
-    assert {"attempted", "applied", "failed", "timed_out"}.issubset(rust_lsp_telemetry.keys())
+    rust_semantic_telemetry = result.summary.get("rust_semantic_telemetry")
+    assert isinstance(rust_semantic_telemetry, dict)
+    assert {"attempted", "applied", "failed", "timed_out"}.issubset(rust_semantic_telemetry.keys())
     neighborhood = insight.get("neighborhood")
     assert isinstance(neighborhood, dict)
     for key in ("callers", "callees", "references", "hierarchy_or_scope"):
@@ -156,8 +156,8 @@ def test_search_mixed_monorepo_rust_nested_workspace_golden(
     target = insight.get("target")
     assert isinstance(target, dict)
     assert target.get("kind") in {"function", "class", "type"}
-    rust_lsp_telemetry = result.summary.get("rust_lsp_telemetry")
-    assert isinstance(rust_lsp_telemetry, dict)
+    rust_semantic_telemetry = result.summary.get("rust_semantic_telemetry")
+    assert isinstance(rust_semantic_telemetry, dict)
     assert_json_snapshot_data(
         "search_mixed_monorepo_rust_compile_target.json",
         result_snapshot_projection(result),
@@ -191,8 +191,8 @@ def test_search_mixed_monorepo_python_nested_workspace_golden(
     target = insight.get("target")
     assert isinstance(target, dict)
     assert target.get("kind") in {"function", "class", "type"}
-    pyrefly_telemetry = result.summary.get("pyrefly_telemetry")
-    assert isinstance(pyrefly_telemetry, dict)
+    python_semantic_telemetry = result.summary.get("python_semantic_telemetry")
+    assert isinstance(python_semantic_telemetry, dict)
     assert_json_snapshot_data(
         "search_mixed_monorepo_python_dispatch_wrapper.json",
         result_snapshot_projection(result),

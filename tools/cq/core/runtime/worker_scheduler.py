@@ -41,8 +41,8 @@ class WorkerScheduler:
         self._lock = threading.Lock()
         self._cpu_pool: ProcessPoolExecutor | None = None
         self._io_pool: ThreadPoolExecutor | None = None
-        self._lsp_semaphore = threading.BoundedSemaphore(
-            value=max(1, int(self._policy.lsp_request_workers))
+        self._semantic_semaphore = threading.BoundedSemaphore(
+            value=max(1, int(self._policy.semantic_request_workers))
         )
 
     @property
@@ -100,14 +100,14 @@ class WorkerScheduler:
             return self.cpu_pool().submit(callable_fn, *args, **kwargs)
         return self.io_pool().submit(callable_fn, *args, **kwargs)
 
-    def submit_lsp(
+    def submit_semantic(
         self,
         fn: Callable[P, R],
         /,
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> Future[R]:
-        """Submit an LSP task with policy-bounded concurrency.
+        """Submit a static semantic task with policy-bounded concurrency.
 
         Returns:
             Future representing the scheduled task.
@@ -115,11 +115,11 @@ class WorkerScheduler:
         callable_fn = cast("Callable[..., R]", fn)
 
         def _run() -> R:
-            self._lsp_semaphore.acquire()
+            self._semantic_semaphore.acquire()
             try:
                 return callable_fn(*args, **kwargs)
             finally:
-                self._lsp_semaphore.release()
+                self._semantic_semaphore.release()
 
         return self.io_pool().submit(_run)
 

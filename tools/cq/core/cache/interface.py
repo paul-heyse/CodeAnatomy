@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
-from typing import ContextManager, Protocol
+from contextlib import AbstractContextManager, nullcontext
+from typing import Protocol
 
 
 class CqCacheBackend(Protocol):
@@ -86,12 +86,13 @@ class CqCacheBackend(Protocol):
         _ = (self, tag)
         return False
 
-    def transact(self) -> ContextManager[None]:
+    def transact(self) -> AbstractContextManager[None]:
         """Return transaction context manager when supported.
 
         Returns:
             ContextManager[None]: Transaction context manager.
         """
+        _ = self
         return nullcontext()
 
     def stats(self) -> dict[str, object]:
@@ -100,6 +101,7 @@ class CqCacheBackend(Protocol):
         Returns:
             dict[str, object]: Backend metrics keyed by metric name.
         """
+        _ = self
         return {}
 
     def volume(self) -> int | None:
@@ -108,6 +110,7 @@ class CqCacheBackend(Protocol):
         Returns:
             int | None: Cache volume estimate in bytes, or `None`.
         """
+        _ = self
         return None
 
     def cull(self) -> int | None:
@@ -116,6 +119,7 @@ class CqCacheBackend(Protocol):
         Returns:
             int | None: Number of entries removed, or `None`.
         """
+        _ = self
         return None
 
     def close(self) -> None:
@@ -206,12 +210,13 @@ class NoopCacheBackend:
         _ = (self, tag)
         return False
 
-    def transact(self) -> ContextManager[None]:
+    def transact(self) -> AbstractContextManager[None]:
         """Return no-op transaction context manager.
 
         Returns:
             ContextManager[None]: Null context manager.
         """
+        _ = self
         return nullcontext()
 
     def stats(self) -> dict[str, object]:
@@ -220,6 +225,7 @@ class NoopCacheBackend:
         Returns:
             dict[str, object]: Empty stats payload.
         """
+        _ = self
         return {}
 
     def volume(self) -> int | None:
@@ -228,6 +234,7 @@ class NoopCacheBackend:
         Returns:
             int | None: Always `None` in no-op backend.
         """
+        _ = self
         return None
 
     def cull(self) -> int | None:
@@ -236,6 +243,7 @@ class NoopCacheBackend:
         Returns:
             int | None: Always `None` in no-op backend.
         """
+        _ = self
         return None
 
     def close(self) -> None:

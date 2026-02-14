@@ -19,7 +19,7 @@ class ArtifactPointerV1(CqStruct, frozen=True):
     Parameters
     ----------
     artifact_kind : str
-        Artifact category (e.g. "snb.bundle", "lsp.call_graph").
+        Artifact category (e.g. "snb.bundle", "semantic.call_graph").
     artifact_id : str
         Unique identifier for this artifact.
     deterministic_id : str
@@ -49,7 +49,7 @@ class DegradeEventV1(CqStruct, frozen=True):
     Parameters
     ----------
     stage : str
-        Enrichment stage identifier (e.g. "lsp.rust", "structural.interval_index").
+        Enrichment stage identifier (e.g. "semantic.rust", "structural.interval_index").
     severity : Literal["info", "warning", "error"]
         Event severity level.
     category : str
@@ -119,7 +119,7 @@ class SemanticEdgeV1(CqStruct, frozen=True):
     weight : float
         Edge weight for ranking or confidence.
     evidence_source : str
-        Evidence source (e.g. "ast", "lsp.rust", "bytecode").
+        Evidence source (e.g. "ast", "semantic.rust", "bytecode").
     metadata : dict[str, object] | None
         Optional edge metadata.
     """
@@ -230,8 +230,8 @@ class BundleMetaV1(CqStruct, frozen=True):
         Original query text.
     created_at_ms : float | None
         Creation timestamp (milliseconds since epoch).
-    lsp_servers : tuple[dict[str, object], ...]
-        LSP server configurations.
+    semantic_sources : tuple[dict[str, object], ...]
+        Static semantic source descriptors.
     limits : dict[str, int] | None
         Query limits applied.
     """
@@ -241,7 +241,7 @@ class BundleMetaV1(CqStruct, frozen=True):
     workspace_root: str | None = None
     query_text: str | None = None
     created_at_ms: float | None = None
-    lsp_servers: tuple[dict[str, object], ...] = ()
+    semantic_sources: tuple[dict[str, object], ...] = ()
     limits: dict[str, int] | None = None
 
 
@@ -269,7 +269,7 @@ class SemanticNeighborhoodBundleV1(CqStruct, frozen=True):
     All downstream sections (R5, R6, R7) MUST reference only these fields.
     This is the authoritative schema that all SNB operations compile against.
 
-    Combines structural, LSP, and optional enrichment planes into
+    Combines structural and optional static enrichment planes into
     a single versioned, deterministic artifact.
 
     Parameters

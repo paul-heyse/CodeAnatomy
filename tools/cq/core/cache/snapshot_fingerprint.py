@@ -35,6 +35,8 @@ from tools.cq.core.structs import CqCacheStruct
 
 NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
 
+_INVENTORY_TOKEN_TUPLE_LENGTH = 2
+
 
 class ScopeFileStatV1(CqCacheStruct, frozen=True):
     """Stable stat tuple for one scope file."""
@@ -106,7 +108,7 @@ def _normalize_inventory_token(
 ) -> dict[str, object]:
     if isinstance(inventory_token, Mapping):
         return {str(key): value for key, value in inventory_token.items()}
-    if isinstance(inventory_token, tuple) and len(inventory_token) == 2:
+    if isinstance(inventory_token, tuple) and len(inventory_token) == _INVENTORY_TOKEN_TUPLE_LENGTH:
         return {
             "root_mtime_ns": int(inventory_token[0]) if isinstance(inventory_token[0], int) else 0,
             "git_index_mtime_ns": int(inventory_token[1])

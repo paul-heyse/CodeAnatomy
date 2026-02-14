@@ -190,16 +190,12 @@ Request structs live in `tools/cq/search/requests.py` and `tools/cq/core/request
 symtable, LibCST wrapper, tree-sitter tree) keyed by content hash. Maximum 64 cached
 entries. Multiple findings in the same file share a single session.
 
-## Pyrefly LSP Runtime Notes
+## Static Semantic Runtime Notes
 
-- Pyrefly integration uses one warm session per workspace root.
-- Requests are pipelined (no JSON-RPC batch) and session access is serialized
-  to keep stdio framing deterministic under concurrent CQ workloads.
-- Position encoding is negotiated at initialize (`utf-8` preferred, `utf-16`
-  fallback) and CQ anchor columns are converted accordingly for request/response
-  normalization.
-- Advanced planes (semantic tokens, inlay hints, text/workspace diagnostics) are
-  capability-gated and fail-open.
+- Language enrichment is static-only and process-local.
+- Provider roots are resolved deterministically from command root + file path.
+- Requests use bounded semantic worker lanes with fail-open behavior.
+- Semantic planes are generated from static sources (tree-sitter + parser diagnostics).
 
 ## Artifacts
 

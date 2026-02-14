@@ -15,7 +15,7 @@
     }
   ],
   "summary": {
-    "enable_lsp": null,
+    "enable_semantic_enrichment": null,
     "front_door_insight": {
       "artifact_ref_presence": {
         "diagnostics": false,
@@ -23,12 +23,12 @@
         "telemetry": false
       },
       "degradation": {
-        "lsp": "skipped",
         "notes": [
           "not_attempted_runtime_disabled"
         ],
         "scan": "ok",
-        "scope_filter": "none"
+        "scope_filter": "none",
+        "semantic": "skipped"
       },
       "neighborhood": {
         "callees": {
@@ -73,10 +73,9 @@
     "language_order": [
       "rust"
     ],
-    "lsp_advanced_planes_present": false,
     "mode": "entity",
     "plan_version": null,
-    "pyrefly_telemetry": {
+    "python_semantic_telemetry": {
       "applied": 0,
       "attempted": 0,
       "failed": 0,
@@ -84,13 +83,14 @@
       "timed_out": 0
     },
     "query": "entity=function name=compile_target lang=rust in=tests/e2e/cq/_golden_workspace/rust_workspace",
-    "rust_lsp_telemetry": {
+    "rust_semantic_telemetry": {
       "applied": 0,
       "attempted": 0,
       "failed": 0,
       "skipped": 0,
       "timed_out": 0
     },
+    "semantic_planes_present": false,
     "steps": null,
     "target": null,
     "target_file": null,

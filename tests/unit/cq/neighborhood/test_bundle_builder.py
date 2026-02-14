@@ -41,7 +41,7 @@ def _def_record(
 
 
 def test_build_bundle_with_structural_only() -> None:
-    """Test bundle building with structural slices only (LSP disabled)."""
+    """Test bundle building with structural slices only (semantic disabled)."""
     def_records = (
         _def_record("function", "test.py", 1, 3, "def target():\n    pass"),
         _def_record("function", "test.py", 5, 7, "def caller():\n    target()"),
@@ -55,7 +55,7 @@ def test_build_bundle_with_structural_only() -> None:
         root=Path("/test"),
         snapshot=snapshot,
         language="python",
-        enable_lsp=False,
+        enable_semantic_enrichment=False,
     )
 
     bundle = build_neighborhood_bundle(request)
@@ -69,8 +69,8 @@ def test_build_bundle_with_structural_only() -> None:
     assert bundle.meta.tool == "cq"
 
 
-def test_build_bundle_with_lsp_enabled_produces_degrades() -> None:
-    """Test that LSP enabled produces degrade events (stub implementation)."""
+def test_build_bundle_with_semantic_enabled_produces_degrades() -> None:
+    """Test that semantic enabled produces degrade events (stub implementation)."""
     def_records = (_def_record("function", "test.py", 1, 3, "def target():\n    pass"),)
 
     snapshot = ScanSnapshot(def_records=def_records)
@@ -81,14 +81,14 @@ def test_build_bundle_with_lsp_enabled_produces_degrades() -> None:
         root=Path("/test"),
         snapshot=snapshot,
         language="python",
-        enable_lsp=True,
+        enable_semantic_enrichment=True,
     )
 
     bundle = build_neighborhood_bundle(request)
 
     assert len(bundle.diagnostics) > 0
-    lsp_degrades = [d for d in bundle.diagnostics if "lsp" in d.stage.lower()]
-    assert len(lsp_degrades) > 0
+    semantic_degrades = [d for d in bundle.diagnostics if "semantic" in d.stage.lower()]
+    assert len(semantic_degrades) > 0
 
 
 def test_artifact_storage_only_when_overflow() -> None:
@@ -103,7 +103,7 @@ def test_artifact_storage_only_when_overflow() -> None:
         root=Path("/test"),
         snapshot=snapshot,
         language="python",
-        enable_lsp=False,
+        enable_semantic_enrichment=False,
         artifact_dir=Path("/tmp/test_artifacts_cq"),
         top_k=10,
     )
@@ -153,7 +153,7 @@ def test_plan_feasible_slices_returns_degrades() -> None:
     assert len(degrades) == len(requested)
 
     for degrade in degrades:
-        assert degrade.stage == "lsp.planning"
+        assert degrade.stage == "semantic.planning"
         assert degrade.severity == "info"
         assert degrade.category == "unavailable"
 
@@ -173,7 +173,7 @@ def test_graph_summary_aggregates_slices() -> None:
         root=Path("/test"),
         snapshot=snapshot,
         language="python",
-        enable_lsp=False,
+        enable_semantic_enrichment=False,
     )
 
     bundle = build_neighborhood_bundle(request)
@@ -276,7 +276,7 @@ def test_preview_limit_applied_to_slices() -> None:
         snapshot=snapshot,
         language="python",
         top_k=5,
-        enable_lsp=False,
+        enable_semantic_enrichment=False,
     )
 
     bundle = build_neighborhood_bundle(request)

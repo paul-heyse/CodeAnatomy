@@ -26,7 +26,7 @@ def test_render_snb_result_emits_bundle_enrichment_evidence() -> None:
         meta=BundleMetaV1(
             tool="cq",
             workspace_root="/repo",
-            lsp_servers=(
+            semantic_sources=(
                 {
                     "workspace_health": "ok",
                     "quiescent": True,
@@ -51,20 +51,20 @@ def test_render_snb_result_emits_bundle_enrichment_evidence() -> None:
             target="target",
             language="python",
             top_k=10,
-            enable_lsp=True,
-            lsp_env={
-                "lsp_health": "ok",
-                "lsp_quiescent": True,
-                "lsp_position_encoding": "utf-16",
+            enable_semantic_enrichment=True,
+            semantic_env={
+                "semantic_health": "ok",
+                "semantic_quiescent": True,
+                "semantic_position_encoding": "utf-16",
             },
         )
     )
 
     assert result.summary["bundle_id"] == "abc123"
-    assert result.summary["lsp_health"] == "ok"
+    assert result.summary["semantic_health"] == "ok"
     assert len(result.evidence) == 1
     evidence = result.evidence[0]
     enrichment = evidence.details.get("enrichment")
     assert isinstance(enrichment, dict)
-    assert enrichment["lsp_health"] == "ok"
+    assert enrichment["semantic_health"] == "ok"
     assert "neighborhood_bundle" in enrichment

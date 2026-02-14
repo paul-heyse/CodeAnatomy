@@ -1,0 +1,9 @@
+{
+  "oncall": "Paul",
+  "source_directories": [
+    "src",
+    "tools",
+    "tests",
+    "rust"
+  ]
+}

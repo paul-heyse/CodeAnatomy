@@ -178,10 +178,10 @@ def test_diagnostics_section_from_degrade_events() -> None:
     """Test that diagnostics section is built from typed DegradeEventV1."""
     diagnostics = (
         DegradeEventV1(
-            stage="lsp.rust",
+            stage="semantic.rust",
             severity="error",
             category="timeout",
-            message="LSP request timed out after 5s",
+            message="semantic request timed out after 5s",
         ),
         DegradeEventV1(
             stage="structural.index",
@@ -207,7 +207,7 @@ def test_diagnostics_section_from_degrade_events() -> None:
     assert len(diag_section.items) == 2
 
     items_text = " ".join(diag_section.items)
-    assert "lsp.rust" in items_text
+    assert "semantic.rust" in items_text
     assert "timeout" in items_text
     assert "structural.index" in items_text
     assert "partial_coverage" in items_text

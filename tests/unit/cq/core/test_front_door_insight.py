@@ -13,7 +13,7 @@ from tools.cq.core.front_door_insight import (
     SearchInsightBuildRequestV1,
     attach_artifact_refs,
     attach_neighborhood_overflow_ref,
-    augment_insight_with_lsp,
+    augment_insight_with_semantic,
     build_calls_insight,
     build_entity_insight,
     build_neighborhood_from_slices,
@@ -26,9 +26,9 @@ from tools.cq.core.front_door_insight import (
 )
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
-from tools.cq.search.lsp_contract_state import (
-    LspContractStateInputV1,
-    derive_lsp_contract_state,
+from tools.cq.search.semantic_contract_state import (
+    SemanticContractStateInputV1,
+    derive_semantic_contract_state,
 )
 
 
@@ -96,14 +96,14 @@ def test_build_neighborhood_from_slices_maps_core_slices() -> None:
     assert neighborhood.hierarchy_or_scope.total == 1
 
 
-def test_augment_insight_with_lsp_updates_target_and_call_graph() -> None:
+def test_augment_insight_with_semantic_updates_target_and_call_graph() -> None:
     base = _entity_insight(
         EntityInsightBuildRequestV1(
             summary={"query": "entity=function name=target", "entity_kind": "function"},
             primary_target=_definition_finding("target"),
         )
     )
-    lsp_payload: dict[str, object] = {
+    semantic_payload: dict[str, object] = {
         "type_contract": {"callable_signature": "def target(x: int) -> str"},
         "call_graph": {
             "incoming_total": 4,
@@ -112,11 +112,11 @@ def test_augment_insight_with_lsp_updates_target_and_call_graph() -> None:
             "outgoing_callees": [{"name": "callee", "file": "src/b.py", "kind": "function"}],
         },
     }
-    updated = augment_insight_with_lsp(base, lsp_payload)
+    updated = augment_insight_with_semantic(base, semantic_payload)
     assert updated.target.signature == "def target(x: int) -> str"
     assert updated.neighborhood.callers.total == 4
     assert updated.neighborhood.callees.total == 1
-    assert updated.degradation.lsp == "ok"
+    assert updated.degradation.semantic == "ok"
 
 
 def test_build_search_insight_prefers_definition_target() -> None:
@@ -295,17 +295,17 @@ def test_to_public_front_door_insight_dict_emits_full_shape() -> None:
     assert set(artifact_refs) == {"diagnostics", "telemetry", "neighborhood_overflow"}
 
 
-def test_derive_lsp_status_contract() -> None:
+def test_derive_semantic_status_contract() -> None:
     assert (
-        derive_lsp_contract_state(
-            LspContractStateInputV1(provider="pyrefly", available=False)
+        derive_semantic_contract_state(
+            SemanticContractStateInputV1(provider="python_static", available=False)
         ).status
         == "unavailable"
     )
     assert (
-        derive_lsp_contract_state(
-            LspContractStateInputV1(
-                provider="pyrefly",
+        derive_semantic_contract_state(
+            SemanticContractStateInputV1(
+                provider="python_static",
                 available=True,
                 attempted=0,
                 applied=0,
@@ -314,9 +314,9 @@ def test_derive_lsp_status_contract() -> None:
         == "skipped"
     )
     assert (
-        derive_lsp_contract_state(
-            LspContractStateInputV1(
-                provider="pyrefly",
+        derive_semantic_contract_state(
+            SemanticContractStateInputV1(
+                provider="python_static",
                 available=True,
                 attempted=2,
                 applied=0,
@@ -326,9 +326,9 @@ def test_derive_lsp_status_contract() -> None:
         == "failed"
     )
     assert (
-        derive_lsp_contract_state(
-            LspContractStateInputV1(
-                provider="pyrefly",
+        derive_semantic_contract_state(
+            SemanticContractStateInputV1(
+                provider="python_static",
                 available=True,
                 attempted=3,
                 applied=1,
@@ -338,9 +338,9 @@ def test_derive_lsp_status_contract() -> None:
         == "partial"
     )
     assert (
-        derive_lsp_contract_state(
-            LspContractStateInputV1(
-                provider="pyrefly",
+        derive_semantic_contract_state(
+            SemanticContractStateInputV1(
+                provider="python_static",
                 available=True,
                 attempted=2,
                 applied=2,

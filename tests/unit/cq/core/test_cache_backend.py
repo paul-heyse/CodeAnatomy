@@ -18,7 +18,7 @@ from tools.cq.core.cache import (
 
 def test_build_cache_key_is_deterministic() -> None:
     key_a = build_cache_key(
-        "lsp_front_door",
+        "semantic_front_door",
         version="v2",
         workspace="/repo",
         language="python",
@@ -26,7 +26,7 @@ def test_build_cache_key_is_deterministic() -> None:
         extras={"line": 12, "col": 4},
     )
     key_b = build_cache_key(
-        "lsp_front_door",
+        "semantic_front_door",
         version="v2",
         workspace="/repo",
         language="python",
@@ -34,7 +34,7 @@ def test_build_cache_key_is_deterministic() -> None:
         extras={"col": 4, "line": 12},
     )
     key_c = build_cache_key(
-        "lsp_front_door",
+        "semantic_front_door",
         version="v2",
         workspace="/repo",
         language="python",
@@ -44,7 +44,7 @@ def test_build_cache_key_is_deterministic() -> None:
 
     assert key_a == key_b
     assert key_a != key_c
-    assert key_a.startswith("cq:lsp_front_door:v2:")
+    assert key_a.startswith("cq:semantic_front_door:v2:")
 
 
 def test_canonicalize_cache_payload_sorts_unordered_values() -> None:

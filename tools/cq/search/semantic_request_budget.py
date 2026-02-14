@@ -1,4 +1,4 @@
-"""Shared request budget profiles for CQ LSP enrichment."""
+"""Shared request budget profiles for CQ static semantic enrichment."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from tools.cq.core.structs import CqStruct
 _FAIL_OPEN_EXCEPTIONS = (OSError, RuntimeError, ValueError, TypeError)
 
 
-class LspRequestBudgetV1(CqStruct, frozen=True):
-    """Timeout and retry budget for one LSP request envelope."""
+class SemanticRequestBudgetV1(CqStruct, frozen=True):
+    """Timeout and retry budget for one static semantic request envelope."""
 
     startup_timeout_seconds: float = 3.0
     probe_timeout_seconds: float = 1.0
@@ -28,9 +28,7 @@ def call_with_retry(
     """Call a function with timeout-only retry semantics.
 
     Returns:
-    -------
-    tuple[object | None, bool]
-        (result, timed_out). Non-timeout exceptions fail fast without retries.
+        tuple[object | None, bool]: Latest function result and timeout flag.
     """
     timed_out = False
     attempts = max(1, int(max_attempts))
@@ -49,23 +47,23 @@ def call_with_retry(
     return None, timed_out
 
 
-def budget_for_mode(mode: str) -> LspRequestBudgetV1:
+def budget_for_mode(mode: str) -> SemanticRequestBudgetV1:
     """Return standard budget profile by CQ command mode."""
     if mode == "calls":
-        return LspRequestBudgetV1(
+        return SemanticRequestBudgetV1(
             startup_timeout_seconds=2.5,
             probe_timeout_seconds=1.25,
             max_attempts=2,
             retry_backoff_ms=120,
         )
     if mode == "entity":
-        return LspRequestBudgetV1(
+        return SemanticRequestBudgetV1(
             startup_timeout_seconds=3.0,
             probe_timeout_seconds=1.25,
             max_attempts=2,
             retry_backoff_ms=120,
         )
-    return LspRequestBudgetV1(
+    return SemanticRequestBudgetV1(
         startup_timeout_seconds=3.0,
         probe_timeout_seconds=1.0,
         max_attempts=2,
@@ -74,7 +72,7 @@ def budget_for_mode(mode: str) -> LspRequestBudgetV1:
 
 
 __all__ = [
-    "LspRequestBudgetV1",
+    "SemanticRequestBudgetV1",
     "budget_for_mode",
     "call_with_retry",
 ]

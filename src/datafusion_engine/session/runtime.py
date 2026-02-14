@@ -5279,7 +5279,6 @@ class DataFusionRuntimeProfile(
             )
             installers.rule_installer(ctx)
             installers.physical_installer(ctx)
-            return
         except (RuntimeError, TypeError, ValueError) as exc:
             msg = (
                 "Planner-rule install failed due to SessionContext ABI mismatch. "
@@ -5287,6 +5286,7 @@ class DataFusionRuntimeProfile(
                 "(scripts/build_datafusion_wheels.sh + uv sync)."
             )
             raise RuntimeError(msg) from exc
+        return
 
     def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
         if not self.catalog.enable_information_schema:

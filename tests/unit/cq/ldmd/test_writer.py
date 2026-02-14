@@ -34,7 +34,7 @@ def _sample_result() -> CqResult:
                 ),
             )
         ),
-        "pyrefly_diagnostics": [{"message": "diag"}],
+        "python_semantic_diagnostics": [{"message": "diag"}],
         "cross_language_diagnostics": [{"code": "ML001"}],
     }
     result.key_findings = [

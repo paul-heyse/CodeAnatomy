@@ -152,7 +152,7 @@ def _result_match_count(result: CqResult) -> int:
     return len(result.key_findings)
 
 
-def _zero_lsp_telemetry() -> dict[str, int]:
+def _zero_semantic_telemetry() -> dict[str, int]:
     return {
         "attempted": 0,
         "applied": 0,
@@ -162,37 +162,37 @@ def _zero_lsp_telemetry() -> dict[str, int]:
     }
 
 
-def _coerce_lsp_telemetry(value: object) -> dict[str, int]:
+def _coerce_semantic_telemetry(value: object) -> dict[str, int]:
     if not isinstance(value, Mapping):
-        return _zero_lsp_telemetry()
-    telemetry = _zero_lsp_telemetry()
+        return _zero_semantic_telemetry()
+    telemetry = _zero_semantic_telemetry()
     for key in telemetry:
         raw = value.get(key)
         telemetry[key] = raw if isinstance(raw, int) and not isinstance(raw, bool) else 0
     return telemetry
 
 
-def _sum_lsp_telemetry(*payloads: Mapping[str, int]) -> dict[str, int]:
-    total = _zero_lsp_telemetry()
+def _sum_semantic_telemetry(*payloads: Mapping[str, int]) -> dict[str, int]:
+    total = _zero_semantic_telemetry()
     for payload in payloads:
         for key in total:
             total[key] += int(payload.get(key, 0))
     return total
 
 
-def _aggregate_lsp_telemetry(
+def _aggregate_semantic_telemetry(
     results: Mapping[QueryLanguage, CqResult],
     *,
     key: str,
 ) -> dict[str, int]:
-    aggregate = _zero_lsp_telemetry()
+    aggregate = _zero_semantic_telemetry()
     for result in results.values():
-        telemetry = _coerce_lsp_telemetry(result.summary.get(key))
-        aggregate = _sum_lsp_telemetry(aggregate, telemetry)
+        telemetry = _coerce_semantic_telemetry(result.summary.get(key))
+        aggregate = _sum_semantic_telemetry(aggregate, telemetry)
     return aggregate
 
 
-def _aggregate_pyrefly_diagnostics(
+def _aggregate_python_semantic_diagnostics(
     *,
     order: list[QueryLanguage],
     results: Mapping[QueryLanguage, CqResult],
@@ -203,7 +203,7 @@ def _aggregate_pyrefly_diagnostics(
         result = results.get(lang)
         if result is None:
             continue
-        rows = result.summary.get("pyrefly_diagnostics")
+        rows = result.summary.get("python_semantic_diagnostics")
         if not isinstance(rows, list):
             continue
         for row in rows:
@@ -217,7 +217,7 @@ def _aggregate_pyrefly_diagnostics(
     return merged
 
 
-def _select_advanced_planes_payload(
+def _select_semantic_planes_payload(
     *,
     order: list[QueryLanguage],
     results: Mapping[QueryLanguage, CqResult],
@@ -226,11 +226,11 @@ def _select_advanced_planes_payload(
         result = results.get(lang)
         if result is None:
             continue
-        planes = result.summary.get("lsp_advanced_planes")
+        planes = result.summary.get("semantic_planes")
         if isinstance(planes, dict) and planes:
             return dict(planes)
     for result in results.values():
-        planes = result.summary.get("lsp_advanced_planes")
+        planes = result.summary.get("semantic_planes")
         if isinstance(planes, dict) and planes:
             return dict(planes)
     return {}
@@ -407,24 +407,26 @@ def merge_language_cq_results(request: MergeResultsRequest) -> CqResult:
             for finding in diag_findings
         ]
     summary_common = dict(request.summary_common or {})
-    summary_common.setdefault("pyrefly_overview", {})
+    summary_common.setdefault("python_semantic_overview", {})
 
-    pyrefly_aggregate = _aggregate_lsp_telemetry(request.results, key="pyrefly_telemetry")
-    rust_aggregate = _aggregate_lsp_telemetry(request.results, key="rust_lsp_telemetry")
-    summary_common["pyrefly_telemetry"] = _sum_lsp_telemetry(
-        _coerce_lsp_telemetry(summary_common.get("pyrefly_telemetry")),
-        pyrefly_aggregate,
+    python_semantic_aggregate = _aggregate_semantic_telemetry(
+        request.results, key="python_semantic_telemetry"
     )
-    summary_common["rust_lsp_telemetry"] = _sum_lsp_telemetry(
-        _coerce_lsp_telemetry(summary_common.get("rust_lsp_telemetry")),
+    rust_aggregate = _aggregate_semantic_telemetry(request.results, key="rust_semantic_telemetry")
+    summary_common["python_semantic_telemetry"] = _sum_semantic_telemetry(
+        _coerce_semantic_telemetry(summary_common.get("python_semantic_telemetry")),
+        python_semantic_aggregate,
+    )
+    summary_common["rust_semantic_telemetry"] = _sum_semantic_telemetry(
+        _coerce_semantic_telemetry(summary_common.get("rust_semantic_telemetry")),
         rust_aggregate,
     )
 
-    summary_common["pyrefly_diagnostics"] = _aggregate_pyrefly_diagnostics(
+    summary_common["python_semantic_diagnostics"] = _aggregate_python_semantic_diagnostics(
         order=order,
         results=request.results,
     )
-    summary_common["lsp_advanced_planes"] = _select_advanced_planes_payload(
+    summary_common["semantic_planes"] = _select_semantic_planes_payload(
         order=order,
         results=request.results,
     )

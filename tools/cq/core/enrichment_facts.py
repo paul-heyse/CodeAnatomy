@@ -10,7 +10,15 @@ NAReason = Literal["not_applicable", "not_resolved", "enrichment_unavailable"]
 
 _LANG_KEYS: tuple[str, ...] = ("python", "rust")
 _STRUCTURED_KEYS: frozenset[str] = frozenset(
-    {"meta", "resolution", "behavior", "structural", "parse_quality", "agreement", "pyrefly"}
+    {
+        "meta",
+        "resolution",
+        "behavior",
+        "structural",
+        "parse_quality",
+        "agreement",
+        "python_semantic",
+    }
 )
 
 _FUNCTION_LIKE_KINDS: frozenset[str] = frozenset(
@@ -96,7 +104,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Qualified Name",
                 paths=(
-                    ("pyrefly", "symbol_grounding", "definition_targets"),
+                    ("python_semantic", "symbol_grounding", "definition_targets"),
                     ("resolution", "qualified_name_candidates"),
                     ("qualified_name_candidates",),
                 ),
@@ -104,29 +112,29 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Binding Candidates",
                 paths=(
-                    ("pyrefly", "symbol_grounding", "declaration_targets"),
+                    ("python_semantic", "symbol_grounding", "declaration_targets"),
                     ("resolution", "binding_candidates"),
                     ("binding_candidates",),
                 ),
             ),
             FactFieldSpec(
                 label="Definition Targets",
-                paths=(("pyrefly", "symbol_grounding", "definition_targets"),),
+                paths=(("python_semantic", "symbol_grounding", "definition_targets"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Declaration Targets",
-                paths=(("pyrefly", "symbol_grounding", "declaration_targets"),),
+                paths=(("python_semantic", "symbol_grounding", "declaration_targets"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Type Definition Targets",
-                paths=(("pyrefly", "symbol_grounding", "type_definition_targets"),),
+                paths=(("python_semantic", "symbol_grounding", "type_definition_targets"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Implementation Targets",
-                paths=(("pyrefly", "symbol_grounding", "implementation_targets"),),
+                paths=(("python_semantic", "symbol_grounding", "implementation_targets"),),
                 applicable_languages=frozenset({"python"}),
             ),
         ),
@@ -137,7 +145,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Signature",
                 paths=(
-                    ("pyrefly", "type_contract", "callable_signature"),
+                    ("python_semantic", "type_contract", "callable_signature"),
                     ("structural", "signature"),
                     ("signature",),
                 ),
@@ -146,7 +154,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Resolved Type",
                 paths=(
-                    ("pyrefly", "type_contract", "resolved_type"),
+                    ("python_semantic", "type_contract", "resolved_type"),
                     ("resolved_type",),
                 ),
                 applicable_languages=frozenset({"python"}),
@@ -154,7 +162,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Parameters",
                 paths=(
-                    ("pyrefly", "type_contract", "parameters"),
+                    ("python_semantic", "type_contract", "parameters"),
                     ("structural", "params"),
                     ("structural", "parameters"),
                     ("params",),
@@ -165,7 +173,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Return Type",
                 paths=(
-                    ("pyrefly", "type_contract", "return_type"),
+                    ("python_semantic", "type_contract", "return_type"),
                     ("structural", "return_type"),
                     ("return_type",),
                 ),
@@ -173,13 +181,13 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             ),
             FactFieldSpec(
                 label="Generic Params",
-                paths=(("pyrefly", "type_contract", "generic_params"),),
+                paths=(("python_semantic", "type_contract", "generic_params"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Async",
                 paths=(
-                    ("pyrefly", "type_contract", "is_async"),
+                    ("python_semantic", "type_contract", "is_async"),
                     ("behavior", "is_async"),
                     ("is_async",),
                 ),
@@ -188,7 +196,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Generator",
                 paths=(
-                    ("pyrefly", "type_contract", "is_generator"),
+                    ("python_semantic", "type_contract", "is_generator"),
                     ("behavior", "is_generator"),
                     ("is_generator",),
                 ),
@@ -220,16 +228,16 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Incoming Callers",
                 paths=(
-                    ("pyrefly", "call_graph", "incoming_callers"),
-                    ("pyrefly", "call_graph", "incoming_total"),
+                    ("python_semantic", "call_graph", "incoming_callers"),
+                    ("python_semantic", "call_graph", "incoming_total"),
                 ),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Outgoing Callees",
                 paths=(
-                    ("pyrefly", "call_graph", "outgoing_callees"),
-                    ("pyrefly", "call_graph", "outgoing_total"),
+                    ("python_semantic", "call_graph", "outgoing_callees"),
+                    ("python_semantic", "call_graph", "outgoing_total"),
                 ),
                 applicable_languages=frozenset({"python"}),
             ),
@@ -241,24 +249,24 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Enclosing Class",
                 paths=(
-                    ("pyrefly", "class_method_context", "enclosing_class"),
+                    ("python_semantic", "class_method_context", "enclosing_class"),
                     ("resolution", "enclosing_class"),
                     ("enclosing_class",),
                 ),
             ),
             FactFieldSpec(
                 label="Base Classes",
-                paths=(("pyrefly", "class_method_context", "base_classes"),),
+                paths=(("python_semantic", "class_method_context", "base_classes"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Overridden Methods",
-                paths=(("pyrefly", "class_method_context", "overridden_methods"),),
+                paths=(("python_semantic", "class_method_context", "overridden_methods"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Overriding Methods",
-                paths=(("pyrefly", "class_method_context", "overriding_methods"),),
+                paths=(("python_semantic", "class_method_context", "overriding_methods"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
@@ -311,22 +319,22 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             ),
             FactFieldSpec(
                 label="Same-Scope Symbols",
-                paths=(("pyrefly", "local_scope_context", "same_scope_symbols"),),
+                paths=(("python_semantic", "local_scope_context", "same_scope_symbols"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Nearest Assignments",
-                paths=(("pyrefly", "local_scope_context", "nearest_assignments"),),
+                paths=(("python_semantic", "local_scope_context", "nearest_assignments"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Narrowing Hints",
-                paths=(("pyrefly", "local_scope_context", "narrowing_hints"),),
+                paths=(("python_semantic", "local_scope_context", "narrowing_hints"),),
                 applicable_languages=frozenset({"python"}),
             ),
             FactFieldSpec(
                 label="Reference Locations",
-                paths=(("pyrefly", "local_scope_context", "reference_locations"),),
+                paths=(("python_semantic", "local_scope_context", "reference_locations"),),
                 applicable_languages=frozenset({"python"}),
             ),
         ),
@@ -337,14 +345,14 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
             FactFieldSpec(
                 label="Import Alias Chain",
                 paths=(
-                    ("pyrefly", "import_alias_resolution", "alias_chain"),
+                    ("python_semantic", "import_alias_resolution", "alias_chain"),
                     ("resolution", "import_alias_chain"),
                     ("import_alias_chain",),
                 ),
             ),
             FactFieldSpec(
                 label="Resolved Import Path",
-                paths=(("pyrefly", "import_alias_resolution", "resolved_path"),),
+                paths=(("python_semantic", "import_alias_resolution", "resolved_path"),),
                 applicable_languages=frozenset({"python"}),
                 applicable_kinds=_IMPORT_LIKE_KINDS | _FUNCTION_LIKE_KINDS | _CLASS_LIKE_KINDS,
             ),
@@ -355,7 +363,7 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
         fields=(
             FactFieldSpec(
                 label="Anchor Diagnostics",
-                paths=(("pyrefly", "anchor_diagnostics"),),
+                paths=(("python_semantic", "anchor_diagnostics"),),
                 applicable_languages=frozenset({"python"}),
             ),
         ),
@@ -392,16 +400,16 @@ FACT_CLUSTERS: tuple[FactClusterSpec, ...] = (
                 ),
             ),
             FactFieldSpec(
-                label="LSP Health",
-                paths=(("lsp_health",),),
+                label="Semantic Health",
+                paths=(("semantic_health",),),
             ),
             FactFieldSpec(
-                label="LSP Quiescent",
-                paths=(("lsp_quiescent",),),
+                label="Semantic Quiescent",
+                paths=(("semantic_quiescent",),),
             ),
             FactFieldSpec(
                 label="Position Encoding",
-                paths=(("lsp_position_encoding",),),
+                paths=(("semantic_position_encoding",),),
             ),
         ),
     ),

@@ -10,16 +10,16 @@ from typing import cast
 import pytest
 from tools.cq.core.locations import SourceSpan
 from tools.cq.search.classifier import QueryMode, clear_caches
-from tools.cq.search.lsp_front_door_adapter import LanguageLspEnrichmentOutcome
+from tools.cq.search.language_front_door_adapter import LanguageSemanticEnrichmentOutcome
 from tools.cq.search.models import SearchConfig
 from tools.cq.search.smart_search import (
     SMART_SEARCH_LIMITS,
     EnrichedMatch,
     RawMatch,
     SearchStats,
-    _attach_pyrefly_enrichment,
-    _pyrefly_no_signal_diagnostic,
-    _PyreflyPrefetchResult,
+    _attach_python_semantic_enrichment,
+    _python_semantic_no_signal_diagnostic,
+    _PythonSemanticPrefetchResult,
     _resolve_search_worker_count,
     _run_single_partition,
     build_candidate_searcher,
@@ -1065,52 +1065,52 @@ class TestSmartSearch:  # noqa: PLR0904
         assert first.get("language") == "python"
         assert isinstance(first.get("python"), dict)
 
-    def test_pyrefly_summary_fields_present(self, sample_repo: Path) -> None:
-        """Search summaries should include additive Pyrefly metadata blocks."""
+    def test_python_semantic_summary_fields_present(self, sample_repo: Path) -> None:
+        """Search summaries should include additive PythonSemantic metadata blocks."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph", lang_scope="python")
         summary = cast("Mapping[str, object]", result.summary)
-        assert "pyrefly_overview" in summary
-        assert "pyrefly_telemetry" in summary
-        assert "pyrefly_diagnostics" in summary
+        assert "python_semantic_overview" in summary
+        assert "python_semantic_telemetry" in summary
+        assert "python_semantic_diagnostics" in summary
 
-    def test_pyrefly_payload_key_attached_when_available(self, sample_repo: Path) -> None:
-        """Per-finding enrichment should expose a dedicated pyrefly payload key."""
+    def test_python_semantic_payload_key_attached_when_available(self, sample_repo: Path) -> None:
+        """Per-finding enrichment should expose a dedicated python_semantic payload key."""
         clear_caches()
         result = smart_search(sample_repo, "build_graph", lang_scope="python")
         assert result.evidence
         first = result.evidence[0]
         enrichment = first.details.data.get("enrichment")
         assert isinstance(enrichment, dict)
-        # Key is always present when Pyrefly enrichment is materialized.
-        if "pyrefly" in enrichment:
-            assert isinstance(enrichment["pyrefly"], dict)
+        # Key is always present when PythonSemantic enrichment is materialized.
+        if "python_semantic" in enrichment:
+            assert isinstance(enrichment["python_semantic"], dict)
 
-    def test_pyrefly_no_signal_diagnostic_normalizes_capability_reason(self) -> None:
+    def test_python_semantic_no_signal_diagnostic_normalizes_capability_reason(self) -> None:
         """Capability-specific coverage reasons should remain explicit."""
-        diagnostic = _pyrefly_no_signal_diagnostic(
-            ("no_pyrefly_signal",),
-            coverage_reason="no_pyrefly_signal:unsupported_capability",
+        diagnostic = _python_semantic_no_signal_diagnostic(
+            ("no_python_semantic_signal",),
+            coverage_reason="no_python_semantic_signal:unsupported_capability",
         )
         assert diagnostic["reason"] == "unsupported_capability"
 
-    def test_pyrefly_no_signal_diagnostic_normalizes_request_interface_reason(self) -> None:
+    def test_python_semantic_no_signal_diagnostic_normalizes_request_interface_reason(self) -> None:
         """Request-interface failures should not be collapsed into generic no-signal."""
-        diagnostic = _pyrefly_no_signal_diagnostic(
-            ("no_pyrefly_signal",),
+        diagnostic = _python_semantic_no_signal_diagnostic(
+            ("no_python_semantic_signal",),
             coverage_reason="request_interface_unavailable",
         )
         assert diagnostic["reason"] == "request_interface_unavailable"
 
-    def test_pyrefly_no_signal_diagnostic_defaults_to_no_signal(self) -> None:
+    def test_python_semantic_no_signal_diagnostic_defaults_to_no_signal(self) -> None:
         """Unexpected/noisy reasons should collapse to canonical no_signal."""
-        diagnostic = _pyrefly_no_signal_diagnostic(("empty_payload",), coverage_reason=None)
+        diagnostic = _python_semantic_no_signal_diagnostic(("empty_payload",), coverage_reason=None)
         assert diagnostic["reason"] == "no_signal"
 
-    def test_attach_pyrefly_uses_prefetched_payload(
+    def test_attach_python_semantic_uses_prefetched_payload(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Prefetched Pyrefly payloads should bypass synchronous fallback calls."""
+        """Prefetched PythonSemantic payloads should bypass synchronous fallback calls."""
         clear_caches()
         ctx = SearchConfig(
             root=tmp_path,
@@ -1131,7 +1131,7 @@ class TestSmartSearch:  # noqa: PLR0904
         prefetched_payload: dict[str, object] = {
             "call_graph": {"incoming_total": 1, "outgoing_total": 0}
         }
-        prefetched = _PyreflyPrefetchResult(
+        prefetched = _PythonSemanticPrefetchResult(
             payloads={key: prefetched_payload},
             attempted_keys={key},
             telemetry={"attempted": 1, "applied": 1, "failed": 0, "skipped": 0, "timed_out": 0},
@@ -1139,25 +1139,25 @@ class TestSmartSearch:  # noqa: PLR0904
         )
 
         def _boom(*_args: object, **_kwargs: object) -> dict[str, object] | None:
-            msg = "fallback pyrefly call should not run when prefetched payload exists"
+            msg = "fallback python_semantic call should not run when prefetched payload exists"
             raise AssertionError(msg)
 
-        monkeypatch.setattr("tools.cq.search.smart_search._pyrefly_enrich_match", _boom)
-        enriched, _overview, telemetry, diagnostics = _attach_pyrefly_enrichment(
+        monkeypatch.setattr("tools.cq.search.smart_search._python_semantic_enrich_match", _boom)
+        enriched, _overview, telemetry, diagnostics = _attach_python_semantic_enrichment(
             ctx=ctx,
             matches=[match],
             prefetched=prefetched,
         )
         assert not diagnostics
-        assert enriched[0].pyrefly_enrichment == prefetched_payload
+        assert enriched[0].python_semantic_enrichment == prefetched_payload
         telemetry_map = cast("Mapping[str, object]", telemetry)
         assert telemetry_map.get("attempted") == 1
         assert telemetry_map.get("applied") == 1
 
-    def test_run_single_partition_starts_pyrefly_prefetch_before_classification(
+    def test_run_single_partition_starts_python_semantic_prefetch_before_classification(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Pyrefly prefetch should run concurrently with classification."""
+        """PythonSemantic prefetch should run concurrently with classification."""
         clear_caches()
         ctx = SearchConfig(
             root=tmp_path,
@@ -1196,12 +1196,12 @@ class TestSmartSearch:  # noqa: PLR0904
             *,
             lang: str,
             raw_matches: list[RawMatch],
-        ) -> _PyreflyPrefetchResult:
+        ) -> _PythonSemanticPrefetchResult:
             assert lang == "python"
             assert raw_matches == [raw_match]
             prefetch_started.set()
             release_prefetch.wait(timeout=1.0)
-            return _PyreflyPrefetchResult(
+            return _PythonSemanticPrefetchResult(
                 telemetry={"attempted": 0, "applied": 0, "failed": 0, "skipped": 0, "timed_out": 0}
             )
 
@@ -1223,7 +1223,7 @@ class TestSmartSearch:  # noqa: PLR0904
             "tools.cq.search.smart_search._run_candidate_phase", _fake_candidate_phase
         )
         monkeypatch.setattr(
-            "tools.cq.search.smart_search._prefetch_pyrefly_for_raw_matches",
+            "tools.cq.search.smart_search._prefetch_python_semantic_for_raw_matches",
             _fake_prefetch,
         )
         monkeypatch.setattr(
@@ -1231,7 +1231,7 @@ class TestSmartSearch:  # noqa: PLR0904
         )
 
         result = _run_single_partition(ctx, "python", mode=QueryMode.IDENTIFIER)
-        assert result.pyrefly_prefetch is not None
+        assert result.python_semantic_prefetch is not None
 
     def test_rust_tree_sitter_fail_open(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1291,17 +1291,17 @@ class TestCandidateSearcher:
         assert pattern == "build.*graph"
 
 
-def test_search_rust_front_door_uses_rust_lsp_adapter(
+def test_search_rust_front_door_uses_rust_semantic_adapter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Rust searches should report non-unavailable LSP when adapter resolves payload."""
+    """Rust searches should report non-unavailable semantic when adapter resolves payload."""
     (tmp_path / "lib.rs").write_text("pub fn compile_target() -> i32 { 1 }\n", encoding="utf-8")
     clear_caches()
 
     monkeypatch.setattr(
-        "tools.cq.search.smart_search.enrich_with_language_lsp",
-        lambda *_args, **_kwargs: LanguageLspEnrichmentOutcome(
+        "tools.cq.search.smart_search.enrich_with_language_semantics",
+        lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
             payload={
                 "call_graph": {
                     "incoming_total": 1,
@@ -1317,9 +1317,9 @@ def test_search_rust_front_door_uses_rust_lsp_adapter(
     result = smart_search(tmp_path, "compile_target", lang_scope="rust")
     insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
     degradation = cast("dict[str, object]", insight.get("degradation", {}))
-    assert degradation.get("lsp") in {"ok", "partial"}
-    rust_lsp = cast("dict[str, object]", result.summary.get("rust_lsp_telemetry", {}))
-    attempted = rust_lsp.get("attempted", 0)
+    assert degradation.get("semantic") in {"ok", "partial"}
+    rust_semantic = cast("dict[str, object]", result.summary.get("rust_semantic_telemetry", {}))
+    attempted = rust_semantic.get("attempted", 0)
     assert isinstance(attempted, int)
     assert attempted >= 1
 
@@ -1336,12 +1336,8 @@ def test_search_python_capability_probe_unavailable_is_non_fatal(
     clear_caches()
 
     monkeypatch.setattr(
-        "tools.cq.search.smart_search.get_pyrefly_lsp_capabilities",
-        lambda *_args, **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        "tools.cq.search.smart_search.enrich_with_language_lsp",
-        lambda *_args, **_kwargs: LanguageLspEnrichmentOutcome(
+        "tools.cq.search.smart_search.enrich_with_language_semantics",
+        lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
             payload={
                 "coverage": {"status": "applied", "reason": None},
                 "call_graph": {
@@ -1357,10 +1353,10 @@ def test_search_python_capability_probe_unavailable_is_non_fatal(
     result = smart_search(tmp_path, "build_graph", lang_scope="python")
     insight = cast("dict[str, object]", result.summary.get("front_door_insight", {}))
     degradation = cast("dict[str, object]", insight.get("degradation", {}))
-    assert degradation.get("lsp") in {"ok", "partial"}
-    pyrefly = cast("dict[str, object]", result.summary.get("pyrefly_telemetry", {}))
-    attempted = pyrefly.get("attempted", 0)
-    applied = pyrefly.get("applied", 0)
+    assert degradation.get("semantic") in {"ok", "partial"}
+    python_semantic = cast("dict[str, object]", result.summary.get("python_semantic_telemetry", {}))
+    attempted = python_semantic.get("attempted", 0)
+    applied = python_semantic.get("applied", 0)
     assert isinstance(attempted, int)
     assert isinstance(applied, int)
     assert attempted >= 1
@@ -1379,8 +1375,8 @@ def test_search_python_timeout_reason_not_collapsed_to_session_unavailable(
     clear_caches()
 
     monkeypatch.setattr(
-        "tools.cq.search.smart_search.enrich_with_language_lsp",
-        lambda *_args, **_kwargs: LanguageLspEnrichmentOutcome(
+        "tools.cq.search.smart_search.enrich_with_language_semantics",
+        lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
             payload=None,
             timed_out=True,
             failure_reason="request_timeout",
@@ -1388,7 +1384,7 @@ def test_search_python_timeout_reason_not_collapsed_to_session_unavailable(
     )
 
     result = smart_search(tmp_path, "build_graph", lang_scope="python")
-    diagnostics = cast("list[object]", result.summary.get("pyrefly_diagnostics", []))
+    diagnostics = cast("list[object]", result.summary.get("python_semantic_diagnostics", []))
     assert diagnostics
     reasons = {
         str(cast("dict[str, object]", row).get("reason"))

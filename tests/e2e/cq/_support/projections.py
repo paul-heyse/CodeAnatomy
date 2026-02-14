@@ -10,10 +10,19 @@ from tools.cq.core.front_door_insight import coerce_front_door_insight
 from tools.cq.core.schema import CqResult
 
 _DURATION_PATTERN = re.compile(r"(\*\*(?:Created|Elapsed):\*\*)\s+[0-9]+(?:\.[0-9]+)?ms")
+_BUNDLE_ID_PATTERN = re.compile(r"(\*\*Bundle ID:\*\*)\s+\S+")
+_RELATIONSHIPS_PATTERN = re.compile(r"^\*\*Relationships:\*\*\s+(.+)$")
 
 
 def _normalize_message(message: str) -> str:
-    return _DURATION_PATTERN.sub(r"\1 <duration_ms>", message)
+    normalized = _DURATION_PATTERN.sub(r"\1 <duration_ms>", message)
+    normalized = _BUNDLE_ID_PATTERN.sub(r"\1 <bundle_id>", normalized)
+    relationships_match = _RELATIONSHIPS_PATTERN.match(normalized)
+    if relationships_match is None:
+        return normalized
+    values = [part.strip() for part in relationships_match.group(1).split(",") if part.strip()]
+    values.sort()
+    return f"**Relationships:** {', '.join(values)}"
 
 
 def _normalize_path(path: str) -> str:
@@ -64,7 +73,7 @@ def _project_front_door_insight(summary: dict[str, object]) -> dict[str, Any] | 
             },
         },
         "degradation": {
-            "lsp": insight.degradation.lsp,
+            "semantic": insight.degradation.semantic,
             "scan": insight.degradation.scan,
             "scope_filter": insight.degradation.scope_filter,
             "notes": list(insight.degradation.notes),
@@ -94,9 +103,9 @@ def _project_step_summaries(summary: dict[str, object]) -> dict[str, Any]:
         projected[step_id] = {
             "mode": step_summary.get("mode"),
             "query": step_summary.get("query"),
-            "pyrefly_telemetry": step_summary.get("pyrefly_telemetry"),
-            "rust_lsp_telemetry": step_summary.get("rust_lsp_telemetry"),
-            "front_door_degradation_lsp": degradation,
+            "python_semantic_telemetry": step_summary.get("python_semantic_telemetry"),
+            "rust_semantic_telemetry": step_summary.get("rust_semantic_telemetry"),
+            "front_door_degradation_semantic": degradation,
         }
     return projected
 
@@ -121,15 +130,15 @@ def result_snapshot_projection(result: CqResult) -> dict[str, Any]:
         "target_file": summary.get("target_file"),
         "target_resolution_kind": summary.get("target_resolution_kind"),
         "top_k": summary.get("top_k"),
-        "enable_lsp": summary.get("enable_lsp"),
+        "enable_semantic_enrichment": summary.get("enable_semantic_enrichment"),
         "total_slices": summary.get("total_slices"),
         "total_nodes": summary.get("total_nodes"),
         "total_edges": summary.get("total_edges"),
         "total_diagnostics": summary.get("total_diagnostics"),
-        "pyrefly_telemetry": summary.get("pyrefly_telemetry"),
-        "rust_lsp_telemetry": summary.get("rust_lsp_telemetry"),
-        "lsp_advanced_planes_present": isinstance(summary.get("lsp_advanced_planes"), dict)
-        and bool(summary.get("lsp_advanced_planes")),
+        "python_semantic_telemetry": summary.get("python_semantic_telemetry"),
+        "rust_semantic_telemetry": summary.get("rust_semantic_telemetry"),
+        "semantic_planes_present": isinstance(summary.get("semantic_planes"), dict)
+        and bool(summary.get("semantic_planes")),
         "front_door_insight": _project_front_door_insight(summary),
     }
     if projected_step_summaries:

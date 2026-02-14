@@ -23,7 +23,9 @@ def neighborhood(
     *,
     lang: Annotated[str, Parameter(name="--lang", help="Query language")] = "python",
     top_k: Annotated[int, Parameter(name="--top-k", help="Max items per slice")] = 10,
-    no_lsp: Annotated[bool, Parameter(name="--no-lsp", help="Disable LSP enrichment")] = False,
+    no_semantic_enrichment: Annotated[
+        bool, Parameter(name="--no-semantic-enrichment", help="Disable semantic enrichment")
+    ] = False,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
 ) -> CliResult:
     """Analyze semantic neighborhood of a target symbol or location.
@@ -71,7 +73,7 @@ def neighborhood(
         language=lang,
         symbol_hint=resolved.symbol_hint,
         top_k=top_k,
-        enable_lsp=not no_lsp,
+        enable_semantic_enrichment=not no_semantic_enrichment,
         artifact_dir=ctx.artifact_dir,
         allow_symbol_fallback=True,
         target_degrade_events=resolved.degrade_events,
@@ -94,8 +96,8 @@ def neighborhood(
             target=target,
             language=lang,
             top_k=top_k,
-            enable_lsp=not no_lsp,
-            lsp_env=_lsp_env_from_bundle(bundle),
+            enable_semantic_enrichment=not no_semantic_enrichment,
+            semantic_env=_semantic_env_from_bundle(bundle),
         )
     )
     result.summary["target_resolution_kind"] = resolved.resolution_kind
@@ -105,20 +107,20 @@ def neighborhood(
     return CliResult(result=result, context=ctx, filters=None)
 
 
-def _lsp_env_from_bundle(bundle: SemanticNeighborhoodBundleV1) -> dict[str, object]:
-    """Extract compact LSP environment flags from bundle metadata.
+def _semantic_env_from_bundle(bundle: SemanticNeighborhoodBundleV1) -> dict[str, object]:
+    """Extract compact semantic environment flags from bundle metadata.
 
     Returns:
-        Mapping of normalized LSP environment flags.
+        Mapping of normalized semantic environment flags.
     """
-    if bundle.meta is None or not bundle.meta.lsp_servers:
+    if bundle.meta is None or not bundle.meta.semantic_sources:
         return {}
-    first = bundle.meta.lsp_servers[0]
+    first = bundle.meta.semantic_sources[0]
     env: dict[str, object] = {}
     for in_key, out_key in (
-        ("workspace_health", "lsp_health"),
-        ("quiescent", "lsp_quiescent"),
-        ("position_encoding", "lsp_position_encoding"),
+        ("workspace_health", "semantic_health"),
+        ("quiescent", "semantic_quiescent"),
+        ("position_encoding", "semantic_position_encoding"),
     ):
         value = first.get(in_key)
         if value is not None:

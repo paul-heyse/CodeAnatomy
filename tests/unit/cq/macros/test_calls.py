@@ -283,7 +283,7 @@ def test_extract_context_snippet_prioritizes_anchor_block() -> None:
     assert "docstring should be omitted" not in snippet
 
 
-def test_calls_payload_reason_normalizes_pyrefly_timeout() -> None:
+def test_calls_payload_reason_normalizes_python_semantic_timeout() -> None:
     payload: dict[str, object] = {
         "coverage": {"status": "not_resolved", "reason": "timeout"},
     }

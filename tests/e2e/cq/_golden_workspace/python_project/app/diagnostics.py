@@ -1,6 +1,6 @@
 """Intentional static-analysis diagnostics fixture.
 
-This file is not imported at runtime by tests; it exists so LSP/diagnostic
+This file is not imported at runtime by tests; it exists so semantic/diagnostic
 planes have realistic material when enabled.
 """
 

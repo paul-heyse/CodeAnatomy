@@ -166,24 +166,24 @@ def _populate_run_summary_metadata(
     lang_scope, language_order = _derive_run_scope_metadata(executed_results)
     merged.summary.setdefault("lang_scope", lang_scope)
     merged.summary.setdefault("language_order", list(language_order))
-    merged.summary.setdefault("pyrefly_overview", {})
+    merged.summary.setdefault("python_semantic_overview", {})
     step_summaries = merged.summary.get("step_summaries")
-    merged.summary["pyrefly_telemetry"] = _aggregate_run_lsp_telemetry(
+    merged.summary["python_semantic_telemetry"] = _aggregate_run_semantic_telemetry(
         step_summaries,
-        telemetry_key="pyrefly_telemetry",
+        telemetry_key="python_semantic_telemetry",
     )
-    merged.summary["rust_lsp_telemetry"] = _aggregate_run_lsp_telemetry(
+    merged.summary["rust_semantic_telemetry"] = _aggregate_run_semantic_telemetry(
         step_summaries,
-        telemetry_key="rust_lsp_telemetry",
+        telemetry_key="rust_semantic_telemetry",
     )
-    merged.summary["lsp_advanced_planes"] = _select_run_advanced_planes(
+    merged.summary["semantic_planes"] = _select_run_semantic_planes(
         step_summaries,
         step_order=merged.summary.get("steps"),
     )
-    merged.summary.setdefault("pyrefly_diagnostics", [])
+    merged.summary.setdefault("python_semantic_diagnostics", [])
 
 
-def _aggregate_run_lsp_telemetry(
+def _aggregate_run_semantic_telemetry(
     step_summaries: object,
     *,
     telemetry_key: str,
@@ -210,7 +210,7 @@ def _aggregate_run_lsp_telemetry(
     return totals
 
 
-def _advanced_plane_signal_score(payload: dict[str, object]) -> int:
+def _semantic_plane_signal_score(payload: dict[str, object]) -> int:
     score = 0
     for value in payload.values():
         if isinstance(value, Mapping) or (
@@ -224,7 +224,7 @@ def _advanced_plane_signal_score(payload: dict[str, object]) -> int:
     return score
 
 
-def _select_run_advanced_planes(
+def _select_run_semantic_planes(
     step_summaries: object,
     *,
     step_order: object,
@@ -242,10 +242,10 @@ def _select_run_advanced_planes(
         summary = step_summaries.get(step_id)
         if not isinstance(summary, dict):
             continue
-        raw = summary.get("lsp_advanced_planes")
+        raw = summary.get("semantic_planes")
         if not isinstance(raw, dict) or not raw:
             continue
-        score = _advanced_plane_signal_score(raw)
+        score = _semantic_plane_signal_score(raw)
         if score > best_score:
             best_planes = dict(raw)
             best_score = score
@@ -1110,7 +1110,7 @@ def _execute_neighborhood_step(
         language=step.lang,
         symbol_hint=resolved.symbol_hint,
         top_k=step.top_k,
-        enable_lsp=not step.no_lsp,
+        enable_semantic_enrichment=not step.no_semantic_enrichment,
         artifact_dir=ctx.artifact_dir,
         allow_symbol_fallback=True,
         target_degrade_events=resolved.degrade_events,
@@ -1135,8 +1135,8 @@ def _execute_neighborhood_step(
             target=step.target,
             language=step.lang,
             top_k=step.top_k,
-            enable_lsp=not step.no_lsp,
-            lsp_env=_lsp_env_from_bundle(bundle),
+            enable_semantic_enrichment=not step.no_semantic_enrichment,
+            semantic_env=_semantic_env_from_bundle(bundle),
         )
     )
     result.summary["target_resolution_kind"] = resolved.resolution_kind
@@ -1145,20 +1145,20 @@ def _execute_neighborhood_step(
     return result
 
 
-def _lsp_env_from_bundle(bundle: object) -> dict[str, object]:
+def _semantic_env_from_bundle(bundle: object) -> dict[str, object]:
     from tools.cq.core.snb_schema import SemanticNeighborhoodBundleV1
 
     if not isinstance(bundle, SemanticNeighborhoodBundleV1):
         return {}
-    if bundle.meta is None or not bundle.meta.lsp_servers:
+    if bundle.meta is None or not bundle.meta.semantic_sources:
         return {}
 
-    first = bundle.meta.lsp_servers[0]
+    first = bundle.meta.semantic_sources[0]
     env: dict[str, object] = {}
     for in_key, out_key in (
-        ("workspace_health", "lsp_health"),
-        ("quiescent", "lsp_quiescent"),
-        ("position_encoding", "lsp_position_encoding"),
+        ("workspace_health", "semantic_health"),
+        ("quiescent", "semantic_quiescent"),
+        ("position_encoding", "semantic_position_encoding"),
     ):
         value = first.get(in_key)
         if value is not None:

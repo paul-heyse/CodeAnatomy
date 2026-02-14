@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 
 
-def trace(label: str):
+def trace(label: str) -> Callable[[Callable[..., str]], Callable[..., str]]:
     def decorate(fn: Callable[..., str]) -> Callable[..., str]:
         def wrapped(*args: object, **kwargs: object) -> str:
             _ = label

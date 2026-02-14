@@ -183,7 +183,11 @@ def test_bundle_meta_v1_roundtrip() -> None:
         workspace_root="/workspace",
         query_text="entity=function name=build_graph",
         created_at_ms=1234567890.0,
-        lsp_servers=({"name": "rust-analyzer", "version": "0.3.0"},),
+        semantic_sources=(
+            {"name": "tree_sitter", "version": "0.25.10"},
+            {"name": "libcst", "version": "1.8.5"},
+            {"name": "ast_grep", "version": "0.40.5"},
+        ),
         limits={"max_nodes": 1000, "max_depth": 3},
     )
 
@@ -195,7 +199,7 @@ def test_bundle_meta_v1_roundtrip() -> None:
     assert decoded.workspace_root == original.workspace_root
     assert decoded.query_text == original.query_text
     assert decoded.created_at_ms == original.created_at_ms
-    assert decoded.lsp_servers == original.lsp_servers
+    assert decoded.semantic_sources == original.semantic_sources
     assert decoded.limits == original.limits
 
 

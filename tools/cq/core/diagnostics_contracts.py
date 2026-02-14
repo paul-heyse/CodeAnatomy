@@ -25,10 +25,10 @@ class DiagnosticsArtifactPayloadV1(CqStruct, frozen=True):
 
     run_meta: DiagnosticsArtifactRunMetaV1
     enrichment_telemetry: dict[str, object] = msgspec.field(default_factory=dict)
-    pyrefly_telemetry: dict[str, object] = msgspec.field(default_factory=dict)
-    rust_lsp_telemetry: dict[str, object] = msgspec.field(default_factory=dict)
-    lsp_advanced_planes: dict[str, object] = msgspec.field(default_factory=dict)
-    pyrefly_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
+    python_semantic_telemetry: dict[str, object] = msgspec.field(default_factory=dict)
+    rust_semantic_telemetry: dict[str, object] = msgspec.field(default_factory=dict)
+    semantic_planes: dict[str, object] = msgspec.field(default_factory=dict)
+    python_semantic_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
     language_capabilities: dict[str, object] = msgspec.field(default_factory=dict)
     cross_language_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
 
@@ -51,20 +51,22 @@ def build_diagnostics_artifact_payload(result: CqResult) -> DiagnosticsArtifactP
             run_id=result.run.run_id,
         ),
         enrichment_telemetry=_coerce_dict(summary.get("enrichment_telemetry")),
-        pyrefly_telemetry=_coerce_dict(summary.get("pyrefly_telemetry")),
-        rust_lsp_telemetry=_coerce_dict(summary.get("rust_lsp_telemetry")),
-        lsp_advanced_planes=_coerce_dict(summary.get("lsp_advanced_planes")),
-        pyrefly_diagnostics=_coerce_list_of_dict(summary.get("pyrefly_diagnostics")),
+        python_semantic_telemetry=_coerce_dict(summary.get("python_semantic_telemetry")),
+        rust_semantic_telemetry=_coerce_dict(summary.get("rust_semantic_telemetry")),
+        semantic_planes=_coerce_dict(summary.get("semantic_planes")),
+        python_semantic_diagnostics=_coerce_list_of_dict(
+            summary.get("python_semantic_diagnostics")
+        ),
         language_capabilities=_coerce_dict(summary.get("language_capabilities")),
         cross_language_diagnostics=_coerce_list_of_dict(summary.get("cross_language_diagnostics")),
     )
     has_data = any(
         (
             payload.enrichment_telemetry,
-            payload.pyrefly_telemetry,
-            payload.rust_lsp_telemetry,
-            payload.lsp_advanced_planes,
-            payload.pyrefly_diagnostics,
+            payload.python_semantic_telemetry,
+            payload.rust_semantic_telemetry,
+            payload.semantic_planes,
+            payload.python_semantic_diagnostics,
             payload.language_capabilities,
             payload.cross_language_diagnostics,
         )

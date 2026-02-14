@@ -86,11 +86,7 @@ def persist_fragment_writes(
     writes: list[FragmentWriteV1],
     runtime: FragmentPersistRuntimeV1,
 ) -> None:
-    """Persist fragment payload writes using one backend transaction.
-
-    Returns:
-        None
-    """
+    """Persist fragment payload writes using one backend transaction."""
     if not (runtime.cache_enabled and writes):
         return
     with runtime.transact():

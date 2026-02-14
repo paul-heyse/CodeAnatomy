@@ -65,7 +65,11 @@ def run_search_partition(
     ctx: SmartSearchContext,
     mode: QueryMode,
 ) -> object:
-    """Run one language partition search flow with phased cache orchestration."""
+    """Run one language partition search flow with phased cache orchestration.
+
+    Returns:
+        object: Language-search result payload for this partition.
+    """
     lang = plan.language
     sm = _smart_search_module()
     scope = _scope_context(ctx, lang, mode)
@@ -89,15 +93,15 @@ def run_search_partition(
         scope=scope,
         smart_search_mod=sm,
     )
-    pyrefly_prefetch = _resolve_prefetch_result(prefetch_future, smart_search_mod=sm)
-    return sm._LanguageSearchResult(
+    python_semantic_prefetch = _resolve_prefetch_result(prefetch_future, smart_search_mod=sm)
+    return sm.LanguageSearchResult(
         lang=lang,
         raw_matches=raw_matches,
         stats=stats,
         pattern=pattern,
         enriched_matches=enriched,
         dropped_by_scope=int(getattr(stats, "dropped_by_scope", 0)),
-        pyrefly_prefetch=pyrefly_prefetch,
+        python_semantic_prefetch=python_semantic_prefetch,
     )
 
 
@@ -234,10 +238,11 @@ def _candidate_payload_from_cache(
                 for item in payload.raw_matches
             ]
             stats = msgspec.convert(payload.stats, type=smart_search_mod.SearchStats)
-            return raw_matches, stats, payload.pattern, True
         except (RuntimeError, TypeError, ValueError):
             record_cache_decode_failure(namespace="search_candidates")
-    raw_matches, stats, pattern = smart_search_mod._run_candidate_phase(ctx, lang=lang, mode=mode)
+        else:
+            return raw_matches, stats, payload.pattern, True
+    raw_matches, stats, pattern = smart_search_mod.run_candidate_phase(ctx, lang=lang, mode=mode)
     return raw_matches, stats, pattern, False
 
 
@@ -251,7 +256,7 @@ def _maybe_submit_prefetch(
     if lang != "python" or not raw_matches:
         return None
     return get_worker_scheduler().submit_io(
-        smart_search_mod._prefetch_pyrefly_for_raw_matches,
+        smart_search_mod.run_prefetch_python_semantic_for_raw_matches,
         ctx,
         lang=lang,
         raw_matches=raw_matches,
@@ -364,7 +369,7 @@ def _compute_and_persist_enrichment_misses(
     smart_search_mod: Any,
 ) -> None:
     miss_raw_matches = [item[1] for item in misses]
-    miss_enriched = smart_search_mod._run_classification_phase(
+    miss_enriched = smart_search_mod.run_classification_phase(
         ctx,
         lang=context.lang,
         raw_matches=miss_raw_matches,
@@ -408,8 +413,8 @@ def _resolve_prefetch_result(
     try:
         return prefetch_future.result()
     except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
-        return smart_search_mod._PyreflyPrefetchResult(
-            telemetry=smart_search_mod._new_pyrefly_telemetry()
+        return smart_search_mod.PythonSemanticPrefetchResult(
+            telemetry=smart_search_mod.new_python_semantic_telemetry()
         )
 
 

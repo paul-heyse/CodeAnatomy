@@ -1,0 +1,40 @@
+2026-02-14 11:19:55 PERFORMANCE Initialized shared memory (heap size: 8589934592, dep table pow: 27, hash table pow: 26): 0.001s
+2026-02-14 11:19:55 PERFORMANCE Initialized multiprocessing workers (workers: 4): 0.022s
+2026-02-14 11:19:55 INFO Server has started listening on socket `/var/folders/70/h2nd1qjs1zngp8z6tt27_s9c0000gn/T/pyre_server_80872aea259d397a.sock`
+2026-02-14 11:19:55 INFO Initializing server state from scratch...
+2026-02-14 11:19:55 INFO Building module tracker...
+2026-02-14 11:19:56 PERFORMANCE Module tracker built: 1.563s
+2026-02-14 11:19:56 PERFORMANCE Full environment built: 1.565s
+2026-02-14 11:19:56 INFO Collecting all definitions...
+2026-02-14 11:20:00 PERFORMANCE Collected definitions (defines: 14497): 3.641s
+2026-02-14 11:20:00 INFO Checking 14497 functions...
+2026-02-14 11:20:23 INFO Server is going down. Cleaning up...
+2026-02-14 11:20:23 INFO Server interrupted with signal `sigterm`
+2026-02-14 11:20:23 INFO Unix.Unix_error(Unix.EINTR, "select", "")
+Raised by primitive operation at Unix in file "unix.ml" (inlined), line 212, characters 0-84
+Called from Hack_procs__Worker.waitpid_no_eintr in file "hack_parallel/hack_parallel/procs/worker.ml", line 112, characters 6-28
+
+Fatal error: exception Sys_error("Broken pipe")
+Raised by primitive operation at Stdlib.output_string in file "stdlib.ml", line 369, characters 2-47
+Called from Hack_procs__Worker.worker_job_main.send_response in file "hack_parallel/hack_parallel/procs/worker.ml" (inlined), line 121, characters 4-22
+Called from Hack_procs__Worker.worker_job_main in file "hack_parallel/hack_parallel/procs/worker.ml", line 159, characters 6-82
+Called from Hack_procs__Worker.fork_handler in file "hack_parallel/hack_parallel/procs/worker.ml", line 166, characters 4-25
+Called from Hack_procs__Worker.worker_loop in file "hack_parallel/hack_parallel/procs/worker.ml", line 194, characters 6-19
+Fatal error: exception Sys_error("Broken pipe")
+Raised by primitive operation at Stdlib.output_string in file "stdlib.ml", line 369, characters 2-47
+Called from Hack_procs__Worker.worker_job_main.send_response in file "hack_parallel/hack_parallel/procs/worker.ml" (inlined), line 121, characters 4-22
+Called from Hack_procs__Worker.worker_job_main in file "hack_parallel/hack_parallel/procs/worker.ml", line 159, characters 6-82
+Called from Hack_procs__Worker.fork_handler in file "hack_parallel/hack_parallel/procs/worker.ml", line 166, characters 4-25
+Called from Hack_procs__Worker.worker_loop in file "hack_parallel/hack_parallel/procs/worker.ml", line 194, characters 6-19
+Fatal error: exception Sys_error("Broken pipe")
+Raised by primitive operation at Stdlib.output_string in file "stdlib.ml", line 369, characters 2-47
+Called from Hack_procs__Worker.worker_job_main.send_response in file "hack_parallel/hack_parallel/procs/worker.ml" (inlined), line 121, characters 4-22
+Called from Hack_procs__Worker.worker_job_main in file "hack_parallel/hack_parallel/procs/worker.ml", line 159, characters 6-82
+Called from Hack_procs__Worker.fork_handler in file "hack_parallel/hack_parallel/procs/worker.ml", line 166, characters 4-25
+Called from Hack_procs__Worker.worker_loop in file "hack_parallel/hack_parallel/procs/worker.ml", line 194, characters 6-19
+Fatal error: exception Sys_error("Broken pipe")
+Raised by primitive operation at Stdlib.output_string in file "stdlib.ml", line 369, characters 2-47
+Called from Hack_procs__Worker.worker_job_main.send_response in file "hack_parallel/hack_parallel/procs/worker.ml" (inlined), line 121, characters 4-22
+Called from Hack_procs__Worker.worker_job_main in file "hack_parallel/hack_parallel/procs/worker.ml", line 159, characters 6-82
+Called from Hack_procs__Worker.fork_handler in file "hack_parallel/hack_parallel/procs/worker.ml", line 166, characters 4-25
+Called from Hack_procs__Worker.worker_loop in file "hack_parallel/hack_parallel/procs/worker.ml", line 194, characters 6-19

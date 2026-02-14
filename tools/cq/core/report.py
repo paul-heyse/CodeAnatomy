@@ -51,11 +51,11 @@ SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
     "cross_language_diagnostics",
     "language_capabilities",
     "enrichment_telemetry",
-    "pyrefly_overview",
-    "pyrefly_telemetry",
-    "rust_lsp_telemetry",
-    "lsp_advanced_planes",
-    "pyrefly_diagnostics",
+    "python_semantic_overview",
+    "python_semantic_telemetry",
+    "rust_semantic_telemetry",
+    "semantic_planes",
+    "python_semantic_diagnostics",
 )
 DETAILS_SUPPRESS_KEYS: frozenset[str] = frozenset(
     {
@@ -72,10 +72,10 @@ DETAILS_SUPPRESS_KEYS: frozenset[str] = frozenset(
 ARTIFACT_ONLY_KEYS: frozenset[str] = frozenset(
     {
         "enrichment_telemetry",
-        "pyrefly_telemetry",
-        "rust_lsp_telemetry",
-        "lsp_advanced_planes",
-        "pyrefly_diagnostics",
+        "python_semantic_telemetry",
+        "rust_semantic_telemetry",
+        "semantic_planes",
+        "python_semantic_diagnostics",
         "language_capabilities",
         "cross_language_diagnostics",
     }
@@ -595,10 +595,10 @@ def _summarize_categories(findings: list[Finding]) -> str:
     return f"`{category_summary}`"
 
 
-def _format_pyrefly_overview(summary: dict[str, object]) -> str:
-    payload = summary.get("pyrefly_overview")
+def _format_python_semantic_overview(summary: dict[str, object]) -> str:
+    payload = summary.get("python_semantic_overview")
     if not isinstance(payload, dict) or not payload:
-        return _na("pyrefly_overview_missing")
+        return _na("python_semantic_overview_missing")
     fields: tuple[tuple[str, str], ...] = (
         ("primary_symbol", "primary"),
         ("matches_enriched", "enriched"),
@@ -612,7 +612,7 @@ def _format_pyrefly_overview(summary: dict[str, object]) -> str:
             continue
         parts.append(f"{label}: {value}")
     if not parts:
-        return _na("pyrefly_overview_missing")
+        return _na("python_semantic_overview_missing")
     return "; ".join(parts)
 
 
@@ -626,7 +626,7 @@ def _render_code_overview(result: CqResult) -> list[str]:
     lines.append(f"- Top Symbols: {_collect_top_symbols(all_findings)}")
     lines.append(f"- Top Files: {_collect_top_files(all_findings)}")
     lines.append(f"- Match Categories: {_summarize_categories(all_findings)}")
-    lines.append(f"- Pyrefly Overview: {_format_pyrefly_overview(summary)}")
+    lines.append(f"- Python semantic overview: {_format_python_semantic_overview(summary)}")
 
     lines.append("")
     return lines
@@ -758,7 +758,7 @@ def _compute_render_enrichment_payload_from_anchor(
             root,
             lang=language,
             force_semantic_enrichment=True,
-            enable_pyrefly=True,
+            enable_python_semantic=True,
         )
         enriched_finding = build_finding(enriched, root)
         payload = to_builtins(enriched_finding.details.data)
@@ -1406,8 +1406,8 @@ def _derive_enrichment_status(value: object) -> str:
     return result
 
 
-def _derive_pyrefly_telemetry_status(value: object) -> str:
-    """Derive compact pyrefly telemetry status.
+def _derive_python_semantic_telemetry_status(value: object) -> str:
+    """Derive compact Python semantic telemetry status.
 
     Returns:
     -------
@@ -1415,16 +1415,16 @@ def _derive_pyrefly_telemetry_status(value: object) -> str:
         Compact status line.
     """
     if not isinstance(value, dict):
-        return "Pyrefly: skipped"
+        return "Python semantic: skipped"
     applied = value.get("applied", 0)
     attempted = value.get("attempted", 0)
     if not attempted:
-        return "Pyrefly: skipped"
-    return f"Pyrefly: {applied}/{attempted} applied"
+        return "Python semantic: skipped"
+    return f"Python semantic: {applied}/{attempted} applied"
 
 
-def _derive_rust_lsp_telemetry_status(value: object) -> str:
-    """Derive compact rust LSP telemetry status.
+def _derive_rust_semantic_telemetry_status(value: object) -> str:
+    """Derive compact rust semantic telemetry status.
 
     Returns:
     -------
@@ -1432,16 +1432,16 @@ def _derive_rust_lsp_telemetry_status(value: object) -> str:
         Compact status line.
     """
     if not isinstance(value, dict):
-        return "Rust LSP: skipped"
+        return "Rust semantic: skipped"
     applied = value.get("applied", 0)
     attempted = value.get("attempted", 0)
     if not attempted:
-        return "Rust LSP: skipped"
-    return f"Rust LSP: {applied}/{attempted} applied"
+        return "Rust semantic: skipped"
+    return f"Rust semantic: {applied}/{attempted} applied"
 
 
-def _derive_lsp_advanced_status(value: object) -> str:
-    """Derive compact status for advanced LSP planes.
+def _derive_semantic_advanced_status(value: object) -> str:
+    """Derive compact status for semantic planes.
 
     Returns:
     -------
@@ -1449,17 +1449,18 @@ def _derive_lsp_advanced_status(value: object) -> str:
         Compact status line.
     """
     if not isinstance(value, dict) or not value:
-        return "LSP advanced: none"
-    tokens = int(value.get("semantic_tokens_count", 0) or 0)
-    hints = int(value.get("inlay_hints_count", 0) or 0)
-    diagnostics = int(value.get("document_diagnostics_count", 0) or 0) + int(
-        value.get("workspace_diagnostics_count", 0) or 0
-    )
-    return f"LSP advanced: tokens={tokens}, hints={hints}, diagnostics={diagnostics}"
+        return "Semantic planes: none"
+    counts = value.get("counts")
+    if not isinstance(counts, dict):
+        return "Semantic planes: present"
+    tokens = int(counts.get("semantic_tokens", 0) or 0)
+    locals_count = int(counts.get("locals", 0) or 0)
+    diagnostics = int(counts.get("diagnostics", 0) or 0)
+    return f"Semantic planes: tokens={tokens}, locals={locals_count}, diagnostics={diagnostics}"
 
 
-def _derive_pyrefly_diagnostics_status(value: object) -> str:
-    """Derive compact pyrefly diagnostics status.
+def _derive_python_semantic_diagnostics_status(value: object) -> str:
+    """Derive compact Python semantic diagnostics status.
 
     Returns:
     -------
@@ -1468,8 +1469,8 @@ def _derive_pyrefly_diagnostics_status(value: object) -> str:
     """
     count = len(value) if isinstance(value, (list, dict)) else 0
     if count == 0:
-        return "Pyrefly diagnostics: clean"
-    return f"Pyrefly diagnostics: {count} items"
+        return "Python semantic diagnostics: clean"
+    return f"Python semantic diagnostics: {count} items"
 
 
 def _derive_capabilities_status(value: object) -> str:
@@ -1509,10 +1510,10 @@ _CompactDeriver = Callable[[object], str]
 
 _COMPACT_STATUS_DERIVERS: dict[str, _CompactDeriver] = {
     "enrichment_telemetry": _derive_enrichment_status,
-    "pyrefly_telemetry": _derive_pyrefly_telemetry_status,
-    "rust_lsp_telemetry": _derive_rust_lsp_telemetry_status,
-    "lsp_advanced_planes": _derive_lsp_advanced_status,
-    "pyrefly_diagnostics": _derive_pyrefly_diagnostics_status,
+    "python_semantic_telemetry": _derive_python_semantic_telemetry_status,
+    "rust_semantic_telemetry": _derive_rust_semantic_telemetry_status,
+    "semantic_planes": _derive_semantic_advanced_status,
+    "python_semantic_diagnostics": _derive_python_semantic_diagnostics_status,
     "language_capabilities": _derive_capabilities_status,
     "cross_language_diagnostics": _derive_cross_lang_status,
 }

@@ -41,10 +41,10 @@ def _result_with_diagnostics() -> CqResult:
                 "ast_grep": {"applied": 2, "total": 3, "degraded": 1},
             }
         },
-        "pyrefly_telemetry": {"attempted": 2, "applied": 1, "failed": 1},
-        "rust_lsp_telemetry": {"attempted": 1, "applied": 1, "failed": 0},
-        "lsp_advanced_planes": {"semantic_tokens_count": 4, "inlay_hints_count": 2},
-        "pyrefly_diagnostics": [{"message": "diag"}],
+        "python_semantic_telemetry": {"attempted": 2, "applied": 1, "failed": 1},
+        "rust_semantic_telemetry": {"attempted": 1, "applied": 1, "failed": 0},
+        "semantic_planes": {"semantic_tokens_count": 4, "inlay_hints_count": 2},
+        "python_semantic_diagnostics": [{"message": "diag"}],
         "language_capabilities": {"python": {}, "rust": {}, "shared": {}},
         "cross_language_diagnostics": [{"code": "ML001", "message": "info"}],
     }
@@ -68,7 +68,7 @@ def test_compact_summary_offloads_diagnostic_payloads() -> None:
     for key in ARTIFACT_ONLY_KEYS:
         if key in result.summary:
             assert key in offloaded_keys
-    assert isinstance(compact.get("pyrefly_diagnostics"), str)
+    assert isinstance(compact.get("python_semantic_diagnostics"), str)
     assert isinstance(compact.get("cross_language_diagnostics"), str)
 
 

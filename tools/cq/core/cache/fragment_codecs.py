@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TypeVar
-
 import msgspec
 
-T = TypeVar("T")
 
-
-def decode_fragment_payload(payload: object, *, type_: type[T]) -> T | None:
+def decode_fragment_payload[T](payload: object, *, type_: type[T]) -> T | None:
     """Decode cached payload into target msgspec contract type.
 
     Returns:

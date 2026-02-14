@@ -96,10 +96,10 @@ def test_auto_scope_summary_uses_multilang_partitions(tmp_path: Path) -> None:
 
     assert result.summary["query"] == "entity=function name=target"
     assert result.summary["mode"] == "entity"
-    assert "pyrefly_overview" in result.summary
-    assert "pyrefly_telemetry" in result.summary
-    assert "rust_lsp_telemetry" in result.summary
-    assert "pyrefly_diagnostics" in result.summary
+    assert "python_semantic_overview" in result.summary
+    assert "python_semantic_telemetry" in result.summary
+    assert "rust_semantic_telemetry" in result.summary
+    assert "python_semantic_diagnostics" in result.summary
     assert result.summary["lang_scope"] == "auto"
     assert result.summary["language_order"] == ["python", "rust"]
     languages = result.summary["languages"]
@@ -121,10 +121,10 @@ def test_single_scope_summary_uses_canonical_multilang_keys(tmp_path: Path) -> N
 
     assert result.summary["lang_scope"] == "python"
     assert result.summary["language_order"] == ["python"]
-    assert "pyrefly_overview" in result.summary
-    assert "pyrefly_telemetry" in result.summary
-    assert "rust_lsp_telemetry" in result.summary
-    assert "pyrefly_diagnostics" in result.summary
+    assert "python_semantic_overview" in result.summary
+    assert "python_semantic_telemetry" in result.summary
+    assert "rust_semantic_telemetry" in result.summary
+    assert "python_semantic_diagnostics" in result.summary
     languages = result.summary["languages"]
     assert isinstance(languages, dict)
     assert set(languages) == {"python"}
@@ -198,8 +198,8 @@ def test_query_text_preserved_when_provided(tmp_path: Path) -> None:
     assert result.summary["mode"] == "entity"
 
 
-def test_entity_insight_skips_lsp_for_high_cardinality_query(tmp_path: Path) -> None:
-    """Broad entity queries should skip LSP augmentation within front-door budget."""
+def test_entity_insight_skips_semantic_for_high_cardinality_query(tmp_path: Path) -> None:
+    """Broad entity queries should skip semantic augmentation within front-door budget."""
     lines = []
     for idx in range(60):
         lines.append(f"def fn_{idx}():\n")
@@ -215,20 +215,20 @@ def test_entity_insight_skips_lsp_for_high_cardinality_query(tmp_path: Path) -> 
     assert isinstance(insight, dict)
     degradation = insight.get("degradation")
     assert isinstance(degradation, dict)
-    assert degradation.get("lsp") == "skipped"
+    assert degradation.get("semantic") == "skipped"
     notes = degradation.get("notes")
     assert isinstance(notes, list)
     assert any("not_attempted_by_budget" in str(note) for note in notes)
 
-    pyrefly_telemetry = result.summary.get("pyrefly_telemetry")
-    assert isinstance(pyrefly_telemetry, dict)
-    attempted = pyrefly_telemetry.get("attempted")
+    python_semantic_telemetry = result.summary.get("python_semantic_telemetry")
+    assert isinstance(python_semantic_telemetry, dict)
+    attempted = python_semantic_telemetry.get("attempted")
     assert isinstance(attempted, int)
     assert attempted == 0
 
 
-def test_mark_entity_insight_lsp_from_merged_telemetry() -> None:
-    """Merged telemetry should drive deterministic front-door LSP status."""
+def test_mark_entity_insight_semantic_from_merged_telemetry() -> None:
+    """Merged telemetry should drive deterministic front-door semantic status."""
     from tools.cq.core.schema import CqResult, RunMeta
 
     run = RunMeta(
@@ -248,14 +248,14 @@ def test_mark_entity_insight_lsp_from_merged_telemetry() -> None:
         summary={
             "lang_scope": "auto",
             "front_door_insight": msgspec.to_builtins(insight),
-            "pyrefly_telemetry": {
+            "python_semantic_telemetry": {
                 "attempted": 2,
                 "applied": 1,
                 "failed": 1,
                 "skipped": 0,
                 "timed_out": 0,
             },
-            "rust_lsp_telemetry": {
+            "rust_semantic_telemetry": {
                 "attempted": 0,
                 "applied": 0,
                 "failed": 0,
@@ -274,4 +274,4 @@ def test_mark_entity_insight_lsp_from_merged_telemetry() -> None:
     assert isinstance(updated, dict)
     degradation = updated.get("degradation")
     assert isinstance(degradation, dict)
-    assert degradation.get("lsp") == "partial"
+    assert degradation.get("semantic") == "partial"

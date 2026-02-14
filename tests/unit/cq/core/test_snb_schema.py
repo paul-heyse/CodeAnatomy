@@ -33,8 +33,8 @@ def test_artifact_pointer_v1_construction() -> None:
 
 def test_degrade_event_v1_construction() -> None:
     """Test DegradeEventV1 construction with required fields."""
-    event = DegradeEventV1(stage="lsp.rust")
-    assert event.stage == "lsp.rust"
+    event = DegradeEventV1(stage="semantic.rust")
+    assert event.stage == "semantic.rust"
     assert event.severity == "warning"
     assert event.category == ""
     assert event.message == ""
@@ -182,7 +182,7 @@ def test_bundle_meta_v1_construction() -> None:
     assert meta.workspace_root is None
     assert meta.query_text is None
     assert meta.created_at_ms is None
-    assert meta.lsp_servers == ()
+    assert meta.semantic_sources == ()
     assert meta.limits is None
 
 
@@ -194,14 +194,14 @@ def test_bundle_meta_v1_with_values() -> None:
         workspace_root="/workspace",
         query_text="entity=function name=build_graph",
         created_at_ms=1234567890.0,
-        lsp_servers=({"name": "rust-analyzer", "version": "0.3.0"},),
+        semantic_sources=({"name": "tree_sitter", "version": "0.25.10"},),
         limits={"max_nodes": 1000, "max_depth": 3},
     )
     assert meta.tool_version == "0.1.0"
     assert meta.workspace_root == "/workspace"
     assert meta.query_text == "entity=function name=build_graph"
     assert meta.created_at_ms == 1234567890.0
-    assert len(meta.lsp_servers) == 1
+    assert len(meta.semantic_sources) == 1
     assert meta.limits == {"max_nodes": 1000, "max_depth": 3}
 
 
@@ -277,16 +277,16 @@ def test_semantic_neighborhood_bundle_v1_with_full_data() -> None:
     }
 
     artifact = ArtifactPointerV1(
-        artifact_kind="lsp.call_graph",
+        artifact_kind="semantic.call_graph",
         artifact_id="artifact-1",
         deterministic_id="sha256-artifact",
     )
 
     diagnostic = DegradeEventV1(
-        stage="lsp.rust",
+        stage="semantic.rust",
         severity="warning",
         category="timeout",
-        message="LSP server timeout",
+        message="semantic server timeout",
     )
 
     bundle = SemanticNeighborhoodBundleV1(
@@ -314,9 +314,9 @@ def test_semantic_neighborhood_bundle_v1_with_full_data() -> None:
     assert bundle.node_index is not None
     assert len(bundle.node_index) == 2
     assert len(bundle.artifacts) == 1
-    assert bundle.artifacts[0].artifact_kind == "lsp.call_graph"
+    assert bundle.artifacts[0].artifact_kind == "semantic.call_graph"
     assert len(bundle.diagnostics) == 1
-    assert bundle.diagnostics[0].stage == "lsp.rust"
+    assert bundle.diagnostics[0].stage == "semantic.rust"
     assert bundle.schema_version == "cq.snb.v1"
 
 

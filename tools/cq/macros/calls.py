@@ -191,8 +191,8 @@ class CallsNeighborhoodRequest:
 
 
 @dataclass(frozen=True)
-class CallsLspRequest:
-    """Request envelope for calls-mode LSP overlay application."""
+class CallsSemanticRequest:
+    """Request envelope for calls-mode semantic overlay application."""
 
     root: Path
     target_file_path: Path | None
@@ -1750,32 +1750,32 @@ def _build_calls_neighborhood(
     return neighborhood, neighborhood_findings, degradation_notes
 
 
-def _apply_calls_lsp(
+def _apply_calls_semantic(
     *,
     insight: FrontDoorInsightV1,
     result: CqResult,
-    request: CallsLspRequest,
+    request: CallsSemanticRequest,
 ) -> tuple[FrontDoorInsightV1, QueryLanguage | None, int, int, int, int, tuple[str, ...]]:
-    from tools.cq.core.front_door_insight import augment_insight_with_lsp
-    from tools.cq.search.lsp_front_door_adapter import (
-        LanguageLspEnrichmentRequest,
-        enrich_with_language_lsp,
-        lsp_runtime_enabled,
+    from tools.cq.core.front_door_insight import augment_insight_with_semantic
+    from tools.cq.search.language_front_door_adapter import (
+        LanguageSemanticEnrichmentRequest,
+        enrich_with_language_semantics,
         provider_for_language,
+        semantic_runtime_enabled,
     )
 
     target_language = request.target_language
-    lsp_attempted = 0
-    lsp_applied = 0
-    lsp_failed = 0
-    lsp_timed_out = 0
-    lsp_provider = provider_for_language(target_language) if target_language else "none"
-    lsp_reasons: list[str] = []
+    semantic_attempted = 0
+    semantic_applied = 0
+    semantic_failed = 0
+    semantic_timed_out = 0
+    semantic_provider = provider_for_language(target_language) if target_language else "none"
+    semantic_reasons: list[str] = []
 
     if request.target_file_path is not None and target_language in {"python", "rust"}:
-        if lsp_runtime_enabled():
-            lsp_outcome = enrich_with_language_lsp(
-                LanguageLspEnrichmentRequest(
+        if semantic_runtime_enabled():
+            semantic_outcome = enrich_with_language_semantics(
+                LanguageSemanticEnrichmentRequest(
                     language=target_language,
                     mode="calls",
                     root=request.root,
@@ -1786,48 +1786,48 @@ def _apply_calls_lsp(
                     symbol_hint=request.symbol_hint,
                 )
             )
-            lsp_attempted = 1
-            lsp_timed_out = int(lsp_outcome.timed_out)
-            lsp_payload = lsp_outcome.payload
-            if lsp_payload is not None:
-                payload_has_signal = _calls_payload_has_signal(target_language, lsp_payload)
+            semantic_attempted = 1
+            semantic_timed_out = int(semantic_outcome.timed_out)
+            semantic_payload = semantic_outcome.payload
+            if semantic_payload is not None:
+                payload_has_signal = _calls_payload_has_signal(target_language, semantic_payload)
                 if payload_has_signal:
-                    lsp_applied = 1
-                    insight = augment_insight_with_lsp(
+                    semantic_applied = 1
+                    insight = augment_insight_with_semantic(
                         insight,
-                        lsp_payload,
+                        semantic_payload,
                         preview_per_slice=request.preview_per_slice,
                     )
                 else:
-                    lsp_failed = 1
-                    lsp_reasons.append(
+                    semantic_failed = 1
+                    semantic_reasons.append(
                         _calls_payload_reason(
                             target_language,
-                            lsp_payload,
-                            fallback_reason=lsp_outcome.failure_reason,
+                            semantic_payload,
+                            fallback_reason=semantic_outcome.failure_reason,
                         )
                     )
-                advanced_planes = lsp_payload.get("advanced_planes")
-                if isinstance(advanced_planes, dict):
-                    result.summary["lsp_advanced_planes"] = dict(advanced_planes)
+                semantic_planes = semantic_payload.get("semantic_planes")
+                if isinstance(semantic_planes, dict):
+                    result.summary["semantic_planes"] = dict(semantic_planes)
             else:
-                lsp_failed = 1
-                lsp_reasons.append(
-                    lsp_outcome.failure_reason
-                    or ("request_timeout" if lsp_outcome.timed_out else "request_failed")
+                semantic_failed = 1
+                semantic_reasons.append(
+                    semantic_outcome.failure_reason
+                    or ("request_timeout" if semantic_outcome.timed_out else "request_failed")
                 )
         else:
-            lsp_reasons.append("not_attempted_runtime_disabled")
-    elif lsp_provider == "none":
-        lsp_reasons.append("provider_unavailable")
+            semantic_reasons.append("not_attempted_runtime_disabled")
+    elif semantic_provider == "none":
+        semantic_reasons.append("provider_unavailable")
     return (
         insight,
         target_language,
-        lsp_attempted,
-        lsp_applied,
-        lsp_failed,
-        lsp_timed_out,
-        tuple(dict.fromkeys(lsp_reasons)),
+        semantic_attempted,
+        semantic_applied,
+        semantic_failed,
+        semantic_timed_out,
+        tuple(dict.fromkeys(semantic_reasons)),
     )
 
 
@@ -1856,21 +1856,21 @@ def _calls_payload_has_signal(
     return isinstance(hover, str) and bool(hover.strip())
 
 
-def _normalize_pyrefly_calls_reason(raw_reason: str | None) -> str:
+def _normalize_python_semantic_calls_reason(raw_reason: str | None) -> str:
     if not raw_reason:
         return "no_signal"
     if raw_reason == "timeout":
         return "request_timeout"
-    if raw_reason.startswith("no_pyrefly_signal:"):
-        normalized = raw_reason.removeprefix("no_pyrefly_signal:")
+    if raw_reason.startswith("no_python_semantic_signal:"):
+        normalized = raw_reason.removeprefix("no_python_semantic_signal:")
         return "request_timeout" if normalized == "timeout" else (normalized or "no_signal")
     return raw_reason
 
 
 def _extract_rust_calls_reason(payload: dict[str, object]) -> str | None:
-    advanced = payload.get("advanced_planes")
-    if isinstance(advanced, dict):
-        reason = advanced.get("reason")
+    planes = payload.get("semantic_planes")
+    if isinstance(planes, dict):
+        reason = planes.get("reason")
         if isinstance(reason, str) and reason:
             return reason
     degrade_events = payload.get("degrade_events")
@@ -1895,8 +1895,8 @@ def _calls_payload_reason(
         if isinstance(coverage, dict):
             reason = coverage.get("reason")
             if isinstance(reason, str) and reason:
-                return _normalize_pyrefly_calls_reason(reason)
-        return _normalize_pyrefly_calls_reason(fallback_reason)
+                return _normalize_python_semantic_calls_reason(reason)
+        return _normalize_python_semantic_calls_reason(fallback_reason)
     return _extract_rust_calls_reason(payload) or fallback_reason or "no_signal"
 
 
@@ -1961,7 +1961,7 @@ def _build_calls_front_door_state(
     score: ScoreDetails | None,
 ) -> CallsFrontDoorState:
     from tools.cq.core.front_door_insight import InsightNeighborhoodV1
-    from tools.cq.search.lsp_front_door_adapter import infer_language_for_path
+    from tools.cq.search.language_front_door_adapter import infer_language_for_path
 
     resolved_target_language = infer_target_language(ctx.root, ctx.function_name)
     target_location, target_callees, target_language_hint = attach_target_metadata(
@@ -2051,14 +2051,16 @@ def _build_calls_front_door_insight(
         InsightLocationV1,
         build_calls_insight,
     )
-    from tools.cq.search.lsp_contract_state import (
-        LspContractStateInputV1,
-        derive_lsp_contract_state,
+    from tools.cq.search.language_front_door_adapter import provider_for_language
+    from tools.cq.search.semantic_contract_state import (
+        SemanticContractStateInputV1,
+        derive_semantic_contract_state,
     )
-    from tools.cq.search.lsp_front_door_adapter import provider_for_language
 
-    lsp_provider = provider_for_language(state.target_language) if state.target_language else "none"
-    lsp_available = state.target_language in {"python", "rust"}
+    semantic_provider = (
+        provider_for_language(state.target_language) if state.target_language else "none"
+    )
+    semantic_available = state.target_language in {"python", "rust"}
     location = (
         InsightLocationV1(file=state.target_location[0], line=state.target_location[1], col=0)
         if state.target_location is not None
@@ -2078,13 +2080,13 @@ def _build_calls_front_door_insight(
             budget=InsightBudgetV1(
                 top_candidates=_FRONT_DOOR_TOP_CANDIDATES,
                 preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
-                lsp_targets=1,
+                semantic_targets=1,
             ),
             degradation=InsightDegradationV1(
-                lsp=derive_lsp_contract_state(
-                    LspContractStateInputV1(
-                        provider=lsp_provider,
-                        available=lsp_available,
+                semantic=derive_semantic_contract_state(
+                    SemanticContractStateInputV1(
+                        provider=semantic_provider,
+                        available=semantic_available,
                     )
                 ).status,
                 scan="fallback" if scan_result.used_fallback else "ok",
@@ -2095,17 +2097,17 @@ def _build_calls_front_door_insight(
     )
 
 
-def _apply_calls_lsp_with_telemetry(
+def _apply_calls_semantic_with_telemetry(
     result: CqResult,
     *,
     insight: FrontDoorInsightV1,
     state: CallsFrontDoorState,
     symbol_hint: str,
 ) -> tuple[FrontDoorInsightV1, tuple[int, int, int, int], tuple[str, ...]]:
-    insight, _language, attempted, applied, failed, timed_out, reasons = _apply_calls_lsp(
+    insight, _language, attempted, applied, failed, timed_out, reasons = _apply_calls_semantic(
         insight=insight,
         result=result,
-        request=CallsLspRequest(
+        request=CallsSemanticRequest(
             root=Path(result.run.root),
             target_file_path=state.target_file_path,
             target_line=state.target_line,
@@ -2118,31 +2120,33 @@ def _apply_calls_lsp_with_telemetry(
     return insight, (attempted, applied, failed, timed_out), reasons
 
 
-def _attach_calls_lsp_summary(
+def _attach_calls_semantic_summary(
     result: CqResult,
     target_language: QueryLanguage | None,
-    lsp_telemetry: tuple[int, int, int, int],
+    semantic_telemetry: tuple[int, int, int, int],
 ) -> None:
-    lsp_attempted, lsp_applied, lsp_failed, lsp_timed_out = lsp_telemetry
-    result.summary["pyrefly_telemetry"] = {
-        "attempted": lsp_attempted if target_language == "python" else 0,
-        "applied": lsp_applied if target_language == "python" else 0,
-        "failed": max(lsp_failed, lsp_attempted - lsp_applied)
+    semantic_attempted, semantic_applied, semantic_failed, semantic_timed_out = semantic_telemetry
+    result.summary["python_semantic_telemetry"] = {
+        "attempted": semantic_attempted if target_language == "python" else 0,
+        "applied": semantic_applied if target_language == "python" else 0,
+        "failed": max(semantic_failed, semantic_attempted - semantic_applied)
         if target_language == "python"
         else 0,
         "skipped": 0,
-        "timed_out": lsp_timed_out if target_language == "python" else 0,
+        "timed_out": semantic_timed_out if target_language == "python" else 0,
     }
-    result.summary["rust_lsp_telemetry"] = {
-        "attempted": lsp_attempted if target_language == "rust" else 0,
-        "applied": lsp_applied if target_language == "rust" else 0,
-        "failed": max(lsp_failed, lsp_attempted - lsp_applied) if target_language == "rust" else 0,
+    result.summary["rust_semantic_telemetry"] = {
+        "attempted": semantic_attempted if target_language == "rust" else 0,
+        "applied": semantic_applied if target_language == "rust" else 0,
+        "failed": max(semantic_failed, semantic_attempted - semantic_applied)
+        if target_language == "rust"
+        else 0,
         "skipped": 0,
-        "timed_out": lsp_timed_out if target_language == "rust" else 0,
+        "timed_out": semantic_timed_out if target_language == "rust" else 0,
     }
 
 
-def _finalize_calls_lsp_state(
+def _finalize_calls_semantic_state(
     *,
     insight: FrontDoorInsightV1,
     summary: dict[str, object],
@@ -2151,13 +2155,15 @@ def _finalize_calls_lsp_state(
     top_level_applied: int,
     reasons: tuple[str, ...],
 ) -> FrontDoorInsightV1:
-    from tools.cq.search.lsp_contract_state import (
-        LspContractStateInputV1,
-        derive_lsp_contract_state,
+    from tools.cq.search.language_front_door_adapter import provider_for_language
+    from tools.cq.search.semantic_contract_state import (
+        SemanticContractStateInputV1,
+        derive_semantic_contract_state,
     )
-    from tools.cq.search.lsp_front_door_adapter import provider_for_language
 
-    telemetry_key = "pyrefly_telemetry" if target_language == "python" else "rust_lsp_telemetry"
+    telemetry_key = (
+        "python_semantic_telemetry" if target_language == "python" else "rust_semantic_telemetry"
+    )
     telemetry = summary.get(telemetry_key)
     attempted = 0
     applied = 0
@@ -2178,8 +2184,8 @@ def _finalize_calls_lsp_state(
     if top_level_attempted > 0 and top_level_applied <= 0 and applied > 0:
         state_reasons.append("top_target_failed")
 
-    lsp_state = derive_lsp_contract_state(
-        LspContractStateInputV1(
+    semantic_state = derive_semantic_contract_state(
+        SemanticContractStateInputV1(
             provider=provider,
             available=provider != "none",
             attempted=attempted,
@@ -2193,8 +2199,8 @@ def _finalize_calls_lsp_state(
         insight,
         degradation=msgspec.structs.replace(
             insight.degradation,
-            lsp=lsp_state.status,
-            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+            semantic=semantic_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *semantic_state.reasons])),
         ),
     )
 
@@ -2218,20 +2224,20 @@ def _build_calls_result(
         confidence=confidence,
         state=state,
     )
-    insight, lsp_telemetry, lsp_reasons = _apply_calls_lsp_with_telemetry(
+    insight, semantic_telemetry, semantic_reasons = _apply_calls_semantic_with_telemetry(
         result,
         insight=insight,
         state=state,
         symbol_hint=ctx.function_name.rsplit(".", maxsplit=1)[-1],
     )
-    _attach_calls_lsp_summary(result, state.target_language, lsp_telemetry)
-    insight = _finalize_calls_lsp_state(
+    _attach_calls_semantic_summary(result, state.target_language, semantic_telemetry)
+    insight = _finalize_calls_semantic_state(
         insight=insight,
         summary=result.summary,
         target_language=state.target_language,
-        top_level_attempted=lsp_telemetry[0],
-        top_level_applied=lsp_telemetry[1],
-        reasons=lsp_reasons,
+        top_level_attempted=semantic_telemetry[0],
+        top_level_applied=semantic_telemetry[1],
+        reasons=semantic_reasons,
     )
     result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)
     return result

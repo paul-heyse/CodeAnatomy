@@ -8,6 +8,7 @@ extension entrypoints.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Mapping
 from functools import cache
 from typing import Any
 
@@ -86,8 +87,8 @@ def udf_docs_snapshot(ctx: Any) -> dict[str, object]:
     payload = fn(*call_args, **call_kwargs)
     if isinstance(payload, dict):
         return payload
-    if hasattr(payload, "items"):
-        return dict(payload)
+    if isinstance(payload, Mapping):
+        return {str(key): value for key, value in payload.items()}
     return {}
 
 

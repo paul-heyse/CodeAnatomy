@@ -15,7 +15,7 @@ def test_neighborhood_step_msgspec_roundtrip() -> None:
         target="example.py:10:5",
         lang="python",
         top_k=20,
-        no_lsp=True,
+        no_semantic_enrichment=True,
     )
 
     # Serialize and deserialize
@@ -26,7 +26,7 @@ def test_neighborhood_step_msgspec_roundtrip() -> None:
     assert deserialized.target == step.target
     assert deserialized.lang == step.lang
     assert deserialized.top_k == step.top_k
-    assert deserialized.no_lsp == step.no_lsp
+    assert deserialized.no_semantic_enrichment == step.no_semantic_enrichment
 
 
 def test_plan_feasible_slices_returns_degrades() -> None:
@@ -116,7 +116,7 @@ def test_neighborhood_step_defaults() -> None:
 
     assert step.lang == "python"
     assert step.top_k == 10
-    assert step.no_lsp is False
+    assert step.no_semantic_enrichment is False
 
 
 def test_neighborhood_step_with_custom_values() -> None:
@@ -125,10 +125,10 @@ def test_neighborhood_step_with_custom_values() -> None:
         target="main.rs:50:10",
         lang="rust",
         top_k=5,
-        no_lsp=True,
+        no_semantic_enrichment=True,
     )
 
     assert step.target == "main.rs:50:10"
     assert step.lang == "rust"
     assert step.top_k == 5
-    assert step.no_lsp is True
+    assert step.no_semantic_enrichment is True

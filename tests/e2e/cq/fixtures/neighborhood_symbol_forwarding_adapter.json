@@ -12,7 +12,7 @@
         "**Nodes:** 5",
         "**Edges:** 1",
         "**Slices:** 2",
-        "**Relationships:** siblings (4), callees (1)"
+        "**Relationships:** callees (1), siblings (4)"
       ],
       "title": "Neighborhood Summary"
     },
@@ -53,16 +53,16 @@
     }
   ],
   "summary": {
-    "enable_lsp": false,
+    "enable_semantic_enrichment": false,
     "front_door_insight": null,
     "lang_scope": null,
     "language_order": null,
-    "lsp_advanced_planes_present": false,
     "mode": null,
     "plan_version": null,
-    "pyrefly_telemetry": null,
+    "python_semantic_telemetry": null,
     "query": null,
-    "rust_lsp_telemetry": null,
+    "rust_semantic_telemetry": null,
+    "semantic_planes_present": false,
     "steps": null,
     "target": "forwarding_adapter",
     "target_file": "tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py",

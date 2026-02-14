@@ -162,8 +162,8 @@ def run_command(repo_root: Path) -> Callable[[list[str]], subprocess.CompletedPr
             Completed process with stdout, stderr, returncode.
         """
         env = os.environ.copy()
-        # Keep CQ e2e snapshots deterministic: LSP availability is environment-dependent.
-        env.setdefault("CQ_ENABLE_LSP", "0")
+        # Keep CQ e2e snapshots deterministic: semantic availability is environment-dependent.
+        env.setdefault("CQ_ENABLE_SEMANTIC_ENRICHMENT", "0")
         return subprocess.run(
             args,
             cwd=repo_root,
@@ -186,8 +186,8 @@ def run_cq_command(
     def _run(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         command = ["./cq", *args]
         env = os.environ.copy()
-        # Keep CQ e2e snapshots deterministic: LSP availability is environment-dependent.
-        env.setdefault("CQ_ENABLE_LSP", "0")
+        # Keep CQ e2e snapshots deterministic: semantic availability is environment-dependent.
+        env.setdefault("CQ_ENABLE_SEMANTIC_ENRICHMENT", "0")
         return subprocess.run(
             command,
             cwd=cwd or repo_root,

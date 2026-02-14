@@ -73,7 +73,7 @@
     }
   ],
   "summary": {
-    "enable_lsp": null,
+    "enable_semantic_enrichment": null,
     "front_door_insight": {
       "artifact_ref_presence": {
         "diagnostics": false,
@@ -81,7 +81,7 @@
         "telemetry": false
       },
       "degradation": {
-        "lsp": "skipped",
+        "semantic": "skipped",
         "notes": [
           "not_attempted_by_design",
           "not_attempted_runtime_disabled"
@@ -132,10 +132,10 @@
     "language_order": [
       "python"
     ],
-    "lsp_advanced_planes_present": false,
+    "semantic_planes_present": false,
     "mode": "identifier",
     "plan_version": null,
-    "pyrefly_telemetry": {
+    "python_semantic_telemetry": {
       "applied": 0,
       "attempted": 0,
       "failed": 0,
@@ -143,7 +143,7 @@
       "timed_out": 0
     },
     "query": "AsyncService",
-    "rust_lsp_telemetry": {
+    "rust_semantic_telemetry": {
       "applied": 0,
       "attempted": 0,
       "failed": 0,

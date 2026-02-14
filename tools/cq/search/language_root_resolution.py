@@ -1,4 +1,4 @@
-"""Workspace root resolution for language-specific LSP providers."""
+"""Workspace root resolution for language-specific static semantic providers."""
 
 from __future__ import annotations
 
@@ -44,19 +44,16 @@ def _nearest_workspace_root(
         current = parent
 
 
-def resolve_lsp_provider_root(
+def resolve_language_provider_root(
     *,
     language: QueryLanguage,
     command_root: Path,
     file_path: Path,
 ) -> Path:
-    """Resolve the effective workspace root for an LSP request.
+    """Resolve the effective workspace root for a static semantic request.
 
     Returns:
-    -------
-    Path
-        Nearest language workspace root for ``file_path`` within ``command_root``,
-        or ``command_root`` when no language marker is found.
+        Path: Workspace root resolved from markers, or command root fallback.
     """
     normalized_command_root = command_root.resolve()
     target_path = _normalize_target_path(normalized_command_root, file_path)
@@ -70,5 +67,5 @@ def resolve_lsp_provider_root(
 
 
 __all__ = [
-    "resolve_lsp_provider_root",
+    "resolve_language_provider_root",
 ]

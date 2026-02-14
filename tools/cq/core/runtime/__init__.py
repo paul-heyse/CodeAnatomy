@@ -2,9 +2,9 @@
 
 from tools.cq.core.runtime.execution_policy import (
     CacheRuntimePolicy,
-    LspRuntimePolicy,
     ParallelismPolicy,
     RuntimeExecutionPolicy,
+    SemanticRuntimePolicy,
     default_runtime_execution_policy,
 )
 from tools.cq.core.runtime.worker_scheduler import (
@@ -16,9 +16,9 @@ from tools.cq.core.runtime.worker_scheduler import (
 
 __all__ = [
     "CacheRuntimePolicy",
-    "LspRuntimePolicy",
     "ParallelismPolicy",
     "RuntimeExecutionPolicy",
+    "SemanticRuntimePolicy",
     "WorkerBatchResult",
     "WorkerScheduler",
     "close_worker_scheduler",

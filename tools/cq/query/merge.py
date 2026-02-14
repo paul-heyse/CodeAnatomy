@@ -59,7 +59,7 @@ def _missing_languages_from_summary(summary: dict[str, object]) -> list[str]:
     return missing
 
 
-def _coerce_lsp_telemetry(payload: object) -> tuple[int, int, int, int]:
+def _coerce_semantic_telemetry(payload: object) -> tuple[int, int, int, int]:
     if not isinstance(payload, dict):
         return 0, 0, 0, 0
     attempted = payload.get("attempted")
@@ -74,24 +74,24 @@ def _coerce_lsp_telemetry(payload: object) -> tuple[int, int, int, int]:
     )
 
 
-def _merge_lsp_contract_inputs(
+def _merge_semantic_contract_inputs(
     summary: dict[str, object],
 ) -> tuple[str, bool, int, int, int, int]:
-    py_attempted, py_applied, py_failed, py_timed_out = _coerce_lsp_telemetry(
-        summary.get("pyrefly_telemetry")
+    py_attempted, py_applied, py_failed, py_timed_out = _coerce_semantic_telemetry(
+        summary.get("python_semantic_telemetry")
     )
-    rust_attempted, rust_applied, rust_failed, rust_timed_out = _coerce_lsp_telemetry(
-        summary.get("rust_lsp_telemetry")
+    rust_attempted, rust_applied, rust_failed, rust_timed_out = _coerce_semantic_telemetry(
+        summary.get("rust_semantic_telemetry")
     )
     provider = "none"
     if rust_attempted > 0 and py_attempted <= 0:
-        provider = "rust_analyzer"
+        provider = "rust_static"
     elif py_attempted > 0:
-        provider = "pyrefly"
+        provider = "python_static"
     elif rust_attempted > 0:
-        provider = "rust_analyzer"
+        provider = "rust_static"
     elif summary.get("lang_scope") == "auto":
-        provider = "pyrefly"
+        provider = "python_static"
     attempted = py_attempted + rust_attempted
     applied = py_applied + rust_applied
     failed = py_failed + rust_failed
@@ -107,10 +107,10 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
         mark_partial_for_missing_languages,
         to_public_front_door_insight_dict,
     )
-    from tools.cq.search.lsp_contract_state import (
-        LspContractStateInputV1,
-        LspProvider,
-        derive_lsp_contract_state,
+    from tools.cq.search.semantic_contract_state import (
+        SemanticContractStateInputV1,
+        SemanticProvider,
+        derive_semantic_contract_state,
     )
 
     insight = coerce_front_door_insight(result.summary.get("front_door_insight"))
@@ -121,12 +121,12 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
         missing = _missing_languages_from_summary(result.summary)
         if missing:
             insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
-    provider, available, attempted, applied, failed, timed_out = _merge_lsp_contract_inputs(
+    provider, available, attempted, applied, failed, timed_out = _merge_semantic_contract_inputs(
         result.summary
     )
-    lsp_state = derive_lsp_contract_state(
-        LspContractStateInputV1(
-            provider=cast("LspProvider", provider),
+    semantic_state = derive_semantic_contract_state(
+        SemanticContractStateInputV1(
+            provider=cast("SemanticProvider", provider),
             available=available,
             attempted=attempted,
             applied=applied,
@@ -138,8 +138,8 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
         insight,
         degradation=msgspec.structs.replace(
             insight.degradation,
-            lsp=lsp_state.status,
-            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+            semantic=semantic_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *semantic_state.reasons])),
         ),
     )
     result.summary["front_door_insight"] = to_public_front_door_insight_dict(insight)

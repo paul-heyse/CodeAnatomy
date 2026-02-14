@@ -1,4 +1,4 @@
-"""Phased execution pipeline for language-aware LSP enrichment."""
+"""Phased execution pipeline for language-aware static semantic enrichment."""
 
 from __future__ import annotations
 
@@ -29,15 +29,22 @@ from tools.cq.core.cache import (
 )
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
-from tools.cq.search.lsp.root_resolution import resolve_lsp_provider_root
-from tools.cq.search.lsp_front_door_contracts import (
-    LanguageLspEnrichmentOutcome,
-    LanguageLspEnrichmentRequest,
-    LspOutcomeCacheV1,
+from tools.cq.search.classifier import get_sg_root
+from tools.cq.search.language_front_door_contracts import (
+    LanguageSemanticEnrichmentOutcome,
+    LanguageSemanticEnrichmentRequest,
+    SemanticOutcomeCacheV1,
 )
-from tools.cq.search.lsp_request_budget import LspRequestBudgetV1, budget_for_mode, call_with_retry
-from tools.cq.search.pyrefly_lsp import PyreflyLspRequest, enrich_with_pyrefly_lsp
-from tools.cq.search.rust_lsp import RustLspRequest, enrich_with_rust_lsp
+from tools.cq.search.language_root_resolution import resolve_language_provider_root
+from tools.cq.search.python_enrichment import enrich_python_context_by_byte_range
+from tools.cq.search.requests import PythonByteRangeEnrichmentRequest
+from tools.cq.search.rust_enrichment import enrich_rust_context_by_byte_range
+from tools.cq.search.semantic_planes_static import build_static_semantic_planes
+from tools.cq.search.semantic_request_budget import (
+    SemanticRequestBudgetV1,
+    budget_for_mode,
+    call_with_retry,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,23 +59,27 @@ class _PipelineContext:
     lock_key: str
     scope_hash: str | None
     snapshot_digest: str
-    budget: LspRequestBudgetV1
+    budget: SemanticRequestBudgetV1
 
 
-def run_language_lsp_enrichment(
-    request: LanguageLspEnrichmentRequest,
+def run_language_semantic_enrichment(
+    request: LanguageSemanticEnrichmentRequest,
     *,
     cache_namespace: str,
     lock_retry_count: int,
     lock_retry_sleep_seconds: float,
     runtime_enabled: bool,
-) -> LanguageLspEnrichmentOutcome:
-    """Run language-aware enrichment with cache probe/single-flight/writeback."""
+) -> LanguageSemanticEnrichmentOutcome:
+    """Run language-aware static enrichment with cache probe/single-flight/writeback.
+
+    Returns:
+        LanguageSemanticEnrichmentOutcome: Enrichment outcome for the request.
+    """
     context = _build_context(request=request, cache_namespace=cache_namespace)
     if not runtime_enabled:
-        return LanguageLspEnrichmentOutcome(
+        return LanguageSemanticEnrichmentOutcome(
             timed_out=False,
-            failure_reason="not_attempted_runtime_disabled",
+            failure_reason="budget_exceeded",
             provider_root=context.provider_root,
         )
     cached_outcome = _probe_cached_outcome(context=context, cache_namespace=cache_namespace)
@@ -103,10 +114,10 @@ def run_language_lsp_enrichment(
 
 def _build_context(
     *,
-    request: LanguageLspEnrichmentRequest,
+    request: LanguageSemanticEnrichmentRequest,
     cache_namespace: str,
 ) -> _PipelineContext:
-    provider_root = resolve_lsp_provider_root(
+    provider_root = resolve_language_provider_root(
         language=request.language,
         command_root=request.root,
         file_path=request.file_path,
@@ -121,7 +132,7 @@ def _build_context(
     snapshot_digest = file_content_hash(target_file_path).digest
     cache_key = build_cache_key(
         cache_namespace,
-        version="v4",
+        version="v1",
         workspace=str(provider_root.resolve()),
         language=request.language,
         target=str(target_file_path),
@@ -162,7 +173,7 @@ def _probe_cached_outcome(
     *,
     context: _PipelineContext,
     cache_namespace: str,
-) -> LanguageLspEnrichmentOutcome | None:
+) -> LanguageSemanticEnrichmentOutcome | None:
     if not context.cache_enabled:
         return None
     cached = context.cache.get(context.cache_key)
@@ -174,11 +185,11 @@ def _probe_cached_outcome(
     if not isinstance(cached, dict):
         return None
     try:
-        payload = msgspec.convert(cached, type=LspOutcomeCacheV1)
+        payload = msgspec.convert(cached, type=SemanticOutcomeCacheV1)
     except (RuntimeError, TypeError, ValueError):
         record_cache_decode_failure(namespace=cache_namespace)
         return None
-    return LanguageLspEnrichmentOutcome(
+    return LanguageSemanticEnrichmentOutcome(
         payload=dict(payload.payload) if isinstance(payload.payload, dict) else None,
         timed_out=bool(payload.timed_out),
         failure_reason=payload.failure_reason,
@@ -189,11 +200,11 @@ def _probe_cached_outcome(
 def _single_flight_gate(
     *,
     context: _PipelineContext,
-    request: LanguageLspEnrichmentRequest,
+    request: LanguageSemanticEnrichmentRequest,
     cache_namespace: str,
     lock_retry_count: int,
     lock_retry_sleep_seconds: float,
-) -> tuple[bool, LanguageLspEnrichmentOutcome | None]:
+) -> tuple[bool, LanguageSemanticEnrichmentOutcome | None]:
     if not context.cache_enabled:
         return True, None
     lock_acquired = context.cache.add(
@@ -216,63 +227,60 @@ def _single_flight_gate(
 
 def _execute_provider(
     *,
-    request: LanguageLspEnrichmentRequest,
+    request: LanguageSemanticEnrichmentRequest,
     context: _PipelineContext,
-) -> LanguageLspEnrichmentOutcome:
+) -> LanguageSemanticEnrichmentOutcome:
     if request.language == "python":
         return _execute_python_provider(request=request, context=context)
     return _execute_rust_provider(request=request, context=context)
 
 
+def _line_col_to_byte_offset(source_bytes: bytes, line: int, col: int) -> int:
+    safe_line = max(1, int(line))
+    safe_col = max(0, int(col))
+    lines = source_bytes.splitlines(keepends=True)
+    if not lines:
+        return 0
+    safe_line = min(safe_line, len(lines))
+    offset = sum(len(chunk) for chunk in lines[: safe_line - 1])
+    line_bytes = lines[safe_line - 1]
+    line_text = line_bytes.decode("utf-8", errors="replace")
+    clamped_col = min(safe_col, len(line_text))
+    byte_col = len(line_text[:clamped_col].encode("utf-8", errors="replace"))
+    return min(offset + byte_col, len(source_bytes))
+
+
+def _source_bytes(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
 def _execute_python_provider(
     *,
-    request: LanguageLspEnrichmentRequest,
+    request: LanguageSemanticEnrichmentRequest,
     context: _PipelineContext,
-) -> LanguageLspEnrichmentOutcome:
-    py_request = PyreflyLspRequest(
-        root=context.provider_root,
-        file_path=context.target_file_path,
-        line=max(1, int(request.line)),
-        col=max(0, int(request.col)),
-        symbol_hint=request.symbol_hint,
-        timeout_seconds=context.budget.probe_timeout_seconds,
-        startup_timeout_seconds=context.budget.startup_timeout_seconds,
-    )
-    payload, timed_out = call_with_retry(
-        lambda: _execute_lsp_task(
-            lambda: enrich_with_pyrefly_lsp(py_request),
-            timeout_seconds=context.budget.startup_timeout_seconds
-            + context.budget.probe_timeout_seconds,
-        ),
-        max_attempts=context.budget.max_attempts,
-        retry_backoff_ms=context.budget.retry_backoff_ms,
-    )
-    normalized_payload = payload if isinstance(payload, dict) else None
-    return LanguageLspEnrichmentOutcome(
-        payload=dict(normalized_payload) if isinstance(normalized_payload, dict) else None,
-        timed_out=timed_out,
-        failure_reason=_pyrefly_failure_reason(normalized_payload, timed_out=timed_out),
-        provider_root=context.provider_root,
-    )
+) -> LanguageSemanticEnrichmentOutcome:
+    source_bytes = _source_bytes(context.target_file_path)
+    if source_bytes is None:
+        return LanguageSemanticEnrichmentOutcome(
+            timed_out=False,
+            failure_reason="source_unavailable",
+            provider_root=context.provider_root,
+        )
 
+    byte_start = _line_col_to_byte_offset(source_bytes, request.line, request.col)
+    byte_end = min(len(source_bytes), max(byte_start + 1, byte_start + 32))
 
-def _execute_rust_provider(
-    *,
-    request: LanguageLspEnrichmentRequest,
-    context: _PipelineContext,
-) -> LanguageLspEnrichmentOutcome:
-    rust_request = RustLspRequest(
-        file_path=str(context.target_file_path),
-        line=max(0, int(request.line) - 1),
-        col=max(0, int(request.col)),
-        query_intent="symbol_grounding",
-    )
     payload, timed_out = call_with_retry(
-        lambda: _execute_lsp_task(
-            lambda: enrich_with_rust_lsp(
-                rust_request,
-                root=context.provider_root,
-                startup_timeout_seconds=context.budget.startup_timeout_seconds,
+        lambda: _execute_semantic_task(
+            lambda: _python_payload(
+                request=request,
+                context=context,
+                source_bytes=source_bytes,
+                byte_start=byte_start,
+                byte_end=byte_end,
             ),
             timeout_seconds=context.budget.startup_timeout_seconds
             + context.budget.probe_timeout_seconds,
@@ -280,20 +288,119 @@ def _execute_rust_provider(
         max_attempts=context.budget.max_attempts,
         retry_backoff_ms=context.budget.retry_backoff_ms,
     )
-    normalized_payload = payload if isinstance(payload, dict) else None
-    return LanguageLspEnrichmentOutcome(
-        payload=dict(normalized_payload) if isinstance(normalized_payload, dict) else None,
+
+    normalized = payload if isinstance(payload, dict) else None
+    return LanguageSemanticEnrichmentOutcome(
+        payload=dict(normalized) if isinstance(normalized, dict) else None,
         timed_out=timed_out,
-        failure_reason=_rust_failure_reason(normalized_payload, timed_out=timed_out),
+        failure_reason=_python_failure_reason(normalized, timed_out=timed_out),
         provider_root=context.provider_root,
     )
+
+
+def _python_payload(
+    *,
+    request: LanguageSemanticEnrichmentRequest,
+    context: _PipelineContext,
+    source_bytes: bytes,
+    byte_start: int,
+    byte_end: int,
+) -> dict[str, object] | None:
+    sg_root = get_sg_root(context.target_file_path, lang="python")
+    payload = enrich_python_context_by_byte_range(
+        PythonByteRangeEnrichmentRequest(
+            sg_root=sg_root,
+            source_bytes=source_bytes,
+            byte_start=byte_start,
+            byte_end=byte_end,
+            cache_key=str(context.target_file_path),
+        )
+    )
+    if not isinstance(payload, dict):
+        return None
+
+    merged = dict(payload)
+    merged["semantic_planes"] = build_static_semantic_planes(language="python", payload=merged)
+    merged["source_attribution"] = {
+        "language": "python",
+        "pipeline": "static_front_door",
+        "symbol_hint": request.symbol_hint,
+    }
+    return merged
+
+
+def _execute_rust_provider(
+    *,
+    request: LanguageSemanticEnrichmentRequest,
+    context: _PipelineContext,
+) -> LanguageSemanticEnrichmentOutcome:
+    source_bytes = _source_bytes(context.target_file_path)
+    if source_bytes is None:
+        return LanguageSemanticEnrichmentOutcome(
+            timed_out=False,
+            failure_reason="source_unavailable",
+            provider_root=context.provider_root,
+        )
+    source = source_bytes.decode("utf-8", errors="replace")
+    byte_start = _line_col_to_byte_offset(source_bytes, request.line, request.col)
+    byte_end = min(len(source_bytes), max(byte_start + 1, byte_start + 32))
+
+    payload, timed_out = call_with_retry(
+        lambda: _execute_semantic_task(
+            lambda: _rust_payload(
+                request=request,
+                context=context,
+                source=source,
+                byte_start=byte_start,
+                byte_end=byte_end,
+            ),
+            timeout_seconds=context.budget.startup_timeout_seconds
+            + context.budget.probe_timeout_seconds,
+        ),
+        max_attempts=context.budget.max_attempts,
+        retry_backoff_ms=context.budget.retry_backoff_ms,
+    )
+    normalized = payload if isinstance(payload, dict) else None
+    return LanguageSemanticEnrichmentOutcome(
+        payload=dict(normalized) if isinstance(normalized, dict) else None,
+        timed_out=timed_out,
+        failure_reason=_rust_failure_reason(normalized, timed_out=timed_out),
+        provider_root=context.provider_root,
+    )
+
+
+def _rust_payload(
+    *,
+    request: LanguageSemanticEnrichmentRequest,
+    context: _PipelineContext,
+    source: str,
+    byte_start: int,
+    byte_end: int,
+) -> dict[str, object] | None:
+    payload = enrich_rust_context_by_byte_range(
+        source,
+        byte_start=byte_start,
+        byte_end=byte_end,
+        cache_key=str(context.target_file_path),
+    )
+    if not isinstance(payload, dict):
+        return None
+
+    merged = dict(payload)
+    merged["semantic_planes"] = build_static_semantic_planes(language="rust", payload=merged)
+    merged["source_attribution"] = {
+        "language": "rust",
+        "pipeline": "static_front_door",
+        "symbol_hint": request.symbol_hint,
+    }
+    return merged
 
 
 def _persist_outcome(
     *,
     context: _PipelineContext,
-    outcome: LanguageLspEnrichmentOutcome,
-    request: LanguageLspEnrichmentRequest,
+    outcome: LanguageSemanticEnrichmentOutcome,
+    request: LanguageSemanticEnrichmentRequest,
     cache_namespace: str,
 ) -> None:
     if not context.cache_enabled:
@@ -317,7 +424,7 @@ def _persist_outcome(
             run_id=request.run_id,
         )
     )
-    payload = LspOutcomeCacheV1(
+    payload = SemanticOutcomeCacheV1(
         payload=outcome.payload,
         timed_out=outcome.timed_out,
         failure_reason=outcome.failure_reason,
@@ -343,45 +450,48 @@ def _release_lock(
     record_cache_delete(namespace=cache_namespace, ok=ok, key=context.lock_key)
 
 
-def _execute_lsp_task(
+def _execute_semantic_task(
     fn: Callable[[], dict[str, object] | None],
     *,
     timeout_seconds: float,
 ) -> dict[str, object] | None:
     scheduler = get_worker_scheduler()
-    future = scheduler.submit_lsp(fn)
+    future = scheduler.submit_semantic(fn)
     try:
         return future.result(timeout=max(0.05, timeout_seconds))
     except FutureTimeoutError as exc:
         future.cancel()
-        raise TimeoutError("lsp_enrichment_timeout") from exc
+        timeout_error = TimeoutError("semantic_enrichment_timeout")
+        raise timeout_error from exc
 
 
 def _negative_ttl_seconds(*, reason: str | None, namespace_ttl: int) -> int:
-    if reason == "request_timeout":
+    if reason == "budget_exceeded":
         return max(5, min(60, namespace_ttl // 6))
-    if reason in {"request_failed", "no_signal"}:
+    if reason in {"parse_error", "source_unavailable", "query_pack_no_signal"}:
         return max(15, min(180, namespace_ttl // 3))
     return max(15, min(120, namespace_ttl // 4))
 
 
-def _pyrefly_failure_reason(
+def _python_failure_reason(
     payload: dict[str, object] | None,
     *,
     timed_out: bool,
 ) -> str | None:
     if timed_out and payload is None:
-        return "request_timeout"
+        return "budget_exceeded"
     if not isinstance(payload, dict):
-        return "request_failed"
-    coverage = payload.get("coverage")
-    if not isinstance(coverage, dict):
-        return None
-    status = coverage.get("status")
+        return "source_unavailable"
+    status = payload.get("enrichment_status")
     if isinstance(status, str) and status == "applied":
         return None
-    reason = coverage.get("reason")
-    return reason if isinstance(reason, str) and reason else "no_signal"
+    parse_quality = payload.get("parse_quality")
+    if isinstance(parse_quality, dict) and parse_quality.get("has_error"):
+        return "parse_error"
+    degrade_reason = payload.get("degrade_reason")
+    if isinstance(degrade_reason, str) and degrade_reason:
+        return degrade_reason
+    return "query_pack_no_signal"
 
 
 def _rust_failure_reason(
@@ -390,25 +500,18 @@ def _rust_failure_reason(
     timed_out: bool,
 ) -> str | None:
     if timed_out and payload is None:
-        return "request_timeout"
+        return "budget_exceeded"
     if not isinstance(payload, dict):
-        return "request_failed"
-    advanced = payload.get("advanced_planes")
-    if isinstance(advanced, dict):
-        reason = advanced.get("reason")
-        if isinstance(reason, str) and reason:
-            return reason
-    degrade_events = payload.get("degrade_events")
-    if isinstance(degrade_events, list):
-        for event in degrade_events:
-            if not isinstance(event, dict):
-                continue
-            category = event.get("category")
-            if isinstance(category, str) and category:
-                return category
-    return None
+        return "source_unavailable"
+    status = payload.get("enrichment_status")
+    if isinstance(status, str) and status == "applied":
+        return None
+    degrade_reason = payload.get("degrade_reason")
+    if isinstance(degrade_reason, str) and degrade_reason:
+        return degrade_reason
+    return "query_pack_no_signal"
 
 
 __all__ = [
-    "run_language_lsp_enrichment",
+    "run_language_semantic_enrichment",
 ]

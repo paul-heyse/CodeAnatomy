@@ -70,11 +70,11 @@ def test_merge_language_cq_results_builds_multilang_contract() -> None:
     assert "rust" in merged.summary["languages"]
     assert isinstance(merged.summary["cross_language_diagnostics"], list)
     assert isinstance(merged.summary["language_capabilities"], dict)
-    assert "pyrefly_overview" in merged.summary
-    assert "pyrefly_telemetry" in merged.summary
-    assert "rust_lsp_telemetry" in merged.summary
-    assert "lsp_advanced_planes" in merged.summary
-    assert "pyrefly_diagnostics" in merged.summary
+    assert "python_semantic_overview" in merged.summary
+    assert "python_semantic_telemetry" in merged.summary
+    assert "rust_semantic_telemetry" in merged.summary
+    assert "semantic_planes" in merged.summary
+    assert "python_semantic_diagnostics" in merged.summary
 
 
 def test_merge_language_cq_results_preserves_summary_common() -> None:
@@ -213,7 +213,7 @@ def test_merge_language_results_marks_partial_when_language_missing_insight() ->
     assert any("missing_languages=rust" in str(note) for note in notes)
 
 
-def test_merge_language_results_aggregates_lsp_telemetry() -> None:
+def test_merge_language_results_aggregates_semantic_telemetry() -> None:
     run = RunMeta(
         macro="q",
         argv=["cq", "q"],
@@ -226,7 +226,7 @@ def test_merge_language_results_aggregates_lsp_telemetry() -> None:
         run=run,
         summary={
             "matches": 2,
-            "pyrefly_telemetry": {
+            "python_semantic_telemetry": {
                 "attempted": 2,
                 "applied": 1,
                 "failed": 1,
@@ -240,7 +240,7 @@ def test_merge_language_results_aggregates_lsp_telemetry() -> None:
         run=run,
         summary={
             "matches": 1,
-            "rust_lsp_telemetry": {
+            "rust_semantic_telemetry": {
                 "attempted": 1,
                 "applied": 1,
                 "failed": 0,
@@ -260,13 +260,13 @@ def test_merge_language_results_aggregates_lsp_telemetry() -> None:
         )
     )
 
-    pyrefly = merged.summary.get("pyrefly_telemetry")
-    rust = merged.summary.get("rust_lsp_telemetry")
-    assert isinstance(pyrefly, dict)
+    python_semantic = merged.summary.get("python_semantic_telemetry")
+    rust = merged.summary.get("rust_semantic_telemetry")
+    assert isinstance(python_semantic, dict)
     assert isinstance(rust, dict)
-    assert pyrefly.get("attempted") == 2
-    assert pyrefly.get("applied") == 1
-    assert pyrefly.get("failed") == 1
+    assert python_semantic.get("attempted") == 2
+    assert python_semantic.get("applied") == 1
+    assert python_semantic.get("failed") == 1
     assert rust.get("attempted") == 1
     assert rust.get("applied") == 1
     assert rust.get("failed") == 0

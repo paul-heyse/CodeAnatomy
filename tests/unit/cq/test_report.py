@@ -151,7 +151,7 @@ def test_render_finding_includes_enrichment_tables() -> None:
     assert "free_function" in output
 
 
-def test_render_includes_pyrefly_overview_and_code_facts() -> None:
+def test_render_includes_python_semantic_overview_and_code_facts() -> None:
     finding = Finding(
         category="callsite",
         message="target call",
@@ -164,7 +164,7 @@ def test_render_includes_pyrefly_overview_and_code_facts() -> None:
                     "python": {
                         "meta": {"language": "python"},
                         "structural": {"node_kind": "function_definition"},
-                        "pyrefly": {
+                        "python_semantic": {
                             "type_contract": {
                                 "resolved_type": "(x: int) -> int",
                                 "callable_signature": "target(x: int) -> int",
@@ -173,7 +173,7 @@ def test_render_includes_pyrefly_overview_and_code_facts() -> None:
                             "anchor_diagnostics": [],
                         },
                     },
-                    "pyrefly": {
+                    "python_semantic": {
                         "type_contract": {
                             "resolved_type": "(x: int) -> int",
                         }
@@ -192,13 +192,13 @@ def test_render_includes_pyrefly_overview_and_code_facts() -> None:
             "languages": {"python": {"total_matches": 1}},
             "cross_language_diagnostics": [],
             "language_capabilities": {"python": {}, "rust": {}, "shared": {}},
-            "pyrefly_overview": {"primary_symbol": "target", "matches_enriched": 1},
+            "python_semantic_overview": {"primary_symbol": "target", "matches_enriched": 1},
         },
         key_findings=[finding],
     )
 
     output = render_markdown(result)
-    assert "Pyrefly Overview:" in output
+    assert "Python semantic overview:" in output
     assert "Resolved Type: (x: int) -> int" in output
     assert "Incoming Callers: 1" in output
 
@@ -494,13 +494,13 @@ def test_render_markdown_keeps_compact_diagnostics_without_payload_dump() -> Non
         summary={
             "query": "target",
             "mode": "identifier",
-            "pyrefly_diagnostics": [{"message": "diag"}],
+            "python_semantic_diagnostics": [{"message": "diag"}],
             "cross_language_diagnostics": [{"code": "ML001"}],
         },
         key_findings=[Finding(category="definition", message="function: target")],
     )
     output = render_markdown(result)
-    assert "Pyrefly diagnostics: 1 items" in output
+    assert "Python semantic diagnostics: 1 items" in output
     assert "Cross-lang: 1 diagnostics" in output
     assert "Diagnostic Details" not in output
     assert '"message": "diag"' not in output

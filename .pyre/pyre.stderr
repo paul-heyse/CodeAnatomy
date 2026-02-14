@@ -1,0 +1,288 @@
+2026-02-14 11:13:38,452 [PID 3750] INFO No binary specified, looking for `pyre.bin` in PATH
+2026-02-14 11:13:38,453 [PID 3750] INFO Pyre binary is located at `/Users/paulheyse/CodeAnatomy/.venv/bin/pyre.bin`
+2026-02-14 11:13:38,453 [PID 3750] WARNING '/Users/paulheyse/CodeAnatomy/src/ rust/ tools/ tests' does not match any paths.
+2026-02-14 11:13:38,453 [PID 3750] WARNING Pyre did not find an existent source directory.
+2026-02-14 11:13:38,453 [PID 3750] INFO Could not determine the number of Pyre workers from configuration. Auto-set the value to 4.
+2026-02-14 11:13:38,453 [PID 3750] INFO No typeshed specified, looking for it...
+2026-02-14 11:13:38,453 [PID 3750] INFO Found: `/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed`
+2026-02-14 11:13:38,455 [PID 3750] INFO Writing arguments into /var/folders/70/h2nd1qjs1zngp8z6tt27_s9c0000gn/T/pyre_arguments_3dwbjxt2.json...
+2026-02-14 11:13:38,455 [PID 3750] DEBUG Arguments:
+{
+  "source_paths": {
+    "kind": "simple",
+    "paths": []
+  },
+  "search_paths": [
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stdlib",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/ExifRead",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/PyMySQL",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/PyYAML",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/aiofiles",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/chevron",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/colorama",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/ldap3",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/mysqlclient",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/paramiko",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/psycopg2",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/pycurl",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/python-dateutil",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/pytz",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/regex",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/requests",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/retry",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/tqdm",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/ujson"
+  ],
+  "excludes": [],
+  "checked_directory_allowlist": [],
+  "checked_directory_blocklist": [],
+  "extensions": [],
+  "log_path": "/Users/paulheyse/CodeAnatomy/.pyre",
+  "global_root": "/Users/paulheyse/CodeAnatomy",
+  "local_root": "/Users/paulheyse/CodeAnatomy/.",
+  "debug": false,
+  "python_version": {
+    "major": 3,
+    "minor": 13,
+    "micro": 12
+  },
+  "system_platform": "darwin",
+  "shared_memory": {},
+  "parallel": true,
+  "number_of_workers": 4,
+  "additional_logging_sections": [
+    "-progress"
+  ],
+  "show_error_traces": false,
+  "strict": false
+}
+2026-02-14 11:13:44,776 [PID 3750] PERFORMANCE  Initialized shared memory (heap size: 8589934592, dep table pow: 1, hash table pow: 26): 0.002s
+2026-02-14 11:13:44,802 [PID 3750] PERFORMANCE  Initialized multiprocessing workers (workers: 4): 0.022s
+2026-02-14 11:13:44,802 [PID 3750] INFO  Building module tracker...
+2026-02-14 11:13:44,863 [PID 3750] PERFORMANCE  Module tracker built: 0.060s
+2026-02-14 11:13:44,863 [PID 3750] PERFORMANCE  Full environment built: 0.062s
+2026-02-14 11:13:44,863 [PID 3750] INFO  Collecting all definitions...
+2026-02-14 11:13:44,863 [PID 3750] PERFORMANCE  Collected definitions (defines: 0): 0.000s
+2026-02-14 11:13:44,863 [PID 3750] INFO  Checking 0 functions...
+2026-02-14 11:13:44,863 [PID 3750] PERFORMANCE  Check_TypeCheck: 0.000s
+2026-02-14 11:13:44,863 [PID 3750] MEMORY  Shared memory size post-typecheck (size: 0)
+2026-02-14 11:13:44,863 [PID 3750] PERFORMANCE  Check_Postprocessing: 0.000s
+2026-02-14 11:13:44,863 [PID 3750] PERFORMANCE  Check (request kind: FullCheck): 0.063s
+2026-02-14 11:13:44,888 [PID 3750] SUCCESS No type errors found
+2026-02-14 11:19:54,550 [PID 10432] INFO Waiting for server...
+2026-02-14 11:19:54,557 [PID 10432] INFO Cannot find a running Pyre server. Starting a new one...
+2026-02-14 11:19:54,557 [PID 10432] INFO No binary specified, looking for `pyre.bin` in PATH
+2026-02-14 11:19:54,557 [PID 10432] INFO Pyre binary is located at `/Users/paulheyse/CodeAnatomy/.venv/bin/pyre.bin`
+2026-02-14 11:19:54,558 [PID 10432] INFO Could not determine the number of Pyre workers from configuration. Auto-set the value to 4.
+2026-02-14 11:19:54,558 [PID 10432] INFO No typeshed specified, looking for it...
+2026-02-14 11:19:54,558 [PID 10432] INFO Found: `/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed`
+2026-02-14 11:19:54,559 [PID 10432] WARNING Critical file does not exist: /Users/paulheyse/CodeAnatomy/.pyre_configuration
+2026-02-14 11:19:54,559 [PID 10432] WARNING Cannot find a watchman root. Incremental check will not be functional since no filesystem updates will be sent to the Pyre server.
+2026-02-14 11:19:54,559 [PID 10432] INFO Starting server at `/Users/paulheyse/CodeAnatomy//.`...
+2026-02-14 11:19:54,560 [PID 10432] INFO Writing arguments into /var/folders/70/h2nd1qjs1zngp8z6tt27_s9c0000gn/T/pyre_arguments_7tgu40e9.json...
+2026-02-14 11:19:54,560 [PID 10432] DEBUG Arguments:
+{
+  "source_paths": {
+    "kind": "simple",
+    "paths": [
+      "/Users/paulheyse/CodeAnatomy/src",
+      "/Users/paulheyse/CodeAnatomy/tools",
+      "/Users/paulheyse/CodeAnatomy/tests",
+      "/Users/paulheyse/CodeAnatomy/rust"
+    ]
+  },
+  "search_paths": [
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stdlib",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/ExifRead",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/PyMySQL",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/PyYAML",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/aiofiles",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/chevron",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/colorama",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/ldap3",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/mysqlclient",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/paramiko",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/psycopg2",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/pycurl",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/python-dateutil",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/pytz",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/regex",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/requests",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/retry",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/tqdm",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/ujson"
+  ],
+  "excludes": [],
+  "checked_directory_allowlist": [
+    "/Users/paulheyse/CodeAnatomy/src",
+    "/Users/paulheyse/CodeAnatomy/tests",
+    "/Users/paulheyse/CodeAnatomy/tools",
+    "/Users/paulheyse/CodeAnatomy/rust"
+  ],
+  "checked_directory_blocklist": [],
+  "extensions": [],
+  "log_path": "/Users/paulheyse/CodeAnatomy/.pyre",
+  "global_root": "/Users/paulheyse/CodeAnatomy",
+  "local_root": "/Users/paulheyse/CodeAnatomy/.",
+  "debug": false,
+  "python_version": {
+    "major": 3,
+    "minor": 13,
+    "micro": 12
+  },
+  "system_platform": "darwin",
+  "shared_memory": {},
+  "parallel": true,
+  "number_of_workers": 4,
+  "strict": false,
+  "socket_path": "/var/folders/70/h2nd1qjs1zngp8z6tt27_s9c0000gn/T/pyre_server_80872aea259d397a.sock",
+  "show_error_traces": false,
+  "additional_logging_sections": [
+    "server"
+  ],
+  "taint_model_paths": [],
+  "store_type_check_resolution": false,
+  "critical_files": [
+    {
+      "full_path": "/Users/paulheyse/CodeAnatomy/.pyre_configuration"
+    },
+    {
+      "full_path": "/Users/paulheyse/CodeAnatomy/.pyre_configuration.local"
+    }
+  ],
+  "skip_initial_type_check": false,
+  "use_lazy_module_tracking": false,
+  "analyze_external_sources": false
+}
+2026-02-14 11:19:54,618 [PID 10432] INFO Server is starting in the background.
+
+2026-02-14 11:19:55,032 [PID 10432] PERFORMANCE  Initialized shared memory (heap size: 8589934592, dep table pow: 27, hash table pow: 26): 0.001s
+2026-02-14 11:19:55,055 [PID 10432] PERFORMANCE  Initialized multiprocessing workers (workers: 4): 0.022s
+2026-02-14 11:19:55,056 [PID 10432] INFO  Server has started listening on socket `/var/folders/70/h2nd1qjs1zngp8z6tt27_s9c0000gn/T/pyre_server_80872aea259d397a.sock`
+2026-02-14 11:19:55,056 [PID 10432] INFO  Initializing server state from scratch...
+2026-02-14 11:19:55,056 [PID 10432] INFO  Building module tracker...
+2026-02-14 11:19:56,620 [PID 10432] PERFORMANCE  Module tracker built: 1.563s
+2026-02-14 11:19:56,621 [PID 10432] PERFORMANCE  Full environment built: 1.565s
+2026-02-14 11:19:56,621 [PID 10432] INFO  Collecting all definitions...
+2026-02-14 11:20:00,267 [PID 10432] PERFORMANCE  Collected definitions (defines: 14497): 3.641s
+2026-02-14 11:20:00,268 [PID 10432] INFO  Checking 14497 functions...
+2026-02-14 11:20:23,633 [PID 10432] INFO SIGINT received. Terminating background server...
+2026-02-14 11:20:23,691 [PID 10432] ERROR Interrupted by user. No server is spawned.
+2026-02-14 11:20:31,198 [PID 10921] INFO Waiting for server...
+2026-02-14 11:20:31,200 [PID 10921] INFO Cannot find a running Pyre server. Starting a new one...
+2026-02-14 11:20:31,202 [PID 10921] INFO No binary specified, looking for `pyre.bin` in PATH
+2026-02-14 11:20:31,203 [PID 10921] INFO Pyre binary is located at `/Users/paulheyse/CodeAnatomy/.venv/bin/pyre.bin`
+2026-02-14 11:20:31,204 [PID 10921] INFO Could not determine the number of Pyre workers from configuration. Auto-set the value to 4.
+2026-02-14 11:20:31,204 [PID 10921] INFO No typeshed specified, looking for it...
+2026-02-14 11:20:31,204 [PID 10921] INFO Found: `/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed`
+2026-02-14 11:20:31,205 [PID 10921] WARNING Critical file does not exist: /Users/paulheyse/CodeAnatomy/.pyre_configuration
+2026-02-14 11:20:31,205 [PID 10921] WARNING Cannot find a watchman root. Incremental check will not be functional since no filesystem updates will be sent to the Pyre server.
+2026-02-14 11:20:31,205 [PID 10921] INFO Starting server at `/Users/paulheyse/CodeAnatomy//.`...
+2026-02-14 11:20:31,206 [PID 10921] INFO Writing arguments into /var/folders/70/h2nd1qjs1zngp8z6tt27_s9c0000gn/T/pyre_arguments_w869gmc_.json...
+2026-02-14 11:20:31,206 [PID 10921] DEBUG Arguments:
+{
+  "source_paths": {
+    "kind": "simple",
+    "paths": [
+      "/Users/paulheyse/CodeAnatomy/src",
+      "/Users/paulheyse/CodeAnatomy/tools",
+      "/Users/paulheyse/CodeAnatomy/tests",
+      "/Users/paulheyse/CodeAnatomy/rust"
+    ]
+  },
+  "search_paths": [
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stdlib",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/ExifRead",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/PyMySQL",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/PyYAML",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/aiofiles",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/chevron",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/colorama",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/ldap3",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/mysqlclient",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/paramiko",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/psycopg2",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/pycurl",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/python-dateutil",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/pytz",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/regex",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/requests",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/retry",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/tqdm",
+    "/Users/paulheyse/CodeAnatomy/.venv/lib/pyre_check/typeshed/stubs/ujson"
+  ],
+  "excludes": [],
+  "checked_directory_allowlist": [
+    "/Users/paulheyse/CodeAnatomy/tools",
+    "/Users/paulheyse/CodeAnatomy/tests",
+    "/Users/paulheyse/CodeAnatomy/rust",
+    "/Users/paulheyse/CodeAnatomy/src"
+  ],
+  "checked_directory_blocklist": [],
+  "extensions": [],
+  "log_path": "/Users/paulheyse/CodeAnatomy/.pyre",
+  "global_root": "/Users/paulheyse/CodeAnatomy",
+  "local_root": "/Users/paulheyse/CodeAnatomy/.",
+  "debug": false,
+  "python_version": {
+    "major": 3,
+    "minor": 13,
+    "micro": 12
+  },
+  "system_platform": "darwin",
+  "shared_memory": {},
+  "parallel": true,
+  "number_of_workers": 4,
+  "strict": false,
+  "socket_path": "/var/folders/70/h2nd1qjs1zngp8z6tt27_s9c0000gn/T/pyre_server_80872aea259d397a.sock",
+  "show_error_traces": false,
+  "additional_logging_sections": [
+    "server"
+  ],
+  "taint_model_paths": [],
+  "store_type_check_resolution": false,
+  "critical_files": [
+    {
+      "full_path": "/Users/paulheyse/CodeAnatomy/.pyre_configuration"
+    },
+    {
+      "full_path": "/Users/paulheyse/CodeAnatomy/.pyre_configuration.local"
+    }
+  ],
+  "skip_initial_type_check": false,
+  "use_lazy_module_tracking": false,
+  "analyze_external_sources": false
+}
+2026-02-14 11:20:31,217 [PID 10921] INFO Server is starting in the background.
+
+2026-02-14 11:20:31,381 [PID 10921] PERFORMANCE  Initialized shared memory (heap size: 8589934592, dep table pow: 27, hash table pow: 26): 0.001s
+2026-02-14 11:20:31,433 [PID 10921] PERFORMANCE  Initialized multiprocessing workers (workers: 4): 0.048s
+2026-02-14 11:20:31,433 [PID 10921] INFO  Server has started listening on socket `/var/folders/70/h2nd1qjs1zngp8z6tt27_s9c0000gn/T/pyre_server_80872aea259d397a.sock`
+2026-02-14 11:20:31,433 [PID 10921] INFO  Initializing server state from scratch...
+2026-02-14 11:20:31,434 [PID 10921] INFO  Building module tracker...
+2026-02-14 11:20:33,940 [PID 10921] PERFORMANCE  Module tracker built: 2.503s
+2026-02-14 11:20:33,941 [PID 10921] PERFORMANCE  Full environment built: 2.504s
+2026-02-14 11:20:33,941 [PID 10921] INFO  Collecting all definitions...
+2026-02-14 11:20:38,319 [PID 10921] PERFORMANCE  Collected definitions (defines: 14497): 4.376s
+2026-02-14 11:20:38,320 [PID 10921] INFO  Checking 14497 functions...
+2026-02-14 11:21:13,037 [PID 10921] INFO  Processed 1813 of 14497 functions
+2026-02-14 11:21:14,139 [PID 10921] INFO  Processed 3626 of 14497 functions
+2026-02-14 11:21:15,259 [PID 10921] INFO  Processed 5439 of 14497 functions
+2026-02-14 11:21:15,395 [PID 10921] INFO  Processed 7252 of 14497 functions
+2026-02-14 11:21:31,788 [PID 10921] INFO  Processed 9065 of 14497 functions
+2026-02-14 11:21:31,853 [PID 10921] INFO  Processed 10878 of 14497 functions
+2026-02-14 11:21:32,667 [PID 10921] INFO  Processed 12684 of 14497 functions
+2026-02-14 11:21:36,566 [PID 10921] INFO  Processed 14497 of 14497 functions
+2026-02-14 11:21:36,568 [PID 10921] PERFORMANCE  Check_TypeCheck: 58.240s
+2026-02-14 11:21:36,568 [PID 10921] MEMORY  Shared memory size post-typecheck (size: 42)
+2026-02-14 11:21:36,568 [PID 10921] INFO  Postprocessing 1137 sources...
+2026-02-14 11:21:37,251 [PID 10921] INFO  Postprocessed 285 of 1137 sources
+2026-02-14 11:21:37,423 [PID 10921] INFO  Postprocessed 570 of 1137 sources
+2026-02-14 11:21:37,542 [PID 10921] INFO  Postprocessed 855 of 1137 sources
+2026-02-14 11:21:37,620 [PID 10921] INFO Waiting for server...
+2026-02-14 11:21:37,636 [PID 10921] SERVER  Connection established
+2026-02-14 11:21:37,636 [PID 10921] SERVER  Processing request (DisplayTypeError())...
+2026-02-14 11:21:37,887 [PID 10921] PERFORMANCE  Server request (binary_version: 7873fbf76ce7a1f3b02a527f4e2ee8ac50ca6843, request kind: DisplayTypeErrors): 0.262s
+2026-02-14 11:21:37,888 [PID 10921] SERVER  Request `(DisplayTypeError())` processed
+2026-02-14 11:21:38,014 [PID 10921] SERVER  Connection closed
+2026-02-14 11:21:38,328 [PID 10921] ERROR Found 8061 type errors!

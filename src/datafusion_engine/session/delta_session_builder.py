@@ -205,10 +205,6 @@ def build_delta_session_context(
     -------
     DeltaSessionBuildResult
         Session construction result with runtime-policy bridge diagnostics.
-
-    Raises:
-        TypeError: Builder invocation can raise ``TypeError`` before the
-            function converts it into an error-bearing ``DeltaSessionBuildResult``.
     """
     from datafusion_engine.session.runtime import delta_runtime_env_options
 

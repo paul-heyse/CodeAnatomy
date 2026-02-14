@@ -67,7 +67,7 @@ def test_run_plan_inline_neighborhood_step() -> None:
     assert plan.steps[0].target == "tools/cq/search/python_analysis_session.py:1"
     assert plan.steps[0].lang == "python"
     assert plan.steps[0].top_k == 10
-    assert plan.steps[0].no_lsp is False
+    assert plan.steps[0].no_semantic_enrichment is False
 
 
 def test_run_plan_inline_neighborhood_steps_array() -> None:
@@ -78,7 +78,7 @@ def test_run_plan_inline_neighborhood_steps_array() -> None:
             "--steps",
             (
                 '[{"type":"neighborhood","target":"tools/cq/search/python_analysis_session.py:1",'
-                '"lang":"python","top_k":3,"no_lsp":true}]'
+                '"lang":"python","top_k":3,"no_semantic_enrichment":true}]'
             ),
         ],
         exit_on_error=False,
@@ -92,7 +92,7 @@ def test_run_plan_inline_neighborhood_steps_array() -> None:
     assert plan.steps[0].target == "tools/cq/search/python_analysis_session.py:1"
     assert plan.steps[0].lang == "python"
     assert plan.steps[0].top_k == 3
-    assert plan.steps[0].no_lsp is True
+    assert plan.steps[0].no_semantic_enrichment is True
 
 
 def test_run_plan_inline_mixed_steps_array_with_neighborhood() -> None:

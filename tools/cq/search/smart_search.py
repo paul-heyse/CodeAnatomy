@@ -83,26 +83,18 @@ from tools.cq.search.context_window import (
     extract_search_context_snippet,
 )
 from tools.cq.search.contracts import (
-    coerce_pyrefly_diagnostics,
-    coerce_pyrefly_overview,
-    coerce_pyrefly_telemetry,
+    coerce_python_semantic_diagnostics,
+    coerce_python_semantic_overview,
+    coerce_python_semantic_telemetry,
 )
 from tools.cq.search.enrichment.core import normalize_python_payload, normalize_rust_payload
-from tools.cq.search.lsp.capabilities import supports_method
-from tools.cq.search.lsp.root_resolution import resolve_lsp_provider_root
-from tools.cq.search.lsp_contract_state import (
-    LspContractStateInputV1,
-    LspContractStateV1,
-    LspProvider,
-    derive_lsp_contract_state,
-)
-from tools.cq.search.lsp_front_door_adapter import (
-    LanguageLspEnrichmentOutcome,
-    LanguageLspEnrichmentRequest,
-    enrich_with_language_lsp,
+from tools.cq.search.language_front_door_adapter import (
+    LanguageSemanticEnrichmentOutcome,
+    LanguageSemanticEnrichmentRequest,
+    enrich_with_language_semantics,
     infer_language_for_path,
-    lsp_runtime_enabled,
     provider_for_language,
+    semantic_runtime_enabled,
 )
 from tools.cq.search.models import (
     CandidateSearchRequest,
@@ -119,13 +111,12 @@ from tools.cq.search.partition_contracts import SearchPartitionPlanV1
 from tools.cq.search.partition_pipeline import run_search_partition
 from tools.cq.search.pipeline import SearchPipeline
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
-from tools.cq.search.pyrefly_lsp import get_pyrefly_lsp_capabilities
-from tools.cq.search.pyrefly_signal import evaluate_pyrefly_signal_from_mapping
 from tools.cq.search.python_analysis_session import get_python_analysis_session
 from tools.cq.search.python_enrichment import (
     _ENRICHMENT_ERRORS as _PYTHON_ENRICHMENT_ERRORS,
 )
 from tools.cq.search.python_enrichment import enrich_python_context_by_byte_range
+from tools.cq.search.python_semantic_signal import evaluate_python_semantic_signal_from_mapping
 from tools.cq.search.requests import (
     CandidateCollectionRequest,
     PythonByteRangeEnrichmentRequest,
@@ -136,6 +127,12 @@ from tools.cq.search.rust_enrichment import enrich_rust_context_by_byte_range
 from tools.cq.search.section_builder import (
     insert_neighborhood_preview,
     insert_target_candidates,
+)
+from tools.cq.search.semantic_contract_state import (
+    SemanticContractStateInputV1,
+    SemanticContractStateV1,
+    SemanticProvider,
+    derive_semantic_contract_state,
 )
 from tools.cq.search.tree_sitter_python import get_tree_sitter_python_cache_stats
 from tools.cq.search.tree_sitter_rust import get_tree_sitter_rust_cache_stats
@@ -166,7 +163,7 @@ _CASE_SENSITIVE_DEFAULT = True
 MAX_EVIDENCE = 100
 MAX_TARGET_CANDIDATES = 3
 _RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
-_PYREFLY_PREFETCH_NON_FATAL_EXCEPTIONS = (
+_PYTHON_SEMANTIC_PREFETCH_NON_FATAL_EXCEPTIONS = (
     OSError,
     RuntimeError,
     TimeoutError,
@@ -174,8 +171,8 @@ _PYREFLY_PREFETCH_NON_FATAL_EXCEPTIONS = (
     ValueError,
 )
 MAX_SEARCH_CLASSIFY_WORKERS = 4
-MAX_PYREFLY_ENRICH_FINDINGS = 8
-_PyreflyAnchorKey = tuple[str, int, int, str]
+MAX_PYTHON_SEMANTIC_ENRICH_FINDINGS = 8
+_PythonSemanticAnchorKey = tuple[str, int, int, str]
 
 
 class RawMatch(CqStruct, frozen=True):
@@ -262,7 +259,7 @@ class MatchEnrichment:
     context_snippet: str | None
     rust_tree_sitter: dict[str, object] | None
     python_enrichment: dict[str, object] | None
-    pyrefly_enrichment: dict[str, object] | None
+    python_semantic_enrichment: dict[str, object] | None
 
 
 class SearchStats(CqStruct, frozen=True):
@@ -343,7 +340,7 @@ class EnrichedMatch(CqStruct, frozen=True):
     symtable: SymtableEnrichment | None = None
     rust_tree_sitter: dict[str, object] | None = None
     python_enrichment: dict[str, object] | None = None
-    pyrefly_enrichment: dict[str, object] | None = None
+    python_semantic_enrichment: dict[str, object] | None = None
     language: QueryLanguage = "python"
 
     @property
@@ -562,7 +559,7 @@ def classify_match(
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
     enable_symtable: bool = True,
     force_semantic_enrichment: bool = False,
-    enable_pyrefly: bool = False,
+    enable_python_semantic: bool = False,
 ) -> EnrichedMatch:
     """Run three-stage classification pipeline on a raw match.
 
@@ -578,8 +575,8 @@ def classify_match(
         Whether to run symtable enrichment.
     force_semantic_enrichment
         Force AST-driven enrichment even when heuristics could short-circuit.
-    enable_pyrefly
-        Whether to attempt per-anchor Pyrefly LSP enrichment in this path.
+    enable_python_semantic
+        Whether to attempt per-anchor Python semantic enrichment in this path.
 
     Returns:
     -------
@@ -631,12 +628,12 @@ def classify_match(
         lang=lang,
         resolved_python=resolved_python,
     )
-    pyrefly_enrichment = _maybe_pyrefly_enrichment(
+    python_semantic_enrichment = _maybe_python_semantic_enrichment(
         root,
         file_path,
         raw,
         lang=lang,
-        enable_pyrefly=enable_pyrefly,
+        enable_python_semantic=enable_python_semantic,
     )
     context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
     enrichment = MatchEnrichment(
@@ -645,7 +642,7 @@ def classify_match(
         context_snippet=context_snippet,
         rust_tree_sitter=rust_tree_sitter,
         python_enrichment=python_enrichment,
-        pyrefly_enrichment=pyrefly_enrichment,
+        python_semantic_enrichment=python_semantic_enrichment,
     )
     return _build_enriched_match(
         raw,
@@ -839,7 +836,7 @@ def _build_enriched_match(
         symtable=enrichment.symtable,
         rust_tree_sitter=enrichment.rust_tree_sitter,
         python_enrichment=enrichment.python_enrichment,
-        pyrefly_enrichment=enrichment.pyrefly_enrichment,
+        python_semantic_enrichment=enrichment.python_semantic_enrichment,
         language=lang,
     )
 
@@ -981,21 +978,21 @@ def _maybe_python_enrichment(
         return None
 
 
-def _maybe_pyrefly_enrichment(
+def _maybe_python_semantic_enrichment(
     root: Path,
     file_path: Path,
     raw: RawMatch,
     *,
     lang: QueryLanguage,
-    enable_pyrefly: bool,
+    enable_python_semantic: bool,
 ) -> dict[str, object] | None:
-    if not enable_pyrefly or lang != "python":
+    if not enable_python_semantic or lang != "python":
         return None
     if file_path.suffix not in {".py", ".pyi"}:
         return None
     try:
-        outcome = enrich_with_language_lsp(
-            LanguageLspEnrichmentRequest(
+        outcome = enrich_with_language_semantics(
+            LanguageSemanticEnrichmentRequest(
                 language="python",
                 mode="search",
                 root=root,
@@ -1224,11 +1221,11 @@ def _merge_enrichment_payloads(data: dict[str, object], match: EnrichedMatch) ->
         # only secondary enrichment sources are available.
         python_payload = {}
     if python_payload is not None:
-        if match.pyrefly_enrichment:
-            python_payload.setdefault("pyrefly", match.pyrefly_enrichment)
+        if match.python_semantic_enrichment:
+            python_payload.setdefault("python_semantic", match.python_semantic_enrichment)
         enrichment["python"] = python_payload
-    if match.pyrefly_enrichment:
-        enrichment["pyrefly"] = match.pyrefly_enrichment
+    if match.python_semantic_enrichment:
+        enrichment["python_semantic"] = match.python_semantic_enrichment
     if match.symtable:
         enrichment["symtable"] = match.symtable
     if len(enrichment) > 1:
@@ -1456,23 +1453,23 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         ),
         "truncated": inputs.stats.truncated,
         "timed_out": inputs.stats.timed_out,
-        "pyrefly_overview": dict[str, object](),
-        "pyrefly_telemetry": {
+        "python_semantic_overview": dict[str, object](),
+        "python_semantic_telemetry": {
             "attempted": 0,
             "applied": 0,
             "failed": 0,
             "skipped": 0,
             "timed_out": 0,
         },
-        "rust_lsp_telemetry": {
+        "rust_semantic_telemetry": {
             "attempted": 0,
             "applied": 0,
             "failed": 0,
             "skipped": 0,
             "timed_out": 0,
         },
-        "lsp_advanced_planes": dict[str, object](),
-        "pyrefly_diagnostics": list[dict[str, object]](),
+        "semantic_planes": dict[str, object](),
+        "python_semantic_diagnostics": list[dict[str, object]](),
     }
     return build_multilang_summary(
         SummaryBuildRequest(
@@ -1788,6 +1785,21 @@ def _run_candidate_phase(
     return raw_matches, stats, pattern
 
 
+def run_candidate_phase(
+    ctx: SmartSearchContext,
+    *,
+    lang: QueryLanguage,
+    mode: QueryMode,
+) -> tuple[list[RawMatch], SearchStats, str]:
+    """Public wrapper around candidate-phase execution.
+
+    Returns:
+        tuple[list[RawMatch], SearchStats, str]:
+            Raw matches, match statistics, and effective candidate pattern.
+    """
+    return _run_candidate_phase(ctx, lang=lang, mode=mode)
+
+
 def _run_classification_phase(
     ctx: SmartSearchContext,
     *,
@@ -1842,6 +1854,20 @@ def _run_classification_phase(
     return [match for _idx, match in indexed_results]
 
 
+def run_classification_phase(
+    ctx: SmartSearchContext,
+    *,
+    lang: QueryLanguage,
+    raw_matches: list[RawMatch],
+) -> list[EnrichedMatch]:
+    """Public wrapper around classification phase execution.
+
+    Returns:
+        list[EnrichedMatch]: Enriched matches after classification.
+    """
+    return _run_classification_phase(ctx, lang=lang, raw_matches=raw_matches)
+
+
 def _resolve_search_worker_count(partition_count: int) -> int:
     if partition_count <= 1:
         return 1
@@ -1869,15 +1895,21 @@ class _LanguageSearchResult:
     pattern: str
     enriched_matches: list[EnrichedMatch]
     dropped_by_scope: int
-    pyrefly_prefetch: _PyreflyPrefetchResult | None = None
+    python_semantic_prefetch: _PythonSemanticPrefetchResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class _PyreflyPrefetchResult:
-    payloads: dict[_PyreflyAnchorKey, dict[str, object]] = dataclass_field(default_factory=dict)
-    attempted_keys: set[_PyreflyAnchorKey] = dataclass_field(default_factory=set)
+class _PythonSemanticPrefetchResult:
+    payloads: dict[_PythonSemanticAnchorKey, dict[str, object]] = dataclass_field(
+        default_factory=dict
+    )
+    attempted_keys: set[_PythonSemanticAnchorKey] = dataclass_field(default_factory=set)
     telemetry: dict[str, int] = dataclass_field(default_factory=dict)
     diagnostics: list[dict[str, object]] = dataclass_field(default_factory=list)
+
+
+LanguageSearchResult = _LanguageSearchResult
+PythonSemanticPrefetchResult = _PythonSemanticPrefetchResult
 
 
 def _run_language_partitions(ctx: SmartSearchContext) -> list[_LanguageSearchResult]:
@@ -1911,17 +1943,17 @@ def _run_single_partition(
     )
 
 
-def _merge_pyrefly_prefetch_results(
+def _merge_python_semantic_prefetch_results(
     partition_results: list[_LanguageSearchResult],
-) -> _PyreflyPrefetchResult | None:
-    payloads: dict[_PyreflyAnchorKey, dict[str, object]] = {}
-    attempted_keys: set[_PyreflyAnchorKey] = set()
-    telemetry = _new_pyrefly_telemetry()
+) -> _PythonSemanticPrefetchResult | None:
+    payloads: dict[_PythonSemanticAnchorKey, dict[str, object]] = {}
+    attempted_keys: set[_PythonSemanticAnchorKey] = set()
+    telemetry = _new_python_semantic_telemetry()
     diagnostics: list[dict[str, object]] = []
     saw_prefetch = False
 
     for partition in partition_results:
-        prefetched = partition.pyrefly_prefetch
+        prefetched = partition.python_semantic_prefetch
         if prefetched is None:
             continue
         saw_prefetch = True
@@ -1934,7 +1966,7 @@ def _merge_pyrefly_prefetch_results(
 
     if not saw_prefetch:
         return None
-    return _PyreflyPrefetchResult(
+    return _PythonSemanticPrefetchResult(
         payloads=payloads,
         attempted_keys=attempted_keys,
         telemetry=telemetry,
@@ -2112,7 +2144,7 @@ def _build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, objec
     return telemetry
 
 
-def _new_pyrefly_telemetry() -> dict[str, int]:
+def _new_python_semantic_telemetry() -> dict[str, int]:
     return {
         "attempted": 0,
         "applied": 0,
@@ -2122,18 +2154,41 @@ def _new_pyrefly_telemetry() -> dict[str, int]:
     }
 
 
-def _pyrefly_anchor_key(
+def new_python_semantic_telemetry() -> dict[str, int]:
+    """Public wrapper for constructing default semantic telemetry.
+
+    Returns:
+        dict[str, int]: Initialized telemetry counters.
+    """
+    return _new_python_semantic_telemetry()
+
+
+def run_prefetch_python_semantic_for_raw_matches(
+    ctx: SmartSearchContext,
+    *,
+    lang: QueryLanguage,
+    raw_matches: list[RawMatch],
+) -> _PythonSemanticPrefetchResult:
+    """Public wrapper around python semantic prefetch execution.
+
+    Returns:
+        _PythonSemanticPrefetchResult: Prefetch payloads and telemetry.
+    """
+    return _prefetch_python_semantic_for_raw_matches(ctx, lang=lang, raw_matches=raw_matches)
+
+
+def _python_semantic_anchor_key(
     *,
     file: str,
     line: int,
     col: int,
     match_text: str,
-) -> _PyreflyAnchorKey:
+) -> _PythonSemanticAnchorKey:
     return (file, line, col, match_text)
 
 
-def _pyrefly_anchor_key_from_raw(raw: RawMatch) -> _PyreflyAnchorKey:
-    return _pyrefly_anchor_key(
+def _python_semantic_anchor_key_from_raw(raw: RawMatch) -> _PythonSemanticAnchorKey:
+    return _python_semantic_anchor_key(
         file=raw.file,
         line=raw.line,
         col=raw.col,
@@ -2141,8 +2196,8 @@ def _pyrefly_anchor_key_from_raw(raw: RawMatch) -> _PyreflyAnchorKey:
     )
 
 
-def _pyrefly_anchor_key_from_match(match: EnrichedMatch) -> _PyreflyAnchorKey:
-    return _pyrefly_anchor_key(
+def _python_semantic_anchor_key_from_match(match: EnrichedMatch) -> _PythonSemanticAnchorKey:
+    return _python_semantic_anchor_key(
         file=match.file,
         line=match.line,
         col=match.col,
@@ -2150,36 +2205,36 @@ def _pyrefly_anchor_key_from_match(match: EnrichedMatch) -> _PyreflyAnchorKey:
     )
 
 
-def _pyrefly_failure_diagnostic(
+def _python_semantic_failure_diagnostic(
     *,
     reason: str = "session_unavailable",
 ) -> dict[str, object]:
     return {
-        "code": "PYREFLY001",
+        "code": "PYTHON_SEMANTIC001",
         "severity": "warning",
-        "message": "Pyrefly enrichment unavailable for one or more anchors",
+        "message": "PythonSemantic enrichment unavailable for one or more anchors",
         "reason": reason,
     }
 
 
-def _pyrefly_no_signal_diagnostic(
+def _python_semantic_no_signal_diagnostic(
     reasons: tuple[str, ...],
     *,
     coverage_reason: str | None = None,
 ) -> dict[str, object]:
-    reason_text = _normalize_pyrefly_degradation_reason(
+    reason_text = _normalize_python_semantic_degradation_reason(
         reasons=reasons,
         coverage_reason=coverage_reason,
     )
     return {
-        "code": "PYREFLY002",
+        "code": "PYTHON_SEMANTIC002",
         "severity": "info",
-        "message": "Pyrefly payload resolved but contained no actionable signal",
+        "message": "PythonSemantic payload resolved but contained no actionable signal",
         "reason": reason_text,
     }
 
 
-def _normalize_pyrefly_degradation_reason(
+def _normalize_python_semantic_degradation_reason(
     *,
     reasons: tuple[str, ...],
     coverage_reason: str | None,
@@ -2195,8 +2250,12 @@ def _normalize_pyrefly_degradation_reason(
         "no_signal",
     }
     normalized_coverage_reason = coverage_reason
-    if normalized_coverage_reason and normalized_coverage_reason.startswith("no_pyrefly_signal:"):
-        normalized_coverage_reason = normalized_coverage_reason.removeprefix("no_pyrefly_signal:")
+    if normalized_coverage_reason and normalized_coverage_reason.startswith(
+        "no_python_semantic_signal:"
+    ):
+        normalized_coverage_reason = normalized_coverage_reason.removeprefix(
+            "no_python_semantic_signal:"
+        )
     if normalized_coverage_reason == "timeout":
         normalized_coverage_reason = "request_timeout"
     if (
@@ -2214,7 +2273,7 @@ def _normalize_pyrefly_degradation_reason(
     return "no_signal"
 
 
-def _pyrefly_coverage_reason(payload: dict[str, object]) -> str | None:
+def _python_semantic_coverage_reason(payload: dict[str, object]) -> str | None:
     coverage = payload.get("coverage")
     if not isinstance(coverage, dict):
         return None
@@ -2224,37 +2283,37 @@ def _pyrefly_coverage_reason(payload: dict[str, object]) -> str | None:
     return None
 
 
-def _prefetch_pyrefly_for_raw_matches(
+def _prefetch_python_semantic_for_raw_matches(
     ctx: SmartSearchContext,
     *,
     lang: QueryLanguage,
     raw_matches: list[RawMatch],
-) -> _PyreflyPrefetchResult:
-    if lang != "python" or not raw_matches or not lsp_runtime_enabled():
-        return _PyreflyPrefetchResult(telemetry=_new_pyrefly_telemetry())
+) -> _PythonSemanticPrefetchResult:
+    if lang != "python" or not raw_matches or not semantic_runtime_enabled():
+        return _PythonSemanticPrefetchResult(telemetry=_new_python_semantic_telemetry())
 
-    telemetry = _new_pyrefly_telemetry()
-    payloads: dict[_PyreflyAnchorKey, dict[str, object]] = {}
-    attempted_keys: set[_PyreflyAnchorKey] = set()
+    telemetry = _new_python_semantic_telemetry()
+    payloads: dict[_PythonSemanticAnchorKey, dict[str, object]] = {}
+    attempted_keys: set[_PythonSemanticAnchorKey] = set()
     diagnostics: list[dict[str, object]] = []
-    pyrefly_budget_used = 0
+    python_semantic_budget_used = 0
 
     for raw in raw_matches:
-        if pyrefly_budget_used >= MAX_PYREFLY_ENRICH_FINDINGS:
+        if python_semantic_budget_used >= MAX_PYTHON_SEMANTIC_ENRICH_FINDINGS:
             telemetry["skipped"] += 1
             continue
         if not is_path_in_lang_scope(raw.file, lang):
             continue
-        key = _pyrefly_anchor_key_from_raw(raw)
+        key = _python_semantic_anchor_key_from_raw(raw)
         if key in attempted_keys:
             continue
         attempted_keys.add(key)
-        pyrefly_budget_used += 1
+        python_semantic_budget_used += 1
         telemetry["attempted"] += 1
         file_path = ctx.root / raw.file
         try:
-            outcome = enrich_with_language_lsp(
-                LanguageLspEnrichmentRequest(
+            outcome = enrich_with_language_semantics(
+                LanguageSemanticEnrichmentRequest(
                     language="python",
                     mode="search",
                     root=ctx.root,
@@ -2265,32 +2324,32 @@ def _prefetch_pyrefly_for_raw_matches(
                     symbol_hint=raw.match_text,
                 )
             )
-        except _PYREFLY_PREFETCH_NON_FATAL_EXCEPTIONS:
+        except _PYTHON_SEMANTIC_PREFETCH_NON_FATAL_EXCEPTIONS:
             telemetry["failed"] += 1
-            diagnostics.append(_pyrefly_failure_diagnostic(reason="request_failed"))
+            diagnostics.append(_python_semantic_failure_diagnostic(reason="request_failed"))
             continue
         payload = outcome.payload if isinstance(outcome.payload, dict) else None
         if outcome.timed_out:
             telemetry["timed_out"] += 1
 
         if isinstance(payload, dict) and payload:
-            has_signal, reasons = evaluate_pyrefly_signal_from_mapping(payload)
+            has_signal, reasons = evaluate_python_semantic_signal_from_mapping(payload)
             if has_signal:
                 telemetry["applied"] += 1
                 payloads[key] = payload
             else:
                 telemetry["failed"] += 1
                 diagnostics.append(
-                    _pyrefly_no_signal_diagnostic(
+                    _python_semantic_no_signal_diagnostic(
                         reasons,
-                        coverage_reason=_pyrefly_coverage_reason(payload),
+                        coverage_reason=_python_semantic_coverage_reason(payload),
                     )
                 )
         else:
             telemetry["failed"] += 1
             diagnostics.append(
-                _pyrefly_failure_diagnostic(
-                    reason=_normalize_pyrefly_degradation_reason(
+                _python_semantic_failure_diagnostic(
+                    reason=_normalize_python_semantic_degradation_reason(
                         reasons=(outcome.failure_reason,)
                         if isinstance(outcome.failure_reason, str)
                         else (),
@@ -2299,7 +2358,7 @@ def _prefetch_pyrefly_for_raw_matches(
                 )
             )
 
-    return _PyreflyPrefetchResult(
+    return _PythonSemanticPrefetchResult(
         payloads=payloads,
         attempted_keys=attempted_keys,
         telemetry=telemetry,
@@ -2307,19 +2366,19 @@ def _prefetch_pyrefly_for_raw_matches(
     )
 
 
-def _pyrefly_enrich_match(
+def _python_semantic_enrich_match(
     ctx: SmartSearchContext,
     match: EnrichedMatch,
-) -> LanguageLspEnrichmentOutcome:
+) -> LanguageSemanticEnrichmentOutcome:
     if match.language != "python":
-        return LanguageLspEnrichmentOutcome(failure_reason="provider_unavailable")
-    if not lsp_runtime_enabled():
-        return LanguageLspEnrichmentOutcome(failure_reason="not_attempted_runtime_disabled")
+        return LanguageSemanticEnrichmentOutcome(failure_reason="provider_unavailable")
+    if not semantic_runtime_enabled():
+        return LanguageSemanticEnrichmentOutcome(failure_reason="not_attempted_runtime_disabled")
     file_path = ctx.root / match.file
     if file_path.suffix not in {".py", ".pyi"}:
-        return LanguageLspEnrichmentOutcome(failure_reason="provider_unavailable")
-    return enrich_with_language_lsp(
-        LanguageLspEnrichmentRequest(
+        return LanguageSemanticEnrichmentOutcome(failure_reason="provider_unavailable")
+    return enrich_with_language_semantics(
+        LanguageSemanticEnrichmentRequest(
             language="python",
             mode="search",
             root=ctx.root,
@@ -2332,10 +2391,10 @@ def _pyrefly_enrich_match(
     )
 
 
-def _seed_pyrefly_state(
-    prefetched: _PyreflyPrefetchResult | None,
+def _seed_python_semantic_state(
+    prefetched: _PythonSemanticPrefetchResult | None,
 ) -> tuple[dict[str, int], list[dict[str, object]]]:
-    telemetry = _new_pyrefly_telemetry()
+    telemetry = _new_python_semantic_telemetry()
     diagnostics: list[dict[str, object]] = []
     if prefetched is None:
         return telemetry, diagnostics
@@ -2346,40 +2405,40 @@ def _seed_pyrefly_state(
     return telemetry, diagnostics
 
 
-def _pyrefly_payload_from_prefetch(
-    prefetched: _PyreflyPrefetchResult | None,
-    key: _PyreflyAnchorKey,
+def _python_semantic_payload_from_prefetch(
+    prefetched: _PythonSemanticPrefetchResult | None,
+    key: _PythonSemanticAnchorKey,
 ) -> dict[str, object] | None:
     if prefetched is None or key not in prefetched.attempted_keys:
         return None
     return prefetched.payloads.get(key)
 
 
-def _fetch_pyrefly_payload(
+def _fetch_python_semantic_payload(
     *,
     ctx: SmartSearchContext,
     match: EnrichedMatch,
-    prefetched: _PyreflyPrefetchResult | None,
+    prefetched: _PythonSemanticPrefetchResult | None,
     telemetry: dict[str, int],
 ) -> tuple[dict[str, object] | None, bool, str | None]:
-    if not lsp_runtime_enabled():
+    if not semantic_runtime_enabled():
         return None, False, None
-    key = _pyrefly_anchor_key_from_match(match)
-    prefetched_payload = _pyrefly_payload_from_prefetch(prefetched, key)
+    key = _python_semantic_anchor_key_from_match(match)
+    prefetched_payload = _python_semantic_payload_from_prefetch(prefetched, key)
     if prefetched is not None and key in prefetched.attempted_keys:
         return prefetched_payload, False, None
 
     telemetry["attempted"] += 1
     try:
-        outcome = _pyrefly_enrich_match(ctx, match)
-    except _PYREFLY_PREFETCH_NON_FATAL_EXCEPTIONS:
+        outcome = _python_semantic_enrich_match(ctx, match)
+    except _PYTHON_SEMANTIC_PREFETCH_NON_FATAL_EXCEPTIONS:
         return None, True, "request_failed"
     if outcome.timed_out:
         telemetry["timed_out"] += 1
     return outcome.payload, True, outcome.failure_reason
 
 
-def _merge_match_with_pyrefly_payload(
+def _merge_match_with_python_semantic_payload(
     *,
     match: EnrichedMatch,
     payload: dict[str, object] | None,
@@ -2389,26 +2448,26 @@ def _merge_match_with_pyrefly_payload(
     diagnostics: list[dict[str, object]],
 ) -> EnrichedMatch:
     if isinstance(payload, dict) and payload:
-        has_signal, reasons = evaluate_pyrefly_signal_from_mapping(payload)
+        has_signal, reasons = evaluate_python_semantic_signal_from_mapping(payload)
         if not has_signal:
             if attempted_in_place:
                 telemetry["failed"] += 1
                 diagnostics.append(
-                    _pyrefly_no_signal_diagnostic(
+                    _python_semantic_no_signal_diagnostic(
                         reasons,
-                        coverage_reason=_pyrefly_coverage_reason(payload),
+                        coverage_reason=_python_semantic_coverage_reason(payload),
                     )
                 )
             return match
         if attempted_in_place:
             telemetry["applied"] += 1
-        return msgspec.structs.replace(match, pyrefly_enrichment=payload)
+        return msgspec.structs.replace(match, python_semantic_enrichment=payload)
 
     if attempted_in_place:
         telemetry["failed"] += 1
         diagnostics.append(
-            _pyrefly_failure_diagnostic(
-                reason=_normalize_pyrefly_degradation_reason(
+            _python_semantic_failure_diagnostic(
+                reason=_normalize_python_semantic_degradation_reason(
                     reasons=(failure_reason,) if isinstance(failure_reason, str) else (),
                     coverage_reason=failure_reason,
                 ),
@@ -2417,34 +2476,34 @@ def _merge_match_with_pyrefly_payload(
     return match
 
 
-def _pyrefly_summary_payload(
+def _python_semantic_summary_payload(
     *,
     overview: dict[str, object],
     telemetry: dict[str, int],
     diagnostics: list[dict[str, object]],
 ) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]]]:
-    telemetry_payload = coerce_pyrefly_telemetry(telemetry)
-    diagnostics_payload = coerce_pyrefly_diagnostics(diagnostics)
+    telemetry_payload = coerce_python_semantic_telemetry(telemetry)
+    diagnostics_payload = coerce_python_semantic_diagnostics(diagnostics)
     return (
-        to_public_dict(coerce_pyrefly_overview(overview)),
+        to_public_dict(coerce_python_semantic_overview(overview)),
         to_public_dict(telemetry_payload),
         to_public_list(diagnostics_payload),
     )
 
 
-def _attach_pyrefly_enrichment(
+def _attach_python_semantic_enrichment(
     *,
     ctx: SmartSearchContext,
     matches: list[EnrichedMatch],
-    prefetched: _PyreflyPrefetchResult | None = None,
+    prefetched: _PythonSemanticPrefetchResult | None = None,
 ) -> tuple[list[EnrichedMatch], dict[str, object], dict[str, object], list[dict[str, object]]]:
-    if not lsp_runtime_enabled():
-        return matches, {}, cast("dict[str, object]", _new_pyrefly_telemetry()), []
+    if not semantic_runtime_enabled():
+        return matches, {}, cast("dict[str, object]", _new_python_semantic_telemetry()), []
 
-    telemetry, diagnostics = _seed_pyrefly_state(prefetched)
+    telemetry, diagnostics = _seed_python_semantic_state(prefetched)
 
     if not matches:
-        overview, telemetry_map, diagnostic_rows = _pyrefly_summary_payload(
+        overview, telemetry_map, diagnostic_rows = _python_semantic_summary_payload(
             overview={},
             telemetry=telemetry,
             diagnostics=diagnostics,
@@ -2452,25 +2511,25 @@ def _attach_pyrefly_enrichment(
         return matches, overview, telemetry_map, diagnostic_rows
 
     enriched: list[EnrichedMatch] = []
-    pyrefly_budget_used = 0
+    python_semantic_budget_used = 0
 
     for match in matches:
         if match.language != "python":
             enriched.append(match)
             continue
-        if pyrefly_budget_used >= MAX_PYREFLY_ENRICH_FINDINGS:
+        if python_semantic_budget_used >= MAX_PYTHON_SEMANTIC_ENRICH_FINDINGS:
             telemetry["skipped"] += 1
             enriched.append(match)
             continue
-        pyrefly_budget_used += 1
-        payload, attempted_in_place, failure_reason = _fetch_pyrefly_payload(
+        python_semantic_budget_used += 1
+        payload, attempted_in_place, failure_reason = _fetch_python_semantic_payload(
             ctx=ctx,
             match=match,
             prefetched=prefetched,
             telemetry=telemetry,
         )
         enriched.append(
-            _merge_match_with_pyrefly_payload(
+            _merge_match_with_python_semantic_payload(
                 match=match,
                 payload=payload,
                 attempted_in_place=attempted_in_place,
@@ -2480,8 +2539,8 @@ def _attach_pyrefly_enrichment(
             )
         )
 
-    overview = _build_pyrefly_overview(enriched)
-    overview_map, telemetry_map, diagnostic_rows = _pyrefly_summary_payload(
+    overview = _build_python_semantic_overview(enriched)
+    overview_map, telemetry_map, diagnostic_rows = _python_semantic_summary_payload(
         overview=overview,
         telemetry=telemetry,
         diagnostics=diagnostics,
@@ -2504,7 +2563,7 @@ def _normalize_neighborhood_file_path(path: str) -> str:
 
 
 @dataclass(slots=True)
-class _PyreflyOverviewAccumulator:
+class _PythonSemanticOverviewAccumulator:
     primary_symbol: str | None = None
     enclosing_class: str | None = None
     total_incoming: int = 0
@@ -2520,9 +2579,9 @@ def _count_mapping_rows(value: object) -> int:
     return sum(1 for row in value if isinstance(row, dict))
 
 
-def _accumulate_pyrefly_overview(
+def _accumulate_python_semantic_overview(
     *,
-    acc: _PyreflyOverviewAccumulator,
+    acc: _PythonSemanticOverviewAccumulator,
     payload: dict[str, object],
     match_text: str,
 ) -> None:
@@ -2552,12 +2611,14 @@ def _accumulate_pyrefly_overview(
     acc.diagnostics += _count_mapping_rows(payload.get("anchor_diagnostics"))
 
 
-def _build_pyrefly_overview(matches: list[EnrichedMatch]) -> dict[str, object]:
-    acc = _PyreflyOverviewAccumulator()
+def _build_python_semantic_overview(matches: list[EnrichedMatch]) -> dict[str, object]:
+    acc = _PythonSemanticOverviewAccumulator()
     for match in matches:
-        payload = match.pyrefly_enrichment
+        payload = match.python_semantic_enrichment
         if isinstance(payload, dict):
-            _accumulate_pyrefly_overview(acc=acc, payload=payload, match_text=match.match_text)
+            _accumulate_python_semantic_overview(
+                acc=acc, payload=payload, match_text=match.match_text
+            )
     return {
         "primary_symbol": acc.primary_symbol,
         "enclosing_class": acc.enclosing_class,
@@ -2569,7 +2630,7 @@ def _build_pyrefly_overview(matches: list[EnrichedMatch]) -> dict[str, object]:
     }
 
 
-def _merge_matches_and_pyrefly(
+def _merge_matches_and_python_semantic(
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
 ) -> tuple[
@@ -2582,11 +2643,11 @@ def _merge_matches_and_pyrefly(
         partition_results=partition_results,
         lang_scope=ctx.lang_scope,
     )
-    prefetched_pyrefly = _merge_pyrefly_prefetch_results(partition_results)
-    return _attach_pyrefly_enrichment(
+    prefetched_python_semantic = _merge_python_semantic_prefetch_results(partition_results)
+    return _attach_python_semantic_enrichment(
         ctx=ctx,
         matches=enriched_matches,
-        prefetched=prefetched_pyrefly,
+        prefetched=prefetched_python_semantic,
     )
 
 
@@ -2595,9 +2656,9 @@ def _build_search_summary(
     partition_results: list[_LanguageSearchResult],
     enriched_matches: list[EnrichedMatch],
     *,
-    pyrefly_overview: dict[str, object],
-    pyrefly_telemetry: dict[str, object],
-    pyrefly_diagnostics: list[dict[str, object]],
+    python_semantic_overview: dict[str, object],
+    python_semantic_telemetry: dict[str, object],
+    python_semantic_diagnostics: list[dict[str, object]],
 ) -> tuple[dict[str, object], list[Finding]]:
     language_stats: dict[QueryLanguage, SearchStats] = {
         result.lang: result.stats for result in partition_results
@@ -2644,13 +2705,13 @@ def _build_search_summary(
     summary["cross_language_diagnostics"] = diagnostics_to_summary_payload(all_diagnostics)
     summary["language_capabilities"] = build_language_capabilities(lang_scope=ctx.lang_scope)
     summary["enrichment_telemetry"] = _build_enrichment_telemetry(enriched_matches)
-    summary["pyrefly_overview"] = pyrefly_overview
-    summary["pyrefly_telemetry"] = pyrefly_telemetry
+    summary["python_semantic_overview"] = python_semantic_overview
+    summary["python_semantic_telemetry"] = python_semantic_telemetry
     summary.setdefault(
-        "rust_lsp_telemetry",
+        "rust_semantic_telemetry",
         {"attempted": 0, "applied": 0, "failed": 0, "skipped": 0, "timed_out": 0},
     )
-    summary["pyrefly_diagnostics"] = pyrefly_diagnostics
+    summary["python_semantic_diagnostics"] = python_semantic_diagnostics
     if dropped_by_scope:
         summary["dropped_by_scope"] = dropped_by_scope
     assert_multilang_summary(summary)
@@ -2760,7 +2821,7 @@ def _build_structural_neighborhood_preview(
     return neighborhood, findings, list(dict.fromkeys(notes))
 
 
-def _apply_search_lsp_insight(
+def _apply_search_semantic_insight(
     *,
     ctx: SmartSearchContext,
     insight: FrontDoorInsightV1,
@@ -2768,33 +2829,33 @@ def _apply_search_lsp_insight(
     primary_target_finding: Finding | None,
     top_definition_match: EnrichedMatch | None,
 ) -> FrontDoorInsightV1:
-    from tools.cq.core.front_door_insight import augment_insight_with_lsp
+    from tools.cq.core.front_door_insight import augment_insight_with_semantic
 
-    outcome = _collect_search_lsp_outcome(
+    outcome = _collect_search_semantic_outcome(
         ctx=ctx,
         primary_target_finding=primary_target_finding,
         top_definition_match=top_definition_match,
     )
     if outcome.payload is not None:
-        insight = augment_insight_with_lsp(insight, outcome.payload)
-        advanced_planes = outcome.payload.get("advanced_planes")
-        if isinstance(advanced_planes, dict):
-            summary["lsp_advanced_planes"] = dict(advanced_planes)
-    _update_search_summary_lsp_telemetry(summary, outcome)
-    lsp_state = _derive_search_lsp_state(summary, outcome)
+        insight = augment_insight_with_semantic(insight, outcome.payload)
+        semantic_planes = outcome.payload.get("semantic_planes")
+        if isinstance(semantic_planes, dict):
+            summary["semantic_planes"] = dict(semantic_planes)
+    _update_search_summary_semantic_telemetry(summary, outcome)
+    semantic_state = _derive_search_semantic_state(summary, outcome)
     return msgspec.structs.replace(
         insight,
         degradation=msgspec.structs.replace(
             insight.degradation,
-            lsp=lsp_state.status,
-            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+            semantic=semantic_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *semantic_state.reasons])),
         ),
     )
 
 
 @dataclass(slots=True)
-class _SearchLspOutcome:
-    provider: str = "none"
+class _SearchSemanticOutcome:
+    provider: SemanticProvider = "none"
     target_language: str | None = None
     payload: dict[str, object] | None = None
     attempted: int = 0
@@ -2818,15 +2879,19 @@ class _SearchAssemblyInputs:
 
 
 def _payload_coverage_status(payload: dict[str, object]) -> tuple[str | None, str | None]:
+    status = payload.get("enrichment_status")
+    if isinstance(status, str):
+        reason = payload.get("degrade_reason")
+        return status, reason if isinstance(reason, str) and reason else None
     coverage = payload.get("coverage")
-    if not isinstance(coverage, dict):
-        return None, None
-    status = coverage.get("status")
-    reason = coverage.get("reason")
-    return (
-        status if isinstance(status, str) else None,
-        reason if isinstance(reason, str) and reason else None,
-    )
+    if isinstance(coverage, dict):
+        cov_status = coverage.get("status")
+        cov_reason = coverage.get("reason")
+        return (
+            cov_status if isinstance(cov_status, str) else None,
+            cov_reason if isinstance(cov_reason, str) and cov_reason else None,
+        )
+    return None, None
 
 
 def _rust_payload_has_signal(payload: dict[str, object]) -> bool:
@@ -2852,9 +2917,14 @@ def _rust_payload_has_signal(payload: dict[str, object]) -> bool:
 
 
 def _rust_payload_reason(payload: dict[str, object]) -> str | None:
-    advanced_planes = payload.get("advanced_planes")
-    if isinstance(advanced_planes, dict):
-        reason = advanced_planes.get("reason")
+    semantic_planes = payload.get("semantic_planes")
+    if isinstance(semantic_planes, dict):
+        degradation = semantic_planes.get("degradation")
+        if isinstance(degradation, list):
+            for reason in degradation:
+                if isinstance(reason, str) and reason:
+                    return reason
+        reason = semantic_planes.get("reason")
         if isinstance(reason, str) and reason:
             return reason
     degrade_events = payload.get("degrade_events")
@@ -2868,7 +2938,7 @@ def _rust_payload_reason(payload: dict[str, object]) -> str | None:
     return None
 
 
-def _resolve_search_lsp_target(
+def _resolve_search_semantic_target(
     *,
     ctx: SmartSearchContext,
     primary_target_finding: Finding | None,
@@ -2899,57 +2969,27 @@ def _resolve_search_lsp_target(
     return target_file_path, target_language, anchor, symbol_hint
 
 
-def _check_python_search_lsp_capabilities(
+def _apply_prefetched_search_semantic_outcome(
     *,
-    ctx: SmartSearchContext,
-    outcome: _SearchLspOutcome,
-    target_file_path: Path,
-) -> None:
-    provider_root = resolve_lsp_provider_root(
-        language="python",
-        command_root=ctx.root,
-        file_path=target_file_path,
-    )
-    capabilities = get_pyrefly_lsp_capabilities(
-        provider_root,
-        startup_timeout_seconds=0.5,
-    )
-    if not capabilities:
-        outcome.reasons.append("capability_probe_unavailable")
-        return
-
-    required_methods = (
-        "textDocument/hover",
-        "textDocument/definition",
-        "textDocument/references",
-    )
-    unsupported = [
-        method for method in required_methods if not supports_method(capabilities, method)
-    ]
-    if unsupported:
-        outcome.reasons.append("unsupported_capability")
-        return
-
-
-def _apply_prefetched_search_lsp_outcome(
-    *,
-    outcome: _SearchLspOutcome,
+    outcome: _SearchSemanticOutcome,
     target_language: QueryLanguage,
     top_definition_match: EnrichedMatch,
 ) -> bool:
-    if target_language != "python" or not isinstance(top_definition_match.pyrefly_enrichment, dict):
+    if target_language != "python" or not isinstance(
+        top_definition_match.python_semantic_enrichment, dict
+    ):
         return False
 
     prefetch_status, prefetch_reason = _payload_coverage_status(
-        top_definition_match.pyrefly_enrichment
+        top_definition_match.python_semantic_enrichment
     )
     if prefetch_status == "applied":
-        outcome.payload = top_definition_match.pyrefly_enrichment
+        outcome.payload = top_definition_match.python_semantic_enrichment
         outcome.applied = 1
     else:
         outcome.failed = 1
         outcome.reasons.append(
-            _normalize_pyrefly_degradation_reason(
+            _normalize_python_semantic_degradation_reason(
                 reasons=(),
                 coverage_reason=prefetch_reason,
             )
@@ -2957,9 +2997,9 @@ def _apply_prefetched_search_lsp_outcome(
     return True
 
 
-def _apply_search_lsp_payload_outcome(
+def _apply_search_semantic_payload_outcome(
     *,
-    outcome: _SearchLspOutcome,
+    outcome: _SearchSemanticOutcome,
     target_language: QueryLanguage,
     payload: dict[str, object] | None,
     timed_out: bool,
@@ -2970,7 +3010,7 @@ def _apply_search_lsp_payload_outcome(
     if payload is None:
         outcome.failed = 1
         normalized_reason = (
-            _normalize_pyrefly_degradation_reason(
+            _normalize_python_semantic_degradation_reason(
                 reasons=(failure_reason,) if isinstance(failure_reason, str) else (),
                 coverage_reason=failure_reason,
             )
@@ -2996,7 +3036,7 @@ def _apply_search_lsp_payload_outcome(
 
     outcome.failed = 1
     outcome.reasons.append(
-        _normalize_pyrefly_degradation_reason(
+        _normalize_python_semantic_degradation_reason(
             reasons=(failure_reason,) if isinstance(failure_reason, str) else (),
             coverage_reason=payload_reason or failure_reason,
         )
@@ -3004,14 +3044,14 @@ def _apply_search_lsp_payload_outcome(
     outcome.payload = None
 
 
-def _collect_search_lsp_outcome(
+def _collect_search_semantic_outcome(
     *,
     ctx: SmartSearchContext,
     primary_target_finding: Finding | None,
     top_definition_match: EnrichedMatch | None,
-) -> _SearchLspOutcome:
-    outcome = _SearchLspOutcome()
-    resolved = _resolve_search_lsp_target(
+) -> _SearchSemanticOutcome:
+    outcome = _SearchSemanticOutcome()
+    resolved = _resolve_search_semantic_target(
         ctx=ctx,
         primary_target_finding=primary_target_finding,
         top_definition_match=top_definition_match,
@@ -3026,27 +3066,20 @@ def _collect_search_lsp_outcome(
 
     outcome.provider = provider_for_language(target_language)
     outcome.target_language = target_language
-    if not lsp_runtime_enabled():
+    if not semantic_runtime_enabled():
         outcome.reasons.append("not_attempted_runtime_disabled")
         return outcome
 
     outcome.attempted = 1
-    if _apply_prefetched_search_lsp_outcome(
+    if _apply_prefetched_search_semantic_outcome(
         outcome=outcome,
         target_language=target_language,
         top_definition_match=top_definition_match,
     ):
         return outcome
 
-    if target_language == "python":
-        _check_python_search_lsp_capabilities(
-            ctx=ctx,
-            outcome=outcome,
-            target_file_path=target_file_path,
-        )
-
-    lsp_outcome = enrich_with_language_lsp(
-        LanguageLspEnrichmentRequest(
+    semantic_outcome = enrich_with_language_semantics(
+        LanguageSemanticEnrichmentRequest(
             language=target_language,
             mode="search",
             root=ctx.root,
@@ -3057,24 +3090,26 @@ def _collect_search_lsp_outcome(
             symbol_hint=symbol_hint,
         )
     )
-    _apply_search_lsp_payload_outcome(
+    _apply_search_semantic_payload_outcome(
         outcome=outcome,
         target_language=target_language,
-        payload=lsp_outcome.payload,
-        timed_out=lsp_outcome.timed_out,
-        failure_reason=lsp_outcome.failure_reason,
+        payload=semantic_outcome.payload,
+        timed_out=semantic_outcome.timed_out,
+        failure_reason=semantic_outcome.failure_reason,
     )
     return outcome
 
 
-def _update_search_summary_lsp_telemetry(
+def _update_search_summary_semantic_telemetry(
     summary: dict[str, object],
-    outcome: _SearchLspOutcome,
+    outcome: _SearchSemanticOutcome,
 ) -> None:
     if outcome.attempted <= 0 or outcome.target_language not in {"python", "rust"}:
         return
     telemetry_key = (
-        "pyrefly_telemetry" if outcome.target_language == "python" else "rust_lsp_telemetry"
+        "python_semantic_telemetry"
+        if outcome.target_language == "python"
+        else "rust_semantic_telemetry"
     )
     telemetry = summary.get(telemetry_key)
     if not isinstance(telemetry, dict):
@@ -3085,7 +3120,7 @@ def _update_search_summary_lsp_telemetry(
     telemetry["timed_out"] = int(telemetry.get("timed_out", 0) or 0) + outcome.timed_out
 
 
-def _read_lsp_telemetry(
+def _read_semantic_telemetry(
     summary: dict[str, object],
     *,
     language: QueryLanguage | None,
@@ -3105,12 +3140,12 @@ def _read_lsp_telemetry(
         )
 
     if language == "python":
-        return _read_entry(summary.get("pyrefly_telemetry"))
+        return _read_entry(summary.get("python_semantic_telemetry"))
     if language == "rust":
-        return _read_entry(summary.get("rust_lsp_telemetry"))
+        return _read_entry(summary.get("rust_semantic_telemetry"))
 
-    py = _read_entry(summary.get("pyrefly_telemetry"))
-    rust = _read_entry(summary.get("rust_lsp_telemetry"))
+    py = _read_entry(summary.get("python_semantic_telemetry"))
+    rust = _read_entry(summary.get("rust_semantic_telemetry"))
     return (
         py[0] + rust[0],
         py[1] + rust[1],
@@ -3119,36 +3154,34 @@ def _read_lsp_telemetry(
     )
 
 
-def _derive_provider_from_summary(summary: dict[str, object]) -> LspProvider:
-    py_attempted, _py_applied, _py_failed, _py_timed_out = _read_lsp_telemetry(
+def _derive_semantic_provider_from_summary(summary: dict[str, object]) -> SemanticProvider:
+    py_attempted, _py_applied, _py_failed, _py_timed_out = _read_semantic_telemetry(
         summary, language="python"
     )
-    rust_attempted, _rs_applied, _rs_failed, _rs_timed_out = _read_lsp_telemetry(
+    rust_attempted, _rs_applied, _rs_failed, _rs_timed_out = _read_semantic_telemetry(
         summary, language="rust"
     )
     if rust_attempted > 0 and py_attempted <= 0:
-        return "rust_analyzer"
+        return "rust_static"
     if py_attempted > 0:
-        return "pyrefly"
+        return "python_static"
     if rust_attempted > 0:
-        return "rust_analyzer"
+        return "rust_static"
     return "none"
 
 
-def _derive_search_lsp_state(
+def _derive_search_semantic_state(
     summary: dict[str, object],
-    outcome: _SearchLspOutcome,
-) -> LspContractStateV1:
-    provider_value: LspProvider
-    if outcome.provider == "pyrefly":
-        provider_value = "pyrefly"
-    elif outcome.provider == "rust_analyzer":
-        provider_value = "rust_analyzer"
+    outcome: _SearchSemanticOutcome,
+) -> SemanticContractStateV1:
+    provider_value: SemanticProvider
+    if outcome.provider in {"python_static", "rust_static"}:
+        provider_value = outcome.provider
     elif outcome.provider == "none":
-        provider_value = _derive_provider_from_summary(summary)
+        provider_value = _derive_semantic_provider_from_summary(summary)
     else:
         provider_value = "none"
-    attempted, applied, failed, timed_out = _read_lsp_telemetry(
+    attempted, applied, failed, timed_out = _read_semantic_telemetry(
         summary,
         language=cast("QueryLanguage | None", outcome.target_language),
     )
@@ -3159,8 +3192,8 @@ def _derive_search_lsp_state(
         reasons.append("not_attempted_by_design")
     if outcome.attempted > 0 and outcome.applied <= 0 and applied > 0:
         reasons.append("top_target_failed")
-    return derive_lsp_contract_state(
-        LspContractStateInputV1(
+    return derive_semantic_contract_state(
+        SemanticContractStateInputV1(
             provider=provider_value,
             available=provider_value != "none",
             attempted=attempted,
@@ -3176,16 +3209,19 @@ def _prepare_search_assembly_inputs(
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
 ) -> _SearchAssemblyInputs:
-    enriched_matches, pyrefly_overview, pyrefly_telemetry, pyrefly_diagnostics = (
-        _merge_matches_and_pyrefly(ctx, partition_results)
-    )
+    (
+        enriched_matches,
+        python_semantic_overview,
+        python_semantic_telemetry,
+        python_semantic_diagnostics,
+    ) = _merge_matches_and_python_semantic(ctx, partition_results)
     summary, all_diagnostics = _build_search_summary(
         ctx,
         partition_results,
         enriched_matches,
-        pyrefly_overview=pyrefly_overview,
-        pyrefly_telemetry=pyrefly_telemetry,
-        pyrefly_diagnostics=pyrefly_diagnostics,
+        python_semantic_overview=python_semantic_overview,
+        python_semantic_telemetry=python_semantic_telemetry,
+        python_semantic_diagnostics=python_semantic_diagnostics,
     )
     sections = build_sections(
         enriched_matches,
@@ -3273,7 +3309,7 @@ def _assemble_search_insight(
             ),
         )
     top_def_match = inputs.definition_matches[0] if inputs.definition_matches else None
-    return _apply_search_lsp_insight(
+    return _apply_search_semantic_insight(
         ctx=ctx,
         insight=insight,
         summary=inputs.summary,

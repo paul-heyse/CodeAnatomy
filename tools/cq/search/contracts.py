@@ -246,8 +246,8 @@ class EnrichmentTelemetry(CqOutputStruct, frozen=True):
         )
 
 
-class PyreflyOverview(CqOutputStruct, frozen=True):
-    """Aggregate Pyrefly semantic summary for code-overview rendering."""
+class PythonSemanticOverview(CqOutputStruct, frozen=True):
+    """Aggregate PythonSemantic semantic summary for code-overview rendering."""
 
     primary_symbol: str | msgspec.UnsetType | None = msgspec.UNSET
     enclosing_class: str | msgspec.UnsetType | None = msgspec.UNSET
@@ -258,8 +258,8 @@ class PyreflyOverview(CqOutputStruct, frozen=True):
     matches_enriched: int = 0
 
 
-class PyreflyTelemetry(CqOutputStruct, frozen=True):
-    """Execution telemetry for Pyrefly enrichment retrieval."""
+class PythonSemanticTelemetry(CqOutputStruct, frozen=True):
+    """Execution telemetry for PythonSemantic enrichment retrieval."""
 
     attempted: int = 0
     applied: int = 0
@@ -268,23 +268,23 @@ class PyreflyTelemetry(CqOutputStruct, frozen=True):
     timed_out: int = 0
 
 
-class PyreflyDiagnostic(CqOutputStruct, frozen=True):
-    """Diagnostic emitted by Pyrefly integration policy."""
+class PythonSemanticDiagnostic(CqOutputStruct, frozen=True):
+    """Diagnostic emitted by PythonSemantic integration policy."""
 
-    code: str = "PYREFLY000"
+    code: str = "PYTHON_SEMANTIC000"
     severity: Severity = "info"
     message: str = ""
     reason: str | None = None
 
 
-def coerce_pyrefly_overview(value: Mapping[str, object] | None) -> PyreflyOverview:
+def coerce_python_semantic_overview(value: Mapping[str, object] | None) -> PythonSemanticOverview:
     """Normalize loose overview mapping into typed contract.
 
     Returns:
-        Normalized Pyrefly overview contract.
+        Normalized PythonSemantic overview contract.
     """
     if value is None:
-        return PyreflyOverview()
+        return PythonSemanticOverview()
     primary_symbol_value = value.get("primary_symbol")
     enclosing_class_value = value.get("enclosing_class")
     total_incoming_value = value.get("total_incoming_callers")
@@ -292,7 +292,7 @@ def coerce_pyrefly_overview(value: Mapping[str, object] | None) -> PyreflyOvervi
     total_implementations_value = value.get("total_implementations")
     targeted_diagnostics_value = value.get("targeted_diagnostics")
     matches_enriched_value = value.get("matches_enriched")
-    return PyreflyOverview(
+    return PythonSemanticOverview(
         primary_symbol=(
             primary_symbol_value if isinstance(primary_symbol_value, str) else msgspec.UNSET
         ),
@@ -311,20 +311,20 @@ def coerce_pyrefly_overview(value: Mapping[str, object] | None) -> PyreflyOvervi
     )
 
 
-def coerce_pyrefly_telemetry(value: Mapping[str, object] | None) -> PyreflyTelemetry:
+def coerce_python_semantic_telemetry(value: Mapping[str, object] | None) -> PythonSemanticTelemetry:
     """Normalize loose telemetry mapping into typed contract.
 
     Returns:
-        Normalized Pyrefly telemetry contract.
+        Normalized PythonSemantic telemetry contract.
     """
     if value is None:
-        return PyreflyTelemetry()
+        return PythonSemanticTelemetry()
     attempted_value = value.get("attempted")
     applied_value = value.get("applied")
     failed_value = value.get("failed")
     skipped_value = value.get("skipped")
     timed_out_value = value.get("timed_out")
-    return PyreflyTelemetry(
+    return PythonSemanticTelemetry(
         attempted=attempted_value if isinstance(attempted_value, int) else 0,
         applied=applied_value if isinstance(applied_value, int) else 0,
         failed=failed_value if isinstance(failed_value, int) else 0,
@@ -333,19 +333,19 @@ def coerce_pyrefly_telemetry(value: Mapping[str, object] | None) -> PyreflyTelem
     )
 
 
-def coerce_pyrefly_diagnostics(
-    value: Sequence[Mapping[str, object] | PyreflyDiagnostic] | None,
-) -> list[PyreflyDiagnostic]:
+def coerce_python_semantic_diagnostics(
+    value: Sequence[Mapping[str, object] | PythonSemanticDiagnostic] | None,
+) -> list[PythonSemanticDiagnostic]:
     """Normalize loose diagnostics into typed rows.
 
     Returns:
-        Normalized list of Pyrefly diagnostic rows.
+        Normalized list of PythonSemantic diagnostic rows.
     """
     if not value:
         return []
-    rows: list[PyreflyDiagnostic] = []
+    rows: list[PythonSemanticDiagnostic] = []
     for item in value:
-        if isinstance(item, PyreflyDiagnostic):
+        if isinstance(item, PythonSemanticDiagnostic):
             rows.append(item)
             continue
         if not isinstance(item, Mapping):
@@ -358,8 +358,8 @@ def coerce_pyrefly_diagnostics(
         )
         reason_value = item.get("reason")
         rows.append(
-            PyreflyDiagnostic(
-                code=str(item.get("code", "PYREFLY000")),
+            PythonSemanticDiagnostic(
+                code=str(item.get("code", "PYTHON_SEMANTIC000")),
                 severity=severity,
                 message=str(item.get("message", "")),
                 reason=reason_value if isinstance(reason_value, str) else None,
@@ -525,16 +525,16 @@ __all__ = [
     "EnrichmentTelemetryBucket",
     "LanguageCapabilities",
     "LanguagePartitionStats",
-    "PyreflyDiagnostic",
-    "PyreflyOverview",
-    "PyreflyTelemetry",
+    "PythonSemanticDiagnostic",
+    "PythonSemanticOverview",
+    "PythonSemanticTelemetry",
     "SearchSummaryContract",
     "coerce_diagnostics",
     "coerce_language_capabilities",
     "coerce_language_partitions",
-    "coerce_pyrefly_diagnostics",
-    "coerce_pyrefly_overview",
-    "coerce_pyrefly_telemetry",
+    "coerce_python_semantic_diagnostics",
+    "coerce_python_semantic_overview",
+    "coerce_python_semantic_telemetry",
     "diagnostic_to_dict",
     "diagnostics_to_dicts",
     "summary_contract_to_dict",

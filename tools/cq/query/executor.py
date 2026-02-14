@@ -115,6 +115,7 @@ from tools.cq.query.ir import Query, Scope
 from tools.cq.query.merge import merge_auto_scope_query_results
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
+_ENTITY_FRAGMENT_PAYLOAD_LEN = 3
 
 
 @dataclass
@@ -322,23 +323,23 @@ def _summary_common_for_query(
     common: dict[str, object] = {
         "query": text,
         "mode": _query_mode(query),
-        "pyrefly_overview": dict[str, object](),
-        "pyrefly_telemetry": {
+        "python_semantic_overview": dict[str, object](),
+        "python_semantic_telemetry": {
             "attempted": 0,
             "applied": 0,
             "failed": 0,
             "skipped": 0,
             "timed_out": 0,
         },
-        "rust_lsp_telemetry": {
+        "rust_semantic_telemetry": {
             "attempted": 0,
             "applied": 0,
             "failed": 0,
             "skipped": 0,
             "timed_out": 0,
         },
-        "lsp_advanced_planes": dict[str, object](),
-        "pyrefly_diagnostics": list[dict[str, object]](),
+        "semantic_planes": dict[str, object](),
+        "python_semantic_diagnostics": list[dict[str, object]](),
     }
     if query.pattern_spec is not None:
         common["pattern"] = query.pattern_spec.pattern
@@ -415,7 +416,7 @@ def _scan_entity_records(
         entries,
         FragmentProbeRuntimeV1(
             cache_get=fragment_ctx.cache.get,
-            decode=lambda payload: _decode_entity_fragment_payload(payload),
+            decode=_decode_entity_fragment_payload,
             cache_enabled=fragment_ctx.cache_enabled,
             record_get=record_cache_get,
             record_decode_failure=record_cache_decode_failure,
@@ -1386,7 +1387,7 @@ def _pattern_data_from_hits(
         payload = hit.payload
         if not (
             isinstance(payload, tuple)
-            and len(payload) == 3
+            and len(payload) == _ENTITY_FRAGMENT_PAYLOAD_LEN
             and isinstance(payload[0], list)
             and isinstance(payload[1], list)
             and isinstance(payload[2], list)

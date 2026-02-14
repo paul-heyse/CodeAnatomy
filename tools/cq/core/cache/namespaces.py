@@ -15,7 +15,7 @@ _DEFAULT_NAMESPACE_TTLS_SECONDS: dict[str, int] = {
     "pattern_scan": 600,
     "pattern_fragment": 600,
     "calls_target_metadata": 900,
-    "lsp_front_door": 300,
+    "semantic_front_door": 300,
     "neighborhood_snapshot": 600,
     "neighborhood_fragment": 600,
     "file_inventory": 180,

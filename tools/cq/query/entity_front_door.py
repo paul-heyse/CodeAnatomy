@@ -17,7 +17,7 @@ from tools.cq.core.front_door_insight import (
     InsightNeighborhoodV1,
     InsightRiskCountersV1,
     InsightSliceV1,
-    augment_insight_with_lsp,
+    augment_insight_with_semantic,
     build_entity_insight,
     mark_partial_for_missing_languages,
     risk_from_counters,
@@ -26,27 +26,27 @@ from tools.cq.core.front_door_insight import (
 from tools.cq.core.schema import CqResult, Finding
 from tools.cq.core.snb_schema import SemanticNodeRefV1
 from tools.cq.query.language import QueryLanguage
-from tools.cq.search.lsp_contract_state import (
-    LspContractStateInputV1,
-    LspProvider,
-    derive_lsp_contract_state,
-)
-from tools.cq.search.lsp_front_door_adapter import (
-    LanguageLspEnrichmentRequest,
-    enrich_with_language_lsp,
+from tools.cq.search.language_front_door_adapter import (
+    LanguageSemanticEnrichmentRequest,
+    enrich_with_language_semantics,
     infer_language_for_path,
-    lsp_runtime_enabled,
     provider_for_language,
+    semantic_runtime_enabled,
+)
+from tools.cq.search.semantic_contract_state import (
+    SemanticContractStateInputV1,
+    SemanticProvider,
+    derive_semantic_contract_state,
 )
 
 
 @dataclass(slots=True)
-class EntityLspTelemetry:
-    lsp_attempted: int = 0
-    lsp_applied: int = 0
-    lsp_failed: int = 0
-    lsp_timed_out: int = 0
-    lsp_provider: LspProvider = "none"
+class EntitySemanticTelemetry:
+    semantic_attempted: int = 0
+    semantic_applied: int = 0
+    semantic_failed: int = 0
+    semantic_timed_out: int = 0
+    semantic_provider: SemanticProvider = "none"
     py_attempted: int = 0
     py_applied: int = 0
     py_failed: int = 0
@@ -93,30 +93,30 @@ def attach_entity_front_door_insight(
             risk=risk,
             confidence=neighborhood_data.confidence,
             degradation=degradation,
-            budget=InsightBudgetV1(top_candidates=3, preview_per_slice=5, lsp_targets=3),
+            budget=InsightBudgetV1(top_candidates=3, preview_per_slice=5, semantic_targets=3),
         )
     )
 
-    insight, telemetry = _run_entity_lsp(
+    insight, telemetry = _run_entity_semantic(
         result,
         candidates=neighborhood_data.candidates,
         insight=insight,
         relationship_detail_max_matches=relationship_detail_max_matches,
     )
-    insight = _apply_lsp_contract_state(insight, telemetry)
+    insight = _apply_semantic_contract_state(insight, telemetry)
 
     missing = _missing_languages_from_summary(result.summary)
     if missing:
         insight = mark_partial_for_missing_languages(insight, missing_languages=missing)
 
-    result.summary["pyrefly_telemetry"] = {
+    result.summary["python_semantic_telemetry"] = {
         "attempted": telemetry.py_attempted,
         "applied": telemetry.py_applied,
         "failed": max(telemetry.py_failed, telemetry.py_attempted - telemetry.py_applied),
         "skipped": 0,
         "timed_out": telemetry.py_timed_out,
     }
-    result.summary["rust_lsp_telemetry"] = {
+    result.summary["rust_semantic_telemetry"] = {
         "attempted": telemetry.rust_attempted,
         "applied": telemetry.rust_applied,
         "failed": max(telemetry.rust_failed, telemetry.rust_attempted - telemetry.rust_applied),
@@ -201,7 +201,7 @@ def _build_degradation(summary: dict[str, object]) -> InsightDegradationV1:
     if isinstance(dropped, dict) and dropped:
         notes.append(f"dropped_by_scope={dropped}")
     return InsightDegradationV1(
-        lsp="skipped",
+        semantic="skipped",
         scan=(
             "timed_out"
             if bool(summary.get("timed_out"))
@@ -214,39 +214,41 @@ def _build_degradation(summary: dict[str, object]) -> InsightDegradationV1:
     )
 
 
-def _run_entity_lsp(
+def _run_entity_semantic(
     result: CqResult,
     *,
     candidates: list[Finding],
     insight: FrontDoorInsightV1,
     relationship_detail_max_matches: int,
-) -> tuple[FrontDoorInsightV1, EntityLspTelemetry]:
-    telemetry = EntityLspTelemetry()
+) -> tuple[FrontDoorInsightV1, EntitySemanticTelemetry]:
+    telemetry = EntitySemanticTelemetry()
     summary_matches = result.summary.get("matches")
     match_count = summary_matches if isinstance(summary_matches, int) else len(result.key_findings)
-    runtime_lsp_enabled = lsp_runtime_enabled()
-    run_entity_lsp = runtime_lsp_enabled and match_count <= relationship_detail_max_matches
+    runtime_semantic_enabled = semantic_runtime_enabled()
+    run_entity_semantic = (
+        runtime_semantic_enabled and match_count <= relationship_detail_max_matches
+    )
 
-    if not run_entity_lsp:
-        _mark_entity_lsp_not_attempted(
+    if not run_entity_semantic:
+        _mark_entity_semantic_not_attempted(
             result,
             candidates=candidates,
             telemetry=telemetry,
-            runtime_lsp_enabled=runtime_lsp_enabled,
+            runtime_semantic_enabled=runtime_semantic_enabled,
         )
         return insight, telemetry
 
     for finding in candidates:
-        insight = _apply_candidate_lsp(result, finding, insight, telemetry)
+        insight = _apply_candidate_semantic(result, finding, insight, telemetry)
     return insight, telemetry
 
 
-def _mark_entity_lsp_not_attempted(
+def _mark_entity_semantic_not_attempted(
     result: CqResult,
     *,
     candidates: list[Finding],
-    telemetry: EntityLspTelemetry,
-    runtime_lsp_enabled: bool,
+    telemetry: EntitySemanticTelemetry,
+    runtime_semantic_enabled: bool,
 ) -> None:
     for finding in candidates:
         if finding.anchor is None:
@@ -255,21 +257,21 @@ def _mark_entity_lsp_not_attempted(
         target_language = infer_language_for_path(target_file)
         if target_language not in {"python", "rust"}:
             continue
-        telemetry.lsp_provider = provider_for_language(target_language)
-        if runtime_lsp_enabled:
+        telemetry.semantic_provider = provider_for_language(target_language)
+        if runtime_semantic_enabled:
             telemetry.reasons.append("not_attempted_by_budget")
         else:
             telemetry.reasons.append("not_attempted_runtime_disabled")
         return
 
 
-def _apply_candidate_lsp(
+def _apply_candidate_semantic(
     result: CqResult,
     finding: Finding,
     insight: FrontDoorInsightV1,
-    telemetry: EntityLspTelemetry,
+    telemetry: EntitySemanticTelemetry,
 ) -> FrontDoorInsightV1:
-    target_context = _resolve_lsp_target_context(result, finding)
+    target_context = _resolve_semantic_target_context(result, finding)
     if target_context is None:
         return insight
 
@@ -277,10 +279,10 @@ def _apply_candidate_lsp(
     anchor = finding.anchor
     if anchor is None:
         return insight
-    _record_lsp_attempt(telemetry, target_language)
+    _record_semantic_attempt(telemetry, target_language)
 
-    lsp_outcome = enrich_with_language_lsp(
-        LanguageLspEnrichmentRequest(
+    semantic_outcome = enrich_with_language_semantics(
+        LanguageSemanticEnrichmentRequest(
             language=target_language,
             mode="entity",
             root=Path(result.run.root),
@@ -295,26 +297,26 @@ def _apply_candidate_lsp(
             ),
         )
     )
-    _record_lsp_timeout(telemetry, target_language, timed_out=lsp_outcome.timed_out)
-    payload = lsp_outcome.payload
+    _record_semantic_timeout(telemetry, target_language, timed_out=semantic_outcome.timed_out)
+    payload = semantic_outcome.payload
 
     if payload is None:
-        _record_lsp_failure(telemetry, target_language)
+        _record_semantic_failure(telemetry, target_language)
         telemetry.reasons.append(
-            lsp_outcome.failure_reason
-            or ("request_timeout" if lsp_outcome.timed_out else "request_failed")
+            semantic_outcome.failure_reason
+            or ("request_timeout" if semantic_outcome.timed_out else "request_failed")
         )
         return insight
 
-    _record_lsp_applied(telemetry, target_language)
-    insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
-    advanced_planes = payload.get("advanced_planes")
-    if isinstance(advanced_planes, dict):
-        result.summary["lsp_advanced_planes"] = dict(advanced_planes)
+    _record_semantic_applied(telemetry, target_language)
+    insight = augment_insight_with_semantic(insight, payload, preview_per_slice=5)
+    semantic_planes = payload.get("semantic_planes")
+    if isinstance(semantic_planes, dict):
+        result.summary["semantic_planes"] = dict(semantic_planes)
     return insight
 
 
-def _resolve_lsp_target_context(
+def _resolve_semantic_target_context(
     result: CqResult,
     finding: Finding,
 ) -> tuple[Path, QueryLanguage] | None:
@@ -327,67 +329,75 @@ def _resolve_lsp_target_context(
     return target_file, target_language
 
 
-def _record_lsp_attempt(telemetry: EntityLspTelemetry, target_language: QueryLanguage) -> None:
-    if telemetry.lsp_provider == "none":
-        telemetry.lsp_provider = provider_for_language(target_language)
-    telemetry.lsp_attempted += 1
+def _record_semantic_attempt(
+    telemetry: EntitySemanticTelemetry, target_language: QueryLanguage
+) -> None:
+    if telemetry.semantic_provider == "none":
+        telemetry.semantic_provider = provider_for_language(target_language)
+    telemetry.semantic_attempted += 1
     if target_language == "python":
         telemetry.py_attempted += 1
     else:
         telemetry.rust_attempted += 1
 
 
-def _record_lsp_timeout(
-    telemetry: EntityLspTelemetry,
+def _record_semantic_timeout(
+    telemetry: EntitySemanticTelemetry,
     target_language: QueryLanguage,
     *,
     timed_out: bool,
 ) -> None:
     timeout_count = int(timed_out)
-    telemetry.lsp_timed_out += timeout_count
+    telemetry.semantic_timed_out += timeout_count
     if target_language == "python":
         telemetry.py_timed_out += timeout_count
     else:
         telemetry.rust_timed_out += timeout_count
 
 
-def _record_lsp_failure(telemetry: EntityLspTelemetry, target_language: QueryLanguage) -> None:
-    telemetry.lsp_failed += 1
+def _record_semantic_failure(
+    telemetry: EntitySemanticTelemetry, target_language: QueryLanguage
+) -> None:
+    telemetry.semantic_failed += 1
     if target_language == "python":
         telemetry.py_failed += 1
     else:
         telemetry.rust_failed += 1
 
 
-def _record_lsp_applied(telemetry: EntityLspTelemetry, target_language: QueryLanguage) -> None:
-    telemetry.lsp_applied += 1
+def _record_semantic_applied(
+    telemetry: EntitySemanticTelemetry, target_language: QueryLanguage
+) -> None:
+    telemetry.semantic_applied += 1
     if target_language == "python":
         telemetry.py_applied += 1
     else:
         telemetry.rust_applied += 1
 
 
-def _apply_lsp_contract_state(
+def _apply_semantic_contract_state(
     insight: FrontDoorInsightV1,
-    telemetry: EntityLspTelemetry,
+    telemetry: EntitySemanticTelemetry,
 ) -> FrontDoorInsightV1:
-    if telemetry.lsp_provider == "none":
+    if telemetry.semantic_provider == "none":
         telemetry.reasons.append("provider_unavailable")
     elif (
-        telemetry.lsp_attempted <= 0
+        telemetry.semantic_attempted <= 0
         and "not_attempted_by_budget" not in telemetry.reasons
         and "not_attempted_runtime_disabled" not in telemetry.reasons
     ):
         telemetry.reasons.append("not_attempted_by_design")
 
-    lsp_state = derive_lsp_contract_state(
-        LspContractStateInputV1(
-            provider=telemetry.lsp_provider,
-            available=telemetry.lsp_provider != "none",
-            attempted=telemetry.lsp_attempted,
-            applied=telemetry.lsp_applied,
-            failed=max(telemetry.lsp_failed, telemetry.lsp_attempted - telemetry.lsp_applied),
-            timed_out=telemetry.lsp_timed_out,
+    semantic_state = derive_semantic_contract_state(
+        SemanticContractStateInputV1(
+            provider=telemetry.semantic_provider,
+            available=telemetry.semantic_provider != "none",
+            attempted=telemetry.semantic_attempted,
+            applied=telemetry.semantic_applied,
+            failed=max(
+                telemetry.semantic_failed, telemetry.semantic_attempted - telemetry.semantic_applied
+            ),
+            timed_out=telemetry.semantic_timed_out,
             reasons=tuple(dict.fromkeys(telemetry.reasons)),
         )
     )
@@ -395,8 +405,8 @@ def _apply_lsp_contract_state(
         insight,
         degradation=msgspec.structs.replace(
             insight.degradation,
-            lsp=lsp_state.status,
-            notes=tuple(dict.fromkeys([*insight.degradation.notes, *lsp_state.reasons])),
+            semantic=semantic_state.status,
+            notes=tuple(dict.fromkeys([*insight.degradation.notes, *semantic_state.reasons])),
         ),
     )
 

@@ -29,7 +29,7 @@ SECTION_ORDER: tuple[str, ...] = (
     "type_supertypes",  # 11 - collapsed: True
     "type_subtypes",  # 12 - collapsed: True
     "imports",  # 13 - collapsed: True
-    "lsp_deep_signals",  # 14 - collapsed: True
+    "semantic_deep_signals",  # 14 - collapsed: True
     "diagnostics",  # 15 - collapsed: True
     "suggested_followups",  # 16 - collapsed: False
     "provenance",  # 17 - collapsed: True
@@ -447,8 +447,8 @@ def _build_provenance_section(bundle: SemanticNeighborhoodBundleV1) -> SectionV1
         if bundle.meta.created_at_ms is not None:
             items.append(f"**Created:** {bundle.meta.created_at_ms}ms")
 
-        if bundle.meta.lsp_servers:
-            items.append(f"**LSP Servers:** {len(bundle.meta.lsp_servers)} configured")
+        if bundle.meta.semantic_sources:
+            items.append(f"**Semantic Sources:** {len(bundle.meta.semantic_sources)} configured")
 
     items.append(f"**Schema:** {bundle.schema_version}")
     items.append(f"**Bundle ID:** {bundle.bundle_id}")

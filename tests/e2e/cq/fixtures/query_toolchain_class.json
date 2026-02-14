@@ -93,8 +93,8 @@
         "telemetry": null
       },
       "budget": {
-        "lsp_targets": 3,
         "preview_per_slice": 5,
+        "semantic_targets": 3,
         "top_candidates": 3
       },
       "confidence": {
@@ -103,19 +103,19 @@
         "score": 0.95
       },
       "degradation": {
-        "lsp": "ok",
         "notes": [
           "missing_languages=rust"
         ],
         "scan": "ok",
-        "scope_filter": "partial"
+        "scope_filter": "partial",
+        "semantic": "ok"
       },
       "neighborhood": {
         "callees": {
           "availability": "partial",
           "overflow_artifact_ref": null,
           "preview": [],
-          "source": "lsp",
+          "source": "heuristic",
           "total": 0
         },
         "callers": {
@@ -130,7 +130,7 @@
               "node_id": "entity:caller:tools/cq/core/toolchain.py:48:Toolchain"
             }
           ],
-          "source": "lsp",
+          "source": "heuristic",
           "total": 1
         },
         "hierarchy_or_scope": {
@@ -294,28 +294,10 @@
         "truncated": false
       }
     },
-    "lsp_advanced_planes": {
-      "document_diagnostics_count": 0,
-      "document_diagnostics_preview": [],
-      "inlay_hints_count": 1,
-      "inlay_hints_preview": [
-        {
-          "character": 8,
-          "label": ": str",
-          "line": 43
-        }
-      ],
-      "plane_timed_out_methods": [],
-      "plane_timeouts": 0,
-      "semantic_tokens_count": 0,
-      "semantic_tokens_preview": [],
-      "workspace_diagnostics_count": 0,
-      "workspace_diagnostics_preview": []
-    },
     "mode": "entity",
-    "pyrefly_diagnostics": [],
-    "pyrefly_overview": {},
-    "pyrefly_telemetry": {
+    "python_semantic_diagnostics": [],
+    "python_semantic_overview": {},
+    "python_semantic_telemetry": {
       "applied": 1,
       "attempted": 1,
       "failed": 0,
@@ -323,12 +305,52 @@
       "timed_out": 0
     },
     "query": "entity=class name=Toolchain",
-    "rust_lsp_telemetry": {
+    "rust_semantic_telemetry": {
       "applied": 0,
       "attempted": 0,
       "failed": 0,
       "skipped": 0,
       "timed_out": 0
+    },
+    "semantic_planes": {
+      "counts": {
+        "diagnostics": 0,
+        "injections": 0,
+        "locals": 2,
+        "semantic_tokens": 2
+      },
+      "degradation": [],
+      "language": "python",
+      "preview": {
+        "diagnostics": [],
+        "injections": [],
+        "locals": [
+          {
+            "kind": "scope",
+            "name": "module"
+          },
+          {
+            "kind": "qualified_name",
+            "name": "Toolchain"
+          }
+        ],
+        "semantic_tokens": [
+          {
+            "kind": "node_kind",
+            "value": "class_definition"
+          },
+          {
+            "kind": "item_role",
+            "value": "class_def"
+          }
+        ]
+      },
+      "sources": [
+        "ast_grep",
+        "libcst",
+        "tree_sitter"
+      ],
+      "version": "cq.semantic_planes.v2"
     }
   }
 }

@@ -117,7 +117,7 @@ class NeighborhoodStepCli:
     target: str | None = None
     lang: str = "python"
     top_k: int = 10
-    no_lsp: bool = False
+    no_semantic_enrichment: bool = False
 
 
 RunStepCli = (

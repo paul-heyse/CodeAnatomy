@@ -70,6 +70,7 @@ dependencies = [
     "markdown-it-py>=4.0.0",
     "textual>=7.5.0",
     "textual-dev>=1.8.0",
+    "pyre-check>=0.9.25",
 ]
 
 [project.scripts]

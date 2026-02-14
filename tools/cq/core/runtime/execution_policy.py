@@ -14,10 +14,10 @@ from tools.cq.core.runtime.env_namespace import (
 )
 from tools.cq.core.structs import CqSettingsStruct
 
-_DEFAULT_LSP_TIMEOUT_MS = 2_000
+_DEFAULT_SEMANTIC_TIMEOUT_MS = 2_000
 _DEFAULT_CACHE_TTL_SECONDS = 900
 _DEFAULT_IO_WORKERS = 8
-_DEFAULT_LSP_WORKERS = 4
+_DEFAULT_SEMANTIC_WORKERS = 4
 _DEFAULT_QUERY_PARTITION_WORKERS = 2
 _DEFAULT_CALLS_FILE_WORKERS = 4
 _DEFAULT_RUN_STEP_WORKERS = 4
@@ -37,18 +37,18 @@ class ParallelismPolicy(CqSettingsStruct, frozen=True):
 
     cpu_workers: PositiveInt
     io_workers: PositiveInt
-    lsp_request_workers: PositiveInt
+    semantic_request_workers: PositiveInt
     query_partition_workers: PositiveInt = _DEFAULT_QUERY_PARTITION_WORKERS
     calls_file_workers: PositiveInt = _DEFAULT_CALLS_FILE_WORKERS
     run_step_workers: PositiveInt = _DEFAULT_RUN_STEP_WORKERS
     enable_process_pool: bool = True
 
 
-class LspRuntimePolicy(CqSettingsStruct, frozen=True):
-    """LSP timing and budgeting policy."""
+class SemanticRuntimePolicy(CqSettingsStruct, frozen=True):
+    """Static semantic timing and budgeting policy."""
 
-    timeout_ms: PositiveInt = _DEFAULT_LSP_TIMEOUT_MS
-    startup_timeout_ms: PositiveInt = _DEFAULT_LSP_TIMEOUT_MS
+    timeout_ms: PositiveInt = _DEFAULT_SEMANTIC_TIMEOUT_MS
+    startup_timeout_ms: PositiveInt = _DEFAULT_SEMANTIC_TIMEOUT_MS
     max_targets_search: PositiveInt = 1
     max_targets_calls: PositiveInt = 1
     max_targets_entity: PositiveInt = 3
@@ -75,7 +75,7 @@ class RuntimeExecutionPolicy(CqSettingsStruct, frozen=True):
     """Top-level runtime policy envelope."""
 
     parallelism: ParallelismPolicy
-    lsp: LspRuntimePolicy = LspRuntimePolicy()
+    semantic: SemanticRuntimePolicy = SemanticRuntimePolicy()
     cache: CacheRuntimePolicy = CacheRuntimePolicy()
 
 
@@ -176,16 +176,24 @@ def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
     cpu_count = max(1, os.cpu_count() or 1)
     cpu_workers = _env_int("CPU_WORKERS", max(1, cpu_count - 1))
     io_workers = _env_int("IO_WORKERS", max(_DEFAULT_IO_WORKERS, cpu_count))
-    lsp_workers = _env_int("LSP_REQUEST_WORKERS", _DEFAULT_LSP_WORKERS)
+    semantic_workers = _env_int("SEMANTIC_REQUEST_WORKERS", _DEFAULT_SEMANTIC_WORKERS)
     enable_process_pool = _env_bool("ENABLE_PROCESS_POOL", default=True)
-    lsp_timeout_ms = _env_int("LSP_TIMEOUT_MS", _DEFAULT_LSP_TIMEOUT_MS, minimum=100)
-    lsp_startup_ms = _env_int("LSP_STARTUP_TIMEOUT_MS", _DEFAULT_LSP_TIMEOUT_MS, minimum=100)
+    semantic_timeout_ms = _env_int(
+        "SEMANTIC_TIMEOUT_MS",
+        _DEFAULT_SEMANTIC_TIMEOUT_MS,
+        minimum=100,
+    )
+    semantic_startup_ms = _env_int(
+        "SEMANTIC_STARTUP_TIMEOUT_MS",
+        _DEFAULT_SEMANTIC_TIMEOUT_MS,
+        minimum=100,
+    )
 
     return RuntimeExecutionPolicy(
         parallelism=ParallelismPolicy(
             cpu_workers=cpu_workers,
             io_workers=io_workers,
-            lsp_request_workers=lsp_workers,
+            semantic_request_workers=semantic_workers,
             query_partition_workers=_env_int(
                 "QUERY_PARTITION_WORKERS",
                 _DEFAULT_QUERY_PARTITION_WORKERS,
@@ -200,12 +208,12 @@ def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
             ),
             enable_process_pool=enable_process_pool,
         ),
-        lsp=LspRuntimePolicy(
-            timeout_ms=lsp_timeout_ms,
-            startup_timeout_ms=lsp_startup_ms,
-            max_targets_search=_env_int("LSP_TARGETS_SEARCH", 1),
-            max_targets_calls=_env_int("LSP_TARGETS_CALLS", 1),
-            max_targets_entity=_env_int("LSP_TARGETS_ENTITY", 3),
+        semantic=SemanticRuntimePolicy(
+            timeout_ms=semantic_timeout_ms,
+            startup_timeout_ms=semantic_startup_ms,
+            max_targets_search=_env_int("SEMANTIC_TARGETS_SEARCH", 1),
+            max_targets_calls=_env_int("SEMANTIC_TARGETS_CALLS", 1),
+            max_targets_entity=_env_int("SEMANTIC_TARGETS_ENTITY", 3),
         ),
         cache=CacheRuntimePolicy(
             enabled=_env_bool("CACHE_ENABLED", default=True),
@@ -234,8 +242,8 @@ def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
 
 __all__ = [
     "CacheRuntimePolicy",
-    "LspRuntimePolicy",
     "ParallelismPolicy",
     "RuntimeExecutionPolicy",
+    "SemanticRuntimePolicy",
     "default_runtime_execution_policy",
 ]

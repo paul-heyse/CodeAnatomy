@@ -35,6 +35,9 @@ class CacheNamespaceTelemetry(CqStruct, frozen=True):
 _TELEMETRY_LOCK = threading.Lock()
 _TELEMETRY: dict[str, dict[str, int]] = {}
 _SEEN_KEYS: dict[str, set[str]] = {}
+_MAX_KEY_SIZE_64 = 64
+_MAX_KEY_SIZE_128 = 128
+_MAX_KEY_SIZE_256 = 256
 
 
 def _bucket(namespace: str) -> dict[str, int]:
@@ -59,11 +62,11 @@ def record_cache_key(*, namespace: str, key: str) -> None:
         seen.add(key)
         bucket = _bucket(namespace)
         bucket["key_cardinality"] = len(seen)
-    if key_len <= 64:
+    if key_len <= _MAX_KEY_SIZE_64:
         _incr(namespace, "key_size_le_64")
-    elif key_len <= 128:
+    elif key_len <= _MAX_KEY_SIZE_128:
         _incr(namespace, "key_size_le_128")
-    elif key_len <= 256:
+    elif key_len <= _MAX_KEY_SIZE_256:
         _incr(namespace, "key_size_le_256")
     else:
         _incr(namespace, "key_size_gt_256")

@@ -61,7 +61,11 @@ class _RuntimeContext:
 
 
 def build_neighborhood_records(request: NeighborhoodScanRequestV1) -> list[SgRecord]:
-    """Build structural records from cache fragments with aggregate fallback."""
+    """Build structural records from cache fragments with aggregate fallback.
+
+    Returns:
+        list[SgRecord]: Cached or freshly computed scan records.
+    """
     context = _runtime_context(request)
     if not context.files:
         return []

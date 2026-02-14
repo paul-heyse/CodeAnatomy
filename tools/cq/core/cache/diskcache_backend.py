@@ -28,42 +28,44 @@ _NON_FATAL_ERRORS: Final = (
     sqlite3.DatabaseError,
 )
 _OPEN_ERRORS: Final = (Timeout, *_NON_FATAL_ERRORS)
+_NAMESPACE_PARTS_MIN_LENGTH: Final = 2
+_NAMESPACE_PREFIX_LENGTH: Final = 3
 
 
 class _FailOpenTransaction:
     """Fail-open transaction wrapper that degrades to no-op on backend errors."""
 
     def __init__(self, backend: DiskcacheBackend) -> None:
-        self._backend = backend
-        self._ctx: object | None = None
+        self.backend = backend
+        self.ctx: object | None = None
 
     def __enter__(self) -> None:
         try:
-            ctx = self._backend._cache.transact(retry=True)
-            self._ctx = ctx
+            ctx = self.backend.cache.transact(retry=True)
+            self.ctx = ctx
             enter = getattr(ctx, "__enter__", None)
             if callable(enter):
                 enter()
         except Timeout:
-            self._backend._record_timeout(namespace="transaction")
-            self._ctx = None
+            self.backend.record_timeout(namespace="transaction")
+            self.ctx = None
         except _NON_FATAL_ERRORS:
-            self._backend._record_abort(namespace="transaction")
-            self._ctx = None
+            self.backend.record_abort(namespace="transaction")
+            self.ctx = None
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-        if self._ctx is None:
+        if self.ctx is None:
             return False
-        exit_fn = getattr(self._ctx, "__exit__", None)
+        exit_fn = getattr(self.ctx, "__exit__", None)
         if not callable(exit_fn):
             return False
         try:
             return bool(exit_fn(exc_type, exc, tb))
         except Timeout:
-            self._backend._record_timeout(namespace="transaction")
+            self.backend.record_timeout(namespace="transaction")
             return False
         except _NON_FATAL_ERRORS:
-            self._backend._record_abort(namespace="transaction")
+            self.backend.record_abort(namespace="transaction")
             return False
 
 
@@ -77,28 +79,32 @@ class DiskcacheBackend:
             cache: Backing diskcache instance.
             default_ttl_seconds: Default cache TTL in seconds.
         """
-        self._cache = cache
-        self._default_ttl_seconds = default_ttl_seconds
+        self.cache = cache
+        self.default_ttl_seconds = default_ttl_seconds
 
     @staticmethod
     def _namespace_from_key(key: str) -> str:
         if key.startswith("cq:"):
             parts = key.split(":", maxsplit=3)
-            if len(parts) >= 2 and parts[1]:
+            if len(parts) >= _NAMESPACE_PARTS_MIN_LENGTH and parts[1]:
                 return parts[1]
         return "cache_backend"
 
     @staticmethod
     def _namespace_from_tag(tag: str) -> str:
         for atom in tag.split("|"):
-            if atom.startswith("ns:") and len(atom) > 3:
+            if atom.startswith("ns:") and len(atom) > _NAMESPACE_PREFIX_LENGTH:
                 return atom[3:]
         return "cache_backend"
 
-    def _record_timeout(self, *, namespace: str) -> None:
+    @staticmethod
+    def record_timeout(namespace: str) -> None:
+        """Record cache timeout event for ``namespace``."""
         record_cache_timeout(namespace=namespace)
 
-    def _record_abort(self, *, namespace: str) -> None:
+    @staticmethod
+    def record_abort(namespace: str) -> None:
+        """Record non-timeout cache abort for ``namespace``."""
         record_cache_abort(namespace=namespace)
 
     def get(self, key: str) -> object | None:
@@ -109,12 +115,12 @@ class DiskcacheBackend:
         """
         namespace = self._namespace_from_key(key)
         try:
-            return self._cache.get(key, default=None, retry=True)
+            return self.cache.get(key, default=None, retry=True)
         except Timeout:
-            self._record_timeout(namespace=namespace)
+            self.record_timeout(namespace=namespace)
             return None
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace=namespace)
+            self.record_abort(namespace=namespace)
             return None
 
     def set(
@@ -130,15 +136,15 @@ class DiskcacheBackend:
         Returns:
             bool: `True` when the value was written, `False` otherwise.
         """
-        ttl = expire if expire is not None else self._default_ttl_seconds
+        ttl = expire if expire is not None else self.default_ttl_seconds
         namespace = self._namespace_from_key(key)
         try:
-            return bool(self._cache.set(key, value, expire=ttl, tag=tag, retry=True))
+            return bool(self.cache.set(key, value, expire=ttl, tag=tag, retry=True))
         except Timeout:
-            self._record_timeout(namespace=namespace)
+            self.record_timeout(namespace=namespace)
             return False
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace=namespace)
+            self.record_abort(namespace=namespace)
             return False
 
     def add(
@@ -154,15 +160,15 @@ class DiskcacheBackend:
         Returns:
             bool: `True` when the value was added, `False` otherwise.
         """
-        ttl = expire if expire is not None else self._default_ttl_seconds
+        ttl = expire if expire is not None else self.default_ttl_seconds
         namespace = self._namespace_from_key(key)
         try:
-            return bool(self._cache.add(key, value, expire=ttl, tag=tag, retry=True))
+            return bool(self.cache.add(key, value, expire=ttl, tag=tag, retry=True))
         except Timeout:
-            self._record_timeout(namespace=namespace)
+            self.record_timeout(namespace=namespace)
             return False
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace=namespace)
+            self.record_abort(namespace=namespace)
             return False
 
     def incr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
@@ -173,15 +179,15 @@ class DiskcacheBackend:
         """
         namespace = self._namespace_from_key(key)
         try:
-            value = self._cache.incr(key, delta=delta, default=default, retry=True)
+            value = self.cache.incr(key, delta=delta, default=default, retry=True)
             if value is None:
                 return None
             return int(value)
         except Timeout:
-            self._record_timeout(namespace=namespace)
+            self.record_timeout(namespace=namespace)
             return None
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace=namespace)
+            self.record_abort(namespace=namespace)
             return None
 
     def decr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
@@ -192,15 +198,15 @@ class DiskcacheBackend:
         """
         namespace = self._namespace_from_key(key)
         try:
-            value = self._cache.decr(key, delta=delta, default=default, retry=True)
+            value = self.cache.decr(key, delta=delta, default=default, retry=True)
             if value is None:
                 return None
             return int(value)
         except Timeout:
-            self._record_timeout(namespace=namespace)
+            self.record_timeout(namespace=namespace)
             return None
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace=namespace)
+            self.record_abort(namespace=namespace)
             return None
 
     def delete(self, key: str) -> bool:
@@ -211,12 +217,12 @@ class DiskcacheBackend:
         """
         namespace = self._namespace_from_key(key)
         try:
-            return bool(self._cache.delete(key, retry=True))
+            return bool(self.cache.delete(key, retry=True))
         except Timeout:
-            self._record_timeout(namespace=namespace)
+            self.record_timeout(namespace=namespace)
             return False
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace=namespace)
+            self.record_abort(namespace=namespace)
             return False
 
     def evict_tag(self, tag: str) -> bool:
@@ -227,14 +233,15 @@ class DiskcacheBackend:
         """
         namespace = self._namespace_from_tag(tag)
         try:
-            self._cache.evict(tag, retry=True)
-            return True
+            self.cache.evict(tag, retry=True)
         except Timeout:
-            self._record_timeout(namespace=namespace)
+            self.record_timeout(namespace=namespace)
             return False
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace=namespace)
+            self.record_abort(namespace=namespace)
             return False
+        else:
+            return True
 
     def transact(self) -> _FailOpenTransaction:
         """Return fail-open transaction context manager.
@@ -251,16 +258,16 @@ class DiskcacheBackend:
             dict[str, object]: Cache hit/miss counts and related metrics.
         """
         try:
-            hits, misses = self._cache.stats(enable=False, reset=False)
+            hits, misses = self.cache.stats(enable=False, reset=False)
             return {
                 "hits": int(hits),
                 "misses": int(misses),
             }
         except Timeout:
-            self._record_timeout(namespace="cache_backend")
+            self.record_timeout(namespace="cache_backend")
             return {}
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace="cache_backend")
+            self.record_abort(namespace="cache_backend")
             return {}
 
     def volume(self) -> int | None:
@@ -270,15 +277,16 @@ class DiskcacheBackend:
             int | None: Estimated cache volume in bytes, or `None` on error.
         """
         try:
-            volume_bytes = int(self._cache.volume())
+            volume_bytes = int(self.cache.volume())
             record_cache_volume(namespace="cache_backend", volume_bytes=volume_bytes)
-            return volume_bytes
         except Timeout:
-            self._record_timeout(namespace="cache_backend")
+            self.record_timeout(namespace="cache_backend")
             return None
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace="cache_backend")
+            self.record_abort(namespace="cache_backend")
             return None
+        else:
+            return volume_bytes
 
     def cull(self) -> int | None:
         """Trigger backend cull and return number of removed entries.
@@ -287,20 +295,21 @@ class DiskcacheBackend:
             int | None: Number of entries removed, or `None` on error.
         """
         try:
-            removed = int(self._cache.cull(retry=True))
+            removed = int(self.cache.cull(retry=True))
             record_cache_cull(namespace="cache_backend", removed=removed)
-            return removed
         except Timeout:
-            self._record_timeout(namespace="cache_backend")
+            self.record_timeout(namespace="cache_backend")
             return None
         except _NON_FATAL_ERRORS:
-            self._record_abort(namespace="cache_backend")
+            self.record_abort(namespace="cache_backend")
             return None
+        else:
+            return removed
 
     def close(self) -> None:
         """Close cache resources."""
         try:
-            self._cache.close()
+            self.cache.close()
         except _NON_FATAL_ERRORS:
             return
 
@@ -338,6 +347,9 @@ def _build_diskcache_backend(policy: CqCachePolicyV1) -> CqCacheBackend:
     except _OPEN_ERRORS:
         try:
             shutil.rmtree(directory, ignore_errors=True)
+        except OSError:
+            return NoopCacheBackend()
+        try:
             cache = _open_cache()
         except _OPEN_ERRORS:
             return NoopCacheBackend()

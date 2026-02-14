@@ -11,6 +11,7 @@ from tools.cq.core.cache.key_builder import (
 )
 from tools.cq.core.cache.policy import CqCachePolicyV1
 from tools.cq.core.cache.run_lifecycle import (
+    CacheWriteTagRequestV1,
     maybe_evict_run_cache_tag,
     resolve_write_cache_tag,
 )
@@ -26,13 +27,15 @@ def _close_cache_backends() -> Generator[None]:
 def test_resolve_write_cache_tag_uses_run_tag_for_ephemeral_namespace() -> None:
     policy = CqCachePolicyV1(namespace_ephemeral={"search_candidates": True})
     tag = resolve_write_cache_tag(
-        policy=policy,
-        workspace="/repo",
-        language="python",
-        namespace="search_candidates",
-        scope_hash="scope123",
-        snapshot="snap123",
-        run_id="run123",
+        CacheWriteTagRequestV1(
+            policy=policy,
+            workspace="/repo",
+            language="python",
+            namespace="search_candidates",
+            scope_hash="scope123",
+            snapshot="snap123",
+            run_id="run123",
+        )
     )
     assert tag.startswith("ws:")
     assert "|lang:python|" in tag
@@ -45,13 +48,15 @@ def test_resolve_write_cache_tag_uses_run_tag_for_ephemeral_namespace() -> None:
 def test_resolve_write_cache_tag_uses_namespace_tag_for_persistent_namespace() -> None:
     policy = CqCachePolicyV1(namespace_ephemeral={"search_candidates": False})
     tag = resolve_write_cache_tag(
-        policy=policy,
-        workspace="/repo",
-        language="python",
-        namespace="search_candidates",
-        scope_hash="scope123",
-        snapshot="snap123",
-        run_id="run123",
+        CacheWriteTagRequestV1(
+            policy=policy,
+            workspace="/repo",
+            language="python",
+            namespace="search_candidates",
+            scope_hash="scope123",
+            snapshot="snap123",
+            run_id="run123",
+        )
     )
     assert tag.startswith("ws:")
     assert "|lang:python|" in tag

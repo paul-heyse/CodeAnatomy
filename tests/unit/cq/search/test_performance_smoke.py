@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
-from tools.cq.query.executor import execute_plan
+from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.search.smart_search import smart_search
@@ -84,10 +84,16 @@ def test_query_entity_auto_scope_smoke() -> None:
     plan = compile_query(query)
 
     start = time.perf_counter()
-    execute_plan(plan, query, tc=tc, root=root, argv=[])
+    execute_plan(
+        ExecutePlanRequestV1(plan=plan, query=query, root=str(root), argv=()),
+        tc=tc,
+    )
     first = time.perf_counter() - start
 
     start = time.perf_counter()
-    execute_plan(plan, query, tc=tc, root=root, argv=[])
+    execute_plan(
+        ExecutePlanRequestV1(plan=plan, query=query, root=str(root), argv=()),
+        tc=tc,
+    )
     second = time.perf_counter() - start
     assert second <= first * 1.5

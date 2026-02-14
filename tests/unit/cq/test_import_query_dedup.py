@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor import execute_plan
+from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 
@@ -33,7 +33,13 @@ def test_import_query_does_not_duplicate_from_import_multi(tmp_path: Path) -> No
     query = parse_query("entity=import name=typing")
     plan = compile_query(query)
     result = execute_plan(
-        plan=plan, query=query, tc=tc, root=repo, argv=["cq", "q", "entity=import"]
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=query,
+            root=str(repo),
+            argv=("cq", "q", "entity=import"),
+        ),
+        tc=tc,
     )
 
     languages = result.summary.get("languages")
@@ -65,7 +71,13 @@ def test_import_query_ignores_commas_in_inline_comments(tmp_path: Path) -> None:
     query = parse_query("entity=import name=Any")
     plan = compile_query(query)
     result = execute_plan(
-        plan=plan, query=query, tc=tc, root=repo, argv=["cq", "q", "entity=import"]
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=query,
+            root=str(repo),
+            argv=("cq", "q", "entity=import"),
+        ),
+        tc=tc,
     )
 
     languages = result.summary.get("languages")

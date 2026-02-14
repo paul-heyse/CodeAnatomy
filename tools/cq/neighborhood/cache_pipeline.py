@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import msgspec
 
@@ -151,7 +152,10 @@ def _read_or_compute_fragment_records(
         ),
     )
     records_by_rel: dict[str, list[SgRecord]] = {
-        hit.entry.file: [_cache_record_to_record(item) for item in hit.payload.records]
+        hit.entry.file: [
+            _cache_record_to_record(item)
+            for item in cast("QueryEntityScanCacheV1", hit.payload).records
+        ]
         for hit in partition.hits
     }
     writes = _compute_fragment_writes(

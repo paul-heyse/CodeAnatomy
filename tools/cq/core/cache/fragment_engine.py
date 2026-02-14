@@ -64,13 +64,17 @@ def partition_fragment_entries(
             misses.append(FragmentMissV1(entry=entry))
             continue
         cached = runtime.cache_get(entry.cache_key)
-        runtime.record_get(request.namespace, isinstance(cached, dict), entry.cache_key)
+        runtime.record_get(
+            namespace=request.namespace,
+            hit=isinstance(cached, dict),
+            key=entry.cache_key,
+        )
         if not isinstance(cached, dict):
             misses.append(FragmentMissV1(entry=entry))
             continue
         decoded = runtime.decode(cached)
         if decoded is None:
-            runtime.record_decode_failure(request.namespace)
+            runtime.record_decode_failure(namespace=request.namespace)
             misses.append(FragmentMissV1(entry=entry))
             continue
         hits.append(FragmentHitV1(entry=entry, payload=decoded))
@@ -94,10 +98,14 @@ def persist_fragment_writes(
             ok = runtime.cache_set(
                 write.entry.cache_key,
                 runtime.encode(write.payload),
-                request.ttl_seconds,
-                request.tag,
+                expire=request.ttl_seconds,
+                tag=request.tag,
             )
-            runtime.record_set(request.namespace, ok, write.entry.cache_key)
+            runtime.record_set(
+                namespace=request.namespace,
+                ok=ok,
+                key=write.entry.cache_key,
+            )
 
 
 __all__ = [

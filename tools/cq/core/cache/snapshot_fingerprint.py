@@ -24,8 +24,7 @@ from tools.cq.core.cache.namespaces import (
     is_namespace_cache_enabled,
     resolve_namespace_ttl_seconds,
 )
-from tools.cq.core.cache.policy import default_cache_policy
-from tools.cq.core.cache.policy import CqCachePolicyV1
+from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
 from tools.cq.core.cache.telemetry import (
     record_cache_decode_failure,
     record_cache_get,

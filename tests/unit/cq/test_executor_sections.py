@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import msgspec
 from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightTargetV1
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor import FileIntervalIndex, _build_callers_section, execute_plan
+from tools.cq.query.executor import (
+    ExecutePlanRequestV1,
+    FileIntervalIndex,
+    _build_callers_section,
+    execute_plan,
+)
 from tools.cq.query.merge import _mark_entity_insight_partial_from_summary
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -42,6 +48,27 @@ def _call_record(file: str, line: int, text: str) -> SgRecord:
     )
 
 
+def _execute_query(
+    *,
+    plan: Any,
+    query: Any,
+    tc: Toolchain,
+    root: Path,
+    argv: tuple[str, ...] = ("cq", "q"),
+    query_text: str | None = None,
+) -> Any:
+    return execute_plan(
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=query,
+            root=str(root),
+            argv=argv,
+            query_text=query_text,
+        ),
+        tc=tc,
+    )
+
+
 def test_callers_section_respects_file_boundaries() -> None:
     """Ensure callers are attributed within the correct file."""
     target_def = _def_record("a.py", "target", 1, 10)
@@ -65,7 +92,7 @@ def test_auto_scope_summary_uses_multilang_partitions(tmp_path: Path) -> None:
     tc = Toolchain.detect()
     query = parse_query("entity=function name=target lang=auto")
     plan = compile_query(query)
-    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+    result = _execute_query(plan=plan, query=query, tc=tc, root=tmp_path)
 
     assert result.summary["query"] == "entity=function name=target"
     assert result.summary["mode"] == "entity"
@@ -90,7 +117,7 @@ def test_single_scope_summary_uses_canonical_multilang_keys(tmp_path: Path) -> N
     tc = Toolchain.detect()
     query = parse_query("entity=function name=target lang=python")
     plan = compile_query(query)
-    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+    result = _execute_query(plan=plan, query=query, tc=tc, root=tmp_path)
 
     assert result.summary["lang_scope"] == "python"
     assert result.summary["language_order"] == ["python"]
@@ -119,7 +146,7 @@ def test_entity_definition_finding_includes_counts_and_scope(tmp_path: Path) -> 
     tc = Toolchain.detect()
     query = parse_query("entity=function name=target lang=python")
     plan = compile_query(query)
-    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+    result = _execute_query(plan=plan, query=query, tc=tc, root=tmp_path)
 
     definitions = [finding for finding in result.key_findings if finding.category == "definition"]
     assert definitions
@@ -139,7 +166,7 @@ def test_auto_scope_entity_insight_marks_missing_language_partial(tmp_path: Path
     tc = Toolchain.detect()
     query = parse_query("entity=function name=compile_target lang=auto")
     plan = compile_query(query)
-    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+    result = _execute_query(plan=plan, query=query, tc=tc, root=tmp_path)
 
     insight = result.summary.get("front_door_insight")
     assert isinstance(insight, dict)
@@ -158,12 +185,12 @@ def test_query_text_preserved_when_provided(tmp_path: Path) -> None:
     query_text = "entity=function name=target lang=python in=a.py"
     query = parse_query(query_text)
     plan = compile_query(query)
-    result = execute_plan(
+    result = _execute_query(
         plan=plan,
         query=query,
         tc=tc,
         root=tmp_path,
-        argv=["cq", "q", query_text],
+        argv=("cq", "q", query_text),
         query_text=query_text,
     )
 
@@ -182,7 +209,7 @@ def test_entity_insight_skips_lsp_for_high_cardinality_query(tmp_path: Path) -> 
     tc = Toolchain.detect()
     query = parse_query("entity=function lang=python")
     plan = compile_query(query)
-    result = execute_plan(plan, query, tc, tmp_path, ["cq", "q"])
+    result = _execute_query(plan=plan, query=query, tc=tc, root=tmp_path)
 
     insight = result.summary.get("front_door_insight")
     assert isinstance(insight, dict)

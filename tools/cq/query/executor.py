@@ -19,6 +19,7 @@ from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.cache import (
     CacheWriteTagRequestV1,
+    CqCacheBackend,
     FragmentEntryV1,
     FragmentHitV1,
     FragmentMissV1,
@@ -165,7 +166,7 @@ class _EntityFragmentContext:
     language: QueryLanguage
     files: list[Path]
     record_types: tuple[str, ...]
-    cache: object
+    cache: CqCacheBackend
     cache_enabled: bool
     ttl_seconds: int
     tag: str
@@ -177,7 +178,7 @@ class _PatternFragmentContext:
     root: Path
     language: QueryLanguage
     paths: list[Path]
-    cache: object
+    cache: CqCacheBackend
     cache_enabled: bool
     ttl_seconds: int
     tag: str
@@ -449,10 +450,10 @@ def _scan_entity_records(
             request,
             writes,
             FragmentPersistRuntimeV1(
-                cache_set=lambda key, value, ttl, tag: fragment_ctx.cache.set(
+                cache_set=lambda key, value, *, expire=None, tag=None: fragment_ctx.cache.set(
                     key,
                     value,
-                    expire=ttl,
+                    expire=expire,
                     tag=tag,
                 ),
                 encode=contract_to_builtins,
@@ -1259,10 +1260,10 @@ def _execute_ast_grep_rules(
             request,
             writes,
             FragmentPersistRuntimeV1(
-                cache_set=lambda key, value, ttl, tag: fragment_ctx.cache.set(
+                cache_set=lambda key, value, *, expire=None, tag=None: fragment_ctx.cache.set(
                     key,
                     value,
-                    expire=ttl,
+                    expire=expire,
                     tag=tag,
                 ),
                 encode=contract_to_builtins,

@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor import execute_plan
+from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
+
+
+def _execute_query(*, plan: Any, query: Any, toolchain: Toolchain, root: Path) -> Any:
+    return execute_plan(
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=query,
+            root=str(root),
+            argv=(),
+        ),
+        tc=toolchain,
+    )
 
 
 @pytest.fixture
@@ -52,7 +65,7 @@ def test_query_latency_cold(toolchain: Toolchain, repo_root: Path) -> None:
     plan = compile_query(query)
 
     start = time.perf_counter()
-    result = execute_plan(plan, query, toolchain, repo_root)
+    result = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)
     elapsed = time.perf_counter() - start
 
     assert result is not None
@@ -77,11 +90,11 @@ def test_query_latency_warm(
     query_text = "entity=function name=Toolchain lang=python"
     query = parse_query(query_text)
     plan = compile_query(query)
-    _ = execute_plan(plan, query, toolchain, repo_root)
+    _ = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)
 
     # Now measure warm execution
     start = time.perf_counter()
-    result = execute_plan(plan, query, toolchain, repo_root)
+    result = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)
     elapsed = time.perf_counter() - start
 
     assert result is not None
@@ -104,7 +117,7 @@ def test_index_build_time(toolchain: Toolchain, repo_root: Path) -> None:
     query_text = "entity=class lang=python"
     query = parse_query(query_text)
     plan = compile_query(query)
-    _ = execute_plan(plan, query, toolchain, repo_root)
+    _ = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)
     elapsed = time.perf_counter() - start
 
     # Index build should be reasonable - adjust threshold based on repo size
@@ -135,7 +148,7 @@ def test_query_scaling_simple(toolchain: Toolchain, repo_root: Path) -> None:
         plan = compile_query(query)
 
         start = time.perf_counter()
-        result = execute_plan(plan, query, toolchain, repo_root)
+        result = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)
         elapsed = time.perf_counter() - start
         timings.append(elapsed)
 

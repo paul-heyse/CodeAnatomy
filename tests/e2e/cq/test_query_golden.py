@@ -3,14 +3,35 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor import execute_plan
+from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 
 from tests.e2e.cq._support.goldens import assert_json_snapshot, load_golden_query_spec
+
+
+def _execute_query(
+    *,
+    plan: Any,
+    query: Any,
+    toolchain: Toolchain,
+    root: Path,
+    query_text: str | None = None,
+) -> Any:
+    return execute_plan(
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=query,
+            root=str(root),
+            argv=(),
+            query_text=query_text,
+        ),
+        tc=toolchain,
+    )
 
 
 @pytest.fixture
@@ -57,7 +78,7 @@ def test_toolchain_class_golden(
     query_text = "entity=class name=Toolchain in=tools/cq/core/toolchain.py"
     query = parse_query(query_text)
     plan = compile_query(query)
-    result = execute_plan(plan, query, toolchain, repo_root)
+    result = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)
 
     assert result is not None
     assert_json_snapshot("query_toolchain_class.json", result, update=update_golden)
@@ -83,7 +104,7 @@ def test_execute_plan_function_golden(
     query_text = "entity=function name=execute_plan in=tools/cq/query/executor.py"
     query = parse_query(query_text)
     plan = compile_query(query)
-    result = execute_plan(plan, query, toolchain, repo_root)
+    result = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)
 
     assert result is not None
     assert_json_snapshot("query_execute_plan_function.json", result, update=update_golden)
@@ -109,7 +130,7 @@ def test_parse_imports_golden(
     query_text = "entity=import name=Path in=tools/cq/index/files.py"
     query = parse_query(query_text)
     plan = compile_query(query)
-    result = execute_plan(plan, query, toolchain, repo_root)
+    result = _execute_query(plan=plan, query=query, toolchain=toolchain, root=repo_root)
 
     assert result is not None
     assert_json_snapshot("query_path_imports.json", result, update=update_golden)
@@ -166,7 +187,13 @@ def test_query_with_spec_validation(toolchain: Toolchain, repo_root: Path) -> No
     query_text = spec["query"]
     query = parse_query(query_text)
     plan = compile_query(query)
-    result = execute_plan(plan, query, toolchain, repo_root)
+    result = _execute_query(
+        plan=plan,
+        query=query,
+        toolchain=toolchain,
+        root=repo_root,
+        query_text=query_text,
+    )
 
     assert result is not None
 

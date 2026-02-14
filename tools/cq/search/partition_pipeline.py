@@ -5,7 +5,7 @@ from __future__ import annotations
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import msgspec
 
@@ -44,7 +44,7 @@ class _PartitionScopeContext:
     cache: CqCacheBackend
     policy: CqCachePolicyV1
     scope_globs: list[str]
-    scope_hash: str
+    scope_hash: str | None
     snapshot_digest: str
 
 
@@ -96,7 +96,7 @@ def run_search_partition(
         stats=stats,
         pattern=pattern,
         enriched_matches=enriched,
-        dropped_by_scope=stats.dropped_by_scope,
+        dropped_by_scope=int(getattr(stats, "dropped_by_scope", 0)),
         pyrefly_prefetch=pyrefly_prefetch,
     )
 
@@ -194,7 +194,7 @@ def _candidate_phase(
     if cache_enabled and not hit:
         payload = SearchCandidatesCacheV1(
             pattern=pattern,
-            raw_matches=contract_to_builtins(raw_matches),
+            raw_matches=cast("list[dict[str, object]]", contract_to_builtins(raw_matches)),
             stats=require_mapping(stats),
         )
         tag = resolve_write_cache_tag(
@@ -245,7 +245,7 @@ def _maybe_submit_prefetch(
     *,
     ctx: SmartSearchContext,
     lang: QueryLanguage,
-    raw_matches: list[object],
+    raw_matches: list[Any],
     smart_search_mod: Any,
 ) -> Future[object] | None:
     if lang != "python" or not raw_matches:
@@ -262,7 +262,7 @@ def _enrichment_phase(
     *,
     ctx: SmartSearchContext,
     lang: QueryLanguage,
-    raw_matches: list[object],
+    raw_matches: list[Any],
     scope: _PartitionScopeContext,
     smart_search_mod: Any,
 ) -> list[object]:
@@ -306,12 +306,12 @@ def _enrichment_phase(
 
 def _probe_enrichment_cache(
     *,
-    raw_matches: list[object],
+    raw_matches: list[Any],
     context: _EnrichmentCacheContext,
     smart_search_mod: Any,
-) -> tuple[list[object | None], list[tuple[int, object, str, str]]]:
-    enriched_results: list[object | None] = [None] * len(raw_matches)
-    misses: list[tuple[int, object, str, str]] = []
+) -> tuple[list[Any | None], list[tuple[int, Any, str, str]]]:
+    enriched_results: list[Any | None] = [None] * len(raw_matches)
+    misses: list[tuple[int, Any, str, str]] = []
     for idx, raw in enumerate(raw_matches):
         file_hash = file_content_hash(context.root / raw.file).digest
         cache_key = build_cache_key(
@@ -346,7 +346,7 @@ def _probe_enrichment_cache(
     return enriched_results, misses
 
 
-def _decode_enrichment_cached(*, cached: dict[str, object], smart_search_mod: Any) -> object | None:
+def _decode_enrichment_cached(*, cached: dict[str, object], smart_search_mod: Any) -> Any | None:
     try:
         payload = msgspec.convert(cached, type=SearchEnrichmentAnchorCacheV1)
         return msgspec.convert(payload.enriched_match, type=smart_search_mod.EnrichedMatch)
@@ -358,8 +358,8 @@ def _decode_enrichment_cached(*, cached: dict[str, object], smart_search_mod: An
 def _compute_and_persist_enrichment_misses(
     *,
     ctx: SmartSearchContext,
-    misses: list[tuple[int, object, str, str]],
-    enriched_results: list[object | None],
+    misses: list[tuple[int, Any, str, str]],
+    enriched_results: list[Any | None],
     context: _EnrichmentCacheContext,
     smart_search_mod: Any,
 ) -> None:
@@ -384,7 +384,10 @@ def _compute_and_persist_enrichment_misses(
                 match_text=raw.match_text,
                 file_content_hash=file_hash,
                 language=context.lang,
-                enriched_match=contract_to_builtins(enriched_match),
+                enriched_match=cast(
+                    "dict[str, object]",
+                    contract_to_builtins(enriched_match),
+                ),
             )
             ok = context.cache.set(
                 cache_key,

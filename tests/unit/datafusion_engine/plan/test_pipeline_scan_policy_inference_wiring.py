@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -11,6 +11,7 @@ import pytest
 
 from datafusion_engine.delta.scan_policy_inference import ScanPolicyOverride
 from datafusion_engine.plan import pipeline_runtime as pipeline
+from datafusion_engine.plan.contracts import PlanWithDeltaPinsRequestV1
 from datafusion_engine.plan.signals import PlanSignals
 from schema_spec.contracts import DeltaScanPolicyDefaults, ScanPolicyConfig, ScanPolicyDefaults
 
@@ -18,7 +19,6 @@ if TYPE_CHECKING:
     from datafusion import SessionContext
 
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
-    from datafusion_engine.views.graph import ViewNode
     from semantics.compile_context import SemanticExecutionContext
 
 
@@ -164,10 +164,12 @@ def test_plan_with_delta_pins_wires_scan_policy_inference(  # noqa: PLR0914, PLR
 
     pipeline.plan_with_delta_pins(
         cast("SessionContext", object()),
-        view_nodes=cast("Sequence[ViewNode]", input_nodes),
-        runtime_profile=cast("DataFusionRuntimeProfile", runtime_profile),
-        snapshot={},
-        semantic_context=cast("SemanticExecutionContext", semantic_context),
+        PlanWithDeltaPinsRequestV1(
+            view_nodes=cast("tuple[object, ...]", input_nodes),
+            runtime_profile=cast("DataFusionRuntimeProfile", runtime_profile),
+            snapshot={},
+            semantic_context=cast("SemanticExecutionContext", semantic_context),
+        ),
     )
 
     assert len(derive_calls) == 2
@@ -248,10 +250,12 @@ def test_plan_with_delta_pins_strict_mode_raises_on_resolver_drift(
     with pytest.raises(RuntimeError, match="Resolver identity violation"):
         pipeline.plan_with_delta_pins(
             cast("SessionContext", object()),
-            view_nodes=cast("Sequence[ViewNode]", ()),
-            runtime_profile=cast("DataFusionRuntimeProfile", runtime_profile),
-            snapshot={},
-            semantic_context=cast("SemanticExecutionContext", semantic_context),
+            PlanWithDeltaPinsRequestV1(
+                view_nodes=cast("tuple[object, ...]", ()),
+                runtime_profile=cast("DataFusionRuntimeProfile", runtime_profile),
+                snapshot={},
+                semantic_context=cast("SemanticExecutionContext", semantic_context),
+            ),
         )
 
     assert len(runtime_profile.artifact_calls) == 1

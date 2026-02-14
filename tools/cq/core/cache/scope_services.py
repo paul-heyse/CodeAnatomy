@@ -56,7 +56,7 @@ def resolve_scope(
         key=lambda item: item.as_posix(),
     )
     scope_roots = _scope_roots(root=resolved_root, paths=resolved_paths)
-    token = (
+    token: dict[str, object] = (
         dict(inventory_token_fn(resolved_root))
         if (plan.include_inventory_token and inventory_token_fn is not None)
         else {}

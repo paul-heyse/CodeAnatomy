@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from tools.cq.core.cache import close_cq_cache_backend
-from tools.cq.search import lsp_front_door_adapter as adapter
+from tools.cq.search import lsp_front_door_pipeline as pipeline
 from tools.cq.search.lsp_front_door_adapter import (
     LanguageLspEnrichmentOutcome,
     LanguageLspEnrichmentRequest,
@@ -35,14 +35,14 @@ def test_lsp_front_door_caches_negative_outcome(
     sample = tmp_path / "sample.py"
     sample.write_text("x = 1\n", encoding="utf-8")
 
-    monkeypatch.setattr(adapter, "resolve_lsp_provider_root", lambda **_kwargs: tmp_path)
+    monkeypatch.setattr(pipeline, "resolve_lsp_provider_root", lambda **_kwargs: tmp_path)
     attempts = {"count": 0}
 
     def _fake_retry(*_args: object, **_kwargs: object) -> tuple[object | None, bool]:
         attempts["count"] += 1
         return None, True
 
-    monkeypatch.setattr(adapter, "call_with_retry", _fake_retry)
+    monkeypatch.setattr(pipeline, "call_with_retry", _fake_retry)
     request = LanguageLspEnrichmentRequest(
         language="python",
         mode="search",
@@ -70,14 +70,14 @@ def test_lsp_front_door_caches_positive_outcome(
     sample = tmp_path / "sample.py"
     sample.write_text("x = 1\n", encoding="utf-8")
 
-    monkeypatch.setattr(adapter, "resolve_lsp_provider_root", lambda **_kwargs: tmp_path)
+    monkeypatch.setattr(pipeline, "resolve_lsp_provider_root", lambda **_kwargs: tmp_path)
     attempts = {"count": 0}
 
     def _fake_retry(*_args: object, **_kwargs: object) -> tuple[object | None, bool]:
         attempts["count"] += 1
         return {"coverage": {"status": "applied"}}, False
 
-    monkeypatch.setattr(adapter, "call_with_retry", _fake_retry)
+    monkeypatch.setattr(pipeline, "call_with_retry", _fake_retry)
     request = LanguageLspEnrichmentRequest(
         language="python",
         mode="search",
@@ -107,7 +107,7 @@ def test_lsp_front_door_single_flight_under_contention(
     sample = tmp_path / "sample.py"
     sample.write_text("x = 1\n", encoding="utf-8")
 
-    monkeypatch.setattr(adapter, "resolve_lsp_provider_root", lambda **_kwargs: tmp_path)
+    monkeypatch.setattr(pipeline, "resolve_lsp_provider_root", lambda **_kwargs: tmp_path)
     calls_lock = threading.Lock()
     attempts = {"count": 0}
 
@@ -117,7 +117,7 @@ def test_lsp_front_door_single_flight_under_contention(
         time.sleep(0.15)
         return {"coverage": {"status": "applied"}}, False
 
-    monkeypatch.setattr(adapter, "call_with_retry", _fake_retry)
+    monkeypatch.setattr(pipeline, "call_with_retry", _fake_retry)
     request = LanguageLspEnrichmentRequest(
         language="python",
         mode="search",

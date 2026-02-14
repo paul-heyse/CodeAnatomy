@@ -9,6 +9,7 @@ import pyarrow as pa
 import pytest
 
 from extraction import orchestrator as orchestrator_mod
+from extraction.contracts import RunExtractionRequestV1
 from extraction.options import ExtractionRunOptions
 
 
@@ -83,7 +84,9 @@ def test_staged_execution_ordering(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     }
     _wire_test_doubles(monkeypatch, stage1_extractors=stage1_extractors, calls=calls)
 
-    orchestrator_mod.run_extraction(repo_root=tmp_path, work_dir=tmp_path / "work")
+    orchestrator_mod.run_extraction(
+        RunExtractionRequestV1(repo_root=str(tmp_path), work_dir=str(tmp_path / "work"))
+    )
 
     assert calls.index("repo_scan") < calls.index("python_imports")
     assert calls.index("repo_scan") < calls.index("ast_files")
@@ -101,9 +104,11 @@ def test_parallel_stage1_extractors(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     _wire_test_doubles(monkeypatch, stage1_extractors=stage1_extractors, calls=calls)
 
     result = orchestrator_mod.run_extraction(
-        repo_root=tmp_path,
-        work_dir=tmp_path / "work",
-        max_workers=4,
+        RunExtractionRequestV1(
+            repo_root=str(tmp_path),
+            work_dir=str(tmp_path / "work"),
+            max_workers=4,
+        )
     )
 
     assert not result.errors
@@ -125,7 +130,9 @@ def test_error_collection(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
         stage1_error="libcst_files",
     )
 
-    result = orchestrator_mod.run_extraction(repo_root=tmp_path, work_dir=tmp_path / "work")
+    result = orchestrator_mod.run_extraction(
+        RunExtractionRequestV1(repo_root=str(tmp_path), work_dir=str(tmp_path / "work"))
+    )
 
     assert result.errors
     first_error = result.errors[0]
@@ -142,7 +149,9 @@ def test_delta_output_locations(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     }
     _wire_test_doubles(monkeypatch, stage1_extractors=stage1_extractors, calls=calls)
 
-    result = orchestrator_mod.run_extraction(repo_root=tmp_path, work_dir=tmp_path / "work")
+    result = orchestrator_mod.run_extraction(
+        RunExtractionRequestV1(repo_root=str(tmp_path), work_dir=str(tmp_path / "work"))
+    )
 
     assert "repo_files_v1" in result.delta_locations
     assert "repo_files" in result.delta_locations
@@ -158,7 +167,9 @@ def test_timing_recorded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     }
     _wire_test_doubles(monkeypatch, stage1_extractors=stage1_extractors, calls=calls)
 
-    result = orchestrator_mod.run_extraction(repo_root=tmp_path, work_dir=tmp_path / "work")
+    result = orchestrator_mod.run_extraction(
+        RunExtractionRequestV1(repo_root=str(tmp_path), work_dir=str(tmp_path / "work"))
+    )
 
     assert "repo_scan" in result.timing
     assert "ast_files" in result.timing

@@ -269,7 +269,8 @@ def _write_cached_file_inventory(request: FileInventoryWriteRequestV1) -> None:
         files=rel_files,
         snapshot_digest=request.scope.snapshot_digest,
         inventory_token={
-            str(k): int(v) if isinstance(v, int) else 0 for k, v in request.scope.inventory_token.items()
+            str(k): int(v) if isinstance(v, int) else 0
+            for k, v in request.scope.inventory_token.items()
         },
     )
     ok = request.cache.set(

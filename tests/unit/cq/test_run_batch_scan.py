@@ -9,7 +9,7 @@ from tools.cq.astgrep.sgpy_scanner import RuleSpec, SgRecord
 from tools.cq.cli_app.context import CliContext
 from tools.cq.core.schema import CqResult
 from tools.cq.query import batch as batch_queries
-from tools.cq.query.executor import execute_plan
+from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.run.runner import execute_run_plan
@@ -52,7 +52,15 @@ def test_batch_equivalence_single_query(tmp_path: Path) -> None:
     query_string = "entity=function name=foo lang=python"
     parsed = parse_query(query_string)
     plan = compile_query(parsed)
-    single = execute_plan(plan=plan, query=parsed, tc=ctx.toolchain, root=ctx.root, argv=ctx.argv)
+    single = execute_plan(
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=parsed,
+            root=str(ctx.root),
+            argv=tuple(ctx.argv),
+        ),
+        tc=ctx.toolchain,
+    )
 
     batched = execute_run_plan(RunPlan(steps=(QStep(query=query_string),)), ctx)
 

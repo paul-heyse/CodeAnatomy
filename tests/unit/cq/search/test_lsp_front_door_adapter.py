@@ -26,11 +26,11 @@ def test_provider_for_language() -> None:
 
 
 def test_enrich_with_language_lsp_python(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tools.cq.search import lsp_front_door_adapter as adapter
+    from tools.cq.search import lsp_front_door_pipeline as pipeline
 
     monkeypatch.delenv("CQ_ENABLE_LSP", raising=False)
     monkeypatch.setattr(
-        adapter,
+        pipeline,
         "enrich_with_pyrefly_lsp",
         lambda _request: {"call_graph": {"incoming_total": 1, "outgoing_total": 0}},
     )
@@ -51,11 +51,11 @@ def test_enrich_with_language_lsp_python(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_enrich_with_language_lsp_rust(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tools.cq.search import lsp_front_door_adapter as adapter
+    from tools.cq.search import lsp_front_door_pipeline as pipeline
 
     monkeypatch.delenv("CQ_ENABLE_LSP", raising=False)
     monkeypatch.setattr(
-        adapter,
+        pipeline,
         "enrich_with_rust_lsp",
         lambda *_args, **_kwargs: {"call_graph": {"incoming_callers": []}},
     )
@@ -92,10 +92,10 @@ def test_enrich_with_language_lsp_runtime_disabled(monkeypatch: pytest.MonkeyPat
 
 
 def test_enrich_with_language_lsp_timeout_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tools.cq.search import lsp_front_door_adapter as adapter
+    from tools.cq.search import lsp_front_door_pipeline as pipeline
 
     monkeypatch.delenv("CQ_ENABLE_LSP", raising=False)
-    monkeypatch.setattr(adapter, "call_with_retry", lambda *_args, **_kwargs: (None, True))
+    monkeypatch.setattr(pipeline, "call_with_retry", lambda *_args, **_kwargs: (None, True))
     outcome = enrich_with_language_lsp(
         LanguageLspEnrichmentRequest(
             language="python",

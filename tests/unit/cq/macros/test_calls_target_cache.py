@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from tools.cq.core.cache import close_cq_cache_backend
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.macros.calls_target import attach_target_metadata
+from tools.cq.macros.calls_target import AttachTargetMetadataRequestV1, attach_target_metadata
 
 
 @pytest.fixture(autouse=True)
@@ -53,11 +53,13 @@ def test_calls_target_cache_revalidates_when_target_file_changes(tmp_path: Path)
     first_result = _empty_result(root)
     _, first_callees, _ = attach_target_metadata(
         first_result,
-        root=root,
-        function_name="target",
-        score=None,
-        target_language="python",
-        run_id="run-1",
+        AttachTargetMetadataRequestV1(
+            root=root,
+            function_name="target",
+            score=None,
+            target_language="python",
+            run_id="run-1",
+        ),
     )
 
     assert first_callees["helper"] == 1
@@ -78,11 +80,13 @@ def test_calls_target_cache_revalidates_when_target_file_changes(tmp_path: Path)
     second_result = _empty_result(root)
     _, second_callees, _ = attach_target_metadata(
         second_result,
-        root=root,
-        function_name="target",
-        score=None,
-        target_language="python",
-        run_id="run-2",
+        AttachTargetMetadataRequestV1(
+            root=root,
+            function_name="target",
+            score=None,
+            target_language="python",
+            run_id="run-2",
+        ),
     )
 
     assert second_callees["helper"] == 0

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from tools.cq.core.schema import CqResult
 from tools.cq.core.toolchain import Toolchain
-from tools.cq.query.executor import execute_plan
+from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.search.smart_search import smart_search
@@ -56,7 +56,16 @@ def _execute_query(query_text: str, toolchain: Toolchain, repo_root: Path) -> Cq
     """
     query = parse_query(query_text)
     plan = compile_query(query)
-    return execute_plan(plan, query, toolchain, repo_root)
+    return execute_plan(
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=query,
+            root=str(repo_root),
+            argv=(),
+            query_text=query_text,
+        ),
+        tc=toolchain,
+    )
 
 
 def test_regression_known_callers(toolchain: Toolchain, repo_root: Path) -> None:
@@ -290,11 +299,14 @@ def test_q_explicit_lang_summary_preserves_scope_and_query_text(
     query = parse_query(query_text)
     plan = compile_query(query)
     result = execute_plan(
-        plan,
-        query,
-        toolchain,
-        repo_root,
-        query_text=query_text,
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=query,
+            root=str(repo_root),
+            argv=(),
+            query_text=query_text,
+        ),
+        tc=toolchain,
     )
 
     assert result.summary["query"] == query_text

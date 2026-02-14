@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 from datafusion_engine.extensions.context_adaptation import (
@@ -14,7 +13,7 @@ from datafusion_engine.extensions.context_adaptation import (
 if TYPE_CHECKING:
     from datafusion import SessionContext
 
-_EXTENSION_MODULES: tuple[str, ...] = ("datafusion_ext",)
+_EXTENSION_MODULES: tuple[str, ...] = ("datafusion_engine.extensions.datafusion_ext",)
 
 
 def load_schema_evolution_adapter_factory() -> object:
@@ -78,17 +77,6 @@ def install_schema_evolution_adapter_factory(ctx: SessionContext) -> None:
             ),
         )
     except (RuntimeError, TypeError, ValueError) as exc:
-        from datafusion_engine.udf.extension_runtime import rust_runtime_install_payload
-
-        runtime_payload = rust_runtime_install_payload(ctx)
-        runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")
-        if runtime_install_mode == "internal_compat":
-            logging.getLogger(__name__).warning(
-                "Skipping schema evolution adapter install due to SessionContext ABI mismatch "
-                "in internal_compat runtime install mode: %s",
-                exc,
-            )
-            return
         msg = (
             "Schema evolution adapter install failed due to SessionContext ABI mismatch. "
             "Rebuild and install matching datafusion/datafusion_ext wheels "

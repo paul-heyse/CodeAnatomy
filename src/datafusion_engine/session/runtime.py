@@ -133,7 +133,7 @@ _MISSING = object()
 _COMPILE_RESOLVER_STRICT_ENV = "CODEANATOMY_COMPILE_RESOLVER_INVARIANTS_STRICT"
 _CI_ENV = "CI"
 _DEFAULT_PERFORMANCE_POLICY = PerformancePolicy()
-_EXTENSION_MODULE_NAMES: tuple[str, ...] = ("datafusion_ext",)
+_EXTENSION_MODULE_NAMES: tuple[str, ...] = ("datafusion_engine.extensions.datafusion_ext",)
 # DataFusion Python currently raises plain ``Exception`` for many SQL/plan failures.
 _DATAFUSION_SQL_ERROR = Exception
 
@@ -1631,7 +1631,7 @@ def _prepare_statement_sql(statement: PreparedStatementSpec) -> str:
 
 def _table_logical_plan(ctx: SessionContext, *, name: str) -> str:
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
     except ImportError:
         module = None
     if module is not None:
@@ -1644,7 +1644,7 @@ def _table_logical_plan(ctx: SessionContext, *, name: str) -> str:
 
 def _table_dfschema_tree(ctx: SessionContext, *, name: str) -> str:
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
     except ImportError:
         module = None
     if module is not None:
@@ -3628,7 +3628,7 @@ class _PlannerRuleInstallers:
 
 def _resolve_planner_rule_installers() -> _PlannerRuleInstallers | None:
     imported_any = False
-    for module_name in ("datafusion_ext",):
+    for module_name in ("datafusion_engine.extensions.datafusion_ext",):
         try:
             candidate = importlib.import_module(module_name)
         except ImportError:
@@ -4770,17 +4770,14 @@ class DataFusionRuntimeProfile(
         return self._ephemeral_context_phases(ctx)
 
     def install_delta_plan_codecs(self, ctx: SessionContext) -> tuple[bool, bool]:
-        """Install Delta plan codecs using the extension or context fallback.
+        """Install Delta plan codecs using the extension entrypoint.
 
         Returns:
         -------
         tuple[bool, bool]
             Tuple of (available, installed) flags.
         """
-        available, installed = self._install_delta_plan_codecs_extension(ctx)
-        if not available:
-            available, installed = self._install_delta_plan_codecs_context(ctx)
-        return available, installed
+        return self._install_delta_plan_codecs_extension(ctx)
 
     def record_delta_plan_codecs_event(self, *, available: bool, installed: bool) -> None:
         """Record the Delta plan codecs install status."""
@@ -5135,26 +5132,11 @@ class DataFusionRuntimeProfile(
         from datafusion_engine.udf.parity import udf_info_schema_parity_report
 
         report = udf_info_schema_parity_report(ctx)
-        runtime_payload = rust_runtime_install_payload(ctx)
-        runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")
+        _runtime_payload = rust_runtime_install_payload(ctx)
         if report.error is not None:
-            if runtime_install_mode == "internal_compat":
-                logging.getLogger(__name__).warning(
-                    "Downgrading UDF information_schema parity error for internal_compat "
-                    "runtime install mode: %s",
-                    report.error,
-                )
-                return report.payload()
             msg = f"information_schema parity check failed: {report.error}"
             raise ValueError(msg)
         if report.missing_in_information_schema:
-            if runtime_install_mode == "internal_compat":
-                logging.getLogger(__name__).warning(
-                    "Downgrading missing UDF information_schema routines for "
-                    "internal_compat runtime install mode: %s",
-                    list(report.missing_in_information_schema),
-                )
-                return report.payload()
             msg = (
                 "information_schema parity check failed; "
                 f"missing routines: {list(report.missing_in_information_schema)}"
@@ -5284,49 +5266,27 @@ class DataFusionRuntimeProfile(
         installers = _resolve_planner_rule_installers()
         if installers is None:
             return
-        candidates: list[object] = [ctx]
-        internal_ctx = getattr(ctx, "ctx", None)
-        if internal_ctx is not None and internal_ctx is not ctx:
-            candidates.append(internal_ctx)
-        last_error: Exception | None = None
-        for candidate in candidates:
-            try:
-                installers.config_installer(
-                    cast("SessionContext", candidate),
-                    policy.allow_ddl,
-                    policy.allow_dml,
-                    policy.allow_statements,
-                )
-                installers.physical_config_installer(
-                    cast("SessionContext", candidate),
-                    self.policies.physical_rulepack_enabled,
-                )
-                installers.rule_installer(cast("SessionContext", candidate))
-                installers.physical_installer(cast("SessionContext", candidate))
-            except (RuntimeError, TypeError, ValueError) as exc:
-                last_error = exc
-            else:
-                return
-        if last_error is not None:
-            # Mixed wheels can expose planner installers bound to a different
-            # SessionContext class; treat that specific conversion failure as
-            # non-fatal during hard-pivot integration.
-            detail = str(last_error)
-            if (
-                isinstance(last_error, TypeError)
-                and "cannot be converted to 'SessionContext'" in detail
-            ) or "cannot be converted to 'SessionContext'" in detail:
-                logging.getLogger(__name__).warning(
-                    "Skipping planner-rule install due to SessionContext ABI mismatch: %s",
-                    last_error,
-                )
-                return
-        msg = (
-            "Planner-rule install failed due to SessionContext ABI mismatch. "
-            "Rebuild and install matching datafusion/datafusion_ext wheels "
-            "(scripts/build_datafusion_wheels.sh + uv sync)."
-        )
-        raise RuntimeError(msg) from last_error
+        try:
+            installers.config_installer(
+                ctx,
+                policy.allow_ddl,
+                policy.allow_dml,
+                policy.allow_statements,
+            )
+            installers.physical_config_installer(
+                ctx,
+                self.policies.physical_rulepack_enabled,
+            )
+            installers.rule_installer(ctx)
+            installers.physical_installer(ctx)
+            return
+        except (RuntimeError, TypeError, ValueError) as exc:
+            msg = (
+                "Planner-rule install failed due to SessionContext ABI mismatch. "
+                "Rebuild and install matching datafusion/datafusion_ext wheels "
+                "(scripts/build_datafusion_wheels.sh + uv sync)."
+            )
+            raise RuntimeError(msg) from exc
 
     def _refresh_udf_catalog(self, ctx: SessionContext) -> None:
         if not self.catalog.enable_information_schema:
@@ -6366,53 +6326,6 @@ class DataFusionRuntimeProfile(
         self._register_schema_registry_tables(ctx)
         return ast_view_names, ast_registration, bytecode_registration
 
-    @staticmethod
-    def _downgrade_internal_compat_schema_issues(
-        ctx: SessionContext,
-        *,
-        issues: dict[str, object],
-        advisory: dict[str, object] | None,
-    ) -> tuple[dict[str, object], dict[str, object] | None]:
-        raw_view_errors = issues.get("view_errors")
-        if not isinstance(raw_view_errors, Mapping):
-            return issues, advisory
-
-        from datafusion_engine.udf.extension_runtime import rust_runtime_install_payload
-
-        runtime_payload = rust_runtime_install_payload(ctx)
-        runtime_install_mode = str(runtime_payload.get("runtime_install_mode") or "")
-        if runtime_install_mode != "internal_compat":
-            return issues, advisory
-
-        downgraded: dict[str, object] = {}
-        remaining_view_errors = dict(raw_view_errors)
-        for key in ("udf_info_schema_parity", "engine_functions"):
-            value = remaining_view_errors.pop(key, None)
-            if value is not None:
-                downgraded[key] = value
-        if not downgraded:
-            return issues, advisory
-
-        logging.getLogger(__name__).warning(
-            "Downgrading schema registry extension-parity failures for "
-            "internal_compat runtime install mode: %s",
-            downgraded,
-        )
-        updated_issues = dict(issues)
-        if remaining_view_errors:
-            updated_issues["view_errors"] = remaining_view_errors
-        else:
-            updated_issues.pop("view_errors", None)
-
-        advisory_payload = dict(advisory or {})
-        existing_view_errors = advisory_payload.get("view_errors")
-        merged_view_errors: dict[str, object] = (
-            dict(existing_view_errors) if isinstance(existing_view_errors, Mapping) else {}
-        )
-        merged_view_errors.update(downgraded)
-        advisory_payload["view_errors"] = merged_view_errors
-        return updated_issues, advisory_payload
-
     def _install_schema_registry(self, ctx: SessionContext) -> None:
         """Register canonical nested schemas on the session context.
 
@@ -6454,12 +6367,6 @@ class DataFusionRuntimeProfile(
             validation,
             zero_row_bootstrap=self.zero_row_bootstrap,
         )
-        if issues:
-            issues, advisory = self._downgrade_internal_compat_schema_issues(
-                ctx,
-                issues=issues,
-                advisory=advisory,
-            )
         if advisory:
             self.record_artifact(
                 SCHEMA_REGISTRY_VALIDATION_ADVISORY_SPEC,
@@ -6524,25 +6431,6 @@ class DataFusionRuntimeProfile(
         except (RuntimeError, TypeError, ValueError):
             return True, False
         return True, bool(result) if result is not None else True
-
-    def _install_delta_plan_codecs_context(self, ctx: SessionContext) -> tuple[bool, bool]:
-        register = getattr(ctx, "register_extension_codecs", None)
-        if not callable(register):
-            return False, False
-        try:
-            register(
-                self.policies.delta_plan_codec_physical,
-                self.policies.delta_plan_codec_logical,
-            )
-        except TypeError:
-            try:
-                register(
-                    self.policies.delta_plan_codec_logical,
-                    self.policies.delta_plan_codec_physical,
-                )
-            except TypeError:
-                return True, False
-        return True, True
 
     def _record_udf_snapshot(self, snapshot: Mapping[str, object]) -> None:
         if self.diagnostics.diagnostics_sink is None:

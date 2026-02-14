@@ -2655,7 +2655,7 @@ def _requires_schema_evolution_adapter(evolution: object) -> bool:
 
 def _schema_evolution_adapter_factory() -> object:
     module = None
-    for module_name in ("datafusion_ext",):
+    for module_name in ("datafusion_engine.extensions.datafusion_ext",):
         try:
             candidate = importlib.import_module(module_name)
         except ImportError:

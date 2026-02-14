@@ -158,7 +158,7 @@ def collect_delta_compatibility(
 
 
 def collect_extension_plugin_snapshot(
-    module_name: str = "datafusion_ext",
+    module_name: str = "datafusion_engine.extensions.datafusion_ext",
 ) -> ExtensionPluginSnapshot:
     """Collect plugin-manifest and capability snapshot diagnostics.
 
@@ -191,7 +191,11 @@ def collect_runtime_execution_metrics(
     Mapping[str, object] | None
         Structured metrics payload, or None when unavailable.
     """
-    module_candidates = (module_name,) if module_name is not None else ("datafusion_ext",)
+    module_candidates = (
+        (module_name,)
+        if module_name is not None
+        else ("datafusion_engine.extensions.datafusion_ext",)
+    )
     errors: list[str] = []
     for candidate in module_candidates:
         try:

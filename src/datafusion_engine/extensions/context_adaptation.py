@@ -86,19 +86,15 @@ def select_context_candidate(
     allow_fallback: bool = True,
     fallback_ctx: object | None = None,
 ) -> tuple[tuple[str, object], ...]:
-    """Return ordered context candidates for extension entrypoint probing.
+    """Return the canonical context candidate for extension entrypoints.
 
     Returns:
     -------
     tuple[tuple[str, object], ...]
-        Ordered ``(kind, context)`` pairs used for entrypoint invocation.
+        Single canonical ``(kind, context)`` pair.
     """
-    candidates: list[tuple[str, object]] = []
-    _append_candidate(candidates, "outer", ctx)
-    _append_candidate(candidates, "internal", internal_ctx)
-    if allow_fallback:
-        _append_candidate(candidates, "fallback", fallback_ctx)
-    return tuple(candidates)
+    _ = (internal_ctx, allow_fallback, fallback_ctx)
+    return (("outer", ctx),)
 
 
 def invoke_entrypoint_with_adapted_context(
@@ -127,46 +123,22 @@ def invoke_entrypoint_with_adapted_context(
         msg = f"Extension entrypoint {entrypoint} is unavailable."
         raise TypeError(msg)
 
-    fallback_ctx = None
-    if invocation.allow_fallback and invocation.fallback_ctx_factory is not None:
-        fallback_ctx = invocation.fallback_ctx_factory(module)
-
-    errors: list[str] = []
-    for ctx_kind, candidate in select_context_candidate(
-        invocation.ctx,
-        internal_ctx=invocation.internal_ctx,
-        allow_fallback=invocation.allow_fallback,
-        fallback_ctx=fallback_ctx,
-    ):
-        try:
-            payload = fn(candidate, *invocation.args)
-        except (TypeError, RuntimeError, ValueError) as exc:
-            errors.append(f"{ctx_kind}: {exc}")
-            continue
-        selection = ExtensionContextSelection(
-            module_name=module_name,
-            module=module,
-            ctx_kind=ctx_kind,
-            ctx=candidate,
-            entrypoint=entrypoint,
+    try:
+        payload = fn(invocation.ctx, *invocation.args)
+    except (TypeError, RuntimeError, ValueError) as exc:
+        msg = (
+            f"Extension entrypoint {entrypoint} failed for canonical context candidate "
+            f"(outer: {exc})"
         )
-        return selection, payload
-
-    detail = "; ".join(errors) if errors else "no context candidates"
-    msg = f"Extension entrypoint {entrypoint} failed across context candidates ({detail})"
-    raise RuntimeError(msg)
-
-
-def _append_candidate(
-    candidates: list[tuple[str, object]],
-    kind: str,
-    candidate: object | None,
-) -> None:
-    if candidate is None:
-        return
-    if any(existing is candidate for _, existing in candidates):
-        return
-    candidates.append((kind, candidate))
+        raise RuntimeError(msg) from exc
+    selection = ExtensionContextSelection(
+        module_name=module_name,
+        module=module,
+        ctx_kind="outer",
+        ctx=invocation.ctx,
+        entrypoint=entrypoint,
+    )
+    return selection, payload
 
 
 __all__ = [

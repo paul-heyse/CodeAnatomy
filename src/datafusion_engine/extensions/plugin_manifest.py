@@ -22,7 +22,9 @@ class PluginManifestResolution:
     error: str | None
 
 
-def resolve_plugin_manifest(module_name: str = "datafusion_ext") -> PluginManifestResolution:
+def resolve_plugin_manifest(
+    module_name: str = "datafusion_engine.extensions.datafusion_ext",
+) -> PluginManifestResolution:
     """Resolve plugin manifest payload from the extension module.
 
     Returns:

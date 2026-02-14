@@ -869,7 +869,7 @@ def rust_udf_snapshot_payload(snapshot: Mapping[str, object]) -> dict[str, objec
     def _plugin_manifest() -> Mapping[str, object] | None:
         from datafusion_engine.extensions.plugin_manifest import resolve_plugin_manifest
 
-        return resolve_plugin_manifest("datafusion_ext").manifest
+        return resolve_plugin_manifest("datafusion_engine.extensions.datafusion_ext").manifest
 
     def _count_seq(key: str) -> int:
         value = snapshot.get(key, ())

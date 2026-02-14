@@ -50,8 +50,6 @@ from serde_msgspec import StructBaseStrict, ensure_raw
 from utils.validation import ensure_mapping
 from utils.value_coercion import coerce_mapping_list
 
-_DELTA_INTERNAL_CTX: dict[str, InternalSessionContext | None] = {"value": None}
-
 
 class InternalSessionContext(Protocol):
     """Protocol representing the internal DataFusion session context."""
@@ -505,7 +503,6 @@ def _internal_ctx(
     ctx: SessionContext,
     *,
     entrypoint: str | None = None,
-    allow_fallback: bool = True,
 ) -> InternalSessionContext:
     """Return the internal session context required by Rust entrypoints.
 
@@ -518,7 +515,7 @@ def _internal_ctx(
     compatibility = is_delta_extension_compatible(
         ctx,
         entrypoint=probe_entrypoint,
-        require_non_fallback=not allow_fallback,
+        require_non_fallback=True,
     )
     if not compatibility.available:
         msg = _compatibility_message(
@@ -537,7 +534,6 @@ def _internal_ctx(
     resolved = _context_from_compatibility(
         ctx,
         ctx_kind=compatibility.ctx_kind,
-        allow_fallback=allow_fallback,
     )
     if resolved is not None:
         return resolved
@@ -553,19 +549,10 @@ def _context_from_compatibility(
     ctx: SessionContext,
     *,
     ctx_kind: str | None,
-    allow_fallback: bool,
 ) -> InternalSessionContext | None:
-    fallback_ctx = _fallback_delta_internal_ctx() if allow_fallback else None
-    internal_ctx = getattr(ctx, "ctx", None)
-    candidates = dict(
-        select_context_candidate(
-            ctx,
-            internal_ctx=internal_ctx,
-            allow_fallback=allow_fallback,
-            fallback_ctx=fallback_ctx,
-        )
-    )
-    selected = candidates.get(ctx_kind or "")
+    _ = ctx_kind
+    candidates = dict(select_context_candidate(ctx))
+    selected = candidates.get("outer")
     if selected is None:
         return None
     return cast("InternalSessionContext", selected)
@@ -591,30 +578,6 @@ def _compatibility_message(
     if error:
         details.append(f"error={error}")
     return " ".join(details)
-
-
-def _fallback_delta_internal_ctx() -> InternalSessionContext | None:
-    cached = _DELTA_INTERNAL_CTX["value"]
-    if cached is not None:
-        return cached
-    try:
-        module = _resolve_extension_module(entrypoint="delta_session_context")
-    except DataFusionEngineError:
-        return None
-    builder = getattr(module, "delta_session_context", None)
-    if not callable(builder):
-        return None
-    try:
-        delta_ctx = builder()
-    except (TypeError, ValueError):
-        try:
-            delta_ctx = builder(None, None, None)
-        except (TypeError, ValueError):
-            return None
-    internal_ctx = getattr(delta_ctx, "ctx", None)
-    resolved = internal_ctx if internal_ctx is not None else delta_ctx
-    _DELTA_INTERNAL_CTX["value"] = cast("InternalSessionContext", resolved)
-    return _DELTA_INTERNAL_CTX["value"]
 
 
 def _require_internal_entrypoint(name: str) -> Callable[..., object]:
@@ -739,7 +702,6 @@ def delta_provider_from_session(
         _internal_ctx(
             ctx,
             entrypoint="delta_table_provider_from_session",
-            allow_fallback=False,
         ),
         storage_profile.canonical_uri,
         storage_payload,
@@ -820,7 +782,6 @@ def delta_provider_with_files(
         _internal_ctx(
             ctx,
             entrypoint="delta_table_provider_with_files",
-            allow_fallback=False,
         ),
         storage_profile.canonical_uri,
         storage_payload,
@@ -1213,7 +1174,6 @@ def delta_merge(
         _internal_ctx(
             ctx,
             entrypoint="delta_merge",
-            allow_fallback=False,
         ),
         request.table_uri,
         storage_payload,

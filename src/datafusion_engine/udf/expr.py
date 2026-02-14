@@ -18,7 +18,7 @@ _PARTS_JOIN_SEPARATOR = "\x1f"
 
 def _require_callable(name: str) -> Callable[..., object]:
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
     except ImportError as exc:
         msg = (
             f"DataFusion extension entrypoint {name} is unavailable (datafusion_ext not installed)."

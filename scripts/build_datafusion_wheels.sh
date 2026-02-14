@@ -267,16 +267,12 @@ with tempfile.TemporaryDirectory() as tmpdir:
         raise SystemExit("datafusion_ext wheel is missing embedded plugin shared library.")
     sys.path.insert(0, tmpdir)
     # Ensure the extension module is importable under the expected package.
-    internal = importlib.import_module("datafusion._internal")
     module = importlib.import_module("datafusion.substrait")
     producer = getattr(module, "Producer", None)
     to_substrait = getattr(producer, "to_substrait_plan", None) if producer else None
     if not callable(to_substrait):
         raise SystemExit("Substrait Producer API missing from built wheel.")
     ext = importlib.import_module("datafusion_ext")
-    ctx_builder = getattr(ext, "delta_session_context", None)
-    if not callable(ctx_builder):
-        raise SystemExit("delta_session_context() missing from datafusion_ext wheel.")
     capabilities = getattr(ext, "capabilities_snapshot", None)
     if not callable(capabilities):
         raise SystemExit("capabilities_snapshot() is missing from datafusion_ext wheel.")
@@ -294,30 +290,21 @@ with tempfile.TemporaryDirectory() as tmpdir:
     plugin_path = manifest.get("plugin_path") if isinstance(manifest, dict) else None
     if not plugin_path or not Path(str(plugin_path)).exists():
         raise SystemExit(f"plugin_manifest() returned invalid plugin_path: {plugin_path!r}")
-    install_runtime = getattr(internal, "install_codeanatomy_runtime", None)
+    install_runtime = getattr(ext, "install_codeanatomy_runtime", None)
     if not callable(install_runtime):
-        raise SystemExit("install_codeanatomy_runtime() missing from datafusion._internal wheel.")
-    contract_probe = getattr(internal, "session_context_contract_probe", None)
+        raise SystemExit("install_codeanatomy_runtime() missing from datafusion_ext wheel.")
+    contract_probe = getattr(ext, "session_context_contract_probe", None)
     if not callable(contract_probe):
-        raise SystemExit("session_context_contract_probe() missing from datafusion._internal wheel.")
+        raise SystemExit("session_context_contract_probe() missing from datafusion_ext wheel.")
     ctx = None
-    ctx_internal = None
     try:
         from datafusion import SessionContext
 
         ctx = SessionContext()
-        ctx_internal = getattr(ctx, "ctx", ctx)
-        session_type = getattr(internal, "SessionContext", None)
-        if isinstance(session_type, type) and not isinstance(ctx_internal, session_type):
-            raise SystemExit(
-                "SessionContext normalization failed: expected internal SessionContext, "
-                f"got wrapper={type(ctx)!r}, normalized={type(ctx_internal)!r}, "
-                f"internal_module={getattr(internal, '__name__', '<unknown>')!r}"
-            )
-        probe_payload = contract_probe(ctx_internal)
+        probe_payload = contract_probe(ctx)
         if not isinstance(probe_payload, dict):
             raise SystemExit("session_context_contract_probe() must return a dict payload.")
-        runtime_payload = install_runtime(ctx_internal, True, 1000, 64)
+        runtime_payload = install_runtime(ctx, True, 1000, 64)
         if not isinstance(runtime_payload, dict):
             raise SystemExit("install_codeanatomy_runtime() must return a dict payload.")
         if "snapshot" not in runtime_payload:
@@ -326,8 +313,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
         raise SystemExit(
             "Unified runtime install validation failed: "
             f"{exc} "
-            f"(wrapper_type={type(ctx)!r}, normalized_type={type(ctx_internal)!r}, "
-            f"internal_module={getattr(internal, '__name__', '<unknown>')!r})"
+            f"(wrapper_type={type(ctx)!r}, ext_module={getattr(ext, '__name__', '<unknown>')!r})"
         ) from exc
 PY
 

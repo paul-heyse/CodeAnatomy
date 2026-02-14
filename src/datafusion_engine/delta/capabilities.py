@@ -15,7 +15,7 @@ from datafusion_engine.extensions.context_adaptation import (
     select_context_candidate,
 )
 
-_DELTA_EXTENSION_MODULES: tuple[str, ...] = ("datafusion_ext",)
+_DELTA_EXTENSION_MODULES: tuple[str, ...] = ("datafusion_engine.extensions.datafusion_ext",)
 _DELTA_SESSION_BUILDER = "delta_session_context"
 
 

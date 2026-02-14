@@ -77,7 +77,7 @@ def _load_extension() -> object:
         ImportError: If no compatible extension module can be loaded.
         ModuleNotFoundError: If a nested import is missing within a candidate module.
     """
-    for module_name in ("datafusion_ext",):
+    for module_name in ("datafusion_engine.extensions.datafusion_ext",):
         try:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError as exc:

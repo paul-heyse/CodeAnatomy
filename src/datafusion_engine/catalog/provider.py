@@ -63,7 +63,7 @@ def _table_from_dataset(dataset: object) -> Table:
     if isinstance(dataset, Table):
         return dataset
     try:
-        df_internal = importlib.import_module("datafusion_ext")
+        df_internal = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
     except ImportError:
         df_internal = None
     if df_internal is not None:

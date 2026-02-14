@@ -425,7 +425,7 @@ def _install_rust_udfs(
 
 def _datafusion_internal() -> ModuleType:
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
     except ImportError as exc:
         msg = (
             "The datafusion_ext extension module exposing install_codeanatomy_runtime or "
@@ -446,7 +446,7 @@ def _datafusion_internal() -> ModuleType:
 
 def _extension_module_with_capabilities() -> ModuleType:
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
     except ImportError as exc:
         msg = "The datafusion_ext module exposing capabilities_snapshot is required."
         raise ImportError(msg) from exc
@@ -758,6 +758,27 @@ def _require_bool_mapping(snapshot: Mapping[str, object], *, name: str) -> Mappi
     return output
 
 
+def _coerce_config_default_value(field_value: object) -> bool | int | str:
+    if isinstance(field_value, bool):
+        return field_value
+    if isinstance(field_value, int):
+        return field_value
+    if isinstance(field_value, str):
+        return field_value
+    if isinstance(field_value, Mapping):
+        if len(field_value) != 1:
+            msg = "Rust UDF snapshot config_defaults tagged values must contain one variant."
+            raise TypeError(msg)
+        if "Bool" in field_value and isinstance(field_value["Bool"], bool):
+            return field_value["Bool"]
+        if "Int" in field_value and isinstance(field_value["Int"], int):
+            return field_value["Int"]
+        if "String" in field_value and isinstance(field_value["String"], str):
+            return field_value["String"]
+    msg = "Rust UDF snapshot config_defaults values must be bool, int, or str."
+    raise TypeError(msg)
+
+
 def _require_config_defaults(
     snapshot: Mapping[str, object],
 ) -> Mapping[str, Mapping[str, object]]:
@@ -770,14 +791,13 @@ def _require_config_defaults(
         if not isinstance(entry, Mapping):
             msg = "Rust UDF snapshot config_defaults must map to mappings."
             raise TypeError(msg)
+        normalized_entry: dict[str, bool | int | str] = {}
         for field, field_value in entry.items():
             if not isinstance(field, str):
                 msg = "Rust UDF snapshot config_defaults fields must use string keys."
                 raise TypeError(msg)
-            if not isinstance(field_value, (bool, int, str)):
-                msg = "Rust UDF snapshot config_defaults values must be bool, int, or str."
-                raise TypeError(msg)
-        output[key] = entry
+            normalized_entry[field] = _coerce_config_default_value(field_value)
+        output[key] = normalized_entry
     return output
 
 

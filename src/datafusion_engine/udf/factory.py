@@ -219,7 +219,7 @@ def _load_extension() -> object:
         ImportError: If the extension module cannot be loaded.
     """
     try:
-        module = importlib.import_module("datafusion_ext")
+        module = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
     except ImportError as exc:
         msg = "The datafusion_ext module with FunctionFactory hooks is required."
         raise ImportError(msg) from exc

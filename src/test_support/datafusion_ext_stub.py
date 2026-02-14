@@ -209,6 +209,23 @@ def capabilities_snapshot() -> dict[str, object]:
     }
 
 
+def session_context_contract_probe(ctx: SessionContext) -> dict[str, object]:
+    """Return a stub SessionContext contract probe payload."""
+    _ = ctx
+    return {
+        "ok": True,
+        "plugin_abi": {"major": 1, "minor": 1},
+        "udf_registry": {
+            "scalar": 0,
+            "aggregate": 0,
+            "window": 0,
+            "table": 0,
+            "custom": 0,
+            "hash": "",
+        },
+    }
+
+
 def replay_substrait_plan(ctx: SessionContext, payload_bytes: bytes) -> object:
     """Replay Substrait bytes through public DataFusion Python APIs in stub mode.
 

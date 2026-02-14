@@ -208,7 +208,7 @@ def validate_delta_gate(
     if resolved is None:
         msg = "Delta protocol snapshot is required for gate validation."
         raise DataFusionEngineError(msg, kind=ErrorKind.DELTA)
-    module_names = ("datafusion_ext",)
+    module_names = ("datafusion_engine.extensions.datafusion_ext",)
     resolved_module = resolve_extension_module(module_names, entrypoint="validate_protocol_gate")
     if resolved_module is None:
         msg = "Delta protocol gate validation requires datafusion_ext."

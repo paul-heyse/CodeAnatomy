@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
-import datafusion as _datafusion
 import msgspec
 import pyarrow as pa
 from datafusion import SessionContext
@@ -55,17 +54,10 @@ if TYPE_CHECKING:
     from datafusion_engine.sql.options import SQLOptions
     from semantics.program_manifest import ManifestDatasetResolver
 
-
-_datafusion_internal = getattr(_datafusion, "_internal", None)
-
 try:
     from datafusion.substrait import Producer as SubstraitProducer
 except ImportError:
     SubstraitProducer = None
-
-_SUBSTRAIT_INTERNAL = (
-    getattr(_datafusion_internal, "substrait", None) if _datafusion_internal is not None else None
-)
 
 # Type alias for DataFrame builder functions
 DataFrameBuilder = Callable[[SessionContext], DataFrame]
@@ -930,7 +922,7 @@ def _proto_serialization_enabled() -> bool:
         True when plan proto serialization should be attempted.
     """
     try:
-        import datafusion_ext
+        from datafusion_engine.extensions import datafusion_ext
     except ImportError:
         return True
     return not bool(getattr(datafusion_ext, "IS_STUB", False))
@@ -1525,25 +1517,6 @@ def _encode_substrait_bytes(plan_obj: object) -> bytes:
     return bytes(encoded)
 
 
-def _internal_substrait_bytes(
-    ctx: SessionContext,
-    normalized: object,
-) -> bytes | None:
-    if _SUBSTRAIT_INTERNAL is None:
-        return None
-    internal_producer = getattr(_SUBSTRAIT_INTERNAL, "Producer", None)
-    to_substrait = getattr(internal_producer, "to_substrait_plan", None)
-    if not callable(to_substrait):
-        return None
-    raw_plan = getattr(normalized, "_raw_plan", normalized)
-    try:
-        substrait_plan = to_substrait(raw_plan, ctx.ctx)
-    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-        msg = f"Failed to encode Substrait plan bytes: {exc}"
-        raise ValueError(msg) from exc
-    return _encode_substrait_bytes(substrait_plan)
-
-
 def _public_substrait_bytes(
     ctx: SessionContext,
     normalized: object,
@@ -1580,9 +1553,6 @@ def _to_substrait_bytes(ctx: SessionContext, optimized: object | None) -> bytes:
         msg = "Substrait serialization requires an optimized logical plan."
         raise ValueError(msg)
     normalized = normalize_substrait_plan(ctx, cast("DataFusionLogicalPlan", optimized))
-    internal_bytes = _internal_substrait_bytes(ctx, normalized)
-    if internal_bytes is not None:
-        return internal_bytes
     return _public_substrait_bytes(ctx, normalized)
 
 

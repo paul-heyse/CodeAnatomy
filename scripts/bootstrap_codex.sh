@@ -82,9 +82,9 @@ import importlib
 import sys
 
 try:
-    mod = importlib.import_module("datafusion._internal")
+    mod = importlib.import_module("datafusion_ext")
 except ImportError as exc:
-    print(f"Failed to import datafusion._internal: {exc}", file=sys.stderr)
+    print(f"Failed to import datafusion_ext: {exc}", file=sys.stderr)
     raise SystemExit(1) from exc
 
 required = (
@@ -95,10 +95,39 @@ required = (
 missing = [name for name in required if not hasattr(mod, name)]
 if missing:
     print(
-        "datafusion._internal missing required hooks: " + ", ".join(missing),
+        "datafusion_ext missing required hooks: " + ", ".join(missing),
         file=sys.stderr,
     )
     raise SystemExit(1)
+
+try:
+    from datafusion import SessionContext
+except ImportError as exc:
+    print(f"Failed to import datafusion.SessionContext: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
+
+try:
+    ctx = SessionContext()
+    probe_payload = mod.session_context_contract_probe(ctx)
+    if not isinstance(probe_payload, dict):
+        print(
+            "session_context_contract_probe() must return a dict payload.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if probe_payload.get("ok") is not True:
+        print(
+            f"session_context_contract_probe() returned non-ok payload: {probe_payload!r}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+except Exception as exc:
+    print(
+        "Failed to validate canonical SessionContext contract probe "
+        f"through datafusion_ext: {exc}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1) from exc
 
 try:
     engine = importlib.import_module("codeanatomy_engine")
@@ -115,7 +144,7 @@ if not hasattr(engine, "SchemaRuntime"):
 PY
 then
   cat >&2 <<EOF
-Error: datafusion._internal/codeanatomy_engine are unavailable or missing required hooks.
+Error: datafusion_ext/codeanatomy_engine are unavailable or missing required hooks.
 
 From a normal shell on this machine run:
 

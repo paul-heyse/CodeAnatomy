@@ -261,6 +261,35 @@ fn parse_python_payload<T: DeserializeOwned>(
         .map_err(|err| PyValueError::new_err(format!("Invalid {label} payload: {err}")))
 }
 
+#[derive(Clone)]
+struct SessionContextContract {
+    ctx: SessionContext,
+}
+
+fn session_context_contract(ctx: &Bound<'_, PyAny>) -> PyResult<SessionContextContract> {
+    if let Ok(session) = ctx.extract::<Bound<'_, PySessionContext>>() {
+        return Ok(SessionContextContract {
+            ctx: session.borrow().ctx.clone(),
+        });
+    }
+    if let Ok(inner) = ctx.getattr("ctx") {
+        if let Ok(session) = inner.extract::<Bound<'_, PySessionContext>>() {
+            return Ok(SessionContextContract {
+                ctx: session.borrow().ctx.clone(),
+            });
+        }
+    }
+    Err(PyValueError::new_err(
+        "ctx must be datafusion.SessionContext or expose a compatible .ctx attribute",
+    ))
+}
+
+fn optional_session_context_contract(
+    ctx: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<SessionContextContract>> {
+    ctx.map(session_context_contract).transpose()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct ExtractionSessionPayload {
     parallelism: Option<usize>,
@@ -540,8 +569,8 @@ fn udf_config_payload_from_ctx(ctx: &SessionContext) -> JsonValue {
 }
 
 #[pyfunction]
-fn install_codeanatomy_udf_config(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    let state_ref = ctx.ctx.state_ref();
+fn install_codeanatomy_udf_config(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     if config.get_extension::<CodeAnatomyUdfConfig>().is_none() {
@@ -552,10 +581,10 @@ fn install_codeanatomy_udf_config(ctx: PyRef<PySessionContext>) -> PyResult<()> 
 
 #[pyfunction]
 fn install_function_factory(
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     policy_ipc: &Bound<'_, PyBytes>,
 ) -> PyResult<()> {
-    datafusion_ext::udf::install_function_factory_native(&ctx.ctx, policy_ipc.as_bytes())
+    datafusion_ext::udf::install_function_factory_native(&session_context_contract(ctx)?.ctx, policy_ipc.as_bytes())
         .map_err(|err| PyRuntimeError::new_err(format!("FunctionFactory install failed: {err}")))
 }
 
@@ -745,7 +774,7 @@ fn capabilities_snapshot(py: Python<'_>) -> PyResult<Py<PyAny>> {
 
 #[pyfunction]
 fn replay_substrait_plan(
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     payload_bytes: &Bound<'_, PyBytes>,
 ) -> PyResult<PyDataFrame> {
     #[cfg(feature = "substrait")]
@@ -757,7 +786,7 @@ fn replay_substrait_plan(
         let plan = Plan::decode(payload_bytes.as_bytes()).map_err(|err| {
             PyValueError::new_err(format!("Failed to decode Substrait payload: {err}"))
         })?;
-        let state = ctx.ctx.state();
+        let state = session_context_contract(ctx)?.ctx.state();
         let runtime = runtime()?;
         let logical_plan = runtime
             .block_on(from_substrait_plan(&state, &plan))
@@ -827,7 +856,7 @@ fn build_extraction_session(
 #[pyfunction]
 fn register_dataset_provider(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     request_payload: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     let request: DatasetProviderRequestPayload =
@@ -850,7 +879,7 @@ fn register_dataset_provider(
     let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
         .block_on(delta_provider_from_session_native(
             DeltaProviderFromSessionRequest {
-                session_ctx: &ctx.ctx,
+                session_ctx: &session_context_contract(ctx)?.ctx,
                 table_uri: &request.table_uri,
                 storage_options,
                 version: request.version,
@@ -864,9 +893,9 @@ fn register_dataset_provider(
 
     let table_name = request.table_name;
     if request.overwrite.unwrap_or(true) {
-        let _ = ctx.ctx.deregister_table(table_name.as_str());
+        let _ = session_context_contract(ctx)?.ctx.deregister_table(table_name.as_str());
     }
-    ctx.ctx
+    session_context_contract(ctx)?.ctx
         .register_table(table_name.as_str(), Arc::new(provider))
         .map_err(|err| {
             PyRuntimeError::new_err(format!(
@@ -923,7 +952,7 @@ fn udf_expr(
     py: Python<'_>,
     name: String,
     args: &Bound<'_, PyTuple>,
-    ctx: Option<PyRef<PySessionContext>>,
+    ctx: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyExpr> {
     let mut expr_args: Vec<Expr> = Vec::with_capacity(args.len());
     for item in args.iter() {
@@ -934,7 +963,8 @@ fn udf_expr(
         let scalar = py_obj_to_scalar_value(py, item.unbind())?;
         expr_args.push(lit(scalar));
     }
-    let expr = if let Some(ctx_ref) = ctx.as_ref() {
+    let ctx_contract = optional_session_context_contract(ctx)?;
+    let expr = if let Some(ctx_ref) = ctx_contract.as_ref() {
         let state = ctx_ref.ctx.state();
         let config_options = state.config_options();
         if let Some(registry) = state.function_registry() {
@@ -957,12 +987,12 @@ fn udf_expr(
 #[pyfunction]
 #[pyo3(signature = (ctx, allow_ddl = None, allow_dml = None, allow_statements = None))]
 fn install_codeanatomy_policy_config(
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     allow_ddl: Option<bool>,
     allow_dml: Option<bool>,
     allow_statements: Option<bool>,
 ) -> PyResult<()> {
-    let state_ref = ctx.ctx.state_ref();
+    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     let policy = ensure_policy_config(config.options_mut()).map_err(|err| {
@@ -983,10 +1013,10 @@ fn install_codeanatomy_policy_config(
 #[pyfunction]
 #[pyo3(signature = (ctx, enabled = None))]
 fn install_codeanatomy_physical_config(
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     enabled: Option<bool>,
 ) -> PyResult<()> {
-    let state_ref = ctx.ctx.state_ref();
+    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     let physical = ensure_physical_config(config.options_mut()).map_err(|err| {
@@ -999,20 +1029,20 @@ fn install_codeanatomy_physical_config(
 }
 
 #[pyfunction]
-fn install_planner_rules(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    install_policy_rules_native(&ctx.ctx)
+fn install_planner_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+    install_policy_rules_native(&session_context_contract(ctx)?.ctx)
         .map_err(|err| PyRuntimeError::new_err(format!("Planner rule install failed: {err}")))
 }
 
 #[pyfunction]
-fn install_physical_rules(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    install_physical_rules_native(&ctx.ctx)
+fn install_physical_rules(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+    install_physical_rules_native(&session_context_contract(ctx)?.ctx)
         .map_err(|err| PyRuntimeError::new_err(format!("Physical rule install failed: {err}")))
 }
 
 #[pyfunction(name = "registry_snapshot")]
-fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<Py<PyAny>> {
-    let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
+fn registry_snapshot_py(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let snapshot = registry_snapshot::registry_snapshot(&session_context_contract(ctx)?.ctx.state());
     let payload = PyDict::new(py);
     payload.set_item("scalar", PyList::new(py, snapshot.scalar)?)?;
     payload.set_item("aggregate", PyList::new(py, snapshot.aggregate)?)?;
@@ -1099,13 +1129,13 @@ fn registry_snapshot_py(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResul
     async_udf_batch_size = None
 ))]
 fn register_codeanatomy_udfs(
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     enable_async: bool,
     async_udf_timeout_ms: Option<u64>,
     async_udf_batch_size: Option<usize>,
 ) -> PyResult<()> {
     udf_registry::register_all_with_policy(
-        &ctx.ctx,
+        &session_context_contract(ctx)?.ctx,
         enable_async,
         async_udf_timeout_ms,
         async_udf_batch_size,
@@ -1119,9 +1149,9 @@ fn register_codeanatomy_udfs(
 #[pyfunction]
 fn session_context_contract_probe(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
+    let snapshot = registry_snapshot::registry_snapshot(&session_context_contract(ctx)?.ctx.state());
     let hash = registry_snapshot_hash(&snapshot)?;
     let payload = json!({
         "ok": true,
@@ -1150,13 +1180,13 @@ fn session_context_contract_probe(
 ))]
 fn install_codeanatomy_runtime(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     enable_async_udfs: bool,
     async_udf_timeout_ms: Option<u64>,
     async_udf_batch_size: Option<usize>,
 ) -> PyResult<Py<PyAny>> {
     udf_registry::register_all_with_policy(
-        &ctx.ctx,
+        &session_context_contract(ctx)?.ctx,
         enable_async_udfs,
         async_udf_timeout_ms,
         async_udf_batch_size,
@@ -1164,18 +1194,18 @@ fn install_codeanatomy_runtime(
     .map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to install CodeAnatomy runtime UDFs: {err}"))
     })?;
-    install_sql_macro_factory_native(&ctx.ctx).map_err(|err| {
+    install_sql_macro_factory_native(&session_context_contract(ctx)?.ctx).map_err(|err| {
         PyRuntimeError::new_err(format!(
             "Failed to install CodeAnatomy FunctionFactory runtime: {err}"
         ))
     })?;
     let planner_names = ["codeanatomy_domain"];
-    install_expr_planners_native(&ctx.ctx, &planner_names).map_err(|err| {
+    install_expr_planners_native(&session_context_contract(ctx)?.ctx, &planner_names).map_err(|err| {
         PyRuntimeError::new_err(format!(
             "Failed to install CodeAnatomy ExprPlanner runtime: {err}"
         ))
     })?;
-    let snapshot = registry_snapshot::registry_snapshot(&ctx.ctx.state());
+    let snapshot = registry_snapshot::registry_snapshot(&session_context_contract(ctx)?.ctx.state());
     let snapshot_json = serde_json::to_value(&snapshot).map_err(|err| {
         PyRuntimeError::new_err(format!(
             "Failed to serialize runtime snapshot payload: {err}"
@@ -1200,7 +1230,7 @@ fn install_codeanatomy_runtime(
 }
 
 #[pyfunction]
-fn udf_docs_snapshot(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<Py<PyAny>> {
+fn udf_docs_snapshot(py: Python<'_>, ctx: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let payload = PyDict::new(py);
     let add_doc = |name: &str, doc: &datafusion_expr::Documentation| -> PyResult<()> {
         let entry = PyDict::new(py);
@@ -1231,7 +1261,7 @@ fn udf_docs_snapshot(py: Python<'_>, ctx: PyRef<PySessionContext>) -> PyResult<P
         Ok(())
     };
 
-    let state = ctx.ctx.state();
+    let state = session_context_contract(ctx)?.ctx.state();
     let docs = udf_docs::registry_docs(&state);
     for (name, doc) in docs {
         add_doc(name.as_str(), doc)?;
@@ -1253,12 +1283,12 @@ fn load_df_plugin(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
 #[pyo3(signature = (ctx, plugin, options_json = None))]
 fn register_df_plugin_udfs(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     plugin: Py<PyAny>,
     options_json: Option<String>,
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
-    let config_payload = udf_config_payload_from_ctx(&ctx.ctx);
+    let config_payload = udf_config_payload_from_ctx(&session_context_contract(ctx)?.ctx);
     let mut options_value = if let Some(raw) = options_json.as_deref() {
         serde_json::from_str::<JsonValue>(raw)
             .map_err(|err| PyValueError::new_err(format!("Invalid UDF options JSON: {err}")))?
@@ -1282,7 +1312,7 @@ fn register_df_plugin_udfs(
             PyValueError::new_err(format!("Failed to encode UDF options: {err}"))
         })?);
     handle
-        .register_udfs(&ctx.ctx, options_json.as_deref())
+        .register_udfs(&session_context_contract(ctx)?.ctx, options_json.as_deref())
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
     Ok(())
 }
@@ -1290,11 +1320,11 @@ fn register_df_plugin_udfs(
 #[pyfunction]
 fn register_df_plugin_table_functions(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     plugin: Py<PyAny>,
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
-    handle.register_table_functions(&ctx.ctx).map_err(|err| {
+    handle.register_table_functions(&session_context_contract(ctx)?.ctx).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
     })?;
     Ok(())
@@ -1324,17 +1354,17 @@ fn create_df_plugin_table_provider(
 #[pyfunction]
 fn register_df_plugin_table_providers(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     plugin: Py<PyAny>,
     table_names: Option<Vec<String>>,
     options_json: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    install_delta_plan_codecs_inner(&ctx)?;
+    install_delta_plan_codecs_inner(&session_context_contract(ctx)?.ctx)?;
     let handle = extract_plugin_handle(py, &plugin)?;
     let mut resolved = HashMap::new();
     if let Some(options) = options_json {
         for (name, value) in options {
-            let injected = inject_delta_scan_defaults(&ctx.ctx, name.as_str(), Some(&value))
+            let injected = inject_delta_scan_defaults(&session_context_contract(ctx)?.ctx, name.as_str(), Some(&value))
                 .map_err(PyValueError::new_err)?;
             if let Some(injected) = injected {
                 resolved.insert(name, injected);
@@ -1346,7 +1376,7 @@ fn register_df_plugin_table_providers(
         .map_or(true, |names| names.iter().any(|name| name == "delta"));
     if wants_delta && !resolved.contains_key("delta") {
         if let Some(injected) =
-            inject_delta_scan_defaults(&ctx.ctx, "delta", None).map_err(PyValueError::new_err)?
+            inject_delta_scan_defaults(&session_context_contract(ctx)?.ctx, "delta", None).map_err(PyValueError::new_err)?
         {
             resolved.insert("delta".to_string(), injected);
         }
@@ -1357,7 +1387,7 @@ fn register_df_plugin_table_providers(
         Some(resolved)
     };
     handle
-        .register_table_providers(&ctx.ctx, table_names.as_deref(), resolved_options.as_ref())
+        .register_table_providers(&session_context_contract(ctx)?.ctx, table_names.as_deref(), resolved_options.as_ref())
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table providers: {err}"))
         })?;
@@ -1367,23 +1397,23 @@ fn register_df_plugin_table_providers(
 #[pyfunction]
 fn register_df_plugin(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     plugin: Py<PyAny>,
     table_names: Option<Vec<String>>,
     options_json: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let handle = extract_plugin_handle(py, &plugin)?;
     handle
-        .register_udfs(&ctx.ctx, None)
+        .register_udfs(&session_context_contract(ctx)?.ctx, None)
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to register plugin UDFs: {err}")))?;
-    handle.register_table_functions(&ctx.ctx).map_err(|err| {
+    handle.register_table_functions(&session_context_contract(ctx)?.ctx).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to register plugin table functions: {err}"))
     })?;
-    install_delta_plan_codecs_inner(&ctx)?;
+    install_delta_plan_codecs_inner(&session_context_contract(ctx)?.ctx)?;
     let resolved_options = if let Some(options) = options_json {
         let mut resolved = HashMap::with_capacity(options.len());
         for (name, value) in options {
-            let injected = inject_delta_scan_defaults(&ctx.ctx, name.as_str(), Some(&value))
+            let injected = inject_delta_scan_defaults(&session_context_contract(ctx)?.ctx, name.as_str(), Some(&value))
                 .map_err(PyValueError::new_err)?;
             if let Some(injected) = injected {
                 resolved.insert(name, injected);
@@ -1394,7 +1424,7 @@ fn register_df_plugin(
         None
     };
     handle
-        .register_table_providers(&ctx.ctx, table_names.as_deref(), resolved_options.as_ref())
+        .register_table_providers(&session_context_contract(ctx)?.ctx, table_names.as_deref(), resolved_options.as_ref())
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to register plugin table providers: {err}"))
         })?;
@@ -1808,7 +1838,7 @@ fn parquet_listing_table_provider(
 #[pyfunction]
 fn delta_table_provider_with_files(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -1842,7 +1872,7 @@ fn delta_table_provider_with_files(
     let (provider, snapshot, scan_config, add_actions) = runtime
         .block_on(delta_provider_with_files_native(
             DeltaProviderWithFilesRequest {
-                session_ctx: &ctx.ctx,
+                session_ctx: &session_context_contract(ctx)?.ctx,
                 table_uri: &table_uri,
                 storage_options: storage,
                 version,
@@ -1867,15 +1897,15 @@ fn delta_table_provider_with_files(
 }
 
 #[pyfunction]
-fn install_expr_planners(ctx: PyRef<PySessionContext>, planner_names: Vec<String>) -> PyResult<()> {
+fn install_expr_planners(ctx: &Bound<'_, PyAny>, planner_names: Vec<String>) -> PyResult<()> {
     let names: Vec<&str> = planner_names.iter().map(String::as_str).collect();
-    install_expr_planners_native(&ctx.ctx, &names)
+    install_expr_planners_native(&session_context_contract(ctx)?.ctx, &names)
         .map_err(|err| PyRuntimeError::new_err(format!("ExprPlanner install failed: {err}")))
 }
 
 #[pyfunction]
-fn install_tracing(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    let state_ref = ctx.ctx.state_ref();
+fn install_tracing(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
     let mut state = state_ref.write();
     let new_state = SessionStateBuilder::new_from_existing(state.clone())
         .with_physical_optimizer_rule(Arc::new(TracingMarkerRule))
@@ -1886,22 +1916,22 @@ fn install_tracing(ctx: PyRef<PySessionContext>) -> PyResult<()> {
 
 #[pyfunction]
 fn register_cache_tables(
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     config: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let snapshot_config = CacheSnapshotConfig::from_map(config);
-    register_cache_table_functions(&ctx.ctx, snapshot_config).map_err(|err| {
+    register_cache_table_functions(&session_context_contract(ctx)?.ctx, snapshot_config).map_err(|err| {
         PyRuntimeError::new_err(format!("Failed to register cache table functions: {err}"))
     })?;
     Ok(())
 }
 
 #[pyfunction]
-fn table_logical_plan(ctx: PyRef<PySessionContext>, table_name: String) -> PyResult<String> {
+fn table_logical_plan(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<String> {
     let runtime = Runtime::new()
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))?;
     let df = runtime
-        .block_on(ctx.ctx.table(table_name.as_str()))
+        .block_on(session_context_contract(ctx)?.ctx.table(table_name.as_str()))
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to resolve table {table_name:?}: {err}"))
         })?;
@@ -1909,11 +1939,11 @@ fn table_logical_plan(ctx: PyRef<PySessionContext>, table_name: String) -> PyRes
 }
 
 #[pyfunction]
-fn table_dfschema_tree(ctx: PyRef<PySessionContext>, table_name: String) -> PyResult<String> {
+fn table_dfschema_tree(ctx: &Bound<'_, PyAny>, table_name: String) -> PyResult<String> {
     let runtime = Runtime::new()
         .map_err(|err| PyRuntimeError::new_err(format!("Failed to create Tokio runtime: {err}")))?;
     let df = runtime
-        .block_on(ctx.ctx.table(table_name.as_str()))
+        .block_on(session_context_contract(ctx)?.ctx.table(table_name.as_str()))
         .map_err(|err| {
             PyRuntimeError::new_err(format!("Failed to resolve table {table_name:?}: {err}"))
         })?;
@@ -1921,8 +1951,8 @@ fn table_dfschema_tree(ctx: PyRef<PySessionContext>, table_name: String) -> PyRe
 }
 
 #[pyfunction]
-fn install_schema_evolution_adapter_factory(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    let state_ref = ctx.ctx.state_ref();
+fn install_schema_evolution_adapter_factory(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     ensure_physical_config(config.options_mut()).map_err(|err| {
@@ -2152,8 +2182,8 @@ fn register_cache_table_functions(ctx: &SessionContext, config: CacheSnapshotCon
 
 // Scope 1: Delta SQL DDL registration via DeltaTableFactory
 #[pyfunction]
-fn install_delta_table_factory(ctx: PyRef<PySessionContext>, alias: String) -> PyResult<()> {
-    let state_ref = ctx.ctx.state_ref();
+fn install_delta_table_factory(ctx: &Bound<'_, PyAny>, alias: String) -> PyResult<()> {
+    let state_ref = session_context_contract(ctx)?.ctx.state_ref();
     let mut state = state_ref.write();
     let factories = state.table_factories_mut();
     factories.insert(alias, Arc::new(DeltaTableFactory {}));
@@ -2397,14 +2427,14 @@ fn runtime_execution_metrics_payload(ctx: &SessionContext) -> JsonValue {
 #[pyfunction]
 fn runtime_execution_metrics_snapshot(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    json_to_py(py, &runtime_execution_metrics_payload(&ctx.ctx))
+    json_to_py(py, &runtime_execution_metrics_payload(&session_context_contract(ctx)?.ctx))
 }
 
 // Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
-fn install_delta_plan_codecs_inner(ctx: &PySessionContext) -> PyResult<()> {
-    let state_ref = ctx.ctx.state_ref();
+fn install_delta_plan_codecs_inner(ctx: &SessionContext) -> PyResult<()> {
+    let state_ref = ctx.state_ref();
     let mut state = state_ref.write();
     let config = state.config_mut();
     config.set_extension(Arc::new(DeltaLogicalCodec {}));
@@ -2414,8 +2444,8 @@ fn install_delta_plan_codecs_inner(ctx: &PySessionContext) -> PyResult<()> {
 
 // Scope 3: Install Delta logical/physical plan codecs via SessionConfig extensions
 #[pyfunction]
-fn install_delta_plan_codecs(ctx: PyRef<PySessionContext>) -> PyResult<()> {
-    install_delta_plan_codecs_inner(&ctx)
+fn install_delta_plan_codecs(ctx: &Bound<'_, PyAny>) -> PyResult<()> {
+    install_delta_plan_codecs_inner(&session_context_contract(ctx)?.ctx)
 }
 
 // Scope 8: Native Delta CDF TableProvider integration
@@ -2500,7 +2530,7 @@ fn delta_cdf_table_provider(
 #[pyfunction]
 fn delta_table_provider_from_session(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -2534,7 +2564,7 @@ fn delta_table_provider_from_session(
     let (provider, snapshot, scan_config, add_actions, predicate_error) = runtime
         .block_on(delta_provider_from_session_native(
             DeltaProviderFromSessionRequest {
-                session_ctx: &ctx.ctx,
+                session_ctx: &session_context_contract(ctx)?.ctx,
                 table_uri: &table_uri,
                 storage_options: storage,
                 version,
@@ -2562,7 +2592,7 @@ fn delta_table_provider_from_session(
 #[pyfunction]
 fn delta_scan_config_from_session(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     file_column_name: Option<String>,
     enable_parquet_pushdown: Option<bool>,
     schema_force_view_types: Option<bool>,
@@ -2576,7 +2606,7 @@ fn delta_scan_config_from_session(
         wrap_partition_values,
         schema_ipc,
     )?;
-    let session_state = ctx.ctx.state();
+    let session_state = session_context_contract(ctx)?.ctx.state();
     let scan_config = delta_scan_config_from_session_native(&session_state, None, overrides)
         .map_err(|err| {
             PyRuntimeError::new_err(format!(
@@ -2658,7 +2688,7 @@ fn delta_add_actions(
 #[pyfunction]
 fn delta_write_ipc(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -2699,7 +2729,7 @@ fn delta_write_ipc(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_write_ipc_native(DeltaWriteIpcRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -2720,7 +2750,7 @@ fn delta_write_ipc(
 #[pyfunction]
 fn delta_delete(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -2756,7 +2786,7 @@ fn delta_delete(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_delete_native(DeltaDeleteRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -2772,7 +2802,7 @@ fn delta_delete(
 #[pyfunction]
 fn delta_update(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -2815,7 +2845,7 @@ fn delta_update(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_update_native(DeltaUpdateRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -2832,7 +2862,7 @@ fn delta_update(
 #[pyfunction]
 fn delta_merge(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -2890,7 +2920,7 @@ fn delta_merge(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_merge_native(DeltaMergeRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -2916,7 +2946,7 @@ fn delta_merge(
 #[pyfunction]
 fn delta_optimize_compact(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -2958,7 +2988,7 @@ fn delta_optimize_compact(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_optimize_compact_native(DeltaOptimizeCompactRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -2974,7 +3004,7 @@ fn delta_optimize_compact(
 #[pyfunction]
 fn delta_vacuum(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -3015,7 +3045,7 @@ fn delta_vacuum(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_vacuum_native(DeltaVacuumRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -3034,7 +3064,7 @@ fn delta_vacuum(
 #[pyfunction]
 fn delta_restore(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -3070,7 +3100,7 @@ fn delta_restore(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_restore_native(DeltaRestoreRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -3087,7 +3117,7 @@ fn delta_restore(
 #[pyfunction]
 fn delta_set_properties(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -3128,7 +3158,7 @@ fn delta_set_properties(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_set_properties_native(DeltaSetPropertiesRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -3144,7 +3174,7 @@ fn delta_set_properties(
 #[pyfunction]
 fn delta_add_features(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -3186,7 +3216,7 @@ fn delta_add_features(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_add_features_native(DeltaAddFeaturesRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -3203,7 +3233,7 @@ fn delta_add_features(
 #[pyfunction]
 fn delta_add_constraints(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -3243,7 +3273,7 @@ fn delta_add_constraints(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_add_constraints_native(DeltaAddConstraintsRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -3259,7 +3289,7 @@ fn delta_add_constraints(
 #[pyfunction]
 fn delta_drop_constraints(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -3300,7 +3330,7 @@ fn delta_drop_constraints(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_drop_constraints_native(DeltaDropConstraintsRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,
@@ -3317,7 +3347,7 @@ fn delta_drop_constraints(
 #[pyfunction]
 fn delta_create_checkpoint(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -3337,7 +3367,7 @@ fn delta_create_checkpoint(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_create_checkpoint_native(
-            &ctx.ctx, &table_uri, storage, version, timestamp, gate,
+            &session_context_contract(ctx)?.ctx, &table_uri, storage, version, timestamp, gate,
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta checkpoint failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
@@ -3346,7 +3376,7 @@ fn delta_create_checkpoint(
 #[pyfunction]
 fn delta_cleanup_metadata(
     py: Python<'_>,
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -3366,7 +3396,7 @@ fn delta_cleanup_metadata(
     let runtime = runtime()?;
     let report = runtime
         .block_on(delta_cleanup_metadata_native(
-            &ctx.ctx, &table_uri, storage, version, timestamp, gate,
+            &session_context_contract(ctx)?.ctx, &table_uri, storage, version, timestamp, gate,
         ))
         .map_err(|err| PyRuntimeError::new_err(format!("Delta metadata cleanup failed: {err}")))?;
     maintenance_report_to_pydict(py, &report)
@@ -3375,7 +3405,7 @@ fn delta_cleanup_metadata(
 // Scope 2: DeltaDataChecker integration
 #[pyfunction]
 fn delta_data_checker(
-    ctx: PyRef<PySessionContext>,
+    ctx: &Bound<'_, PyAny>,
     table_uri: String,
     storage_options: Option<Vec<(String, String)>>,
     version: Option<i64>,
@@ -3397,7 +3427,7 @@ fn delta_data_checker(
     let runtime = runtime()?;
     runtime
         .block_on(delta_data_check_native(DeltaDataCheckRequest {
-            session_ctx: &ctx.ctx,
+            session_ctx: &session_context_contract(ctx)?.ctx,
             table_uri: &table_uri,
             storage_options: storage,
             version,

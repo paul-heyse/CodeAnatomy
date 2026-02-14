@@ -325,7 +325,7 @@ def replay_substrait_bytes(ctx: SessionContext, payload: bytes) -> DataFrame:
 
     """
     try:
-        import datafusion_ext
+        from datafusion_engine.extensions import datafusion_ext
     except ImportError as exc:
         msg = (
             "Substrait replay requires datafusion_ext.replay_substrait_plan. "

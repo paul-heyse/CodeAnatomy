@@ -32,7 +32,9 @@ def _nearest_workspace_root(
 ) -> Path | None:
     current = target_path if target_path.is_dir() else target_path.parent
     while True:
-        if _is_within(current, command_root) and any((current / marker).exists() for marker in markers):
+        if _is_within(current, command_root) and any(
+            (current / marker).exists() for marker in markers
+        ):
             return current
         if current == command_root:
             return None

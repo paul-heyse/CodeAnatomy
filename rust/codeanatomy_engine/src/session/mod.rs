@@ -4,6 +4,7 @@
 //! No ad-hoc post-build mutation.
 
 pub mod envelope;
+pub mod extraction;
 pub mod factory;
 pub mod format_policy;
 pub mod planning_manifest;

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from datafusion_engine.plan.execution_runtime import datafusion_write_options
+from datafusion_engine.plan.result_types import datafusion_write_options
 from schema_spec.policies import DataFusionWritePolicy
 from tests.test_helpers.optional_deps import require_datafusion_udfs
 

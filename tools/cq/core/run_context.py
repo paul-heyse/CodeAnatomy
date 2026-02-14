@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.schema import RunMeta, mk_runmeta
 from tools.cq.core.structs import CqStruct
+from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -19,6 +20,7 @@ class RunContext(CqStruct, frozen=True):
     argv: list[str]
     tc: Toolchain | None = None
     started_ms: float = 0.0
+    run_id: str | None = None
 
     @classmethod
     def from_parts(
@@ -28,6 +30,7 @@ class RunContext(CqStruct, frozen=True):
         argv: list[str] | None,
         tc: Toolchain | None,
         started_ms: float,
+        run_id: str | None = None,
     ) -> RunContext:
         """Construct a run context from common command inputs.
 
@@ -41,6 +44,7 @@ class RunContext(CqStruct, frozen=True):
             argv=list(argv) if argv else [],
             tc=tc,
             started_ms=started_ms,
+            run_id=run_id or uuid7_str(),
         )
 
     def to_runmeta(self, macro: str) -> RunMeta:
@@ -58,6 +62,7 @@ class RunContext(CqStruct, frozen=True):
             root=str(self.root),
             started_ms=self.started_ms,
             toolchain=toolchain,
+            run_id=self.run_id,
         )
 
 

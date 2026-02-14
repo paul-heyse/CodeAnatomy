@@ -113,61 +113,6 @@
       "skipped": 0,
       "timed_out": 0
     },
-    "step_summaries": {
-      "q_0": {
-        "front_door_degradation_lsp": {
-          "lsp": "skipped",
-          "notes": [
-            "not_attempted_runtime_disabled"
-          ],
-          "scan": "ok",
-          "scope_filter": "none"
-        },
-        "mode": "entity",
-        "pyrefly_telemetry": {
-          "applied": 0,
-          "attempted": 0,
-          "failed": 0,
-          "skipped": 0,
-          "timed_out": 0
-        },
-        "query": "entity=function name=resolve in=tests/e2e/cq/_golden_workspace/python_project/app",
-        "rust_lsp_telemetry": {
-          "applied": 0,
-          "attempted": 0,
-          "failed": 0,
-          "skipped": 0,
-          "timed_out": 0
-        }
-      },
-      "search_1": {
-        "front_door_degradation_lsp": {
-          "lsp": "skipped",
-          "notes": [
-            "not_attempted_by_design",
-            "not_attempted_runtime_disabled"
-          ],
-          "scan": "ok",
-          "scope_filter": "none"
-        },
-        "mode": "identifier",
-        "pyrefly_telemetry": {
-          "applied": 0,
-          "attempted": 0,
-          "failed": 0,
-          "skipped": 0,
-          "timed_out": 0
-        },
-        "query": "AsyncService",
-        "rust_lsp_telemetry": {
-          "applied": 0,
-          "attempted": 0,
-          "failed": 0,
-          "skipped": 0,
-          "timed_out": 0
-        }
-      }
-    },
     "steps": [
       "q_0",
       "search_1"

@@ -1,0 +1,100 @@
+   0.038256417s  INFO prepare_target{force=false package_id=applib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/app) target="applib"}: cargo::core::compiler::fingerprint: fingerprint error for applib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/app)/Check { test: false }/TargetInner { name: "applib", doc: true, ..: with_path("/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/app/src/main.rs", Edition2021) }
+   0.038973042s  INFO prepare_target{force=false package_id=applib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/app) target="applib"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/target/debug/.fingerprint/applib-49d1709a5d6c727d/bin-applib`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+   0.053883750s  INFO prepare_target{force=false package_id=corelib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core) target="corelib"}: cargo::core::compiler::fingerprint: fingerprint error for corelib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("corelib", ["lib"], "/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs", Edition2021) }
+   0.054059292s  INFO prepare_target{force=false package_id=corelib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core) target="corelib"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/target/debug/.fingerprint/corelib-f433adb65f56cf5e/lib-corelib`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.054261583s  INFO prepare_target{force=false package_id=applib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/app) target="applib"}: cargo::core::compiler::fingerprint: fingerprint error for applib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/app)/Check { test: true }/TargetInner { name: "applib", doc: true, ..: with_path("/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/app/src/main.rs", Edition2021) }
+   0.054266958s  INFO prepare_target{force=false package_id=applib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/app) target="applib"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/target/debug/.fingerprint/applib-787d64161530ee1d/test-bin-applib`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+   0.054455792s  INFO prepare_target{force=false package_id=corelib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core) target="corelib"}: cargo::core::compiler::fingerprint: fingerprint error for corelib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("corelib", ["lib"], "/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs", Edition2021) }
+   0.054461792s  INFO prepare_target{force=false package_id=corelib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core) target="corelib"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/target/debug/.fingerprint/corelib-8d6111ee06441b31/test-lib-corelib`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+    Checking corelib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core)
+    Checking applib v0.1.0 (/Users/paulheyse/CodeAnatomy/tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/app)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.34s

@@ -216,50 +216,6 @@ def _install_function_factory_with_async_fallback(
     return enable_async
 
 
-def _install_internal_compat_runtime(
-    internal: ModuleType,
-    *,
-    ctx: SessionContext,
-    enable_async: bool,
-    async_udf_timeout_ms: int | None,
-    async_udf_batch_size: int | None,
-) -> Mapping[str, object]:
-    from datafusion_engine.expr.planner import install_expr_planners
-    from datafusion_engine.udf.factory import FunctionFactoryPolicy, install_function_factory
-
-    install_udf_config = getattr(internal, "install_codeanatomy_udf_config", None)
-    udf_installed = False
-    if callable(install_udf_config):
-        _invoke_runtime_entrypoint(internal, "install_codeanatomy_udf_config", ctx=ctx)
-        udf_installed = True
-
-    def _install_async_policy() -> None:
-        install_function_factory(ctx, policy=FunctionFactoryPolicy(allow_async=True))
-
-    def _install_sync_policy() -> None:
-        install_function_factory(ctx, policy=FunctionFactoryPolicy(allow_async=False))
-
-    async_enabled = _install_function_factory_with_async_fallback(
-        install_with_async=_install_async_policy,
-        install_without_async=_install_sync_policy,
-        enable_async=enable_async,
-    )
-    planner_names = ("codeanatomy_domain",)
-    install_expr_planners(ctx, planner_names=planner_names)
-    return _build_runtime_install_payload(
-        install_mode="internal_compat",
-        snapshot={},
-        internal=internal,
-        udf_installed=udf_installed,
-        planner_names=planner_names,
-        async_config={
-            "enabled": async_enabled,
-            "timeout_ms": async_udf_timeout_ms,
-            "batch_size": async_udf_batch_size,
-        },
-    )
-
-
 def _missing_runtime_modular_entrypoints(internal: ModuleType) -> list[str]:
     return [
         name for name in _RUNTIME_MODULAR_ENTRYPOINTS if not callable(getattr(internal, name, None))
@@ -277,14 +233,6 @@ def _install_runtime_via_modular_entrypoints(
     register_udfs = getattr(internal, "register_codeanatomy_udfs", None)
     snapshot_fn = getattr(internal, "registry_snapshot", None)
     if not callable(register_udfs) or not callable(snapshot_fn):
-        if internal.__name__ == "datafusion._internal":
-            return _install_internal_compat_runtime(
-                internal,
-                ctx=ctx,
-                enable_async=enable_async,
-                async_udf_timeout_ms=async_udf_timeout_ms,
-                async_udf_batch_size=async_udf_batch_size,
-            )
         missing = _missing_runtime_modular_entrypoints(internal)
         missing_csv = ", ".join(missing)
         msg = (
@@ -510,16 +458,20 @@ def _install_rust_udfs(
 
 
 def _datafusion_internal() -> ModuleType:
-    for module_name in ("datafusion._internal", "datafusion_ext"):
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        if _module_supports_runtime_install(module):
-            return module
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:
+        msg = (
+            "The datafusion_ext extension module exposing install_codeanatomy_runtime or "
+            "the modular runtime entrypoint contract is required. "
+            "Rebuild and install matching datafusion/datafusion_ext wheels "
+            "(scripts/build_datafusion_wheels.sh + uv sync)."
+        )
+        raise ImportError(msg) from exc
+    if _module_supports_runtime_install(module):
+        return module
     msg = (
-        "A DataFusion extension module exposing install_codeanatomy_runtime or "
-        "the modular runtime entrypoint contract is required. "
+        "datafusion_ext is missing required runtime entrypoints. "
         "Rebuild and install matching datafusion/datafusion_ext wheels "
         "(scripts/build_datafusion_wheels.sh + uv sync)."
     )
@@ -527,13 +479,12 @@ def _datafusion_internal() -> ModuleType:
 
 
 def _extension_module_with_capabilities() -> ModuleType | None:
-    for module_name in ("datafusion._internal", "datafusion_ext"):
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        if callable(getattr(module, "capabilities_snapshot", None)):
-            return module
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError:
+        return None
+    if callable(getattr(module, "capabilities_snapshot", None)):
+        return module
     return None
 
 
@@ -1188,7 +1139,7 @@ def _build_docs_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     except (ImportError, AttributeError, TypeError, ValueError):
         return {}
     if not isinstance(snapshot, Mapping):
-        msg = "datafusion._internal.udf_docs_snapshot returned a non-mapping payload."
+        msg = "datafusion_ext.udf_docs_snapshot returned a non-mapping payload."
         raise TypeError(msg)
     return dict(snapshot)
 
@@ -1350,24 +1301,6 @@ def _async_udf_policy(
     return (enable_async, async_udf_timeout_ms, async_udf_batch_size)
 
 
-def _install_udf_config(ctx: SessionContext) -> None:
-    internal = _datafusion_internal()
-    installer = getattr(internal, "install_codeanatomy_udf_config", None)
-    if not callable(installer):
-        return
-    try:
-        _invoke_runtime_entrypoint(internal, "install_codeanatomy_udf_config", ctx=ctx)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        expected = {"major": _EXPECTED_PLUGIN_ABI_MAJOR, "minor": _EXPECTED_PLUGIN_ABI_MINOR}
-        msg = (
-            "Rust UDF config install failed due to SessionContext ABI mismatch. "
-            f"expected_plugin_abi={expected}. "
-            "Rebuild and install matching datafusion/datafusion_ext wheels "
-            "(scripts/build_datafusion_wheels.sh + uv sync)."
-        )
-        raise RuntimeError(msg) from exc
-
-
 def _registered_snapshot(
     ctx: SessionContext,
     *,
@@ -1418,7 +1351,6 @@ def register_rust_udfs(
     )
     if existing is not None:
         return existing
-    _install_udf_config(ctx)
     _install_rust_udfs(
         ctx,
         enable_async=enable_async,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.schema import extraction_schemas as _extraction_mod
 from datafusion_engine.schema import registry as schema_registry
 
 
@@ -14,7 +15,7 @@ def test_extract_schema_for_prefers_derived_when_shape_is_compatible(
     """Derived schemas should be returned when available."""
     derived = pa.schema([pa.field("file_id", pa.int64())])
 
-    monkeypatch.setattr(schema_registry, "_derived_extract_schema_for", lambda _name: derived)
+    monkeypatch.setattr(_extraction_mod, "_derived_extract_schema_for", lambda _name: derived)
 
     result = schema_registry.extract_schema_for("repo_files_v1")
     assert result == derived
@@ -24,7 +25,7 @@ def test_extract_schema_for_raises_when_derived_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Missing derived schemas should raise instead of static fallback."""
-    monkeypatch.setattr(schema_registry, "_derived_extract_schema_for", lambda _name: None)
+    monkeypatch.setattr(_extraction_mod, "_derived_extract_schema_for", lambda _name: None)
 
     with pytest.raises(KeyError, match="No derived extract schema available"):
         schema_registry.extract_schema_for("repo_files_v1")

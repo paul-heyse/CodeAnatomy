@@ -70,15 +70,6 @@
       "skipped": 0,
       "timed_out": 0
     },
-    "step_summaries": {
-      "neighborhood_0": {
-        "front_door_degradation_lsp": {},
-        "mode": null,
-        "pyrefly_telemetry": null,
-        "query": null,
-        "rust_lsp_telemetry": null
-      }
-    },
     "steps": [
       "neighborhood_0"
     ],

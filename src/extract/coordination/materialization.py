@@ -30,11 +30,11 @@ from datafusion_engine.plan.bundle_artifact import (
     PlanBundleOptions,
     build_plan_artifact,
 )
-from datafusion_engine.plan.execution_runtime import (
+from datafusion_engine.plan.result_types import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan.execution_runtime import (
+from datafusion_engine.plan.result_types import (
     execute_plan_artifact as execute_plan_artifact_helper,
 )
 from datafusion_engine.schema.contracts import SchemaContract

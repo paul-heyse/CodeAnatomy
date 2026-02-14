@@ -287,6 +287,7 @@ def _apply_candidate_lsp(
             file_path=target_file,
             line=max(1, int(anchor.line)),
             col=int(anchor.col or 0),
+            run_id=result.run.run_id,
             symbol_hint=(
                 str(finding.details.get("name"))
                 if isinstance(finding.details.get("name"), str)

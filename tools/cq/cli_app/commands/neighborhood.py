@@ -7,8 +7,10 @@ from typing import Annotated
 from cyclopts import App, Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.core.schema import mk_runmeta, ms
+from tools.cq.core.cache import maybe_evict_run_cache_tag
+from tools.cq.core.schema import assign_result_finding_ids, mk_runmeta, ms
 from tools.cq.core.snb_schema import SemanticNeighborhoodBundleV1
+from tools.cq.utils.uuid_factory import uuid7_str
 
 neighborhood_app = App(name="neighborhood", help="Analyze semantic neighborhood of a target")
 nb_app = App(name="nb", help="Analyze semantic neighborhood of a target (alias)")
@@ -36,20 +38,19 @@ def neighborhood(
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
     from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
     from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
-    from tools.cq.query.sg_parser import sg_scan
 
     if ctx is None:
         msg = "Context not injected"
         raise RuntimeError(msg)
 
     started = ms()
-
-    records = sg_scan(
-        paths=[ctx.root],
-        lang=lang if lang in {"python", "rust"} else "python",  # type: ignore[arg-type]
-        root=ctx.root,
+    run_id = uuid7_str()
+    resolved_lang = lang if lang in {"python", "rust"} else "python"
+    snapshot = ScanSnapshot.build_from_repo(
+        ctx.root,
+        lang=resolved_lang,
+        run_id=run_id,
     )
-    snapshot = ScanSnapshot.from_records(records)
 
     spec = parse_target_spec(target)
     resolved = resolve_target(
@@ -83,6 +84,7 @@ def neighborhood(
         root=str(ctx.root),
         started_ms=started,
         toolchain=ctx.toolchain.to_dict(),
+        run_id=run_id,
     )
 
     result = render_snb_result(
@@ -97,6 +99,8 @@ def neighborhood(
         )
     )
     result.summary["target_resolution_kind"] = resolved.resolution_kind
+    assign_result_finding_ids(result)
+    maybe_evict_run_cache_tag(root=ctx.root, language=resolved_lang, run_id=run_id)
 
     return CliResult(result=result, context=ctx, filters=None)
 

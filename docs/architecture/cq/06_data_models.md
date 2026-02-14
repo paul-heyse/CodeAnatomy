@@ -170,6 +170,9 @@ class Finding(msgspec.Struct):
     anchor: Anchor | None = None
     severity: Literal["info", "warning", "error"] = "info"
     details: DetailPayload = msgspec.field(default_factory=DetailPayload)
+    stable_id: str | None = None       # Deterministic semantic ID
+    execution_id: str | None = None    # Run-correlated ID
+    id_taxonomy: str | None = None     # e.g. "stable_execution"
 
     def __post_init__(self) -> None:
         """Normalize legacy dict details to DetailPayload."""
@@ -179,6 +182,9 @@ class Finding(msgspec.Struct):
 - category is free-form string (not enum) for extensibility
 - severity uses Literal for LSP-style levels
 - __post_init__ provides legacy compatibility by normalizing dict to DetailPayload
+- `stable_id` is content-derived and deterministic across reruns for equivalent findings
+- `execution_id` is run-scoped (`run_id + stable_id`) and changes per execution
+- `id_taxonomy` declares how IDs should be interpreted by downstream consumers
 
 **Category Taxonomy (Observed in Practice):**
 - `call_site` / `callsite` - Function invocation

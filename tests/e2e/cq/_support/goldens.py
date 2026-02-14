@@ -49,6 +49,8 @@ def _normalize_result_for_snapshot(result: CqResult) -> dict[str, Any]:
     if isinstance(summary, dict):
         summary.pop("cache", None)
         summary.pop("cache_stats", None)
+        summary.pop("cache_backend", None)
+        summary.pop("step_summaries", None)
 
     # Sort findings by file path and line number for deterministic ordering
     def _finding_sort_key(finding: dict[str, object]) -> tuple[str, int]:
@@ -120,6 +122,8 @@ def _scrub_unstable(value: object) -> object:
 
 def _scrub_mapping(value: dict[str, object]) -> dict[str, object]:
     scrubbed = {str(k): _scrub_unstable(v) for k, v in value.items()}
+    for id_key in ("stable_id", "execution_id", "id_taxonomy"):
+        scrubbed.pop(id_key, None)
 
     run = scrubbed.get("run")
     if isinstance(run, dict):
@@ -138,6 +142,8 @@ def _scrub_mapping(value: dict[str, object]) -> dict[str, object]:
     if isinstance(summary, dict):
         summary.pop("cache", None)
         summary.pop("cache_stats", None)
+        summary.pop("cache_backend", None)
+        summary.pop("step_summaries", None)
         summary.pop("timings", None)
         summary.pop("timing", None)
 

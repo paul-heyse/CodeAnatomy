@@ -9,6 +9,8 @@ from tools.cq.core.cache import (
     build_cache_key,
     build_cache_tag,
     build_run_cache_tag,
+    build_scope_hash,
+    canonicalize_cache_payload,
     close_cq_cache_backend,
     get_cq_cache_backend,
 )
@@ -29,7 +31,7 @@ def test_build_cache_key_is_deterministic() -> None:
         workspace="/repo",
         language="python",
         target="src/app.py",
-        extras={"line": 12, "col": 4},
+        extras={"col": 4, "line": 12},
     )
     key_c = build_cache_key(
         "lsp_front_door",
@@ -45,15 +47,35 @@ def test_build_cache_key_is_deterministic() -> None:
     assert key_a.startswith("cq:lsp_front_door:v2:")
 
 
+def test_canonicalize_cache_payload_sorts_unordered_values() -> None:
+    payload = canonicalize_cache_payload(
+        {
+            "b": {"z": {"x", "y"}},
+            "a": [3, 2, 1],
+        }
+    )
+    assert list(payload) == ["a", "b"]
+    assert payload["b"] == {"z": ["x", "y"]}
+
+
 def test_build_cache_tag() -> None:
-    assert build_cache_tag(workspace="/repo", language="rust") == "/repo:rust"
+    tag = build_cache_tag(workspace="/repo", language="rust")
+    assert tag.startswith("ws:")
+    assert "|lang:rust" in tag
 
 
 def test_build_run_cache_tag() -> None:
-    assert (
-        build_run_cache_tag(workspace="/repo", language="python", run_id="abc123")
-        == "/repo:python:run:abc123"
-    )
+    tag = build_run_cache_tag(workspace="/repo", language="python", run_id="abc123")
+    assert tag.startswith("ws:")
+    assert "|lang:python|" in tag
+    assert "run:" in tag
+
+
+def test_build_scope_hash_is_stable() -> None:
+    hash_a = build_scope_hash({"paths": ["a", "b"], "globs": ("*.py",)})
+    hash_b = build_scope_hash({"globs": ("*.py",), "paths": ["a", "b"]})
+    assert isinstance(hash_a, str)
+    assert hash_a == hash_b
 
 
 def test_cache_backend_roundtrip(tmp_path: Path) -> None:
@@ -62,13 +84,41 @@ def test_cache_backend_roundtrip(tmp_path: Path) -> None:
     os.environ["CQ_CACHE_ENABLED"] = "1"
 
     backend = get_cq_cache_backend(root=tmp_path)
-    backend.set("k", {"v": 1}, expire=30, tag="x")
-    value = backend.get("k")
+    assert backend.set("k", {"v": 1}, expire=30, tag="x") is True
+    assert backend.get("k") == {"v": 1}
 
-    assert value == {"v": 1}
-
-    backend.evict_tag("x")
+    assert backend.evict_tag("x") is True
     assert backend.get("k") is None
+
+    close_cq_cache_backend()
+    os.environ.pop("CQ_CACHE_DIR", None)
+    os.environ.pop("CQ_CACHE_ENABLED", None)
+
+
+def test_cache_backend_advanced_operations(tmp_path: Path) -> None:
+    close_cq_cache_backend()
+    os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache_adv")
+    os.environ["CQ_CACHE_ENABLED"] = "1"
+
+    backend = get_cq_cache_backend(root=tmp_path)
+    assert backend.add("counter", 1, expire=30, tag="x") is True
+    assert backend.add("counter", 2, expire=30, tag="x") is False
+    assert backend.incr("counter", 2, default=0) == 3
+    assert backend.decr("counter", 1, default=0) == 2
+
+    with backend.transact():
+        assert backend.set("k1", 1, expire=30, tag="x") is True
+        assert backend.set("k2", 2, expire=30, tag="x") is True
+
+    stats = backend.stats()
+    assert isinstance(stats, dict)
+    volume = backend.volume()
+    assert volume is None or isinstance(volume, int)
+    removed = backend.cull()
+    assert removed is None or isinstance(removed, int)
+
+    assert backend.delete("k1") is True
+    assert backend.get("k1") is None
 
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_DIR", None)
@@ -80,7 +130,7 @@ def test_cache_backend_noop_when_disabled(tmp_path: Path) -> None:
     os.environ["CQ_CACHE_ENABLED"] = "0"
 
     backend = get_cq_cache_backend(root=tmp_path)
-    backend.set("k", 1)
+    assert backend.set("k", 1) is False
     assert backend.get("k") is None
 
     close_cq_cache_backend()
@@ -129,8 +179,7 @@ def test_cache_backend_fails_open_on_corrupt_diskcache(
 
     monkeypatch.setattr(diskcache_backend, "FanoutCache", _raise_corrupt)
     backend = get_cq_cache_backend(root=tmp_path)
-    backend.set("k", {"v": 1})
-
+    assert backend.set("k", {"v": 1}) is False
     assert backend.get("k") is None
     assert attempts["count"] == 2
 

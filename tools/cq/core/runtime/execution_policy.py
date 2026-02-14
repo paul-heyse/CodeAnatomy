@@ -16,10 +16,14 @@ _DEFAULT_LSP_WORKERS = 4
 _DEFAULT_QUERY_PARTITION_WORKERS = 2
 _DEFAULT_CALLS_FILE_WORKERS = 4
 _DEFAULT_RUN_STEP_WORKERS = 4
+_DEFAULT_CACHE_SIZE_LIMIT_BYTES = 2_147_483_648
+_DEFAULT_CACHE_CULL_LIMIT = 16
+_DEFAULT_CACHE_EVICTION_POLICY = "least-recently-stored"
 _ENV_PREFIX = "CQ_RUNTIME_"
 
 
 PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
+NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
 PositiveFloat = Annotated[float, msgspec.Meta(gt=0.0)]
 
 
@@ -52,6 +56,14 @@ class CacheRuntimePolicy(CqSettingsStruct, frozen=True):
     ttl_seconds: PositiveInt = _DEFAULT_CACHE_TTL_SECONDS
     shards: PositiveInt = 8
     timeout_seconds: PositiveFloat = 0.05
+    evict_run_tag_on_exit: bool = False
+    namespace_ttl_seconds: dict[str, int] = msgspec.field(default_factory=dict)
+    namespace_enabled: dict[str, bool] = msgspec.field(default_factory=dict)
+    namespace_ephemeral: dict[str, bool] = msgspec.field(default_factory=dict)
+    size_limit_bytes: PositiveInt = _DEFAULT_CACHE_SIZE_LIMIT_BYTES
+    cull_limit: NonNegativeInt = _DEFAULT_CACHE_CULL_LIMIT
+    eviction_policy: str = _DEFAULT_CACHE_EVICTION_POLICY
+    statistics_enabled: bool = False
 
 
 class RuntimeExecutionPolicy(CqSettingsStruct, frozen=True):
@@ -64,6 +76,17 @@ class RuntimeExecutionPolicy(CqSettingsStruct, frozen=True):
 
 _DEF_BOOL_TRUE = {"1", "true", "yes", "on"}
 _DEF_BOOL_FALSE = {"0", "false", "no", "off"}
+
+
+def _parse_bool(raw: str | None) -> bool | None:
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if value in _DEF_BOOL_TRUE:
+        return True
+    if value in _DEF_BOOL_FALSE:
+        return False
+    return None
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -89,15 +112,88 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
 
 
 def _env_bool(name: str, *, default: bool) -> bool:
-    raw = os.getenv(f"{_ENV_PREFIX}{name}")
-    if raw is None:
+    parsed = _parse_bool(os.getenv(f"{_ENV_PREFIX}{name}"))
+    if parsed is None:
         return default
-    value = raw.strip().lower()
-    if value in _DEF_BOOL_TRUE:
-        return True
-    if value in _DEF_BOOL_FALSE:
-        return False
-    return default
+    return parsed
+
+
+def _namespace_from_env_suffix(suffix: str) -> str:
+    return suffix.strip("_").lower()
+
+
+def _env_namespace_ttls() -> dict[str, int]:
+    overrides: dict[str, int] = {}
+    prefix = f"{_ENV_PREFIX}CACHE_NAMESPACE_"
+    suffix = "_TTL_SECONDS"
+    for key, value in os.environ.items():
+        if not key.startswith(prefix) or not key.endswith(suffix):
+            continue
+        namespace = _namespace_from_env_suffix(key[len(prefix) : -len(suffix)])
+        if not namespace:
+            continue
+        try:
+            ttl = int(value)
+        except ValueError:
+            continue
+        if ttl > 0:
+            overrides[namespace] = ttl
+    legacy_prefix = f"{_ENV_PREFIX}CACHE_TTL_"
+    legacy_suffix = "_SECONDS"
+    for key, value in os.environ.items():
+        if not key.startswith(legacy_prefix) or not key.endswith(legacy_suffix):
+            continue
+        namespace = _namespace_from_env_suffix(key[len(legacy_prefix) : -len(legacy_suffix)])
+        if not namespace:
+            continue
+        try:
+            ttl = int(value)
+        except ValueError:
+            continue
+        if ttl > 0:
+            overrides[namespace] = ttl
+    return overrides
+
+
+def _env_namespace_enabled() -> dict[str, bool]:
+    overrides: dict[str, bool] = {}
+    prefix = f"{_ENV_PREFIX}CACHE_NAMESPACE_"
+    suffix = "_ENABLED"
+    for key, value in os.environ.items():
+        if not key.startswith(prefix) or not key.endswith(suffix):
+            continue
+        namespace = _namespace_from_env_suffix(key[len(prefix) : -len(suffix)])
+        if not namespace:
+            continue
+        parsed = _parse_bool(value)
+        if parsed is not None:
+            overrides[namespace] = parsed
+    legacy_prefix = f"{_ENV_PREFIX}CACHE_ENABLE_"
+    for key, value in os.environ.items():
+        if not key.startswith(legacy_prefix):
+            continue
+        namespace = _namespace_from_env_suffix(key[len(legacy_prefix) :])
+        if not namespace:
+            continue
+        parsed = _parse_bool(value)
+        if parsed is not None:
+            overrides[namespace] = parsed
+    return overrides
+
+
+def _env_namespace_ephemeral() -> dict[str, bool]:
+    overrides: dict[str, bool] = {}
+    prefix = f"{_ENV_PREFIX}CACHE_EPHEMERAL_"
+    for key, value in os.environ.items():
+        if not key.startswith(prefix):
+            continue
+        namespace = _namespace_from_env_suffix(key[len(prefix) :])
+        if not namespace:
+            continue
+        parsed = _parse_bool(value)
+        if parsed is not None:
+            overrides[namespace] = parsed
+    return overrides
 
 
 def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
@@ -145,6 +241,22 @@ def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
             ttl_seconds=_env_int("CACHE_TTL_SECONDS", _DEFAULT_CACHE_TTL_SECONDS),
             shards=_env_int("CACHE_SHARDS", 8),
             timeout_seconds=_env_float("CACHE_TIMEOUT_SECONDS", 0.05),
+            evict_run_tag_on_exit=_env_bool("CACHE_EVICT_RUN_TAG_ON_EXIT", default=False),
+            namespace_ttl_seconds=_env_namespace_ttls(),
+            namespace_enabled=_env_namespace_enabled(),
+            namespace_ephemeral=_env_namespace_ephemeral(),
+            size_limit_bytes=_env_int(
+                "CACHE_SIZE_LIMIT_BYTES",
+                _DEFAULT_CACHE_SIZE_LIMIT_BYTES,
+            ),
+            cull_limit=_env_int("CACHE_CULL_LIMIT", _DEFAULT_CACHE_CULL_LIMIT, minimum=0),
+            eviction_policy=(
+                os.getenv(f"{_ENV_PREFIX}CACHE_EVICTION_POLICY") or _DEFAULT_CACHE_EVICTION_POLICY
+            ),
+            statistics_enabled=(
+                _env_bool("CACHE_STATISTICS_ENABLED", default=False)
+                or _env_bool("CACHE_STATS_ENABLED", default=False)
+            ),
         ),
     )
 

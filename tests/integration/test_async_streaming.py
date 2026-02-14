@@ -9,7 +9,7 @@ import pyarrow as pa
 import pytest
 from datafusion.dataframe import DataFrame
 
-from datafusion_engine.plan.execution_runtime import datafusion_to_async_batches
+from datafusion_engine.plan.result_types import datafusion_to_async_batches
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.datafusion_runtime import df_ctx
 

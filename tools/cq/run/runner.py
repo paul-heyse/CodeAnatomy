@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -12,6 +12,8 @@ import msgspec
 
 from tools.cq.cli_app.context import CliContext
 from tools.cq.core.bootstrap import resolve_runtime_services
+from tools.cq.core.cache import maybe_evict_run_cache_tag
+from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
@@ -20,7 +22,7 @@ from tools.cq.core.multilang_orchestrator import (
 from tools.cq.core.requests import MergeResultsRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
-from tools.cq.core.schema import CqResult, Finding, mk_result, ms
+from tools.cq.core.schema import CqResult, Finding, assign_result_finding_ids, mk_result, ms
 from tools.cq.query.batch import build_batch_session, filter_files_for_scope, select_files_by_rel
 from tools.cq.query.batch_spans import collect_span_filters
 from tools.cq.query.execution_requests import (
@@ -37,10 +39,10 @@ from tools.cq.query.language import (
     QueryLanguage,
     QueryLanguageScope,
     expand_language_scope,
-    file_extensions_for_scope,
 )
 from tools.cq.query.parser import QueryParseError, parse_query
 from tools.cq.query.planner import ToolPlan, compile_query, scope_to_globs, scope_to_paths
+from tools.cq.query.sg_parser import list_scan_files
 from tools.cq.run.spec import (
     BytecodeSurfaceStep,
     CallsStep,
@@ -66,6 +68,7 @@ from tools.cq.search.multilang_diagnostics import (
     is_python_oriented_query_text,
 )
 from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
+from tools.cq.utils.uuid_factory import uuid7_str
 
 RUN_STEP_NON_FATAL_EXCEPTIONS = (
     OSError,
@@ -101,6 +104,7 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = Fa
         tc=ctx.toolchain,
         started_ms=ms(),
     )
+    run_id = run_ctx.run_id or uuid7_str()
     merged = mk_result(run_ctx.to_runmeta("run"))
     merged.summary["plan_version"] = plan.version
 
@@ -114,21 +118,36 @@ def execute_run_plan(plan: RunPlan, ctx: CliContext, *, stop_on_error: bool = Fa
         else:
             other_steps.append(step)
 
-    for step_id, result in _execute_q_steps(q_steps, plan, ctx, stop_on_error=stop_on_error):
+    for step_id, result in _execute_q_steps(
+        q_steps,
+        plan,
+        ctx,
+        stop_on_error=stop_on_error,
+        run_id=run_id,
+    ):
         merge_step_results(merged, step_id, result)
         executed_results.append((step_id, result))
 
     non_q_results = (
-        _execute_non_q_steps_serial(other_steps, plan, ctx, stop_on_error=stop_on_error)
+        _execute_non_q_steps_serial(
+            other_steps,
+            plan,
+            ctx,
+            run_id=run_id,
+            stop_on_error=stop_on_error,
+        )
         if stop_on_error
-        else _execute_non_q_steps_parallel(other_steps, plan, ctx)
+        else _execute_non_q_steps_parallel(other_steps, plan, ctx, run_id=run_id)
     )
     for step_id, result in non_q_results:
         merge_step_results(merged, step_id, result)
         executed_results.append((step_id, result))
 
     _populate_run_summary_metadata(merged, executed_results, total_steps=len(steps))
-
+    merged.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    assign_result_finding_ids(merged)
+    maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=run_id)
+    maybe_evict_run_cache_tag(root=ctx.root, language="rust", run_id=run_id)
     return merged
 
 
@@ -194,7 +213,7 @@ def _aggregate_run_lsp_telemetry(
 def _advanced_plane_signal_score(payload: dict[str, object]) -> int:
     score = 0
     for value in payload.values():
-        if isinstance(value, list | dict):
+        if isinstance(value, Mapping) or (isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))):
             score += len(value)
         elif isinstance(value, str) and value:
             score += 1
@@ -317,6 +336,7 @@ def _execute_q_steps(
     ctx: CliContext,
     *,
     stop_on_error: bool,
+    run_id: str,
 ) -> list[tuple[str, CqResult]]:
     results: list[tuple[str, CqResult]] = []
     if not steps:
@@ -349,6 +369,7 @@ def _execute_q_steps(
             ctx=ctx,
             stop_on_error=stop_on_error,
             results=results,
+            run_id=run_id,
         )
         if should_stop:
             return _collapse_parent_q_results(results, ctx=ctx)
@@ -387,9 +408,10 @@ def _run_grouped_q_batches(
     ctx: CliContext,
     stop_on_error: bool,
     results: list[tuple[str, CqResult]],
+    run_id: str,
 ) -> bool:
     for parsed_steps in grouped_steps.values():
-        batch_results = runner(parsed_steps, ctx, stop_on_error=stop_on_error)
+        batch_results = runner(parsed_steps, ctx, stop_on_error=stop_on_error, run_id=run_id)
         results.extend(batch_results)
         if stop_on_error and _results_have_error(batch_results):
             return True
@@ -470,6 +492,7 @@ def _execute_entity_q_steps(
     ctx: CliContext,
     *,
     stop_on_error: bool,
+    run_id: str,
 ) -> list[tuple[str, CqResult]]:
     if not ctx.toolchain.has_sgpy:
         return [
@@ -520,6 +543,7 @@ def _execute_entity_q_steps(
             paths=step.scope_paths,
             scope_globs=step.scope_globs,
             argv=ctx.argv,
+            run_id=run_id,
             query_text=step.step.query,
             match_spans=spans,
             symtable=session.symtable,
@@ -545,6 +569,7 @@ def _execute_pattern_q_steps(
     ctx: CliContext,
     *,
     stop_on_error: bool,
+    run_id: str,
 ) -> list[tuple[str, CqResult]]:
     if not ctx.toolchain.has_sgpy:
         return [
@@ -561,7 +586,7 @@ def _execute_pattern_q_steps(
         ]
     union_paths = _unique_paths([path for step in steps for path in step.scope_paths])
     lang = steps[0].plan.lang if steps else "python"
-    pattern_files = _tabulate_files(ctx.root, union_paths, lang_scope=lang)
+    pattern_files = _tabulate_files(ctx.root, union_paths, lang=lang)
     files_by_rel: dict[str, Path] = {}
     for path in pattern_files:
         try:
@@ -581,6 +606,7 @@ def _execute_pattern_q_steps(
             root=ctx.root,
             files=files,
             argv=ctx.argv,
+            run_id=run_id,
             query_text=step.step.query,
         )
         try:
@@ -782,9 +808,11 @@ def _collapse_parent_q_results(
     return collapsed
 
 
-def _execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext) -> CqResult:
+def _execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext, *, run_id: str) -> CqResult:
     if isinstance(step, SearchStep):
-        return _execute_search_step(step, plan, ctx)
+        return _execute_search_step(step, plan, ctx, run_id=run_id)
+    if isinstance(step, NeighborhoodStep):
+        return _execute_neighborhood_step(step, ctx, run_id=run_id)
 
     executor = _NON_SEARCH_DISPATCH.get(type(step))
     if executor is None:
@@ -795,10 +823,16 @@ def _execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext) -> CqResu
     return _apply_run_scope_filter(result, ctx.root, plan.in_dir, plan.exclude)
 
 
-def _execute_non_q_step_safe(step: RunStep, plan: RunPlan, ctx: CliContext) -> tuple[str, CqResult]:
+def _execute_non_q_step_safe(
+    step: RunStep,
+    plan: RunPlan,
+    ctx: CliContext,
+    *,
+    run_id: str,
+) -> tuple[str, CqResult]:
     step_id = step.id or step_type(step)
     try:
-        return step_id, _execute_non_q_step(step, plan, ctx)
+        return step_id, _execute_non_q_step(step, plan, ctx, run_id=run_id)
     except RUN_STEP_NON_FATAL_EXCEPTIONS as exc:
         return step_id, _error_result(step_id, step_type(step), exc, ctx)
 
@@ -808,11 +842,12 @@ def _execute_non_q_steps_serial(
     plan: RunPlan,
     ctx: CliContext,
     *,
+    run_id: str,
     stop_on_error: bool,
 ) -> list[tuple[str, CqResult]]:
     results: list[tuple[str, CqResult]] = []
     for step in steps:
-        step_id, result = _execute_non_q_step_safe(step, plan, ctx)
+        step_id, result = _execute_non_q_step_safe(step, plan, ctx, run_id=run_id)
         results.append((step_id, result))
         if stop_on_error and result.summary.get("error"):
             break
@@ -823,23 +858,34 @@ def _execute_non_q_steps_parallel(
     steps: list[RunStep],
     plan: RunPlan,
     ctx: CliContext,
+    *,
+    run_id: str,
 ) -> list[tuple[str, CqResult]]:
     if len(steps) <= 1:
-        return _execute_non_q_steps_serial(steps, plan, ctx, stop_on_error=False)
+        return _execute_non_q_steps_serial(steps, plan, ctx, run_id=run_id, stop_on_error=False)
     scheduler = get_worker_scheduler()
     if scheduler.policy.run_step_workers <= 1:
-        return _execute_non_q_steps_serial(steps, plan, ctx, stop_on_error=False)
-    futures = [scheduler.submit_io(_execute_non_q_step_safe, step, plan, ctx) for step in steps]
+        return _execute_non_q_steps_serial(steps, plan, ctx, run_id=run_id, stop_on_error=False)
+    futures = [
+        scheduler.submit_io(_execute_non_q_step_safe, step, plan, ctx, run_id=run_id)
+        for step in steps
+    ]
     batch = scheduler.collect_bounded(
         futures,
         timeout_seconds=max(1.0, float(len(steps)) * 60.0),
     )
     if batch.timed_out > 0:
-        return _execute_non_q_steps_serial(steps, plan, ctx, stop_on_error=False)
+        return _execute_non_q_steps_serial(steps, plan, ctx, run_id=run_id, stop_on_error=False)
     return batch.done
 
 
-def _execute_search_step(step: SearchStep, plan: RunPlan, ctx: CliContext) -> CqResult:
+def _execute_search_step(
+    step: SearchStep,
+    plan: RunPlan,
+    ctx: CliContext,
+    *,
+    run_id: str,
+) -> CqResult:
     if step.regex and step.literal:
         msg = "search step cannot set both regex and literal"
         raise RuntimeError(msg)
@@ -872,6 +918,7 @@ def _execute_search_step(step: SearchStep, plan: RunPlan, ctx: CliContext) -> Cq
             limits=SMART_SEARCH_LIMITS,
             tc=ctx.toolchain,
             argv=ctx.argv,
+            run_id=run_id,
         )
     )
 
@@ -1002,7 +1049,12 @@ def _execute_bytecode_surface(step: BytecodeSurfaceStep, ctx: CliContext) -> CqR
     return cmd_bytecode_surface(request)
 
 
-def _execute_neighborhood_step(step: NeighborhoodStep, ctx: CliContext) -> CqResult:
+def _execute_neighborhood_step(
+    step: NeighborhoodStep,
+    ctx: CliContext,
+    *,
+    run_id: str | None = None,
+) -> CqResult:
     """Execute a neighborhood step.
 
     Parameters
@@ -1022,17 +1074,19 @@ def _execute_neighborhood_step(step: NeighborhoodStep, ctx: CliContext) -> CqRes
     from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
     from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
     from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
-    from tools.cq.query.sg_parser import sg_scan
 
     started = ms()
+    active_run_id = run_id or uuid7_str()
+    resolved_lang: QueryLanguage = (
+        cast("QueryLanguage", step.lang) if step.lang in {"python", "rust"} else "python"
+    )
 
     # Build scan snapshot
-    records = sg_scan(
-        paths=[ctx.root],
-        lang=step.lang if step.lang in {"python", "rust"} else "python",  # type: ignore[arg-type]
-        root=ctx.root,
+    snapshot = ScanSnapshot.build_from_repo(
+        ctx.root,
+        lang=resolved_lang,
+        run_id=active_run_id,
     )
-    snapshot = ScanSnapshot.from_records(records)
 
     spec = parse_target_spec(step.target)
     resolved = resolve_target(
@@ -1069,6 +1123,7 @@ def _execute_neighborhood_step(step: NeighborhoodStep, ctx: CliContext) -> CqRes
         root=str(ctx.root),
         started_ms=started,
         toolchain=ctx.toolchain.to_dict(),
+        run_id=active_run_id,
     )
 
     result = render_snb_result(
@@ -1083,6 +1138,8 @@ def _execute_neighborhood_step(step: NeighborhoodStep, ctx: CliContext) -> CqRes
         )
     )
     result.summary["target_resolution_kind"] = resolved.resolution_kind
+    assign_result_finding_ids(result)
+    maybe_evict_run_cache_tag(root=ctx.root, language=resolved_lang, run_id=active_run_id)
     return result
 
 
@@ -1236,20 +1293,14 @@ def _tabulate_files(
     root: Path,
     paths: list[Path],
     *,
-    lang_scope: QueryLanguageScope,
+    lang: QueryLanguage,
 ) -> list[Path]:
-    from tools.cq.index.files import build_repo_file_index, tabulate_files
-    from tools.cq.index.repo import resolve_repo_context
-
-    repo_context = resolve_repo_context(root)
-    repo_index = build_repo_file_index(repo_context)
-    result = tabulate_files(
-        repo_index,
-        paths,
-        None,
-        extensions=file_extensions_for_scope(lang_scope),
+    return list_scan_files(
+        paths=paths,
+        root=root,
+        globs=None,
+        lang=lang,
     )
-    return result.files
 
 
 def _error_result(step_id: str, macro: str, exc: Exception, ctx: CliContext) -> CqResult:
@@ -1264,7 +1315,7 @@ def _error_result(step_id: str, macro: str, exc: Exception, ctx: CliContext) -> 
     result.key_findings.append(
         Finding(category="error", message=f"{step_id}: {exc}", severity="error")
     )
-    return result
+    return assign_result_finding_ids(result)
 
 
 def _has_query_tokens(query_string: str) -> bool:

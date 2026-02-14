@@ -5,17 +5,17 @@
     {
       "anchor": {
         "col": 0,
-        "end_col": 39,
-        "end_line": 651,
+        "end_col": 17,
+        "end_line": 788,
         "file": "tools/cq/query/executor.py",
-        "line": 605
+        "line": 736
       },
       "category": "definition",
       "details": {
         "data": {
-          "callee_count": 4,
+          "callee_count": 6,
           "caller_count": 0,
-          "calls_within": 4,
+          "calls_within": 6,
           "enclosing_scope": "<module>",
           "kind": "function",
           "language": "python",
@@ -27,7 +27,7 @@
           "confidence_score": 0.95,
           "evidence_kind": "resolved_ast",
           "impact_bucket": "low",
-          "impact_score": 0.0455
+          "impact_score": 0.0545
         }
       },
       "message": "function: execute_plan",
@@ -54,15 +54,15 @@
         {
           "anchor": {
             "col": 0,
-            "end_col": 39,
-            "end_line": 651,
+            "end_col": 17,
+            "end_line": 788,
             "file": "tools/cq/query/executor.py",
-            "line": 605
+            "line": 736
           },
           "category": "entity_neighborhood",
           "details": {
             "data": {
-              "callee_count": 4,
+              "callee_count": 6,
               "caller_count": 0,
               "enclosing_scope": "<module>",
               "language": "python",
@@ -74,10 +74,10 @@
               "confidence_score": 0.95,
               "evidence_kind": "resolved_ast",
               "impact_bucket": "low",
-              "impact_score": 0.0455
+              "impact_score": 0.0545
             }
           },
-          "message": "execute_plan: callers=0, callees=4, scope=<module>",
+          "message": "execute_plan: callers=0, callees=6, scope=<module>",
           "severity": "info"
         }
       ],
@@ -120,11 +120,11 @@
               "file_path": "tools/cq/query/executor.py",
               "kind": "definition",
               "name": "execute_plan",
-              "node_id": "entity:callee:tools/cq/query/executor.py:605:execute_plan"
+              "node_id": "entity:callee:tools/cq/query/executor.py:736:execute_plan"
             }
           ],
           "source": "lsp",
-          "total": 4
+          "total": 6
         },
         "callers": {
           "availability": "partial",
@@ -151,7 +151,7 @@
       "risk": {
         "counters": {
           "arg_shape_count": 0,
-          "callees": 4,
+          "callees": 6,
           "callers": 0,
           "closure_capture_count": 0,
           "files_with_calls": 0,
@@ -168,7 +168,7 @@
         "location": {
           "col": 0,
           "file": "tools/cq/query/executor.py",
-          "line": 605
+          "line": 736
         },
         "qualname": null,
         "selection_reason": "top_entity_result",

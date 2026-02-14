@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING
 
 from tools.cq.astgrep.rules import get_rules_for_types
 from tools.cq.astgrep.sgpy_scanner import RecordType, SgRecord, filter_records_by_type, scan_files
-from tools.cq.index.files import build_repo_file_index, tabulate_files
-from tools.cq.index.repo import resolve_repo_context
 from tools.cq.query.enrichment import SymtableEnricher
 from tools.cq.query.executor import (
     EntityCandidates,
@@ -21,10 +19,9 @@ from tools.cq.query.executor import (
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE,
     QueryLanguage,
-    file_extensions_for_language,
 )
 from tools.cq.query.planner import scope_to_globs, scope_to_paths
-from tools.cq.query.sg_parser import normalize_record_types
+from tools.cq.query.sg_parser import list_scan_files, normalize_record_types
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -60,15 +57,7 @@ def build_batch_session(
     BatchEntityQuerySession
         Session containing shared scan artifacts.
     """
-    repo_context = resolve_repo_context(root)
-    repo_index = build_repo_file_index(repo_context)
-    file_result = tabulate_files(
-        repo_index,
-        paths,
-        None,
-        extensions=file_extensions_for_language(lang),
-    )
-    files = file_result.files
+    files = list_scan_files(paths=paths, root=root, globs=None, lang=lang)
     files_by_rel = _index_files_by_rel(root, files)
 
     normalized_record_types = normalize_record_types(record_types)

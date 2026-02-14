@@ -30,6 +30,7 @@ class SearchConfig(CqStruct, frozen=True):
     argv: list[str] = msgspec.field(default_factory=list)
     tc: Toolchain | None = None
     started_ms: float = 0.0
+    run_id: str | None = None
 
 
 class SearchRequest(CqStruct, frozen=True):
@@ -46,6 +47,7 @@ class SearchRequest(CqStruct, frozen=True):
     tc: Toolchain | None = None
     argv: list[str] | None = None
     started_ms: float | None = None
+    run_id: str | None = None
 
 
 class CandidateSearchRequest(CqStruct, frozen=True):

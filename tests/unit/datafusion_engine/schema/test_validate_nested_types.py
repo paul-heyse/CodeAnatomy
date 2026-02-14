@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.schema import nested_views as _nested_mod
 from datafusion_engine.schema import registry as schema_registry
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ def test_validate_nested_types_skips_when_schema_authority_is_missing(
         msg = "No derived extract schema available"
         raise KeyError(msg)
 
-    monkeypatch.setattr(schema_registry, "extract_schema_for", _raise_missing)
+    monkeypatch.setattr(_nested_mod, "extract_schema_for", _raise_missing)
 
     with caplog.at_level(logging.WARNING):
         schema_registry.validate_nested_types(cast("SessionContext", ctx), "ast_nodes")
@@ -67,7 +68,7 @@ def test_validate_nested_types_keeps_mismatch_diagnostics(
     """Expected-vs-actual nested mismatch should still emit warning diagnostics."""
     ctx = _StubContext(pa.schema([pa.field("actual_field", pa.string())]))
     expected = pa.schema([pa.field("expected_field", pa.string())])
-    monkeypatch.setattr(schema_registry, "extract_schema_for", lambda _name: expected)
+    monkeypatch.setattr(_nested_mod, "extract_schema_for", lambda _name: expected)
 
     with caplog.at_level(logging.WARNING):
         schema_registry.validate_nested_types(cast("SessionContext", ctx), "ast_nodes")

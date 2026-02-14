@@ -193,6 +193,28 @@
 - Delta CDF UDTF accepts 1-5 args: (uri, start_version, end_version, start_timestamp, end_timestamp)
 - CDF scan range args go into `DeltaCdfScanOptions` fields; `delta_cdf_provider` version/timestamp params are for table snapshot loading
 
+## Schema Registry Decomposition (Wave 4B)
+- Split `registry.py` (4167 LOC) into 3 modules + re-export shim
+- `extraction_schemas.py` (1944 LOC): struct types, file schemas, schema resolution
+- `nested_views.py` (1025 LOC): NESTED_DATASET_INDEX, accessors, DataFrame builders
+- `observability_schemas.py` (1327 LOC): pipeline events, validation functions
+- `registry.py` (249 LOC): backward-compat re-export shim
+- CRITICAL: `__all__` must include ALL re-exported symbols or ruff F401 strips them
+- CRITICAL: monkeypatch tests that patch via registry module must be updated to patch canonical module
+  - Tests patching `registry._derived_extract_schema_for` must patch `extraction_schemas` instead
+  - Tests patching `registry.extract_schema_for` for validate_nested_types must patch `nested_views`
+- Private symbols `_semantic_validation_tables`, `_resolve_nested_row_schema_authority` re-exported for test access
+- pyright `cast()` needed for `pa.Schema.names` access when param typed as `object` (original used it too)
+
+## Session Runtime Decomposition (Wave 4A)
+- `session/features.py`: FeatureStateSnapshot, feature_state_snapshot, named_args_supported
+- `session/introspection.py`: standalone helpers taking profile as param (schema_introspector, metrics, traces, diskcache, cdf)
+- `session/config.py`: RE-EXPORT module (not canonical home) - avoids circular imports since presets use types from runtime.py
+- `session/__init__.py`: lazy __getattr__ re-exports from all new modules
+- `runtime.py` still re-exports extracted symbols for backward compat (83+ importers)
+- KEY: can't move preset constants OUT of runtime.py because they're used internally AND would create circular import
+- Cleaned up 4 dead imports from runtime.py after extraction
+
 ## Rust Engine Executor Modules (WS-P11/P13/P7)
 - `executor/mod.rs` registers: delta_writer, maintenance, metrics_collector, result, runner, tracing
 - Pre-existing build errors in param_compiler.rs (ScalarAndMetadata) and datafusion_ext (StringAggDetUdaf)

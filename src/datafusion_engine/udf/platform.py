@@ -55,7 +55,6 @@ from datafusion_engine.udf.runtime import (
     rust_udf_docs,
     rust_udf_snapshot_hash,
 )
-from utils.env_utils import env_bool
 
 
 @dataclass(frozen=True)
@@ -102,7 +101,6 @@ class RustUdfPlatformOptions:
 _FUNCTION_FACTORY_CTXS: WeakSet[SessionContext] = WeakSet()
 _EXPR_PLANNER_CTXS: WeakSet[SessionContext] = WeakSet()
 _LOGGER = logging.getLogger(__name__)
-_SOFT_FAIL_LOGGED: dict[str, bool] = {"expr_planners": False, "function_factory": False}
 
 
 def _install_function_factory(
@@ -263,7 +261,7 @@ def _strict_failure_message(
     return f"{status_label} installation failed; native extension is required. {status.error}"
 
 
-def install_rust_udf_platform(  # noqa: C901, PLR0912, PLR0914
+def install_rust_udf_platform(  # noqa: PLR0914
     ctx: SessionContext,
     *,
     options: RustUdfPlatformOptions | None = None,
@@ -349,20 +347,13 @@ def install_rust_udf_platform(  # noqa: C901, PLR0912, PLR0914
             planner_names=planner_names,
         )
     if resolved.strict:
-        allow_soft_fail = env_bool("CODEANATOMY_DIAGNOSTICS_BUNDLE", default=False)
         strict_checks = (
-            ("FunctionFactory", function_factory, "function_factory"),
-            ("ExprPlanner", expr_planners, "expr_planners"),
+            ("FunctionFactory", function_factory),
+            ("ExprPlanner", expr_planners),
         )
-        for label, status, log_key in strict_checks:
+        for label, status in strict_checks:
             msg = _strict_failure_message(label, status)
-            if msg is None:
-                continue
-            if allow_soft_fail:
-                if not _SOFT_FAIL_LOGGED[log_key]:
-                    _LOGGER.error(msg)
-                    _SOFT_FAIL_LOGGED[log_key] = True
-            else:
+            if msg is not None:
                 raise RuntimeError(msg)
     return RustUdfPlatform(
         snapshot=snapshot,

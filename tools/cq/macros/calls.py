@@ -7,6 +7,7 @@ keyword usage, and forwarding behavior.
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
+from tools.cq.core.cache import maybe_evict_run_cache_tag
 from tools.cq.core.definition_parser import extract_symbol_name
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
@@ -24,6 +26,7 @@ from tools.cq.core.schema import (
     Finding,
     ScoreDetails,
     Section,
+    assign_result_finding_ids,
     mk_result,
     ms,
 )
@@ -37,7 +40,6 @@ from tools.cq.macros.calls_target import attach_target_metadata, infer_target_la
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file, list_scan_files, sg_scan
 from tools.cq.search import INTERACTIVE, find_call_candidates
 from tools.cq.search.adapter import find_def_lines, find_files_with_pattern
-from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from tools.cq.core.front_door_insight import (
@@ -194,6 +196,7 @@ class CallsLspRequest:
     target_language: QueryLanguage | None
     symbol_hint: str
     preview_per_slice: int
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -770,6 +773,18 @@ def _render_selected_context_lines(source_lines: list[str], selected: list[int])
     return rendered
 
 
+def _stable_callsite_id(
+    *,
+    file: str,
+    line: int,
+    col: int,
+    callee: str,
+    context: str,
+) -> str:
+    seed = f"{file}:{line}:{col}:{callee}:{context}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:24]
+
+
 class CallFinder(ast.NodeVisitor):
     """Find all calls to a specific function."""
 
@@ -805,7 +820,13 @@ class CallFinder(ast.NodeVisitor):
                     resolution_path="",
                     binding="unresolved",
                     target_names=[],
-                    call_id=uuid7_str(),
+                    call_id=_stable_callsite_id(
+                        file=self.file,
+                        line=node.lineno,
+                        col=node.col_offset,
+                        callee=callee,
+                        context=context,
+                    ),
                     hazards=hazards,
                 )
             )
@@ -1128,7 +1149,13 @@ def _build_rust_call_site_from_record(
         resolution_path="ast_grep_rust",
         binding="ok",
         target_names=[target_symbol],
-        call_id=uuid7_str(),
+        call_id=_stable_callsite_id(
+            file=rel_path,
+            line=record.start_line,
+            col=record.start_col,
+            callee=callee,
+            context="<module>",
+        ),
         hazards=[],
         symtable_info=None,
         bytecode_info=None,
@@ -1210,7 +1237,13 @@ def _build_call_site_from_record(
         resolution_path="",
         binding="unresolved",
         target_names=[],
-        call_id=uuid7_str(),
+        call_id=_stable_callsite_id(
+            file=ctx.rel_path,
+            line=record.start_line,
+            col=record.start_col,
+            callee=callee,
+            context=context,
+        ),
         hazards=hazards,
         symtable_info=enrichment.get("symtable"),
         bytecode_info=enrichment.get("bytecode"),
@@ -1745,6 +1778,7 @@ def _apply_calls_lsp(
                     file_path=request.target_file_path,
                     line=max(1, request.target_line),
                     col=0,
+                    run_id=request.run_id,
                     symbol_hint=request.symbol_hint,
                 )
             )
@@ -1933,6 +1967,7 @@ def _build_calls_front_door_state(
         score=score,
         preview_limit=_CALLS_TARGET_CALLEE_PREVIEW,
         target_language=resolved_target_language,
+        run_id=result.run.run_id,
     )
     neighborhood, neighborhood_findings, degradation_notes = _build_calls_neighborhood(
         CallsNeighborhoodRequest(
@@ -2071,6 +2106,7 @@ def _apply_calls_lsp_with_telemetry(
             target_language=state.target_language,
             symbol_hint=symbol_hint,
             preview_per_slice=_FRONT_DOOR_PREVIEW_PER_SLICE,
+            run_id=result.run.run_id,
         ),
     )
     return insight, (attempted, applied, failed, timed_out), reasons
@@ -2253,4 +2289,9 @@ def cmd_calls(
     )
     scan_result = _scan_call_sites(ctx.root, ctx.function_name)
     result = _build_calls_result(ctx, scan_result, started_ms=started)
-    return _apply_rust_fallback(result, ctx.root, ctx.function_name)
+    result = _apply_rust_fallback(result, ctx.root, ctx.function_name)
+    assign_result_finding_ids(result)
+    if result.run.run_id:
+        maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=result.run.run_id)
+        maybe_evict_run_cache_tag(root=ctx.root, language="rust", run_id=result.run.run_id)
+    return result

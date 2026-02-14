@@ -8,11 +8,11 @@ import pyarrow as pa
 
 from datafusion_engine.lineage.datafusion import extract_lineage
 from datafusion_engine.lineage.scan import ScanUnit, plan_scan_unit
-from datafusion_engine.plan.execution_runtime import (
+from datafusion_engine.plan.result_types import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan.execution_runtime import (
+from datafusion_engine.plan.result_types import (
     execute_plan_artifact as execute_plan_artifact_helper,
 )
 from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult

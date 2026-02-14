@@ -183,3 +183,26 @@
 
 ### Test Results
 - All 298 unit tests + 51 integration/e2e/doc tests pass (349 total, 0 failures)
+
+## Wave 4A: Session Runtime Decomposition (2026-02-13)
+
+### What Was Done
+Extracted 3 new modules from `session/runtime.py` (8,476 LOC, 194 top-level defs):
+
+1. **`features.py`** (123 LOC) - Canonical home for `FeatureStateSnapshot`, `feature_state_snapshot()`, `named_args_supported()`
+2. **`introspection.py`** (213 LOC) - Standalone introspection helpers: `schema_introspector_for_profile`, `collect_datafusion_*`, `run_diskcache_maintenance`, `evict_diskcache_entries`, `register_cdf_inputs_for_profile`
+3. **`config.py`** (54 LOC) - Re-export module for presets/constants (not canonical definitions)
+4. **`__init__.py`** updated with lazy `__getattr__` re-exports for all new module symbols
+
+### Critical Design Decision: config.py as re-export, not canonical home
+Preset constants (DEFAULT_DF_POLICY, etc.) are used internally by runtime.py AND reference types defined in runtime.py. Moving definitions to config.py would create circular imports. Solution: keep canonical definitions in runtime.py; config.py re-exports for clean import paths.
+
+### Import Chain
+- `features.py` imports `DeterminismTier`, `StructBaseCompat`; TYPE_CHECKING-only import of `DataFusionRuntimeProfile`
+- `introspection.py` imports from `cache.diskcache_factory`, `datafusion_engine.lineage.diagnostics`, `datafusion_engine.schema.introspection`; TYPE_CHECKING for `DataFusionRuntimeProfile`, `ManifestDatasetResolver`
+- `config.py` imports everything from `runtime.py` (one-way, no circular)
+- `runtime.py` imports from `features.py` and `introspection.py` (re-exports at module level for backward compat)
+- Removed 4 now-unused imports from runtime.py: `evict_cache_tag`, `run_profile_maintenance`, `DeterminismTier`, `StructBaseCompat`
+
+### Type Fix
+- `introspection.py:register_cdf_inputs_for_profile` param `dataset_resolver` typed as `object | None` initially; fixed to `ManifestDatasetResolver | None` to match downstream `register_cdf_inputs()` signature (pyrefly caught this)

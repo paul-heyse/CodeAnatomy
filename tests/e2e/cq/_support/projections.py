@@ -86,7 +86,7 @@ def _project_step_summaries(summary: dict[str, object]) -> dict[str, Any]:
         if not isinstance(step_id, str) or not isinstance(step_summary, dict):
             continue
         insight = step_summary.get("front_door_insight")
-        degradation = {}
+        degradation: dict[str, object] = {}
         if isinstance(insight, dict):
             maybe_degradation = insight.get("degradation")
             if isinstance(maybe_degradation, dict):

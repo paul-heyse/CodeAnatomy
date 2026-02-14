@@ -284,10 +284,14 @@ def test_extract_context_snippet_prioritizes_anchor_block() -> None:
 
 
 def test_calls_payload_reason_normalizes_pyrefly_timeout() -> None:
-    payload = {"coverage": {"status": "not_resolved", "reason": "timeout"}}
+    payload: dict[str, object] = {
+        "coverage": {"status": "not_resolved", "reason": "timeout"},
+    }
     assert _calls_payload_reason("python", payload) == "request_timeout"
 
 
 def test_calls_payload_reason_uses_fallback_for_rust() -> None:
     payload: dict[str, object] = {}
-    assert _calls_payload_reason("rust", payload, fallback_reason="request_failed") == "request_failed"
+    assert (
+        _calls_payload_reason("rust", payload, fallback_reason="request_failed") == "request_failed"
+    )

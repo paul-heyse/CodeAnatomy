@@ -5,6 +5,7 @@ Executes ToolPlans and returns CqResult objects.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,8 +17,29 @@ from ast_grep_py import Config, Rule, SgRoot
 
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
 from tools.cq.core.bootstrap import resolve_runtime_services
-from tools.cq.core.cache import build_cache_key, build_cache_tag, get_cq_cache_backend
-from tools.cq.core.cache.contracts import QueryEntityScanCacheV1, SgRecordCacheV1
+from tools.cq.core.cache import (
+    build_cache_key,
+    build_scope_hash,
+    build_scope_snapshot_fingerprint,
+    default_cache_policy,
+    file_content_hash,
+    get_cq_cache_backend,
+    is_namespace_cache_enabled,
+    maybe_evict_run_cache_tag,
+    resolve_namespace_ttl_seconds,
+    resolve_write_cache_tag,
+    snapshot_backend_metrics,
+)
+from tools.cq.core.cache.contracts import (
+    PatternFragmentCacheV1,
+    QueryEntityScanCacheV1,
+    SgRecordCacheV1,
+)
+from tools.cq.core.cache.telemetry import (
+    record_cache_decode_failure,
+    record_cache_get,
+    record_cache_set,
+)
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.multilang_orchestrator import (
@@ -35,6 +57,7 @@ from tools.cq.core.schema import (
     Finding,
     RunMeta,
     Section,
+    assign_result_finding_ids,
     mk_result,
     ms,
 )
@@ -56,16 +79,18 @@ from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE,
     QueryLanguage,
     QueryLanguageScope,
+    expand_language_scope,
     file_extensions_for_language,
     file_extensions_for_scope,
 )
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
-from tools.cq.query.sg_parser import filter_records_by_kind, sg_scan
+from tools.cq.query.sg_parser import filter_records_by_kind, list_scan_files, sg_scan
 from tools.cq.search import SearchLimits, find_files_with_pattern
 from tools.cq.search.multilang_diagnostics import (
     build_language_capabilities,
 )
 from tools.cq.utils.interval_index import FileIntervalIndex, IntervalIndex
+from tools.cq.utils.uuid_factory import uuid7_str
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode
@@ -214,6 +239,7 @@ def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
         argv=ctx.argv,
         tc=ctx.tc,
         started_ms=ctx.started_ms,
+        run_id=ctx.run_id,
     )
     return run_ctx.to_runmeta("q")
 
@@ -303,7 +329,7 @@ def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
     result.summary.update(_summary_common_for_context(ctx))
     result.summary["error"] = message
     _finalize_single_scope_summary(ctx, result)
-    return result
+    return assign_result_finding_ids(result)
 
 
 def _resolve_entity_paths(
@@ -321,49 +347,113 @@ def _scan_entity_records(
     paths: list[Path],
     scope_globs: list[str] | None,
 ) -> list[SgRecord]:
-    cache = get_cq_cache_backend(root=ctx.root)
-    cache_key = build_cache_key(
-        "query_entity_scan",
-        version="v1",
-        workspace=str(ctx.root.resolve()),
-        language=ctx.plan.lang,
-        target=ctx.query.entity or "entity",
-        extras={
-            "paths": [str(path) for path in paths],
-            "scope_globs": list(scope_globs or []),
-            "record_types": list(ctx.plan.sg_record_types),
-            "name": ctx.query.name or "",
-            "pattern": (
-                ctx.query.pattern_spec.pattern if ctx.query.pattern_spec is not None else ""
-            ),
-        },
-    )
-    cached = cache.get(cache_key)
-    if isinstance(cached, dict):
-        try:
-            payload = msgspec.convert(cached, type=QueryEntityScanCacheV1)
-            return [_cache_record_to_record(row) for row in payload.records]
-        except (RuntimeError, TypeError, ValueError):
-            pass
-
-    records = sg_scan(
+    namespace = "query_entity_fragment"
+    resolved_root = ctx.root.resolve()
+    files = list_scan_files(
         paths=paths,
-        record_types=ctx.plan.sg_record_types,
-        root=ctx.root,
+        root=resolved_root,
         globs=scope_globs,
         lang=ctx.plan.lang,
     )
-    cache.set(
-        cache_key,
-        contract_to_builtins(
-            QueryEntityScanCacheV1(
-                records=[_record_to_cache_record(record) for record in records],
-            )
-        ),
-        expire=900,
-        tag=build_cache_tag(workspace=str(ctx.root.resolve()), language=ctx.plan.lang),
+    if not files:
+        return []
+
+    record_types = tuple(sorted(ctx.plan.sg_record_types))
+    scope_hash = build_scope_hash(
+        {
+            "paths": tuple(sorted(str(path.resolve()) for path in paths)),
+            "scope_globs": tuple(scope_globs or ()),
+            "record_types": record_types,
+            "lang": ctx.plan.lang,
+        }
     )
-    return records
+    snapshot = build_scope_snapshot_fingerprint(
+        root=resolved_root,
+        files=files,
+        language=ctx.plan.lang,
+        scope_globs=scope_globs or [],
+        scope_roots=paths,
+    )
+    policy = default_cache_policy(root=resolved_root)
+    cache = get_cq_cache_backend(root=resolved_root)
+    cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
+    ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=namespace)
+
+    records_by_rel: dict[str, list[SgRecord]] = {}
+    misses: list[tuple[Path, str, str]] = []
+
+    for file_path in files:
+        rel_path = _normalize_match_file(str(file_path), resolved_root)
+        file_hash = file_content_hash(file_path).digest
+        fragment_key = build_cache_key(
+            namespace,
+            version="v1",
+            workspace=str(resolved_root),
+            language=ctx.plan.lang,
+            target=rel_path,
+            extras={
+                "file_content_hash": file_hash,
+                "record_types": record_types,
+            },
+        )
+        if cache_enabled and file_hash:
+            cached = cache.get(fragment_key)
+            record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=fragment_key)
+            if isinstance(cached, dict):
+                try:
+                    payload = msgspec.convert(cached, type=QueryEntityScanCacheV1)
+                    records_by_rel[rel_path] = [
+                        _cache_record_to_record(row) for row in payload.records
+                    ]
+                    continue
+                except (RuntimeError, TypeError, ValueError):
+                    record_cache_decode_failure(namespace=namespace)
+        misses.append((file_path, rel_path, fragment_key))
+
+    if misses:
+        scanned = sg_scan(
+            paths=[item[0] for item in misses],
+            record_types=ctx.plan.sg_record_types,
+            root=resolved_root,
+            globs=None,
+            lang=ctx.plan.lang,
+        )
+        grouped = group_records_by_file(scanned)
+        tag = resolve_write_cache_tag(
+            policy=policy,
+            workspace=str(resolved_root),
+            language=ctx.plan.lang,
+            namespace=namespace,
+            scope_hash=scope_hash,
+            snapshot=snapshot.digest,
+            run_id=ctx.run_id,
+        )
+        with cache.transact():
+            for _file_path, rel_path, fragment_key in misses:
+                fragment_records = sorted(
+                    grouped.get(rel_path, []),
+                    key=_record_sort_key,
+                )
+                records_by_rel[rel_path] = fragment_records
+                if not cache_enabled:
+                    continue
+                payload = QueryEntityScanCacheV1(
+                    records=[_record_to_cache_record(record) for record in fragment_records]
+                )
+                ok = cache.set(
+                    fragment_key,
+                    contract_to_builtins(payload),
+                    expire=ttl_seconds,
+                    tag=tag,
+                )
+                record_cache_set(namespace=namespace, ok=ok, key=fragment_key)
+
+    ordered_records: list[SgRecord] = []
+    for file_path in files:
+        rel_path = _normalize_match_file(str(file_path), resolved_root)
+        ordered_records.extend(records_by_rel.get(rel_path, []))
+    ordered_records.sort(key=_record_sort_key)
+    return ordered_records
 
 
 def _record_to_cache_record(record: SgRecord) -> SgRecordCacheV1:
@@ -391,6 +481,42 @@ def _cache_record_to_record(payload: SgRecordCacheV1) -> SgRecord:
         end_col=payload.end_col,
         text=payload.text,
         rule_id=payload.rule_id,
+    )
+
+
+def _record_sort_key(record: SgRecord) -> tuple[str, int, int, str, str, str, str]:
+    return (
+        record.file,
+        int(record.start_line),
+        int(record.start_col),
+        record.record,
+        record.kind,
+        record.rule_id,
+        record.text,
+    )
+
+
+def _finding_sort_key(finding: Finding) -> tuple[str, int, int, str]:
+    if finding.anchor is None:
+        return ("", 0, 0, finding.message)
+    return (
+        finding.anchor.file,
+        int(finding.anchor.line),
+        int(finding.anchor.col or 0),
+        finding.message,
+    )
+
+
+def _raw_match_sort_key(row: dict[str, object]) -> tuple[str, int, int, str]:
+    file = row.get("file")
+    line = row.get("line")
+    col = row.get("col")
+    rule_id = row.get("ruleId")
+    return (
+        str(file) if isinstance(file, str) else "",
+        int(line) if isinstance(line, int) else 0,
+        int(col) if isinstance(col, int) else 0,
+        str(rule_id) if isinstance(rule_id, str) else "",
     )
 
 
@@ -494,6 +620,11 @@ def _tabulate_scope_files(
     lang: QueryLanguage,
     explain: bool,
 ) -> FileTabulationResult:
+    if not explain:
+        return FileTabulationResult(
+            files=list_scan_files(paths=paths, root=root, globs=scope_globs, lang=lang),
+            decisions=[],
+        )
     repo_context = resolve_repo_context(root)
     repo_index = build_repo_file_index(repo_context)
     return tabulate_files(
@@ -609,6 +740,7 @@ def execute_plan(
     root: Path,
     argv: list[str] | None = None,
     query_text: str | None = None,
+    run_id: str | None = None,
 ) -> CqResult:
     """Execute a ToolPlan and return results.
 
@@ -630,6 +762,7 @@ def execute_plan(
     CqResult
         Query results
     """
+    active_run_id = run_id or uuid7_str()
     if query.lang_scope == "auto":
         return _execute_auto_scope_plan(
             query,
@@ -637,6 +770,7 @@ def execute_plan(
             root=root,
             argv=argv or [],
             query_text=query_text,
+            run_id=active_run_id,
         )
 
     ctx = QueryExecutionContext(
@@ -646,9 +780,12 @@ def execute_plan(
         root=root,
         argv=argv or [],
         started_ms=ms(),
+        run_id=active_run_id,
         query_text=query_text,
     )
-    return _execute_single_context(ctx)
+    result = _execute_single_context(ctx)
+    maybe_evict_run_cache_tag(root=root, language=plan.lang, run_id=active_run_id)
+    return result
 
 
 def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
@@ -664,6 +801,7 @@ def _execute_auto_scope_plan(
     root: Path,
     argv: list[str],
     query_text: str | None = None,
+    run_id: str,
 ) -> CqResult:
 
     results = execute_by_language_scope(
@@ -674,9 +812,10 @@ def _execute_auto_scope_plan(
             tc=tc,
             root=root,
             argv=argv,
+            run_id=run_id,
         ),
     )
-    return merge_auto_scope_query_results(
+    merged = merge_auto_scope_query_results(
         query=query,
         results=results,
         root=root,
@@ -684,6 +823,11 @@ def _execute_auto_scope_plan(
         tc=tc,
         summary_common=_summary_common_for_query(query, query_text=query_text),
     )
+    merged.summary["cache_backend"] = snapshot_backend_metrics(root=root)
+    assign_result_finding_ids(merged)
+    for lang in expand_language_scope(query.lang_scope):
+        maybe_evict_run_cache_tag(root=root, language=lang, run_id=run_id)
+    return merged
 
 
 def _run_scoped_auto_query(
@@ -693,6 +837,7 @@ def _run_scoped_auto_query(
     tc: Toolchain,
     root: Path,
     argv: list[str],
+    run_id: str,
 ) -> CqResult:
     from tools.cq.query.planner import compile_query
 
@@ -705,6 +850,7 @@ def _run_scoped_auto_query(
         root=root,
         argv=argv,
         started_ms=ms(),
+        run_id=run_id,
     )
     return _execute_single_context(scoped_ctx)
 
@@ -753,7 +899,8 @@ def _execute_entity_query(ctx: QueryExecutionContext) -> CqResult:
     _maybe_add_entity_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
     _attach_entity_insight(result, root=ctx.root)
-    return result
+    result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    return assign_result_finding_ids(result)
 
 
 def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
@@ -771,6 +918,7 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
         root=request.root,
         argv=request.argv,
         started_ms=ms(),
+        run_id=request.run_id or uuid7_str(),
         query_text=request.query_text,
     )
     scan_ctx = _build_scan_context(request.records)
@@ -797,7 +945,8 @@ def execute_entity_query_from_records(request: EntityQueryRequest) -> CqResult:
     _maybe_add_entity_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
     _attach_entity_insight(result, root=ctx.root)
-    return result
+    result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    return assign_result_finding_ids(result)
 
 
 def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
@@ -817,7 +966,8 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
         state.file_result.files,
         state.ctx.root,
         state.ctx.query,
-        None,
+        state.scope_globs,
+        state.ctx.run_id,
     )
 
     result = mk_result(_build_runmeta(ctx))
@@ -840,7 +990,8 @@ def _execute_pattern_query(ctx: QueryExecutionContext) -> CqResult:
     result.summary["files_scanned"] = len({r.file for r in records})
     _maybe_add_pattern_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
-    return result
+    result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    return assign_result_finding_ids(result)
 
 
 def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
@@ -858,6 +1009,7 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
         root=request.root,
         argv=request.argv,
         started_ms=ms(),
+        run_id=request.run_id or uuid7_str(),
         query_text=request.query_text,
     )
     if not request.files:
@@ -877,7 +1029,8 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
         state.file_result.files,
         state.ctx.root,
         state.ctx.query,
-        None,
+        state.scope_globs,
+        state.ctx.run_id,
     )
 
     result = mk_result(_build_runmeta(ctx))
@@ -900,7 +1053,8 @@ def execute_pattern_query_with_files(request: PatternQueryRequest) -> CqResult:
     result.summary["files_scanned"] = len({r.file for r in records})
     _maybe_add_pattern_explain(state, result)
     _finalize_single_scope_summary(ctx, result)
-    return result
+    result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    return assign_result_finding_ids(result)
 
 
 def _execute_ast_grep_rules(
@@ -908,7 +1062,8 @@ def _execute_ast_grep_rules(
     paths: list[Path],
     root: Path,
     query: Query | None = None,
-    _globs: list[str] | None = None,
+    globs: list[str] | None = None,
+    run_id: str | None = None,
 ) -> tuple[list[Finding], list[SgRecord], list[dict[str, object]]]:
     """Execute ast-grep rules using ast-grep-py and return findings.
 
@@ -930,18 +1085,147 @@ def _execute_ast_grep_rules(
     tuple[list[Finding], list[SgRecord], list[dict[str, object]]]
         Findings, underlying records, and raw match data.
     """
-    if not rules:
+    if not rules or not paths:
         return [], [], []
-    ctx = AstGrepExecutionContext(
-        rules=rules,
-        paths=paths,
-        root=root,
-        query=query,
-        lang=query.primary_language if query is not None else DEFAULT_QUERY_LANGUAGE,
+
+    resolved_root = root.resolve()
+    lang = query.primary_language if query is not None else DEFAULT_QUERY_LANGUAGE
+    namespace = "pattern_fragment"
+    rules_digest = hashlib.sha256(
+        msgspec.json.encode(
+            contract_to_builtins(list(rules)),
+        )
+    ).hexdigest()
+    query_filters_digest = hashlib.sha256(
+        msgspec.json.encode(
+            contract_to_builtins(list(query.metavar_filters if query is not None else []))
+        )
+    ).hexdigest()
+    scope_hash = build_scope_hash(
+        {
+            "paths": tuple(sorted(str(path.resolve()) for path in paths)),
+            "scope_globs": tuple(globs or ()),
+            "lang": lang,
+            "rules_digest": rules_digest,
+        }
     )
-    state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
-    _run_ast_grep(ctx, state)
-    return state.findings, state.records, state.raw_matches
+    snapshot = build_scope_snapshot_fingerprint(
+        root=resolved_root,
+        files=paths,
+        language=lang,
+        scope_globs=globs or [],
+        scope_roots=paths,
+    )
+    policy = default_cache_policy(root=resolved_root)
+    cache = get_cq_cache_backend(root=resolved_root)
+    cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
+    ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=namespace)
+    tag = resolve_write_cache_tag(
+        policy=policy,
+        workspace=str(resolved_root),
+        language=lang,
+        namespace=namespace,
+        scope_hash=scope_hash,
+        snapshot=snapshot.digest,
+        run_id=run_id,
+    )
+
+    findings_by_rel: dict[str, list[Finding]] = {}
+    records_by_rel: dict[str, list[SgRecord]] = {}
+    raw_matches_by_rel: dict[str, list[dict[str, object]]] = {}
+    misses: list[tuple[Path, str, str]] = []
+
+    for file_path in paths:
+        rel_path = _normalize_match_file(str(file_path), resolved_root)
+        file_hash = file_content_hash(file_path).digest
+        fragment_key = build_cache_key(
+            namespace,
+            version="v1",
+            workspace=str(resolved_root),
+            language=lang,
+            target=rel_path,
+            extras={
+                "file_content_hash": file_hash,
+                "rules_digest": rules_digest,
+                "query_filters_digest": query_filters_digest,
+            },
+        )
+        if cache_enabled and file_hash:
+            cached = cache.get(fragment_key)
+            record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=fragment_key)
+            if isinstance(cached, dict):
+                try:
+                    payload = msgspec.convert(cached, type=PatternFragmentCacheV1)
+                    findings_by_rel[rel_path] = [
+                        msgspec.convert(item, type=Finding) for item in payload.findings
+                    ]
+                    records_by_rel[rel_path] = [
+                        _cache_record_to_record(item) for item in payload.records
+                    ]
+                    raw_matches_by_rel[rel_path] = list(payload.raw_matches)
+                    continue
+                except (RuntimeError, TypeError, ValueError):
+                    record_cache_decode_failure(namespace=namespace)
+        misses.append((file_path, rel_path, fragment_key))
+
+    if misses:
+        ctx = AstGrepExecutionContext(
+            rules=rules,
+            paths=[item[0] for item in misses],
+            root=resolved_root,
+            query=query,
+            lang=lang,
+        )
+        state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
+        _run_ast_grep(ctx, state)
+        miss_records = group_records_by_file(state.records)
+        miss_findings: dict[str, list[Finding]] = {}
+        for finding in state.findings:
+            rel_path = finding.anchor.file if finding.anchor is not None else ""
+            miss_findings.setdefault(rel_path, []).append(finding)
+        miss_raw: dict[str, list[dict[str, object]]] = {}
+        for row in state.raw_matches:
+            rel_path = row.get("file")
+            if not isinstance(rel_path, str):
+                continue
+            miss_raw.setdefault(rel_path, []).append(row)
+
+        with cache.transact():
+            for _file_path, rel_path, fragment_key in misses:
+                findings = sorted(miss_findings.get(rel_path, []), key=_finding_sort_key)
+                records = sorted(miss_records.get(rel_path, []), key=_record_sort_key)
+                raw_matches = sorted(miss_raw.get(rel_path, []), key=_raw_match_sort_key)
+                findings_by_rel[rel_path] = findings
+                records_by_rel[rel_path] = records
+                raw_matches_by_rel[rel_path] = raw_matches
+                if not cache_enabled:
+                    continue
+                payload = PatternFragmentCacheV1(
+                    findings=cast("list[dict[str, object]]", contract_to_builtins(findings)),
+                    records=[_record_to_cache_record(record) for record in records],
+                    raw_matches=raw_matches,
+                )
+                ok = cache.set(
+                    fragment_key,
+                    contract_to_builtins(payload),
+                    expire=ttl_seconds,
+                    tag=tag,
+                )
+                record_cache_set(namespace=namespace, ok=ok, key=fragment_key)
+
+    findings: list[Finding] = []
+    records: list[SgRecord] = []
+    raw_matches: list[dict[str, object]] = []
+    for file_path in sorted(paths, key=lambda path: path.as_posix()):
+        rel_path = _normalize_match_file(str(file_path), resolved_root)
+        findings.extend(findings_by_rel.get(rel_path, []))
+        records.extend(records_by_rel.get(rel_path, []))
+        raw_matches.extend(raw_matches_by_rel.get(rel_path, []))
+
+    findings.sort(key=_finding_sort_key)
+    records.sort(key=_record_sort_key)
+    raw_matches.sort(key=_raw_match_sort_key)
+    return findings, records, raw_matches
 
 
 def _run_ast_grep(ctx: AstGrepExecutionContext, state: AstGrepExecutionState) -> None:

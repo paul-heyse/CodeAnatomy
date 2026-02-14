@@ -491,11 +491,29 @@ def build_cache_key(
 ```python
 def build_cache_tag(*, workspace: str, language: str) -> str:
     """Build tag used for bulk invalidation."""
-    return f"{workspace}:{language}"
+    return "|".join((f"ws:{_digest_text(workspace)}", f"lang:{language}"))
 
 def build_run_cache_tag(*, workspace: str, language: str, run_id: str) -> str:
     """Build run-scoped cache invalidation tag."""
-    return f"{workspace}:{language}:run:{run_id}"
+    return "|".join(
+        (
+            f"ws:{_digest_text(workspace)}",
+            f"lang:{language}",
+            f"run:{_digest_text(run_id, size=24)}",
+        )
+    )
+
+def build_namespace_cache_tag(
+    *,
+    workspace: str,
+    language: str,
+    namespace: str,
+    scope_hash: str | None = None,
+    snapshot: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    """Build namespace-oriented cache invalidation tag."""
+    # ws/lang/ns + optional scope/snapshot/run atoms in canonical order.
 ```
 
 ### Typed Cache Payload Contracts
@@ -515,16 +533,40 @@ class SgRecordCacheV1(CqCacheStruct, frozen=True):
     text: str = ""
     rule_id: str = ""
 
-class SearchPartitionCacheV1(CqCacheStruct, frozen=True):
-    """Cached search partition payload."""
+class SearchCandidatesCacheV1(CqCacheStruct, frozen=True):
+    """Cached search candidate payload."""
     pattern: str
     raw_matches: list[dict[str, object]]
     stats: dict[str, object]
-    enriched_matches: list[dict[str, object]]
+
+class SearchEnrichmentAnchorCacheV1(CqCacheStruct, frozen=True):
+    """Cached enrichment payload for one search anchor."""
+    file: str
+    line: NonNegativeInt
+    col: NonNegativeInt
+    match_text: str
+    file_content_hash: str
+    language: str
+    enriched_match: dict[str, object]
 
 class QueryEntityScanCacheV1(CqCacheStruct, frozen=True):
-    """Cached entity-query scan payload."""
+    """Cached per-file entity/neighborhood scan fragment payload."""
     records: list[SgRecordCacheV1]
+
+class PatternFragmentCacheV1(CqCacheStruct, frozen=True):
+    """Cached per-file ast-grep pattern fragment payload."""
+    findings: list[dict[str, object]] = msgspec.field(default_factory=list)
+    records: list[SgRecordCacheV1] = msgspec.field(default_factory=list)
+    raw_matches: list[dict[str, object]] = msgspec.field(default_factory=list)
+
+class ScopeSnapshotCacheV1(CqCacheStruct, frozen=True):
+    """Cached scope snapshot fingerprint payload."""
+    language: str
+    scope_globs: tuple[str, ...] = ()
+    scope_roots: tuple[str, ...] = ()
+    inventory_token: dict[str, object] = msgspec.field(default_factory=dict)
+    files: list[ScopeFileStatCacheV1] = msgspec.field(default_factory=list)
+    digest: str = ""
 
 class CallsTargetCacheV1(CqCacheStruct, frozen=True):
     """Cached calls-target metadata payload."""
@@ -533,10 +575,14 @@ class CallsTargetCacheV1(CqCacheStruct, frozen=True):
 ```
 
 **Cache Namespace Mapping:**
-- `search_partition` → `SearchPartitionCacheV1`
-- `query_entity_scan` → `QueryEntityScanCacheV1`
-- `calls_target` → `CallsTargetCacheV1`
-- `lsp_front_door` → `dict[str, object]` (untyped LSP payloads)
+- `search_candidates` → `SearchCandidatesCacheV1`
+- `search_enrichment` → `SearchEnrichmentAnchorCacheV1`
+- `query_entity_fragment` → `QueryEntityScanCacheV1`
+- `pattern_fragment` → `PatternFragmentCacheV1`
+- `neighborhood_fragment` / `neighborhood_snapshot` → `QueryEntityScanCacheV1`
+- `scope_snapshot` → `ScopeSnapshotCacheV1`
+- `calls_target_metadata` → `CallsTargetCacheV1`
+- `lsp_front_door` → `dict[str, object]` (normalized payload + timeout/failure metadata)
 
 ### DiskcacheBackend Implementation
 

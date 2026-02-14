@@ -9,7 +9,19 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.cache import build_cache_key, build_cache_tag, get_cq_cache_backend
+from tools.cq.core.cache import (
+    build_cache_key,
+    build_scope_hash,
+    build_scope_snapshot_fingerprint,
+    default_cache_policy,
+    get_cq_cache_backend,
+    is_namespace_cache_enabled,
+    record_cache_decode_failure,
+    record_cache_get,
+    record_cache_set,
+    resolve_namespace_ttl_seconds,
+    resolve_write_cache_tag,
+)
 from tools.cq.core.cache.contracts import CallsTargetCacheV1
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.definition_parser import extract_definition_name, extract_symbol_name
@@ -433,6 +445,26 @@ def add_target_callees_section(
     result.sections.append(Section(title="Target Callees", findings=findings))
 
 
+def _target_scope_snapshot_digest(
+    *,
+    root: Path,
+    target_location: tuple[str, int] | None,
+    language: QueryLanguage | None,
+) -> str | None:
+    if target_location is None:
+        return None
+    file_path = root / target_location[0]
+    if not file_path.exists():
+        return None
+    return build_scope_snapshot_fingerprint(
+        root=root,
+        files=[file_path],
+        language=language or "python",
+        scope_globs=[],
+        scope_roots=[file_path.parent],
+    ).digest
+
+
 def attach_target_metadata(
     result: CqResult,
     *,
@@ -441,6 +473,7 @@ def attach_target_metadata(
     score: ScoreDetails | None,
     preview_limit: int = _CALLS_TARGET_CALLEE_PREVIEW,
     target_language: QueryLanguage | None = None,
+    run_id: str | None = None,
 ) -> tuple[tuple[str, int] | None, Counter[str], QueryLanguage | None]:
     """Resolve target location, collect target callees, and update result payload.
 
@@ -448,62 +481,110 @@ def attach_target_metadata(
         Resolved target location and counted target-body callees.
     """
     resolved_language = target_language or infer_target_language(root, function_name)
-    cache = get_cq_cache_backend(root=root)
+    namespace = "calls_target_metadata"
+    resolved_root = root.resolve()
+    policy = default_cache_policy(root=resolved_root)
+    cache = get_cq_cache_backend(root=resolved_root)
+    cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
+    ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=namespace)
+    scope_hash = build_scope_hash(
+        {
+            "function_name": function_name,
+            "lang": resolved_language or "auto",
+            "preview_limit": preview_limit,
+        }
+    )
     cache_key = build_cache_key(
-        "calls_target_metadata",
+        namespace,
         version="v2",
-        workspace=str(root.resolve()),
+        workspace=str(resolved_root),
         language=(resolved_language or "auto"),
         target=function_name,
-        extras={"preview_limit": preview_limit},
+        extras={
+            "preview_limit": preview_limit,
+            "scope_hash": scope_hash,
+        },
     )
-    cached = cache.get(cache_key)
+    cached = cache.get(cache_key) if cache_enabled else None
+    if cache_enabled:
+        record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=cache_key)
     should_write_cache = False
+    snapshot_digest: str | None = None
+
+    def _resolve_target_payload() -> tuple[tuple[str, int] | None, Counter[str], str | None]:
+        resolved_target = resolve_target_definition(
+            root,
+            function_name,
+            target_language=resolved_language,
+        )
+        resolved_callees = scan_target_callees(
+            root,
+            function_name,
+            resolved_target,
+            target_language=resolved_language,
+        )
+        resolved_snapshot = _target_scope_snapshot_digest(
+            root=resolved_root,
+            target_location=resolved_target,
+            language=resolved_language,
+        )
+        return resolved_target, resolved_callees, resolved_snapshot
+
     if isinstance(cached, dict):
         try:
             cached_payload = msgspec.convert(cached, type=CallsTargetCacheV1)
             target_location = cached_payload.target_location
             target_callees = Counter(cached_payload.target_callees)
+            snapshot_digest = cached_payload.snapshot_digest
+            current_snapshot = _target_scope_snapshot_digest(
+                root=resolved_root,
+                target_location=target_location,
+                language=resolved_language,
+            )
+            if snapshot_digest != current_snapshot:
+                target_location, target_callees, snapshot_digest = _resolve_target_payload()
+                should_write_cache = True
+            elif snapshot_digest is None and target_location is not None:
+                snapshot_digest = current_snapshot
+                should_write_cache = True
         except (RuntimeError, TypeError, ValueError):
-            target_location = resolve_target_definition(
-                root,
-                function_name,
-                target_language=resolved_language,
-            )
-            target_callees = scan_target_callees(
-                root,
-                function_name,
-                target_location,
-                target_language=resolved_language,
-            )
+            if cache_enabled:
+                record_cache_decode_failure(namespace=namespace)
+            target_location, target_callees, snapshot_digest = _resolve_target_payload()
             should_write_cache = True
     else:
-        target_location = resolve_target_definition(
-            root,
-            function_name,
-            target_language=resolved_language,
-        )
-        target_callees = scan_target_callees(
-            root,
-            function_name,
-            target_location,
-            target_language=resolved_language,
+        target_location, target_callees, snapshot_digest = _resolve_target_payload()
+        should_write_cache = True
+    if target_location is not None and snapshot_digest is None:
+        snapshot_digest = _target_scope_snapshot_digest(
+            root=resolved_root,
+            target_location=target_location,
+            language=resolved_language,
         )
         should_write_cache = True
     if should_write_cache:
         cache_payload = CallsTargetCacheV1(
             target_location=target_location,
             target_callees=dict(target_callees),
+            snapshot_digest=snapshot_digest,
         )
-        cache.set(
-            cache_key,
-            contract_to_builtins(cache_payload),
-            expire=900,
-            tag=build_cache_tag(
-                workspace=str(root.resolve()),
+        if cache_enabled:
+            tag = resolve_write_cache_tag(
+                policy=policy,
+                workspace=str(resolved_root),
                 language=(resolved_language or "python"),
-            ),
-        )
+                namespace=namespace,
+                scope_hash=scope_hash,
+                snapshot=snapshot_digest,
+                run_id=run_id,
+            )
+            ok = cache.set(
+                cache_key,
+                contract_to_builtins(cache_payload),
+                expire=ttl_seconds,
+                tag=tag,
+            )
+            record_cache_set(namespace=namespace, ok=ok, key=cache_key)
     if target_location is not None:
         result.summary["target_file"] = target_location[0]
         result.summary["target_line"] = target_location[1]

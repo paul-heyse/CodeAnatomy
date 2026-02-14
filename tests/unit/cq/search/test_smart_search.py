@@ -1359,8 +1359,12 @@ def test_search_python_capability_probe_unavailable_is_non_fatal(
     degradation = cast("dict[str, object]", insight.get("degradation", {}))
     assert degradation.get("lsp") in {"ok", "partial"}
     pyrefly = cast("dict[str, object]", result.summary.get("pyrefly_telemetry", {}))
-    assert pyrefly.get("attempted", 0) >= 1
-    assert pyrefly.get("applied", 0) >= 1
+    attempted = pyrefly.get("attempted", 0)
+    applied = pyrefly.get("applied", 0)
+    assert isinstance(attempted, int)
+    assert isinstance(applied, int)
+    assert attempted >= 1
+    assert applied >= 1
 
 
 def test_search_python_timeout_reason_not_collapsed_to_session_unavailable(

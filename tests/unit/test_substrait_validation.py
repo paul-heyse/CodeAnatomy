@@ -5,7 +5,7 @@ from __future__ import annotations
 import pyarrow as pa
 
 from datafusion_engine.plan.bundle_artifact import PlanBundleOptions, build_plan_artifact
-from datafusion_engine.plan.execution_runtime import validate_substrait_plan
+from datafusion_engine.plan.result_types import validate_substrait_plan
 from tests.test_helpers.arrow_seed import register_arrow_table
 from tests.test_helpers.datafusion_runtime import df_profile
 from tests.test_helpers.optional_deps import require_datafusion

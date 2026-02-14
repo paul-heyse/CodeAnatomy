@@ -1631,7 +1631,7 @@ def _substrait_validation_payload(
     Raises:
         ValueError: If substrait validation reports mismatch.
     """
-    from datafusion_engine.plan.execution_runtime import validate_substrait_plan
+    from datafusion_engine.plan.result_types import validate_substrait_plan
 
     validation = validate_substrait_plan(substrait_bytes, df=df, ctx=ctx)
     if validation is None:

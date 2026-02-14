@@ -181,6 +181,9 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
 
     # Apply filters
     result = apply_result_filters(result, filters)
+    from tools.cq.core.schema import assign_result_finding_ids
+
+    assign_result_finding_ids(result)
 
     # Save artifact unless disabled
     if not no_save:

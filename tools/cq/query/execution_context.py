@@ -22,4 +22,5 @@ class QueryExecutionContext(CqStruct, frozen=True):
     root: Path
     argv: list[str]
     started_ms: float
+    run_id: str
     query_text: str | None = None

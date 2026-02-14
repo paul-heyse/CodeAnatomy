@@ -510,8 +510,8 @@ class DataFusionExecutionFacade:
             status="hit" if cached_entry is not None else "miss",
             source="substrait",
         )
-        # Lazy import to avoid circular dependency with execution.py
-        from datafusion_engine.plan.execution_runtime import replay_substrait_bytes
+        # Lazy import to avoid circular dependency
+        from datafusion_engine.plan.result_types import replay_substrait_bytes
 
         try:
             df = replay_substrait_bytes(self.ctx, substrait_bytes)

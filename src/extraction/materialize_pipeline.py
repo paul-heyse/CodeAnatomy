@@ -16,11 +16,11 @@ from datafusion_engine.io.write import WriteFormat, WriteMode, WritePipeline, Wr
 from datafusion_engine.lineage.diagnostics import recorder_for_profile
 from datafusion_engine.materialize_policy import MaterializationPolicy
 from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
-from datafusion_engine.plan.execution_runtime import (
+from datafusion_engine.plan.result_types import (
     PlanExecutionOptions,
     PlanScanOverrides,
 )
-from datafusion_engine.plan.execution_runtime import (
+from datafusion_engine.plan.result_types import (
     execute_plan_artifact as execute_plan_artifact_helper,
 )
 from datafusion_engine.session.facade import DataFusionExecutionFacade, ExecutionResult

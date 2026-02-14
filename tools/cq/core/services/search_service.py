@@ -26,6 +26,7 @@ class SearchServiceRequest(CqStruct, frozen=True):
     limits: SearchLimits | None = None
     tc: Toolchain | None = None
     argv: list[str] | None = None
+    run_id: str | None = None
 
 
 class SearchService:
@@ -49,6 +50,7 @@ class SearchService:
             limits=request.limits,
             tc=request.tc,
             argv=request.argv,
+            run_id=request.run_id,
         )
 
 

@@ -216,21 +216,16 @@ def _load_extension() -> object:
         object: Result.
 
     Raises:
-        ImportError: If no compatible extension module can be loaded.
-        ModuleNotFoundError: If a nested import is missing within a candidate module.
+        ImportError: If the extension module cannot be loaded.
     """
-    for module_name in ("datafusion._internal", "datafusion_ext"):
-        try:
-            module = importlib.import_module(module_name)
-        except ModuleNotFoundError as exc:
-            if exc.name != module_name:
-                raise
-            continue
-        except ImportError:
-            continue
-        if hasattr(module, "install_function_factory"):
-            return module
-    msg = "A DataFusion extension module with FunctionFactory hooks is required."
+    try:
+        module = importlib.import_module("datafusion_ext")
+    except ImportError as exc:
+        msg = "The datafusion_ext module with FunctionFactory hooks is required."
+        raise ImportError(msg) from exc
+    if hasattr(module, "install_function_factory"):
+        return module
+    msg = "datafusion_ext is missing install_function_factory entrypoint."
     raise ImportError(msg)
 
 

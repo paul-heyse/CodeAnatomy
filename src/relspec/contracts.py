@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from functools import cache
-from typing import Final
+from typing import Any, Final
+
+import msgspec
 
 from arrow_utils.core.ordering import OrderingLevel
 from datafusion_engine.arrow.metadata import (
@@ -38,6 +40,19 @@ RELATION_OUTPUT_ORDERING_KEYS: tuple[tuple[str, str], ...] = (
     ("task_priority", "ascending"),
     ("task_name", "ascending"),
 )
+
+
+class CompileExecutionPolicyRequestV1(msgspec.Struct, frozen=True):
+    """Request envelope for execution-policy compilation."""
+
+    task_graph: Any
+    output_locations: dict[str, Any]
+    runtime_profile: Any
+    view_nodes: tuple[Any, ...] | None = None
+    semantic_ir: Any | None = None
+    scan_overrides: tuple[Any, ...] = ()
+    diagnostics_policy: Any | None = None
+    workload_class: str | None = None
 
 
 def _schema_version_from_name(name: str) -> int | None:
@@ -165,6 +180,7 @@ __all__ = [
     "REL_DEF_SYMBOL_NAME",
     "REL_IMPORT_SYMBOL_NAME",
     "REL_NAME_SYMBOL_NAME",
+    "CompileExecutionPolicyRequestV1",
     "rel_callsite_symbol_metadata_spec",
     "rel_def_symbol_metadata_spec",
     "rel_import_symbol_metadata_spec",

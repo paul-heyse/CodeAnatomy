@@ -5205,6 +5205,7 @@ class DataFusionRuntimeProfile(
 
     def _install_udf_platform(self, ctx: SessionContext) -> None:
         """Install the unified Rust UDF platform on the session context."""
+        from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
@@ -5228,7 +5229,10 @@ class DataFusionRuntimeProfile(
             expr_planner_names=self.policies.expr_planner_names,
             strict=bool(capabilities.get("available")) and bool(capabilities.get("compatible")),
         )
-        platform = install_rust_udf_platform(ctx, options=options)
+        platform = install_rust_udf_platform(
+            InstallRustUdfPlatformRequestV1(options=msgspec.to_builtins(options)),
+            ctx=ctx,
+        )
         if platform.snapshot is not None:
             self._record_udf_snapshot(platform.snapshot)
         if platform.docs is not None and self.diagnostics.diagnostics_sink is not None:

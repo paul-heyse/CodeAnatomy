@@ -5,11 +5,15 @@ from __future__ import annotations
 import ast
 import re
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import msgspec
 
 from tools.cq.core.cache import (
+    CacheWriteTagRequestV1,
+    CqCacheBackend,
+    CqCachePolicyV1,
     build_cache_key,
     build_scope_hash,
     build_scope_snapshot_fingerprint,
@@ -28,6 +32,7 @@ from tools.cq.core.definition_parser import extract_definition_name, extract_sym
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding, ScoreDetails, Section
 from tools.cq.core.scoring import build_detail_payload
+from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage
 from tools.cq.query.sg_parser import SgRecord, sg_scan
 from tools.cq.search import INTERACTIVE
@@ -465,33 +470,79 @@ def _target_scope_snapshot_digest(
     ).digest
 
 
-def attach_target_metadata(
-    result: CqResult,
+class AttachTargetMetadataRequestV1(CqStruct, frozen=True):
+    """Typed request envelope for calls target metadata enrichment."""
+
+    root: Path
+    function_name: str
+    score: ScoreDetails | None = None
+    preview_limit: int = _CALLS_TARGET_CALLEE_PREVIEW
+    target_language: QueryLanguage | None = None
+    run_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _TargetMetadataCacheContext:
+    namespace: str
+    root: Path
+    cache: CqCacheBackend
+    policy: CqCachePolicyV1
+    cache_enabled: bool
+    ttl_seconds: int
+    cache_key: str
+    scope_hash: str | None
+    resolved_language: QueryLanguage | None
+
+
+@dataclass(frozen=True, slots=True)
+class _TargetPayloadState:
+    target_location: tuple[str, int] | None
+    target_callees: Counter[str]
+    snapshot_digest: str | None
+    should_write_cache: bool
+
+
+def _resolve_target_payload(
     *,
     root: Path,
     function_name: str,
-    score: ScoreDetails | None,
-    preview_limit: int = _CALLS_TARGET_CALLEE_PREVIEW,
-    target_language: QueryLanguage | None = None,
-    run_id: str | None = None,
-) -> tuple[tuple[str, int] | None, Counter[str], QueryLanguage | None]:
-    """Resolve target location, collect target callees, and update result payload.
+    resolved_language: QueryLanguage | None,
+) -> tuple[tuple[str, int] | None, Counter[str], str | None]:
+    resolved_target = resolve_target_definition(
+        root,
+        function_name,
+        target_language=resolved_language,
+    )
+    resolved_callees = scan_target_callees(
+        root,
+        function_name,
+        resolved_target,
+        target_language=resolved_language,
+    )
+    resolved_snapshot = _target_scope_snapshot_digest(
+        root=root,
+        target_location=resolved_target,
+        language=resolved_language,
+    )
+    return resolved_target, resolved_callees, resolved_snapshot
 
-    Returns:
-        Resolved target location and counted target-body callees.
-    """
-    resolved_language = target_language or infer_target_language(root, function_name)
+
+def _build_target_metadata_cache_context(
+    request: AttachTargetMetadataRequestV1,
+    *,
+    resolved_language: QueryLanguage | None,
+) -> _TargetMetadataCacheContext:
     namespace = "calls_target_metadata"
-    resolved_root = root.resolve()
+    resolved_root = request.root.resolve()
     policy = default_cache_policy(root=resolved_root)
     cache = get_cq_cache_backend(root=resolved_root)
     cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
     ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=namespace)
     scope_hash = build_scope_hash(
         {
-            "function_name": function_name,
+            "function_name": request.function_name,
             "lang": resolved_language or "auto",
-            "preview_limit": preview_limit,
+            "preview_limit": request.preview_limit,
         }
     )
     cache_key = build_cache_key(
@@ -499,105 +550,183 @@ def attach_target_metadata(
         version="v2",
         workspace=str(resolved_root),
         language=(resolved_language or "auto"),
-        target=function_name,
+        target=request.function_name,
         extras={
-            "preview_limit": preview_limit,
+            "preview_limit": request.preview_limit,
             "scope_hash": scope_hash,
         },
     )
-    cached = cache.get(cache_key) if cache_enabled else None
-    if cache_enabled:
-        record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=cache_key)
-    should_write_cache = False
-    snapshot_digest: str | None = None
+    return _TargetMetadataCacheContext(
+        namespace=namespace,
+        root=resolved_root,
+        cache=cache,
+        policy=policy,
+        cache_enabled=cache_enabled,
+        ttl_seconds=ttl_seconds,
+        cache_key=cache_key,
+        scope_hash=scope_hash,
+        resolved_language=resolved_language,
+    )
 
-    def _resolve_target_payload() -> tuple[tuple[str, int] | None, Counter[str], str | None]:
-        resolved_target = resolve_target_definition(
-            root,
-            function_name,
-            target_language=resolved_language,
-        )
-        resolved_callees = scan_target_callees(
-            root,
-            function_name,
-            resolved_target,
-            target_language=resolved_language,
-        )
-        resolved_snapshot = _target_scope_snapshot_digest(
-            root=resolved_root,
-            target_location=resolved_target,
-            language=resolved_language,
-        )
-        return resolved_target, resolved_callees, resolved_snapshot
 
-    if isinstance(cached, dict):
-        try:
-            cached_payload = msgspec.convert(cached, type=CallsTargetCacheV1)
-            target_location = cached_payload.target_location
-            target_callees = Counter(cached_payload.target_callees)
-            snapshot_digest = cached_payload.snapshot_digest
-            current_snapshot = _target_scope_snapshot_digest(
-                root=resolved_root,
-                target_location=target_location,
-                language=resolved_language,
-            )
-            if snapshot_digest != current_snapshot:
-                target_location, target_callees, snapshot_digest = _resolve_target_payload()
-                should_write_cache = True
-            elif snapshot_digest is None and target_location is not None:
-                snapshot_digest = current_snapshot
-                should_write_cache = True
-        except (RuntimeError, TypeError, ValueError):
-            if cache_enabled:
-                record_cache_decode_failure(namespace=namespace)
-            target_location, target_callees, snapshot_digest = _resolve_target_payload()
-            should_write_cache = True
-    else:
-        target_location, target_callees, snapshot_digest = _resolve_target_payload()
-        should_write_cache = True
+def _resolve_target_payload_state(
+    *,
+    request: AttachTargetMetadataRequestV1,
+    context: _TargetMetadataCacheContext,
+) -> _TargetPayloadState:
+    cached = context.cache.get(context.cache_key) if context.cache_enabled else None
+    if context.cache_enabled:
+        record_cache_get(
+            namespace=context.namespace,
+            hit=isinstance(cached, dict),
+            key=context.cache_key,
+        )
+    if not isinstance(cached, dict):
+        target_location, target_callees, snapshot_digest = _resolve_target_payload(
+            root=context.root,
+            function_name=request.function_name,
+            resolved_language=context.resolved_language,
+        )
+        return _TargetPayloadState(
+            target_location=target_location,
+            target_callees=target_callees,
+            snapshot_digest=snapshot_digest,
+            should_write_cache=True,
+        )
+    try:
+        cached_payload = msgspec.convert(cached, type=CallsTargetCacheV1)
+    except (RuntimeError, TypeError, ValueError):
+        if context.cache_enabled:
+            record_cache_decode_failure(namespace=context.namespace)
+        target_location, target_callees, snapshot_digest = _resolve_target_payload(
+            root=context.root,
+            function_name=request.function_name,
+            resolved_language=context.resolved_language,
+        )
+        return _TargetPayloadState(
+            target_location=target_location,
+            target_callees=target_callees,
+            snapshot_digest=snapshot_digest,
+            should_write_cache=True,
+        )
+    target_location = cached_payload.target_location
+    target_callees = Counter(cached_payload.target_callees)
+    snapshot_digest = cached_payload.snapshot_digest
+    current_snapshot = _target_scope_snapshot_digest(
+        root=context.root,
+        target_location=target_location,
+        language=context.resolved_language,
+    )
+    if snapshot_digest != current_snapshot:
+        target_location, target_callees, snapshot_digest = _resolve_target_payload(
+            root=context.root,
+            function_name=request.function_name,
+            resolved_language=context.resolved_language,
+        )
+        return _TargetPayloadState(
+            target_location=target_location,
+            target_callees=target_callees,
+            snapshot_digest=snapshot_digest,
+            should_write_cache=True,
+        )
+    if snapshot_digest is None and target_location is not None:
+        return _TargetPayloadState(
+            target_location=target_location,
+            target_callees=target_callees,
+            snapshot_digest=current_snapshot,
+            should_write_cache=True,
+        )
+    return _TargetPayloadState(
+        target_location=target_location,
+        target_callees=target_callees,
+        snapshot_digest=snapshot_digest,
+        should_write_cache=False,
+    )
+
+
+def _persist_target_metadata_cache(
+    *,
+    context: _TargetMetadataCacheContext,
+    payload_state: _TargetPayloadState,
+    run_id: str | None,
+) -> None:
+    if not context.cache_enabled:
+        return
+    cache_payload = CallsTargetCacheV1(
+        target_location=payload_state.target_location,
+        target_callees=dict(payload_state.target_callees),
+        snapshot_digest=payload_state.snapshot_digest,
+    )
+    tag = resolve_write_cache_tag(
+        CacheWriteTagRequestV1(
+            policy=context.policy,
+            workspace=str(context.root),
+            language=(context.resolved_language or "python"),
+            namespace=context.namespace,
+            scope_hash=context.scope_hash,
+            snapshot=payload_state.snapshot_digest,
+            run_id=run_id,
+        )
+    )
+    ok = context.cache.set(
+        context.cache_key,
+        contract_to_builtins(cache_payload),
+        expire=context.ttl_seconds,
+        tag=tag,
+    )
+    record_cache_set(namespace=context.namespace, ok=ok, key=context.cache_key)
+
+
+def attach_target_metadata(
+    result: CqResult,
+    request: AttachTargetMetadataRequestV1,
+) -> tuple[tuple[str, int] | None, Counter[str], QueryLanguage | None]:
+    """Resolve target location, collect target callees, and update result payload."""
+    resolved_language = request.target_language or infer_target_language(
+        request.root,
+        request.function_name,
+    )
+    context = _build_target_metadata_cache_context(
+        request,
+        resolved_language=resolved_language,
+    )
+    payload_state = _resolve_target_payload_state(request=request, context=context)
+    target_location = payload_state.target_location
+    target_callees = payload_state.target_callees
+    snapshot_digest = payload_state.snapshot_digest
+    should_write_cache = payload_state.should_write_cache
     if target_location is not None and snapshot_digest is None:
         snapshot_digest = _target_scope_snapshot_digest(
-            root=resolved_root,
+            root=context.root,
             target_location=target_location,
             language=resolved_language,
         )
         should_write_cache = True
     if should_write_cache:
-        cache_payload = CallsTargetCacheV1(
-            target_location=target_location,
-            target_callees=dict(target_callees),
-            snapshot_digest=snapshot_digest,
+        _persist_target_metadata_cache(
+            context=context,
+            payload_state=_TargetPayloadState(
+                target_location=target_location,
+                target_callees=target_callees,
+                snapshot_digest=snapshot_digest,
+                should_write_cache=True,
+            ),
+            run_id=request.run_id,
         )
-        if cache_enabled:
-            tag = resolve_write_cache_tag(
-                policy=policy,
-                workspace=str(resolved_root),
-                language=(resolved_language or "python"),
-                namespace=namespace,
-                scope_hash=scope_hash,
-                snapshot=snapshot_digest,
-                run_id=run_id,
-            )
-            ok = cache.set(
-                cache_key,
-                contract_to_builtins(cache_payload),
-                expire=ttl_seconds,
-                tag=tag,
-            )
-            record_cache_set(namespace=namespace, ok=ok, key=cache_key)
     if target_location is not None:
         result.summary["target_file"] = target_location[0]
         result.summary["target_line"] = target_location[1]
     add_target_callees_section(
         result,
         target_callees,
-        score,
-        preview_limit=preview_limit,
+        request.score,
+        preview_limit=request.preview_limit,
     )
     return target_location, target_callees, resolved_language
 
 
 __all__ = [
+    "AttachTargetMetadataRequestV1",
     "add_target_callees_section",
     "attach_target_metadata",
     "infer_target_language",

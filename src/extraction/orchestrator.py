@@ -9,14 +9,19 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import msgspec
 
-from extraction.contracts import resolve_semantic_input_locations, with_compat_aliases
+from extraction.contracts import (
+    RunExtractionRequestV1,
+    resolve_semantic_input_locations,
+    with_compat_aliases,
+)
 from extraction.options import ExtractionRunOptions, normalize_extraction_options
 from obs.otel.metrics import record_error, record_stage_duration
 from obs.otel.scopes import SCOPE_EXTRACT
@@ -40,16 +45,26 @@ class ExtractionResult(msgspec.Struct, frozen=True):
     timing: dict[str, float]
 
 
-def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
-    repo_root: Path,
-    work_dir: Path,
-    *,
-    scip_index_config: object | None = None,
-    scip_identity_overrides: object | None = None,
-    tree_sitter_enabled: bool = True,
-    max_workers: int = 6,
-    options: ExtractionRunOptions | Mapping[str, object] | None = None,
-) -> ExtractionResult:
+@dataclass
+class _ExtractionRunState:
+    delta_locations: dict[str, str]
+    semantic_input_locations: dict[str, str]
+    errors: list[dict[str, object]]
+    timing: dict[str, float]
+
+
+@dataclass(frozen=True)
+class _Stage1ExecutionRequest:
+    repo_root: Path
+    repo_files: pa.Table
+    extract_dir: Path
+    scip_index_config: object | None
+    scip_identity_overrides: object | None
+    tree_sitter_enabled: bool
+    max_workers: int
+
+
+def run_extraction(request: RunExtractionRequestV1) -> ExtractionResult:
     """Run the full extraction pipeline with staged execution.
 
     Parameters
@@ -79,24 +94,75 @@ def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
     ValueError
         If required Stage 0 repo scan outputs are missing.
     """
-    delta_locations: dict[str, str] = {}
-    semantic_input_locations: dict[str, str] = {}
-    errors: list[dict[str, object]] = []
-    timing: dict[str, float] = {}
-    extract_dir = work_dir / "extract"
+    repo_root = Path(request.repo_root)
+    extract_dir = Path(request.work_dir) / "extract"
     extract_dir.mkdir(parents=True, exist_ok=True)
-    resolved_options = normalize_extraction_options(
-        options,
-        default_tree_sitter_enabled=tree_sitter_enabled,
-        default_max_workers=max_workers,
+    state = _ExtractionRunState(
+        delta_locations={},
+        semantic_input_locations={},
+        errors=[],
+        timing={},
     )
-    tree_sitter_enabled = resolved_options.tree_sitter_enabled
-    max_workers = resolved_options.max_workers
-
-    # Track overall extraction phase timing
+    resolved_options = normalize_extraction_options(
+        request.options,
+        default_tree_sitter_enabled=request.tree_sitter_enabled,
+        default_max_workers=request.max_workers,
+    )
     extraction_start = time.monotonic()
+    repo_files = _run_repo_scan_with_fallback(
+        repo_root=repo_root,
+        extract_dir=extract_dir,
+        options=resolved_options,
+        state=state,
+    )
+    if repo_files is None:
+        return _materialize_extraction_result(state)
+    _run_parallel_stage1_extractors(
+        _Stage1ExecutionRequest(
+            repo_root=repo_root,
+            repo_files=repo_files,
+            extract_dir=extract_dir,
+            scip_index_config=request.scip_index_config,
+            scip_identity_overrides=request.scip_identity_overrides,
+            tree_sitter_enabled=resolved_options.tree_sitter_enabled,
+            max_workers=resolved_options.max_workers,
+        ),
+        state=state,
+    )
+    _run_python_imports_stage(extract_dir=extract_dir, state=state)
+    _run_python_external_stage(repo_root=repo_root, extract_dir=extract_dir, state=state)
+    _finalize_extraction_state(state=state, extraction_start=extraction_start)
+    return _materialize_extraction_result(state)
 
-    # Stage 0: repo_scan (sequential, prerequisite for all others)
+
+def _materialize_extraction_result(state: _ExtractionRunState) -> ExtractionResult:
+    return ExtractionResult(
+        delta_locations=state.delta_locations,
+        semantic_input_locations=state.semantic_input_locations,
+        errors=state.errors,
+        timing=state.timing,
+    )
+
+
+def _record_repo_scan_outputs(
+    *,
+    outputs: dict[str, pa.Table],
+    extract_dir: Path,
+    state: _ExtractionRunState,
+) -> pa.Table:
+    repo_files = _require_repo_scan_table(outputs, "repo_files_v1")
+    for name, table in sorted(outputs.items()):
+        state.delta_locations[name] = _write_delta(table, extract_dir / name, name)
+    return repo_files
+
+
+def _run_repo_scan_with_fallback(
+    *,
+    repo_root: Path,
+    extract_dir: Path,
+    options: ExtractionRunOptions,
+    state: _ExtractionRunState,
+) -> pa.Table | None:
     t0 = time.monotonic()
     try:
         with stage_span(
@@ -105,60 +171,70 @@ def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "repo_scan"},
         ):
-            repo_scan_outputs = _run_repo_scan(repo_root, options=resolved_options)
-        timing["repo_scan"] = time.monotonic() - t0
-        repo_files = _require_repo_scan_table(repo_scan_outputs, "repo_files_v1")
-        for name, table in sorted(repo_scan_outputs.items()):
-            delta_locations[name] = _write_delta(table, extract_dir / name, name)
+            outputs = _run_repo_scan(repo_root, options=options)
+        state.timing["repo_scan"] = time.monotonic() - t0
+        return _record_repo_scan_outputs(outputs=outputs, extract_dir=extract_dir, state=state)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        timing["repo_scan"] = time.monotonic() - t0
-        errors.append({"extractor": "repo_scan", "error": str(exc)})
+        state.timing["repo_scan"] = time.monotonic() - t0
+        state.errors.append({"extractor": "repo_scan", "error": str(exc)})
         record_error("extraction", type(exc).__name__)
         logger.warning("repo_scan failed: %s", exc)
-        t0_fallback = time.monotonic()
-        try:
-            with stage_span(
-                "extraction.repo_scan_fallback",
-                stage="extraction",
-                scope_name=SCOPE_EXTRACT,
-                attributes={"extractor": "repo_scan_fallback"},
-            ):
-                repo_scan_outputs = _run_repo_scan_fallback(
-                    repo_root,
-                    options=resolved_options,
-                )
-            timing["repo_scan_fallback"] = time.monotonic() - t0_fallback
-            repo_files = _require_repo_scan_table(repo_scan_outputs, "repo_files_v1")
-            for name, table in sorted(repo_scan_outputs.items()):
-                delta_locations[name] = _write_delta(table, extract_dir / name, name)
-            logger.warning(
-                "Using non-git repo scan fallback with %d discovered files",
-                repo_files.num_rows,
-            )
-        except (OSError, RuntimeError, TypeError, ValueError) as fallback_exc:
-            timing["repo_scan_fallback"] = time.monotonic() - t0_fallback
-            errors.append({"extractor": "repo_scan_fallback", "error": str(fallback_exc)})
-            record_error("extraction", type(fallback_exc).__name__)
-            logger.warning("repo_scan_fallback failed: %s", fallback_exc)
-            return ExtractionResult(
-                delta_locations=delta_locations,
-                semantic_input_locations=semantic_input_locations,
-                errors=errors,
-                timing=timing,
-            )
-
-    # Stage 1: parallel extractors (all depend on repo_files)
-    stage1_extractors = _build_stage1_extractors(
+    return _run_repo_scan_fallback_stage(
         repo_root=repo_root,
-        repo_files=repo_files,
-        scip_index_config=scip_index_config,
-        scip_identity_overrides=scip_identity_overrides,
-        tree_sitter_enabled=tree_sitter_enabled,
+        extract_dir=extract_dir,
+        options=options,
+        state=state,
     )
 
-    t1 = time.monotonic()
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {name: executor.submit(fn) for name, fn in stage1_extractors.items()}
+
+def _run_repo_scan_fallback_stage(
+    *,
+    repo_root: Path,
+    extract_dir: Path,
+    options: ExtractionRunOptions,
+    state: _ExtractionRunState,
+) -> pa.Table | None:
+    t0 = time.monotonic()
+    try:
+        with stage_span(
+            "extraction.repo_scan_fallback",
+            stage="extraction",
+            scope_name=SCOPE_EXTRACT,
+            attributes={"extractor": "repo_scan_fallback"},
+        ):
+            outputs = _run_repo_scan_fallback(repo_root, options=options)
+        state.timing["repo_scan_fallback"] = time.monotonic() - t0
+        repo_files = _record_repo_scan_outputs(
+            outputs=outputs, extract_dir=extract_dir, state=state
+        )
+        logger.warning(
+            "Using non-git repo scan fallback with %d discovered files",
+            repo_files.num_rows,
+        )
+        return repo_files
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        state.timing["repo_scan_fallback"] = time.monotonic() - t0
+        state.errors.append({"extractor": "repo_scan_fallback", "error": str(exc)})
+        record_error("extraction", type(exc).__name__)
+        logger.warning("repo_scan_fallback failed: %s", exc)
+        return None
+
+
+def _run_parallel_stage1_extractors(
+    request: _Stage1ExecutionRequest,
+    *,
+    state: _ExtractionRunState,
+) -> None:
+    extractors = _build_stage1_extractors(
+        repo_root=request.repo_root,
+        repo_files=request.repo_files,
+        scip_index_config=request.scip_index_config,
+        scip_identity_overrides=request.scip_identity_overrides,
+        tree_sitter_enabled=request.tree_sitter_enabled,
+    )
+    stage_start = time.monotonic()
+    with ThreadPoolExecutor(max_workers=request.max_workers) as executor:
+        futures = {name: executor.submit(fn) for name, fn in extractors.items()}
         for name, future in futures.items():
             try:
                 with stage_span(
@@ -168,16 +244,21 @@ def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
                     attributes={"extractor": name},
                 ):
                     result_table = future.result()
-                timing[name] = time.monotonic() - t1
-                delta_locations[name] = _write_delta(result_table, extract_dir / name, name)
+                state.timing[name] = time.monotonic() - stage_start
+                state.delta_locations[name] = _write_delta(
+                    result_table,
+                    request.extract_dir / name,
+                    name,
+                )
             except (OSError, RuntimeError, TypeError, ValueError) as exc:
-                timing[name] = time.monotonic() - t1
-                errors.append({"extractor": name, "error": str(exc)})
+                state.timing[name] = time.monotonic() - stage_start
+                state.errors.append({"extractor": name, "error": str(exc)})
                 record_error("extraction", type(exc).__name__)
                 logger.warning("Extractor %s failed: %s", name, exc)
 
-    # Stage 2: python_imports (depends on ast/cst/tree-sitter tables)
-    t2 = time.monotonic()
+
+def _run_python_imports_stage(*, extract_dir: Path, state: _ExtractionRunState) -> None:
+    t0 = time.monotonic()
     try:
         with stage_span(
             "extraction.python_imports",
@@ -185,19 +266,27 @@ def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "python_imports"},
         ):
-            python_imports = _run_python_imports(delta_locations)
-        timing["python_imports"] = time.monotonic() - t2
-        delta_locations["python_imports"] = _write_delta(
-            python_imports, extract_dir / "python_imports", "python_imports"
+            python_imports = _run_python_imports(state.delta_locations)
+        state.timing["python_imports"] = time.monotonic() - t0
+        state.delta_locations["python_imports"] = _write_delta(
+            python_imports,
+            extract_dir / "python_imports",
+            "python_imports",
         )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        timing["python_imports"] = time.monotonic() - t2
-        errors.append({"extractor": "python_imports", "error": str(exc)})
+        state.timing["python_imports"] = time.monotonic() - t0
+        state.errors.append({"extractor": "python_imports", "error": str(exc)})
         record_error("extraction", type(exc).__name__)
         logger.warning("python_imports failed: %s", exc)
 
-    # Stage 3: python_external (depends on python_imports)
-    t3 = time.monotonic()
+
+def _run_python_external_stage(
+    *,
+    repo_root: Path,
+    extract_dir: Path,
+    state: _ExtractionRunState,
+) -> None:
+    t0 = time.monotonic()
     try:
         with stage_span(
             "extraction.python_external",
@@ -205,34 +294,27 @@ def run_extraction(  # noqa: PLR0913, PLR0914, PLR0915
             scope_name=SCOPE_EXTRACT,
             attributes={"extractor": "python_external"},
         ):
-            python_external = _run_python_external(delta_locations, repo_root)
-        timing["python_external"] = time.monotonic() - t3
-        delta_locations["python_external_interfaces"] = _write_delta(
+            python_external = _run_python_external(state.delta_locations, repo_root)
+        state.timing["python_external"] = time.monotonic() - t0
+        state.delta_locations["python_external_interfaces"] = _write_delta(
             python_external,
             extract_dir / "python_external_interfaces",
             "python_external_interfaces",
         )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        timing["python_external"] = time.monotonic() - t3
-        errors.append({"extractor": "python_external", "error": str(exc)})
+        state.timing["python_external"] = time.monotonic() - t0
+        state.errors.append({"extractor": "python_external", "error": str(exc)})
         record_error("extraction", type(exc).__name__)
         logger.warning("python_external failed: %s", exc)
 
-    delta_locations = with_compat_aliases(delta_locations)
-    semantic_input_locations = resolve_semantic_input_locations(delta_locations)
-    delta_locations.update(semantic_input_locations)
 
-    # Record overall extraction phase duration
+def _finalize_extraction_state(*, state: _ExtractionRunState, extraction_start: float) -> None:
+    state.delta_locations = with_compat_aliases(state.delta_locations)
+    state.semantic_input_locations = resolve_semantic_input_locations(state.delta_locations)
+    state.delta_locations.update(state.semantic_input_locations)
     extraction_elapsed = time.monotonic() - extraction_start
-    extraction_status = "ok" if not errors else "error"
+    extraction_status = "ok" if not state.errors else "error"
     record_stage_duration("extraction", extraction_elapsed, status=extraction_status)
-
-    return ExtractionResult(
-        delta_locations=delta_locations,
-        semantic_input_locations=semantic_input_locations,
-        errors=errors,
-        timing=timing,
-    )
 
 
 def _write_delta(table: pa.Table, location: Path, name: str) -> str:

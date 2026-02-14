@@ -8,6 +8,21 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+import msgspec
+
+
+class RunExtractionRequestV1(msgspec.Struct, frozen=True):
+    """Request envelope for staged extraction orchestration."""
+
+    repo_root: str
+    work_dir: str
+    scip_index_config: object | None = None
+    scip_identity_overrides: object | None = None
+    tree_sitter_enabled: bool = True
+    max_workers: int = 6
+    options: Mapping[str, object] | None = None
+
+
 # Legacy compatibility aliases retained during migration.
 _COMPAT_ALIASES: dict[str, str] = {
     "repo_files": "repo_files_v1",
@@ -76,6 +91,7 @@ def resolve_semantic_input_locations(delta_locations: Mapping[str, str]) -> dict
 
 
 __all__ = [
+    "RunExtractionRequestV1",
     "resolve_semantic_input_locations",
     "with_compat_aliases",
 ]

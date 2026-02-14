@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import msgspec
 from opentelemetry import trace
 
+from graph.contracts import OrchestrateBuildRequestV1
 from obs.otel.logs import emit_diagnostics_event
 from obs.otel.scopes import SCOPE_PIPELINE
 from obs.otel.tracing import stage_span
@@ -110,19 +111,7 @@ def _validate_output_targets(semantic_spec: SemanticExecutionSpec) -> None:
         raise ValueError(msg)
 
 
-def orchestrate_build(  # noqa: PLR0913
-    repo_root: Path,
-    work_dir: Path,
-    output_dir: Path,
-    engine_profile: str = "medium",
-    rulepack_profile: str = "default",
-    *,
-    runtime_config: object | None = None,
-    extraction_config: dict[str, object] | None = None,
-    include_errors: bool = True,
-    include_manifest: bool = True,
-    include_run_bundle: bool = False,
-) -> BuildResult:
+def orchestrate_build(request: OrchestrateBuildRequestV1) -> BuildResult:
     """Orchestrate the complete CPG build from extraction to final outputs.
 
     Parameters
@@ -153,12 +142,17 @@ def orchestrate_build(  # noqa: PLR0913
     BuildResult
         CPG outputs, auxiliary outputs, RunResult envelope, extraction timing, and warnings.
     """
+    repo_root = Path(request.repo_root)
+    work_dir = Path(request.work_dir)
+    output_dir = Path(request.output_dir)
     cpg_outputs: dict[str, dict[str, object]]
     auxiliary_outputs: dict[str, dict[str, object]]
 
     with stage_span("build_orchestrator", stage="orchestrator", scope_name=SCOPE_PIPELINE):
         extraction_result = _run_extraction_phase(
-            repo_root, work_dir, extraction_config=extraction_config
+            repo_root,
+            work_dir,
+            extraction_config=request.extraction_config,
         )
         semantic_inputs = (
             extraction_result.semantic_input_locations
@@ -167,21 +161,25 @@ def orchestrate_build(  # noqa: PLR0913
         )
         _, spec = _compile_semantic_phase(
             semantic_input_locations=semantic_inputs,
-            engine_profile=engine_profile,
-            rulepack_profile=rulepack_profile,
+            engine_profile=request.engine_profile,
+            rulepack_profile=request.rulepack_profile,
             output_dir=output_dir,
-            runtime_config=runtime_config,
+            runtime_config=request.runtime_config,
         )
-        run_result, run_artifacts = _execute_engine_phase(semantic_inputs, spec, engine_profile)
+        run_result, run_artifacts = _execute_engine_phase(
+            semantic_inputs,
+            spec,
+            request.engine_profile,
+        )
         cpg_outputs = _collect_cpg_outputs(run_result, output_dir=output_dir)
         auxiliary_outputs = _collect_auxiliary_outputs(
             output_dir=output_dir,
             artifacts=run_artifacts,
             run_result=run_result,
             extraction_result=extraction_result,
-            include_errors=include_errors,
-            include_manifest=include_manifest,
-            include_run_bundle=include_run_bundle,
+            include_errors=request.include_errors,
+            include_manifest=request.include_manifest,
+            include_run_bundle=request.include_run_bundle,
         )
         _record_observability(spec, run_result)
         warnings = _extract_warnings(run_result)
@@ -201,6 +199,7 @@ def _run_extraction_phase(
     *,
     extraction_config: dict[str, object] | None,
 ) -> ExtractionResult:
+    from extraction.contracts import RunExtractionRequestV1
     from extraction.options import normalize_extraction_options
     from extraction.orchestrator import run_extraction
 
@@ -212,13 +211,15 @@ def _run_extraction_phase(
         )
         run_options = normalize_extraction_options(extraction_config)
         extraction_result = run_extraction(
-            repo_root=repo_root,
-            work_dir=work_dir,
-            scip_index_config=scip_cfg,
-            scip_identity_overrides=scip_overrides,
-            tree_sitter_enabled=run_options.tree_sitter_enabled,
-            max_workers=run_options.max_workers,
-            options=run_options,
+            RunExtractionRequestV1(
+                repo_root=str(repo_root),
+                work_dir=str(work_dir),
+                scip_index_config=scip_cfg,
+                scip_identity_overrides=scip_overrides,
+                tree_sitter_enabled=run_options.tree_sitter_enabled,
+                max_workers=run_options.max_workers,
+                options=msgspec.to_builtins(run_options),
+            )
         )
         elapsed = time.monotonic() - t_start
         logger.info(

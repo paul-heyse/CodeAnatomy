@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from relspec.compiled_policy import CompiledExecutionPolicy
+from relspec.contracts import CompileExecutionPolicyRequestV1
 from serde_msgspec import to_builtins
 from utils.hashing import hash_json_canonical
 
@@ -40,17 +42,20 @@ _LOGGER = logging.getLogger(__name__)
 _HIGH_FANOUT_THRESHOLD = 2
 
 
-def compile_execution_policy(  # noqa: PLR0913
-    *,
-    task_graph: _TaskGraphLike,
-    output_locations: Mapping[str, DatasetLocation],
-    runtime_profile: DataFusionRuntimeProfile,
-    view_nodes: Sequence[ViewNode] | None = None,
-    semantic_ir: SemanticIR | None = None,
-    scan_overrides: tuple[ScanPolicyOverride, ...] = (),
-    diagnostics_policy: DiagnosticsPolicy | None = None,
-    workload_class: str | None = None,
-) -> CompiledExecutionPolicy:
+@dataclass(frozen=True)
+class _CompiledPolicyComponents:
+    cache_policies: dict[str, str]
+    scan_policy_map: dict[str, object]
+    maintenance_policy_map: dict[str, object]
+    udf_requirements: dict[str, tuple[str, ...]]
+    join_strategies: dict[str, str]
+    inference_confidence: dict[str, object]
+    materialization_strategy: str | None
+    diagnostics_flags: dict[str, bool]
+    workload_class: str | None
+
+
+def compile_execution_policy(request: CompileExecutionPolicyRequestV1) -> CompiledExecutionPolicy:
     """Compile all execution policy from plan artifacts.
 
     Parameters
@@ -77,58 +82,63 @@ def compile_execution_policy(  # noqa: PLR0913
     CompiledExecutionPolicy
         Frozen policy artifact ready for downstream consumption.
     """
-    semantic_ir_cache_overrides = _cache_overrides_from_semantic_ir(semantic_ir)
-    view_node_cache_overrides = _cache_overrides_from_view_nodes(view_nodes)
-    cache_overrides = _merge_cache_overrides(
-        semantic_ir_cache_overrides,
-        view_node_cache_overrides,
-    )
-    cache_policies = _derive_cache_policies(
-        task_graph,
-        output_locations,
-        cache_overrides=cache_overrides,
-        workload_class=workload_class,
-    )
-    scan_policy_map = _scan_overrides_to_mapping(scan_overrides)
-    maintenance_policy_map = _derive_maintenance_policies(output_locations)
-    udf_reqs = _derive_udf_requirements(
-        task_graph=task_graph,
-        view_nodes=view_nodes,
-    )
-    join_strategies = _derive_join_strategies_from_semantic_ir(semantic_ir)
-    inference_confidence = _derive_inference_confidence_from_semantic_ir(semantic_ir)
-    materialization_strategy = _derive_materialization_strategy(
-        output_locations=output_locations,
-        runtime_profile=runtime_profile,
-        workload_class=workload_class,
-    )
-    diag_flags = _diagnostics_flags_from_policy(diagnostics_policy)
-
-    # Build the policy without fingerprint first, then compute it.
+    components = _derive_policy_components(request)
     preliminary = CompiledExecutionPolicy(
-        cache_policy_by_view=cache_policies,
-        scan_policy_overrides=scan_policy_map,
-        maintenance_policy_by_dataset=maintenance_policy_map,
-        udf_requirements_by_view=udf_reqs,
-        join_strategy_by_view=join_strategies,
-        inference_confidence_by_view=inference_confidence,
-        materialization_strategy=materialization_strategy,
-        diagnostics_flags=diag_flags,
-        workload_class=workload_class,
+        cache_policy_by_view=components.cache_policies,
+        scan_policy_overrides=components.scan_policy_map,
+        maintenance_policy_by_dataset=components.maintenance_policy_map,
+        udf_requirements_by_view=components.udf_requirements,
+        join_strategy_by_view=components.join_strategies,
+        inference_confidence_by_view=components.inference_confidence,
+        materialization_strategy=components.materialization_strategy,
+        diagnostics_flags=components.diagnostics_flags,
+        workload_class=components.workload_class,
     )
     fingerprint = _compute_policy_fingerprint(preliminary)
 
     return CompiledExecutionPolicy(
-        cache_policy_by_view=cache_policies,
-        scan_policy_overrides=scan_policy_map,
-        maintenance_policy_by_dataset=maintenance_policy_map,
-        udf_requirements_by_view=udf_reqs,
-        join_strategy_by_view=join_strategies,
-        inference_confidence_by_view=inference_confidence,
-        materialization_strategy=materialization_strategy,
-        diagnostics_flags=diag_flags,
-        workload_class=workload_class,
+        cache_policy_by_view=components.cache_policies,
+        scan_policy_overrides=components.scan_policy_map,
+        maintenance_policy_by_dataset=components.maintenance_policy_map,
+        udf_requirements_by_view=components.udf_requirements,
+        join_strategy_by_view=components.join_strategies,
+        inference_confidence_by_view=components.inference_confidence,
+        materialization_strategy=components.materialization_strategy,
+        diagnostics_flags=components.diagnostics_flags,
+        workload_class=components.workload_class,
         policy_fingerprint=fingerprint,
+    )
+
+
+def _derive_policy_components(
+    request: CompileExecutionPolicyRequestV1,
+) -> _CompiledPolicyComponents:
+    cache_overrides = _merge_cache_overrides(
+        _cache_overrides_from_semantic_ir(request.semantic_ir),
+        _cache_overrides_from_view_nodes(request.view_nodes),
+    )
+    return _CompiledPolicyComponents(
+        cache_policies=_derive_cache_policies(
+            request.task_graph,
+            request.output_locations,
+            cache_overrides=cache_overrides,
+            workload_class=request.workload_class,
+        ),
+        scan_policy_map=_scan_overrides_to_mapping(request.scan_overrides),
+        maintenance_policy_map=_derive_maintenance_policies(request.output_locations),
+        udf_requirements=_derive_udf_requirements(
+            task_graph=request.task_graph,
+            view_nodes=request.view_nodes,
+        ),
+        join_strategies=_derive_join_strategies_from_semantic_ir(request.semantic_ir),
+        inference_confidence=_derive_inference_confidence_from_semantic_ir(request.semantic_ir),
+        materialization_strategy=_derive_materialization_strategy(
+            output_locations=request.output_locations,
+            runtime_profile=request.runtime_profile,
+            workload_class=request.workload_class,
+        ),
+        diagnostics_flags=_diagnostics_flags_from_policy(request.diagnostics_policy),
+        workload_class=request.workload_class,
     )
 
 

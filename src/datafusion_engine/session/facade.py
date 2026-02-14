@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import msgspec
 from datafusion import DataFrame, SessionContext
 from opentelemetry.semconv.attributes import db_attributes
 
@@ -136,6 +137,7 @@ class DataFusionExecutionFacade:
         plan-bundle construction.
 
         """
+        from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
         from datafusion_engine.udf.platform import (
             RustUdfPlatformOptions,
             install_rust_udf_platform,
@@ -159,7 +161,10 @@ class DataFusionExecutionFacade:
                 expr_planner_names=("codeanatomy_domain",),
                 strict=platform_strict,
             )
-            install_rust_udf_platform(self.ctx, options=options)
+            install_rust_udf_platform(
+                InstallRustUdfPlatformRequestV1(options=msgspec.to_builtins(options)),
+                ctx=self.ctx,
+            )
             return
 
         # Profile-driven configuration with strict validation
@@ -177,7 +182,10 @@ class DataFusionExecutionFacade:
             expr_planner_names=policies.expr_planner_names,
             strict=platform_strict,
         )
-        install_rust_udf_platform(self.ctx, options=options)
+        install_rust_udf_platform(
+            InstallRustUdfPlatformRequestV1(options=msgspec.to_builtins(options)),
+            ctx=self.ctx,
+        )
 
     def io_adapter(self) -> DataFusionIOAdapter:
         """Return a DataFusionIOAdapter for the session context.

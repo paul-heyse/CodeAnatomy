@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -17,10 +18,12 @@ from tools.cq.astgrep.sgpy_scanner import (
     scan_files,
 )
 from tools.cq.core.cache import (
+    CqCacheBackend,
+    CqCachePolicyV1,
+    ScopePlanV1,
+    ScopeResolutionV1,
     build_cache_key,
     build_namespace_cache_tag,
-    build_scope_hash,
-    build_scope_snapshot_fingerprint,
     default_cache_policy,
     get_cq_cache_backend,
     is_namespace_cache_enabled,
@@ -28,6 +31,7 @@ from tools.cq.core.cache import (
     record_cache_get,
     record_cache_set,
     resolve_namespace_ttl_seconds,
+    resolve_scope,
 )
 from tools.cq.core.structs import CqStruct
 from tools.cq.index.files import build_repo_file_index, tabulate_files
@@ -49,6 +53,19 @@ class FileInventoryCacheV1(CqStruct, frozen=True):
     files: list[str]
     snapshot_digest: str = ""
     inventory_token: dict[str, int] = msgspec.field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class FileInventoryWriteRequestV1:
+    """Request envelope for persisting file-inventory cache payloads."""
+
+    cache: CqCacheBackend
+    policy: CqCachePolicyV1
+    namespace: str
+    cache_key: str
+    root: Path
+    scope: ScopeResolutionV1
+    files: list[Path]
 
 
 # Re-export SgRecord from sgpy_scanner for backward compatibility
@@ -164,101 +181,132 @@ def _tabulate_scan_files(
     *,
     lang: QueryLanguage,
 ) -> list[Path]:
-    """Tabulate files to scan using cache-backed inventory and snapshots."""
+    """Tabulate files to scan using cache-backed inventory and snapshots.
+
+    Returns:
+        list[Path]: Sorted files that match scan inputs.
+    """
     namespace = "file_inventory"
     resolved_root = root.resolve()
-    resolved_paths = [path if path.is_absolute() else resolved_root / path for path in paths]
-    extensions = tuple(file_extensions_for_language(lang))
-    normalized_globs = tuple(globs or ())
-
-    scope_roots = sorted(
-        {str(candidate.resolve()) for candidate in resolved_paths if candidate.exists()}
+    scope_plan = ScopePlanV1(
+        root=str(resolved_root),
+        paths=tuple(str(path) for path in paths),
+        globs=tuple(globs or ()),
+        language=lang,
     )
-    if not scope_roots:
-        scope_roots = [str(resolved_root)]
-
-    repo_context = resolve_repo_context(resolved_root)
-    inventory_token = _repo_inventory_token(root=resolved_root, repo_context=repo_context)
-    scope_hash = build_scope_hash(
-        {
-            "scope_roots": tuple(scope_roots),
-            "scope_globs": normalized_globs,
-            "lang": lang,
-            "extensions": extensions,
-        }
+    scope = resolve_scope(
+        scope_plan,
+        list_files=_list_files_for_inventory,
+        inventory_token_fn=_inventory_token_for_root,
     )
-
     cache_key = build_cache_key(
         namespace,
         version="v1",
-        workspace=str(resolved_root),
-        language=lang,
-        target=scope_hash or lang,
+        workspace=scope.root,
+        language=scope.language,
+        target=scope.scope_hash or scope.language,
         extras={
-            "scope_roots": tuple(scope_roots),
-            "scope_globs": normalized_globs,
-            "extensions": extensions,
-            "inventory_token": inventory_token,
+            "scope_globs": scope_plan.globs,
+            "inventory_token": scope.inventory_token,
         },
     )
     policy = default_cache_policy(root=resolved_root)
     cache = get_cq_cache_backend(root=resolved_root)
     cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
-
     if cache_enabled:
-        cached = cache.get(cache_key)
-        record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=cache_key)
-        if isinstance(cached, dict):
-            try:
-                payload = msgspec.convert(cached, type=FileInventoryCacheV1)
-                files = [resolved_root / rel for rel in payload.files]
-                existing = [path for path in files if path.exists()]
-                if len(existing) == len(files):
-                    return existing
-            except (RuntimeError, TypeError, ValueError):
-                record_cache_decode_failure(namespace=namespace)
+        cached_files = _read_cached_file_inventory(
+            cache=cache,
+            cache_key=cache_key,
+            root=resolved_root,
+            namespace=namespace,
+        )
+        if cached_files is not None:
+            return cached_files
+    files = [resolved_root / rel for rel in scope.files]
+    if cache_enabled:
+        _write_cached_file_inventory(
+            FileInventoryWriteRequestV1(
+                cache=cache,
+                namespace=namespace,
+                cache_key=cache_key,
+                policy=policy,
+                root=resolved_root,
+                scope=scope,
+                files=files,
+            )
+        )
+    return files
 
+
+def _read_cached_file_inventory(
+    *,
+    cache: CqCacheBackend,
+    cache_key: str,
+    root: Path,
+    namespace: str,
+) -> list[Path] | None:
+    cached = cache.get(cache_key)
+    record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=cache_key)
+    if not isinstance(cached, dict):
+        return None
+    try:
+        payload = msgspec.convert(cached, type=FileInventoryCacheV1)
+    except (RuntimeError, TypeError, ValueError):
+        record_cache_decode_failure(namespace=namespace)
+        return None
+    files = [root / rel for rel in payload.files]
+    existing = [path for path in files if path.exists()]
+    return existing if len(existing) == len(files) else None
+
+
+def _write_cached_file_inventory(request: FileInventoryWriteRequestV1) -> None:
+    ttl_seconds = resolve_namespace_ttl_seconds(
+        policy=request.policy,
+        namespace=request.namespace,
+    )
+    rel_files = [_normalize_match_file(str(path), request.root) for path in request.files]
+    payload = FileInventoryCacheV1(
+        files=rel_files,
+        snapshot_digest=request.scope.snapshot_digest,
+        inventory_token={
+            str(k): int(v) if isinstance(v, int) else 0 for k, v in request.scope.inventory_token.items()
+        },
+    )
+    ok = request.cache.set(
+        request.cache_key,
+        msgspec.to_builtins(payload),
+        expire=ttl_seconds,
+        tag=build_namespace_cache_tag(
+            workspace=request.scope.root,
+            language=request.scope.language,
+            namespace=request.namespace,
+            scope_hash=request.scope.scope_hash,
+            snapshot=request.scope.snapshot_digest,
+        ),
+    )
+    record_cache_set(namespace=request.namespace, ok=ok, key=request.cache_key)
+
+
+def _list_files_for_inventory(
+    paths: list[Path],
+    root: Path,
+    globs: list[str] | None,
+    lang: str,
+) -> list[Path]:
+    query_lang: QueryLanguage = "rust" if lang == "rust" else "python"
+    repo_context = resolve_repo_context(root)
     repo_index = build_repo_file_index(repo_context)
     result = tabulate_files(
         repo_index,
-        resolved_paths,
-        list(normalized_globs),
-        extensions=extensions,
+        paths,
+        globs,
+        extensions=tuple(file_extensions_for_language(query_lang)),
     )
-    files = sorted(result.files, key=lambda path: path.as_posix())
+    return sorted(result.files, key=lambda path: path.as_posix())
 
-    snapshot = build_scope_snapshot_fingerprint(
-        root=resolved_root,
-        files=files,
-        language=lang,
-        scope_globs=list(normalized_globs),
-        scope_roots=[Path(item) for item in scope_roots],
-        inventory_token=inventory_token,
-    )
 
-    if cache_enabled:
-        ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=namespace)
-        rel_files = [_normalize_match_file(str(path), resolved_root) for path in files]
-        payload = FileInventoryCacheV1(
-            files=rel_files,
-            snapshot_digest=snapshot.digest,
-            inventory_token=inventory_token,
-        )
-        ok = cache.set(
-            cache_key,
-            msgspec.to_builtins(payload),
-            expire=ttl_seconds,
-            tag=build_namespace_cache_tag(
-                workspace=str(resolved_root),
-                language=lang,
-                namespace=namespace,
-                scope_hash=scope_hash,
-                snapshot=snapshot.digest,
-            ),
-        )
-        record_cache_set(namespace=namespace, ok=ok, key=cache_key)
-
-    return files
+def _inventory_token_for_root(root: Path) -> Mapping[str, object]:
+    return _repo_inventory_token(root=root, repo_context=resolve_repo_context(root))
 
 
 def normalize_record_types(
@@ -297,7 +345,11 @@ def normalize_record_types(
 
 
 def _normalize_match_file(file_path: str, root: Path) -> str:
-    """Normalize file paths to repo-relative POSIX paths."""
+    """Normalize file paths to repo-relative POSIX paths.
+
+    Returns:
+        str: Normalized file path string.
+    """
     path = Path(file_path)
     if path.is_absolute():
         try:
@@ -308,7 +360,11 @@ def _normalize_match_file(file_path: str, root: Path) -> str:
 
 
 def _parse_rule_id(rule_id: str) -> tuple[RecordType | None, str]:
-    """Parse rule ID to extract record type and kind."""
+    """Parse rule ID to extract record type and kind.
+
+    Returns:
+        tuple[RecordType | None, str]: Parsed record type and record kind.
+    """
     if not rule_id.startswith("py_"):
         return None, ""
 
@@ -337,5 +393,9 @@ def filter_records_by_kind(
     record_type: RecordType,
     kinds: set[str] | None = None,
 ) -> list[SgRecord]:
-    """Filter records by type and optionally by kind."""
+    """Filter records by type and optionally by kind.
+
+    Returns:
+        list[SgRecord]: Matching records by record type and kind.
+    """
     return [r for r in records if r.record == record_type and (kinds is None or r.kind in kinds)]

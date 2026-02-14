@@ -102,7 +102,11 @@ class DiskcacheBackend:
         record_cache_abort(namespace=namespace)
 
     def get(self, key: str) -> object | None:
-        """Fetch key from cache."""
+        """Fetch key from cache.
+
+        Returns:
+            object | None: Cached value for the key, or `None` on miss/error.
+        """
         namespace = self._namespace_from_key(key)
         try:
             return self._cache.get(key, default=None, retry=True)
@@ -121,7 +125,11 @@ class DiskcacheBackend:
         expire: int | None = None,
         tag: str | None = None,
     ) -> bool:
-        """Write value to cache and return acknowledgement."""
+        """Write value to cache and return acknowledgement.
+
+        Returns:
+            bool: `True` when the value was written, `False` otherwise.
+        """
         ttl = expire if expire is not None else self._default_ttl_seconds
         namespace = self._namespace_from_key(key)
         try:
@@ -141,7 +149,11 @@ class DiskcacheBackend:
         expire: int | None = None,
         tag: str | None = None,
     ) -> bool:
-        """Write value only when absent and return acknowledgement."""
+        """Write value only when absent and return acknowledgement.
+
+        Returns:
+            bool: `True` when the value was added, `False` otherwise.
+        """
         ttl = expire if expire is not None else self._default_ttl_seconds
         namespace = self._namespace_from_key(key)
         try:
@@ -154,7 +166,11 @@ class DiskcacheBackend:
             return False
 
     def incr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
-        """Increment numeric value and return updated value."""
+        """Increment numeric value and return updated value.
+
+        Returns:
+            int | None: Updated integer value when present, otherwise `None`.
+        """
         namespace = self._namespace_from_key(key)
         try:
             value = self._cache.incr(key, delta=delta, default=default, retry=True)
@@ -169,7 +185,11 @@ class DiskcacheBackend:
             return None
 
     def decr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
-        """Decrement numeric value and return updated value."""
+        """Decrement numeric value and return updated value.
+
+        Returns:
+            int | None: Updated integer value when present, otherwise `None`.
+        """
         namespace = self._namespace_from_key(key)
         try:
             value = self._cache.decr(key, delta=delta, default=default, retry=True)
@@ -184,7 +204,11 @@ class DiskcacheBackend:
             return None
 
     def delete(self, key: str) -> bool:
-        """Delete key from cache and return acknowledgement."""
+        """Delete key from cache and return acknowledgement.
+
+        Returns:
+            bool: `True` when deletion was attempted successfully, `False` otherwise.
+        """
         namespace = self._namespace_from_key(key)
         try:
             return bool(self._cache.delete(key, retry=True))
@@ -196,7 +220,11 @@ class DiskcacheBackend:
             return False
 
     def evict_tag(self, tag: str) -> bool:
-        """Evict tagged items and return acknowledgement."""
+        """Evict tagged items and return acknowledgement.
+
+        Returns:
+            bool: `True` when tag eviction succeeded, `False` otherwise.
+        """
         namespace = self._namespace_from_tag(tag)
         try:
             self._cache.evict(tag, retry=True)
@@ -209,11 +237,19 @@ class DiskcacheBackend:
             return False
 
     def transact(self) -> _FailOpenTransaction:
-        """Return fail-open transaction context manager."""
+        """Return fail-open transaction context manager.
+
+        Returns:
+            _FailOpenTransaction: Context manager for best-effort transactional scope.
+        """
         return _FailOpenTransaction(self)
 
     def stats(self) -> dict[str, object]:
-        """Return cache stats payload."""
+        """Return cache stats payload.
+
+        Returns:
+            dict[str, object]: Cache hit/miss counts and related metrics.
+        """
         try:
             hits, misses = self._cache.stats(enable=False, reset=False)
             return {
@@ -228,7 +264,11 @@ class DiskcacheBackend:
             return {}
 
     def volume(self) -> int | None:
-        """Return backend volume in bytes, when available."""
+        """Return backend volume in bytes, when available.
+
+        Returns:
+            int | None: Estimated cache volume in bytes, or `None` on error.
+        """
         try:
             volume_bytes = int(self._cache.volume())
             record_cache_volume(namespace="cache_backend", volume_bytes=volume_bytes)
@@ -241,7 +281,11 @@ class DiskcacheBackend:
             return None
 
     def cull(self) -> int | None:
-        """Trigger backend cull and return number of removed entries."""
+        """Trigger backend cull and return number of removed entries.
+
+        Returns:
+            int | None: Number of entries removed, or `None` on error.
+        """
         try:
             removed = int(self._cache.cull(retry=True))
             record_cache_cull(namespace="cache_backend", removed=removed)

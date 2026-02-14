@@ -8,6 +8,11 @@ from typing import Annotated
 
 import msgspec
 
+from tools.cq.core.runtime.env_namespace import (
+    NamespacePatternV1,
+    parse_namespace_bool_overrides,
+    parse_namespace_int_overrides,
+)
 from tools.cq.core.runtime.execution_policy import default_runtime_execution_policy
 from tools.cq.core.structs import CqSettingsStruct
 
@@ -60,33 +65,26 @@ def _env_int(raw: str | None, *, default: int, minimum: int = 1) -> int:
     return max(minimum, parsed)
 
 
-def _namespace_from_env_suffix(suffix: str) -> str:
-    return suffix.strip("_").lower()
-
-
 def _resolve_namespace_ttl_from_env(
     *,
     defaults: dict[str, int],
 ) -> dict[str, int]:
     resolved = dict(defaults)
-    prefix = "CQ_CACHE_NAMESPACE_"
-    suffix = "_TTL_SECONDS"
-    for key, value in os.environ.items():
-        if not key.startswith(prefix) or not key.endswith(suffix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(prefix) : -len(suffix)])
-        if not namespace:
-            continue
-        resolved[namespace] = _env_int(value, default=resolved.get(namespace, 900), minimum=1)
-    legacy_prefix = "CQ_CACHE_TTL_"
-    legacy_suffix = "_SECONDS"
-    for key, value in os.environ.items():
-        if not key.startswith(legacy_prefix) or not key.endswith(legacy_suffix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(legacy_prefix) : -len(legacy_suffix)])
-        if not namespace:
-            continue
-        resolved[namespace] = _env_int(value, default=resolved.get(namespace, 900), minimum=1)
+    parsed = parse_namespace_int_overrides(
+        env=os.environ,
+        patterns=(
+            NamespacePatternV1(prefix="CQ_CACHE_NAMESPACE_", suffix="_TTL_SECONDS"),
+            NamespacePatternV1(prefix="CQ_CACHE_TTL_", suffix="_SECONDS"),
+        ),
+        minimum=1,
+    )
+    for namespace, value in parsed.values.items():
+        if isinstance(value, int):
+            resolved[str(namespace)] = _env_int(
+                str(value),
+                default=resolved.get(str(namespace), 900),
+                minimum=1,
+            )
     return resolved
 
 
@@ -95,23 +93,19 @@ def _resolve_namespace_enabled_from_env(
     defaults: dict[str, bool],
 ) -> dict[str, bool]:
     resolved = dict(defaults)
-    prefix = "CQ_CACHE_NAMESPACE_"
-    suffix = "_ENABLED"
-    for key, value in os.environ.items():
-        if not key.startswith(prefix) or not key.endswith(suffix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(prefix) : -len(suffix)])
-        if not namespace:
-            continue
-        resolved[namespace] = _env_bool(value, default=resolved.get(namespace, True))
-    legacy_prefix = "CQ_CACHE_ENABLE_"
-    for key, value in os.environ.items():
-        if not key.startswith(legacy_prefix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(legacy_prefix) :])
-        if not namespace:
-            continue
-        resolved[namespace] = _env_bool(value, default=resolved.get(namespace, True))
+    parsed = parse_namespace_bool_overrides(
+        env=os.environ,
+        patterns=(
+            NamespacePatternV1(prefix="CQ_CACHE_NAMESPACE_", suffix="_ENABLED"),
+            NamespacePatternV1(prefix="CQ_CACHE_ENABLE_"),
+        ),
+    )
+    for namespace, value in parsed.values.items():
+        if isinstance(value, bool):
+            resolved[str(namespace)] = _env_bool(
+                "1" if value else "0",
+                default=resolved.get(str(namespace), True),
+            )
     return resolved
 
 
@@ -120,14 +114,16 @@ def _resolve_namespace_ephemeral_from_env(
     defaults: dict[str, bool],
 ) -> dict[str, bool]:
     resolved = dict(defaults)
-    prefix = "CQ_CACHE_EPHEMERAL_"
-    for key, value in os.environ.items():
-        if not key.startswith(prefix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(prefix) :])
-        if not namespace:
-            continue
-        resolved[namespace] = _env_bool(value, default=resolved.get(namespace, False))
+    parsed = parse_namespace_bool_overrides(
+        env=os.environ,
+        patterns=(NamespacePatternV1(prefix="CQ_CACHE_EPHEMERAL_"),),
+    )
+    for namespace, value in parsed.values.items():
+        if isinstance(value, bool):
+            resolved[str(namespace)] = _env_bool(
+                "1" if value else "0",
+                default=resolved.get(str(namespace), False),
+            )
     return resolved
 
 

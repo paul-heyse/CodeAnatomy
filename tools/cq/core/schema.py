@@ -6,13 +6,12 @@ Structs defining the structured output format for all cq macros.
 from __future__ import annotations
 
 import hashlib
-import json
-from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal
 
 import msgspec
 
 from tools.cq import SCHEMA_VERSION
+from tools.cq.core.id import stable_digest24
 from tools.cq.core.locations import SourceSpan
 
 # Schema evolution notes:
@@ -410,26 +409,6 @@ def mk_result(run: RunMeta) -> CqResult:
     return CqResult(run=run)
 
 
-def _canonicalize_for_id(value: object) -> object:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, Mapping):
-        items = sorted((str(key), _canonicalize_for_id(val)) for key, val in value.items())
-        return {key: val for key, val in items}
-    if isinstance(value, (set, frozenset)):
-        normalized = [_canonicalize_for_id(item) for item in value]
-        return sorted(normalized, key=repr)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_canonicalize_for_id(item) for item in value]
-    try:
-        builtins = msgspec.to_builtins(value)
-    except (RuntimeError, TypeError, ValueError):
-        if hasattr(value, "__dict__"):
-            return _canonicalize_for_id(vars(value))
-        return repr(value)
-    return _canonicalize_for_id(builtins)
-
-
 def _stable_finding_id(finding: Finding) -> str:
     payload = {
         "category": finding.category,
@@ -448,17 +427,15 @@ def _stable_finding_id(finding: Finding) -> str:
         ),
         "details": finding.details.to_legacy_dict(),
     }
-    canonical = _canonicalize_for_id(payload)
-    digest = hashlib.sha256(
-        json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
-            "utf-8"
-        )
-    ).hexdigest()
-    return digest[:24]
+    return stable_digest24(payload)
 
 
 def assign_result_finding_ids(result: CqResult) -> CqResult:
-    """Assign stable and execution-scoped IDs for all findings in a result."""
+    """Assign stable and execution-scoped IDs for all findings in a result.
+
+    Returns:
+        CqResult: Result with updated finding IDs.
+    """
     run_id = result.run.run_id or ""
 
     def _assign(finding: Finding) -> None:

@@ -11,6 +11,24 @@ from tools.cq.core.cache.diskcache_backend import (
     close_cq_cache_backend,
     get_cq_cache_backend,
 )
+from tools.cq.core.cache.fragment_codecs import (
+    decode_fragment_payload,
+    encode_fragment_payload,
+)
+from tools.cq.core.cache.fragment_contracts import (
+    FragmentEntryV1,
+    FragmentHitV1,
+    FragmentMissV1,
+    FragmentPartitionV1,
+    FragmentRequestV1,
+    FragmentWriteV1,
+)
+from tools.cq.core.cache.fragment_engine import (
+    FragmentPersistRuntimeV1,
+    FragmentProbeRuntimeV1,
+    partition_fragment_entries,
+    persist_fragment_writes,
+)
 from tools.cq.core.cache.interface import CqCacheBackend, NoopCacheBackend
 from tools.cq.core.cache.key_builder import (
     build_cache_key,
@@ -29,9 +47,11 @@ from tools.cq.core.cache.namespaces import (
 )
 from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
 from tools.cq.core.cache.run_lifecycle import (
+    CacheWriteTagRequestV1,
     maybe_evict_run_cache_tag,
     resolve_write_cache_tag,
 )
+from tools.cq.core.cache.scope_services import ScopePlanV1, ScopeResolutionV1, resolve_scope
 from tools.cq.core.cache.snapshot_fingerprint import (
     ScopeFileStatV1,
     ScopeSnapshotFingerprintV1,
@@ -55,12 +75,23 @@ from tools.cq.core.cache.telemetry import (
 
 __all__ = [
     "CacheNamespaceTelemetry",
+    "CacheWriteTagRequestV1",
     "CqCacheBackend",
     "CqCachePolicyV1",
     "DiskcacheBackend",
     "FileContentHashV1",
+    "FragmentEntryV1",
+    "FragmentHitV1",
+    "FragmentMissV1",
+    "FragmentPartitionV1",
+    "FragmentPersistRuntimeV1",
+    "FragmentProbeRuntimeV1",
+    "FragmentRequestV1",
+    "FragmentWriteV1",
     "NoopCacheBackend",
     "ScopeFileStatV1",
+    "ScopePlanV1",
+    "ScopeResolutionV1",
     "ScopeSnapshotFingerprintV1",
     "build_cache_key",
     "build_cache_tag",
@@ -71,13 +102,17 @@ __all__ = [
     "cache_namespace_env_suffix",
     "canonicalize_cache_payload",
     "close_cq_cache_backend",
+    "decode_fragment_payload",
     "default_cache_policy",
+    "encode_fragment_payload",
     "file_content_hash",
     "get_cq_cache_backend",
     "is_namespace_cache_enabled",
     "is_namespace_ephemeral",
     "maybe_evict_run_cache_tag",
     "namespace_defaults",
+    "partition_fragment_entries",
+    "persist_fragment_writes",
     "record_cache_abort",
     "record_cache_cull",
     "record_cache_decode_failure",
@@ -91,6 +126,7 @@ __all__ = [
     "reset_cache_telemetry",
     "reset_file_content_hash_cache",
     "resolve_namespace_ttl_seconds",
+    "resolve_scope",
     "resolve_write_cache_tag",
     "snapshot_backend_metrics",
     "snapshot_cache_telemetry",

@@ -507,6 +507,7 @@ def build_command(
     import logging
 
     from graph.build_pipeline import orchestrate_build
+    from graph.contracts import OrchestrateBuildRequestV1
     from planning_engine.spec_contracts import RuntimeConfig, TracingConfig
 
     logger = logging.getLogger("codeanatomy.pipeline")
@@ -604,16 +605,18 @@ def build_command(
     resolved_work_dir = request.work_dir or resolved_repo_root / ".codeanatomy"
 
     result = orchestrate_build(
-        repo_root=resolved_repo_root,
-        work_dir=resolved_work_dir,
-        output_dir=resolved_output_dir,
-        engine_profile=options.engine_profile,
-        rulepack_profile=options.rulepack_profile,
-        runtime_config=runtime_config,
-        extraction_config=extraction_config,
-        include_errors=request.include_extract_errors,
-        include_manifest=request.include_manifest,
-        include_run_bundle=request.include_run_bundle,
+        OrchestrateBuildRequestV1(
+            repo_root=str(resolved_repo_root),
+            work_dir=str(resolved_work_dir),
+            output_dir=str(resolved_output_dir),
+            engine_profile=options.engine_profile,
+            rulepack_profile=options.rulepack_profile,
+            runtime_config=runtime_config,
+            extraction_config=extraction_config,
+            include_errors=request.include_extract_errors,
+            include_manifest=request.include_manifest,
+            include_run_bundle=request.include_run_bundle,
+        )
     )
 
     logger.info(

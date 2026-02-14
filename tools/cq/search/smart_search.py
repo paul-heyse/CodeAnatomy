@@ -5,7 +5,6 @@ from __future__ import annotations
 import multiprocessing
 import re
 from collections import Counter
-from concurrent.futures import Future
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -14,28 +13,9 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from tools.cq.core.cache import (
-    build_cache_key,
-    build_scope_hash,
-    build_scope_snapshot_fingerprint,
-    default_cache_policy,
-    file_content_hash,
-    get_cq_cache_backend,
-    is_namespace_cache_enabled,
     maybe_evict_run_cache_tag,
-    resolve_namespace_ttl_seconds,
-    resolve_write_cache_tag,
     snapshot_backend_metrics,
 )
-from tools.cq.core.cache.contracts import (
-    SearchCandidatesCacheV1,
-    SearchEnrichmentAnchorCacheV1,
-)
-from tools.cq.core.cache.telemetry import (
-    record_cache_decode_failure,
-    record_cache_get,
-    record_cache_set,
-)
-from tools.cq.core.contracts import contract_to_builtins, require_mapping
 from tools.cq.core.locations import (
     SourceSpan,
     line_relative_byte_range_to_absolute,
@@ -76,7 +56,6 @@ from tools.cq.query.language import (
     ripgrep_type_for_language,
     ripgrep_types_for_scope,
 )
-from tools.cq.query.sg_parser import list_scan_files
 from tools.cq.search.candidate_normalizer import build_definition_candidate_finding
 from tools.cq.search.classifier import (
     HeuristicResult,
@@ -136,6 +115,8 @@ from tools.cq.search.multilang_diagnostics import (
     diagnostics_to_summary_payload,
     is_python_oriented_query_text,
 )
+from tools.cq.search.partition_contracts import SearchPartitionPlanV1
+from tools.cq.search.partition_pipeline import run_search_partition
 from tools.cq.search.pipeline import SearchPipeline
 from tools.cq.search.profiles import INTERACTIVE, SearchLimits
 from tools.cq.search.pyrefly_lsp import get_pyrefly_lsp_capabilities
@@ -1913,217 +1894,20 @@ def _run_single_partition(
     *,
     mode: QueryMode,
 ) -> _LanguageSearchResult:
-    resolved_root = ctx.root.resolve()
-    cache = get_cq_cache_backend(root=resolved_root)
-    policy = default_cache_policy(root=resolved_root)
-
-    include_globs = constrain_include_globs_for_language(ctx.include_globs, lang) or []
-    scope_globs: list[str] = list(include_globs)
-    scope_globs.extend(
-        exclude if exclude.startswith("!") else f"!{exclude}"
-        for exclude in (ctx.exclude_globs or [])
-    )
-
-    scope_files = list_scan_files(
-        paths=[resolved_root],
-        root=resolved_root,
-        globs=scope_globs or None,
-        lang=lang,
-    )
-    scope_snapshot = build_scope_snapshot_fingerprint(
-        root=resolved_root,
-        files=scope_files,
+    plan = SearchPartitionPlanV1(
+        root=str(ctx.root.resolve()),
         language=lang,
-        scope_globs=scope_globs,
-        scope_roots=[resolved_root],
-    )
-    scope_hash = build_scope_hash(
-        {
-            "scope_roots": (str(resolved_root),),
-            "scope_globs": tuple(scope_globs),
-            "mode": mode.value,
-            "query": ctx.query,
-        }
-    )
-
-    candidate_namespace = "search_candidates"
-    candidate_cache_enabled = is_namespace_cache_enabled(
-        policy=policy,
-        namespace=candidate_namespace,
-    )
-    candidate_ttl = resolve_namespace_ttl_seconds(policy=policy, namespace=candidate_namespace)
-    candidate_key = build_cache_key(
-        candidate_namespace,
-        version="v2",
-        workspace=str(resolved_root),
-        language=lang,
-        target=ctx.query,
-        extras={
-            "mode": mode.value,
-            "include_strings": ctx.include_strings,
-            "include_globs": tuple(ctx.include_globs or ()),
-            "exclude_globs": tuple(ctx.exclude_globs or ()),
-            "max_total_matches": ctx.limits.max_total_matches,
-            "snapshot_digest": scope_snapshot.digest,
-        },
-    )
-    raw_matches: list[RawMatch]
-    stats: SearchStats
-    pattern: str
-    candidate_hit = False
-    if candidate_cache_enabled:
-        cached = cache.get(candidate_key)
-        record_cache_get(
-            namespace=candidate_namespace,
-            hit=isinstance(cached, dict),
-            key=candidate_key,
-        )
-        if isinstance(cached, dict):
-            try:
-                payload = msgspec.convert(cached, type=SearchCandidatesCacheV1)
-                raw_matches = [msgspec.convert(item, type=RawMatch) for item in payload.raw_matches]
-                stats = msgspec.convert(payload.stats, type=SearchStats)
-                pattern = payload.pattern
-                candidate_hit = True
-            except (RuntimeError, TypeError, ValueError):
-                record_cache_decode_failure(namespace=candidate_namespace)
-                raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang, mode=mode)
-        else:
-            raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang, mode=mode)
-    else:
-        raw_matches, stats, pattern = _run_candidate_phase(ctx, lang=lang, mode=mode)
-
-    if candidate_cache_enabled and not candidate_hit:
-        payload = SearchCandidatesCacheV1(
-            pattern=pattern,
-            raw_matches=cast("list[dict[str, object]]", contract_to_builtins(raw_matches)),
-            stats=require_mapping(stats),
-        )
-        candidate_tag = resolve_write_cache_tag(
-            policy=policy,
-            workspace=str(resolved_root),
-            language=lang,
-            namespace=candidate_namespace,
-            scope_hash=scope_hash,
-            snapshot=scope_snapshot.digest,
-            run_id=ctx.run_id,
-        )
-        ok = cache.set(
-            candidate_key,
-            contract_to_builtins(payload),
-            expire=candidate_ttl,
-            tag=candidate_tag,
-        )
-        record_cache_set(namespace=candidate_namespace, ok=ok, key=candidate_key)
-
-    pyrefly_prefetch_future: Future[_PyreflyPrefetchResult] | None = None
-    pyrefly_prefetch: _PyreflyPrefetchResult | None = None
-    if lang == "python" and raw_matches:
-        pyrefly_prefetch_future = get_worker_scheduler().submit_io(
-            _prefetch_pyrefly_for_raw_matches,
-            ctx,
-            lang=lang,
-            raw_matches=raw_matches,
-        )
-
-    enrichment_namespace = "search_enrichment"
-    enrichment_cache_enabled = is_namespace_cache_enabled(
-        policy=policy,
-        namespace=enrichment_namespace,
-    )
-    enrichment_ttl = resolve_namespace_ttl_seconds(policy=policy, namespace=enrichment_namespace)
-    enrichment_tag = resolve_write_cache_tag(
-        policy=policy,
-        workspace=str(resolved_root),
-        language=lang,
-        namespace=enrichment_namespace,
-        scope_hash=scope_hash,
-        snapshot=scope_snapshot.digest,
+        query=ctx.query,
+        mode=mode.value,
+        include_strings=ctx.include_strings,
+        include_globs=tuple(ctx.include_globs or ()),
+        exclude_globs=tuple(ctx.exclude_globs or ()),
+        max_total_matches=ctx.limits.max_total_matches,
         run_id=ctx.run_id,
     )
-
-    enriched_results: list[EnrichedMatch | None] = [None] * len(raw_matches)
-    misses: list[tuple[int, RawMatch, str, str]] = []
-    for idx, raw in enumerate(raw_matches):
-        file_hash = file_content_hash(resolved_root / raw.file).digest
-        cache_key = build_cache_key(
-            enrichment_namespace,
-            version="v2",
-            workspace=str(resolved_root),
-            language=lang,
-            target=f"{raw.file}:{raw.line}:{raw.col}",
-            extras={
-                "match_text": raw.match_text,
-                "match_start": raw.match_start,
-                "match_end": raw.match_end,
-                "submatch_index": raw.submatch_index,
-                "file_content_hash": file_hash,
-            },
-        )
-        if enrichment_cache_enabled and file_hash:
-            cached = cache.get(cache_key)
-            record_cache_get(
-                namespace=enrichment_namespace,
-                hit=isinstance(cached, dict),
-                key=cache_key,
-            )
-            if isinstance(cached, dict):
-                try:
-                    payload = msgspec.convert(cached, type=SearchEnrichmentAnchorCacheV1)
-                    enriched_results[idx] = msgspec.convert(
-                        payload.enriched_match,
-                        type=EnrichedMatch,
-                    )
-                    continue
-                except (RuntimeError, TypeError, ValueError):
-                    record_cache_decode_failure(namespace=enrichment_namespace)
-        misses.append((idx, raw, cache_key, file_hash))
-
-    if misses:
-        miss_raw_matches = [item[1] for item in misses]
-        miss_enriched = _run_classification_phase(ctx, lang=lang, raw_matches=miss_raw_matches)
-        with cache.transact():
-            for miss_idx, (idx, raw, cache_key, file_hash) in enumerate(misses):
-                if miss_idx >= len(miss_enriched):
-                    break
-                enriched_match = miss_enriched[miss_idx]
-                enriched_results[idx] = enriched_match
-                if not enrichment_cache_enabled or not file_hash:
-                    continue
-                payload = SearchEnrichmentAnchorCacheV1(
-                    file=raw.file,
-                    line=max(1, int(raw.line)),
-                    col=max(0, int(raw.col)),
-                    match_text=raw.match_text,
-                    file_content_hash=file_hash,
-                    language=lang,
-                    enriched_match=cast(
-                        "dict[str, object]",
-                        contract_to_builtins(enriched_match),
-                    ),
-                )
-                ok = cache.set(
-                    cache_key,
-                    contract_to_builtins(payload),
-                    expire=enrichment_ttl,
-                    tag=enrichment_tag,
-                )
-                record_cache_set(namespace=enrichment_namespace, ok=ok, key=cache_key)
-
-    enriched = [match for match in enriched_results if isinstance(match, EnrichedMatch)]
-    if pyrefly_prefetch_future is not None:
-        try:
-            pyrefly_prefetch = pyrefly_prefetch_future.result()
-        except (OSError, RuntimeError, TimeoutError, ValueError, TypeError):
-            pyrefly_prefetch = _PyreflyPrefetchResult(telemetry=_new_pyrefly_telemetry())
-    return _LanguageSearchResult(
-        lang=lang,
-        raw_matches=raw_matches,
-        stats=stats,
-        pattern=pattern,
-        enriched_matches=enriched,
-        dropped_by_scope=stats.dropped_by_scope,
-        pyrefly_prefetch=pyrefly_prefetch,
+    return cast(
+        "_LanguageSearchResult",
+        run_search_partition(plan, ctx=ctx, mode=mode),
     )
 
 

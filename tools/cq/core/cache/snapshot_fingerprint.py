@@ -14,6 +14,7 @@ from tools.cq.core.cache.contracts import (
     ScopeSnapshotCacheV1,
 )
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.interface import CqCacheBackend
 from tools.cq.core.cache.key_builder import (
     build_cache_key,
     build_namespace_cache_tag,
@@ -24,6 +25,7 @@ from tools.cq.core.cache.namespaces import (
     resolve_namespace_ttl_seconds,
 )
 from tools.cq.core.cache.policy import default_cache_policy
+from tools.cq.core.cache.policy import CqCachePolicyV1
 from tools.cq.core.cache.telemetry import (
     record_cache_decode_failure,
     record_cache_get,
@@ -55,6 +57,19 @@ class ScopeSnapshotFingerprintV1(CqCacheStruct, frozen=True):
     def file_count(self) -> int:
         """Return number of files included in this snapshot."""
         return len(self.files)
+
+
+class _ScopeSnapshotCacheContextV1(CqCacheStruct, frozen=True):
+    namespace: str
+    root: str
+    language: str
+    scope_hash: str | None = None
+    scope_roots: tuple[str, ...] = ()
+    scope_globs: tuple[str, ...] = ()
+    inventory_token: dict[str, object] = msgspec.field(default_factory=dict)
+    file_signature: tuple[tuple[str, int, int], ...] = ()
+    cache_key: str = ""
+    cache_enabled: bool = False
 
 
 def _safe_rel_path(*, root: Path, file_path: Path) -> str:
@@ -102,6 +117,134 @@ def _normalize_inventory_token(
     return {}
 
 
+def _snapshot_cache_context(
+    *,
+    root: Path,
+    language: str,
+    scope_globs: list[str] | None,
+    scope_roots: list[Path] | None,
+    inventory_token: Mapping[str, object] | object | None,
+    file_signature: tuple[tuple[str, int, int], ...],
+) -> tuple[_ScopeSnapshotCacheContextV1, CqCachePolicyV1]:
+    namespace = "scope_snapshot"
+    resolved_root = root.resolve()
+    normalized_scope_roots = _normalize_scope_roots(root=resolved_root, scope_roots=scope_roots)
+    normalized_inventory = _normalize_inventory_token(inventory_token)
+    normalized_globs = tuple(scope_globs or ())
+    scope_hash = build_scope_hash(
+        {
+            "scope_roots": normalized_scope_roots,
+            "scope_globs": normalized_globs,
+            "inventory_token": normalized_inventory,
+        }
+    )
+    cache_key = build_cache_key(
+        namespace,
+        version="v1",
+        workspace=str(resolved_root),
+        language=language,
+        target=scope_hash or language,
+        extras={
+            "scope_roots": normalized_scope_roots,
+            "scope_globs": normalized_globs,
+            "inventory_token": normalized_inventory,
+            "file_signature": file_signature,
+        },
+    )
+    policy = default_cache_policy(root=resolved_root)
+    cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
+    return (
+        _ScopeSnapshotCacheContextV1(
+            namespace=namespace,
+            root=str(resolved_root),
+            language=language,
+            scope_hash=scope_hash,
+            scope_roots=normalized_scope_roots,
+            scope_globs=normalized_globs,
+            inventory_token=normalized_inventory,
+            file_signature=file_signature,
+            cache_key=cache_key,
+            cache_enabled=cache_enabled,
+        ),
+        policy,
+    )
+
+
+def _cached_scope_snapshot(
+    *,
+    cache: CqCacheBackend,
+    context: _ScopeSnapshotCacheContextV1,
+) -> ScopeSnapshotFingerprintV1 | None:
+    if not context.cache_enabled:
+        return None
+    cached = cache.get(context.cache_key)
+    record_cache_get(
+        namespace=context.namespace,
+        hit=isinstance(cached, dict),
+        key=context.cache_key,
+    )
+    if not isinstance(cached, dict):
+        return None
+    try:
+        payload = msgspec.convert(cached, type=ScopeSnapshotCacheV1)
+    except (RuntimeError, TypeError, ValueError):
+        record_cache_decode_failure(namespace=context.namespace)
+        return None
+    return ScopeSnapshotFingerprintV1(
+        language=payload.language,
+        scope_globs=tuple(payload.scope_globs),
+        files=tuple(
+            ScopeFileStatV1(
+                path=item.path,
+                size_bytes=item.size_bytes,
+                mtime_ns=item.mtime_ns,
+            )
+            for item in payload.files
+        ),
+        digest=payload.digest,
+    )
+
+
+def _persist_scope_snapshot(
+    *,
+    cache: CqCacheBackend,
+    policy: CqCachePolicyV1,
+    context: _ScopeSnapshotCacheContextV1,
+    snapshot: ScopeSnapshotFingerprintV1,
+) -> None:
+    if not context.cache_enabled:
+        return
+    ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=context.namespace)
+    cache_payload = ScopeSnapshotCacheV1(
+        language=snapshot.language,
+        scope_globs=snapshot.scope_globs,
+        scope_roots=context.scope_roots,
+        inventory_token=context.inventory_token,
+        files=[
+            ScopeFileStatCacheV1(
+                path=item.path,
+                size_bytes=item.size_bytes,
+                mtime_ns=item.mtime_ns,
+            )
+            for item in snapshot.files
+        ],
+        digest=snapshot.digest,
+    )
+    ok = cache.set(
+        context.cache_key,
+        contract_to_builtins(cache_payload),
+        expire=ttl_seconds,
+        tag=build_namespace_cache_tag(
+            workspace=context.root,
+            language=context.language,
+            namespace=context.namespace,
+            scope_hash=context.scope_hash,
+            snapshot=snapshot.digest,
+        ),
+    )
+    record_cache_set(namespace=context.namespace, ok=ok, key=context.cache_key)
+
+
 def build_scope_snapshot_fingerprint(
     *,
     root: Path,
@@ -116,65 +259,30 @@ def build_scope_snapshot_fingerprint(
     Returns:
         Snapshot payload containing sorted file stats and digest.
     """
-    namespace = "scope_snapshot"
     resolved_root = root.resolve()
-    normalized_scope_roots = _normalize_scope_roots(root=resolved_root, scope_roots=scope_roots)
-    normalized_inventory = _normalize_inventory_token(inventory_token)
-    scope_hash = build_scope_hash(
-        {
-            "scope_roots": normalized_scope_roots,
-            "scope_globs": tuple(scope_globs or ()),
-            "inventory_token": normalized_inventory,
-        }
-    )
     stats = sorted(
         (_file_stat(root=resolved_root, file_path=path) for path in files),
         key=lambda item: item.path,
     )
     file_signature = tuple((item.path, item.size_bytes, item.mtime_ns) for item in stats)
-    policy = default_cache_policy(root=resolved_root)
-    cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
     cache = get_cq_cache_backend(root=resolved_root)
-    cache_key = build_cache_key(
-        namespace,
-        version="v1",
-        workspace=str(resolved_root),
+    context, policy = _snapshot_cache_context(
+        root=resolved_root,
         language=language,
-        target=scope_hash or language,
-        extras={
-            "scope_roots": normalized_scope_roots,
-            "scope_globs": tuple(scope_globs or ()),
-            "inventory_token": normalized_inventory,
-            "file_signature": file_signature,
-        },
+        scope_globs=scope_globs,
+        scope_roots=scope_roots,
+        inventory_token=inventory_token,
+        file_signature=file_signature,
     )
-    if cache_enabled:
-        cached = cache.get(cache_key)
-        record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=cache_key)
-        if isinstance(cached, dict):
-            try:
-                payload = msgspec.convert(cached, type=ScopeSnapshotCacheV1)
-                return ScopeSnapshotFingerprintV1(
-                    language=payload.language,
-                    scope_globs=tuple(payload.scope_globs),
-                    files=tuple(
-                        ScopeFileStatV1(
-                            path=item.path,
-                            size_bytes=item.size_bytes,
-                            mtime_ns=item.mtime_ns,
-                        )
-                        for item in payload.files
-                    ),
-                    digest=payload.digest,
-                )
-            except (RuntimeError, TypeError, ValueError):
-                record_cache_decode_failure(namespace=namespace)
+    cached_snapshot = _cached_scope_snapshot(cache=cache, context=context)
+    if cached_snapshot is not None:
+        return cached_snapshot
 
     payload = {
         "language": language,
-        "scope_globs": tuple(scope_globs or ()),
-        "scope_roots": normalized_scope_roots,
-        "inventory_token": normalized_inventory,
+        "scope_globs": context.scope_globs,
+        "scope_roots": context.scope_roots,
+        "inventory_token": context.inventory_token,
         "files": file_signature,
     }
     digest = hashlib.sha256(msgspec.json.encode(payload)).hexdigest()
@@ -184,36 +292,12 @@ def build_scope_snapshot_fingerprint(
         files=tuple(stats),
         digest=digest,
     )
-    if cache_enabled:
-        ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=namespace)
-        cache_payload = ScopeSnapshotCacheV1(
-            language=snapshot.language,
-            scope_globs=snapshot.scope_globs,
-            scope_roots=normalized_scope_roots,
-            inventory_token=normalized_inventory,
-            files=[
-                ScopeFileStatCacheV1(
-                    path=item.path,
-                    size_bytes=item.size_bytes,
-                    mtime_ns=item.mtime_ns,
-                )
-                for item in snapshot.files
-            ],
-            digest=snapshot.digest,
-        )
-        ok = cache.set(
-            cache_key,
-            contract_to_builtins(cache_payload),
-            expire=ttl_seconds,
-            tag=build_namespace_cache_tag(
-                workspace=str(resolved_root),
-                language=language,
-                namespace=namespace,
-                scope_hash=scope_hash,
-                snapshot=digest,
-            ),
-        )
-        record_cache_set(namespace=namespace, ok=ok, key=cache_key)
+    _persist_scope_snapshot(
+        cache=cache,
+        policy=policy,
+        context=context,
+        snapshot=snapshot,
+    )
     return snapshot
 
 

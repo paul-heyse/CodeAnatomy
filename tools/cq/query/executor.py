@@ -18,14 +18,25 @@ from ast_grep_py import Config, Rule, SgRoot
 from tools.cq.astgrep.sgpy_scanner import SgRecord, group_records_by_file
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.cache import (
+    CacheWriteTagRequestV1,
+    FragmentEntryV1,
+    FragmentHitV1,
+    FragmentMissV1,
+    FragmentPersistRuntimeV1,
+    FragmentProbeRuntimeV1,
+    FragmentRequestV1,
+    FragmentWriteV1,
     build_cache_key,
     build_scope_hash,
     build_scope_snapshot_fingerprint,
+    decode_fragment_payload,
     default_cache_policy,
     file_content_hash,
     get_cq_cache_backend,
     is_namespace_cache_enabled,
     maybe_evict_run_cache_tag,
+    partition_fragment_entries,
+    persist_fragment_writes,
     resolve_namespace_ttl_seconds,
     resolve_write_cache_tag,
     snapshot_backend_metrics,
@@ -148,6 +159,33 @@ class PatternExecutionState:
 
 
 @dataclass(frozen=True)
+class _EntityFragmentContext:
+    namespace: str
+    root: Path
+    language: QueryLanguage
+    files: list[Path]
+    record_types: tuple[str, ...]
+    cache: object
+    cache_enabled: bool
+    ttl_seconds: int
+    tag: str
+
+
+@dataclass(frozen=True)
+class _PatternFragmentContext:
+    namespace: str
+    root: Path
+    language: QueryLanguage
+    paths: list[Path]
+    cache: object
+    cache_enabled: bool
+    ttl_seconds: int
+    tag: str
+    rules_digest: str
+    query_filters_digest: str
+
+
+@dataclass(frozen=True)
 class AstGrepExecutionContext:
     """Inputs for executing inline ast-grep rules."""
 
@@ -171,6 +209,17 @@ class DefQueryRelationshipPolicyV1(CqStruct, frozen=True):
     """Policy controls for definition-query relationship detail expansion."""
 
     compute_relationship_details: bool
+
+
+class ExecutePlanRequestV1(CqStruct, frozen=True):
+    """Request contract for query plan execution."""
+
+    plan: ToolPlan
+    query: Query
+    root: str
+    argv: tuple[str, ...] = ()
+    query_text: str | None = None
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -347,6 +396,81 @@ def _scan_entity_records(
     paths: list[Path],
     scope_globs: list[str] | None,
 ) -> list[SgRecord]:
+    fragment_ctx = _build_entity_fragment_context(ctx, paths=paths, scope_globs=scope_globs)
+    if not fragment_ctx.files:
+        return []
+
+    entries = _entity_fragment_entries(fragment_ctx)
+    request = FragmentRequestV1(
+        namespace=fragment_ctx.namespace,
+        workspace=str(fragment_ctx.root),
+        language=ctx.plan.lang,
+        ttl_seconds=fragment_ctx.ttl_seconds,
+        tag=fragment_ctx.tag,
+        run_id=ctx.run_id,
+    )
+    partition = partition_fragment_entries(
+        request,
+        entries,
+        FragmentProbeRuntimeV1(
+            cache_get=fragment_ctx.cache.get,
+            decode=lambda payload: _decode_entity_fragment_payload(payload),
+            cache_enabled=fragment_ctx.cache_enabled,
+            record_get=record_cache_get,
+            record_decode_failure=record_cache_decode_failure,
+        ),
+    )
+
+    records_by_rel = _entity_records_from_hits(partition.hits)
+    if partition.misses:
+        miss_paths = [fragment_ctx.root / miss.entry.file for miss in partition.misses]
+        scanned = sg_scan(
+            paths=miss_paths,
+            record_types=ctx.plan.sg_record_types,
+            root=fragment_ctx.root,
+            globs=None,
+            lang=ctx.plan.lang,
+        )
+        grouped = group_records_by_file(scanned)
+        writes: list[FragmentWriteV1] = []
+        for miss in partition.misses:
+            rel_path = miss.entry.file
+            fragment_records = sorted(grouped.get(rel_path, []), key=_record_sort_key)
+            records_by_rel[rel_path] = fragment_records
+            writes.append(
+                FragmentWriteV1(
+                    entry=miss.entry,
+                    payload=QueryEntityScanCacheV1(
+                        records=[_record_to_cache_record(item) for item in fragment_records]
+                    ),
+                )
+            )
+        persist_fragment_writes(
+            request,
+            writes,
+            FragmentPersistRuntimeV1(
+                cache_set=lambda key, value, ttl, tag: fragment_ctx.cache.set(
+                    key,
+                    value,
+                    expire=ttl,
+                    tag=tag,
+                ),
+                encode=contract_to_builtins,
+                cache_enabled=fragment_ctx.cache_enabled,
+                transact=fragment_ctx.cache.transact,
+                record_set=record_cache_set,
+            ),
+        )
+
+    return _assemble_entity_records(fragment_ctx, records_by_rel)
+
+
+def _build_entity_fragment_context(
+    ctx: QueryExecutionContext,
+    *,
+    paths: list[Path],
+    scope_globs: list[str] | None,
+) -> _EntityFragmentContext:
     namespace = "query_entity_fragment"
     resolved_root = ctx.root.resolve()
     files = list_scan_files(
@@ -355,9 +479,6 @@ def _scan_entity_records(
         globs=scope_globs,
         lang=ctx.plan.lang,
     )
-    if not files:
-        return []
-
     record_types = tuple(sorted(ctx.plan.sg_record_types))
     scope_hash = build_scope_hash(
         {
@@ -377,49 +498,8 @@ def _scan_entity_records(
     policy = default_cache_policy(root=resolved_root)
     cache = get_cq_cache_backend(root=resolved_root)
     cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
-    ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=namespace)
-
-    records_by_rel: dict[str, list[SgRecord]] = {}
-    misses: list[tuple[Path, str, str]] = []
-
-    for file_path in files:
-        rel_path = _normalize_match_file(str(file_path), resolved_root)
-        file_hash = file_content_hash(file_path).digest
-        fragment_key = build_cache_key(
-            namespace,
-            version="v1",
-            workspace=str(resolved_root),
-            language=ctx.plan.lang,
-            target=rel_path,
-            extras={
-                "file_content_hash": file_hash,
-                "record_types": record_types,
-            },
-        )
-        if cache_enabled and file_hash:
-            cached = cache.get(fragment_key)
-            record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=fragment_key)
-            if isinstance(cached, dict):
-                try:
-                    payload = msgspec.convert(cached, type=QueryEntityScanCacheV1)
-                    records_by_rel[rel_path] = [
-                        _cache_record_to_record(row) for row in payload.records
-                    ]
-                    continue
-                except (RuntimeError, TypeError, ValueError):
-                    record_cache_decode_failure(namespace=namespace)
-        misses.append((file_path, rel_path, fragment_key))
-
-    if misses:
-        scanned = sg_scan(
-            paths=[item[0] for item in misses],
-            record_types=ctx.plan.sg_record_types,
-            root=resolved_root,
-            globs=None,
-            lang=ctx.plan.lang,
-        )
-        grouped = group_records_by_file(scanned)
-        tag = resolve_write_cache_tag(
+    tag = resolve_write_cache_tag(
+        CacheWriteTagRequestV1(
             policy=policy,
             workspace=str(resolved_root),
             language=ctx.plan.lang,
@@ -428,29 +508,68 @@ def _scan_entity_records(
             snapshot=snapshot.digest,
             run_id=ctx.run_id,
         )
-        with cache.transact():
-            for _file_path, rel_path, fragment_key in misses:
-                fragment_records = sorted(
-                    grouped.get(rel_path, []),
-                    key=_record_sort_key,
-                )
-                records_by_rel[rel_path] = fragment_records
-                if not cache_enabled:
-                    continue
-                payload = QueryEntityScanCacheV1(
-                    records=[_record_to_cache_record(record) for record in fragment_records]
-                )
-                ok = cache.set(
-                    fragment_key,
-                    contract_to_builtins(payload),
-                    expire=ttl_seconds,
-                    tag=tag,
-                )
-                record_cache_set(namespace=namespace, ok=ok, key=fragment_key)
+    )
+    return _EntityFragmentContext(
+        namespace=namespace,
+        root=resolved_root,
+        language=ctx.plan.lang,
+        files=files,
+        record_types=record_types,
+        cache=cache,
+        cache_enabled=cache_enabled,
+        ttl_seconds=resolve_namespace_ttl_seconds(policy=policy, namespace=namespace),
+        tag=tag,
+    )
 
+
+def _entity_fragment_entries(fragment_ctx: _EntityFragmentContext) -> list[FragmentEntryV1]:
+    entries: list[FragmentEntryV1] = []
+    for file_path in fragment_ctx.files:
+        rel_path = _normalize_match_file(str(file_path), fragment_ctx.root)
+        content_hash = file_content_hash(file_path).digest
+        entries.append(
+            FragmentEntryV1(
+                file=rel_path,
+                content_hash=content_hash,
+                cache_key=build_cache_key(
+                    fragment_ctx.namespace,
+                    version="v1",
+                    workspace=str(fragment_ctx.root),
+                    language=fragment_ctx.language,
+                    target=rel_path,
+                    extras={
+                        "file_content_hash": content_hash,
+                        "record_types": fragment_ctx.record_types,
+                    },
+                ),
+            )
+        )
+    return entries
+
+
+def _decode_entity_fragment_payload(payload: object) -> list[SgRecord] | None:
+    decoded = decode_fragment_payload(payload, type_=QueryEntityScanCacheV1)
+    if decoded is None:
+        return None
+    return [_cache_record_to_record(item) for item in decoded.records]
+
+
+def _entity_records_from_hits(hits: tuple[FragmentHitV1, ...]) -> dict[str, list[SgRecord]]:
+    records_by_rel: dict[str, list[SgRecord]] = {}
+    for hit in hits:
+        if not isinstance(hit.payload, list):
+            continue
+        records_by_rel[hit.entry.file] = cast("list[SgRecord]", hit.payload)
+    return records_by_rel
+
+
+def _assemble_entity_records(
+    fragment_ctx: _EntityFragmentContext,
+    records_by_rel: dict[str, list[SgRecord]],
+) -> list[SgRecord]:
     ordered_records: list[SgRecord] = []
-    for file_path in files:
-        rel_path = _normalize_match_file(str(file_path), resolved_root)
+    for file_path in fragment_ctx.files:
+        rel_path = _normalize_match_file(str(file_path), fragment_ctx.root)
         ordered_records.extend(records_by_rel.get(rel_path, []))
     ordered_records.sort(key=_record_sort_key)
     return ordered_records
@@ -733,15 +852,7 @@ def _maybe_add_pattern_explain(state: PatternExecutionState, result: CqResult) -
     result.summary["file_filters"] = list(state.file_result.decisions)
 
 
-def execute_plan(
-    plan: ToolPlan,
-    query: Query,
-    tc: Toolchain,
-    root: Path,
-    argv: list[str] | None = None,
-    query_text: str | None = None,
-    run_id: str | None = None,
-) -> CqResult:
+def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult:
     """Execute a ToolPlan and return results.
 
     Parameters
@@ -762,29 +873,30 @@ def execute_plan(
     CqResult
         Query results
     """
-    active_run_id = run_id or uuid7_str()
-    if query.lang_scope == "auto":
+    root = Path(request.root).resolve()
+    active_run_id = request.run_id or uuid7_str()
+    if request.query.lang_scope == "auto":
         return _execute_auto_scope_plan(
-            query,
+            request.query,
             tc=tc,
             root=root,
-            argv=argv or [],
-            query_text=query_text,
+            argv=list(request.argv),
+            query_text=request.query_text,
             run_id=active_run_id,
         )
 
     ctx = QueryExecutionContext(
-        plan=plan,
-        query=query,
+        plan=request.plan,
+        query=request.query,
         tc=tc,
         root=root,
-        argv=argv or [],
+        argv=list(request.argv),
         started_ms=ms(),
         run_id=active_run_id,
-        query_text=query_text,
+        query_text=request.query_text,
     )
     result = _execute_single_context(ctx)
-    maybe_evict_run_cache_tag(root=root, language=plan.lang, run_id=active_run_id)
+    maybe_evict_run_cache_tag(root=root, language=request.plan.lang, run_id=active_run_id)
     return result
 
 
@@ -1088,13 +1200,100 @@ def _execute_ast_grep_rules(
     if not rules or not paths:
         return [], [], []
 
+    fragment_ctx = _build_pattern_fragment_context(
+        root=root,
+        paths=paths,
+        query=query,
+        rules=rules,
+        globs=globs,
+        run_id=run_id,
+    )
+    entries = _pattern_fragment_entries(fragment_ctx)
+    request = FragmentRequestV1(
+        namespace=fragment_ctx.namespace,
+        workspace=str(fragment_ctx.root),
+        language=fragment_ctx.language,
+        ttl_seconds=fragment_ctx.ttl_seconds,
+        tag=fragment_ctx.tag,
+        run_id=run_id,
+    )
+    partition = partition_fragment_entries(
+        request,
+        entries,
+        FragmentProbeRuntimeV1(
+            cache_get=fragment_ctx.cache.get,
+            decode=_decode_pattern_fragment_payload,
+            cache_enabled=fragment_ctx.cache_enabled,
+            record_get=record_cache_get,
+            record_decode_failure=record_cache_decode_failure,
+        ),
+    )
+    findings_by_rel, records_by_rel, raw_by_rel = _pattern_data_from_hits(partition.hits)
+    if partition.misses:
+        miss_data = _compute_pattern_miss_data(
+            rules=rules,
+            query=query,
+            fragment_ctx=fragment_ctx,
+            misses=partition.misses,
+        )
+        writes: list[FragmentWriteV1] = []
+        for miss in partition.misses:
+            rel_path = miss.entry.file
+            findings = sorted(miss_data[0].get(rel_path, []), key=_finding_sort_key)
+            records = sorted(miss_data[1].get(rel_path, []), key=_record_sort_key)
+            raw_matches = sorted(miss_data[2].get(rel_path, []), key=_raw_match_sort_key)
+            findings_by_rel[rel_path] = findings
+            records_by_rel[rel_path] = records
+            raw_by_rel[rel_path] = raw_matches
+            writes.append(
+                FragmentWriteV1(
+                    entry=miss.entry,
+                    payload=PatternFragmentCacheV1(
+                        findings=cast("list[dict[str, object]]", contract_to_builtins(findings)),
+                        records=[_record_to_cache_record(item) for item in records],
+                        raw_matches=raw_matches,
+                    ),
+                )
+            )
+        persist_fragment_writes(
+            request,
+            writes,
+            FragmentPersistRuntimeV1(
+                cache_set=lambda key, value, ttl, tag: fragment_ctx.cache.set(
+                    key,
+                    value,
+                    expire=ttl,
+                    tag=tag,
+                ),
+                encode=contract_to_builtins,
+                cache_enabled=fragment_ctx.cache_enabled,
+                transact=fragment_ctx.cache.transact,
+                record_set=record_cache_set,
+            ),
+        )
+    return _assemble_pattern_output(
+        paths=fragment_ctx.paths,
+        root=fragment_ctx.root,
+        findings_by_rel=findings_by_rel,
+        records_by_rel=records_by_rel,
+        raw_by_rel=raw_by_rel,
+    )
+
+
+def _build_pattern_fragment_context(
+    *,
+    root: Path,
+    paths: list[Path],
+    query: Query | None,
+    rules: tuple[AstGrepRule, ...],
+    globs: list[str] | None,
+    run_id: str | None,
+) -> _PatternFragmentContext:
     resolved_root = root.resolve()
     lang = query.primary_language if query is not None else DEFAULT_QUERY_LANGUAGE
     namespace = "pattern_fragment"
     rules_digest = hashlib.sha256(
-        msgspec.json.encode(
-            contract_to_builtins(list(rules)),
-        )
+        msgspec.json.encode(contract_to_builtins(list(rules)))
     ).hexdigest()
     query_filters_digest = hashlib.sha256(
         msgspec.json.encode(
@@ -1117,111 +1316,135 @@ def _execute_ast_grep_rules(
         scope_roots=paths,
     )
     policy = default_cache_policy(root=resolved_root)
-    cache = get_cq_cache_backend(root=resolved_root)
-    cache_enabled = is_namespace_cache_enabled(policy=policy, namespace=namespace)
-    ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=namespace)
-    tag = resolve_write_cache_tag(
-        policy=policy,
-        workspace=str(resolved_root),
-        language=lang,
+    return _PatternFragmentContext(
         namespace=namespace,
-        scope_hash=scope_hash,
-        snapshot=snapshot.digest,
-        run_id=run_id,
+        root=resolved_root,
+        language=lang,
+        paths=sorted(paths, key=lambda item: item.as_posix()),
+        cache=get_cq_cache_backend(root=resolved_root),
+        cache_enabled=is_namespace_cache_enabled(policy=policy, namespace=namespace),
+        ttl_seconds=resolve_namespace_ttl_seconds(policy=policy, namespace=namespace),
+        tag=resolve_write_cache_tag(
+            CacheWriteTagRequestV1(
+                policy=policy,
+                workspace=str(resolved_root),
+                language=lang,
+                namespace=namespace,
+                scope_hash=scope_hash,
+                snapshot=snapshot.digest,
+                run_id=run_id,
+            )
+        ),
+        rules_digest=rules_digest,
+        query_filters_digest=query_filters_digest,
     )
 
+
+def _pattern_fragment_entries(fragment_ctx: _PatternFragmentContext) -> list[FragmentEntryV1]:
+    entries: list[FragmentEntryV1] = []
+    for file_path in fragment_ctx.paths:
+        rel_path = _normalize_match_file(str(file_path), fragment_ctx.root)
+        content_hash = file_content_hash(file_path).digest
+        entries.append(
+            FragmentEntryV1(
+                file=rel_path,
+                content_hash=content_hash,
+                cache_key=build_cache_key(
+                    fragment_ctx.namespace,
+                    version="v1",
+                    workspace=str(fragment_ctx.root),
+                    language=fragment_ctx.language,
+                    target=rel_path,
+                    extras={
+                        "file_content_hash": content_hash,
+                        "rules_digest": fragment_ctx.rules_digest,
+                        "query_filters_digest": fragment_ctx.query_filters_digest,
+                    },
+                ),
+            )
+        )
+    return entries
+
+
+def _decode_pattern_fragment_payload(payload: object) -> object | None:
+    decoded = decode_fragment_payload(payload, type_=PatternFragmentCacheV1)
+    if decoded is None:
+        return None
+    findings = [msgspec.convert(item, type=Finding) for item in decoded.findings]
+    records = [_cache_record_to_record(item) for item in decoded.records]
+    return (findings, records, list(decoded.raw_matches))
+
+
+def _pattern_data_from_hits(
+    hits: tuple[FragmentHitV1, ...],
+) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
     findings_by_rel: dict[str, list[Finding]] = {}
     records_by_rel: dict[str, list[SgRecord]] = {}
-    raw_matches_by_rel: dict[str, list[dict[str, object]]] = {}
-    misses: list[tuple[Path, str, str]] = []
+    raw_by_rel: dict[str, list[dict[str, object]]] = {}
+    for hit in hits:
+        payload = hit.payload
+        if not (
+            isinstance(payload, tuple)
+            and len(payload) == 3
+            and isinstance(payload[0], list)
+            and isinstance(payload[1], list)
+            and isinstance(payload[2], list)
+        ):
+            continue
+        findings_by_rel[hit.entry.file] = cast("list[Finding]", payload[0])
+        records_by_rel[hit.entry.file] = cast("list[SgRecord]", payload[1])
+        raw_by_rel[hit.entry.file] = cast("list[dict[str, object]]", payload[2])
+    return findings_by_rel, records_by_rel, raw_by_rel
 
-    for file_path in paths:
-        rel_path = _normalize_match_file(str(file_path), resolved_root)
-        file_hash = file_content_hash(file_path).digest
-        fragment_key = build_cache_key(
-            namespace,
-            version="v1",
-            workspace=str(resolved_root),
-            language=lang,
-            target=rel_path,
-            extras={
-                "file_content_hash": file_hash,
-                "rules_digest": rules_digest,
-                "query_filters_digest": query_filters_digest,
-            },
-        )
-        if cache_enabled and file_hash:
-            cached = cache.get(fragment_key)
-            record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=fragment_key)
-            if isinstance(cached, dict):
-                try:
-                    payload = msgspec.convert(cached, type=PatternFragmentCacheV1)
-                    findings_by_rel[rel_path] = [
-                        msgspec.convert(item, type=Finding) for item in payload.findings
-                    ]
-                    records_by_rel[rel_path] = [
-                        _cache_record_to_record(item) for item in payload.records
-                    ]
-                    raw_matches_by_rel[rel_path] = list(payload.raw_matches)
-                    continue
-                except (RuntimeError, TypeError, ValueError):
-                    record_cache_decode_failure(namespace=namespace)
-        misses.append((file_path, rel_path, fragment_key))
 
-    if misses:
-        ctx = AstGrepExecutionContext(
+def _compute_pattern_miss_data(
+    *,
+    rules: tuple[AstGrepRule, ...],
+    query: Query | None,
+    fragment_ctx: _PatternFragmentContext,
+    misses: tuple[FragmentMissV1, ...],
+) -> tuple[dict[str, list[Finding]], dict[str, list[SgRecord]], dict[str, list[dict[str, object]]]]:
+    miss_paths = [fragment_ctx.root / miss.entry.file for miss in misses]
+    state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
+    _run_ast_grep(
+        AstGrepExecutionContext(
             rules=rules,
-            paths=[item[0] for item in misses],
-            root=resolved_root,
+            paths=miss_paths,
+            root=fragment_ctx.root,
             query=query,
-            lang=lang,
-        )
-        state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
-        _run_ast_grep(ctx, state)
-        miss_records = group_records_by_file(state.records)
-        miss_findings: dict[str, list[Finding]] = {}
-        for finding in state.findings:
-            rel_path = finding.anchor.file if finding.anchor is not None else ""
-            miss_findings.setdefault(rel_path, []).append(finding)
-        miss_raw: dict[str, list[dict[str, object]]] = {}
-        for row in state.raw_matches:
-            rel_path = row.get("file")
-            if not isinstance(rel_path, str):
-                continue
+            lang=fragment_ctx.language,
+        ),
+        state,
+    )
+    miss_records = group_records_by_file(state.records)
+    miss_findings: dict[str, list[Finding]] = {}
+    for finding in state.findings:
+        rel_path = finding.anchor.file if finding.anchor is not None else ""
+        miss_findings.setdefault(rel_path, []).append(finding)
+    miss_raw: dict[str, list[dict[str, object]]] = {}
+    for row in state.raw_matches:
+        rel_path = row.get("file")
+        if isinstance(rel_path, str):
             miss_raw.setdefault(rel_path, []).append(row)
+    return miss_findings, miss_records, miss_raw
 
-        with cache.transact():
-            for _file_path, rel_path, fragment_key in misses:
-                findings = sorted(miss_findings.get(rel_path, []), key=_finding_sort_key)
-                records = sorted(miss_records.get(rel_path, []), key=_record_sort_key)
-                raw_matches = sorted(miss_raw.get(rel_path, []), key=_raw_match_sort_key)
-                findings_by_rel[rel_path] = findings
-                records_by_rel[rel_path] = records
-                raw_matches_by_rel[rel_path] = raw_matches
-                if not cache_enabled:
-                    continue
-                payload = PatternFragmentCacheV1(
-                    findings=cast("list[dict[str, object]]", contract_to_builtins(findings)),
-                    records=[_record_to_cache_record(record) for record in records],
-                    raw_matches=raw_matches,
-                )
-                ok = cache.set(
-                    fragment_key,
-                    contract_to_builtins(payload),
-                    expire=ttl_seconds,
-                    tag=tag,
-                )
-                record_cache_set(namespace=namespace, ok=ok, key=fragment_key)
 
+def _assemble_pattern_output(
+    *,
+    paths: list[Path],
+    root: Path,
+    findings_by_rel: dict[str, list[Finding]],
+    records_by_rel: dict[str, list[SgRecord]],
+    raw_by_rel: dict[str, list[dict[str, object]]],
+) -> tuple[list[Finding], list[SgRecord], list[dict[str, object]]]:
     findings: list[Finding] = []
     records: list[SgRecord] = []
     raw_matches: list[dict[str, object]] = []
-    for file_path in sorted(paths, key=lambda path: path.as_posix()):
-        rel_path = _normalize_match_file(str(file_path), resolved_root)
+    for file_path in paths:
+        rel_path = _normalize_match_file(str(file_path), root)
         findings.extend(findings_by_rel.get(rel_path, []))
         records.extend(records_by_rel.get(rel_path, []))
-        raw_matches.extend(raw_matches_by_rel.get(rel_path, []))
-
+        raw_matches.extend(raw_by_rel.get(rel_path, []))
     findings.sort(key=_finding_sort_key)
     records.sort(key=_record_sort_key)
     raw_matches.sort(key=_raw_match_sort_key)

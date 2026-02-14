@@ -51,7 +51,7 @@ def q(
     from tools.cq.core.run_context import RunContext
     from tools.cq.core.schema import mk_result, ms
     from tools.cq.core.services import SearchServiceRequest
-    from tools.cq.query.executor import execute_plan
+    from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
     from tools.cq.query.parser import QueryParseError, parse_query
     from tools.cq.query.planner import compile_query
 
@@ -109,12 +109,14 @@ def q(
     # Compile and execute
     plan = compile_query(parsed_query)
     result = execute_plan(
-        plan=plan,
-        query=parsed_query,
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=parsed_query,
+            root=str(ctx.root),
+            argv=tuple(ctx.argv),
+            query_text=query_string,
+        ),
         tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        query_text=query_string,
     )
 
     return CliResult(result=result, context=ctx, filters=options)

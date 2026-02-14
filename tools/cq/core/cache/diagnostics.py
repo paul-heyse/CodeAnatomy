@@ -11,6 +11,11 @@ from tools.cq.core.cache.telemetry import snapshot_cache_telemetry
 
 
 def _namespace_metrics_payload() -> dict[str, dict[str, object]]:
+    """Build payload data for namespace metrics snapshots.
+
+    Returns:
+        dict[str, dict[str, object]]: Namespace metrics grouped by cache namespace.
+    """
     metrics = snapshot_cache_telemetry()
     payload: dict[str, dict[str, object]] = {}
     for namespace, counters in sorted(metrics.items()):
@@ -47,7 +52,11 @@ def _namespace_metrics_payload() -> dict[str, dict[str, object]]:
 
 
 def snapshot_backend_metrics(*, root: Path) -> dict[str, object]:
-    """Collect backend cache metrics for summary/diagnostics payloads."""
+    """Collect backend cache metrics for summary/diagnostics payloads.
+
+    Returns:
+        dict[str, object]: Backend stats, volume, and namespace-level payload.
+    """
     backend = get_cq_cache_backend(root=root)
     payload: dict[str, object] = {}
     stats = backend.stats()

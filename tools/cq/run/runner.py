@@ -213,7 +213,9 @@ def _aggregate_run_lsp_telemetry(
 def _advanced_plane_signal_score(payload: dict[str, object]) -> int:
     score = 0
     for value in payload.values():
-        if isinstance(value, Mapping) or (isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))):
+        if isinstance(value, Mapping) or (
+            isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+        ):
             score += len(value)
         elif isinstance(value, str) and value:
             score += 1

@@ -13,7 +13,7 @@ import msgspec
 from tools.cq.core.codec import dumps_json_value
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
-from tools.cq.query.executor import execute_plan
+from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.search.smart_search import smart_search
@@ -83,11 +83,13 @@ def build_perf_smoke_report(*, workspace: Path) -> PerfSmokeReport:
     query_plan = compile_query(query_obj)
     query_measurement = _measure_pair(
         lambda: execute_plan(
-            query_plan,
-            query_obj,
+            ExecutePlanRequestV1(
+                plan=query_plan,
+                query=query_obj,
+                root=str(workspace),
+                argv=(),
+            ),
             tc=tc,
-            root=workspace,
-            argv=[],
         )
     )
 

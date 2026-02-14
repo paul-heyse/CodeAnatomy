@@ -20,7 +20,7 @@ from tools.cq.macros.imports import ImportRequest, cmd_imports
 from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
 from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
 from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
-from tools.cq.query.executor import execute_plan
+from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.ir import Scope
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
@@ -161,11 +161,13 @@ def resolve_target_scope(ctx: BundleContext) -> TargetScope:
         query = query.with_scope(Scope(in_dir=ctx.in_dir))
     plan = compile_query(query)
     result = execute_plan(
-        plan,
-        query,
-        ctx.tc,
-        root,
-        argv=ctx.argv,
+        ExecutePlanRequestV1(
+            plan=plan,
+            query=query,
+            root=str(root),
+            argv=tuple(ctx.argv),
+        ),
+        tc=ctx.tc,
     )
     files = set()
     for finding in result.key_findings:

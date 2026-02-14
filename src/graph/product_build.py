@@ -285,6 +285,7 @@ def _execute_build(
         Typed outputs for the requested graph product.
     """
     from graph.build_pipeline import orchestrate_build
+    from graph.contracts import OrchestrateBuildRequestV1
 
     with root_span(
         "graph_product.build",
@@ -306,16 +307,18 @@ def _execute_build(
         )
         try:
             build_result = orchestrate_build(
-                repo_root=repo_root,
-                work_dir=work_dir,
-                output_dir=output_dir,
-                engine_profile=request.engine_profile,
-                rulepack_profile=request.rulepack_profile,
-                runtime_config=request.runtime_config,
-                extraction_config=request.extraction_config,
-                include_errors=request.include_extract_errors,
-                include_manifest=request.include_manifest,
-                include_run_bundle=request.include_run_bundle,
+                OrchestrateBuildRequestV1(
+                    repo_root=str(repo_root),
+                    work_dir=str(work_dir),
+                    output_dir=str(output_dir),
+                    engine_profile=request.engine_profile,
+                    rulepack_profile=request.rulepack_profile,
+                    runtime_config=request.runtime_config,
+                    extraction_config=request.extraction_config,
+                    include_errors=request.include_extract_errors,
+                    include_manifest=request.include_manifest,
+                    include_run_bundle=request.include_run_bundle,
+                )
             )
         except Exception as exc:
             record_exception(span, exc)

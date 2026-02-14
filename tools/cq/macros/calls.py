@@ -36,7 +36,11 @@ from tools.cq.core.scoring import (
     build_detail_payload,
     build_score_details,
 )
-from tools.cq.macros.calls_target import attach_target_metadata, infer_target_language
+from tools.cq.macros.calls_target import (
+    AttachTargetMetadataRequestV1,
+    attach_target_metadata,
+    infer_target_language,
+)
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file, list_scan_files, sg_scan
 from tools.cq.search import INTERACTIVE, find_call_candidates
 from tools.cq.search.adapter import find_def_lines, find_files_with_pattern
@@ -1962,12 +1966,14 @@ def _build_calls_front_door_state(
     resolved_target_language = infer_target_language(ctx.root, ctx.function_name)
     target_location, target_callees, target_language_hint = attach_target_metadata(
         result,
-        root=ctx.root,
-        function_name=ctx.function_name,
-        score=score,
-        preview_limit=_CALLS_TARGET_CALLEE_PREVIEW,
-        target_language=resolved_target_language,
-        run_id=result.run.run_id,
+        AttachTargetMetadataRequestV1(
+            root=ctx.root,
+            function_name=ctx.function_name,
+            score=score,
+            preview_limit=_CALLS_TARGET_CALLEE_PREVIEW,
+            target_language=resolved_target_language,
+            run_id=result.run.run_id,
+        ),
     )
     neighborhood, neighborhood_findings, degradation_notes = _build_calls_neighborhood(
         CallsNeighborhoodRequest(

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 import msgspec
+
+from tools.cq.core.id import canonicalize_payload
 
 _HASH_LIKE_RE = re.compile(r"^[0-9a-fA-F]{8,128}$")
 _MIN_HASH_ATOM_SIZE = 8
@@ -56,27 +58,13 @@ def _compose_tag(
     return "|".join(parts)
 
 
-def _canonicalize(value: object) -> object:
-    if isinstance(value, Mapping):
-        items = sorted((str(key), _canonicalize(val)) for key, val in value.items())
-        return dict(items)
-    if isinstance(value, (set, frozenset)):
-        normalized = [_canonicalize(item) for item in value]
-        return sorted(normalized, key=msgspec.json.encode)
-    if isinstance(value, tuple):
-        return tuple(_canonicalize(item) for item in value)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_canonicalize(item) for item in value]
-    return value
-
-
 def canonicalize_cache_payload(payload: Mapping[str, object]) -> dict[str, object]:
     """Canonicalize payload data before digest generation.
 
     Returns:
         Deterministically ordered payload converted to built-in containers.
     """
-    normalized = _canonicalize(dict(payload))
+    normalized = canonicalize_payload(dict(payload))
     if isinstance(normalized, dict):
         return normalized
     return {}

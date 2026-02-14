@@ -7,6 +7,11 @@ from typing import Annotated
 
 import msgspec
 
+from tools.cq.core.runtime.env_namespace import (
+    NamespacePatternV1,
+    parse_namespace_bool_overrides,
+    parse_namespace_int_overrides,
+)
 from tools.cq.core.structs import CqSettingsStruct
 
 _DEFAULT_LSP_TIMEOUT_MS = 2_000
@@ -118,82 +123,48 @@ def _env_bool(name: str, *, default: bool) -> bool:
     return parsed
 
 
-def _namespace_from_env_suffix(suffix: str) -> str:
-    return suffix.strip("_").lower()
-
-
 def _env_namespace_ttls() -> dict[str, int]:
-    overrides: dict[str, int] = {}
-    prefix = f"{_ENV_PREFIX}CACHE_NAMESPACE_"
-    suffix = "_TTL_SECONDS"
-    for key, value in os.environ.items():
-        if not key.startswith(prefix) or not key.endswith(suffix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(prefix) : -len(suffix)])
-        if not namespace:
-            continue
-        try:
-            ttl = int(value)
-        except ValueError:
-            continue
-        if ttl > 0:
-            overrides[namespace] = ttl
-    legacy_prefix = f"{_ENV_PREFIX}CACHE_TTL_"
-    legacy_suffix = "_SECONDS"
-    for key, value in os.environ.items():
-        if not key.startswith(legacy_prefix) or not key.endswith(legacy_suffix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(legacy_prefix) : -len(legacy_suffix)])
-        if not namespace:
-            continue
-        try:
-            ttl = int(value)
-        except ValueError:
-            continue
-        if ttl > 0:
-            overrides[namespace] = ttl
-    return overrides
+    parsed = parse_namespace_int_overrides(
+        env=os.environ,
+        patterns=(
+            NamespacePatternV1(
+                prefix=f"{_ENV_PREFIX}CACHE_NAMESPACE_",
+                suffix="_TTL_SECONDS",
+            ),
+            NamespacePatternV1(
+                prefix=f"{_ENV_PREFIX}CACHE_TTL_",
+                suffix="_SECONDS",
+            ),
+        ),
+        minimum=1,
+    )
+    return {str(key): int(value) for key, value in parsed.values.items() if isinstance(value, int)}
 
 
 def _env_namespace_enabled() -> dict[str, bool]:
-    overrides: dict[str, bool] = {}
-    prefix = f"{_ENV_PREFIX}CACHE_NAMESPACE_"
-    suffix = "_ENABLED"
-    for key, value in os.environ.items():
-        if not key.startswith(prefix) or not key.endswith(suffix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(prefix) : -len(suffix)])
-        if not namespace:
-            continue
-        parsed = _parse_bool(value)
-        if parsed is not None:
-            overrides[namespace] = parsed
-    legacy_prefix = f"{_ENV_PREFIX}CACHE_ENABLE_"
-    for key, value in os.environ.items():
-        if not key.startswith(legacy_prefix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(legacy_prefix) :])
-        if not namespace:
-            continue
-        parsed = _parse_bool(value)
-        if parsed is not None:
-            overrides[namespace] = parsed
-    return overrides
+    parsed = parse_namespace_bool_overrides(
+        env=os.environ,
+        patterns=(
+            NamespacePatternV1(
+                prefix=f"{_ENV_PREFIX}CACHE_NAMESPACE_",
+                suffix="_ENABLED",
+            ),
+            NamespacePatternV1(prefix=f"{_ENV_PREFIX}CACHE_ENABLE_"),
+        ),
+    )
+    return {
+        str(key): bool(value) for key, value in parsed.values.items() if isinstance(value, bool)
+    }
 
 
 def _env_namespace_ephemeral() -> dict[str, bool]:
-    overrides: dict[str, bool] = {}
-    prefix = f"{_ENV_PREFIX}CACHE_EPHEMERAL_"
-    for key, value in os.environ.items():
-        if not key.startswith(prefix):
-            continue
-        namespace = _namespace_from_env_suffix(key[len(prefix) :])
-        if not namespace:
-            continue
-        parsed = _parse_bool(value)
-        if parsed is not None:
-            overrides[namespace] = parsed
-    return overrides
+    parsed = parse_namespace_bool_overrides(
+        env=os.environ,
+        patterns=(NamespacePatternV1(prefix=f"{_ENV_PREFIX}CACHE_EPHEMERAL_"),),
+    )
+    return {
+        str(key): bool(value) for key, value in parsed.values.items() if isinstance(value, bool)
+    }
 
 
 def default_runtime_execution_policy() -> RuntimeExecutionPolicy:

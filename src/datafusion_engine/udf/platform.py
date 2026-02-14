@@ -35,6 +35,7 @@ from dataclasses import dataclass, replace
 from typing import cast
 from weakref import WeakSet
 
+import msgspec
 from datafusion import SessionContext
 
 from datafusion_engine.expr.domain_planner import domain_planner_names_from_snapshot
@@ -43,6 +44,7 @@ from datafusion_engine.expr.planner import (
     install_expr_planners,
 )
 from datafusion_engine.udf.catalog import rewrite_tag_index
+from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
 from datafusion_engine.udf.factory import (
     FunctionFactoryPolicy,
     function_factory_payloads,
@@ -101,6 +103,17 @@ class RustUdfPlatformOptions:
 _FUNCTION_FACTORY_CTXS: WeakSet[SessionContext] = WeakSet()
 _EXPR_PLANNER_CTXS: WeakSet[SessionContext] = WeakSet()
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PlatformInstallState:
+    snapshot: Mapping[str, object] | None
+    snapshot_hash: str | None
+    rewrite_tags: tuple[str, ...]
+    docs: Mapping[str, object] | None
+    runtime_payload: Mapping[str, object]
+    planner_names: tuple[str, ...]
+    function_factory_policy: FunctionFactoryPolicy | None
 
 
 def _install_function_factory(
@@ -261,10 +274,100 @@ def _strict_failure_message(
     return f"{status_label} installation failed; native extension is required. {status.error}"
 
 
-def install_rust_udf_platform(  # noqa: PLR0914
-    ctx: SessionContext,
+def _resolve_platform_install_state(
     *,
-    options: RustUdfPlatformOptions | None = None,
+    ctx: SessionContext,
+    resolved: RustUdfPlatformOptions,
+) -> _PlatformInstallState:
+    snapshot, snapshot_hash, rewrite_tags, docs = _resolve_udf_snapshot(ctx, resolved)
+    runtime_payload = (
+        rust_runtime_install_payload(ctx)
+        if snapshot is not None
+        else cast("Mapping[str, object]", {})
+    )
+    return _PlatformInstallState(
+        snapshot=snapshot,
+        snapshot_hash=snapshot_hash,
+        rewrite_tags=rewrite_tags,
+        docs=docs,
+        runtime_payload=runtime_payload,
+        planner_names=_resolve_expr_planner_names(resolved, snapshot),
+        function_factory_policy=_resolve_function_factory_policy(resolved, snapshot),
+    )
+
+
+def _install_function_factory_status(
+    *,
+    ctx: SessionContext,
+    resolved: RustUdfPlatformOptions,
+    state: _PlatformInstallState,
+) -> tuple[ExtensionInstallStatus | None, Mapping[str, object] | None]:
+    function_factory_payload = (
+        function_factory_payloads(state.function_factory_policy)
+        if resolved.enable_function_factory
+        else None
+    )
+    if not resolved.enable_function_factory:
+        return None, function_factory_payload
+    if resolved.function_factory_hook is not None:
+        return _install_function_factory(
+            ctx,
+            enabled=True,
+            hook=resolved.function_factory_hook,
+            policy=state.function_factory_policy,
+        )
+    if state.snapshot is not None and "function_factory_installed" in state.runtime_payload:
+        installed = bool(state.runtime_payload.get("function_factory_installed"))
+        error = (
+            None if installed else "install_codeanatomy_runtime did not install FunctionFactory."
+        )
+        return ExtensionInstallStatus(
+            available=True, installed=installed, error=error
+        ), function_factory_payload
+    return _install_function_factory(
+        ctx,
+        enabled=True,
+        hook=None,
+        policy=state.function_factory_policy,
+    )
+
+
+def _install_expr_planner_status(
+    *,
+    ctx: SessionContext,
+    resolved: RustUdfPlatformOptions,
+    state: _PlatformInstallState,
+) -> tuple[ExtensionInstallStatus | None, Mapping[str, object] | None]:
+    expr_planner_payload = (
+        expr_planner_payloads(state.planner_names) if resolved.enable_expr_planners else None
+    )
+    if not resolved.enable_expr_planners:
+        return None, expr_planner_payload
+    if resolved.expr_planner_hook is not None:
+        return _install_expr_planners(
+            ctx,
+            enabled=True,
+            hook=resolved.expr_planner_hook,
+            planner_names=state.planner_names,
+        )
+    if state.snapshot is not None and "expr_planners_installed" in state.runtime_payload:
+        installed = bool(state.runtime_payload.get("expr_planners_installed"))
+        error = None if installed else "install_codeanatomy_runtime did not install ExprPlanners."
+        return ExtensionInstallStatus(
+            available=True, installed=installed, error=error
+        ), expr_planner_payload
+    return _install_expr_planners(
+        ctx,
+        enabled=True,
+        hook=None,
+        planner_names=state.planner_names,
+    )
+
+
+def install_rust_udf_platform(
+    request: InstallRustUdfPlatformRequestV1,
+    *,
+    ctx: SessionContext,
 ) -> RustUdfPlatform:
     """Install planning-critical extension platform before plan-bundle construction.
 
@@ -278,74 +381,25 @@ def install_rust_udf_platform(  # noqa: PLR0914
     Raises:
         RuntimeError: If strict mode is enabled and required hooks fail.
     """
-    resolved = options or RustUdfPlatformOptions()
+    resolved = (
+        msgspec.convert(request.options, type=RustUdfPlatformOptions)
+        if isinstance(request.options, dict)
+        else RustUdfPlatformOptions()
+    )
     from datafusion_engine.udf.runtime import validate_extension_capabilities
 
     _ = validate_extension_capabilities(strict=resolved.strict, ctx=ctx)
-    snapshot, snapshot_hash, rewrite_tags, docs = _resolve_udf_snapshot(ctx, resolved)
-    runtime_payload = (
-        rust_runtime_install_payload(ctx)
-        if snapshot is not None
-        else cast("Mapping[str, object]", {})
+    state = _resolve_platform_install_state(ctx=ctx, resolved=resolved)
+    function_factory, function_factory_payload = _install_function_factory_status(
+        ctx=ctx,
+        resolved=resolved,
+        state=state,
     )
-    planner_names = _resolve_expr_planner_names(resolved, snapshot)
-    function_factory_policy = _resolve_function_factory_policy(resolved, snapshot)
-
-    function_factory_payload = (
-        function_factory_payloads(function_factory_policy)
-        if resolved.enable_function_factory
-        else None
+    expr_planners, expr_planner_payload = _install_expr_planner_status(
+        ctx=ctx,
+        resolved=resolved,
+        state=state,
     )
-    if not resolved.enable_function_factory:
-        function_factory: ExtensionInstallStatus | None = None
-    elif resolved.function_factory_hook is not None:
-        function_factory, function_factory_payload = _install_function_factory(
-            ctx,
-            enabled=True,
-            hook=resolved.function_factory_hook,
-            policy=function_factory_policy,
-        )
-    elif snapshot is not None and "function_factory_installed" in runtime_payload:
-        installed = bool(runtime_payload.get("function_factory_installed"))
-        error = (
-            None if installed else "install_codeanatomy_runtime did not install FunctionFactory."
-        )
-        function_factory = ExtensionInstallStatus(
-            available=True,
-            installed=installed,
-            error=error,
-        )
-    else:
-        function_factory, function_factory_payload = _install_function_factory(
-            ctx,
-            enabled=True,
-            hook=None,
-            policy=function_factory_policy,
-        )
-
-    expr_planner_payload = (
-        expr_planner_payloads(planner_names) if resolved.enable_expr_planners else None
-    )
-    if not resolved.enable_expr_planners:
-        expr_planners: ExtensionInstallStatus | None = None
-    elif resolved.expr_planner_hook is not None:
-        expr_planners, expr_planner_payload = _install_expr_planners(
-            ctx,
-            enabled=True,
-            hook=resolved.expr_planner_hook,
-            planner_names=planner_names,
-        )
-    elif snapshot is not None and "expr_planners_installed" in runtime_payload:
-        installed = bool(runtime_payload.get("expr_planners_installed"))
-        error = None if installed else "install_codeanatomy_runtime did not install ExprPlanners."
-        expr_planners = ExtensionInstallStatus(available=True, installed=installed, error=error)
-    else:
-        expr_planners, expr_planner_payload = _install_expr_planners(
-            ctx,
-            enabled=True,
-            hook=None,
-            planner_names=planner_names,
-        )
     if resolved.strict:
         strict_checks = (
             ("FunctionFactory", function_factory),
@@ -356,11 +410,11 @@ def install_rust_udf_platform(  # noqa: PLR0914
             if msg is not None:
                 raise RuntimeError(msg)
     return RustUdfPlatform(
-        snapshot=snapshot,
-        snapshot_hash=snapshot_hash,
-        rewrite_tags=rewrite_tags,
-        domain_planner_names=planner_names,
-        docs=docs,
+        snapshot=state.snapshot,
+        snapshot_hash=state.snapshot_hash,
+        rewrite_tags=state.rewrite_tags,
+        domain_planner_names=state.planner_names,
+        docs=state.docs,
         function_factory=function_factory,
         expr_planners=expr_planners,
         function_factory_policy=function_factory_payload,
@@ -390,16 +444,20 @@ def ensure_rust_udfs(
         RuntimeError: If the platform does not return a registry snapshot.
     """
     platform = install_rust_udf_platform(
-        ctx,
-        options=RustUdfPlatformOptions(
-            enable_udfs=True,
-            enable_async_udfs=enable_async,
-            async_udf_timeout_ms=async_udf_timeout_ms,
-            async_udf_batch_size=async_udf_batch_size,
-            enable_function_factory=False,
-            enable_expr_planners=False,
-            strict=False,
+        InstallRustUdfPlatformRequestV1(
+            options=msgspec.to_builtins(
+                RustUdfPlatformOptions(
+                    enable_udfs=True,
+                    enable_async_udfs=enable_async,
+                    async_udf_timeout_ms=async_udf_timeout_ms,
+                    async_udf_batch_size=async_udf_batch_size,
+                    enable_function_factory=False,
+                    enable_expr_planners=False,
+                    strict=False,
+                )
+            )
         ),
+        ctx=ctx,
     )
     if platform.snapshot is None:
         msg = "Rust UDF platform did not return a registry snapshot."

@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import msgspec
 from datafusion import SessionContext
 
 from datafusion_engine.registry_facade import RegistrationPhase, RegistrationPhaseOrchestrator
@@ -58,11 +59,15 @@ class _ViewGraphRegistrationContext:
             raise ValueError(msg)
 
     def install_udf_platform(self) -> None:
+        from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
         from datafusion_engine.udf.platform import install_rust_udf_platform
         from datafusion_engine.udf.runtime import rust_udf_snapshot
 
         options = _platform_options(self.runtime_profile)
-        platform = install_rust_udf_platform(self.ctx, options=options)
+        platform = install_rust_udf_platform(
+            InstallRustUdfPlatformRequestV1(options=msgspec.to_builtins(options)),
+            ctx=self.ctx,
+        )
         self.snapshot = platform.snapshot or rust_udf_snapshot(self.ctx)
         if self.snapshot is None:
             msg = "Rust UDF snapshot is required for view registration."

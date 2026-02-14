@@ -672,6 +672,31 @@ class TestEnrichPythonContext:
         assert "enrichment_sources" in result
         assert "node_kind" in result
 
+    def test_stage_status_uses_python_resolution_key(self) -> None:
+        """Stage metadata should use python_resolution and exclude legacy libcst key."""
+        sg = _make_sg()
+        node = _find_node(sg, 45, 0)
+        assert node is not None
+        result = enrich_python_context(
+            PythonNodeEnrichmentRequest(
+                sg_root=sg,
+                node=node,
+                source_bytes=_PYTHON_SAMPLE.encode(),
+                line=45,
+                col=0,
+                cache_key="test",
+            )
+        )
+        assert result is not None
+        stage_status = result.get("stage_status")
+        stage_timings = result.get("stage_timings_ms")
+        assert isinstance(stage_status, dict)
+        assert isinstance(stage_timings, dict)
+        assert "python_resolution" in stage_status
+        assert "python_resolution" in stage_timings
+        assert "libcst" not in stage_status
+        assert "libcst" not in stage_timings
+
     def test_enrichment_applied_for_call(self) -> None:
         """Test enrichment applied for call."""
         sg = _make_sg()
@@ -730,6 +755,29 @@ class TestEnrichPythonContext:
         sources = result.get("enrichment_sources", [])
         assert isinstance(sources, list)
         assert "ast_grep" in sources
+
+    def test_agreement_sources_reference_python_resolution(self) -> None:
+        """Agreement metadata should report python_resolution as a source when present."""
+        sg = _make_sg()
+        node = _find_node(sg, 45, 0)
+        assert node is not None
+        result = enrich_python_context(
+            PythonNodeEnrichmentRequest(
+                sg_root=sg,
+                node=node,
+                source_bytes=_PYTHON_SAMPLE.encode(),
+                line=45,
+                col=0,
+                cache_key="test",
+            )
+        )
+        assert result is not None
+        agreement = result.get("agreement")
+        assert isinstance(agreement, dict)
+        sources = agreement.get("sources")
+        assert isinstance(sources, list)
+        assert "python_resolution" in sources
+        assert "libcst" not in sources
 
     def test_enrichment_emits_payload_budget_metadata(self) -> None:
         """Payload metadata should include size hint and optional dropped fields."""

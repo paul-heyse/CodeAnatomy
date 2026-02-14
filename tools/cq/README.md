@@ -106,12 +106,12 @@ Smart search results include multi-source enrichment from a 5-stage pipeline:
 | `ast_grep` | ast-grep-py | Node kind, symbol role, structural context |
 | `python_ast` | Python `ast` | AST node type, scope nesting |
 | `import_detail` | Import visitor | Module path, alias resolution |
-| `libcst` | LibCST metadata | Qualified names, scope analysis, binding candidates |
+| `python_resolution` | Python `ast` + `symtable` + tree-sitter anchor fallback | Qualified names, scope analysis, binding candidates |
 | `tree_sitter` | tree-sitter queries | Parse quality, structural patterns |
 
 Enrichment payloads are structured into sections: `meta`, `resolution`, `behavior`,
 `structural`, `parse_quality`, `agreement`. Cross-source agreement tracking compares
-ast_grep, libcst, and tree_sitter results ("full"/"partial"/"conflict").
+ast_grep, python_resolution, and tree_sitter results ("full"/"partial"/"conflict").
 
 ### Markdown Code Facts
 
@@ -186,8 +186,8 @@ Request structs live in `tools/cq/search/requests.py` and `tools/cq/core/request
 
 ## Analysis Session Caching
 
-`PythonAnalysisSession` caches per-file analysis artifacts (ast-grep root, AST tree,
-symtable, LibCST wrapper, tree-sitter tree) keyed by content hash. Maximum 64 cached
+`PythonAnalysisSession` caches per-file analysis artifacts (ast-grep root/index, AST tree,
+symtable, native resolution index, tree-sitter tree) keyed by content hash. Maximum 64 cached
 entries. Multiple findings in the same file share a single session.
 
 ## Static Semantic Runtime Notes

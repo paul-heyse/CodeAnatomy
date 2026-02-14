@@ -267,53 +267,281 @@ def _capture_gap_fill_fields(
     return payload
 
 
+def _set_payload_field(
+    payload: dict[str, object],
+    *,
+    key: str,
+    value: object | None,
+) -> None:
+    if key in payload:
+        return
+    if value is None:
+        return
+    if isinstance(value, (list, dict)) and not value:
+        return
+    payload[key] = value
+
+
 def _apply_gap_fill_from_captures(
     payload: dict[str, object],
     captures: dict[str, list[Node]],
     source_bytes: bytes,
 ) -> None:
-    if "call_target" not in payload:
-        call_target = _capture_call_target(captures.get("call.expression", []), source_bytes)
-        if call_target is not None:
-            payload["call_target"] = call_target
-    if "enclosing_callable" not in payload:
-        callable_name = _capture_named_definition(
+    _set_payload_field(
+        payload,
+        key="call_target",
+        value=_capture_call_target(captures, source_bytes),
+    )
+    _set_payload_field(
+        payload,
+        key="enclosing_callable",
+        value=_capture_named_definition(
+            captures.get("def.function.name", []),
             captures.get("def.function", []),
             source_bytes,
-        )
-        if callable_name is not None:
-            payload["enclosing_callable"] = callable_name
-    if "enclosing_class" not in payload:
-        class_name = _capture_named_definition(
+        ),
+    )
+    _set_payload_field(
+        payload,
+        key="enclosing_class",
+        value=_capture_named_definition(
+            captures.get("class.definition.name", []),
             captures.get("class.definition", []),
             source_bytes,
-        )
-        if class_name is not None:
-            payload["enclosing_class"] = class_name
+        ),
+    )
+    _set_payload_field(
+        payload,
+        key="import_alias_chain",
+        value=_capture_import_alias_chain(captures, source_bytes),
+    )
+    _set_payload_field(
+        payload,
+        key="binding_candidates",
+        value=_capture_binding_candidates(captures, source_bytes),
+    )
+    _set_payload_field(
+        payload,
+        key="qualified_name_candidates",
+        value=_capture_qualified_name_candidates(captures, source_bytes),
+    )
 
 
-def _capture_call_target(nodes: list[Node], source_bytes: bytes) -> str | None:
-    if not nodes:
+def _capture_call_target(captures: dict[str, list[Node]], source_bytes: bytes) -> str | None:
+    for capture_name in ("call.function.identifier", "call.function.attribute"):
+        nodes = captures.get(capture_name, [])
+        if not nodes:
+            continue
+        text = _node_text(nodes[0], source_bytes)
+        if text:
+            return text[:_MAX_CAPTURE_TEXT_LEN]
+
+    call_nodes = captures.get("call.expression", [])
+    if not call_nodes:
         return None
-    function_node = nodes[0].child_by_field_name("function")
+    function_node = call_nodes[0].child_by_field_name("function")
     if function_node is None:
         return None
     text = _node_text(function_node, source_bytes)
-    if not text:
-        return None
-    return text[:_MAX_CAPTURE_TEXT_LEN]
+    return text[:_MAX_CAPTURE_TEXT_LEN] if text else None
 
 
-def _capture_named_definition(nodes: list[Node], source_bytes: bytes) -> str | None:
-    if not nodes:
+def _capture_named_definition(
+    name_nodes: list[Node],
+    fallback_nodes: list[Node],
+    source_bytes: bytes,
+) -> str | None:
+    if name_nodes:
+        name = _node_text(name_nodes[0], source_bytes)
+        if name:
+            return name
+    if not fallback_nodes:
         return None
-    name_node = nodes[0].child_by_field_name("name")
+    name_node = fallback_nodes[0].child_by_field_name("name")
     if name_node is None:
         return None
     name = _node_text(name_node, source_bytes)
-    if not name:
-        return None
-    return name
+    return name or None
+
+
+def _capture_text_rows(
+    captures: dict[str, list[Node]],
+    capture_names: tuple[str, ...],
+    source_bytes: bytes,
+) -> list[str]:
+    rows: list[str] = []
+    for name in capture_names:
+        nodes = captures.get(name, [])
+        for node in nodes:
+            text = _node_text(node, source_bytes)
+            if text:
+                rows.append(text[:_MAX_CAPTURE_TEXT_LEN])
+            if len(rows) >= _MAX_CAPTURE_ITEMS:
+                return rows
+    return rows
+
+
+def _append_chain_row(chain: list[dict[str, object]], *, key: str, value: str) -> None:
+    if not value or len(chain) >= _MAX_CAPTURE_ITEMS:
+        return
+    row: dict[str, object] = {key: value[:_MAX_CAPTURE_TEXT_LEN]}
+    if row not in chain:
+        chain.append(row)
+
+
+def _append_named_import_chain(
+    chain: list[dict[str, object]],
+    name_node: Node,
+    source_bytes: bytes,
+) -> None:
+    if getattr(name_node, "type", "") != "aliased_import":
+        _append_chain_row(chain, key="module", value=_node_text(name_node, source_bytes))
+        return
+
+    module_node = name_node.child_by_field_name("name")
+    alias_node = name_node.child_by_field_name("alias")
+    if module_node is not None:
+        _append_chain_row(chain, key="module", value=_node_text(module_node, source_bytes))
+    if alias_node is not None:
+        _append_chain_row(chain, key="alias", value=_node_text(alias_node, source_bytes))
+
+
+def _append_import_statement_chain(
+    chain: list[dict[str, object]],
+    captures: dict[str, list[Node]],
+    source_bytes: bytes,
+) -> None:
+    for statement in captures.get("import.statement", []):
+        name_node = statement.child_by_field_name("name")
+        if name_node is None:
+            continue
+        _append_named_import_chain(chain, name_node, source_bytes)
+        if len(chain) >= _MAX_CAPTURE_ITEMS:
+            return
+
+
+def _append_import_from_statement_chain(
+    chain: list[dict[str, object]],
+    captures: dict[str, list[Node]],
+    source_bytes: bytes,
+) -> None:
+    for statement in captures.get("import.from_statement", []):
+        module_node = statement.child_by_field_name("module_name")
+        if module_node is not None:
+            _append_chain_row(chain, key="from", value=_node_text(module_node, source_bytes))
+        name_node = statement.child_by_field_name("name")
+        if name_node is not None:
+            _append_named_import_chain(chain, name_node, source_bytes)
+        if len(chain) >= _MAX_CAPTURE_ITEMS:
+            return
+
+
+def _append_module_alias_pairs(
+    chain: list[dict[str, object]],
+    *,
+    modules: list[str],
+    aliases: list[str],
+) -> None:
+    for index, module_name in enumerate(modules[:_MAX_CAPTURE_ITEMS]):
+        _append_chain_row(chain, key="module", value=module_name)
+        if index < len(aliases):
+            _append_chain_row(chain, key="alias", value=aliases[index])
+        if len(chain) >= _MAX_CAPTURE_ITEMS:
+            return
+
+
+def _append_alias_only_rows(
+    chain: list[dict[str, object]],
+    *,
+    aliases: list[str],
+) -> None:
+    for alias in aliases:
+        _append_chain_row(chain, key="alias", value=alias)
+        if len(chain) >= _MAX_CAPTURE_ITEMS:
+            return
+
+
+def _capture_import_alias_chain(
+    captures: dict[str, list[Node]],
+    source_bytes: bytes,
+) -> list[dict[str, object]]:
+    chain: list[dict[str, object]] = []
+    _append_import_statement_chain(chain, captures, source_bytes)
+    _append_import_from_statement_chain(chain, captures, source_bytes)
+
+    from_modules = _capture_text_rows(captures, ("import.from.module",), source_bytes)
+    modules = _capture_text_rows(
+        captures,
+        ("import.module", "import.from.name"),
+        source_bytes,
+    )
+    aliases = _capture_text_rows(
+        captures,
+        ("import.alias", "import.from.alias"),
+        source_bytes,
+    )
+    if from_modules:
+        _append_chain_row(chain, key="from", value=from_modules[0])
+
+    _append_module_alias_pairs(chain, modules=modules, aliases=aliases)
+
+    if not modules:
+        _append_alias_only_rows(chain, aliases=aliases)
+    return chain[:_MAX_CAPTURE_ITEMS]
+
+
+def _capture_binding_candidates(
+    captures: dict[str, list[Node]],
+    source_bytes: bytes,
+) -> list[dict[str, object]]:
+    candidates: list[dict[str, object]] = []
+    for capture_name, kind in (
+        ("assignment.target", "assignment"),
+        ("binding.identifier", "identifier"),
+    ):
+        nodes = captures.get(capture_name, [])
+        for node in nodes:
+            text = _node_text(node, source_bytes)
+            if not text:
+                continue
+            row: dict[str, object] = {
+                "name": text[:_MAX_CAPTURE_TEXT_LEN],
+                "kind": f"tree_sitter_{kind}",
+                "byte_start": int(getattr(node, "start_byte", -1)),
+            }
+            candidates.append(row)
+            if len(candidates) >= _MAX_CAPTURE_ITEMS:
+                return candidates
+    return candidates
+
+
+def _capture_qualified_name_candidates(
+    captures: dict[str, list[Node]],
+    source_bytes: bytes,
+) -> list[dict[str, object]]:
+    rows = _capture_text_rows(
+        captures,
+        (
+            "call.function.identifier",
+            "call.function.attribute",
+            "import.module",
+            "import.from.name",
+            "def.function.name",
+            "class.definition.name",
+            "attribute.expr",
+        ),
+        source_bytes,
+    )
+    out: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for text in rows:
+        if text in seen:
+            continue
+        seen.add(text)
+        out.append({"name": text, "source": "tree_sitter"})
+        if len(out) >= _MAX_CAPTURE_ITEMS:
+            break
+    return out
 
 
 def _default_parse_quality() -> dict[str, object]:

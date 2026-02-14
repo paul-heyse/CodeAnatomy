@@ -27,7 +27,7 @@ CQ is a code query tool that occupies a specific niche: **AST-aware code analysi
 
 **Core value proposition:**
 - Structural precision: AST-based matching eliminates false positives from strings, comments, and variable names
-- Enrichment depth: Multi-source evidence (ast-grep, Python AST, LibCST, tree-sitter, symtable, bytecode, Pyrefly LSP) with cross-source agreement tracking
+- Enrichment depth: Multi-source evidence (ast-grep, Python AST, import detail, python resolution, tree-sitter, symtable, bytecode, Pyrefly LSP) with cross-source agreement tracking
 - Impact awareness: Call graph traversal, data flow taint analysis, and signature change simulation
 - Workflow composition: Multi-step execution with shared scan infrastructure
 - Contextual neighborhoods: Semantic neighborhood assembly with capability-gated LSP enrichment and progressive disclosure via LDMD
@@ -78,7 +78,7 @@ CQ is organized as a layered system with four execution tiers and a shared infra
 ### 2.1 Execution Tiers
 
 **Tier 1: Search** (`tools/cq/search/`)
-Entry point for code discovery. Ripgrep generates candidates; a 3-tier classification pipeline (heuristic -> AST node -> record-based) categorizes matches; a 5-stage enrichment pipeline (ast-grep -> Python AST -> import detail -> LibCST -> tree-sitter) adds structural metadata. Output groups findings by containing function with cross-source agreement indicators.
+Entry point for code discovery. Ripgrep generates candidates; a 3-tier classification pipeline (heuristic -> AST node -> record-based) categorizes matches; a 5-stage enrichment pipeline (ast-grep -> Python AST -> import detail -> python resolution -> tree-sitter) adds structural metadata. Output groups findings by containing function with cross-source agreement indicators.
 
 **Tier 2: Query** (`tools/cq/query/`)
 Declarative code queries via a token-based DSL. Follows classic compiler architecture: parse (DSL -> Query IR), compile (IR -> ToolPlan), execute (ToolPlan -> CqResult). Supports entity queries (`entity=function name=~^build`), structural pattern queries (`pattern='getattr($X, $Y)'`), relational constraints (`inside`, `has`, `precedes`, `follows`), and composite logic (`all`, `any`, `not`).

@@ -36,8 +36,8 @@ from tools.cq.search.enrichment.core import (
 from tools.cq.search.enrichment.core import (
     payload_size_hint as _shared_payload_size_hint,
 )
-from tools.cq.search.libcst_python import enrich_python_resolution_by_byte_range
 from tools.cq.search.python_analysis_session import PythonAnalysisSession
+from tools.cq.search.python_native_resolution import enrich_python_resolution_by_byte_range
 from tools.cq.search.requests import PythonByteRangeEnrichmentRequest, PythonNodeEnrichmentRequest
 from tools.cq.search.tree_sitter_python import (
     enrich_python_context_by_byte_range as _ts_enrich_python_by_byte_range,
@@ -1819,7 +1819,7 @@ def _merge_gap_fill_fields(
 def _build_agreement_section(
     *,
     ast_fields: dict[str, object],
-    libcst_fields: dict[str, object],
+    python_resolution_fields: dict[str, object],
     tree_sitter_fields: dict[str, object],
 ) -> dict[str, object]:
     """Build deterministic cross-source agreement metadata.
@@ -1832,22 +1832,22 @@ def _build_agreement_section(
     conflicts: list[dict[str, object]] = []
     comparison_sources = {
         "ast_grep": ast_fields,
-        "libcst": libcst_fields,
+        "python_resolution": python_resolution_fields,
         "tree_sitter": tree_sitter_fields,
     }
     present_sources = [name for name, values in comparison_sources.items() if values]
 
-    for key in sorted(set(ast_fields).intersection(libcst_fields)):
+    for key in sorted(set(ast_fields).intersection(python_resolution_fields)):
         left = ast_fields.get(key)
-        right = libcst_fields.get(key)
+        right = python_resolution_fields.get(key)
         if left != right:
-            conflicts.append({"field": key, "ast_grep": left, "libcst": right})
+            conflicts.append({"field": key, "ast_grep": left, "python_resolution": right})
 
-    for key in sorted(set(libcst_fields).intersection(tree_sitter_fields)):
-        left = libcst_fields.get(key)
+    for key in sorted(set(python_resolution_fields).intersection(tree_sitter_fields)):
+        left = python_resolution_fields.get(key)
         right = tree_sitter_fields.get(key)
         if left != right:
-            conflicts.append({"field": key, "libcst": left, "tree_sitter": right})
+            conflicts.append({"field": key, "python_resolution": left, "tree_sitter": right})
 
     if conflicts:
         status = "conflict"
@@ -1870,7 +1870,7 @@ class _PythonEnrichmentState:
     stage_timings_ms: dict[str, float] = field(default_factory=dict)
     degrade_reasons: list[str] = field(default_factory=list)
     ast_fields: dict[str, object] = field(default_factory=dict)
-    libcst_fields: dict[str, object] = field(default_factory=dict)
+    python_resolution_fields: dict[str, object] = field(default_factory=dict)
     tree_sitter_fields: dict[str, object] = field(default_factory=dict)
 
 
@@ -1963,7 +1963,7 @@ def _decode_python_source_text(
     return session.source if session is not None else source_bytes.decode("utf-8", errors="replace")
 
 
-def _run_libcst_stage(
+def _run_python_resolution_stage(
     state: _PythonEnrichmentState,
     *,
     source_bytes: bytes,
@@ -1973,33 +1973,33 @@ def _run_libcst_stage(
     session: PythonAnalysisSession | None,
 ) -> None:
     if byte_start is None or byte_end is None:
-        state.stage_status["libcst"] = "skipped"
-        state.stage_timings_ms["libcst"] = 0.0
+        state.stage_status["python_resolution"] = "skipped"
+        state.stage_timings_ms["python_resolution"] = 0.0
         return
 
-    libcst_started = perf_counter()
-    libcst_reasons: list[str] = []
+    resolution_started = perf_counter()
+    resolution_reasons: list[str] = []
     try:
-        wrapper = session.ensure_libcst_wrapper() if session is not None else None
         source_text = _decode_python_source_text(source_bytes=source_bytes, session=session)
-        state.libcst_fields = enrich_python_resolution_by_byte_range(
+        state.python_resolution_fields = enrich_python_resolution_by_byte_range(
             source_text,
+            source_bytes=source_bytes,
+            file_path=cache_key,
             byte_start=byte_start,
             byte_end=byte_end,
-            cache_key=cache_key,
-            wrapper=wrapper,
+            session=session,
         )
     except _ENRICHMENT_ERRORS as exc:
-        state.libcst_fields = {}
-        libcst_reasons.append(f"libcst: {type(exc).__name__}")
-    state.stage_timings_ms["libcst"] = (perf_counter() - libcst_started) * 1000.0
-    state.degrade_reasons.extend(libcst_reasons)
-    if state.libcst_fields:
-        state.payload.update(state.libcst_fields)
-        _append_source(state.payload, "libcst")
-        state.stage_status["libcst"] = "applied"
+        state.python_resolution_fields = {}
+        resolution_reasons.append(f"python_resolution: {type(exc).__name__}")
+    state.stage_timings_ms["python_resolution"] = (perf_counter() - resolution_started) * 1000.0
+    state.degrade_reasons.extend(resolution_reasons)
+    if state.python_resolution_fields:
+        state.payload.update(state.python_resolution_fields)
+        _append_source(state.payload, "python_resolution")
+        state.stage_status["python_resolution"] = "applied"
         return
-    state.stage_status["libcst"] = "degraded" if libcst_reasons else "skipped"
+    state.stage_status["python_resolution"] = "degraded" if resolution_reasons else "skipped"
 
 
 def _extract_tree_sitter_gap_fill(
@@ -2069,7 +2069,7 @@ def _run_tree_sitter_stage(
 def _finalize_python_enrichment_payload(state: _PythonEnrichmentState) -> None:
     agreement = _build_agreement_section(
         ast_fields=state.ast_fields,
-        libcst_fields=state.libcst_fields,
+        python_resolution_fields=state.python_resolution_fields,
         tree_sitter_fields=state.tree_sitter_fields,
     )
     state.payload["agreement"] = agreement
@@ -2155,7 +2155,7 @@ def enrich_python_context(request: PythonNodeEnrichmentRequest) -> dict[str, obj
         cache_key=request.cache_key,
         line=request.line,
     )
-    _run_libcst_stage(
+    _run_python_resolution_stage(
         state,
         source_bytes=request.source_bytes,
         byte_start=byte_start,

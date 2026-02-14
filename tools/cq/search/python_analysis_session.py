@@ -37,8 +37,8 @@ class PythonAnalysisSession:
     node_index: Any | None = None
     ast_tree: ast.Module | None = None
     symtable_table: symtable.SymbolTable | None = None
-    libcst_wrapper: Any | None = None
     tree_sitter_tree: Any | None = None
+    resolution_index: dict[str, object] | None = None
     stage_timings_ms: dict[str, float] = field(default_factory=dict)
     stage_errors: dict[str, str] = field(default_factory=dict)
 
@@ -138,28 +138,15 @@ class PythonAnalysisSession:
             self._mark_stage("symtable", started)
         return self.symtable_table
 
-    def ensure_libcst_wrapper(self) -> Any | None:
-        """Build or return cached LibCST ``MetadataWrapper``.
+    def ensure_resolution_index(self) -> dict[str, object] | None:
+        """Return cached native resolution index payload.
 
         Returns:
         -------
-        Any | None
-            Cached or newly constructed LibCST metadata wrapper.
+        dict[str, object] | None
+            Cached resolution index, if available.
         """
-        if self.libcst_wrapper is not None:
-            return self.libcst_wrapper
-        started = perf_counter()
-        try:
-            import libcst as cst
-            from libcst.metadata import MetadataWrapper
-
-            self.libcst_wrapper = MetadataWrapper(cst.parse_module(self.source))
-        except (RuntimeError, TypeError, ValueError, SyntaxError, ImportError) as exc:
-            self.stage_errors["libcst"] = type(exc).__name__
-            self.libcst_wrapper = None
-        finally:
-            self._mark_stage("libcst", started)
-        return self.libcst_wrapper
+        return self.resolution_index
 
     def ensure_tree_sitter_tree(self) -> Any | None:
         """Build or return cached tree-sitter Python tree.

@@ -624,6 +624,25 @@ class TestSmartSearch:  # noqa: PLR0904
         # Should find matches
         assert len(result.evidence) > 0
 
+    def test_python_enrichment_telemetry_uses_python_resolution_stage(
+        self, sample_repo: Path
+    ) -> None:
+        """Telemetry stage buckets should use python_resolution and exclude legacy libcst."""
+        clear_caches()
+        result = smart_search(sample_repo, "build_graph", lang_scope="python")
+        telemetry = result.summary.get("enrichment_telemetry")
+        assert isinstance(telemetry, dict)
+        python_bucket = telemetry.get("python")
+        assert isinstance(python_bucket, dict)
+        stages = python_bucket.get("stages")
+        timings = python_bucket.get("timings_ms")
+        assert isinstance(stages, dict)
+        assert isinstance(timings, dict)
+        assert "python_resolution" in stages
+        assert "python_resolution" in timings
+        assert "libcst" not in stages
+        assert "libcst" not in timings
+
     def test_smart_search_scanned_files_exact(self, sample_repo: Path) -> None:
         """Smart search should report exact scanned file counts when available."""
         clear_caches()

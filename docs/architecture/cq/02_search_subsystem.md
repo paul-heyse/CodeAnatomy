@@ -7,10 +7,10 @@ The CQ search subsystem (`tools/cq/search/`) provides semantically-enriched code
 **Key characteristics:**
 
 - Three-tier classification pipeline (heuristic → AST node → record-based)
-- Five-stage Python enrichment pipeline (ast-grep → Python AST → import → LibCST → tree-sitter)
+- Five-stage Python enrichment pipeline (ast-grep → Python AST → import → python_resolution → tree-sitter)
 - Parallel ProcessPool classification with spawn context and fail-open semantics
 - Per-file caching with thread-unsafe cache architecture
-- Cross-source agreement validation across ast-grep, LibCST, and tree-sitter
+- Cross-source agreement validation across ast-grep, python_resolution, and tree-sitter
 - Multi-language orchestration with per-language partition statistics
 - Pyrefly LSP integration for semantic hover data and diagnostics
 - Front-door insight card: `FrontDoorInsightV1` contract embedded as first output block with target identity, neighborhood preview, risk, and confidence
@@ -504,7 +504,7 @@ class _PythonEnrichmentState:
     stage_timings_ms: dict[str, float]             # Stage timing metrics
     degrade_reasons: list[str]                     # Degradation reasons
     ast_fields: dict[str, object]                  # Stage 1 fields (for agreement)
-    libcst_fields: dict[str, object]               # Stage 4 fields (for agreement)
+    python_resolution_fields: dict[str, object]    # Stage 4 fields (for agreement)
     tree_sitter_fields: dict[str, object]          # Stage 5 fields (for agreement)
 ```
 
@@ -563,11 +563,11 @@ class _PythonEnrichmentState:
 
 **Cost:** O(1) - node text parsing only.
 
-### Stage 4: LibCST (lines 1966-2002)
+### Stage 4: python_resolution (lines 1966-2002)
 
-**Function:** `_run_libcst_stage()`
+**Function:** `_run_python_resolution_stage()`
 
-**Purpose:** Extract resolution information using LibCST metadata.
+**Purpose:** Extract resolution information using native Python analysis.
 
 **Conditional:** Only runs when byte range is available (byte_start and byte_end).
 
@@ -581,9 +581,9 @@ class _PythonEnrichmentState:
 
 **Strategy:** Gap-fill merge - only adds fields not already populated by ast-grep.
 
-**Cost:** O(parse) for first file access, O(1) for cached LibCST wrappers.
+**Cost:** O(parse) for first file access, O(1) for cached per-file analysis artifacts.
 
-**Session integration:** Reuses `PythonAnalysisSession.libcst_wrapper` if available.
+**Session integration:** Reuses `PythonAnalysisSession` AST/symtable/tree-sitter caches and resolution index.
 
 ### Stage 5: Tree-Sitter (lines 2021-2066)
 
@@ -609,7 +609,7 @@ class _PythonEnrichmentState:
 
 **Operations:**
 
-1. **Build agreement section** - Compare ast-grep, LibCST, tree-sitter results
+1. **Build agreement section** - Compare ast-grep, python_resolution, tree-sitter results
 2. **Crosscheck validation** - If `CQ_PY_ENRICHMENT_CROSSCHECK=1` and conflicts detected, mark as degraded
 3. **Status marking** - Set `enrichment_status` to "degraded" if `degrade_reasons` non-empty
 4. **Stage metadata** - Add `stage_status` and `stage_timings_ms`
@@ -621,7 +621,7 @@ class _PythonEnrichmentState:
 
 ## 6. Cross-Source Agreement
 
-**Purpose:** Validate consistency across ast-grep, LibCST, and tree-sitter extractions.
+**Purpose:** Validate consistency across ast-grep, python_resolution, and tree-sitter extractions.
 
 **Function:** `_build_agreement_section()` (line 1817-1863)
 
@@ -630,29 +630,29 @@ class _PythonEnrichmentState:
 ```python
 def _build_agreement_section(
     ast_fields: dict[str, object],
-    libcst_fields: dict[str, object],
+    python_resolution_fields: dict[str, object],
     tree_sitter_fields: dict[str, object],
 ) -> dict[str, object]:
     # 1. Track which sources provided each field
     present_sources: list[str] = []
     if ast_fields:
         present_sources.append("ast_grep")
-    if libcst_fields:
-        present_sources.append("libcst")
+    if python_resolution_fields:
+        present_sources.append("python_resolution")
     if tree_sitter_fields:
         present_sources.append("tree_sitter")
 
     # 2. Compare overlapping fields
     conflicts: list[str] = []
     for field in ast_fields:
-        if field in libcst_fields and ast_fields[field] != libcst_fields[field]:
-            conflicts.append(f"ast_grep vs libcst: {field}")
+        if field in python_resolution_fields and ast_fields[field] != python_resolution_fields[field]:
+            conflicts.append(f"ast_grep vs python_resolution: {field}")
         if field in tree_sitter_fields and ast_fields[field] != tree_sitter_fields[field]:
             conflicts.append(f"ast_grep vs tree_sitter: {field}")
 
-    for field in libcst_fields:
-        if field in tree_sitter_fields and libcst_fields[field] != tree_sitter_fields[field]:
-            conflicts.append(f"libcst vs tree_sitter: {field}")
+    for field in python_resolution_fields:
+        if field in tree_sitter_fields and python_resolution_fields[field] != tree_sitter_fields[field]:
+            conflicts.append(f"python_resolution vs tree_sitter: {field}")
 
     # 3. Determine agreement status
     if len(present_sources) >= _FULL_AGREEMENT_SOURCE_COUNT and not conflicts:
@@ -2268,7 +2268,7 @@ Input: (root, query, **kwargs)
         [Stage 3: Import Detail] _run_import_stage()
           import_module, import_alias, import_names, import_level
         ↓
-        [Stage 4: LibCST] _run_libcst_stage()
+        [Stage 4: python_resolution] _run_python_resolution_stage()
           qualified_names, binding_candidates, import_alias_chain, call_resolution
           Gap-fill merge (only adds missing fields)
         ↓
@@ -2276,7 +2276,7 @@ Input: (root, query, **kwargs)
           Final gap-fill fallback, parse_quality
         ↓
         [Finalization] _finalize_python_enrichment_payload()
-          Agreement section (ast_grep vs libcst vs tree_sitter)
+          Agreement section (ast_grep vs python_resolution vs tree_sitter)
           Crosscheck validation (CQ_PY_ENRICHMENT_CROSSCHECK=1)
           Payload budget enforcement (4096 bytes)
         → EnrichedMatch with DetailPayload
@@ -2385,7 +2385,7 @@ All enrichment stages follow a fail-open policy:
 
 **Common reasons:**
 - `"ast_grep: <exception>"` - ast-grep extraction failed
-- `"libcst: <exception>"` - LibCST parsing failed
+- `"python_resolution: <exception>"` - Native resolution stage failed
 - `"tree_sitter: <exception>"` - Tree-sitter parsing failed
 - `"crosscheck mismatch"` - Agreement conflict detected
 - `"payload_budget"` - Payload exceeded 4096 bytes
@@ -2460,7 +2460,7 @@ All enrichment stages follow a fail-open policy:
 
 **Current state:** Five-stage Python enrichment runs sequentially per-match.
 
-**Tension:** ast-grep and tree-sitter stages are independent but run sequentially. LibCST stage depends on tree-sitter only for gap-fill.
+**Tension:** ast-grep and tree-sitter stages are independent but run sequentially. python_resolution runs as a distinct gap-fill stage.
 
 **Potential improvements:**
 - Parallelize ast-grep and tree-sitter stages
@@ -2490,7 +2490,7 @@ All enrichment stages follow a fail-open policy:
 
 #### 4. Cross-Source Agreement Validation
 
-**Current state:** Agreement checked by comparing ast-grep, LibCST, tree-sitter outputs. Conflicts trigger degradation only if `CQ_PY_ENRICHMENT_CROSSCHECK=1`.
+**Current state:** Agreement checked by comparing ast-grep, python_resolution, tree-sitter outputs. Conflicts trigger degradation only if `CQ_PY_ENRICHMENT_CROSSCHECK=1`.
 
 **Tension:** Agreement validation catches bugs but adds payload overhead and complexity.
 
@@ -2526,7 +2526,7 @@ All enrichment stages follow a fail-open policy:
 
 **Current state:** ast-grep stage extracts fields that later stages gap-fill.
 
-**Coupling:** LibCST and tree-sitter stages depend on ast-grep field names.
+**Coupling:** python_resolution and tree-sitter stages depend on ast-grep field names.
 
 **Risk:** Changes to ast-grep extraction break gap-fill logic.
 
@@ -2610,7 +2610,7 @@ All enrichment stages follow a fail-open policy:
 **Goal:** Run independent enrichment stages in parallel.
 
 **Approach:**
-- Split pipeline into DAG: `ast-grep || tree-sitter`, then `LibCST` (depends on tree-sitter gap-fill)
+- Split pipeline into DAG: `ast-grep || tree-sitter`, then `python_resolution`
 - Use `asyncio` or ThreadPool for parallel stage execution
 - Merge results via structured concurrency
 
@@ -2766,7 +2766,7 @@ smart_search()
 │           │  ├─ _run_ast_grep_stage()
 │           │  ├─ _run_python_ast_stage()
 │           │  ├─ _run_import_stage()
-│           │  ├─ _run_libcst_stage()
+│           │  ├─ _run_python_resolution_stage()
 │           │  ├─ _run_tree_sitter_stage()
 │           │  └─ _finalize_python_enrichment_payload()
 │           └─ enrich_rust_context()  [Rust]
@@ -2812,7 +2812,7 @@ smart_search.py
 ```
 python_enrichment.py
 ├─ enrichment/core.py (payload normalization, budget enforcement)
-├─ enrichment/libcst_python.py (LibCST resolution)
+├─ python_native_resolution.py (native resolution)
 └─ enrichment/tree_sitter_python.py (tree-sitter gap-fill)
 
 rust_enrichment.py
@@ -2823,7 +2823,6 @@ rust_enrichment.py
 
 - `ast_grep_py` - AST parsing and node lookup
 - `tree-sitter` - Alternative parser for Python/Rust
-- `libcst` - Python CST with metadata resolution
 - `ripgrep` (rg) - Fast text search engine
 - `msgspec` - Fast serialization
 

@@ -3,33 +3,44 @@
     "./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs"
   ],
   "key_findings": [
-    "function: compile_target"
+    "reference: compile_target"
   ],
   "sections": [
     {
       "count": 1,
       "messages": [
-        "function: compile_target"
+        "reference: compile_target"
       ],
       "title": "Target Candidates"
     },
     {
-      "count": 3,
+      "count": 5,
       "messages": [
-        "Sibling Definitions: 4 (top: Compiler, CoreCompiler, compile, invoke_compile)",
-        "Functions Called: 1 (top: compile)",
-        "Callers: 1 (top: invoke_compile)"
+        "Enclosing Context: 1 (top: compile_target(input))",
+        "Parent Scopes: 3 (top: {\n    compile_target(input)\n}, invoke_compile, pub trait Compiler {\n    fn compile(&self, input: &str) -> String;\n}\n\npub struct CoreCompiler;\n\nimpl Compiler for Cor...)",
+        "Children: 2 (top: compile_target, (input))",
+        "Callers: 1 (top: compile_target(input))",
+        "Callees: 1 (top: compile_target(input))"
       ],
       "title": "Neighborhood Preview"
     },
     {
       "count": 3,
       "messages": [
-        "compile_target (./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs)",
-        "./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs",
-        "invoke_compile (./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs)"
+        "reference: compile_target (1 occurrences) [object_id=obj_305829f64634793b50c3f81e]",
+        "reference: compile_target (1 occurrences) [object_id=obj_aab9e6f05b5ba1c2289cc8b4]",
+        "reference: compile_target (1 occurrences) [object_id=obj_d7cd9edbded38d5894e4ebff]"
       ],
-      "title": "Top Contexts"
+      "title": "Resolved Objects"
+    },
+    {
+      "count": 3,
+      "messages": [
+        "compile_target: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs:13:14 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs:8-23) [reference] [object_id=obj_aab9e6f05b5ba1c2289cc8b4] [line_id=d34161c05bcfb6aff7871568]",
+        "compile_target: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs:20:15 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs:8-23) [reference] [object_id=obj_d7cd9edbded38d5894e4ebff] [line_id=15427fa064b4781eaa2b3e1e]",
+        "compile_target: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs:25:4 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs:24-26) [reference] [object_id=obj_305829f64634793b50c3f81e] [line_id=2f15917b17ab80cc5cda7909]"
+      ],
+      "title": "Occurrences"
     },
     {
       "count": 1,
@@ -55,13 +66,13 @@
         "telemetry": false
       },
       "degradation": {
-        "semantic": "skipped",
         "notes": [
           "not_attempted_by_design",
           "not_attempted_runtime_disabled"
         ],
         "scan": "ok",
-        "scope_filter": "none"
+        "scope_filter": "none",
+        "semantic": "skipped"
       },
       "neighborhood": {
         "callees": {
@@ -74,7 +85,7 @@
         },
         "hierarchy_or_scope": {
           "availability": "full",
-          "total": 4
+          "total": 6
         },
         "references": {
           "availability": "unavailable",
@@ -92,11 +103,11 @@
       },
       "source": "search",
       "target": {
-        "kind": "function",
+        "kind": "reference",
         "location": {
-          "col": 14,
+          "col": 4,
           "file": "tests/e2e/cq/_golden_workspace/mixed_monorepo/rust/crates/core/src/lib.rs",
-          "line": 13
+          "line": 25
         },
         "selection_reason": "top_definition",
         "symbol": "compile_target"
@@ -106,7 +117,6 @@
     "language_order": [
       "rust"
     ],
-    "semantic_planes_present": false,
     "mode": "identifier",
     "plan_version": null,
     "python_semantic_telemetry": {
@@ -124,6 +134,7 @@
       "skipped": 0,
       "timed_out": 0
     },
+    "semantic_planes_present": false,
     "steps": null,
     "target": null,
     "target_file": null,

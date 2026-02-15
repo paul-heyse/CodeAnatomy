@@ -323,6 +323,11 @@ from tools.cq.cli_app.commands.ldmd import ldmd_app
 
 app.command(ldmd_app)
 
+# Artifact retrieval commands
+from tools.cq.cli_app.commands.artifact import artifact_app
+
+app.command(artifact_app)
+
 # Neighborhood command
 from tools.cq.cli_app.commands.neighborhood import nb_app, neighborhood_app
 

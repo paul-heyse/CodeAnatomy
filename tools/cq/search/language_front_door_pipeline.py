@@ -8,8 +8,6 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from pathlib import Path
 
-import msgspec
-
 from tools.cq.core.cache import (
     CacheWriteTagRequestV1,
     CqCacheBackend,
@@ -27,7 +25,11 @@ from tools.cq.core.cache import (
     resolve_namespace_ttl_seconds,
     resolve_write_cache_tag,
 )
-from tools.cq.core.contracts import contract_to_builtins
+from tools.cq.core.cache.fragment_codecs import (
+    decode_fragment_payload,
+    encode_fragment_payload,
+    is_fragment_cache_payload,
+)
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.search.classifier import get_sg_root
 from tools.cq.search.language_front_door_contracts import (
@@ -179,14 +181,15 @@ def _probe_cached_outcome(
     cached = context.cache.get(context.cache_key)
     record_cache_get(
         namespace=cache_namespace,
-        hit=isinstance(cached, dict),
+        hit=is_fragment_cache_payload(cached),
         key=context.cache_key,
     )
-    if not isinstance(cached, dict):
+    payload = decode_fragment_payload(cached, type_=SemanticOutcomeCacheV1)
+    if payload is None:
+        if is_fragment_cache_payload(cached):
+            record_cache_decode_failure(namespace=cache_namespace)
         return None
-    try:
-        payload = msgspec.convert(cached, type=SemanticOutcomeCacheV1)
-    except (RuntimeError, TypeError, ValueError):
+    if not isinstance(payload, SemanticOutcomeCacheV1):
         record_cache_decode_failure(namespace=cache_namespace)
         return None
     return LanguageSemanticEnrichmentOutcome(
@@ -431,7 +434,7 @@ def _persist_outcome(
     )
     ok = context.cache.set(
         context.cache_key,
-        contract_to_builtins(payload),
+        encode_fragment_payload(payload),
         expire=ttl_seconds,
         tag=tag,
     )

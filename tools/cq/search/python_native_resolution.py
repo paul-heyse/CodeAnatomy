@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from tools.cq.search.python_analysis_session import PythonAnalysisSession
+    from tools.cq.search.python_analysis_session import AstSpanEntry, PythonAnalysisSession
 
 _MAX_BINDINGS = 8
 _MAX_QUALIFIED_NAME_CANDIDATES = 8
@@ -44,6 +44,17 @@ class _AstAnchor:
 class _DefinitionSite:
     kind: str
     byte_start: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolutionPayloadInputs:
+    tree: ast.AST
+    source_bytes: bytes
+    scope_root: symtable.SymbolTable
+    tree_sitter_tree: Any | None
+    session: PythonAnalysisSession | None
+    byte_start: int
+    byte_end: int
 
 
 def _line_col_to_byte_offset(source_bytes: bytes, line: int, col: int) -> int | None:
@@ -140,6 +151,33 @@ def _find_ast_anchor(
                 parents=parents,
                 byte_start=span_start,
                 byte_end=span_end,
+            )
+            best_key = candidate_key
+    return best
+
+
+def _find_ast_anchor_from_index(
+    span_entries: tuple[AstSpanEntry, ...],
+    *,
+    byte_start: int,
+    byte_end: int,
+) -> _AstAnchor | None:
+    best: _AstAnchor | None = None
+    best_key: tuple[int, int, int] | None = None
+    for entry in span_entries:
+        contains_anchor = entry.byte_start <= byte_start and byte_end <= entry.byte_end
+        overlaps_anchor = entry.byte_start < byte_end and byte_start < entry.byte_end
+        if not contains_anchor and not overlaps_anchor:
+            continue
+        size = entry.byte_end - entry.byte_start
+        depth = len(entry.parents)
+        candidate_key = (size, entry.priority, -depth)
+        if best_key is None or candidate_key < best_key:
+            best = _AstAnchor(
+                node=entry.node,
+                parents=entry.parents,
+                byte_start=entry.byte_start,
+                byte_end=entry.byte_end,
             )
             best_key = candidate_key
     return best
@@ -644,6 +682,83 @@ def _load_ast_symtable_tree(
     return tree, scope_table, None
 
 
+def _resolve_ast_anchor(
+    *,
+    tree: ast.AST,
+    source_bytes: bytes,
+    byte_start: int,
+    byte_end: int,
+    session: PythonAnalysisSession | None,
+) -> _AstAnchor | None:
+    anchor: _AstAnchor | None = None
+    if session is not None:
+        span_index = session.ensure_ast_span_index()
+        if span_index:
+            anchor = _find_ast_anchor_from_index(
+                span_index,
+                byte_start=byte_start,
+                byte_end=byte_end,
+            )
+    if anchor is not None:
+        return anchor
+    return _find_ast_anchor(
+        tree,
+        source_bytes,
+        byte_start=byte_start,
+        byte_end=byte_end,
+    )
+
+
+def _build_resolution_payload(
+    *,
+    anchor: _AstAnchor,
+    inputs: _ResolutionPayloadInputs,
+) -> dict[str, object]:
+    index = _load_resolution_index(
+        tree=inputs.tree,
+        source_bytes=inputs.source_bytes,
+        session=inputs.session,
+    )
+    alias_map = _coerce_alias_map(index.get("import_alias_map"))
+    definition_index = _coerce_definition_index(index.get("definition_index"))
+
+    scope_path = _scope_path_from_parents(anchor.parents)
+    scope_table = _descend_scope_table(inputs.scope_root, scope_path)
+    scope_tables = _scope_table_chain(inputs.scope_root, scope_path)
+    if scope_table not in scope_tables:
+        scope_tables.append(scope_table)
+
+    payload: dict[str, object] = {}
+    payload.update(_extract_symbol_role(anchor.node))
+    enclosing = _extract_enclosing_context(anchor)
+    payload.update(enclosing)
+    payload.update(_extract_import_alias_chain(anchor))
+    payload.update(
+        _extract_binding_candidates(
+            anchor=anchor,
+            scope_tables=scope_tables,
+            definition_index=definition_index,
+        )
+    )
+
+    tree_sitter_text = _tree_sitter_anchor_text(
+        inputs.source_bytes,
+        tree=inputs.tree_sitter_tree,
+        byte_start=inputs.byte_start,
+        byte_end=inputs.byte_end,
+    )
+    payload.update(
+        _extract_qualified_name_candidates(
+            anchor=anchor,
+            alias_map=alias_map,
+            enclosing_callable=_as_optional_str(enclosing.get("enclosing_callable")),
+            enclosing_class=_as_optional_str(enclosing.get("enclosing_class")),
+            tree_sitter_text=tree_sitter_text,
+        )
+    )
+    return payload
+
+
 def enrich_python_resolution_by_byte_range(
     source: str,
     *,
@@ -678,57 +793,26 @@ def enrich_python_resolution_by_byte_range(
     tree, scope_root, tree_sitter_tree = loaded
 
     try:
-        anchor = _find_ast_anchor(
-            tree,
-            source_bytes,
+        anchor = _resolve_ast_anchor(
+            tree=tree,
+            source_bytes=source_bytes,
             byte_start=byte_start,
             byte_end=byte_end,
+            session=typed_session,
         )
         if anchor is None:
             return {}
-
-        index = _load_resolution_index(
-            tree=tree,
-            source_bytes=source_bytes,
-            session=typed_session,
-        )
-        alias_map = _coerce_alias_map(index.get("import_alias_map"))
-        definition_index = _coerce_definition_index(index.get("definition_index"))
-
-        scope_path = _scope_path_from_parents(anchor.parents)
-        scope_table = _descend_scope_table(scope_root, scope_path)
-        scope_tables = _scope_table_chain(scope_root, scope_path)
-        if scope_table not in scope_tables:
-            scope_tables.append(scope_table)
-
-        payload: dict[str, object] = {}
-        payload.update(_extract_symbol_role(anchor.node))
-        enclosing = _extract_enclosing_context(anchor)
-        payload.update(enclosing)
-        payload.update(_extract_import_alias_chain(anchor))
-
-        payload.update(
-            _extract_binding_candidates(
-                anchor=anchor,
-                scope_tables=scope_tables,
-                definition_index=definition_index,
-            )
-        )
-
-        tree_sitter_text = _tree_sitter_anchor_text(
-            source_bytes,
-            tree=tree_sitter_tree,
-            byte_start=byte_start,
-            byte_end=byte_end,
-        )
-        payload.update(
-            _extract_qualified_name_candidates(
-                anchor=anchor,
-                alias_map=alias_map,
-                enclosing_callable=_as_optional_str(enclosing.get("enclosing_callable")),
-                enclosing_class=_as_optional_str(enclosing.get("enclosing_class")),
-                tree_sitter_text=tree_sitter_text,
-            )
+        payload = _build_resolution_payload(
+            anchor=anchor,
+            inputs=_ResolutionPayloadInputs(
+                tree=tree,
+                source_bytes=source_bytes,
+                scope_root=scope_root,
+                tree_sitter_tree=tree_sitter_tree,
+                session=typed_session,
+                byte_start=byte_start,
+                byte_end=byte_end,
+            ),
         )
     except _NATIVE_RESOLUTION_ERRORS:
         return {}

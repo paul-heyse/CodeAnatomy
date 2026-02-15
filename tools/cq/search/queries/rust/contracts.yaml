@@ -1,0 +1,5 @@
+language: rust
+version: 1
+rules:
+  require_rooted: true
+  forbid_non_local: true

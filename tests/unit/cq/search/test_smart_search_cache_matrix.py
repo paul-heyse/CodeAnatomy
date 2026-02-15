@@ -39,6 +39,7 @@ def _normalize_result_payload(result: object) -> dict[str, object]:
     summary = payload.get("summary")
     if isinstance(summary, dict):
         summary.pop("cache_backend", None)
+        summary.pop("search_stage_timings_ms", None)
     return payload
 
 

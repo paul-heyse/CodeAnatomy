@@ -4,35 +4,47 @@
     "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
   ],
   "key_findings": [
-    "function: compile_target"
+    "reference: compile_target"
   ],
   "sections": [
     {
       "count": 1,
       "messages": [
-        "function: compile_target"
+        "reference: compile_target"
       ],
       "title": "Target Candidates"
     },
     {
-      "count": 3,
+      "count": 4,
       "messages": [
-        "Sibling Definitions: 5 (top: engine, traits, macros, tests, smoke_compile_target)",
-        "Functions Called: 2 (top: new, compile)",
-        "Callers: 1 (top: invoke_compile)"
+        "Enclosing Context: 1 (top: use corelib::{compile_target, Compiler, Engine, Runnable};)",
+        "Parent Scopes: 1 (top: use corelib::{compile_target, Compiler, Engine, Runnable};\n\npub fn compile_for_app(input: &str) -> String {\n    let e...)",
+        "Children: 1 (top: corelib::{compile_target, Compiler, Engine, Runnable})",
+        "Siblings: 2 (top: compile_for_app)"
       ],
       "title": "Neighborhood Preview"
     },
     {
       "count": 5,
       "messages": [
-        "./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs",
-        "run_pipeline (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs)",
-        "compile_target (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)",
-        "tests (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)",
-        "smoke_compile_target (./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs)"
+        "reference: compile_target (1 occurrences) [object_id=obj_034d1be33a7fd57f7801fbde]",
+        "reference: compile_target (1 occurrences) [object_id=obj_539db414998580c29d122c34]",
+        "reference: compile_target (1 occurrences) [object_id=obj_5998c090afb5542cd00a1fb1]",
+        "reference: compile_target (1 occurrences) [object_id=obj_7abe2d543e14c539265ef5ff]",
+        "reference: compile_target (1 occurrences) [object_id=obj_82904649a3be2ea1b6f2c210]"
       ],
-      "title": "Top Contexts"
+      "title": "Resolved Objects"
+    },
+    {
+      "count": 5,
+      "messages": [
+        "compile_target: ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs:1:14 (block ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs:1-2) [reference] [object_id=obj_034d1be33a7fd57f7801fbde] [line_id=66e7dcf234840777cff800d8]",
+        "compile_target: ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs:10:21 (block ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs:8-11) [reference] [object_id=obj_539db414998580c29d122c34] [line_id=bacd24a7e43eb530576688e6]",
+        "compile_target: ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:10:7 (block ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:10-15) [reference] [object_id=obj_5998c090afb5542cd00a1fb1] [line_id=de35f80873a6ba2f157ed3a3]",
+        "compile_target: ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:17:15 (block ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:16-23) [reference] [object_id=obj_82904649a3be2ea1b6f2c210] [line_id=93eac01a04ed2afb6de7f735]",
+        "compile_target: ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:21:19 (block ./tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:20-23) [reference] [object_id=obj_7abe2d543e14c539265ef5ff] [line_id=ecf5a8df3dc4c3ad53c6651b]"
+      ],
+      "title": "Occurrences"
     },
     {
       "count": 1,
@@ -59,22 +71,22 @@
         "telemetry": false
       },
       "degradation": {
-        "semantic": "skipped",
         "notes": [
           "not_attempted_by_design",
           "not_attempted_runtime_disabled"
         ],
         "scan": "ok",
-        "scope_filter": "none"
+        "scope_filter": "none",
+        "semantic": "skipped"
       },
       "neighborhood": {
         "callees": {
-          "availability": "full",
-          "total": 2
+          "availability": "unavailable",
+          "total": 0
         },
         "callers": {
-          "availability": "full",
-          "total": 1
+          "availability": "unavailable",
+          "total": 0
         },
         "hierarchy_or_scope": {
           "availability": "full",
@@ -87,8 +99,8 @@
       },
       "risk": {
         "counters": {
-          "callees": 2,
-          "callers": 1,
+          "callees": 0,
+          "callers": 0,
           "forwarding_count": 0,
           "hazard_count": 0
         },
@@ -96,11 +108,11 @@
       },
       "source": "search",
       "target": {
-        "kind": "function",
+        "kind": "reference",
         "location": {
-          "col": 7,
-          "file": "tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs",
-          "line": 10
+          "col": 14,
+          "file": "tests/e2e/cq/_golden_workspace/rust_workspace/crates/app/src/lib.rs",
+          "line": 1
         },
         "selection_reason": "top_definition",
         "symbol": "compile_target"
@@ -110,7 +122,6 @@
     "language_order": [
       "rust"
     ],
-    "semantic_planes_present": false,
     "mode": "identifier",
     "plan_version": null,
     "python_semantic_telemetry": {
@@ -128,6 +139,7 @@
       "skipped": 0,
       "timed_out": 0
     },
+    "semantic_planes_present": false,
     "steps": null,
     "target": null,
     "target_file": null,

@@ -23,6 +23,7 @@ class SearchServiceRequest(CqStruct, frozen=True):
     include_globs: list[str] | None = None
     exclude_globs: list[str] | None = None
     include_strings: bool = False
+    with_neighborhood: bool = False
     limits: SearchLimits | None = None
     tc: Toolchain | None = None
     argv: list[str] | None = None
@@ -47,6 +48,7 @@ class SearchService:
             include_globs=request.include_globs,
             exclude_globs=request.exclude_globs,
             include_strings=request.include_strings,
+            with_neighborhood=request.with_neighborhood,
             limits=request.limits,
             tc=request.tc,
             argv=request.argv,

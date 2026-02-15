@@ -90,3 +90,35 @@ def test_search_command_in_dir_file_keeps_file_path(
     request = captured.get("request")
     assert isinstance(request, SearchServiceRequest)
     assert request.include_globs == ["tools/cq/search/python_analysis_session.py"]
+
+
+def test_search_command_forwards_with_neighborhood_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--with-neighborhood should flow into the search service request."""
+    captured: dict[str, object] = {}
+
+    class _FakeSearchService:
+        def execute(self, request: SearchServiceRequest) -> CqResult:
+            captured["request"] = request
+            return _empty_result(argv=["cq", "search"], root=tmp_path)
+
+    class _FakeRuntimeServices:
+        def __init__(self) -> None:
+            self.search = _FakeSearchService()
+
+    monkeypatch.setattr(
+        "tools.cq.core.bootstrap.resolve_runtime_services",
+        lambda _root: _FakeRuntimeServices(),
+    )
+
+    ctx = CliContext.build(argv=["cq", "search"], root=tmp_path)
+    cmd_search(
+        "PythonAnalysisSession",
+        opts=SearchParams(with_neighborhood=True),
+        ctx=ctx,
+    )
+
+    request = captured.get("request")
+    assert isinstance(request, SearchServiceRequest)
+    assert request.with_neighborhood is True

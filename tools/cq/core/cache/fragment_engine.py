@@ -6,6 +6,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 
+from tools.cq.core.cache.fragment_codecs import is_fragment_cache_payload
 from tools.cq.core.cache.fragment_contracts import (
     FragmentEntryV1,
     FragmentHitV1,
@@ -64,12 +65,13 @@ def partition_fragment_entries(
             misses.append(FragmentMissV1(entry=entry))
             continue
         cached = runtime.cache_get(entry.cache_key)
+        is_payload = is_fragment_cache_payload(cached)
         runtime.record_get(
             namespace=request.namespace,
-            hit=isinstance(cached, dict),
+            hit=is_payload,
             key=entry.cache_key,
         )
-        if not isinstance(cached, dict):
+        if not is_payload:
             misses.append(FragmentMissV1(entry=entry))
             continue
         decoded = runtime.decode(cached)

@@ -58,7 +58,7 @@ def test_ldmd_index_search_get_neighbors(
         ]
     )
     neighbors_payload = json.loads(
-        run_cq_text(["ldmd", "neighbors", str(ldmd_path), "--id", "summary"])
+        run_cq_text(["ldmd", "neighbors", str(ldmd_path), "--id", "key_findings"])
     )
 
     spec = load_golden_spec("golden_specs/ldmd_roundtrip_spec.json")
@@ -69,7 +69,6 @@ def test_ldmd_index_search_get_neighbors(
         if isinstance(item, dict) and isinstance(item.get("id"), str)
     ]
     assert "insight_card" in section_ids
-    assert "diagnostic_artifacts" in section_ids
 
     snapshot_payload: dict[str, Any] = {
         "index_section_ids": [

@@ -2,36 +2,58 @@
   "anchors": [],
   "key_findings": [
     "Symbol: forwarding_adapter",
-    "Kind: function",
+    "Kind: function_definition",
     "File: tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py"
   ],
   "sections": [
     {
       "count": 4,
       "messages": [
-        "**Nodes:** 5",
-        "**Edges:** 1",
-        "**Slices:** 2",
-        "**Relationships:** callees (1), siblings (4)"
+        "**Nodes:** 8",
+        "**Edges:** 7",
+        "**Slices:** 5",
+        "**Relationships:** callees (1), children (4), enclosing_context (1), parents (1), siblings (2)"
       ],
       "title": "Neighborhood Summary"
     },
     {
-      "count": 4,
+      "count": 1,
       "messages": [
-        "- **DynamicRouter** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
-        "- **__init__** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
-        "- **dispatch** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
-        "- **op_direct** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+        "- **forwarding_adapter** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
       ],
-      "title": "Sibling Definitions"
+      "title": "Enclosing Context"
     },
     {
       "count": 1,
       "messages": [
-        "- **dispatch** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+        "- **# ruff: noqa: D102, D107, DOC201, TID252\n\"\"\"Dynamic dispatch fixture module.\"\"\"\n\nfrom __future__ import annotations\n\n...** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
       ],
-      "title": "Functions Called"
+      "title": "Parent Scopes"
+    },
+    {
+      "count": 4,
+      "messages": [
+        "- **forwarding_adapter** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
+        "- **(\n    router: DynamicRouter, operation: str, *args: object, **kwargs: object\n)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
+        "- **str** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
+        "- **\"\"\"Forward *args/**kwargs to dispatch target for query coverage.\"\"\"\n    return router.dispatch(operation, *args, **kw...** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+      ],
+      "title": "Children"
+    },
+    {
+      "count": 2,
+      "messages": [
+        "- **DynamicRouter** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)",
+        "_... and 1 more_"
+      ],
+      "title": "Siblings"
+    },
+    {
+      "count": 1,
+      "messages": [
+        "- **router.dispatch(operation, *args, **kwargs)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+      ],
+      "title": "Callees"
     },
     {
       "count": 1,
@@ -70,8 +92,8 @@
     "target_resolution_kind": "symbol_fallback",
     "top_k": 5,
     "total_diagnostics": 0,
-    "total_edges": 1,
-    "total_nodes": 5,
-    "total_slices": 2
+    "total_edges": 7,
+    "total_nodes": 8,
+    "total_slices": 5
   }
 }

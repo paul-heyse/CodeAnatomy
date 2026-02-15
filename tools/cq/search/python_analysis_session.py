@@ -21,6 +21,77 @@ _MAX_SESSION_CACHE_ENTRIES = 64
 _SESSION_CACHE: dict[str, PythonAnalysisSession] = {}
 
 
+@dataclass(frozen=True, slots=True)
+class AstSpanEntry:
+    """Precomputed AST span entry for fast byte-anchor lookup."""
+
+    node: ast.AST
+    parents: tuple[ast.AST, ...]
+    byte_start: int
+    byte_end: int
+    priority: int
+
+
+def _line_col_to_byte_offset(source_bytes: bytes, line: int, col: int) -> int | None:
+    if line < 1 or col < 0:
+        return None
+    lines = source_bytes.splitlines(keepends=True)
+    if line > len(lines):
+        return None
+    prefix = b"".join(lines[: line - 1])
+    line_bytes = lines[line - 1]
+    char_col = min(col, len(line_bytes.decode("utf-8", errors="replace")))
+    as_bytes = line_bytes.decode("utf-8", errors="replace")[:char_col].encode(
+        "utf-8", errors="replace"
+    )
+    return len(prefix) + len(as_bytes)
+
+
+def _node_byte_span(node: ast.AST, source_bytes: bytes) -> tuple[int, int] | None:
+    lineno = getattr(node, "lineno", None)
+    col_offset = getattr(node, "col_offset", None)
+    end_lineno = getattr(node, "end_lineno", None)
+    end_col_offset = getattr(node, "end_col_offset", None)
+    if not isinstance(lineno, int):
+        return None
+    if not isinstance(col_offset, int):
+        return None
+    if not isinstance(end_lineno, int):
+        return None
+    if not isinstance(end_col_offset, int):
+        return None
+    start = _line_col_to_byte_offset(source_bytes, lineno, col_offset)
+    end = _line_col_to_byte_offset(source_bytes, end_lineno, end_col_offset)
+    if start is None or end is None or end <= start:
+        return None
+    return start, end
+
+
+def _iter_nodes_with_parents(tree: ast.AST) -> list[tuple[ast.AST, tuple[ast.AST, ...]]]:
+    nodes: list[tuple[ast.AST, tuple[ast.AST, ...]]] = []
+    stack: list[tuple[ast.AST, tuple[ast.AST, ...]]] = [(tree, ())]
+    while stack:
+        node, parents = stack.pop()
+        nodes.append((node, parents))
+        children = tuple(ast.iter_child_nodes(node))
+        stack.extend((child, (*parents, node)) for child in reversed(children))
+    return nodes
+
+
+def _ast_node_priority(node: ast.AST) -> int:
+    if isinstance(node, ast.Name):
+        return 0
+    if isinstance(node, ast.Attribute):
+        return 1
+    if isinstance(node, ast.alias):
+        return 2
+    if isinstance(node, ast.Call):
+        return 3
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return 4
+    return 10
+
+
 def _source_hash(source_bytes: bytes) -> str:
     return blake2b(source_bytes, digest_size=16).hexdigest()
 
@@ -39,6 +110,7 @@ class PythonAnalysisSession:
     symtable_table: symtable.SymbolTable | None = None
     tree_sitter_tree: Any | None = None
     resolution_index: dict[str, object] | None = None
+    ast_span_index: tuple[AstSpanEntry, ...] | None = None
     stage_timings_ms: dict[str, float] = field(default_factory=dict)
     stage_errors: dict[str, str] = field(default_factory=dict)
 
@@ -148,6 +220,46 @@ class PythonAnalysisSession:
         """
         return self.resolution_index
 
+    def ensure_ast_span_index(self) -> tuple[AstSpanEntry, ...] | None:
+        """Build or return cached AST byte-span index.
+
+        Returns:
+        -------
+        tuple[AstSpanEntry, ...] | None
+            Cached or newly built byte-span index.
+        """
+        if self.ast_span_index is not None:
+            return self.ast_span_index
+        tree = self.ensure_ast()
+        if tree is None:
+            return None
+        started = perf_counter()
+        rows: list[AstSpanEntry] = []
+        try:
+            for node, parents in _iter_nodes_with_parents(tree):
+                span = _node_byte_span(node, self.source_bytes)
+                if span is None:
+                    continue
+                span_start, span_end = span
+                rows.append(
+                    AstSpanEntry(
+                        node=node,
+                        parents=parents,
+                        byte_start=span_start,
+                        byte_end=span_end,
+                        priority=_ast_node_priority(node),
+                    )
+                )
+        except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
+            self.stage_errors["ast_span_index"] = type(exc).__name__
+            self.ast_span_index = None
+        else:
+            rows.sort(key=lambda item: (item.byte_start, item.byte_end))
+            self.ast_span_index = tuple(rows)
+        finally:
+            self._mark_stage("ast_span_index", started)
+        return self.ast_span_index
+
     def ensure_tree_sitter_tree(self) -> Any | None:
         """Build or return cached tree-sitter Python tree.
 
@@ -218,6 +330,7 @@ def python_analysis_session_cache_size() -> int:
 
 
 __all__ = [
+    "AstSpanEntry",
     "PythonAnalysisSession",
     "clear_python_analysis_sessions",
     "get_python_analysis_session",

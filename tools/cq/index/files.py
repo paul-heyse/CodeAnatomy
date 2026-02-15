@@ -48,7 +48,7 @@ class UntrackedScanConfig:
     scope_root: Path
     tracked: set[str]
     ignore_spec: GitIgnoreSpec
-    extensions: Sequence[str]
+    extensions: frozenset[str]
     explain: bool
 
 
@@ -88,50 +88,46 @@ def tabulate_files(
     if not scope_paths:
         return FileTabulationResult(files=[], decisions=[])
 
-    scope_roots = _resolve_scope_roots(repo_index.repo_root, scope_paths)
+    resolved_repo_root = repo_index.repo_root.resolve()
+    scope_roots = _resolve_scope_roots(resolved_repo_root, scope_paths)
+    scope_prefixes = _scope_prefixes_for_repo(resolved_repo_root, scope_roots)
     tracked = _filter_tracked_to_scope(
         repo_index.tracked,
-        repo_index.repo_root,
-        scope_roots,
+        scope_prefixes,
     )
+    extension_set = frozenset(extensions)
     tracked_files = {
-        (repo_index.repo_root / rel).resolve()
+        (resolved_repo_root / rel).resolve()
         for rel in tracked
-        if _is_candidate_file(repo_index.repo_root / rel, extensions)
+        if _is_candidate_file(resolved_repo_root / rel, extension_set)
     }
 
-    untracked_files: set[Path] = set()
-    ignored_decisions: list[FileFilterDecision] = []
-    for scope_root in scope_roots:
-        config = UntrackedScanConfig(
-            repo_root=repo_index.repo_root,
-            scope_root=scope_root,
-            tracked=repo_index.tracked,
-            ignore_spec=repo_index.ignore_spec,
-            extensions=extensions,
-            explain=explain,
-        )
-        files, decisions = _collect_untracked_files(config)
-        untracked_files.update(files)
-        ignored_decisions.extend(decisions)
+    untracked_files, ignored_decisions = _scan_untracked_scope_files(
+        repo_root=resolved_repo_root,
+        scope_roots=scope_roots,
+        tracked=repo_index.tracked,
+        ignore_spec=repo_index.ignore_spec,
+        extensions=extension_set,
+        explain=explain,
+    )
 
     all_files = list(tracked_files | untracked_files)
     decisions: list[FileFilterDecision] = []
 
     filtered: list[Path] = []
     for path in all_files:
-        rel_path = path.relative_to(repo_index.repo_root).as_posix()
+        rel_path = _normalize_relative_path(path=path, repo_root=resolved_repo_root)
         scope_excluded = False
         glob_excluded = False
-        if not _is_within_scope(path, scope_roots):
+        if rel_path is None or not _is_within_scope(rel_path, scope_prefixes):
             scope_excluded = True
-        if globs and not _matches_globs(rel_path, globs):
+        if globs and (rel_path is None or not _matches_globs(rel_path, globs)):
             glob_excluded = True
         if scope_excluded or glob_excluded:
             if explain:
                 decisions.append(
                     FileFilterDecision(
-                        file=rel_path,
+                        file=rel_path or path.as_posix(),
                         ignored=False,
                         ignore_rule_index=None,
                         glob_excluded=glob_excluded,
@@ -148,6 +144,32 @@ def tabulate_files(
         files=sorted(filtered, key=lambda path: path.as_posix()),
         decisions=decisions,
     )
+
+
+def _scan_untracked_scope_files(
+    *,
+    repo_root: Path,
+    scope_roots: Sequence[Path],
+    tracked: set[str],
+    ignore_spec: GitIgnoreSpec,
+    extensions: frozenset[str],
+    explain: bool,
+) -> tuple[set[Path], list[FileFilterDecision]]:
+    files: set[Path] = set()
+    decisions: list[FileFilterDecision] = []
+    for scope_root in scope_roots:
+        config = UntrackedScanConfig(
+            repo_root=repo_root,
+            scope_root=scope_root,
+            tracked=tracked,
+            ignore_spec=ignore_spec,
+            extensions=extensions,
+            explain=explain,
+        )
+        collected_files, collected_decisions = _collect_untracked_files(config)
+        files.update(collected_files)
+        decisions.extend(collected_decisions)
+    return files, decisions
 
 
 def _collect_tracked_paths(repo: pygit2.Repository | None) -> set[str]:
@@ -167,34 +189,23 @@ def _resolve_scope_roots(repo_root: Path, scope_paths: Sequence[Path]) -> list[P
 
 def _filter_tracked_to_scope(
     tracked: set[str],
-    repo_root: Path,
-    scope_roots: Sequence[Path],
+    scope_prefixes: tuple[str, ...],
 ) -> set[str]:
-    if not scope_roots:
+    if not scope_prefixes:
         return set()
     filtered: set[str] = set()
     for rel_path in tracked:
-        for scope_root in scope_roots:
-            try:
-                scope_rel = scope_root.relative_to(repo_root)
-            except ValueError:
-                continue
-            if _path_is_under(rel_path, scope_rel):
-                filtered.add(rel_path)
-                break
+        if _is_within_scope(rel_path, scope_prefixes):
+            filtered.add(rel_path)
     return filtered
 
 
-def _path_is_under(rel_path: str, scope_rel: Path) -> bool:
-    if scope_rel == Path():
+def _path_is_under(rel_path: str, scope_prefix: str) -> bool:
+    normalized_rel = rel_path.strip("/")
+    normalized_scope = scope_prefix.strip("/")
+    if not normalized_scope or normalized_scope == ".":
         return True
-    rel = Path(rel_path)
-    try:
-        rel.relative_to(scope_rel)
-    except ValueError:
-        return False
-    else:
-        return True
+    return normalized_rel == normalized_scope or normalized_rel.startswith(f"{normalized_scope}/")
 
 
 def _collect_untracked_files(
@@ -261,10 +272,10 @@ def _record_ignore_decision(
     )
 
 
-def _is_candidate_file(path: Path, extensions: Sequence[str]) -> bool:
+def _is_candidate_file(path: Path, extensions: frozenset[str]) -> bool:
     if not path.is_file():
         return False
-    return path.suffix in set(extensions)
+    return path.suffix in extensions
 
 
 def _matches_globs(rel_path: str, globs: Sequence[str]) -> bool:
@@ -280,8 +291,33 @@ def _matches_globs(rel_path: str, globs: Sequence[str]) -> bool:
     return include
 
 
-def _is_within_scope(path: Path, scope_roots: Sequence[Path]) -> bool:
-    return any(_is_relative_to(path, scope_root) for scope_root in scope_roots)
+def _is_within_scope(rel_path: str, scope_prefixes: tuple[str, ...]) -> bool:
+    return any(_path_is_under(rel_path, prefix) for prefix in scope_prefixes)
+
+
+def _scope_prefixes_for_repo(repo_root: Path, scope_roots: Sequence[Path]) -> tuple[str, ...]:
+    prefixes: list[str] = []
+    for scope_root in scope_roots:
+        try:
+            rel = scope_root.relative_to(repo_root).as_posix().strip("/")
+        except ValueError:
+            continue
+        if rel in {"", "."}:
+            rel = ""
+        prefixes.append(rel)
+    if not prefixes:
+        return ()
+    return tuple(dict.fromkeys(prefixes))
+
+
+def _normalize_relative_path(path: Path, repo_root: Path) -> str | None:
+    try:
+        return path.relative_to(repo_root).as_posix()
+    except ValueError:
+        try:
+            return path.resolve().relative_to(repo_root).as_posix()
+        except ValueError:
+            return None
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:

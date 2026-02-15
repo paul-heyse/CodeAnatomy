@@ -1646,10 +1646,9 @@ def _build_calls_neighborhood(
         build_neighborhood_from_slices,
     )
     from tools.cq.core.snb_schema import SemanticNodeRefV1
-    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-    from tools.cq.neighborhood.structural_collector import (
-        StructuralNeighborhoodCollectRequest,
-        collect_structural_neighborhood,
+    from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
+    from tools.cq.neighborhood.tree_sitter_contracts import (
+        TreeSitterNeighborhoodCollectRequest,
     )
 
     neighborhood = InsightNeighborhoodV1()
@@ -1660,17 +1659,19 @@ def _build_calls_neighborhood(
     else:
         target_file, target_line = request.target_location
         try:
-            snapshot = ScanSnapshot.build_from_repo(request.root, lang="python")
-            slices, degrades = collect_structural_neighborhood(
-                StructuralNeighborhoodCollectRequest(
+            collect_result = collect_tree_sitter_neighborhood(
+                TreeSitterNeighborhoodCollectRequest(
+                    root=str(request.root),
                     target_name=request.function_name.rsplit(".", maxsplit=1)[-1],
                     target_file=target_file,
+                    language="python",
                     target_line=target_line,
                     target_col=0,
-                    snapshot=snapshot,
                     max_per_slice=request.preview_per_slice,
                 )
             )
+            slices = tuple(collect_result.slices)
+            degrades = tuple(collect_result.diagnostics)
             neighborhood = build_neighborhood_from_slices(
                 slices,
                 preview_per_slice=request.preview_per_slice,
@@ -1704,7 +1705,7 @@ def _build_calls_neighborhood(
                 f"{degrade.stage}:{degrade.category or degrade.severity}" for degrade in degrades
             )
         except (OSError, RuntimeError, TimeoutError, ValueError, TypeError) as exc:
-            degradation_notes.append(f"structural_scan_unavailable:{type(exc).__name__}")
+            degradation_notes.append(f"tree_sitter_neighborhood_unavailable:{type(exc).__name__}")
 
     if neighborhood.callers.total == 0 and request.analysis.contexts:
         preview_nodes = tuple(

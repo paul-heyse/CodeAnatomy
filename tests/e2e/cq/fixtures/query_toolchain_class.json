@@ -316,7 +316,7 @@
       "counts": {
         "diagnostics": 0,
         "injections": 0,
-        "locals": 2,
+        "locals": 4,
         "semantic_tokens": 2
       },
       "degradation": [],
@@ -327,11 +327,19 @@
         "locals": [
           {
             "kind": "scope",
-            "name": "module"
+            "name": "<module>"
           },
           {
             "kind": "qualified_name",
-            "name": "Toolchain"
+            "name": "CqStruct"
+          },
+          {
+            "kind": "qualified_name",
+            "name": "Toolchain.CqStruct"
+          },
+          {
+            "kind": "qualified_name",
+            "name": "tools.cq.core.structs.CqStruct"
           }
         ],
         "semantic_tokens": [
@@ -347,7 +355,7 @@
       },
       "sources": [
         "ast_grep",
-        "libcst",
+        "python_resolution",
         "tree_sitter"
       ],
       "version": "cq.semantic_planes.v2"

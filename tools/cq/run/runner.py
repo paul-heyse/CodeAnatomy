@@ -1073,7 +1073,6 @@ def _execute_neighborhood_step(
     """
     from tools.cq.core.schema import mk_runmeta, ms
     from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
-    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
     from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
     from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
 
@@ -1083,18 +1082,11 @@ def _execute_neighborhood_step(
         cast("QueryLanguage", step.lang) if step.lang in {"python", "rust"} else "python"
     )
 
-    # Build scan snapshot
-    snapshot = ScanSnapshot.build_from_repo(
-        ctx.root,
-        lang=resolved_lang,
-        run_id=active_run_id,
-    )
-
     spec = parse_target_spec(step.target)
     resolved = resolve_target(
         spec,
-        snapshot,
         root=ctx.root,
+        language=resolved_lang,
         allow_symbol_fallback=True,
     )
 
@@ -1106,8 +1098,7 @@ def _execute_neighborhood_step(
         target_col=resolved.target_col,
         target_uri=resolved.target_uri,
         root=ctx.root,
-        snapshot=snapshot,
-        language=step.lang,
+        language=resolved_lang,
         symbol_hint=resolved.symbol_hint,
         top_k=step.top_k,
         enable_semantic_enrichment=not step.no_semantic_enrichment,
@@ -1133,7 +1124,7 @@ def _execute_neighborhood_step(
             run=run,
             bundle=bundle,
             target=step.target,
-            language=step.lang,
+            language=resolved_lang,
             top_k=step.top_k,
             enable_semantic_enrichment=not step.no_semantic_enrichment,
             semantic_env=_semantic_env_from_bundle(bundle),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,6 @@ from tools.cq.core.cache import (
     CqCachePolicyV1,
     build_cache_key,
     build_scope_hash,
-    build_scope_snapshot_fingerprint,
     default_cache_policy,
     file_content_hash,
     get_cq_cache_backend,
@@ -27,12 +27,17 @@ from tools.cq.core.cache import (
     resolve_write_cache_tag,
 )
 from tools.cq.core.cache.contracts import SearchCandidatesCacheV1, SearchEnrichmentAnchorCacheV1
+from tools.cq.core.cache.fragment_codecs import (
+    decode_fragment_payload,
+    encode_fragment_payload,
+    is_fragment_cache_payload,
+)
 from tools.cq.core.contracts import contract_to_builtins, require_mapping
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.query.language import QueryLanguage, constrain_include_globs_for_language
-from tools.cq.query.sg_parser import list_scan_files
 from tools.cq.search.classifier import QueryMode
 from tools.cq.search.partition_contracts import SearchPartitionPlanV1
+from tools.cq.search.tree_sitter_parallel import run_file_lanes_parallel
 
 if TYPE_CHECKING:
     from tools.cq.search.context import SmartSearchContext
@@ -57,6 +62,22 @@ class _EnrichmentCacheContext:
     lang: QueryLanguage
     ttl_seconds: int
     tag: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _EnrichmentMissTask:
+    root: str
+    lang: QueryLanguage
+    items: list[tuple[int, Any, str, str]]
+
+
+@dataclass(frozen=True, slots=True)
+class _EnrichmentMissResult:
+    idx: int
+    raw: Any
+    cache_key: str
+    file_hash: str
+    enriched_match: Any
 
 
 def run_search_partition(
@@ -117,40 +138,51 @@ def _scope_context(
     mode: QueryMode,
 ) -> _PartitionScopeContext:
     resolved_root = ctx.root.resolve()
+    cache = get_cq_cache_backend(root=resolved_root)
+    policy = default_cache_policy(root=resolved_root)
     include_globs = constrain_include_globs_for_language(ctx.include_globs, lang) or []
     scope_globs = list(include_globs)
     scope_globs.extend(
         exclude if exclude.startswith("!") else f"!{exclude}"
         for exclude in (ctx.exclude_globs or [])
     )
-    scope_files = list_scan_files(
-        paths=[resolved_root],
-        root=resolved_root,
-        globs=scope_globs or None,
-        lang=lang,
-    )
-    scope_snapshot = build_scope_snapshot_fingerprint(
-        root=resolved_root,
-        files=scope_files,
-        language=lang,
-        scope_globs=scope_globs,
-        scope_roots=[resolved_root],
-    )
+    cache_enabled = is_namespace_cache_enabled(
+        policy=policy, namespace="search_candidates"
+    ) or is_namespace_cache_enabled(policy=policy, namespace="search_enrichment")
+    snapshot_digest = "cache_disabled"
+    if cache_enabled:
+        # Keep cache strictly query/run scoped in the hot path: no repository-wide
+        # file tabulation or snapshot building before candidate collection.
+        snapshot_digest = (
+            build_scope_hash(
+                {
+                    "scope_roots": (str(resolved_root),),
+                    "scope_globs": tuple(scope_globs),
+                    "mode": mode.value,
+                    "query": ctx.query,
+                    "language": lang,
+                    "include_strings": ctx.include_strings,
+                    "run_id": ctx.run_id or "",
+                }
+            )
+            or f"run:{ctx.run_id or 'unknown'}"
+        )
     scope_hash = build_scope_hash(
         {
             "scope_roots": (str(resolved_root),),
             "scope_globs": tuple(scope_globs),
             "mode": mode.value,
             "query": ctx.query,
+            "run_id": ctx.run_id or "",
         }
     )
     return _PartitionScopeContext(
         root=resolved_root,
-        cache=get_cq_cache_backend(root=resolved_root),
-        policy=default_cache_policy(root=resolved_root),
+        cache=cache,
+        policy=policy,
         scope_globs=scope_globs,
         scope_hash=scope_hash,
-        snapshot_digest=scope_snapshot.digest,
+        snapshot_digest=snapshot_digest,
     )
 
 
@@ -185,7 +217,7 @@ def _candidate_phase(
         cached_raw = scope.cache.get(cache_key)
         record_cache_get(
             namespace=namespace,
-            hit=isinstance(cached_raw, dict),
+            hit=is_fragment_cache_payload(cached_raw),
             key=cache_key,
         )
     raw_matches, stats, pattern, hit = _candidate_payload_from_cache(
@@ -214,7 +246,7 @@ def _candidate_phase(
         )
         ok = scope.cache.set(
             cache_key,
-            contract_to_builtins(payload),
+            encode_fragment_payload(payload),
             expire=ttl_seconds,
             tag=tag,
         )
@@ -230,9 +262,9 @@ def _candidate_payload_from_cache(
     mode: QueryMode,
     smart_search_mod: Any,
 ) -> tuple[list[object], object, str, bool]:
-    if isinstance(cached, dict):
+    payload = decode_fragment_payload(cached, type_=SearchCandidatesCacheV1)
+    if payload is not None:
         try:
-            payload = msgspec.convert(cached, type=SearchCandidatesCacheV1)
             raw_matches = [
                 msgspec.convert(item, type=smart_search_mod.RawMatch)
                 for item in payload.raw_matches
@@ -242,6 +274,8 @@ def _candidate_payload_from_cache(
             record_cache_decode_failure(namespace="search_candidates")
         else:
             return raw_matches, stats, payload.pattern, True
+    elif is_fragment_cache_payload(cached):
+        record_cache_decode_failure(namespace="search_candidates")
     raw_matches, stats, pattern = smart_search_mod.run_candidate_phase(ctx, lang=lang, mode=mode)
     return raw_matches, stats, pattern, False
 
@@ -337,23 +371,24 @@ def _probe_enrichment_cache(
             cached = context.cache.get(cache_key)
             record_cache_get(
                 namespace=context.namespace,
-                hit=isinstance(cached, dict),
+                hit=is_fragment_cache_payload(cached),
                 key=cache_key,
             )
-            if isinstance(cached, dict):
-                decoded = _decode_enrichment_cached(
-                    cached=cached, smart_search_mod=smart_search_mod
-                )
-                if decoded is not None:
-                    enriched_results[idx] = decoded
-                    continue
+            decoded = _decode_enrichment_cached(cached=cached, smart_search_mod=smart_search_mod)
+            if decoded is not None:
+                enriched_results[idx] = decoded
+                continue
         misses.append((idx, raw, cache_key, file_hash))
     return enriched_results, misses
 
 
-def _decode_enrichment_cached(*, cached: dict[str, object], smart_search_mod: Any) -> Any | None:
+def _decode_enrichment_cached(*, cached: object, smart_search_mod: Any) -> Any | None:
+    payload = decode_fragment_payload(cached, type_=SearchEnrichmentAnchorCacheV1)
+    if payload is None:
+        if is_fragment_cache_payload(cached):
+            record_cache_decode_failure(namespace="search_enrichment")
+        return None
     try:
-        payload = msgspec.convert(cached, type=SearchEnrichmentAnchorCacheV1)
         return msgspec.convert(payload.enriched_match, type=smart_search_mod.EnrichedMatch)
     except (RuntimeError, TypeError, ValueError):
         record_cache_decode_failure(namespace="search_enrichment")
@@ -368,39 +403,133 @@ def _compute_and_persist_enrichment_misses(
     context: _EnrichmentCacheContext,
     smart_search_mod: Any,
 ) -> None:
-    miss_raw_matches = [item[1] for item in misses]
-    miss_enriched = smart_search_mod.run_classification_phase(
-        ctx,
-        lang=context.lang,
-        raw_matches=miss_raw_matches,
+    miss_results = _classify_enrichment_misses(
+        ctx=ctx,
+        misses=misses,
+        context=context,
+        smart_search_mod=smart_search_mod,
     )
     with context.cache.transact():
-        for miss_idx, (idx, raw, cache_key, file_hash) in enumerate(misses):
-            if miss_idx >= len(miss_enriched):
-                break
-            enriched_match = miss_enriched[miss_idx]
-            enriched_results[idx] = enriched_match
-            if not (context.cache_enabled and file_hash):
+        for row in miss_results:
+            enriched_results[row.idx] = row.enriched_match
+            if not (context.cache_enabled and row.file_hash):
                 continue
             payload = SearchEnrichmentAnchorCacheV1(
-                file=raw.file,
-                line=max(1, int(raw.line)),
-                col=max(0, int(raw.col)),
-                match_text=raw.match_text,
-                file_content_hash=file_hash,
+                file=row.raw.file,
+                line=max(1, int(row.raw.line)),
+                col=max(0, int(row.raw.col)),
+                match_text=row.raw.match_text,
+                file_content_hash=row.file_hash,
                 language=context.lang,
                 enriched_match=cast(
                     "dict[str, object]",
-                    contract_to_builtins(enriched_match),
+                    contract_to_builtins(row.enriched_match),
                 ),
             )
             ok = context.cache.set(
-                cache_key,
-                contract_to_builtins(payload),
+                row.cache_key,
+                encode_fragment_payload(payload),
                 expire=context.ttl_seconds,
                 tag=context.tag,
             )
-            record_cache_set(namespace=context.namespace, ok=ok, key=cache_key)
+            record_cache_set(namespace=context.namespace, ok=ok, key=row.cache_key)
+
+
+def _classify_enrichment_misses(
+    *,
+    ctx: SmartSearchContext,
+    misses: list[tuple[int, Any, str, str]],
+    context: _EnrichmentCacheContext,
+    smart_search_mod: Any,
+) -> list[_EnrichmentMissResult]:
+    if len(misses) <= 1:
+        return _classify_enrichment_miss_batch(
+            _EnrichmentMissTask(
+                root=str(ctx.root),
+                lang=context.lang,
+                items=misses,
+            )
+        )
+
+    partitioned: dict[str, list[tuple[int, Any, str, str]]] = {}
+    for item in misses:
+        partitioned.setdefault(str(item[1].file), []).append(item)
+    batches = list(partitioned.values())
+    workers = min(
+        len(batches), max(1, int(getattr(smart_search_mod, "MAX_SEARCH_CLASSIFY_WORKERS", 1)))
+    )
+    if workers <= 1:
+        return _classify_enrichment_miss_batch(
+            _EnrichmentMissTask(
+                root=str(ctx.root),
+                lang=context.lang,
+                items=misses,
+            )
+        )
+
+    tasks = [
+        _EnrichmentMissTask(
+            root=str(ctx.root),
+            lang=context.lang,
+            items=batch,
+        )
+        for batch in batches
+    ]
+    try:
+        batches_out = run_file_lanes_parallel(
+            tasks,
+            worker=_classify_enrichment_miss_batch,
+            max_workers=workers,
+        )
+        rows: list[_EnrichmentMissResult] = []
+        for done_batch in batches_out:
+            rows.extend(done_batch)
+    except (
+        multiprocessing.ProcessError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
+        rows = _classify_enrichment_miss_batch(
+            _EnrichmentMissTask(
+                root=str(ctx.root),
+                lang=context.lang,
+                items=misses,
+            )
+        )
+    rows.sort(key=lambda item: item.idx)
+    return rows
+
+
+def _classify_enrichment_miss_batch(
+    task: _EnrichmentMissTask,
+) -> list[_EnrichmentMissResult]:
+    from tools.cq.search.smart_search import classify_match
+
+    root = Path(task.root)
+    deep_enrichment_seen: set[tuple[str, str]] = set()
+    results: list[_EnrichmentMissResult] = []
+    for idx, raw, cache_key, file_hash in task.items:
+        enrichment_key = (str(raw.file), str(raw.match_text))
+        enable_deep_enrichment = enrichment_key not in deep_enrichment_seen
+        if enable_deep_enrichment:
+            deep_enrichment_seen.add(enrichment_key)
+        results.append(
+            _EnrichmentMissResult(
+                idx=idx,
+                raw=raw,
+                cache_key=cache_key,
+                file_hash=file_hash,
+                enriched_match=classify_match(
+                    raw,
+                    root,
+                    lang=task.lang,
+                    enable_deep_enrichment=enable_deep_enrichment,
+                ),
+            )
+        )
+    return results
 
 
 def _resolve_prefetch_result(

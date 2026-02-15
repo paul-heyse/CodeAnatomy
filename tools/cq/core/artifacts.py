@@ -6,12 +6,36 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
+import msgspec
+
+from tools.cq.core.cache import (
+    CacheWriteTagRequestV1,
+    CqCacheBackend,
+    build_cache_key,
+    build_search_artifact_cache_key,
+    build_search_artifact_index_key,
+    default_cache_policy,
+    get_cq_cache_backend,
+    record_cache_decode_failure,
+    record_cache_get,
+    record_cache_set,
+    resolve_namespace_ttl_seconds,
+    resolve_write_cache_tag,
+)
+from tools.cq.core.cache.contracts import (
+    SearchArtifactBundleV1,
+    SearchArtifactIndexEntryV1,
+    SearchArtifactIndexV1,
+)
 from tools.cq.core.codec import dumps_json_value
+from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.diagnostics_contracts import build_diagnostics_artifact_payload
 from tools.cq.core.schema import Artifact, CqResult
 from tools.cq.core.serialization import to_builtins
 
 DEFAULT_ARTIFACT_DIR = ".cq/artifacts"
+_SEARCH_ARTIFACT_NAMESPACE = "search_artifacts"
+_SEARCH_ARTIFACT_INDEX_LIMIT = 200
 
 
 def _resolve_artifact_dir(result: CqResult, artifact_dir: str | Path | None) -> Path:
@@ -145,4 +169,180 @@ def save_neighborhood_overflow_artifact(
         payload=payload,
         artifact_dir=artifact_dir,
         filename=artifact_name,
+    )
+
+
+def save_search_artifact_bundle_cache(
+    result: CqResult,
+    bundle: SearchArtifactBundleV1,
+) -> Artifact | None:
+    """Persist search artifact bundle in runtime cache and return artifact reference.
+
+    Returns:
+        Artifact | None: Reference when cache write succeeds, otherwise ``None``.
+    """
+    if result.run.macro != "search":
+        return None
+
+    root = Path(result.run.root)
+    cache = get_cq_cache_backend(root=root)
+    policy = default_cache_policy(root=root)
+    ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=_SEARCH_ARTIFACT_NAMESPACE)
+    run_id = bundle.run_id or result.run.run_id or "no_run_id"
+    cache_key = build_search_artifact_cache_key(
+        workspace=str(root),
+        run_id=run_id,
+        query=bundle.query,
+        macro=bundle.macro,
+    )
+    tag = resolve_write_cache_tag(
+        CacheWriteTagRequestV1(
+            policy=policy,
+            workspace=str(root),
+            language="auto",
+            namespace=_SEARCH_ARTIFACT_NAMESPACE,
+            run_id=run_id,
+        )
+    )
+    ok = cache.set(
+        cache_key,
+        contract_to_builtins(bundle),
+        expire=ttl_seconds,
+        tag=tag,
+    )
+    record_cache_set(namespace=_SEARCH_ARTIFACT_NAMESPACE, ok=ok, key=cache_key)
+    if not ok:
+        return None
+
+    created_ms = bundle.created_ms or result.run.started_ms
+    entry = SearchArtifactIndexEntryV1(
+        run_id=run_id,
+        cache_key=cache_key,
+        query=bundle.query,
+        macro=bundle.macro,
+        created_ms=float(created_ms),
+    )
+    _persist_search_artifact_index_entry(
+        cache=cache,
+        index_key=build_search_artifact_index_key(workspace=str(root), run_id=run_id),
+        ttl_seconds=ttl_seconds,
+        tag=tag,
+        entry=entry,
+    )
+    _persist_search_artifact_index_entry(
+        cache=cache,
+        index_key=_global_search_artifact_index_key(workspace=str(root)),
+        ttl_seconds=ttl_seconds,
+        tag=tag,
+        entry=entry,
+    )
+    return Artifact(path=f"cache://search_artifacts/{run_id}/{cache_key}", format="cache")
+
+
+def list_search_artifact_index_entries(
+    *,
+    root: Path,
+    run_id: str | None = None,
+    limit: int = 50,
+) -> list[SearchArtifactIndexEntryV1]:
+    """List cached search artifact index entries for workspace scope.
+
+    Returns:
+        list[SearchArtifactIndexEntryV1]: Matching index entries.
+    """
+    cache = get_cq_cache_backend(root=root)
+    index_key = (
+        build_search_artifact_index_key(workspace=str(root), run_id=run_id)
+        if run_id
+        else _global_search_artifact_index_key(workspace=str(root))
+    )
+    index = _load_search_artifact_index(cache=cache, index_key=index_key)
+    if index is None:
+        return []
+    normalized = sorted(index.entries, key=lambda row: row.created_ms, reverse=True)
+    return normalized[: max(1, int(limit))]
+
+
+def load_search_artifact_bundle(
+    *,
+    root: Path,
+    run_id: str,
+) -> tuple[SearchArtifactBundleV1 | None, SearchArtifactIndexEntryV1 | None]:
+    """Load latest cached search artifact bundle for run_id.
+
+    Returns:
+        tuple[SearchArtifactBundleV1 | None, SearchArtifactIndexEntryV1 | None]:
+            The bundle and index entry, or ``None`` entries when missing.
+    """
+    entries = list_search_artifact_index_entries(root=root, run_id=run_id, limit=1)
+    if not entries:
+        return None, None
+    entry = entries[0]
+    cache = get_cq_cache_backend(root=root)
+    cached = cache.get(entry.cache_key)
+    record_cache_get(
+        namespace=_SEARCH_ARTIFACT_NAMESPACE,
+        hit=isinstance(cached, dict),
+        key=entry.cache_key,
+    )
+    if not isinstance(cached, dict):
+        return None, entry
+    try:
+        payload = msgspec.convert(cached, type=SearchArtifactBundleV1)
+    except (RuntimeError, TypeError, ValueError):
+        record_cache_decode_failure(namespace=_SEARCH_ARTIFACT_NAMESPACE)
+        return None, entry
+    return payload, entry
+
+
+def _persist_search_artifact_index_entry(
+    *,
+    cache: CqCacheBackend,
+    index_key: str,
+    ttl_seconds: int,
+    tag: str | None,
+    entry: SearchArtifactIndexEntryV1,
+) -> None:
+    current = _load_search_artifact_index(cache=cache, index_key=index_key)
+    entries = [] if current is None else list(current.entries)
+    entries = [row for row in entries if row.cache_key != entry.cache_key]
+    entries.insert(0, entry)
+    payload = SearchArtifactIndexV1(entries=entries[:_SEARCH_ARTIFACT_INDEX_LIMIT])
+    ok = cache.set(
+        index_key,
+        contract_to_builtins(payload),
+        expire=ttl_seconds,
+        tag=tag,
+    )
+    record_cache_set(namespace=_SEARCH_ARTIFACT_NAMESPACE, ok=ok, key=index_key)
+
+
+def _load_search_artifact_index(
+    *,
+    cache: CqCacheBackend,
+    index_key: str,
+) -> SearchArtifactIndexV1 | None:
+    cached = cache.get(index_key)
+    record_cache_get(
+        namespace=_SEARCH_ARTIFACT_NAMESPACE,
+        hit=isinstance(cached, dict),
+        key=index_key,
+    )
+    if not isinstance(cached, dict):
+        return None
+    try:
+        return msgspec.convert(cached, type=SearchArtifactIndexV1)
+    except (RuntimeError, TypeError, ValueError):
+        record_cache_decode_failure(namespace=_SEARCH_ARTIFACT_NAMESPACE)
+        return None
+
+
+def _global_search_artifact_index_key(*, workspace: str) -> str:
+    return build_cache_key(
+        _SEARCH_ARTIFACT_NAMESPACE,
+        version="v1",
+        workspace=workspace,
+        language="auto",
+        target="index:all",
+        extras={"kind": "global_index"},
     )

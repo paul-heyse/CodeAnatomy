@@ -441,13 +441,13 @@ def resolve_primary_language_payload(
     language = language_value if isinstance(language_value, str) else None
     if language is not None and language in _LANG_KEYS:
         direct = payload.get(language)
-        if isinstance(direct, dict):
+        if isinstance(direct, dict) and direct:
             nested_lang = _extract_nested_language(direct)
             return nested_lang or language, direct
 
     for key in _LANG_KEYS:
         candidate = payload.get(key)
-        if isinstance(candidate, dict):
+        if isinstance(candidate, dict) and candidate:
             nested_lang = _extract_nested_language(candidate)
             return nested_lang or key, candidate
 

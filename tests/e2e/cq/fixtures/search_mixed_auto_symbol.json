@@ -5,63 +5,58 @@
     "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py"
   ],
   "key_findings": [
-    "function: mixed_symbol",
+    "module: mixed_symbol",
     "function: mixed_symbol"
   ],
   "sections": [
     {
       "count": 2,
       "messages": [
-        "function: mixed_symbol",
+        "module: mixed_symbol",
         "function: mixed_symbol"
       ],
       "title": "Target Candidates"
     },
     {
-      "count": 1,
+      "count": 4,
       "messages": [
-        "Sibling Definitions: 1 (top: resolve_name)"
+        "reference: mixed_symbol (1 occurrences) [object_id=obj_9ac8428c113bb515555185bb]",
+        "module: mixed_symbol (1 occurrences) [object_id=obj_9c2d67ed3d0cab1fad092e63]",
+        "reference: mixed_symbol (1 occurrences) [object_id=obj_d92757e8b88ea1b94a43723a]",
+        "function: mixed_symbol (1 occurrences) [object_id=obj_ed2bc890deb9774064df4c59]"
       ],
-      "title": "Neighborhood Preview"
+      "title": "Resolved Objects"
     },
     {
       "count": 3,
       "messages": [
-        "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py",
-        "mixed_symbol (./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py)",
-        "mixed_symbol (./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs)"
+        "mixed_symbol: ./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs:1:7 (block ./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs:1-4) [reference] [object_id=obj_9ac8428c113bb515555185bb] [line_id=bf9a3af7faa9e91f568a84d7]",
+        "mixed_symbol: ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py:4:22 (block ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py:1-6) [from_import] [object_id=obj_9c2d67ed3d0cab1fad092e63] [line_id=e1a8be4d5ed30d4d7857b2a5]",
+        "mixed_symbol: ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py:6:4 (block ./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py:6-9) [reference] [object_id=obj_ed2bc890deb9774064df4c59] [line_id=edc7444b6c3f0200c5bdfd09]"
       ],
-      "title": "Top Contexts"
+      "title": "Occurrences"
     },
     {
-      "count": 1,
-      "messages": [
-        "From import"
-      ],
-      "title": "Imports"
-    },
-    {
-      "count": 3,
+      "count": 2,
       "messages": [
         "reference: 2",
-        "from_import: 1",
-        "string_match: 1"
+        "from_import: 1"
       ],
       "title": "Uses by Kind"
     },
     {
       "count": 1,
       "messages": [
-        "Match in string literal"
+        "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py:6 [string_match]"
       ],
       "title": "Non-Code Matches (Strings / Comments / Docstrings)"
     },
     {
       "count": 3,
       "messages": [
-        "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py: 2 matches",
-        "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py: 1 matches",
-        "./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs: 1 matches"
+        "./tests/e2e/cq/_golden_workspace/mixed_workspace/rust/tooling/src/lib.rs: 1 matches",
+        "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py: 1 matches",
+        "./tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py: 1 matches"
       ],
       "title": "Hot Files"
     }
@@ -75,13 +70,14 @@
         "telemetry": false
       },
       "degradation": {
-        "semantic": "skipped",
         "notes": [
           "not_attempted_by_design",
+          "tree_sitter_neighborhood_disabled_by_default",
           "not_attempted_runtime_disabled"
         ],
         "scan": "ok",
-        "scope_filter": "none"
+        "scope_filter": "none",
+        "semantic": "skipped"
       },
       "neighborhood": {
         "callees": {
@@ -93,8 +89,8 @@
           "total": 0
         },
         "hierarchy_or_scope": {
-          "availability": "full",
-          "total": 1
+          "availability": "unavailable",
+          "total": 0
         },
         "references": {
           "availability": "unavailable",
@@ -112,11 +108,11 @@
       },
       "source": "search",
       "target": {
-        "kind": "function",
+        "kind": "module",
         "location": {
-          "col": 4,
-          "file": "tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/pipeline.py",
-          "line": 6
+          "col": 22,
+          "file": "tests/e2e/cq/_golden_workspace/mixed_workspace/src/python_pkg/__init__.py",
+          "line": 4
         },
         "selection_reason": "top_definition",
         "symbol": "mixed_symbol"
@@ -127,7 +123,6 @@
       "python",
       "rust"
     ],
-    "semantic_planes_present": false,
     "mode": "identifier",
     "plan_version": null,
     "python_semantic_telemetry": {
@@ -145,6 +140,7 @@
       "skipped": 0,
       "timed_out": 0
     },
+    "semantic_planes_present": false,
     "steps": null,
     "target": null,
     "target_file": null,

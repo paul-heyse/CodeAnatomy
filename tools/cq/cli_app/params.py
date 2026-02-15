@@ -126,6 +126,13 @@ class SearchParams(FilterParams):
             help="Include matches in strings/comments/docstrings",
         ),
     ] = False
+    with_neighborhood: Annotated[
+        bool,
+        Parameter(
+            name="--with-neighborhood",
+            help="Include structural neighborhood preview (slower)",
+        ),
+    ] = False
     in_dir: Annotated[str | None, Parameter(name="--in", help="Restrict to directory")] = None
     lang: Annotated[
         QueryLanguageToken,

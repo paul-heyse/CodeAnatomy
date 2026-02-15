@@ -36,6 +36,8 @@ from tools.cq.core.cache.key_builder import (
     build_namespace_cache_tag,
     build_run_cache_tag,
     build_scope_hash,
+    build_search_artifact_cache_key,
+    build_search_artifact_index_key,
     canonicalize_cache_payload,
 )
 from tools.cq.core.cache.namespaces import (
@@ -99,6 +101,8 @@ __all__ = [
     "build_run_cache_tag",
     "build_scope_hash",
     "build_scope_snapshot_fingerprint",
+    "build_search_artifact_cache_key",
+    "build_search_artifact_index_key",
     "cache_namespace_env_suffix",
     "canonicalize_cache_payload",
     "close_cq_cache_backend",

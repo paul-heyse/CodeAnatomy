@@ -74,6 +74,7 @@ def search(
             include_globs=include_globs if include_globs else None,
             exclude_globs=list(options.exclude) if options.exclude else None,
             include_strings=options.include_strings,
+            with_neighborhood=options.with_neighborhood,
             limits=SMART_SEARCH_LIMITS,
             tc=ctx.toolchain,
             argv=ctx.argv,

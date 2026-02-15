@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import multiprocessing
 import re
-from collections import Counter
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -56,7 +55,6 @@ from tools.cq.query.language import (
     ripgrep_type_for_language,
     ripgrep_types_for_scope,
 )
-from tools.cq.search.candidate_normalizer import build_definition_candidate_finding
 from tools.cq.search.classifier import (
     HeuristicResult,
     MatchCategory,
@@ -107,6 +105,20 @@ from tools.cq.search.multilang_diagnostics import (
     diagnostics_to_summary_payload,
     is_python_oriented_query_text,
 )
+from tools.cq.search.object_resolution_contracts import (
+    SearchObjectResolvedViewV1,
+    SearchObjectSummaryV1,
+    SearchOccurrenceV1,
+)
+from tools.cq.search.object_resolver import ObjectResolutionRuntime, build_object_resolved_view
+from tools.cq.search.object_sections import (
+    build_non_code_occurrence_section,
+    build_occurrence_hot_files_section,
+    build_occurrence_kind_counts_section,
+    build_occurrences_section,
+    build_resolved_objects_section,
+    is_non_code_occurrence,
+)
 from tools.cq.search.partition_contracts import SearchPartitionPlanV1
 from tools.cq.search.partition_pipeline import run_search_partition
 from tools.cq.search.pipeline import SearchPipeline
@@ -117,6 +129,7 @@ from tools.cq.search.python_enrichment import (
 )
 from tools.cq.search.python_enrichment import enrich_python_context_by_byte_range
 from tools.cq.search.python_semantic_signal import evaluate_python_semantic_signal_from_mapping
+from tools.cq.search.query_pack_lint import lint_search_query_packs
 from tools.cq.search.requests import (
     CandidateCollectionRequest,
     PythonByteRangeEnrichmentRequest,
@@ -162,6 +175,16 @@ _CASE_SENSITIVE_DEFAULT = True
 # Evidence disclosure cap to keep output high-signal
 MAX_EVIDENCE = 100
 MAX_TARGET_CANDIDATES = 3
+_TARGET_CANDIDATE_KINDS: frozenset[str] = frozenset(
+    {
+        "function",
+        "method",
+        "class",
+        "type",
+        "module",
+        "callable",
+    }
+)
 _RUST_ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 _PYTHON_SEMANTIC_PREFETCH_NON_FATAL_EXCEPTIONS = (
     OSError,
@@ -173,6 +196,7 @@ _PYTHON_SEMANTIC_PREFETCH_NON_FATAL_EXCEPTIONS = (
 MAX_SEARCH_CLASSIFY_WORKERS = 4
 MAX_PYTHON_SEMANTIC_ENRICH_FINDINGS = 8
 _PythonSemanticAnchorKey = tuple[str, int, int, str]
+_SEARCH_OBJECT_VIEW_REGISTRY: dict[str, SearchObjectResolvedViewV1] = {}
 
 
 class RawMatch(CqStruct, frozen=True):
@@ -260,6 +284,33 @@ class MatchEnrichment:
     rust_tree_sitter: dict[str, object] | None
     python_enrichment: dict[str, object] | None
     python_semantic_enrichment: dict[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class MatchClassifyOptions:
+    enable_symtable: bool = True
+    force_semantic_enrichment: bool = False
+    enable_python_semantic: bool = False
+    enable_deep_enrichment: bool = True
+
+
+def _merged_classify_options(
+    options: MatchClassifyOptions | None,
+    legacy_flags: dict[str, bool],
+) -> MatchClassifyOptions:
+    base = options or MatchClassifyOptions()
+    return MatchClassifyOptions(
+        enable_symtable=bool(legacy_flags.get("enable_symtable", base.enable_symtable)),
+        force_semantic_enrichment=bool(
+            legacy_flags.get("force_semantic_enrichment", base.force_semantic_enrichment)
+        ),
+        enable_python_semantic=bool(
+            legacy_flags.get("enable_python_semantic", base.enable_python_semantic)
+        ),
+        enable_deep_enrichment=bool(
+            legacy_flags.get("enable_deep_enrichment", base.enable_deep_enrichment)
+        ),
+    )
 
 
 class SearchStats(CqStruct, frozen=True):
@@ -439,6 +490,7 @@ def build_candidate_searcher(
         include_globs=request.include_globs,
         exclude_globs=request.exclude_globs,
         include_strings=False,
+        with_neighborhood=False,
         argv=[],
         tc=None,
         started_ms=0.0,
@@ -557,44 +609,30 @@ def classify_match(
     root: Path,
     *,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    enable_symtable: bool = True,
-    force_semantic_enrichment: bool = False,
-    enable_python_semantic: bool = False,
+    options: MatchClassifyOptions | None = None,
+    **legacy_flags: bool,
 ) -> EnrichedMatch:
     """Run three-stage classification pipeline on a raw match.
 
-    Parameters
-    ----------
-    raw
-        Raw match from ripgrep.
-    root
-        Repository root for file resolution.
-    lang
-        Query language used by parsing/classification stages.
-    enable_symtable
-        Whether to run symtable enrichment.
-    force_semantic_enrichment
-        Force AST-driven enrichment even when heuristics could short-circuit.
-    enable_python_semantic
-        Whether to attempt per-anchor Python semantic enrichment in this path.
-
     Returns:
-    -------
-    EnrichedMatch
-        Fully classified and enriched match.
+        EnrichedMatch: Fully classified match with enrichment payloads.
     """
-    match_text = raw.match_text
+    resolved_options = _merged_classify_options(options, legacy_flags)
 
     # Stage 1: Fast heuristic
-    heuristic = classify_heuristic(raw.text, raw.col, match_text)
+    heuristic = classify_heuristic(raw.text, raw.col, raw.match_text)
 
-    if heuristic.skip_deeper and heuristic.category is not None and not force_semantic_enrichment:
+    if (
+        heuristic.skip_deeper
+        and heuristic.category is not None
+        and not resolved_options.force_semantic_enrichment
+    ):
         file_path = root / raw.file
         context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
         return _build_heuristic_enriched(
             raw,
             heuristic,
-            match_text,
+            raw.match_text,
             lang=lang,
             context_window=context_window,
             context_snippet=context_snippet,
@@ -615,25 +653,37 @@ def classify_match(
         raw,
         classification,
         lang=lang,
-        enable_symtable=enable_symtable,
+        enable_symtable=resolved_options.enable_symtable,
     )
-    rust_tree_sitter = _maybe_rust_tree_sitter_enrichment(
-        file_path,
-        raw,
-        lang=lang,
+    rust_tree_sitter = (
+        _maybe_rust_tree_sitter_enrichment(
+            file_path,
+            raw,
+            lang=lang,
+        )
+        if resolved_options.enable_deep_enrichment
+        else None
     )
-    python_enrichment = _maybe_python_enrichment(
-        file_path,
-        raw,
-        lang=lang,
-        resolved_python=resolved_python,
+    python_enrichment = (
+        _maybe_python_enrichment(
+            file_path,
+            raw,
+            lang=lang,
+            resolved_python=resolved_python,
+        )
+        if resolved_options.enable_deep_enrichment
+        else None
     )
-    python_semantic_enrichment = _maybe_python_semantic_enrichment(
-        root,
-        file_path,
-        raw,
-        lang=lang,
-        enable_python_semantic=enable_python_semantic,
+    python_semantic_enrichment = (
+        _maybe_python_semantic_enrichment(
+            root,
+            file_path,
+            raw,
+            lang=lang,
+            enable_python_semantic=resolved_options.enable_python_semantic,
+        )
+        if resolved_options.enable_deep_enrichment
+        else None
     )
     context_window, context_snippet = _build_context_enrichment(file_path, raw, lang=lang)
     enrichment = MatchEnrichment(
@@ -646,7 +696,7 @@ def classify_match(
     )
     return _build_enriched_match(
         raw,
-        match_text,
+        raw.match_text,
         classification,
         enrichment,
         lang=lang,
@@ -1380,6 +1430,7 @@ def _coerce_summary_inputs(
         include_globs=cast("list[str] | None", kwargs.get("include")),
         exclude_globs=cast("list[str] | None", kwargs.get("exclude")),
         include_strings=False,
+        with_neighborhood=False,
         argv=[],
         tc=None,
         started_ms=0.0,
@@ -1442,6 +1493,7 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         "scan_method": "hybrid",
         "pattern": inputs.pattern,
         "case_sensitive": True,
+        "with_neighborhood": bool(config.with_neighborhood),
         "caps_hit": (
             "timeout"
             if inputs.stats.timed_out
@@ -1490,8 +1542,9 @@ def build_sections(
     mode: QueryMode,
     *,
     include_strings: bool = False,
+    object_runtime: ObjectResolutionRuntime | None = None,
 ) -> list[Section]:
-    """Build organized sections for CqResult.
+    """Build object-resolved sections for CqResult.
 
     Parameters
     ----------
@@ -1505,35 +1558,40 @@ def build_sections(
         Query mode.
     include_strings
         Include string/comment/docstring matches.
+    object_runtime
+        Optional precomputed object-resolution runtime.
 
     Returns:
     -------
     list[Section]
         Organized sections.
     """
-    non_code_categories: set[MatchCategory] = {
-        "docstring_match",
-        "comment_match",
-        "string_match",
-    }
-    sorted_matches = sorted(matches, key=compute_relevance_score, reverse=True)
-    visible_matches = _filter_visible_matches(
-        sorted_matches,
+    _ = root
+    runtime = object_runtime or build_object_resolved_view(matches, query=query)
+    visible_occurrences, non_code_occurrences = _split_occurrences_for_render(
+        runtime.view.occurrences,
         include_strings=include_strings,
-        non_code_categories=non_code_categories,
     )
-
+    object_symbols = {
+        summary.object_ref.object_id: summary.object_ref.symbol
+        for summary in runtime.view.summaries
+    }
+    occurrences_by_object: dict[str, list[SearchOccurrenceV1]] = {}
+    for row in runtime.view.occurrences:
+        occurrences_by_object.setdefault(row.object_id, []).append(row)
+    occurrence_rows = runtime.view.occurrences if include_strings else visible_occurrences
     sections: list[Section] = [
-        _build_top_contexts_section(visible_matches, root),
+        build_resolved_objects_section(
+            runtime.view.summaries,
+            occurrences_by_object=occurrences_by_object,
+        ),
+        build_occurrences_section(occurrence_rows, object_symbols=object_symbols),
+        build_occurrence_kind_counts_section(occurrence_rows),
     ]
-    sections.extend(_build_identifier_sections(visible_matches, root, mode))
-    sections.append(_build_kind_counts_section(matches))
-
-    non_code_section = _build_non_code_section(sorted_matches, root, non_code_categories)
-    if non_code_section is not None:
+    non_code_section = build_non_code_occurrence_section(non_code_occurrences)
+    if non_code_section is not None and not include_strings:
         sections.append(non_code_section)
-
-    sections.append(_build_hot_files_section(matches))
+    sections.append(build_occurrence_hot_files_section(occurrence_rows))
 
     followups_section = _build_followups_section(matches, query, mode)
     if followups_section is not None:
@@ -1542,122 +1600,21 @@ def build_sections(
     return sections
 
 
-def _filter_visible_matches(
-    sorted_matches: list[EnrichedMatch],
+def _split_occurrences_for_render(
+    occurrences: list[SearchOccurrenceV1],
     *,
     include_strings: bool,
-    non_code_categories: set[MatchCategory],
-) -> list[EnrichedMatch]:
+) -> tuple[list[SearchOccurrenceV1], list[SearchOccurrenceV1]]:
     if include_strings:
-        return sorted_matches
-    return [m for m in sorted_matches if m.category not in non_code_categories]
-
-
-def _group_matches_by_context(
-    matches: list[EnrichedMatch],
-) -> dict[str, list[EnrichedMatch]]:
-    grouped: dict[str, list[EnrichedMatch]] = {}
-    for match in matches:
-        key = f"{match.containing_scope} ({match.file})" if match.containing_scope else match.file
-        grouped.setdefault(key, []).append(match)
-    return grouped
-
-
-def _build_top_contexts_section(
-    matches: list[EnrichedMatch],
-    root: Path,
-) -> Section:
-    grouped = _group_matches_by_context(matches)
-    group_scores = [
-        (key, max(compute_relevance_score(m) for m in group), group)
-        for key, group in grouped.items()
-    ]
-    group_scores.sort(key=lambda t: t[1], reverse=True)
-    top_contexts: list[Finding] = []
-    for key, _score, group in group_scores[:20]:
-        rep = group[0]
-        finding = build_finding(rep, root)
-        finding.message = f"{key}"
-        top_contexts.append(finding)
-    return Section(title="Top Contexts", findings=top_contexts)
-
-
-def _build_identifier_sections(
-    matches: list[EnrichedMatch],
-    root: Path,
-    mode: QueryMode,
-) -> list[Section]:
-    if mode != QueryMode.IDENTIFIER:
-        return []
-    sections: list[Section] = []
-    defs = [m for m in matches if m.category == "definition"]
-    imps = [m for m in matches if m.category in {"import", "from_import"}]
-    calls = [m for m in matches if m.category == "callsite"]
-    if defs:
-        sections.append(
-            Section(title="Definitions", findings=[build_finding(m, root) for m in defs[:5]])
-        )
-    if imps:
-        sections.append(
-            Section(
-                title="Imports",
-                findings=[build_finding(m, root) for m in imps[:10]],
-                collapsed=True,
-            )
-        )
-    if calls:
-        sections.append(
-            Section(
-                title="Callsites",
-                findings=[build_finding(m, root) for m in calls[:10]],
-                collapsed=True,
-            )
-        )
-    return sections
-
-
-def _build_kind_counts_section(matches: list[EnrichedMatch]) -> Section:
-    category_counts = Counter(m.category for m in matches)
-    kind_findings = [
-        Finding(
-            category="count",
-            message=f"{cat}: {count}",
-            severity="info",
-            details=DetailPayload(kind="count", data={"category": cat, "count": count}),
-        )
-        for cat, count in category_counts.most_common()
-    ]
-    return Section(title="Uses by Kind", findings=kind_findings, collapsed=True)
-
-
-def _build_non_code_section(
-    matches: list[EnrichedMatch],
-    root: Path,
-    non_code_categories: set[MatchCategory],
-) -> Section | None:
-    non_code = [m for m in matches if m.category in non_code_categories]
-    if not non_code:
-        return None
-    return Section(
-        title="Non-Code Matches (Strings / Comments / Docstrings)",
-        findings=[build_finding(m, root) for m in non_code[:20]],
-        collapsed=True,
-    )
-
-
-def _build_hot_files_section(matches: list[EnrichedMatch]) -> Section:
-    file_counts = Counter(m.file for m in matches)
-    hot_file_findings = [
-        Finding(
-            category="hot_file",
-            message=f"{file}: {count} matches",
-            anchor=Anchor(file=file, line=1),
-            severity="info",
-            details=DetailPayload(kind="hot_file", data={"count": count}),
-        )
-        for file, count in file_counts.most_common(10)
-    ]
-    return Section(title="Hot Files", findings=hot_file_findings, collapsed=True)
+        return occurrences, []
+    visible: list[SearchOccurrenceV1] = []
+    non_code: list[SearchOccurrenceV1] = []
+    for row in occurrences:
+        if is_non_code_occurrence(row.category):
+            non_code.append(row)
+        else:
+            visible.append(row)
+    return visible, non_code
 
 
 def _build_followups_section(
@@ -1694,6 +1651,7 @@ def _build_search_context(request: SearchRequest) -> SmartSearchContext:
         include_globs=request.include_globs,
         exclude_globs=request.exclude_globs,
         include_strings=request.include_strings,
+        with_neighborhood=request.with_neighborhood,
         argv=argv,
         tc=request.tc,
         started_ms=started,
@@ -1715,6 +1673,7 @@ def _coerce_search_request(
         include_globs=_coerce_glob_list(kwargs.get("include_globs")),
         exclude_globs=_coerce_glob_list(kwargs.get("exclude_globs")),
         include_strings=bool(kwargs.get("include_strings")),
+        with_neighborhood=bool(kwargs.get("with_neighborhood")),
         limits=_coerce_limits(kwargs.get("limits")),
         tc=cast("Toolchain | None", kwargs.get("tc")),
         argv=_coerce_argv(kwargs.get("argv")),
@@ -2035,6 +1994,51 @@ def _build_capability_diagnostics_for_search(
     )
 
 
+def _build_tree_sitter_runtime_diagnostics(
+    telemetry: dict[str, object],
+) -> list[Finding]:
+    python_bucket = telemetry.get("python")
+    if not isinstance(python_bucket, dict):
+        return []
+    runtime = python_bucket.get("query_runtime")
+    if not isinstance(runtime, dict):
+        return []
+    did_exceed = int(runtime.get("did_exceed_match_limit", 0) or 0)
+    cancelled = int(runtime.get("cancelled", 0) or 0)
+    findings: list[Finding] = []
+    if did_exceed > 0:
+        findings.append(
+            Finding(
+                category="tree_sitter_runtime",
+                message=f"tree-sitter match limit exceeded on {did_exceed} anchors",
+                severity="warning",
+                details=DetailPayload(
+                    kind="tree_sitter_runtime",
+                    data={
+                        "reason": "did_exceed_match_limit",
+                        "count": did_exceed,
+                    },
+                ),
+            )
+        )
+    if cancelled > 0:
+        findings.append(
+            Finding(
+                category="tree_sitter_runtime",
+                message=f"tree-sitter query cancelled on {cancelled} anchors",
+                severity="warning",
+                details=DetailPayload(
+                    kind="tree_sitter_runtime",
+                    data={
+                        "reason": "cancelled",
+                        "count": cancelled,
+                    },
+                ),
+            )
+        )
+    return findings
+
+
 def _status_from_enrichment(payload: dict[str, object] | None) -> str:
     if payload is None:
         return "skipped"
@@ -2055,6 +2059,10 @@ def _empty_enrichment_telemetry() -> dict[str, object]:
             "applied": 0,
             "degraded": 0,
             "skipped": 0,
+            "query_runtime": {
+                "did_exceed_match_limit": 0,
+                "cancelled": 0,
+            },
             "stages": {
                 "ast_grep": {"applied": 0, "degraded": 0, "skipped": 0},
                 "python_ast": {"applied": 0, "degraded": 0, "skipped": 0},
@@ -2110,6 +2118,15 @@ def _accumulate_python_enrichment(
     timings_bucket = lang_bucket.get("timings_ms")
     if isinstance(stage_timings, dict) and isinstance(timings_bucket, dict):
         _accumulate_stage_timings(timings_bucket, stage_timings)
+    runtime_payload = payload.get("query_runtime")
+    runtime_bucket = lang_bucket.get("query_runtime")
+    if isinstance(runtime_payload, dict) and isinstance(runtime_bucket, dict):
+        if bool(runtime_payload.get("did_exceed_match_limit")):
+            runtime_bucket["did_exceed_match_limit"] = (
+                int(runtime_bucket.get("did_exceed_match_limit", 0)) + 1
+            )
+        if bool(runtime_payload.get("cancelled")):
+            runtime_bucket["cancelled"] = int(runtime_bucket.get("cancelled", 0)) + 1
 
 
 def _attach_enrichment_cache_stats(telemetry: dict[str, object]) -> None:
@@ -2234,6 +2251,23 @@ def _python_semantic_no_signal_diagnostic(
     }
 
 
+def _python_semantic_partial_signal_diagnostic(
+    reasons: tuple[str, ...],
+    *,
+    coverage_reason: str | None = None,
+) -> dict[str, object]:
+    reason_text = _normalize_python_semantic_degradation_reason(
+        reasons=reasons,
+        coverage_reason=coverage_reason,
+    )
+    return {
+        "code": "PYTHON_SEMANTIC003",
+        "severity": "info",
+        "message": "PythonSemantic payload retained with partial signal",
+        "reason": reason_text,
+    }
+
+
 def _normalize_python_semantic_degradation_reason(
     *,
     reasons: tuple[str, ...],
@@ -2338,9 +2372,10 @@ def _prefetch_python_semantic_for_raw_matches(
                 telemetry["applied"] += 1
                 payloads[key] = payload
             else:
-                telemetry["failed"] += 1
+                telemetry["applied"] += 1
+                payloads[key] = payload
                 diagnostics.append(
-                    _python_semantic_no_signal_diagnostic(
+                    _python_semantic_partial_signal_diagnostic(
                         reasons,
                         coverage_reason=_python_semantic_coverage_reason(payload),
                     )
@@ -2451,14 +2486,14 @@ def _merge_match_with_python_semantic_payload(
         has_signal, reasons = evaluate_python_semantic_signal_from_mapping(payload)
         if not has_signal:
             if attempted_in_place:
-                telemetry["failed"] += 1
+                telemetry["applied"] += 1
                 diagnostics.append(
-                    _python_semantic_no_signal_diagnostic(
+                    _python_semantic_partial_signal_diagnostic(
                         reasons,
                         coverage_reason=_python_semantic_coverage_reason(payload),
                     )
                 )
-            return match
+            return msgspec.structs.replace(match, python_semantic_enrichment=payload)
         if attempted_in_place:
             telemetry["applied"] += 1
         return msgspec.structs.replace(match, python_semantic_enrichment=payload)
@@ -2560,6 +2595,27 @@ def _normalize_neighborhood_file_path(path: str) -> str:
     if normalized.startswith("./"):
         normalized = normalized[2:]
     return Path(normalized).as_posix()
+
+
+def _register_search_object_view(
+    *,
+    run_id: str | None,
+    view: SearchObjectResolvedViewV1,
+) -> None:
+    if not isinstance(run_id, str) or not run_id:
+        return
+    _SEARCH_OBJECT_VIEW_REGISTRY[run_id] = view
+
+
+def pop_search_object_view_for_run(run_id: str | None) -> SearchObjectResolvedViewV1 | None:
+    """Pop object-resolved search view payload for a completed run.
+
+    Returns:
+        SearchObjectResolvedViewV1 | None: Popped view if run_id exists and is cached.
+    """
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    return _SEARCH_OBJECT_VIEW_REGISTRY.pop(run_id, None)
 
 
 @dataclass(slots=True)
@@ -2702,9 +2758,28 @@ def _build_search_summary(
     )
     capability_diagnostics = _build_capability_diagnostics_for_search(lang_scope=ctx.lang_scope)
     all_diagnostics = diagnostics + capability_diagnostics
+    query_pack_lint = lint_search_query_packs()
+    summary["query_pack_lint"] = {
+        "status": query_pack_lint.status,
+        "errors": list(query_pack_lint.errors),
+    }
+    if query_pack_lint.status != "ok":
+        all_diagnostics.append(
+            Finding(
+                category="query_pack_lint",
+                message=f"Query pack lint failed: {len(query_pack_lint.errors)} errors",
+                severity="warning",
+                details=DetailPayload(
+                    kind="query_pack_lint",
+                    data={"errors": list(query_pack_lint.errors)},
+                ),
+            )
+        )
+    enrichment_telemetry = _build_enrichment_telemetry(enriched_matches)
+    all_diagnostics.extend(_build_tree_sitter_runtime_diagnostics(enrichment_telemetry))
     summary["cross_language_diagnostics"] = diagnostics_to_summary_payload(all_diagnostics)
     summary["language_capabilities"] = build_language_capabilities(lang_scope=ctx.lang_scope)
-    summary["enrichment_telemetry"] = _build_enrichment_telemetry(enriched_matches)
+    summary["enrichment_telemetry"] = enrichment_telemetry
     summary["python_semantic_overview"] = python_semantic_overview
     summary["python_semantic_telemetry"] = python_semantic_telemetry
     summary.setdefault(
@@ -2720,24 +2795,121 @@ def _build_search_summary(
 
 def _collect_definition_candidates(
     ctx: SmartSearchContext,
-    enriched_matches: list[EnrichedMatch],
+    object_runtime: ObjectResolutionRuntime,
 ) -> tuple[list[EnrichedMatch], list[Finding]]:
-    ranked_matches = sorted(enriched_matches, key=compute_relevance_score, reverse=True)
-    definition_pairs: list[tuple[EnrichedMatch, Finding]] = []
-    for match in ranked_matches:
-        candidate = build_definition_candidate_finding(
-            match,
-            ctx.root,
-            build_finding_fn=build_finding,
-        )
-        if candidate is None:
+    _ = ctx
+    definition_matches: list[EnrichedMatch] = []
+    candidate_findings: list[Finding] = []
+
+    for summary in object_runtime.view.summaries:
+        object_ref = summary.object_ref
+        kind = _normalize_target_candidate_kind(object_ref.kind)
+        if kind not in _TARGET_CANDIDATE_KINDS:
             continue
-        definition_pairs.append((match, candidate))
-        if len(definition_pairs) >= MAX_TARGET_CANDIDATES:
+
+        representative = object_runtime.representative_matches.get(object_ref.object_id)
+        if representative is not None:
+            definition_matches.append(representative)
+        candidate = _build_object_candidate_finding(
+            summary=summary,
+            representative=representative,
+        )
+        candidate_findings.append(candidate)
+        if len(candidate_findings) >= MAX_TARGET_CANDIDATES:
             break
-    definition_matches = [match for match, _finding in definition_pairs]
-    candidate_findings = [finding for _match, finding in definition_pairs]
+
+    if candidate_findings:
+        return definition_matches, candidate_findings
+
+    # Fallback: always provide at least one target candidate from top object.
+    if not object_runtime.view.summaries:
+        return definition_matches, candidate_findings
+    fallback_summary = object_runtime.view.summaries[0]
+    representative = object_runtime.representative_matches.get(
+        fallback_summary.object_ref.object_id
+    )
+    if representative is not None:
+        definition_matches.append(representative)
+    candidate_findings.append(
+        _build_object_candidate_finding(summary=fallback_summary, representative=representative)
+    )
     return definition_matches, candidate_findings
+
+
+def _normalize_target_candidate_kind(kind: str | None) -> str:
+    if not isinstance(kind, str) or not kind:
+        return "reference"
+    lowered = kind.lower()
+    if lowered in {"method", "function", "callable"}:
+        return "function"
+    if lowered in {"class"}:
+        return "class"
+    if lowered in {"module"}:
+        return "module"
+    if lowered in {"type"}:
+        return "type"
+    return lowered
+
+
+def _build_object_candidate_finding(
+    *,
+    summary: SearchObjectSummaryV1,
+    representative: EnrichedMatch | None,
+) -> Finding:
+    object_ref = summary.object_ref
+    kind = _normalize_target_candidate_kind(object_ref.kind)
+    symbol = object_ref.symbol
+    anchor: Anchor | None = None
+    if isinstance(object_ref.canonical_file, str) and isinstance(object_ref.canonical_line, int):
+        anchor = Anchor(
+            file=object_ref.canonical_file,
+            line=max(1, int(object_ref.canonical_line)),
+            col=representative.col if representative is not None else None,
+        )
+    elif representative is not None:
+        anchor = Anchor.from_span(representative.span)
+    details = {
+        "name": symbol,
+        "kind": kind,
+        "qualified_name": object_ref.qualified_name,
+        "signature": representative.text.strip() if representative is not None else symbol,
+        "object_id": object_ref.object_id,
+        "language": representative.language if representative is not None else object_ref.language,
+        "occurrence_count": summary.occurrence_count,
+        "resolution_quality": object_ref.resolution_quality,
+    }
+    return Finding(
+        category="definition",
+        message=f"{kind}: {symbol}",
+        anchor=anchor,
+        severity="info",
+        details=DetailPayload(kind=kind, data=cast("dict[str, object]", details)),
+    )
+
+
+def _resolve_primary_target_match(
+    *,
+    candidate_findings: list[Finding],
+    object_runtime: ObjectResolutionRuntime,
+    definition_matches: list[EnrichedMatch],
+    enriched_matches: list[EnrichedMatch],
+) -> EnrichedMatch | None:
+    if candidate_findings:
+        object_id = candidate_findings[0].details.get("object_id")
+        if isinstance(object_id, str):
+            representative = object_runtime.representative_matches.get(object_id)
+            if representative is not None:
+                return representative
+    if definition_matches:
+        return definition_matches[0]
+    if object_runtime.view.summaries:
+        object_id = object_runtime.view.summaries[0].object_ref.object_id
+        representative = object_runtime.representative_matches.get(object_id)
+        if representative is not None:
+            return representative
+    if enriched_matches:
+        return enriched_matches[0]
+    return None
 
 
 def _build_structural_neighborhood_preview(
@@ -2747,11 +2919,8 @@ def _build_structural_neighborhood_preview(
     definition_matches: list[EnrichedMatch],
 ) -> tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]:
     from tools.cq.core.front_door_insight import build_neighborhood_from_slices
-    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-    from tools.cq.neighborhood.structural_collector import (
-        StructuralNeighborhoodCollectRequest,
-        collect_structural_neighborhood,
-    )
+    from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
+    from tools.cq.neighborhood.tree_sitter_contracts import TreeSitterNeighborhoodCollectRequest
 
     if primary_target_finding is None or primary_target_finding.anchor is None:
         return None, [], []
@@ -2767,25 +2936,24 @@ def _build_structural_neighborhood_preview(
         if definition_matches
         else str(primary_target_finding.details.get("language", "python"))
     )
-    snapshot_language: QueryLanguage = "rust" if target_language == "rust" else "python"
+    collector_language = "rust" if target_language == "rust" else "python"
     try:
-        snapshot = ScanSnapshot.build_from_repo(
-            ctx.root,
-            lang=snapshot_language,
-            run_id=ctx.run_id,
-        )
-        slices, degrades = collect_structural_neighborhood(
-            StructuralNeighborhoodCollectRequest(
+        collect_result = collect_tree_sitter_neighborhood(
+            TreeSitterNeighborhoodCollectRequest(
+                root=str(ctx.root),
                 target_name=target_name,
                 target_file=target_file,
+                language=collector_language,
                 target_line=primary_target_finding.anchor.line,
                 target_col=int(primary_target_finding.anchor.col or 0),
-                snapshot=snapshot,
                 max_per_slice=5,
             )
         )
     except (OSError, RuntimeError, TimeoutError, ValueError, TypeError) as exc:
-        return None, [], [f"structural_scan_unavailable:{type(exc).__name__}"]
+        return None, [], [f"tree_sitter_neighborhood_unavailable:{type(exc).__name__}"]
+
+    slices = tuple(collect_result.slices)
+    degrades = tuple(collect_result.diagnostics)
 
     neighborhood = build_neighborhood_from_slices(
         slices,
@@ -2821,20 +2989,54 @@ def _build_structural_neighborhood_preview(
     return neighborhood, findings, list(dict.fromkeys(notes))
 
 
+def _ast_grep_prefilter_scope_paths(
+    scope_paths: tuple[Path, ...] | None,
+    *,
+    lang: QueryLanguage,
+) -> tuple[Path, ...] | None:
+    if not scope_paths:
+        return None
+    filtered: list[Path] = []
+    for path in scope_paths:
+        if path.is_file():
+            if get_sg_root(path, lang=lang) is not None:
+                filtered.append(path)
+            continue
+        filtered.append(path)
+    return tuple(filtered) if filtered else scope_paths
+
+
+def _candidate_scope_paths_for_neighborhood(
+    *,
+    ctx: SmartSearchContext,
+    partition_results: list[_LanguageSearchResult],
+) -> tuple[Path, ...]:
+    ordered_paths: dict[str, Path] = {}
+    for partition in partition_results:
+        for match in partition.raw_matches:
+            rel_path = str(match.file).strip()
+            if not rel_path or rel_path in ordered_paths:
+                continue
+            candidate = (ctx.root / rel_path).resolve()
+            if candidate.exists():
+                ordered_paths[rel_path] = candidate
+    return tuple(ordered_paths.values())
+
+
 def _apply_search_semantic_insight(
     *,
     ctx: SmartSearchContext,
     insight: FrontDoorInsightV1,
     summary: dict[str, object],
     primary_target_finding: Finding | None,
-    top_definition_match: EnrichedMatch | None,
+    primary_target_match: EnrichedMatch | None,
 ) -> FrontDoorInsightV1:
     from tools.cq.core.front_door_insight import augment_insight_with_semantic
 
     outcome = _collect_search_semantic_outcome(
         ctx=ctx,
         primary_target_finding=primary_target_finding,
-        top_definition_match=top_definition_match,
+        primary_target_match=primary_target_match,
     )
     if outcome.payload is not None:
         insight = augment_insight_with_semantic(insight, outcome.payload)
@@ -2868,14 +3070,23 @@ class _SearchSemanticOutcome:
 @dataclass(slots=True)
 class _SearchAssemblyInputs:
     enriched_matches: list[EnrichedMatch]
+    object_runtime: ObjectResolutionRuntime
     summary: dict[str, object]
     sections: list[Section]
     all_diagnostics: list[Finding]
     definition_matches: list[EnrichedMatch]
     candidate_findings: list[Finding]
     primary_target_finding: Finding | None
+    primary_target_match: EnrichedMatch | None
     insight_neighborhood: InsightNeighborhoodV1 | None
     neighborhood_notes: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _NeighborhoodPreviewInputs:
+    primary_target_finding: Finding | None
+    definition_matches: list[EnrichedMatch]
+    has_target_candidates: bool
 
 
 def _payload_coverage_status(payload: dict[str, object]) -> tuple[str | None, str | None]:
@@ -2942,30 +3153,33 @@ def _resolve_search_semantic_target(
     *,
     ctx: SmartSearchContext,
     primary_target_finding: Finding | None,
-    top_definition_match: EnrichedMatch | None,
+    primary_target_match: EnrichedMatch | None,
 ) -> tuple[Path, QueryLanguage, Anchor, str] | None:
-    if (
-        primary_target_finding is None
-        or primary_target_finding.anchor is None
-        or top_definition_match is None
-    ):
+    if primary_target_finding is None and primary_target_match is None:
         return None
 
-    anchor = primary_target_finding.anchor
+    anchor = primary_target_finding.anchor if primary_target_finding is not None else None
+    if anchor is None and primary_target_match is not None:
+        anchor = Anchor.from_span(primary_target_match.span)
+    if anchor is None:
+        return None
+
     target_file_path = ctx.root / anchor.file
     inferred_language = infer_language_for_path(target_file_path)
     target_language = (
-        top_definition_match.language
-        if top_definition_match.language in {"python", "rust"}
+        primary_target_match.language
+        if primary_target_match is not None and primary_target_match.language in {"python", "rust"}
         else inferred_language
     )
     if target_language not in {"python", "rust"}:
         return None
 
-    name_value = primary_target_finding.details.get("name")
-    symbol_hint = (
-        str(name_value) if isinstance(name_value, str) else top_definition_match.match_text
-    )
+    name_value = primary_target_finding.details.get("name") if primary_target_finding else None
+    symbol_hint = str(name_value) if isinstance(name_value, str) else None
+    if not symbol_hint and primary_target_match is not None:
+        symbol_hint = primary_target_match.match_text
+    if not symbol_hint:
+        symbol_hint = ctx.query
     return target_file_path, target_language, anchor, symbol_hint
 
 
@@ -2973,19 +3187,27 @@ def _apply_prefetched_search_semantic_outcome(
     *,
     outcome: _SearchSemanticOutcome,
     target_language: QueryLanguage,
-    top_definition_match: EnrichedMatch,
+    primary_target_match: EnrichedMatch | None,
 ) -> bool:
-    if target_language != "python" or not isinstance(
-        top_definition_match.python_semantic_enrichment, dict
+    if (
+        target_language != "python"
+        or primary_target_match is None
+        or not isinstance(primary_target_match.python_semantic_enrichment, dict)
     ):
         return False
 
     prefetch_status, prefetch_reason = _payload_coverage_status(
-        top_definition_match.python_semantic_enrichment
+        primary_target_match.python_semantic_enrichment
     )
-    if prefetch_status == "applied":
-        outcome.payload = top_definition_match.python_semantic_enrichment
+    if prefetch_status in {"applied", "degraded", "partial_signal", "structural_only"}:
+        outcome.payload = primary_target_match.python_semantic_enrichment
         outcome.applied = 1
+    elif primary_target_match.python_semantic_enrichment:
+        # Retain closest-fit payload even when strict signal threshold is not met.
+        outcome.payload = primary_target_match.python_semantic_enrichment
+        outcome.applied = 1
+        if prefetch_reason:
+            outcome.reasons.append(prefetch_reason)
     else:
         outcome.failed = 1
         outcome.reasons.append(
@@ -3030,8 +3252,13 @@ def _apply_search_semantic_payload_outcome(
         return
 
     payload_status, payload_reason = _payload_coverage_status(payload)
-    if payload_status == "applied":
+    if payload_status in {"applied", "degraded", "partial_signal", "structural_only"}:
         outcome.applied = 1
+        return
+    if payload:
+        outcome.applied = 1
+        if payload_reason:
+            outcome.reasons.append(payload_reason)
         return
 
     outcome.failed = 1
@@ -3048,21 +3275,20 @@ def _collect_search_semantic_outcome(
     *,
     ctx: SmartSearchContext,
     primary_target_finding: Finding | None,
-    top_definition_match: EnrichedMatch | None,
+    primary_target_match: EnrichedMatch | None,
 ) -> _SearchSemanticOutcome:
     outcome = _SearchSemanticOutcome()
     resolved = _resolve_search_semantic_target(
         ctx=ctx,
         primary_target_finding=primary_target_finding,
-        top_definition_match=top_definition_match,
+        primary_target_match=primary_target_match,
     )
     if resolved is None:
-        if top_definition_match is not None and primary_target_finding is not None:
+        if primary_target_match is not None or primary_target_finding is not None:
             outcome.reasons.append("provider_unavailable")
         return outcome
 
     target_file_path, target_language, anchor, symbol_hint = resolved
-    assert top_definition_match is not None
 
     outcome.provider = provider_for_language(target_language)
     outcome.target_language = target_language
@@ -3074,7 +3300,7 @@ def _collect_search_semantic_outcome(
     if _apply_prefetched_search_semantic_outcome(
         outcome=outcome,
         target_language=target_language,
-        top_definition_match=top_definition_match,
+        primary_target_match=primary_target_match,
     ):
         return outcome
 
@@ -3205,6 +3431,41 @@ def _derive_search_semantic_state(
     )
 
 
+def _build_tree_sitter_neighborhood_preview(
+    *,
+    ctx: SmartSearchContext,
+    partition_results: list[_LanguageSearchResult],
+    summary: dict[str, object],
+    sections: list[Section],
+    inputs: _NeighborhoodPreviewInputs,
+) -> tuple[InsightNeighborhoodV1 | None, list[str]]:
+    summary["tree_sitter_neighborhood"] = {
+        "enabled": bool(ctx.with_neighborhood),
+        "mode": "opt_in",
+    }
+    if not ctx.with_neighborhood:
+        return None, ["tree_sitter_neighborhood_disabled_by_default"]
+
+    scope_paths = _candidate_scope_paths_for_neighborhood(
+        ctx=ctx,
+        partition_results=partition_results,
+    )
+    summary["tree_sitter_neighborhood"]["candidate_scope_files"] = str(len(scope_paths))
+    insight_neighborhood, neighborhood_findings, neighborhood_notes = (
+        _build_structural_neighborhood_preview(
+            ctx,
+            primary_target_finding=inputs.primary_target_finding,
+            definition_matches=inputs.definition_matches,
+        )
+    )
+    insert_neighborhood_preview(
+        sections,
+        findings=neighborhood_findings,
+        has_target_candidates=inputs.has_target_candidates,
+    )
+    return insight_neighborhood, neighborhood_notes
+
+
 def _prepare_search_assembly_inputs(
     ctx: SmartSearchContext,
     partition_results: list[_LanguageSearchResult],
@@ -3223,38 +3484,49 @@ def _prepare_search_assembly_inputs(
         python_semantic_telemetry=python_semantic_telemetry,
         python_semantic_diagnostics=python_semantic_diagnostics,
     )
+    object_runtime = build_object_resolved_view(enriched_matches, query=ctx.query)
+    summary["resolved_objects"] = len(object_runtime.view.summaries)
+    summary["resolved_occurrences"] = len(object_runtime.view.occurrences)
     sections = build_sections(
         enriched_matches,
         ctx.root,
         ctx.query,
         ctx.mode,
         include_strings=ctx.include_strings,
+        object_runtime=object_runtime,
     )
     if all_diagnostics:
         sections.append(Section(title="Cross-Language Diagnostics", findings=all_diagnostics))
-    definition_matches, candidate_findings = _collect_definition_candidates(ctx, enriched_matches)
+    definition_matches, candidate_findings = _collect_definition_candidates(ctx, object_runtime)
     insert_target_candidates(sections, candidates=candidate_findings)
     primary_target_finding = candidate_findings[0] if candidate_findings else None
-    insight_neighborhood, neighborhood_findings, neighborhood_notes = (
-        _build_structural_neighborhood_preview(
-            ctx,
+    primary_target_match = _resolve_primary_target_match(
+        candidate_findings=candidate_findings,
+        object_runtime=object_runtime,
+        definition_matches=definition_matches,
+        enriched_matches=enriched_matches,
+    )
+    insight_neighborhood, neighborhood_notes = _build_tree_sitter_neighborhood_preview(
+        ctx=ctx,
+        partition_results=partition_results,
+        summary=summary,
+        sections=sections,
+        inputs=_NeighborhoodPreviewInputs(
             primary_target_finding=primary_target_finding,
             definition_matches=definition_matches,
-        )
-    )
-    insert_neighborhood_preview(
-        sections,
-        findings=neighborhood_findings,
-        has_target_candidates=bool(candidate_findings),
+            has_target_candidates=bool(candidate_findings),
+        ),
     )
     return _SearchAssemblyInputs(
         enriched_matches=enriched_matches,
+        object_runtime=object_runtime,
         summary=summary,
         sections=sections,
         all_diagnostics=all_diagnostics,
         definition_matches=definition_matches,
         candidate_findings=candidate_findings,
         primary_target_finding=primary_target_finding,
+        primary_target_match=primary_target_match,
         insight_neighborhood=insight_neighborhood,
         neighborhood_notes=neighborhood_notes,
     )
@@ -3308,13 +3580,12 @@ def _assemble_search_insight(
                 ),
             ),
         )
-    top_def_match = inputs.definition_matches[0] if inputs.definition_matches else None
     return _apply_search_semantic_insight(
         ctx=ctx,
         insight=insight,
         summary=inputs.summary,
         primary_target_finding=inputs.primary_target_finding,
-        top_definition_match=top_def_match,
+        primary_target_match=inputs.primary_target_match,
     )
 
 
@@ -3343,6 +3614,7 @@ def _assemble_smart_search_result(
         key_findings=_build_search_result_key_findings(inputs),
         evidence=[build_finding(m, ctx.root) for m in inputs.enriched_matches[:MAX_EVIDENCE]],
     )
+    _register_search_object_view(run_id=run.run_id, view=inputs.object_runtime.view)
     result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
     return assign_result_finding_ids(result)
 
@@ -3362,7 +3634,7 @@ def smart_search(
         Search query string.
     kwargs
         Optional overrides: mode, include_globs, exclude_globs, include_strings,
-        limits, tc, argv.
+        with_neighborhood, limits, tc, argv.
 
     Returns:
     -------
@@ -3372,6 +3644,7 @@ def smart_search(
     request = _coerce_search_request(root=root, query=query, kwargs=kwargs)
     ctx = _build_search_context(request)
     pipeline = SearchPipeline(ctx)
+    partition_started = ms()
     partition_results = pipeline.run_partitions(_run_language_partitions)
     mode_chain = [ctx.mode]
     if _should_fallback_to_literal(
@@ -3392,7 +3665,13 @@ def smart_search(
     elif not ctx.mode_chain:
         ctx = msgspec.structs.replace(ctx, mode_chain=(ctx.mode,))
 
+    assemble_started = ms()
     result = SearchPipeline(ctx).assemble(partition_results, _assemble_smart_search_result)
+    result.summary["search_stage_timings_ms"] = {
+        "partition": max(0.0, assemble_started - partition_started),
+        "assemble": max(0.0, ms() - assemble_started),
+        "total": max(0.0, ms() - ctx.started_ms),
+    }
     if ctx.run_id:
         for language in expand_language_scope(ctx.lang_scope):
             maybe_evict_run_cache_tag(root=ctx.root, language=language, run_id=ctx.run_id)
@@ -3414,5 +3693,6 @@ __all__ = [
     "classify_match",
     "collect_candidates",
     "compute_relevance_score",
+    "pop_search_object_view_for_run",
     "smart_search",
 ]

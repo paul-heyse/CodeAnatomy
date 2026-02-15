@@ -27,6 +27,7 @@ class SearchConfig(CqStruct, frozen=True):
     include_globs: list[str] | None = None
     exclude_globs: list[str] | None = None
     include_strings: bool = False
+    with_neighborhood: bool = False
     argv: list[str] = msgspec.field(default_factory=list)
     tc: Toolchain | None = None
     started_ms: float = 0.0
@@ -43,6 +44,7 @@ class SearchRequest(CqStruct, frozen=True):
     include_globs: list[str] | None = None
     exclude_globs: list[str] | None = None
     include_strings: bool = False
+    with_neighborhood: bool = False
     limits: SearchLimits | None = None
     tc: Toolchain | None = None
     argv: list[str] | None = None

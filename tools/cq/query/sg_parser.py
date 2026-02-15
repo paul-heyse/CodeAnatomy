@@ -33,6 +33,11 @@ from tools.cq.core.cache import (
     resolve_namespace_ttl_seconds,
     resolve_scope,
 )
+from tools.cq.core.cache.fragment_codecs import (
+    decode_fragment_payload,
+    encode_fragment_payload,
+    is_fragment_cache_payload,
+)
 from tools.cq.core.structs import CqStruct
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import RepoContext, resolve_repo_context
@@ -246,12 +251,13 @@ def _read_cached_file_inventory(
     namespace: str,
 ) -> list[Path] | None:
     cached = cache.get(cache_key)
-    record_cache_get(namespace=namespace, hit=isinstance(cached, dict), key=cache_key)
-    if not isinstance(cached, dict):
+    record_cache_get(namespace=namespace, hit=is_fragment_cache_payload(cached), key=cache_key)
+    payload = decode_fragment_payload(cached, type_=FileInventoryCacheV1)
+    if payload is None:
+        if is_fragment_cache_payload(cached):
+            record_cache_decode_failure(namespace=namespace)
         return None
-    try:
-        payload = msgspec.convert(cached, type=FileInventoryCacheV1)
-    except (RuntimeError, TypeError, ValueError):
+    if not isinstance(payload, FileInventoryCacheV1):
         record_cache_decode_failure(namespace=namespace)
         return None
     files = [root / rel for rel in payload.files]
@@ -275,7 +281,7 @@ def _write_cached_file_inventory(request: FileInventoryWriteRequestV1) -> None:
     )
     ok = request.cache.set(
         request.cache_key,
-        msgspec.to_builtins(payload),
+        encode_fragment_payload(payload),
         expire=ttl_seconds,
         tag=build_namespace_cache_tag(
             workspace=request.scope.root,

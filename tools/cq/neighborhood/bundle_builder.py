@@ -1,8 +1,4 @@
-"""Static semantic neighborhood bundle assembler.
-
-This implementation is structural-first and deliberately avoids runtime language
-server processes or protocol capability negotiation paths.
-"""
+"""Static semantic neighborhood bundle assembler."""
 
 from __future__ import annotations
 
@@ -10,12 +6,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-
-from tools.cq.core.definition_parser import extract_symbol_name
 from tools.cq.core.schema import ms
 from tools.cq.core.snb_schema import (
     ArtifactPointerV1,
@@ -28,9 +19,11 @@ from tools.cq.core.snb_schema import (
     SemanticNodeRefV1,
 )
 from tools.cq.core.structs import CqStruct
-from tools.cq.neighborhood.structural_collector import (
-    StructuralNeighborhoodCollectRequest,
-    collect_structural_neighborhood,
+from tools.cq.neighborhood.tree_sitter_collector import (
+    collect_tree_sitter_neighborhood,
+)
+from tools.cq.neighborhood.tree_sitter_contracts import (
+    TreeSitterNeighborhoodCollectRequest,
 )
 
 
@@ -40,7 +33,6 @@ class BundleBuildRequest(CqStruct, frozen=True):
     target_name: str
     target_file: str
     root: Path
-    snapshot: ScanSnapshot
     language: str = "python"
     symbol_hint: str | None = None
     top_k: int = 10
@@ -100,17 +92,18 @@ def plan_feasible_slices(
 def build_neighborhood_bundle(
     request: BundleBuildRequest,
 ) -> SemanticNeighborhoodBundleV1:
-    """Build semantic neighborhood bundle with structural assembly.
+    """Build semantic neighborhood bundle with tree-sitter assembly.
 
     Returns:
         SemanticNeighborhoodBundleV1: Assembled semantic neighborhood bundle payload.
     """
     started = ms()
-    slices, structural_degrades = collect_structural_neighborhood(
-        StructuralNeighborhoodCollectRequest(
+    collect_result = collect_tree_sitter_neighborhood(
+        TreeSitterNeighborhoodCollectRequest(
+            root=str(request.root),
             target_name=request.target_name,
             target_file=request.target_file,
-            snapshot=request.snapshot,
+            language=request.language,
             target_line=request.target_line,
             target_col=request.target_col,
             max_per_slice=request.top_k,
@@ -119,19 +112,19 @@ def build_neighborhood_bundle(
     )
 
     diagnostics = list(request.target_degrade_events)
-    diagnostics.extend(structural_degrades)
-    if request.enable_semantic_enrichment:
+    diagnostics.extend(collect_result.diagnostics)
+    if request.enable_semantic_enrichment and collect_result.slices:
         diagnostics.append(
             DegradeEventV1(
                 stage="semantic.enrichment",
                 severity="info",
-                category="structural_only",
-                message="Static neighborhood enrichment is structural-only in this cut",
+                category="tree_sitter_structural",
+                message="Neighborhood enrichment assembled from tree-sitter structural planes",
             )
         )
 
-    merged_slices = _merge_slices(tuple(slices), request.top_k)
-    subject = _build_subject_node(request)
+    merged_slices = _merge_slices(tuple(collect_result.slices), request.top_k)
+    subject = collect_result.subject or _build_fallback_subject_node(request)
     graph = _build_graph_summary(tuple(merged_slices))
     artifacts = _store_artifacts_with_preview(request.artifact_dir, merged_slices)
 
@@ -209,21 +202,7 @@ def _generate_bundle_id(request: BundleBuildRequest) -> str:
     return f"snb.{digest}"
 
 
-def _build_subject_node(request: BundleBuildRequest) -> SemanticNodeRefV1 | None:
-    for record in request.snapshot.def_records:
-        if record.file != request.target_file:
-            continue
-        name = extract_symbol_name(record.text, fallback="")
-        if name != request.target_name:
-            continue
-        return SemanticNodeRefV1(
-            node_id=f"subject:{record.file}:{record.start_line}:{name}",
-            kind=record.kind,
-            name=name,
-            display_label=name,
-            file_path=record.file,
-        )
-
+def _build_fallback_subject_node(request: BundleBuildRequest) -> SemanticNodeRefV1:
     fallback_name = request.target_name or (request.symbol_hint or "target")
     return SemanticNodeRefV1(
         node_id=f"subject:{request.target_file}:{request.target_line or 0}:{fallback_name}",

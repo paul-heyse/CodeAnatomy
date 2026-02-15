@@ -18,19 +18,35 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+import msgspec
+
+from tools.cq.search.tree_sitter_injections import build_injection_plan
+from tools.cq.search.tree_sitter_runtime import run_bounded_query_captures
+from tools.cq.search.tree_sitter_runtime_contracts import (
+    QueryExecutionSettingsV1,
+    QueryWindowV1,
+)
+from tools.cq.search.tree_sitter_rust_bundle import (
+    load_rust_grammar_bundle,
+    load_rust_query_sources,
+)
+from tools.cq.search.tree_sitter_tags import build_tag_events
+
 if TYPE_CHECKING:
-    from tree_sitter import Language, Node, Parser, Tree
+    from tree_sitter import Language, Node, Parser, Query, Tree
 
 try:
     import tree_sitter_rust as _tree_sitter_rust
     from tree_sitter import Language as _TreeSitterLanguage
     from tree_sitter import Parser as _TreeSitterParser
     from tree_sitter import Point as _TreeSitterPoint
+    from tree_sitter import Query as _TreeSitterQuery
 except ImportError:  # pragma: no cover - exercised via availability checks
     _tree_sitter_rust = None
     _TreeSitterLanguage = None
     _TreeSitterParser = None
     _TreeSitterPoint = None
+    _TreeSitterQuery = None
 
 _SCOPE_KINDS: tuple[str, ...] = (
     "function_item",
@@ -66,6 +82,7 @@ _DEFAULT_SCOPE_DEPTH = 24
 _MAX_SCOPE_NODES = 256
 MAX_SOURCE_BYTES = 5 * 1024 * 1024  # 5 MB
 _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
+_QUERY_MATCH_LIMIT = 4_096
 
 # ---------------------------------------------------------------------------
 # Payload bounds constants
@@ -321,6 +338,68 @@ def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
         "cache_misses": _CACHE_STATS.misses,
         "cache_evictions": _CACHE_STATS.evictions,
     }
+
+
+@lru_cache(maxsize=128)
+def _compile_query(pack_name: str, source: str) -> Query:
+    if _TreeSitterQuery is None:
+        msg = "tree_sitter query bindings are unavailable"
+        raise RuntimeError(msg)
+    _ = pack_name
+    return _TreeSitterQuery(_rust_language(), source)
+
+
+def _pack_sources() -> tuple[tuple[str, str], ...]:
+    sources = load_rust_query_sources(include_distribution_queries=False)
+    return tuple(
+        (source.pack_name, source.source) for source in sources if source.pack_name.endswith(".scm")
+    )
+
+
+def _capture_texts_from_captures(
+    captures: dict[str, list[Node]],
+    source_bytes: bytes,
+    *capture_names: str,
+    limit: int = 8,
+) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for capture_name in capture_names:
+        for captured in captures.get(capture_name, []):
+            text = _node_text(captured, source_bytes)
+            if text is None or text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def _collect_query_pack_captures(
+    *,
+    root: Node,
+    window: QueryWindowV1,
+    settings: QueryExecutionSettingsV1,
+) -> tuple[dict[str, list[Node]], dict[str, object]]:
+    captures: dict[str, list[Node]] = {}
+    query_telemetry: dict[str, object] = {}
+    for pack_name, query_source in _pack_sources():
+        try:
+            query = _compile_query(pack_name, query_source)
+            pack_captures, telemetry = run_bounded_query_captures(
+                query,
+                root,
+                windows=(window,),
+                settings=settings,
+            )
+        except _ENRICHMENT_ERRORS:
+            continue
+        query_telemetry[pack_name] = msgspec.to_builtins(telemetry)
+        for capture_name, nodes in pack_captures.items():
+            bucket = captures.setdefault(capture_name, [])
+            bucket.extend(nodes)
+    return captures, query_telemetry
 
 
 # ---------------------------------------------------------------------------
@@ -1247,6 +1326,77 @@ def _build_enrichment_payload(
     return payload
 
 
+def _collect_query_pack_payload(
+    *,
+    root: Node,
+    source_bytes: bytes,
+    byte_start: int,
+    byte_end: int,
+) -> dict[str, object]:
+    if byte_end <= byte_start:
+        return {}
+
+    window = QueryWindowV1(start_byte=byte_start, end_byte=byte_end)
+    settings = QueryExecutionSettingsV1(match_limit=_QUERY_MATCH_LIMIT)
+    captures, query_telemetry = _collect_query_pack_captures(
+        root=root,
+        window=window,
+        settings=settings,
+    )
+
+    payload: dict[str, object] = {}
+    if query_telemetry:
+        payload["query_pack_telemetry"] = query_telemetry
+
+    definitions = _capture_texts_from_captures(
+        captures,
+        source_bytes,
+        "def.function.name",
+        "def.struct.name",
+        "def.enum.name",
+        "def.trait.name",
+        "def.module.name",
+        "def.macro.name",
+    )
+    references = _capture_texts_from_captures(
+        captures,
+        source_bytes,
+        "ref.identifier",
+        "ref.scoped.name",
+        "ref.use.path",
+        "ref.macro.path",
+    )
+    calls = _capture_texts_from_captures(
+        captures,
+        source_bytes,
+        "call.target",
+        "call.macro.path",
+    )
+    imports = _capture_texts_from_captures(
+        captures,
+        source_bytes,
+        "import.path",
+        "import.extern.name",
+    )
+
+    payload["rust_tree_sitter_facts"] = {
+        "definitions": definitions,
+        "references": references,
+        "calls": calls,
+        "imports": imports,
+    }
+    payload["query_pack_bundle"] = msgspec.to_builtins(
+        load_rust_grammar_bundle(include_distribution_queries=False)
+    )
+    payload["query_pack_tags"] = msgspec.to_builtins(
+        build_tag_events(source_bytes, captures=captures)
+    )
+    payload["query_pack_injections"] = msgspec.to_builtins(
+        build_injection_plan(source_bytes, captures=captures, default_language="rust")
+    )
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------------
@@ -1292,9 +1442,21 @@ def enrich_rust_context(
         if node is None:
             return None
         scope = _find_scope(node, max_depth=max_scope_depth)
-        return _build_enrichment_payload(node, scope, source_bytes, max_scope_depth=max_scope_depth)
+        payload = _build_enrichment_payload(
+            node, scope, source_bytes, max_scope_depth=max_scope_depth
+        )
+        payload.update(
+            _collect_query_pack_payload(
+                root=tree.root_node,
+                source_bytes=source_bytes,
+                byte_start=int(getattr(node, "start_byte", 0)),
+                byte_end=int(getattr(node, "end_byte", 0)),
+            )
+        )
     except _ENRICHMENT_ERRORS:
         return None
+    else:
+        return payload
 
 
 def enrich_rust_context_by_byte_range(
@@ -1341,9 +1503,21 @@ def enrich_rust_context_by_byte_range(
         if node is None:
             return None
         scope = _find_scope(node, max_depth=max_scope_depth)
-        return _build_enrichment_payload(node, scope, source_bytes, max_scope_depth=max_scope_depth)
+        payload = _build_enrichment_payload(
+            node, scope, source_bytes, max_scope_depth=max_scope_depth
+        )
+        payload.update(
+            _collect_query_pack_payload(
+                root=tree.root_node,
+                source_bytes=source_bytes,
+                byte_start=byte_start,
+                byte_end=byte_end,
+            )
+        )
     except _ENRICHMENT_ERRORS:
         return None
+    else:
+        return payload
 
 
 __all__ = [

@@ -156,11 +156,60 @@ def build_namespace_cache_tag(
     )
 
 
+def build_search_artifact_cache_key(
+    *,
+    workspace: str,
+    run_id: str,
+    query: str,
+    macro: str = "search",
+) -> str:
+    """Build deterministic cache key for one search artifact bundle.
+
+    Returns:
+        str: Cache key for the search artifact bundle.
+    """
+    return build_cache_key(
+        "search_artifacts",
+        version="v1",
+        workspace=workspace,
+        language="auto",
+        target=run_id,
+        extras={
+            "query": query,
+            "macro": macro,
+        },
+    )
+
+
+def build_search_artifact_index_key(
+    *,
+    workspace: str,
+    run_id: str,
+) -> str:
+    """Build deterministic cache key for a run-scoped search artifact index.
+
+    Returns:
+        str: Cache key for the run-scoped search artifact index.
+    """
+    return build_cache_key(
+        "search_artifacts",
+        version="v1",
+        workspace=workspace,
+        language="auto",
+        target=f"index:{run_id}",
+        extras={
+            "kind": "index",
+        },
+    )
+
+
 __all__ = [
     "build_cache_key",
     "build_cache_tag",
     "build_namespace_cache_tag",
     "build_run_cache_tag",
     "build_scope_hash",
+    "build_search_artifact_cache_key",
+    "build_search_artifact_index_key",
     "canonicalize_cache_payload",
 ]

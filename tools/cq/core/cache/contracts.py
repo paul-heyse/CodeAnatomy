@@ -8,6 +8,8 @@ import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import RecordType
 from tools.cq.core.structs import CqCacheStruct
+from tools.cq.search.object_resolution_contracts import SearchObjectSummaryV1, SearchOccurrenceV1
+from tools.cq.search.tree_sitter_artifact_contracts import TreeSitterArtifactBundleV1
 
 NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
 
@@ -96,14 +98,48 @@ class CallsTargetCacheV1(CqCacheStruct, frozen=True):
     snapshot_digest: str | None = None
 
 
+class SearchArtifactBundleV1(CqCacheStruct, frozen=True):
+    """Cache-backed object-resolved search artifact bundle."""
+
+    run_id: str
+    query: str
+    macro: str = "search"
+    summary: dict[str, object] = msgspec.field(default_factory=dict)
+    object_summaries: list[SearchObjectSummaryV1] = msgspec.field(default_factory=list)
+    occurrences: list[SearchOccurrenceV1] = msgspec.field(default_factory=list)
+    diagnostics: dict[str, object] = msgspec.field(default_factory=dict)
+    snippets: dict[str, str] = msgspec.field(default_factory=dict)
+    created_ms: float = 0.0
+
+
+class SearchArtifactIndexEntryV1(CqCacheStruct, frozen=True):
+    """Index row for one cache-backed search artifact bundle."""
+
+    run_id: str
+    cache_key: str
+    query: str
+    macro: str = "search"
+    created_ms: float = 0.0
+
+
+class SearchArtifactIndexV1(CqCacheStruct, frozen=True):
+    """Run-scoped index of cache-backed search artifact bundles."""
+
+    entries: list[SearchArtifactIndexEntryV1] = msgspec.field(default_factory=list)
+
+
 __all__ = [
     "CallsTargetCacheV1",
     "PatternFragmentCacheV1",
     "QueryEntityScanCacheV1",
     "ScopeFileStatCacheV1",
     "ScopeSnapshotCacheV1",
+    "SearchArtifactBundleV1",
+    "SearchArtifactIndexEntryV1",
+    "SearchArtifactIndexV1",
     "SearchCandidatesCacheV1",
     "SearchEnrichmentAnchorCacheV1",
     "SearchPartitionCacheV1",
     "SgRecordCacheV1",
+    "TreeSitterArtifactBundleV1",
 ]

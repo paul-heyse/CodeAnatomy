@@ -316,7 +316,7 @@
       "counts": {
         "diagnostics": 0,
         "injections": 0,
-        "locals": 2,
+        "locals": 3,
         "semantic_tokens": 3
       },
       "degradation": [],
@@ -327,11 +327,15 @@
         "locals": [
           {
             "kind": "scope",
-            "name": "module"
+            "name": "<module>"
           },
           {
             "kind": "qualified_name",
-            "name": "execute_plan"
+            "name": "ExecutePlanRequestV1"
+          },
+          {
+            "kind": "qualified_name",
+            "name": "execute_plan.ExecutePlanRequestV1"
           }
         ],
         "semantic_tokens": [
@@ -352,7 +356,7 @@
       "sources": [
         "ast_grep",
         "python_ast",
-        "libcst",
+        "python_resolution",
         "tree_sitter"
       ],
       "version": "cq.semantic_planes.v2"

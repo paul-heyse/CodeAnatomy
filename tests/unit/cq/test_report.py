@@ -97,8 +97,16 @@ def _sleeping_pid_worker(
 
 
 def test_render_summary_compacts_output() -> None:
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q", "entity=function name=build_graph"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=12.0,
+        toolchain={},
+    )
     result = CqResult(
-        run=_run_meta(),
+        run=run,
         summary={
             "query": "build_graph",
             "mode": "identifier",
@@ -117,6 +125,30 @@ def test_render_summary_compacts_output() -> None:
     assert '"query":"build_graph"' in output
     assert '"mode":"identifier"' in output
     assert "- **query**:" not in output
+
+
+def test_render_search_hides_summary_and_context_blocks() -> None:
+    finding = Finding(
+        category="definition",
+        message="build_graph (src/module.py)",
+        anchor=Anchor(file="src/module.py", line=10),
+        details=DetailPayload.from_legacy(
+            {
+                "language": "python",
+                "context_window": {"start_line": 5, "end_line": 20},
+                "context_snippet": "def build_graph():\n    target = 1",
+            }
+        ),
+    )
+    result = CqResult(
+        run=_run_meta(),
+        summary={"query": "build_graph", "mode": "identifier"},
+        key_findings=[finding],
+        sections=[Section(title="Resolved Objects", findings=[finding])],
+    )
+    output = render_markdown(result)
+    assert "## Summary" not in output
+    assert "Context (lines" not in output
 
 
 def test_render_finding_includes_enrichment_tables() -> None:
@@ -254,8 +286,9 @@ def test_render_hides_unresolved_facts_by_default() -> None:
         ),
     )
     output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
-    assert "N/A — not resolved" in output
-    assert "Diagnostics" in output
+    assert "N/A — not resolved" not in output
+    assert "N/A — not applicable" not in output
+    assert "Identity" in output
 
 
 def test_render_can_show_unresolved_facts_with_env(
@@ -281,6 +314,28 @@ def test_render_can_show_unresolved_facts_with_env(
     )
     output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
     assert "N/A — not resolved" in output
+    assert "N/A — not applicable" not in output
+
+
+def test_render_falls_back_to_top_level_enrichment_when_nested_language_payload_empty() -> None:
+    finding = Finding(
+        category="reference",
+        message="reference: stable_id",
+        anchor=Anchor(file="src/module.py", line=12, col=8),
+        details=DetailPayload.from_legacy(
+            {
+                "language": "python",
+                "enrichment": {
+                    "language": "python",
+                    "python": {},
+                    "item_role": "callsite",
+                },
+            }
+        ),
+    )
+    output = render_markdown(CqResult(run=_run_meta(), key_findings=[finding]))
+    assert "Language: python" in output
+    assert "Symbol Role: callsite" in output
 
 
 def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None:
@@ -488,7 +543,14 @@ def test_render_enrichment_parallelization_workers_1_vs_4(
 
 
 def test_render_markdown_keeps_compact_diagnostics_without_payload_dump() -> None:
-    run = _run_meta()
+    run = RunMeta(
+        macro="q",
+        argv=["cq", "q", "entity=function name=target"],
+        root=".",
+        started_ms=0.0,
+        elapsed_ms=12.0,
+        toolchain={},
+    )
     result = CqResult(
         run=run,
         summary={

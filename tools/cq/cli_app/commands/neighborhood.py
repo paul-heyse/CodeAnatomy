@@ -37,7 +37,6 @@ def neighborhood(
         RuntimeError: If CLI context is not injected.
     """
     from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
-    from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
     from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
     from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
 
@@ -48,17 +47,12 @@ def neighborhood(
     started = ms()
     run_id = uuid7_str()
     resolved_lang = lang if lang in {"python", "rust"} else "python"
-    snapshot = ScanSnapshot.build_from_repo(
-        ctx.root,
-        lang=resolved_lang,
-        run_id=run_id,
-    )
 
     spec = parse_target_spec(target)
     resolved = resolve_target(
         spec,
-        snapshot,
         root=ctx.root,
+        language=resolved_lang,
         allow_symbol_fallback=True,
     )
 
@@ -69,8 +63,7 @@ def neighborhood(
         target_col=resolved.target_col,
         target_uri=resolved.target_uri,
         root=ctx.root,
-        snapshot=snapshot,
-        language=lang,
+        language=resolved_lang,
         symbol_hint=resolved.symbol_hint,
         top_k=top_k,
         enable_semantic_enrichment=not no_semantic_enrichment,
@@ -94,7 +87,7 @@ def neighborhood(
             run=run,
             bundle=bundle,
             target=target,
-            language=lang,
+            language=resolved_lang,
             top_k=top_k,
             enable_semantic_enrichment=not no_semantic_enrichment,
             semantic_env=_semantic_env_from_bundle(bundle),

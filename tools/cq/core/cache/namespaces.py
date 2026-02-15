@@ -20,6 +20,7 @@ _DEFAULT_NAMESPACE_TTLS_SECONDS: dict[str, int] = {
     "neighborhood_fragment": 600,
     "file_inventory": 180,
     "scope_snapshot": 180,
+    "search_artifacts": 86_400,
 }
 
 

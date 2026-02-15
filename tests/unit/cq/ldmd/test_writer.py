@@ -14,8 +14,8 @@ from tools.cq.ldmd.writer import render_ldmd_from_cq_result
 
 def _sample_result() -> CqResult:
     run = mk_runmeta(
-        macro="search",
-        argv=["cq", "search", "foo"],
+        macro="q",
+        argv=["cq", "q", "entity=function name=foo"],
         root="/repo",
         started_ms=0.0,
         toolchain={"python": "3.13"},
@@ -42,7 +42,7 @@ def _sample_result() -> CqResult:
     ]
     result.sections = [
         Section(
-            title="Top Contexts",
+            title="Definitions",
             findings=[
                 Finding(category="context", message=f"context-{index}") for index in range(1, 8)
             ],

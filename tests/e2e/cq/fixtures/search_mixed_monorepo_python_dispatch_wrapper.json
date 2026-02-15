@@ -14,21 +14,33 @@
       "title": "Target Candidates"
     },
     {
-      "count": 3,
+      "count": 7,
       "messages": [
-        "Sibling Definitions: 9 (top: trace, decorate, wrapped, Backend, dispatch)",
-        "Functions Called: 2 (top: LocalBackend, resolver)",
-        "Callers: 1 (top: _inner)"
+        "Enclosing Context: 1 (top: @trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or ...)",
+        "Parent Scopes: 2 (top: @trace(\"runtime\")\ndef dispatch_wrapper(payload: str, backend: Backend | None = None) -> str:\n    active = backend or ..., from __future__ import annotations\n\nfrom abc import ABC, abstractmethod\nfrom collections.abc import Callable\n\n\ndef tr...)",
+        "Children: 4 (top: dispatch_wrapper, (payload: str, backend: Backend | None = None), str, active = backend or LocalBackend()\n    resolver: Callable[[str], str] = active.dispatch\n    return resolver(payload))",
+        "Siblings: 3 (top: @trace(\"runtime\"), LocalBackend, make_pipeline)",
+        "Conjunction Peers: 1 (top: @trace(\"runtime\"))",
+        "Callers: 1 (top: dispatch_wrapper(value))",
+        "Callees: 2 (top: LocalBackend(), resolver(payload))"
       ],
       "title": "Neighborhood Preview"
     },
     {
       "count": 2,
       "messages": [
-        "dispatch_wrapper (./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py)",
-        "_inner (./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py)"
+        "function: dispatch_wrapper (1 occurrences) [object_id=obj_1d591aa7c5bd4178092fd052]",
+        "reference: dispatch_wrapper (1 occurrences) [object_id=obj_d35ab55b5fb107e74c81fa1b]"
       ],
-      "title": "Top Contexts"
+      "title": "Resolved Objects"
+    },
+    {
+      "count": 2,
+      "messages": [
+        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:30:4 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:30-35) [reference] [object_id=obj_1d591aa7c5bd4178092fd052] [line_id=e01572781dbc4b12c652d1ca]",
+        "dispatch_wrapper: ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:38:27 (block ./tests/e2e/cq/_golden_workspace/mixed_monorepo/services/python_service/app/pipeline.py:37-40) [reference] [object_id=obj_d35ab55b5fb107e74c81fa1b] [line_id=4c4cebffee73a9ba0018e914]"
+      ],
+      "title": "Occurrences"
     },
     {
       "count": 1,
@@ -54,13 +66,13 @@
         "telemetry": false
       },
       "degradation": {
-        "semantic": "skipped",
         "notes": [
           "not_attempted_by_design",
           "not_attempted_runtime_disabled"
         ],
         "scan": "ok",
-        "scope_filter": "none"
+        "scope_filter": "none",
+        "semantic": "skipped"
       },
       "neighborhood": {
         "callees": {
@@ -73,7 +85,7 @@
         },
         "hierarchy_or_scope": {
           "availability": "full",
-          "total": 9
+          "total": 11
         },
         "references": {
           "availability": "unavailable",
@@ -105,7 +117,6 @@
     "language_order": [
       "python"
     ],
-    "semantic_planes_present": false,
     "mode": "identifier",
     "plan_version": null,
     "python_semantic_telemetry": {
@@ -123,6 +134,7 @@
       "skipped": 0,
       "timed_out": 0
     },
+    "semantic_planes_present": false,
     "steps": null,
     "target": null,
     "target_file": null,

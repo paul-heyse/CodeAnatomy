@@ -52,6 +52,7 @@ class SearchOptions(CommonFilters, frozen=True):
     regex: bool = False
     literal: bool = False
     include_strings: bool = False
+    with_neighborhood: bool = False
     in_dir: str | None = None
     lang: str = "auto"
 

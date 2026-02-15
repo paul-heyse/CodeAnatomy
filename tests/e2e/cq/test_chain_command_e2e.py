@@ -25,6 +25,7 @@ def test_chain_search_and_q_steps_golden(
             "AsyncService",
             "--in",
             "tests/e2e/cq/_golden_workspace/python_project",
+            "--with-neighborhood",
             "AND",
             "q",
             "entity=function name=resolve in=tests/e2e/cq/_golden_workspace/python_project/app",

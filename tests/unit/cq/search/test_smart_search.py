@@ -499,8 +499,8 @@ class TestBuildSummary:
 class TestBuildSections:
     """Tests for section construction."""
 
-    def test_sections_include_top_contexts(self, sample_repo: Path) -> None:
-        """Test that Top Contexts section is included."""
+    def test_sections_include_resolved_objects(self, sample_repo: Path) -> None:
+        """Object-resolved output should include a deduplicated object section."""
         matches = [
             EnrichedMatch(
                 span=_span("src/module.py", 1, 0),
@@ -513,10 +513,10 @@ class TestBuildSections:
         ]
         sections = build_sections(matches, sample_repo, "build_graph", QueryMode.IDENTIFIER)
         titles = [s.title for s in sections]
-        assert "Top Contexts" in titles
+        assert "Resolved Objects" in titles
 
-    def test_sections_include_definitions_for_identifier(self, sample_repo: Path) -> None:
-        """Test that Definitions section is included for identifier mode."""
+    def test_sections_include_occurrences_for_identifier(self, sample_repo: Path) -> None:
+        """Identifier mode should include explicit occurrence rows."""
         matches = [
             EnrichedMatch(
                 span=_span("src/module.py", 1, 0),
@@ -529,7 +529,7 @@ class TestBuildSections:
         ]
         sections = build_sections(matches, sample_repo, "build_graph", QueryMode.IDENTIFIER)
         titles = [s.title for s in sections]
-        assert "Definitions" in titles
+        assert "Occurrences" in titles
 
     def test_non_code_matches_collapsed(self, sample_repo: Path) -> None:
         """Test that non-code matches section is collapsed."""
@@ -548,8 +548,8 @@ class TestBuildSections:
         if non_code_section:
             assert non_code_section.collapsed is True
 
-    def test_sections_group_by_scope(self, sample_repo: Path) -> None:
-        """Top contexts should group by containing scope within a file."""
+    def test_occurrences_include_block_ranges(self, sample_repo: Path) -> None:
+        """Occurrence rows should surface location + enclosing block range."""
         matches = [
             EnrichedMatch(
                 span=_span("src/module.py", 10, 4),
@@ -580,14 +580,29 @@ class TestBuildSections:
             ),
         ]
         sections = build_sections(matches, sample_repo, "build_graph", QueryMode.IDENTIFIER)
-        top_contexts = sections[0]
-        messages = {f.message for f in top_contexts.findings}
-        assert "helper (src/module.py)" in messages
-        assert "worker (src/module.py)" in messages
-        assert len(top_contexts.findings) == 2
+        resolved_section = next(s for s in sections if s.title == "Resolved Objects")
+        assert resolved_section.findings
+        assert "object_id=" in resolved_section.findings[0].message
+        resolved_occurrence_total = 0
+        for finding in resolved_section.findings:
+            resolved_occurrences = finding.details.get("occurrences")
+            assert isinstance(resolved_occurrences, list)
+            resolved_occurrence_total += len(resolved_occurrences)
+            if resolved_occurrences:
+                first_resolved_occurrence = resolved_occurrences[0]
+                assert isinstance(first_resolved_occurrence, dict)
+                assert "line_id" in first_resolved_occurrence
+                assert isinstance(first_resolved_occurrence.get("block_ref"), str)
+        assert resolved_occurrence_total == 3
+
+        occurrences_section = next(s for s in sections if s.title == "Occurrences")
+        assert len(occurrences_section.findings) == 3
+        assert all("block" in finding.message for finding in occurrences_section.findings)
+        assert all("line_id=" in finding.message for finding in occurrences_section.findings)
+        assert all("object_id=" in finding.message for finding in occurrences_section.findings)
 
     def test_sections_include_strings_when_enabled(self, sample_repo: Path) -> None:
-        """Non-code matches should only appear in top contexts when include_strings is set."""
+        """Non-code matches should surface in occurrence rows when include_strings is set."""
         matches = [
             EnrichedMatch(
                 span=_span("src/module.py", 2, 0),
@@ -599,7 +614,8 @@ class TestBuildSections:
             )
         ]
         sections = build_sections(matches, sample_repo, "build_graph", QueryMode.IDENTIFIER)
-        assert sections[0].findings == []
+        occurrences_section = next(s for s in sections if s.title == "Occurrences")
+        assert occurrences_section.findings == []
         sections_with_strings = build_sections(
             matches,
             sample_repo,
@@ -607,7 +623,10 @@ class TestBuildSections:
             QueryMode.IDENTIFIER,
             include_strings=True,
         )
-        assert len(sections_with_strings[0].findings) == 1
+        with_strings_occurrences = next(
+            s for s in sections_with_strings if s.title == "Occurrences"
+        )
+        assert len(with_strings_occurrences.findings) == 1
 
 
 class TestSmartSearch:  # noqa: PLR0904
@@ -796,7 +815,8 @@ class TestSmartSearch:  # noqa: PLR0904
         result = smart_search(sample_repo, "build_graph")
         assert len(result.sections) > 0
         titles = [section.title for section in result.sections]
-        assert "Top Contexts" in titles
+        assert "Resolved Objects" in titles
+        assert "Occurrences" in titles
         assert "Target Candidates" in titles
 
     def test_smart_search_key_findings(self, sample_repo: Path) -> None:
@@ -805,7 +825,13 @@ class TestSmartSearch:  # noqa: PLR0904
         result = smart_search(sample_repo, "build_graph")
         assert len(result.key_findings) > 0 or len(result.sections) == 0
         first = result.key_findings[0]
-        assert first.category in {"definition", "context", "from_import", "import", "callsite"}
+        assert first.category in {
+            "definition",
+            "resolved_object",
+            "from_import",
+            "import",
+            "callsite",
+        }
 
     def test_search_insight_target_grounded_from_definitions(self, sample_repo: Path) -> None:
         """Insight target should resolve to a definition location when available."""
@@ -851,9 +877,16 @@ class TestSmartSearch:  # noqa: PLR0904
     ) -> None:
         """Resolved definition targets should include a neighborhood preview section."""
         clear_caches()
-        result = smart_search(sample_repo, "build_graph")
+        result = smart_search(sample_repo, "build_graph", with_neighborhood=True)
         titles = [section.title for section in result.sections]
         assert "Neighborhood Preview" in titles
+
+    def test_search_neighborhood_preview_disabled_by_default(self, sample_repo: Path) -> None:
+        """Neighborhood preview should be opt-in for search latency control."""
+        clear_caches()
+        result = smart_search(sample_repo, "build_graph")
+        titles = [section.title for section in result.sections]
+        assert "Neighborhood Preview" not in titles
 
     def test_search_degradation_notes_are_deduplicated(self, sample_repo: Path) -> None:
         """Degradation notes should avoid duplicate status markers."""

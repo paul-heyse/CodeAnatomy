@@ -256,6 +256,8 @@ def _emit_run_meta(lines: list[str], result: CqResult) -> None:
 
 
 def _emit_summary(lines: list[str], result: CqResult) -> None:
+    if result.run.macro == "search":
+        return
     if not result.summary:
         return
     from tools.cq.core.report import compact_summary_for_rendering

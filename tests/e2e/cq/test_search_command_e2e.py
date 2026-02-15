@@ -12,6 +12,14 @@ from tests.e2e.cq._support.goldens import assert_json_snapshot_data, load_golden
 from tests.e2e.cq._support.projections import result_snapshot_projection
 from tests.e2e.cq._support.specs import assert_result_matches_spec
 
+_ALLOWED_INSIGHT_TARGET_KINDS = {
+    "function",
+    "class",
+    "type",
+    "module",
+    "reference",
+}
+
 
 @pytest.mark.e2e
 def test_search_python_workspace_golden(
@@ -26,6 +34,7 @@ def test_search_python_workspace_golden(
             "tests/e2e/cq/_golden_workspace/python_project",
             "--lang",
             "python",
+            "--with-neighborhood",
             "--format",
             "json",
             "--no-save-artifact",
@@ -38,7 +47,7 @@ def test_search_python_workspace_golden(
     assert isinstance(insight, dict)
     target = insight.get("target")
     assert isinstance(target, dict)
-    assert target.get("kind") in {"function", "class", "type"}
+    assert target.get("kind") in _ALLOWED_INSIGHT_TARGET_KINDS
     assert any(section.title == "Neighborhood Preview" for section in result.sections)
     assert_json_snapshot_data(
         "search_python_asyncservice.json",
@@ -60,6 +69,7 @@ def test_search_rust_workspace_golden(
             "tests/e2e/cq/_golden_workspace/rust_workspace",
             "--lang",
             "rust",
+            "--with-neighborhood",
             "--format",
             "json",
             "--no-save-artifact",
@@ -72,7 +82,7 @@ def test_search_rust_workspace_golden(
     assert isinstance(insight, dict)
     target = insight.get("target")
     assert isinstance(target, dict)
-    assert target.get("kind") in {"function", "class", "type"}
+    assert target.get("kind") in _ALLOWED_INSIGHT_TARGET_KINDS
     rust_semantic_telemetry = result.summary.get("rust_semantic_telemetry")
     assert isinstance(rust_semantic_telemetry, dict)
     assert {"attempted", "applied", "failed", "timed_out"}.issubset(rust_semantic_telemetry.keys())
@@ -143,6 +153,7 @@ def test_search_mixed_monorepo_rust_nested_workspace_golden(
             "tests/e2e/cq/_golden_workspace/mixed_monorepo",
             "--lang",
             "rust",
+            "--with-neighborhood",
             "--format",
             "json",
             "--no-save-artifact",
@@ -155,7 +166,7 @@ def test_search_mixed_monorepo_rust_nested_workspace_golden(
     assert isinstance(insight, dict)
     target = insight.get("target")
     assert isinstance(target, dict)
-    assert target.get("kind") in {"function", "class", "type"}
+    assert target.get("kind") in _ALLOWED_INSIGHT_TARGET_KINDS
     rust_semantic_telemetry = result.summary.get("rust_semantic_telemetry")
     assert isinstance(rust_semantic_telemetry, dict)
     assert_json_snapshot_data(
@@ -178,6 +189,7 @@ def test_search_mixed_monorepo_python_nested_workspace_golden(
             "tests/e2e/cq/_golden_workspace/mixed_monorepo",
             "--lang",
             "python",
+            "--with-neighborhood",
             "--format",
             "json",
             "--no-save-artifact",
@@ -190,7 +202,7 @@ def test_search_mixed_monorepo_python_nested_workspace_golden(
     assert isinstance(insight, dict)
     target = insight.get("target")
     assert isinstance(target, dict)
-    assert target.get("kind") in {"function", "class", "type"}
+    assert target.get("kind") in _ALLOWED_INSIGHT_TARGET_KINDS
     python_semantic_telemetry = result.summary.get("python_semantic_telemetry")
     assert isinstance(python_semantic_telemetry, dict)
     assert_json_snapshot_data(

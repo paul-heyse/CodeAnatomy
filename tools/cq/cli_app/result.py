@@ -10,7 +10,9 @@ from tools.cq.core.artifacts import (
     save_artifact_json,
     save_diagnostics_artifact,
     save_neighborhood_overflow_artifact,
+    save_search_artifact_bundle_cache,
 )
+from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 from tools.cq.core.findings_table import (
     FindingsTableOptions,
     apply_filters,
@@ -158,14 +160,13 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
     int
         Exit code (0 for success).
     """
-    from tools.cq.cli_app.context import CliTextResult, FilterConfig
+    from tools.cq.cli_app.context import FilterConfig
     from tools.cq.cli_app.types import OutputFormat
+    from tools.cq.search.smart_search import pop_search_object_view_for_run
 
-    # For non-CqResult (e.g., admin command with int exit code, or CliTextResult)
-    if not cli_result.is_cq_result:
-        if isinstance(cli_result.result, CliTextResult):
-            sys.stdout.write(f"{cli_result.result.text}\n")
-        return cli_result.get_exit_code()
+    non_cq_exit = _handle_non_cq_result(cli_result)
+    if non_cq_exit is not None:
+        return non_cq_exit
 
     ctx = cli_result.context
     result = cli_result.result
@@ -175,9 +176,7 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
     artifact_dir = str(ctx.artifact_dir) if ctx.artifact_dir else None
     no_save = not ctx.save_artifact
 
-    # Determine filters: explicit param > result.filters > empty
-    if filters is None:
-        filters = cli_result.filters if cli_result.filters else FilterConfig()
+    filters = _resolve_filters(cli_result, filters, FilterConfig)
 
     # Apply filters
     result = apply_result_filters(result, filters)
@@ -185,27 +184,168 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
 
     assign_result_finding_ids(result)
 
-    # Save artifact unless disabled
-    if not no_save:
-        artifact = save_artifact_json(result, artifact_dir)
-        result.artifacts.append(artifact)
-        diagnostics_artifact = save_diagnostics_artifact(result, artifact_dir)
-        if diagnostics_artifact is not None:
-            result.artifacts.append(diagnostics_artifact)
-        overflow_artifact = save_neighborhood_overflow_artifact(result, artifact_dir)
-        if overflow_artifact is not None:
-            result.artifacts.append(overflow_artifact)
-        _attach_insight_artifact_refs(
-            result,
-            diagnostics_ref=diagnostics_artifact.path if diagnostics_artifact is not None else None,
-            telemetry_ref=diagnostics_artifact.path if diagnostics_artifact is not None else None,
-            neighborhood_overflow_ref=(
-                overflow_artifact.path if overflow_artifact is not None else None
-            ),
-        )
+    _handle_artifact_persistence(
+        result=result,
+        artifact_dir=artifact_dir,
+        no_save=no_save,
+        pop_search_object_view_for_run=pop_search_object_view_for_run,
+    )
 
     # Render and output
     output = render_result(result, output_format)
     sys.stdout.write(f"{output}\n")
 
     return 0
+
+
+def _handle_non_cq_result(cli_result: CliResult) -> int | None:
+    from tools.cq.cli_app.context import CliTextResult
+
+    if cli_result.is_cq_result:
+        return None
+    if isinstance(cli_result.result, CliTextResult):
+        sys.stdout.write(f"{cli_result.result.text}\n")
+    return cli_result.get_exit_code()
+
+
+def _resolve_filters(
+    cli_result: CliResult,
+    filters: FilterConfig | None,
+    filter_type: type[FilterConfig],
+) -> FilterConfig:
+    if filters is not None:
+        return filters
+    return cli_result.filters if cli_result.filters else filter_type()
+
+
+def _handle_artifact_persistence(
+    *,
+    result: CqResult,
+    artifact_dir: str | None,
+    no_save: bool,
+    pop_search_object_view_for_run: Callable[[str], object | None],
+) -> None:
+    if no_save:
+        run_id = result.run.run_id
+        if result.run.macro == "search" and run_id is not None:
+            _ = pop_search_object_view_for_run(run_id)
+        return
+    if result.run.macro == "search":
+        _save_search_artifacts(
+            result,
+            pop_search_object_view_for_run=pop_search_object_view_for_run,
+        )
+        return
+    _save_general_artifacts(result, artifact_dir)
+
+
+def _save_search_artifacts(
+    result: CqResult,
+    *,
+    pop_search_object_view_for_run: Callable[[str], object | None],
+) -> None:
+    run_id = result.run.run_id
+    if run_id is None:
+        return
+    object_view = pop_search_object_view_for_run(run_id)
+    if object_view is None:
+        return
+    search_artifact = save_search_artifact_bundle_cache(
+        result,
+        _build_search_artifact_bundle(result, object_view),
+    )
+    if search_artifact is None:
+        return
+    result.artifacts.append(search_artifact)
+    _attach_insight_artifact_refs(
+        result,
+        diagnostics_ref=search_artifact.path,
+        telemetry_ref=search_artifact.path,
+        neighborhood_overflow_ref=None,
+    )
+
+
+def _save_general_artifacts(result: CqResult, artifact_dir: str | None) -> None:
+    artifact = save_artifact_json(result, artifact_dir)
+    result.artifacts.append(artifact)
+    diagnostics_artifact = save_diagnostics_artifact(result, artifact_dir)
+    if diagnostics_artifact is not None:
+        result.artifacts.append(diagnostics_artifact)
+    overflow_artifact = save_neighborhood_overflow_artifact(result, artifact_dir)
+    if overflow_artifact is not None:
+        result.artifacts.append(overflow_artifact)
+    _attach_insight_artifact_refs(
+        result,
+        diagnostics_ref=diagnostics_artifact.path if diagnostics_artifact is not None else None,
+        telemetry_ref=diagnostics_artifact.path if diagnostics_artifact is not None else None,
+        neighborhood_overflow_ref=overflow_artifact.path if overflow_artifact is not None else None,
+    )
+
+
+def _build_search_artifact_bundle(
+    result: CqResult,
+    object_view: object,
+) -> SearchArtifactBundleV1:
+    import msgspec
+
+    from tools.cq.search.object_resolution_contracts import SearchObjectResolvedViewV1
+
+    resolved_view = msgspec.convert(object_view, type=SearchObjectResolvedViewV1)
+    return SearchArtifactBundleV1(
+        run_id=result.run.run_id or "no_run_id",
+        query=_search_query(result.summary),
+        macro=result.run.macro,
+        summary=_search_artifact_summary(result.summary),
+        object_summaries=list(resolved_view.summaries),
+        occurrences=list(resolved_view.occurrences),
+        diagnostics=_search_artifact_diagnostics(result.summary),
+        snippets=dict(resolved_view.snippets),
+        created_ms=result.run.started_ms,
+    )
+
+
+def _search_query(summary: dict[str, object]) -> str:
+    raw = summary.get("query")
+    if isinstance(raw, str) and raw:
+        return raw
+    return "<unknown>"
+
+
+def _search_artifact_summary(summary: dict[str, object]) -> dict[str, object]:
+    keys = (
+        "query",
+        "mode",
+        "lang_scope",
+        "returned_matches",
+        "total_matches",
+        "matched_files",
+        "scanned_files",
+        "resolved_objects",
+        "resolved_occurrences",
+    )
+    payload: dict[str, object] = {}
+    for key in keys:
+        value = summary.get(key)
+        if value is not None:
+            payload[key] = value
+    return payload
+
+
+def _search_artifact_diagnostics(summary: dict[str, object]) -> dict[str, object]:
+    keys = (
+        "enrichment_telemetry",
+        "python_semantic_overview",
+        "python_semantic_telemetry",
+        "python_semantic_diagnostics",
+        "rust_semantic_telemetry",
+        "cross_language_diagnostics",
+        "semantic_planes",
+        "language_capabilities",
+        "dropped_by_scope",
+    )
+    payload: dict[str, object] = {}
+    for key in keys:
+        value = summary.get(key)
+        if value is not None:
+            payload[key] = value
+    return payload

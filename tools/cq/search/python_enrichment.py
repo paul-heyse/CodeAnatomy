@@ -39,9 +39,7 @@ from tools.cq.search.enrichment.core import (
 from tools.cq.search.python_analysis_session import PythonAnalysisSession
 from tools.cq.search.python_native_resolution import enrich_python_resolution_by_byte_range
 from tools.cq.search.requests import PythonByteRangeEnrichmentRequest, PythonNodeEnrichmentRequest
-from tools.cq.search.tree_sitter_python import (
-    enrich_python_context_by_byte_range as _ts_enrich_python_by_byte_range,
-)
+from tools.cq.search.tree_sitter_python_facts import build_python_tree_sitter_facts
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode, SgRoot
@@ -2036,19 +2034,19 @@ def _run_tree_sitter_stage(
     tree_sitter_reasons: list[str] = []
     try:
         source_text = _decode_python_source_text(source_bytes=source_bytes, session=session)
-        ts_payload = _ts_enrich_python_by_byte_range(
+        ts_payload = build_python_tree_sitter_facts(
             source_text,
             byte_start=byte_start,
             byte_end=byte_end,
             cache_key=cache_key,
         )
         if ts_payload:
-            gap_fill, parse_quality = _extract_tree_sitter_gap_fill(ts_payload)
-            _merge_gap_fill_fields(state.payload, supplemental=gap_fill)
-            state.tree_sitter_fields.update(gap_fill)
-            if parse_quality is not None:
-                state.tree_sitter_fields["parse_quality"] = parse_quality
-                state.payload["parse_quality"] = parse_quality
+            state.tree_sitter_fields.update(ts_payload)
+            # Tree-sitter is the primary structural plane in this cutover.
+            for key, value in ts_payload.items():
+                if key == "enrichment_sources":
+                    continue
+                state.payload[key] = value
             _append_source(state.payload, "tree_sitter")
             ts_status = ts_payload.get("enrichment_status")
             state.stage_status["tree_sitter"] = (

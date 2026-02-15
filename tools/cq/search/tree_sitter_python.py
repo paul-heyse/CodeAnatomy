@@ -9,11 +9,17 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from hashlib import blake2b
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.search.tree_sitter_query_registry import load_query_pack_sources
+from tools.cq.search.tree_sitter_runtime import run_bounded_query_captures
+from tools.cq.search.tree_sitter_runtime_contracts import (
+    QueryExecutionSettingsV1,
+    QueryWindowV1,
+)
+
 if TYPE_CHECKING:
-    from tree_sitter import Language, Node, Parser, Query, QueryCursor, Tree
+    from tree_sitter import Language, Node, Parser, Query, Tree
 
 try:
     import tree_sitter_python as _tree_sitter_python
@@ -28,7 +34,6 @@ except ImportError:  # pragma: no cover - optional dependency
     _TreeSitterQuery = None
     _TreeSitterQueryCursor = None
 
-_QUERY_ROOT = Path(__file__).with_suffix("").parent / "queries" / "python"
 _MAX_TREE_CACHE_ENTRIES = 64
 _TREE_CACHE: dict[str, tuple[Tree, str]] = {}
 _MAX_SOURCE_BYTES = 5 * 1024 * 1024
@@ -38,6 +43,7 @@ _DEFAULT_MATCH_LIMIT = 4_096
 _QUERY_TIMEOUT_SECONDS = 0.035
 _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 _COMPILE_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError)
+_STOP_CONTEXT_KINDS: frozenset[str] = frozenset({"module", "source_file"})
 
 
 class _CacheStats:
@@ -156,11 +162,10 @@ def get_tree_sitter_python_cache_stats() -> dict[str, int]:
 
 
 def _query_sources() -> dict[str, str]:
-    if not _QUERY_ROOT.exists():
-        return {}
     sources: dict[str, str] = {}
-    for path in sorted(_QUERY_ROOT.glob("*.scm")):
-        sources[path.name] = path.read_text(encoding="utf-8")
+    for source in load_query_pack_sources("python", include_distribution=False):
+        if source.pack_name.endswith(".scm"):
+            sources[source.pack_name] = source.source
     return sources
 
 
@@ -179,22 +184,14 @@ def _safe_cursor_captures(
     byte_start: int,
     byte_end: int,
     match_limit: int,
-) -> dict[str, list[Node]]:
-    if _TreeSitterQueryCursor is None:
-        msg = "tree_sitter query cursor bindings are unavailable"
-        raise RuntimeError(msg)
-    cursor: QueryCursor = _TreeSitterQueryCursor(query, match_limit=match_limit)
-    cursor.set_byte_range(byte_start, byte_end)
-    captures = cursor.captures(root)
-    if not isinstance(captures, dict):
-        return {}
-    result: dict[str, list[Node]] = {}
-    for name, nodes in captures.items():
-        if not isinstance(name, str):
-            continue
-        if isinstance(nodes, list):
-            result[name] = [node for node in nodes if hasattr(node, "start_byte")]
-    return result
+) -> tuple[dict[str, list[Node]], bool]:
+    captures, telemetry = run_bounded_query_captures(
+        query,
+        root,
+        windows=(QueryWindowV1(start_byte=byte_start, end_byte=byte_end),),
+        settings=QueryExecutionSettingsV1(match_limit=match_limit),
+    )
+    return captures, telemetry.exceeded_match_limit
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
@@ -214,9 +211,10 @@ def _extract_parse_quality(
 ) -> dict[str, object]:
     quality: dict[str, object] = {"has_error": bool(getattr(root, "has_error", False))}
     captures: dict[str, list[Node]]
+    did_exceed_match_limit = False
     try:
         query = _compile_query("__errors__.scm", "(ERROR) @error (MISSING) @missing")
-        captures = _safe_cursor_captures(
+        captures, did_exceed_match_limit = _safe_cursor_captures(
             query,
             root,
             byte_start=byte_start,
@@ -239,6 +237,7 @@ def _extract_parse_quality(
 
     quality["error_nodes"] = _collect("error")
     quality["missing_nodes"] = _collect("missing")
+    quality["did_exceed_match_limit"] = did_exceed_match_limit
     return quality
 
 
@@ -251,19 +250,27 @@ def _capture_gap_fill_fields(
     match_limit: int,
 ) -> dict[str, object]:
     payload: dict[str, object] = {}
+    did_exceed_match_limit = False
     for filename, source in _query_sources().items():
         try:
             query = _compile_query(filename, source)
-            captures = _safe_cursor_captures(
+            captures, exceeded = _safe_cursor_captures(
                 query,
                 root,
                 byte_start=byte_start,
                 byte_end=byte_end,
                 match_limit=match_limit,
             )
+            did_exceed_match_limit = did_exceed_match_limit or exceeded
         except _ENRICHMENT_ERRORS:
             continue
         _apply_gap_fill_from_captures(payload, captures, source_bytes)
+    _finalize_gap_fill_payload(payload)
+    payload["query_runtime"] = {
+        "match_limit": match_limit,
+        "did_exceed_match_limit": did_exceed_match_limit,
+        "cancelled": False,
+    }
     return payload
 
 
@@ -327,8 +334,43 @@ def _apply_gap_fill_from_captures(
     )
 
 
+def _finalize_gap_fill_payload(payload: dict[str, object]) -> None:
+    payload.setdefault("qualified_name_candidates", [])
+    payload.setdefault("binding_candidates", [])
+    payload.setdefault("import_alias_chain", [])
+    call_target = payload.get("call_target")
+    if (
+        not payload["qualified_name_candidates"]
+        and isinstance(call_target, str)
+        and call_target
+    ):
+        payload["qualified_name_candidates"] = [{"name": call_target, "source": "tree_sitter"}]
+    if not payload["binding_candidates"]:
+        binding_candidate = _binding_candidate_from_call_target(call_target)
+        if binding_candidate is not None:
+            payload["binding_candidates"] = [binding_candidate]
+
+
+def _binding_candidate_from_call_target(call_target: object) -> dict[str, object] | None:
+    if not isinstance(call_target, str):
+        return None
+    head = call_target.split(".", maxsplit=1)[0].strip()
+    if not head:
+        return None
+    return {
+        "name": head[:_MAX_CAPTURE_TEXT_LEN],
+        "kind": "tree_sitter_call_target",
+        "byte_start": -1,
+    }
+
+
 def _capture_call_target(captures: dict[str, list[Node]], source_bytes: bytes) -> str | None:
-    for capture_name in ("call.function.identifier", "call.function.attribute"):
+    for capture_name in (
+        "call.target.identifier",
+        "call.target.attribute",
+        "call.function.identifier",
+        "call.function.attribute",
+    ):
         nodes = captures.get(capture_name, [])
         if not nodes:
             continue
@@ -522,8 +564,12 @@ def _capture_qualified_name_candidates(
     rows = _capture_text_rows(
         captures,
         (
+            "call.target.identifier",
+            "call.target.attribute",
             "call.function.identifier",
             "call.function.attribute",
+            "ref.identifier",
+            "ref.attribute",
             "import.module",
             "import.from.name",
             "def.function.name",
@@ -545,7 +591,44 @@ def _capture_qualified_name_candidates(
 
 
 def _default_parse_quality() -> dict[str, object]:
-    return {"has_error": False, "error_nodes": list[str](), "missing_nodes": list[str]()}
+    return {
+        "has_error": False,
+        "error_nodes": list[str](),
+        "missing_nodes": list[str](),
+        "did_exceed_match_limit": False,
+    }
+
+
+def _lift_anchor(node: Node) -> Node:
+    current = node
+    while current.parent is not None:
+        parent = current.parent
+        if parent.type in {
+            "call",
+            "attribute",
+            "assignment",
+            "import_statement",
+            "import_from_statement",
+            "function_definition",
+            "class_definition",
+        }:
+            return parent
+        if current.type in _STOP_CONTEXT_KINDS:
+            return current
+        current = parent
+    return node
+
+
+def _effective_capture_window(root: Node, *, byte_start: int, byte_end: int) -> tuple[int, int]:
+    anchor = root.named_descendant_for_byte_range(byte_start, byte_end)
+    if anchor is None:
+        return byte_start, byte_end
+    lifted = _lift_anchor(anchor)
+    start = int(getattr(lifted, "start_byte", byte_start))
+    end = int(getattr(lifted, "end_byte", byte_end))
+    if end <= start:
+        return byte_start, byte_end
+    return start, end
 
 
 def enrich_python_context_by_byte_range(
@@ -593,11 +676,16 @@ def enrich_python_context_by_byte_range(
         return payload
 
     root = tree.root_node
+    window_start, window_end = _effective_capture_window(
+        root,
+        byte_start=byte_start,
+        byte_end=byte_end,
+    )
     parse_quality = _extract_parse_quality(
         root,
         source_bytes,
-        byte_start=byte_start,
-        byte_end=byte_end,
+        byte_start=window_start,
+        byte_end=window_end,
     )
     payload["parse_quality"] = parse_quality
 
@@ -606,8 +694,8 @@ def enrich_python_context_by_byte_range(
             _capture_gap_fill_fields(
                 root,
                 source_bytes,
-                byte_start=byte_start,
-                byte_end=byte_end,
+                byte_start=window_start,
+                byte_end=window_end,
                 match_limit=match_limit,
             )
         )

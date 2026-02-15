@@ -11,16 +11,14 @@
       "messages": [
         "**Nodes:** 0",
         "**Edges:** 0",
-        "**Diagnostics:** 1 errors, 2 warnings"
+        "**Diagnostics:** 1 errors"
       ],
       "title": "neighborhood_0: Neighborhood Summary"
     },
     {
-      "count": 3,
+      "count": 1,
       "messages": [
-        "\u26a0\ufe0f **target_resolution** (not_found): No definition found for anchor tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:9; falling back to file-only resolution",
-        "\u26a0\ufe0f **structural.target_resolution** (not_found): No anchor match for tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs:9; trying name-based resolution",
-        "\u274c **structural.target_resolution** (not_found): Target definition 'lib' not found in tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
+        "\u274c **tree_sitter.neighborhood** (anchor_unresolved): Unable to resolve anchor for 'lib'"
       ],
       "title": "neighborhood_0: Diagnostics"
     },
@@ -28,7 +26,7 @@
       "count": 2,
       "messages": [
         "**Investigate errors:**",
-        "- structural.target_resolution: Target definition 'lib' not found in tests/e2e/cq/_golden_workspace/rust_workspace/crates/corelib/src/lib.rs"
+        "- tree_sitter.neighborhood: Unable to resolve anchor for 'lib'"
       ],
       "title": "neighborhood_0: Suggested Follow-ups"
     },

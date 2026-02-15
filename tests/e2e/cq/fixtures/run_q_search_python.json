@@ -11,7 +11,8 @@
     "function: resolve",
     "function: resolve",
     "function: resolve",
-    "function: build_pipeline",
+    "module: AsyncService",
+    "module: AsyncService",
     "class: AsyncService"
   ],
   "sections": [
@@ -25,55 +26,50 @@
       "title": "q_0: python: Neighborhood Preview"
     },
     {
-      "count": 2,
+      "count": 3,
       "messages": [
-        "function: build_pipeline",
+        "module: AsyncService",
+        "module: AsyncService",
         "class: AsyncService"
       ],
       "title": "search_1: Target Candidates"
     },
     {
-      "count": 4,
+      "count": 6,
       "messages": [
-        "Nested Definitions: 1 (top: recorder)",
-        "Sibling Definitions: 1 (top: resolve)",
-        "Functions Called: 8 (top: ServiceRegistry, register, DynamicRouter, AsyncService, handle)",
-        "Callers: 1 (top: run)"
+        "reference: AsyncService (1 occurrences) [object_id=obj_1fc61c023c3b3b39b0db1e83]",
+        "reference: AsyncService (1 occurrences) [object_id=obj_2c19640396c6f81730224ec7]",
+        "module: AsyncService (1 occurrences) [object_id=obj_5122dd862cd2469ca48a865f]",
+        "reference: AsyncService (1 occurrences) [object_id=obj_667c8fd7887c2ec2ba72f358]",
+        "module: AsyncService (1 occurrences) [object_id=obj_9d1c3d80a774abca2b657d74]",
+        "class: AsyncService (1 occurrences) [object_id=obj_a8c41b319ce7a02bbc064830]"
       ],
-      "title": "search_1: Neighborhood Preview"
+      "title": "search_1: Resolved Objects"
     },
     {
-      "count": 4,
+      "count": 5,
       "messages": [
-        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py",
-        "./tests/e2e/cq/_golden_workspace/python_project/app/api.py",
-        "build_pipeline (./tests/e2e/cq/_golden_workspace/python_project/app/api.py)",
-        "AsyncService (./tests/e2e/cq/_golden_workspace/python_project/app/services.py)"
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:7:22 (block ./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:1-11) [from_import] [object_id=obj_9d1c3d80a774abca2b657d74] [line_id=8c57617d74f6ecc4b3ca93fe]",
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:8:22 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:6-12) [from_import] [object_id=obj_5122dd862cd2469ca48a865f] [line_id=bba1806f5f0604af90700116]",
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:18:62 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:18-35) [annotation] [object_id=obj_1fc61c023c3b3b39b0db1e83] [line_id=117ed6c55a5ccfed5bc187e6]",
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:29:14 (block ./tests/e2e/cq/_golden_workspace/python_project/app/api.py:22-35) [reference] [object_id=obj_2c19640396c6f81730224ec7] [line_id=537a560aab6689ab068b9cee]",
+        "AsyncService: ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:22:6 (block ./tests/e2e/cq/_golden_workspace/python_project/app/services.py:22-39) [reference] [object_id=obj_a8c41b319ce7a02bbc064830] [line_id=74ec48f139aa7cade837fb1a]"
       ],
-      "title": "search_1: Top Contexts"
+      "title": "search_1: Occurrences"
     },
     {
-      "count": 2,
-      "messages": [
-        "From import",
-        "From import"
-      ],
-      "title": "search_1: Imports"
-    },
-    {
-      "count": 4,
+      "count": 3,
       "messages": [
         "from_import: 2",
         "reference: 2",
-        "annotation: 1",
-        "string_match: 1"
+        "annotation: 1"
       ],
       "title": "search_1: Uses by Kind"
     },
     {
       "count": 1,
       "messages": [
-        "Match in string literal"
+        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py:10 [string_match]"
       ],
       "title": "search_1: Non-Code Matches (Strings / Comments / Docstrings)"
     },
@@ -81,7 +77,7 @@
       "count": 3,
       "messages": [
         "./tests/e2e/cq/_golden_workspace/python_project/app/api.py: 3 matches",
-        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py: 2 matches",
+        "./tests/e2e/cq/_golden_workspace/python_project/app/__init__.py: 1 matches",
         "./tests/e2e/cq/_golden_workspace/python_project/app/services.py: 1 matches"
       ],
       "title": "search_1: Hot Files"

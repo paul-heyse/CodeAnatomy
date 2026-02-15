@@ -24,6 +24,7 @@ from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 from tools.cq.core.serialization import to_builtins
 from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage
+from tools.cq.search.object_fact_attachment import is_applicability_not_applicable
 
 # Maximum evidence items to show before truncating
 MAX_EVIDENCE_DISPLAY = 20
@@ -35,6 +36,10 @@ MAX_CODE_OVERVIEW_ITEMS = 5
 MAX_FACT_VALUE_ITEMS = 8
 MAX_FACT_MAPPING_SCALAR_PAIRS = 4
 RUN_QUERY_ARG_START_INDEX = 2
+MAX_OBJECT_OCCURRENCE_LINES = 200
+_TOP_SYMBOL_SKIP_CATEGORIES: frozenset[str] = frozenset(
+    {"count", "hot_file", "occurrence", "non_code_occurrence"}
+)
 SUMMARY_PRIORITY_KEYS: tuple[str, ...] = (
     "query",
     "mode",
@@ -86,10 +91,8 @@ _SECTION_ORDER_MAP: dict[str, tuple[str, ...]] = {
     "search": (
         "Target Candidates",
         "Neighborhood Preview",
-        "Definitions",
-        "Top Contexts",
-        "Imports",
-        "Callsites",
+        "Resolved Objects",
+        "Occurrences",
         "Uses by Kind",
         "Non-Code Matches (Strings / Comments / Docstrings)",
         "Hot Files",
@@ -148,6 +151,7 @@ def _format_finding(
     f: Finding,
     *,
     show_anchor: bool = True,
+    show_context: bool = True,
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
@@ -179,8 +183,9 @@ def _format_finding(
     enrichment_payload = _extract_enrichment_payload(f)
     if enrichment_payload is not None:
         rendered_lines.extend(_format_enrichment_facts(enrichment_payload))
+    rendered_lines.extend(_format_resolved_object_occurrences(f))
 
-    rendered_lines.extend(_format_context_block(f))
+    rendered_lines.extend(_format_context_block(f, enabled=show_context))
 
     return "\n".join(rendered_lines)
 
@@ -200,7 +205,9 @@ def _format_finding_prefix(finding: Finding) -> str:
     return f"{icon} " if icon else ""
 
 
-def _format_context_block(finding: Finding) -> list[str]:
+def _format_context_block(finding: Finding, *, enabled: bool = True) -> list[str]:
+    if not enabled:
+        return []
     context_snippet = finding.details.get("context_snippet")
     if not isinstance(context_snippet, str) or not context_snippet:
         return []
@@ -408,11 +415,27 @@ def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
     lines = ["  Code Facts:"]
     show_unresolved = _show_unresolved_facts()
     for cluster in clusters:
-        rows = [row for row in cluster.rows if show_unresolved or row.reason != "not_resolved"]
-        lines.append(f"  - {cluster.title}")
+        candidate_rows = (
+            list(cluster.rows)
+            if show_unresolved
+            else [row for row in cluster.rows if row.reason != "not_applicable"]
+        )
+        candidate_rows = [
+            row for row in candidate_rows if not is_applicability_not_applicable(row.reason)
+        ]
+        rows = (
+            candidate_rows
+            if show_unresolved
+            else [row for row in candidate_rows if row.reason != "not_resolved"]
+        )
         if not rows:
+            unresolved_only = any(row.reason == "not_resolved" for row in candidate_rows)
+            if not (show_unresolved and unresolved_only):
+                continue
+            lines.append(f"  - {cluster.title}")
             lines.append(f"    - N/A: {_na('not_resolved')}")
             continue
+        lines.append(f"  - {cluster.title}")
         for row in rows:
             if row.reason is not None:
                 lines.append(f"    - {row.label}: {_na(row.reason)}")
@@ -433,7 +456,7 @@ def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
 
 
 def _extract_symbol_hint(finding: Finding) -> str | None:
-    for key in ("name", "match_text", "callee", "text"):
+    for key in ("name", "symbol", "match_text", "callee", "text"):
         value = finding.details.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip().split("\n", maxsplit=1)[0]
@@ -447,6 +470,44 @@ def _extract_symbol_hint(finding: Finding) -> str | None:
     if "(" in message:
         return message.split("(", maxsplit=1)[0].strip() or None
     return message
+
+
+def _format_resolved_object_occurrences(finding: Finding) -> list[str]:
+    if finding.category != "resolved_object":
+        return []
+    occurrences = finding.details.get("occurrences")
+    if not isinstance(occurrences, list) or not occurrences:
+        return []
+
+    lines = ["  Occurrence Locations:"]
+    for row in occurrences[:MAX_OBJECT_OCCURRENCE_LINES]:
+        if not isinstance(row, dict):
+            continue
+        line_id = (
+            _clean_scalar(row.get("line_id"))
+            or _clean_scalar(row.get("occurrence_id"))
+            or "unknown"
+        )
+        file_value = _clean_scalar(row.get("file"))
+        line_value = _safe_int(row.get("line"))
+        col_value = _safe_int(row.get("col"))
+        location = _format_location(file_value, line_value, col_value) or "<unknown>"
+        block_ref = _clean_scalar(row.get("block_ref"))
+        if block_ref is None:
+            start_line = _safe_int(row.get("context_start_line"))
+            end_line = _safe_int(row.get("context_end_line"))
+            if file_value is not None and start_line is not None and end_line is not None:
+                block_ref = f"{file_value}:{start_line}-{end_line}"
+            elif file_value is not None:
+                block_ref = f"{file_value}:?"
+            else:
+                block_ref = "<unknown>"
+        lines.append(f"  - line_id={line_id}: {location} (block {block_ref})")
+
+    remaining = len(occurrences) - MAX_OBJECT_OCCURRENCE_LINES
+    if remaining > 0:
+        lines.append(f"  - ... +{remaining} more occurrences")
+    return lines
 
 
 def _derive_query_fallback(result: CqResult) -> str | None:
@@ -554,6 +615,10 @@ def _collect_top_symbols(findings: list[Finding]) -> str:
     symbol_hints: list[str] = []
     seen_symbols: set[str] = set()
     for finding in findings:
+        if finding.category in _TOP_SYMBOL_SKIP_CATEGORIES:
+            continue
+        if finding.anchor is None:
+            continue
         symbol = _extract_symbol_hint(finding)
         if symbol is None or symbol in seen_symbols:
             continue
@@ -1047,6 +1112,7 @@ def _maybe_attach_render_enrichment(
 def _format_section(
     s: Section,
     *,
+    show_context: bool = True,
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
@@ -1074,6 +1140,7 @@ def _format_section(
         [
             _format_finding(
                 finding,
+                show_context=show_context,
                 root=root,
                 enrich_cache=enrich_cache,
                 allowed_enrichment_files=allowed_enrichment_files,
@@ -1124,6 +1191,7 @@ def _ordered_summary_payload(summary: dict[str, object]) -> dict[str, object]:
 def _render_key_findings(
     findings: list[Finding],
     *,
+    show_context: bool = True,
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
@@ -1142,6 +1210,7 @@ def _render_key_findings(
         [
             _format_finding(
                 finding,
+                show_context=show_context,
                 root=root,
                 enrich_cache=enrich_cache,
                 allowed_enrichment_files=allowed_enrichment_files,
@@ -1170,6 +1239,7 @@ def _finding_dedupe_key(finding: Finding) -> tuple[object, ...]:
 def _render_sections(
     sections: list[Section],
     *,
+    show_context: bool = True,
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
@@ -1199,6 +1269,7 @@ def _render_sections(
         lines.append(
             _format_section(
                 Section(title=section.title, findings=findings, collapsed=section.collapsed),
+                show_context=show_context,
                 root=root,
                 enrich_cache=enrich_cache,
                 allowed_enrichment_files=allowed_enrichment_files,
@@ -1211,6 +1282,7 @@ def _render_sections(
 def _render_evidence(
     findings: list[Finding],
     *,
+    show_context: bool = True,
     root: Path | None = None,
     enrich_cache: dict[tuple[str, int, int, str], dict[str, object]] | None = None,
     allowed_enrichment_files: set[str] | None = None,
@@ -1240,6 +1312,7 @@ def _render_evidence(
         [
             _format_finding(
                 finding,
+                show_context=show_context,
                 root=root,
                 enrich_cache=enrich_cache,
                 allowed_enrichment_files=allowed_enrichment_files,
@@ -1568,6 +1641,7 @@ def render_markdown(result: CqResult) -> str:
     lines.extend(
         _render_key_findings(
             result.key_findings,
+            show_context=result.run.macro != "search",
             root=root,
             enrich_cache=enrich_cache,
             allowed_enrichment_files=allowed_enrichment_files,
@@ -1577,6 +1651,7 @@ def render_markdown(result: CqResult) -> str:
     lines.extend(
         _render_sections(
             reordered,
+            show_context=result.run.macro != "search",
             root=root,
             enrich_cache=enrich_cache,
             allowed_enrichment_files=allowed_enrichment_files,
@@ -1586,6 +1661,7 @@ def render_markdown(result: CqResult) -> str:
     lines.extend(
         _render_evidence(
             result.evidence,
+            show_context=result.run.macro != "search",
             root=root,
             enrich_cache=enrich_cache,
             allowed_enrichment_files=allowed_enrichment_files,
@@ -1593,7 +1669,8 @@ def render_markdown(result: CqResult) -> str:
         )
     )
     lines.extend(_render_artifacts(result.artifacts))
-    lines.extend(_render_summary(compact_summary))
+    if result.run.macro != "search":
+        lines.extend(_render_summary(compact_summary))
     lines.extend(_render_footer(result))
     return "\n".join(lines)
 

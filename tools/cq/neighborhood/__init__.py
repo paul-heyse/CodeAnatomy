@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from tools.cq.neighborhood.scan_snapshot import ScanSnapshot
-from tools.cq.neighborhood.structural_collector import (
-    StructuralNeighborhood,
-    collect_structural_neighborhood,
+from tools.cq.neighborhood.tree_sitter_collector import (
+    collect_tree_sitter_neighborhood,
+)
+from tools.cq.neighborhood.tree_sitter_contracts import (
+    TreeSitterNeighborhoodCollectRequest,
+    TreeSitterNeighborhoodCollectResult,
 )
 
 __all__ = [
-    "ScanSnapshot",
-    "StructuralNeighborhood",
-    "collect_structural_neighborhood",
+    "TreeSitterNeighborhoodCollectRequest",
+    "TreeSitterNeighborhoodCollectResult",
+    "collect_tree_sitter_neighborhood",
 ]

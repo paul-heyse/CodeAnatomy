@@ -926,27 +926,27 @@ These deletions rely on multiple scope items landing and should be executed only
 18. Execute deletion batches D1-D5 in order.
 
 ## Implementation Checklist
-- [ ] S1: Introduce request-scoped incremental parse session and remove per-lane caches.
-- [ ] S2: Wire `progress_callback` and query budgets through runtime and telemetry.
-- [ ] S3: Add `set_point_range` support and contracts for point windows.
-- [ ] S4: Enforce containment-correct window semantics for incremental re-analysis.
-- [ ] S5: Add `#set!` metadata to packs and read with `pattern_settings`.
-- [ ] S6: Load and enforce `contracts.yaml` at lint/runtime pack load.
-- [ ] S7: Convert extraction to `matches()`-first evidence row model.
-- [ ] S8: Replace heuristic neighborhood edges with query-driven edges.
-- [ ] S9: Add TreeCursor structural export nodes/edges with field labels.
-- [ ] S10: Emit first-class ERROR/MISSING diagnostics with spans and context.
-- [ ] S11: Execute injection plans using `included_ranges` parser passes.
-- [ ] S12: Add parse-state recovery hints from `next_state`/`lookahead_iterator`.
-- [ ] S13: Add occurrence + block grounding contracts and terminal/artifact split.
-- [ ] S14: Replace lock/poll and unbounded lanes with `Lock`/`RLock`/`BoundedSemaphore`/`barrier` coordination.
-- [ ] S15: Move tree-sitter/artifact stores to deterministic keys, msgspec bytes, and `Deque`/`Index` retrieval indices.
-- [ ] S16: Add `memoize_stampede` loaders plus diskcache-native maintenance (`stats`, `expire`, `cull`, `check`).
-- [ ] S17: Centralize UUID generation/normalization (`uuid7`, `uuid1_to_uuid6`) and keep UUIDs out of cache-key identity.
-- [ ] D1: Delete legacy parse/cache/window code after S1-S4 pass.
-- [ ] D2: Delete hard-coded capture mappers and duplicate lint paths after S5-S7 pass.
-- [ ] D3: Delete heuristic neighborhood diagnostics/matching after S8-S10 pass.
-- [ ] D4: Delete non-executable injection and weak grounding output paths after S11-S13 pass.
-- [ ] D5: Delete bespoke coordination/cache-index/memoization/UUID paths after S14-S17 pass.
-- [ ] Add/refresh CQ-focused tests only under `tests/unit/cq` and `tests/e2e/cq` for each scope item.
-- [ ] Run formatting, linting, type checks, and CQ-focused pytest only after full scope implementation.
+- [x] S1: Introduce request-scoped incremental parse session and remove per-lane caches.
+- [x] S2: Wire `progress_callback` and query budgets through runtime and telemetry.
+- [x] S3: Add `set_point_range` support and contracts for point windows.
+- [x] S4: Enforce containment-correct window semantics for incremental re-analysis.
+- [x] S5: Add `#set!` metadata to packs and read with `pattern_settings`.
+- [x] S6: Load and enforce `contracts.yaml` at lint/runtime pack load.
+- [x] S7: Convert extraction to `matches()`-first evidence row model.
+- [x] S8: Replace heuristic neighborhood edges with query-driven edges.
+- [x] S9: Add TreeCursor structural export nodes/edges with field labels.
+- [x] S10: Emit first-class ERROR/MISSING diagnostics with spans and context.
+- [x] S11: Execute injection plans using `included_ranges` parser passes.
+- [x] S12: Add parse-state recovery hints from `next_state`/`lookahead_iterator`.
+- [x] S13: Add occurrence + block grounding contracts and terminal/artifact split.
+- [x] S14: Replace lock/poll and unbounded lanes with `Lock`/`RLock`/`BoundedSemaphore`/`barrier` coordination.
+- [x] S15: Move tree-sitter/artifact stores to deterministic keys, msgspec bytes, and `Deque`/`Index` retrieval indices.
+- [x] S16: Add `memoize_stampede` loaders plus diskcache-native maintenance (`stats`, `expire`, `cull`, `check`).
+- [x] S17: Centralize UUID generation/normalization (`uuid7`, `uuid1_to_uuid6`) and keep UUIDs out of cache-key identity.
+- [x] D1: Delete legacy parse/cache/window code after S1-S4 pass.
+- [x] D2: Delete hard-coded capture mappers and duplicate lint paths after S5-S7 pass.
+- [x] D3: Delete heuristic neighborhood diagnostics/matching after S8-S10 pass.
+- [x] D4: Delete non-executable injection and weak grounding output paths after S11-S13 pass.
+- [x] D5: Delete bespoke coordination/cache-index/memoization/UUID paths after S14-S17 pass.
+- [x] Add/refresh CQ-focused tests only under `tests/unit/cq` and `tests/e2e/cq` for each scope item.
+- [x] Run formatting, linting, type checks, and CQ-focused pytest only after full scope implementation.

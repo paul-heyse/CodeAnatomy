@@ -12,7 +12,8 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext
-from tools.cq.cli_app.types import OutputFormat
+from tools.cq.cli_app.decorators import require_context, require_ctx
+from tools.cq.cli_app.types import OutputFormat, SchemaKind
 
 
 def _emit_deprecated_message(ctx: CliContext, message: str) -> None:
@@ -33,6 +34,7 @@ def _emit_deprecated_message(ctx: CliContext, message: str) -> None:
     sys.stdout.write(f"{message}\n")
 
 
+@require_ctx
 def index(
     *,
     rebuild: Annotated[
@@ -54,21 +56,17 @@ def index(
 
     Returns:
         int: Process status code.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
+    ctx = require_context(ctx)
+
     # Parameters rebuild and status are deprecated placeholders - intentionally unused
     del rebuild, status
-
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
 
     _emit_deprecated_message(ctx, "Index management has been removed. Caching is no longer used.")
     return 0
 
 
+@require_ctx
 def cache(
     *,
     stats: Annotated[
@@ -90,30 +88,26 @@ def cache(
 
     Returns:
         int: Process status code.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
+    ctx = require_context(ctx)
+
     # Parameters stats and clear are deprecated placeholders - intentionally unused
     del stats, clear
-
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
 
     _emit_deprecated_message(ctx, "Cache management has been removed. Caching is no longer used.")
     return 0
 
 
+@require_ctx
 def schema(
     *,
     kind: Annotated[
-        str,
+        SchemaKind,
         Parameter(
             name="--kind",
             help="Schema kind: result, query, or components",
         ),
-    ] = "result",
+    ] = SchemaKind.result,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
 ) -> int:
     """Emit msgspec JSON Schema for CQ types.
@@ -124,29 +118,19 @@ def schema(
 
     Returns:
         int: Process status code.
-
-    Raises:
-        RuntimeError: If command context is not injected.
-        ValueError: If `kind` is not one of the supported schema kinds.
     """
+    ctx = require_context(ctx)
+
     from tools.cq.core.codec import dumps_json_value
     from tools.cq.core.schema_export import cq_result_schema, cq_schema_components, query_schema
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
-
-    kind_value = kind.strip().lower()
-    if kind_value == "result":
+    if kind is SchemaKind.result:
         payload = cq_result_schema()
-    elif kind_value == "query":
+    elif kind is SchemaKind.query:
         payload = query_schema()
-    elif kind_value == "components":
+    else:
         schema_doc, components = cq_schema_components()
         payload = {"schema": schema_doc, "components": components}
-    else:
-        msg = f"Unknown schema kind: {kind}"
-        raise ValueError(msg)
 
     sys.stdout.write(dumps_json_value(payload, indent=2))
     sys.stdout.write("\n")

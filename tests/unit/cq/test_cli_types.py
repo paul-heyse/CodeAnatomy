@@ -5,8 +5,11 @@ from __future__ import annotations
 import pytest
 from tools.cq.cli_app.types import (
     ImpactBucket,
+    LdmdSliceMode,
+    NeighborhoodLanguageToken,
     OutputFormat,
     ReportPreset,
+    SchemaKind,
     SeverityLevel,
     comma_separated_enum,
     comma_separated_list,
@@ -66,6 +69,35 @@ class TestReportPresetEnum:
         assert ReportPreset.safety_reliability.value == "safety-reliability"
         assert ReportPreset.change_propagation.value == "change-propagation"
         assert ReportPreset.dependency_health.value == "dependency-health"
+
+
+class TestSchemaKindEnum:
+    """Tests for SchemaKind enum."""
+
+    def test_all_values(self) -> None:
+        """Test all schema kind values."""
+        assert SchemaKind.result.value == "result"
+        assert SchemaKind.query.value == "query"
+        assert SchemaKind.components.value == "components"
+
+
+class TestNeighborhoodLanguageTokenEnum:
+    """Tests for neighborhood language token enum."""
+
+    def test_all_values(self) -> None:
+        """Test supported neighborhood language values."""
+        assert NeighborhoodLanguageToken.python.value == "python"
+        assert NeighborhoodLanguageToken.rust.value == "rust"
+
+
+class TestLdmdSliceModeEnum:
+    """Tests for LDMD slice mode enum."""
+
+    def test_all_values(self) -> None:
+        """Test supported LDMD extraction modes."""
+        assert LdmdSliceMode.full.value == "full"
+        assert LdmdSliceMode.preview.value == "preview"
+        assert LdmdSliceMode.tldr.value == "tldr"
 
 
 class TestCommaSeparatedList:

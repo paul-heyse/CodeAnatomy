@@ -3,34 +3,55 @@ Usage: cq run [OPTIONS]
 Execute a multi-step CQ run plan.
 
 ╭─ Parameters ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ --include --empty-include           Include files matching pattern (glob or ~regex, repeatable) [env var:            │
-│                                     CQ_RUN_INCLUDE] [default: []]                                                    │
-│ --exclude --empty-exclude           Exclude files matching pattern (glob or ~regex, repeatable) [env var:            │
-│                                     CQ_RUN_EXCLUDE] [default: []]                                                    │
-│ --impact --empty-impact             Filter by impact bucket (comma-separated: low,med,high) [choices: low, med,      │
-│                                     high] [env var: CQ_RUN_IMPACT] [default: []]                                     │
-│ --confidence --empty-confidence     Filter by confidence bucket (comma-separated: low,med,high) [choices: low, med,  │
-│                                     high] [env var: CQ_RUN_CONFIDENCE] [default: []]                                 │
-│ --severity --empty-severity         Filter by severity (comma-separated: error,warning,info) [choices: info,         │
-│                                     warning, error] [env var: CQ_RUN_SEVERITY] [default: []]                         │
-│ --limit                             Maximum number of findings [env var: CQ_RUN_LIMIT]                               │
 │ --stop-on-error --no-stop-on-error  Stop execution on the first step error [env var: CQ_RUN_STOP_ON_ERROR] [default: │
 │                                     False]                                                                           │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Global Options ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ --root                                    Repository root [env var: CQ_RUN_ROOT]                                     │
-│ --verbose -v                              Verbosity level [env var: CQ_RUN_VERBOSE] [default: 0]                     │
-│ --format                                  Output format [choices: md, json, both, summary, mermaid, mermaid-class,   │
-│                                           dot, ldmd] [env var: CQ_RUN_FORMAT] [default: md]                          │
-│ --artifact-dir                            Artifact directory [env var: CQ_RUN_ARTIFACT_DIR]                          │
-│ --no-save-artifact --no-no-save-artifact  Don't save artifact [env var: CQ_RUN_NO_SAVE_ARTIFACT] [default: False]    │
-│ --config                                  Config file path [env var: CQ_RUN_CONFIG]                                  │
-│ --no-config --no-no-config                Skip config file loading [env var: CQ_RUN_NO_CONFIG] [default: False]      │
+│ Options applied to every CQ command.                                                                                 │
+│                                                                                                                      │
+│ --root                              Repository root [env var: CQ_ROOT, CQ_RUN_ROOT] [default: None]                  │
+│ --verbose -v                        Verbosity level [env var: CQ_VERBOSE, CQ_RUN_VERBOSE] [default: 0]               │
+│ --format                            Output format [choices: md, json, both, summary, mermaid, mermaid-class, dot,    │
+│                                     ldmd] [env var: CQ_FORMAT, CQ_RUN_FORMAT] [default: md]                          │
+│ --artifact-dir                      Artifact directory [env var: CQ_ARTIFACT_DIR, CQ_RUN_ARTIFACT_DIR] [default:     │
+│                                     None]                                                                            │
+│ --save-artifact --no-save-artifact  Persist output artifacts [env var: CQ_SAVE_ARTIFACT, CQ_RUN_SAVE_ARTIFACT]       │
+│                                     [default: True]                                                                  │
+│ --config                            Config file path [env var: CQ_CONFIG, CQ_RUN_CONFIG] [default: None]             │
+│ --use-config --no-config            Enable config file loading [env var: CQ_USE_CONFIG, CQ_RUN_USE_CONFIG] [default: │
+│                                     True]                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Filters ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --include --empty-include        Include files matching pattern (glob or ~regex, repeatable) [env var:               │
+│                                  CQ_RUN_INCLUDE] [default: []]                                                       │
+│ --exclude --empty-exclude        Exclude files matching pattern (glob or ~regex, repeatable) [env var:               │
+│                                  CQ_RUN_EXCLUDE] [default: []]                                                       │
+│ --impact --empty-impact          Filter by impact bucket (comma-separated: low,med,high) [choices: low, med, high]   │
+│                                  [env var: CQ_RUN_IMPACT] [default: []]                                              │
+│ --confidence --empty-confidence  Filter by confidence bucket (comma-separated: low,med,high) [choices: low, med,     │
+│                                  high] [env var: CQ_RUN_CONFIDENCE] [default: []]                                    │
+│ --severity --empty-severity      Filter by severity (comma-separated: error,warning,info) [choices: info, warning,   │
+│                                  error] [env var: CQ_RUN_SEVERITY] [default: []]                                     │
+│ --limit                          Maximum number of findings [env var: CQ_RUN_LIMIT] [default: None]                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Run Input ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ --plan                 Path to a run plan TOML file [env var: CQ_RUN_PLAN]                                           │
+│ --plan                 Path to a run plan TOML file [env var: CQ_RUN_PLAN] [default: None]                           │
 │ --step --empty-step    Repeatable JSON step object (e.g., '{"type":"q","query":"..."}') [env var: CQ_RUN_STEP]       │
 │                        [default: []]                                                                                 │
 │ --steps --empty-steps  JSON array of steps (e.g., '[{"type":"q",...},{"type":"calls",...}]') [env var: CQ_RUN_STEPS] │
 │                        [default: []]                                                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+Examples:
+  cq search build_graph --lang python
+  cq q "entity=function name=~^build"
+  cq run --steps '[{"type":"q","query":"entity=function"}]'
+  cq neighborhood tools/cq/cli_app/app.py:1 --lang python
+
+Environment Variables:
+  CQ_ROOT           Repository root path
+  CQ_FORMAT         Output format (md, json, both, summary, mermaid, dot, ldmd)
+  CQ_VERBOSE        Verbosity level
+  CQ_ARTIFACT_DIR   Artifact output directory
+  CQ_SAVE_ARTIFACT  Enable/disable artifact persistence

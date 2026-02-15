@@ -8,10 +8,12 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.decorators import require_context, require_ctx
 from tools.cq.run.chain import compile_chain_segments
 from tools.cq.run.runner import execute_run_plan
 
 
+@require_ctx
 def chain(
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
     delimiter: Annotated[str, Parameter(name="--delimiter")] = "AND",
@@ -28,11 +30,9 @@ def chain(
         CliResult: Renderable command result payload.
 
     Raises:
-        RuntimeError: If context is missing or no chain segments are provided.
+        RuntimeError: If no chain segments are provided.
     """
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     groups = [
         list(group)

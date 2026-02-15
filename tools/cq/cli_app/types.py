@@ -108,6 +108,23 @@ class QueryLanguageToken(StrEnum):
         return self.value
 
 
+class NeighborhoodLanguageToken(StrEnum):
+    """Supported neighborhood language tokens."""
+
+    python = "python"
+    rust = "rust"
+
+    def __str__(self) -> str:
+        """Return the CLI token.
+
+        Returns:
+        -------
+        str
+            String value used by the CLI.
+        """
+        return self.value
+
+
 class ReportPreset(StrEnum):
     """Report preset options."""
 
@@ -115,6 +132,42 @@ class ReportPreset(StrEnum):
     safety_reliability = "safety-reliability"
     change_propagation = "change-propagation"
     dependency_health = "dependency-health"
+
+    def __str__(self) -> str:
+        """Return the CLI token.
+
+        Returns:
+        -------
+        str
+            String value used by the CLI.
+        """
+        return self.value
+
+
+class SchemaKind(StrEnum):
+    """Schema export payload kind."""
+
+    result = "result"
+    query = "query"
+    components = "components"
+
+    def __str__(self) -> str:
+        """Return the CLI token.
+
+        Returns:
+        -------
+        str
+            String value used by the CLI.
+        """
+        return self.value
+
+
+class LdmdSliceMode(StrEnum):
+    """LDMD extraction mode token."""
+
+    full = "full"
+    preview = "preview"
+    tldr = "tldr"
 
     def __str__(self) -> str:
         """Return the CLI token.

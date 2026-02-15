@@ -446,7 +446,7 @@ def _seed_and_register_dataset(
                 status="bootstrap_failed",
                 required=item.required,
                 path=str(path),
-        message=str(exc),
+                message=str(exc),
             ),
             counted_failed=item.required,
         )

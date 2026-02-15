@@ -84,11 +84,17 @@ def compile_chain_segments(groups: Iterable[list[str]]) -> RunPlan:
             msg = "Empty chain segment"
             raise RuntimeError(msg)
         try:
-            command, bound, _ignored = app.parse_args(
+            with app.app_stack(
                 group,
-                exit_on_error=False,
-                print_error=False,
-            )
+                {
+                    "exit_on_error": False,
+                    "print_error": False,
+                },
+            ):
+                command, bound, unused_tokens, _ignored = app.parse_known_args(group)
+            if unused_tokens:
+                msg = f"Unused chain tokens: {unused_tokens}"
+                raise RuntimeError(msg)
         except CycloptsError as exc:  # pragma: no cover - defensive
             msg = str(exc)
             raise RuntimeError(msg) from exc

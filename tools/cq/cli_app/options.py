@@ -8,10 +8,11 @@ from typing import Any
 
 import msgspec
 
+from tools.cq.cli_app.types import QueryLanguageToken
 from tools.cq.core.structs import CqStruct
 
 
-class CommonFilters(CqStruct, frozen=True):
+class CommonFilters(CqStruct, frozen=True, kw_only=True):
     """Common filter fields shared across CQ commands."""
 
     include: list[str] = msgspec.field(default_factory=list)
@@ -40,13 +41,13 @@ class CommonFilters(CqStruct, frozen=True):
         )
 
 
-class QueryOptions(CommonFilters, frozen=True):
+class QueryOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the q query command."""
 
     explain_files: bool = False
 
 
-class SearchOptions(CommonFilters, frozen=True):
+class SearchOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the search command."""
 
     regex: bool = False
@@ -54,58 +55,58 @@ class SearchOptions(CommonFilters, frozen=True):
     include_strings: bool = False
     with_neighborhood: bool = False
     in_dir: str | None = None
-    lang: str = "auto"
+    lang: QueryLanguageToken = QueryLanguageToken.auto
 
 
-class ReportOptions(CommonFilters, frozen=True):
+class ReportOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the report command."""
 
-    target: str | None = None
+    target: str
     in_dir: str | None = None
     param: str | None = None
     signature: str | None = None
     bytecode_show: str | None = None
 
 
-class ImpactOptions(CommonFilters, frozen=True):
+class ImpactOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the impact command."""
 
-    param: str | None = None
+    param: str
     depth: int = 5
 
 
-class ImportsOptions(CommonFilters, frozen=True):
+class ImportsOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the imports command."""
 
     cycles: bool = False
     module: str | None = None
 
 
-class ExceptionsOptions(CommonFilters, frozen=True):
+class ExceptionsOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the exceptions command."""
 
     function: str | None = None
 
 
-class SigImpactOptions(CommonFilters, frozen=True):
+class SigImpactOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the sig-impact command."""
 
-    to: str | None = None
+    to: str
 
 
-class SideEffectsOptions(CommonFilters, frozen=True):
+class SideEffectsOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the side-effects command."""
 
     max_files: int = 2000
 
 
-class BytecodeSurfaceOptions(CommonFilters, frozen=True):
+class BytecodeSurfaceOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the bytecode-surface command."""
 
     show: str = "globals,attrs,constants"
 
 
-class RunOptions(CommonFilters, frozen=True):
+class RunOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the run command."""
 
     plan: Path | None = None

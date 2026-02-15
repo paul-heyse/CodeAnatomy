@@ -4,49 +4,65 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from cyclopts import App, Parameter
+from cyclopts import App, Group, Parameter, validators
 
 from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.decorators import require_context, require_ctx
+from tools.cq.cli_app.types import NeighborhoodLanguageToken
 from tools.cq.core.cache import maybe_evict_run_cache_tag
 from tools.cq.core.schema import assign_result_finding_ids, mk_runmeta, ms
 from tools.cq.core.snb_schema import SemanticNeighborhoodBundleV1
 from tools.cq.utils.uuid_factory import uuid7_str
 
-neighborhood_app = App(name="neighborhood", help="Analyze semantic neighborhood of a target")
-nb_app = App(name="nb", help="Analyze semantic neighborhood of a target (alias)")
+neighborhood_app = App(
+    name="neighborhood",
+    help="Analyze semantic neighborhood of a target",
+    group=Group("Analysis", sort_key=1),
+)
 
 
 @neighborhood_app.default
-@nb_app.default
+@require_ctx
 def neighborhood(
     target: Annotated[str, Parameter(help="Target location (file:line[:col] or symbol)")],
     *,
-    lang: Annotated[str, Parameter(name="--lang", help="Query language")] = "python",
-    top_k: Annotated[int, Parameter(name="--top-k", help="Max items per slice")] = 10,
-    no_semantic_enrichment: Annotated[
-        bool, Parameter(name="--no-semantic-enrichment", help="Disable semantic enrichment")
-    ] = False,
+    lang: Annotated[
+        NeighborhoodLanguageToken,
+        Parameter(name="--lang", help="Query language (python, rust)"),
+    ] = NeighborhoodLanguageToken.python,
+    top_k: Annotated[
+        int,
+        Parameter(
+            name="--top-k",
+            help="Max items per slice",
+            validator=validators.Number(gte=1, lte=10_000),
+        ),
+    ] = 10,
+    semantic_enrichment: Annotated[
+        bool,
+        Parameter(
+            name="--semantic-enrichment",
+            negative="--no-semantic-enrichment",
+            negative_bool=(),
+            help="Enable semantic enrichment",
+        ),
+    ] = True,
     ctx: Annotated[CliContext | None, Parameter(parse=False)] = None,
 ) -> CliResult:
     """Analyze semantic neighborhood of a target symbol or location.
 
     Returns:
         CLI result containing rendered neighborhood findings.
-
-    Raises:
-        RuntimeError: If CLI context is not injected.
     """
     from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
     from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
     from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     started = ms()
     run_id = uuid7_str()
-    resolved_lang = lang if lang in {"python", "rust"} else "python"
+    resolved_lang = str(lang)
 
     spec = parse_target_spec(target)
     resolved = resolve_target(
@@ -66,7 +82,7 @@ def neighborhood(
         language=resolved_lang,
         symbol_hint=resolved.symbol_hint,
         top_k=top_k,
-        enable_semantic_enrichment=not no_semantic_enrichment,
+        enable_semantic_enrichment=semantic_enrichment,
         artifact_dir=ctx.artifact_dir,
         allow_symbol_fallback=True,
         target_degrade_events=resolved.degrade_events,
@@ -89,7 +105,7 @@ def neighborhood(
             target=target,
             language=resolved_lang,
             top_k=top_k,
-            enable_semantic_enrichment=not no_semantic_enrichment,
+            enable_semantic_enrichment=semantic_enrichment,
             semantic_env=_semantic_env_from_bundle(bundle),
         )
     )
@@ -119,3 +135,11 @@ def _semantic_env_from_bundle(bundle: SemanticNeighborhoodBundleV1) -> dict[str,
         if value is not None:
             env[out_key] = value
     return env
+
+
+def get_app() -> App:
+    """Return neighborhood sub-app for lazy registration."""
+    return neighborhood_app
+
+
+__all__ = ["get_app", "neighborhood_app"]

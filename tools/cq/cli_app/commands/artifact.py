@@ -7,13 +7,20 @@ from typing import Annotated, Literal
 
 import cyclopts
 import msgspec
+from cyclopts import validators
 
 from tools.cq.cli_app.context import CliContext, CliResult, CliTextResult
+from tools.cq.cli_app.decorators import require_context, require_ctx
+from tools.cq.cli_app.groups import protocol_group
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.artifacts import list_search_artifact_index_entries, load_search_artifact_bundle
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 
-artifact_app = cyclopts.App(name="artifact", help="Retrieve cache-backed CQ artifacts")
+artifact_app = cyclopts.App(
+    name="artifact",
+    help="Retrieve cache-backed CQ artifacts",
+    group=protocol_group,
+)
 
 _ArtifactKind = Literal[
     "search_bundle",
@@ -45,26 +52,29 @@ def _wants_json(ctx: CliContext) -> bool:
 
 
 @artifact_app.command(name="list")
+@require_ctx
 def list_artifacts(
     *,
     run_id: Annotated[
         str | None,
         cyclopts.Parameter(name="--run-id", help="Filter entries to a run id"),
     ] = None,
-    limit: Annotated[int, cyclopts.Parameter(name="--limit", help="Max rows to return")] = 20,
+    limit: Annotated[
+        int,
+        cyclopts.Parameter(
+            name="--limit",
+            help="Max rows to return",
+            validator=validators.Number(gte=1, lte=10_000),
+        ),
+    ] = 20,
     ctx: Annotated[CliContext | None, cyclopts.Parameter(parse=False)] = None,
 ) -> CliResult:
     """List cached search artifact bundles.
 
-    Raises:
-        RuntimeError: If CLI context is not injected.
-
     Returns:
         CliResult: Human-readable listing of cached artifact index entries.
     """
-    if ctx is None:
-        msg = "CliContext not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     entries = list_search_artifact_index_entries(
         root=ctx.root,
@@ -94,6 +104,7 @@ def list_artifacts(
 
 
 @artifact_app.command
+@require_ctx
 def get(
     *,
     run_id: Annotated[str, cyclopts.Parameter(name="--run-id", help="Run id to retrieve")],
@@ -105,15 +116,10 @@ def get(
 ) -> CliResult:
     """Fetch a cached search artifact payload by run id.
 
-    Raises:
-        RuntimeError: If CLI context is not injected.
-
     Returns:
         CliResult: Serialized payload for the selected artifact.
     """
-    if ctx is None:
-        msg = "CliContext not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     bundle, entry = load_search_artifact_bundle(root=ctx.root, run_id=run_id)
     if bundle is None:
@@ -146,4 +152,9 @@ def _artifact_payload_for_kind(
     return bundle
 
 
-__all__ = ["artifact_app"]
+def get_app() -> cyclopts.App:
+    """Return artifact sub-app for lazy registration."""
+    return artifact_app
+
+
+__all__ = ["artifact_app", "get_app"]

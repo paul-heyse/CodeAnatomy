@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tools.cq.cli_app.app import app
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 from tools.cq.cli_app.result import render_result
+from tools.cq.cli_app.result_action import cq_result_action
+from tools.cq.cli_app.telemetry import invoke_with_telemetry
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.schema import CqResult, RunMeta
 
@@ -147,3 +150,38 @@ class TestCliResult:
         cq_result = CqResult(run=run)
         result = CliResult(result=cq_result, context=ctx)
         assert result.get_exit_code() == 0
+
+
+class TestResultAction:
+    """Tests for CQ result-action adapter."""
+
+    def test_result_action_passes_int(self) -> None:
+        """Test int passthrough behavior."""
+        assert cq_result_action(7) == 7
+
+    def test_result_action_handles_cli_result_int(self, tmp_path: Path) -> None:
+        """Test CliResult wrapper handling for integer payloads."""
+        ctx = CliContext.build(argv=["cq", "cache"], root=tmp_path)
+        wrapped = CliResult(result=5, context=ctx)
+        assert cq_result_action(wrapped) == 5
+
+
+class TestInvokeWithTelemetry:
+    """Tests for CQ telemetry wrapper."""
+
+    def test_invoke_success(self, tmp_path: Path) -> None:
+        """Test successful command invocation telemetry."""
+        ctx = CliContext.build(argv=["cq", "cache"], root=tmp_path)
+        exit_code, event = invoke_with_telemetry(app, ["cache"], ctx=ctx)
+        assert exit_code == 0
+        assert event.ok is True
+        assert event.command is not None
+        assert event.parse_ms >= 0
+
+    def test_invoke_parse_error(self, tmp_path: Path) -> None:
+        """Test parse-failure telemetry."""
+        ctx = CliContext.build(argv=["cq", "unknown"], root=tmp_path)
+        exit_code, event = invoke_with_telemetry(app, ["unknown-command"], ctx=ctx)
+        assert exit_code == 2
+        assert event.ok is False
+        assert event.error_stage is not None

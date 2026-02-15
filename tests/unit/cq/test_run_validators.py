@@ -20,3 +20,23 @@ def test_search_regex_literal_mutually_exclusive() -> None:
             exit_on_error=True,
             print_error=False,
         )
+
+
+def test_calls_limit_must_be_positive() -> None:
+    """Ensure --limit enforces minimum value."""
+    with pytest.raises(SystemExit):
+        app.parse_args(
+            ["calls", "foo", "--limit", "0"],
+            exit_on_error=True,
+            print_error=False,
+        )
+
+
+def test_impact_depth_must_be_positive() -> None:
+    """Ensure impact --depth enforces minimum value."""
+    with pytest.raises(SystemExit):
+        app.parse_args(
+            ["impact", "foo", "--param", "x", "--depth", "0"],
+            exit_on_error=True,
+            print_error=False,
+        )

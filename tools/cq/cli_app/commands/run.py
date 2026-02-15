@@ -7,10 +7,12 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.decorators import require_context, require_ctx
 from tools.cq.cli_app.options import RunOptions, options_from_params
 from tools.cq.cli_app.params import RunParams
 
 
+@require_ctx
 def run(
     *,
     opts: Annotated[RunParams, Parameter(name="*")] | None = None,
@@ -24,18 +26,13 @@ def run(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.core.run_context import RunContext
     from tools.cq.core.schema import mk_result, ms
     from tools.cq.run.loader import RunPlanError, load_run_plan
     from tools.cq.run.runner import execute_run_plan
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     if opts is None:
         opts = RunParams()

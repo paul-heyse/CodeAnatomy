@@ -1,8 +1,4 @@
-"""CQ CLI application using cyclopts.
-
-This module defines the root cyclopts App with meta-app launcher pattern
-for unified global option handling and context injection.
-"""
+"""CQ CLI application using cyclopts."""
 
 from __future__ import annotations
 
@@ -11,25 +7,41 @@ import sys
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
-from cyclopts import App, Group, Parameter
+from cyclopts import App, Parameter
 from rich.console import Console
 
 from tools.cq.cli_app.config import build_config_chain, load_typed_config, load_typed_env_config
 from tools.cq.cli_app.config_types import CqConfig
-from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
-from tools.cq.cli_app.result import handle_result
+from tools.cq.cli_app.context import CliContext, CliContextOptions
+from tools.cq.cli_app.groups import (
+    admin_group,
+    analysis_group,
+    global_group,
+    setup_group,
+)
+from tools.cq.cli_app.result_action import cq_result_action
+from tools.cq.cli_app.telemetry import invoke_with_telemetry
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.structs import CqStruct
 
-# Version string
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
-# Command groups - global options appear first
-global_group = Group("Global Options", sort_key=0)
-analysis_group = Group("Analysis", sort_key=1)
-admin_group = Group("Administration", sort_key=2)
+_HELP_EPILOGUE = """
+Examples:
+  cq search build_graph --lang python
+  cq q "entity=function name=~^build"
+  cq run --steps '[{"type":"q","query":"entity=function"}]'
+  cq neighborhood tools/cq/cli_app/app.py:1 --lang python
+
+Environment Variables:
+  CQ_ROOT           Repository root path
+  CQ_FORMAT         Output format (md, json, both, summary, mermaid, dot, ldmd)
+  CQ_VERBOSE        Verbosity level
+  CQ_ARTIFACT_DIR   Artifact output directory
+  CQ_SAVE_ARTIFACT  Enable/disable artifact persistence
+"""
 
 
 class GlobalOptions(CqStruct, frozen=True):
@@ -47,11 +59,25 @@ class ConfigOptionArgs:
     """Parsed CLI config options."""
 
     config: Annotated[
-        str | None, Parameter(name="--config", group=global_group, help="Config file path")
+        str | None,
+        Parameter(
+            name="--config",
+            env_var="CQ_CONFIG",
+            group=global_group,
+            help="Config file path",
+        ),
     ] = None
-    no_config: Annotated[
-        bool, Parameter(name="--no-config", group=global_group, help="Skip config file loading")
-    ] = False
+    use_config: Annotated[
+        bool,
+        Parameter(
+            name="--use-config",
+            negative="--no-config",
+            negative_bool=(),
+            env_var="CQ_USE_CONFIG",
+            group=global_group,
+            help="Enable config file loading",
+        ),
+    ] = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,20 +85,52 @@ class GlobalOptionArgs:
     """Parsed CLI global options."""
 
     root: Annotated[
-        Path | None, Parameter(name="--root", group=global_group, help="Repository root")
+        Path | None,
+        Parameter(
+            name="--root",
+            env_var="CQ_ROOT",
+            group=global_group,
+            help="Repository root",
+        ),
     ] = None
     verbose: Annotated[
-        int, Parameter(name=["--verbose", "-v"], group=global_group, help="Verbosity level")
+        int,
+        Parameter(
+            name=["--verbose", "-v"],
+            env_var="CQ_VERBOSE",
+            group=global_group,
+            help="Verbosity level",
+        ),
     ] = 0
     output_format: Annotated[
-        OutputFormat, Parameter(name="--format", group=global_group, help="Output format")
+        OutputFormat,
+        Parameter(
+            name="--format",
+            env_var="CQ_FORMAT",
+            group=global_group,
+            help="Output format",
+        ),
     ] = OutputFormat.md
     artifact_dir: Annotated[
-        Path | None, Parameter(name="--artifact-dir", group=global_group, help="Artifact directory")
+        Path | None,
+        Parameter(
+            name="--artifact-dir",
+            env_var="CQ_ARTIFACT_DIR",
+            group=global_group,
+            help="Artifact directory",
+        ),
     ] = None
-    no_save_artifact: Annotated[
-        bool, Parameter(name="--no-save-artifact", group=global_group, help="Don't save artifact")
-    ] = False
+    save_artifact: Annotated[
+        bool,
+        Parameter(
+            name="--save-artifact",
+            negative="--no-save-artifact",
+            negative_bool=(),
+            env_var="CQ_SAVE_ARTIFACT",
+            group=global_group,
+            help="Persist output artifacts",
+        ),
+    ] = True
 
 
 class LaunchContext(CqStruct, frozen=True):
@@ -86,16 +144,15 @@ class LaunchContext(CqStruct, frozen=True):
     save_artifact: bool
 
 
-def _make_console() -> Console:
+def _make_console(*, stderr: bool = False) -> Console:
     """Create a deterministic console for output.
 
     Returns:
-    -------
-    Console
-        Configured Rich console.
+        Console: A configured rich console instance.
     """
     force_color = os.environ.get("CQ_FORCE_COLOR", "").lower() in {"1", "true"}
     return Console(
+        stderr=stderr,
         width=100,
         force_terminal=force_color,
         color_system="auto" if force_color else None,
@@ -103,25 +160,26 @@ def _make_console() -> Console:
     )
 
 
-# Create the root app with config chain
+console = _make_console()
+error_console = _make_console(stderr=True)
+
 app = App(
     name="cq",
     help="Code Query - High-signal code analysis macros",
     version=VERSION,
-    help_format="markdown",
+    help_format="rich",
+    help_epilogue=_HELP_EPILOGUE,
     name_transform=lambda s: s.replace("_", "-"),
+    default_parameter=Parameter(show_default=True, show_env_var=True),
+    result_action=cq_result_action,
     config=build_config_chain(),
+    console=console,
+    error_console=error_console,
+    exit_on_error=False,
+    print_error=True,
+    help_on_error=True,
 )
-
-# Set group parameters for meta app
 app.meta.group_parameters = global_group
-
-console = _make_console()
-
-
-# ============================================================================
-# Meta App Launcher
-# ============================================================================
 
 
 def _apply_config_overrides(opts: GlobalOptions, config: CqConfig | None) -> GlobalOptions:
@@ -172,24 +230,25 @@ def _build_launch_context(
     config_opts: ConfigOptionArgs,
     global_opts: GlobalOptionArgs,
 ) -> LaunchContext:
-    if config_opts.config or config_opts.no_config:
+    no_config = not config_opts.use_config
+    if config_opts.config or no_config:
         app.config = build_config_chain(
             config_file=config_opts.config,
-            no_config=config_opts.no_config,
+            no_config=no_config,
         )
 
     typed_config = load_typed_config(
         config_file=config_opts.config,
-        no_config=config_opts.no_config,
+        no_config=no_config,
     )
-    typed_env = None if config_opts.no_config else load_typed_env_config()
+    typed_env = None if no_config else load_typed_env_config()
 
     cli_opts = GlobalOptions(
         root=global_opts.root,
         verbose=global_opts.verbose,
         output_format=global_opts.output_format,
         artifact_dir=global_opts.artifact_dir,
-        save_artifact=not global_opts.no_save_artifact,
+        save_artifact=global_opts.save_artifact,
     )
     resolved = _resolve_global_options(cli_opts, typed_config, typed_env)
     return LaunchContext(
@@ -203,37 +262,14 @@ def _build_launch_context(
 
 
 def _build_cli_context(launch: LaunchContext) -> CliContext:
-    return CliContext.build(
-        argv=launch.argv,
+    options = CliContextOptions(
         root=launch.root,
         verbose=launch.verbose,
         output_format=launch.output_format,
         artifact_dir=launch.artifact_dir,
         save_artifact=launch.save_artifact,
     )
-
-
-def _execute_command(tokens: tuple[str, ...], ctx: CliContext) -> CliResult | int | object:
-    command, bound, ignored = app.parse_args(
-        tokens,
-        exit_on_error=True,
-        print_error=True,
-    )
-
-    extra: dict[str, Any] = {}
-    if "ctx" in ignored:
-        extra["ctx"] = ctx
-
-    return command(*bound.args, **bound.kwargs, **extra)
-
-
-def _finalize_result(result: CliResult | int | object) -> int:
-    if isinstance(result, CliResult):
-        filters = result.filters if result.filters else FilterConfig()
-        return handle_result(result, filters)
-    if isinstance(result, int):
-        return result
-    return 0
+    return CliContext.build(argv=launch.argv, options=options)
 
 
 @app.meta.default
@@ -245,37 +281,34 @@ def launcher(
     """Handle global options and dispatch the selected command.
 
     Returns:
-    -------
-    int
-        Process exit code.
+        int: Process exit code from command execution.
     """
-    if global_opts is None:
-        global_opts = GlobalOptionArgs()
-    if config_opts is None:
-        config_opts = ConfigOptionArgs()
+    resolved_global_opts = global_opts if global_opts is not None else GlobalOptionArgs()
+    resolved_config_opts = config_opts if config_opts is not None else ConfigOptionArgs()
     launch = _build_launch_context(
         argv=sys.argv[1:],
-        config_opts=config_opts,
-        global_opts=global_opts,
+        config_opts=resolved_config_opts,
+        global_opts=resolved_global_opts,
     )
     ctx = _build_cli_context(launch)
-    result = _execute_command(tokens, ctx)
-    return _finalize_result(result)
+    exit_code, _event = invoke_with_telemetry(app, list(tokens), ctx=ctx)
+    return exit_code
 
 
-# ============================================================================
-# Register Analysis Commands
-# ============================================================================
-
+# Analysis commands
 app.command("tools.cq.cli_app.commands.analysis:impact", group=analysis_group)
 app.command("tools.cq.cli_app.commands.analysis:calls", group=analysis_group)
 app.command("tools.cq.cli_app.commands.analysis:imports", group=analysis_group)
 app.command("tools.cq.cli_app.commands.analysis:exceptions", group=analysis_group)
 app.command(
-    "tools.cq.cli_app.commands.analysis:sig_impact", name="sig-impact", group=analysis_group
+    "tools.cq.cli_app.commands.analysis:sig_impact",
+    name="sig-impact",
+    group=analysis_group,
 )
 app.command(
-    "tools.cq.cli_app.commands.analysis:side_effects", name="side-effects", group=analysis_group
+    "tools.cq.cli_app.commands.analysis:side_effects",
+    name="side-effects",
+    group=analysis_group,
 )
 app.command("tools.cq.cli_app.commands.analysis:scopes", group=analysis_group)
 app.command(
@@ -283,53 +316,35 @@ app.command(
     name="bytecode-surface",
     group=analysis_group,
 )
-
-
-# ============================================================================
-# Register Query Command
-# ============================================================================
-
-app.command("tools.cq.cli_app.commands.query:q", group=analysis_group)
-
-
-# ============================================================================
-# Register Search Command
-# ============================================================================
-
+app.command("tools.cq.cli_app.commands.query:q", name="q", group=analysis_group)
 app.command("tools.cq.cli_app.commands.search:search", group=analysis_group)
-
-
-# ============================================================================
-# Register Report Command
-# ============================================================================
-
 app.command("tools.cq.cli_app.commands.report:report", group=analysis_group)
+app.command("tools.cq.cli_app.commands.run:run", group=analysis_group)
+app.command("tools.cq.cli_app.commands.chain:chain", group=analysis_group)
+app.command(
+    "tools.cq.cli_app.commands.neighborhood:neighborhood",
+    name="neighborhood",
+    alias="nb",
+    group=analysis_group,
+)
 
-
-# ============================================================================
-# Register Admin Commands
-# ============================================================================
-
+# Admin commands
 app.command("tools.cq.cli_app.commands.admin:index", group=admin_group)
 app.command("tools.cq.cli_app.commands.admin:cache", group=admin_group)
 app.command("tools.cq.cli_app.commands.admin:schema", group=admin_group)
 
-# Run/chain commands
-app.command("tools.cq.cli_app.commands.run:run", group=analysis_group)
-app.command("tools.cq.cli_app.commands.chain:chain", group=analysis_group)
+# Protocol command sub-apps (lazy-loaded)
+app.command("tools.cq.cli_app.commands.ldmd:ldmd_app", name="ldmd")
+app.command(
+    "tools.cq.cli_app.commands.artifact:artifact_app",
+    name="artifact",
+)
 
-# LDMD protocol commands
-from tools.cq.cli_app.commands.ldmd import ldmd_app
-
-app.command(ldmd_app)
-
-# Artifact retrieval commands
-from tools.cq.cli_app.commands.artifact import artifact_app
-
-app.command(artifact_app)
-
-# Neighborhood command
-from tools.cq.cli_app.commands.neighborhood import nb_app, neighborhood_app
-
-app.command(neighborhood_app)
-app.command(nb_app)
+# Setup commands
+app.command("tools.cq.cli_app.commands.repl:repl", group=setup_group)
+app.register_install_completion_command(
+    name="--install-completion",
+    add_to_startup=False,
+    group=setup_group,
+    help="Install CQ shell completion scripts.",
+)

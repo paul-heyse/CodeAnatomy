@@ -11,13 +11,16 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.decorators import require_context, require_ctx
 from tools.cq.cli_app.options import ReportOptions, options_from_params
 from tools.cq.cli_app.params import ReportParams
+from tools.cq.cli_app.types import ReportPreset
 
 
+@require_ctx
 def report(
     preset: Annotated[
-        str,
+        ReportPreset,
         Parameter(
             help="Report preset (refactor-impact, safety-reliability, change-propagation, dependency-health)"
         ),
@@ -35,55 +38,15 @@ def report(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.core.bundles import BundleContext, parse_target_spec, run_bundle
     from tools.cq.core.run_context import RunContext
     from tools.cq.core.schema import mk_result, ms
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     options = options_from_params(opts, type_=ReportOptions)
-
-    if options.target is None:
-        started_ms = ms()
-        run_ctx = RunContext.from_parts(
-            root=ctx.root,
-            argv=ctx.argv,
-            tc=ctx.toolchain,
-            started_ms=started_ms,
-        )
-        run = run_ctx.to_runmeta("report")
-        result = mk_result(run)
-        result.summary["error"] = "Target spec is required"
-        return CliResult(result=result, context=ctx, filters=options)
-
-    # Validate preset
-    valid_presets = {
-        "refactor-impact",
-        "safety-reliability",
-        "change-propagation",
-        "dependency-health",
-    }
-    if preset not in valid_presets:
-        started_ms = ms()
-        run_ctx = RunContext.from_parts(
-            root=ctx.root,
-            argv=ctx.argv,
-            tc=ctx.toolchain,
-            started_ms=started_ms,
-        )
-        run = run_ctx.to_runmeta("report")
-        result = mk_result(run)
-        result.summary["error"] = (
-            f"Invalid preset: {preset}. Must be one of: {', '.join(sorted(valid_presets))}"
-        )
-        return CliResult(result=result, context=ctx, filters=options)
 
     # Parse target spec
     try:
@@ -112,6 +75,6 @@ def report(
         bytecode_show=options.bytecode_show,
     )
 
-    result = run_bundle(preset, bundle_ctx)
+    result = run_bundle(str(preset), bundle_ctx)
 
     return CliResult(result=result, context=ctx, filters=options)

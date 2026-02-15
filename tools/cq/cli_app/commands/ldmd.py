@@ -7,9 +7,12 @@ from pathlib import Path
 from typing import Annotated
 
 import cyclopts
+from cyclopts import validators
 
 from tools.cq.cli_app.context import CliContext, CliResult, CliTextResult
-from tools.cq.cli_app.types import OutputFormat
+from tools.cq.cli_app.decorators import require_context, require_ctx
+from tools.cq.cli_app.groups import protocol_group
+from tools.cq.cli_app.types import LdmdSliceMode, OutputFormat
 from tools.cq.ldmd.format import (
     LdmdParseError,
     build_index,
@@ -18,7 +21,11 @@ from tools.cq.ldmd.format import (
     search_sections,
 )
 
-ldmd_app = cyclopts.App(name="ldmd", help="LDMD progressive disclosure protocol")
+ldmd_app = cyclopts.App(
+    name="ldmd",
+    help="LDMD progressive disclosure protocol",
+    group=protocol_group,
+)
 
 
 def _text_result(
@@ -59,6 +66,7 @@ def _wants_json(ctx: CliContext) -> bool:
 
 
 @ldmd_app.command
+@require_ctx
 def index(
     path: Annotated[str, cyclopts.Parameter(help="Path to LDMD document")],
     *,
@@ -77,13 +85,8 @@ def index(
     -------
     CliResult
         JSON output with section metadata.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
-    if ctx is None:
-        msg = "CliContext not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
     doc_path = Path(path)
     if not doc_path.exists():
         return _text_result(ctx, f"Document not found: {path}", exit_code=2)
@@ -119,13 +122,32 @@ def index(
 
 
 @ldmd_app.command
+@require_ctx
 def get(
     path: Annotated[str, cyclopts.Parameter(help="Path to LDMD document")],
     *,
     section_id: Annotated[str, cyclopts.Parameter(name="--id")],
-    mode: str = "full",
-    depth: int = 0,
-    limit_bytes: int = 0,
+    mode: Annotated[
+        LdmdSliceMode,
+        cyclopts.Parameter(
+            name="--mode",
+            help="Extraction mode: full, preview, or tldr",
+        ),
+    ] = LdmdSliceMode.full,
+    depth: Annotated[
+        int,
+        cyclopts.Parameter(
+            name="--depth",
+            validator=validators.Number(gte=0, lte=100),
+        ),
+    ] = 0,
+    limit_bytes: Annotated[
+        int,
+        cyclopts.Parameter(
+            name="--limit-bytes",
+            validator=validators.Number(gte=0, lte=10_000_000),
+        ),
+    ] = 0,
     ctx: Annotated[CliContext | None, cyclopts.Parameter(parse=False)] = None,
 ) -> CliResult:
     """Extract content from a section by ID.
@@ -149,13 +171,8 @@ def get(
     -------
     CliResult
         Extracted section content.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
-    if ctx is None:
-        msg = "CliContext not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
     doc_path = Path(path)
     if not doc_path.exists():
         return _text_result(ctx, f"Document not found: {path}", exit_code=2)
@@ -172,8 +189,8 @@ def get(
         slice_data = get_slice(
             content,
             idx,
-            section_id=section_id,
-            mode=mode,
+            section_id=resolved_id,
+            mode=str(mode),
             depth=depth,
             limit_bytes=limit_bytes,
         )
@@ -183,7 +200,7 @@ def get(
     if _wants_json(ctx):
         payload = {
             "section_id": resolved_id,
-            "mode": mode,
+            "mode": str(mode),
             "depth": depth,
             "limit_bytes": limit_bytes,
             "content": extracted_text,
@@ -197,6 +214,7 @@ def get(
 
 
 @ldmd_app.command
+@require_ctx
 def search(
     path: Annotated[str, cyclopts.Parameter(help="Path to LDMD document")],
     *,
@@ -218,13 +236,8 @@ def search(
     -------
     CliResult
         JSON output with search matches.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
-    if ctx is None:
-        msg = "CliContext not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
     doc_path = Path(path)
     if not doc_path.exists():
         return _text_result(ctx, f"Document not found: {path}", exit_code=2)
@@ -240,6 +253,7 @@ def search(
 
 
 @ldmd_app.command
+@require_ctx
 def neighbors(
     path: Annotated[str, cyclopts.Parameter(help="Path to LDMD document")],
     *,
@@ -261,13 +275,8 @@ def neighbors(
     -------
     CliResult
         JSON output with prev/next section IDs.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
-    if ctx is None:
-        msg = "CliContext not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
     doc_path = Path(path)
     if not doc_path.exists():
         return _text_result(ctx, f"Document not found: {path}", exit_code=2)
@@ -292,3 +301,11 @@ def neighbors(
             media_type="application/json",
         )
     return _text_result(ctx, json.dumps(nav, indent=2), media_type="application/json")
+
+
+def get_app() -> cyclopts.App:
+    """Return LDMD sub-app for lazy registration."""
+    return ldmd_app
+
+
+__all__ = ["get_app", "ldmd_app"]

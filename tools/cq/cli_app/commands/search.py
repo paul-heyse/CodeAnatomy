@@ -11,10 +11,12 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.decorators import require_context, require_ctx
 from tools.cq.cli_app.options import SearchOptions, options_from_params
 from tools.cq.cli_app.params import SearchParams
 
 
+@require_ctx
 def search(
     query: Annotated[str, Parameter(help="Search query")],
     *,
@@ -30,9 +32,6 @@ def search(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.core.bootstrap import resolve_runtime_services
     from tools.cq.core.services import SearchServiceRequest
@@ -40,9 +39,7 @@ def search(
     from tools.cq.search.classifier import QueryMode
     from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     # Determine mode
     if opts is None:
@@ -70,7 +67,7 @@ def search(
             root=ctx.root,
             query=query,
             mode=mode,
-            lang_scope=parse_query_language_scope(options.lang),
+            lang_scope=parse_query_language_scope(str(options.lang)),
             include_globs=include_globs if include_globs else None,
             exclude_globs=list(options.exclude) if options.exclude else None,
             include_strings=options.include_strings,

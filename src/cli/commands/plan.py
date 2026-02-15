@@ -169,9 +169,7 @@ def _build_plan_request_payload(
     output_root: Path,
     rulepack_profile: str,
 ) -> dict[str, object]:
-    output_locations = {
-        name: str(output_root / "build" / name) for name in output_targets
-    }
+    output_locations = {name: str(output_root / "build" / name) for name in output_targets}
     return {
         "input_locations": {},
         "output_targets": output_targets,

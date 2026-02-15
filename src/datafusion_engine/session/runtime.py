@@ -273,9 +273,7 @@ def _parse_compile_resolver_invariant_inputs(
 ) -> _CompileResolverInvariantInputs:
     if invariants is not None:
         if kwargs:
-            message = (
-                "Cannot pass legacy keyword arguments when `invariants` is provided."
-            )
+            message = "Cannot pass legacy keyword arguments when `invariants` is provided."
             raise TypeError(message)
         return invariants
     label = _coerce_str(kwargs.get("label"), "label")
@@ -322,9 +320,7 @@ def _coerce_str_sequence(value: object, field_name: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, str) or not isinstance(value, Sequence):
-        message = (
-            f"Field {field_name!r} must be a sequence of strings."
-        )
+        message = f"Field {field_name!r} must be a sequence of strings."
         raise TypeError(message)
     return tuple(item for item in value if isinstance(item, str))
 

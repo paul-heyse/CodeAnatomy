@@ -23,10 +23,15 @@ from tools.cq.cli_app.types import (
 )
 
 search_mode = Group("Search Mode", validator=validators.mutually_exclusive)
+filter_group = Group("Filters", default_parameter=Parameter(show_choices=True))
 run_input = Group(
     "Run Input",
     validator=validators.LimitedChoice(min=1, max=3),
 )
+
+_LIMIT_VALIDATOR = validators.Number(gte=1, lte=1_000_000)
+_DEPTH_VALIDATOR = validators.Number(gte=1, lte=10_000)
+_MAX_FILES_VALIDATOR = validators.Number(gte=1, lte=1_000_000)
 
 
 @dataclass(kw_only=True)
@@ -40,7 +45,9 @@ class FilterParams:
         list[str],
         Parameter(
             name="--include",
+            group=filter_group,
             help="Include files matching pattern (glob or ~regex, repeatable)",
+            consume_multiple=True,
             converter=comma_separated_list(str),
         ),
     ] = field(default_factory=list)
@@ -49,7 +56,9 @@ class FilterParams:
         list[str],
         Parameter(
             name="--exclude",
+            group=filter_group,
             help="Exclude files matching pattern (glob or ~regex, repeatable)",
+            consume_multiple=True,
             converter=comma_separated_list(str),
         ),
     ] = field(default_factory=list)
@@ -58,7 +67,9 @@ class FilterParams:
         list[ImpactBucket],
         Parameter(
             name="--impact",
+            group=filter_group,
             help="Filter by impact bucket (comma-separated: low,med,high)",
+            consume_multiple=True,
             converter=comma_separated_enum(ImpactBucket),
         ),
     ] = field(default_factory=list)
@@ -67,7 +78,9 @@ class FilterParams:
         list[ConfidenceBucket],
         Parameter(
             name="--confidence",
+            group=filter_group,
             help="Filter by confidence bucket (comma-separated: low,med,high)",
+            consume_multiple=True,
             converter=comma_separated_enum(ConfidenceBucket),
         ),
     ] = field(default_factory=list)
@@ -76,7 +89,9 @@ class FilterParams:
         list[SeverityLevel],
         Parameter(
             name="--severity",
+            group=filter_group,
             help="Filter by severity (comma-separated: error,warning,info)",
+            consume_multiple=True,
             converter=comma_separated_enum(SeverityLevel),
         ),
     ] = field(default_factory=list)
@@ -85,6 +100,8 @@ class FilterParams:
         int | None,
         Parameter(
             name="--limit",
+            group=filter_group,
+            validator=_LIMIT_VALIDATOR,
             help="Maximum number of findings",
         ),
     ] = None
@@ -167,7 +184,7 @@ class ImpactParams(FilterParams):
     """Options for the impact command."""
 
     param: Annotated[str, Parameter(help="Parameter name to trace")]
-    depth: Annotated[int, Parameter(help="Maximum call depth")] = 5
+    depth: Annotated[int, Parameter(help="Maximum call depth", validator=_DEPTH_VALIDATOR)] = 5
 
 
 @dataclass(kw_only=True)
@@ -196,7 +213,9 @@ class SigImpactParams(FilterParams):
 class SideEffectsParams(FilterParams):
     """Options for the side-effects command."""
 
-    max_files: Annotated[int, Parameter(help="Maximum files to scan")] = 2000
+    max_files: Annotated[
+        int, Parameter(help="Maximum files to scan", validator=_MAX_FILES_VALIDATOR)
+    ] = 2000
 
 
 @dataclass(kw_only=True)

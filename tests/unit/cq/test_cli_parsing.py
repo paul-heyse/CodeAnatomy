@@ -189,6 +189,15 @@ class TestReportCommandParsing:
         assert opts.param == "config"
         assert opts.signature == "foo(a, b)"
 
+    def test_report_invalid_preset_fails_parse(self) -> None:
+        """Test that invalid preset is rejected at parse time."""
+        with pytest.raises(SystemExit):
+            app.parse_args(
+                ["report", "not-a-real-preset", "--target", "function:build_graph"],
+                exit_on_error=True,
+                print_error=False,
+            )
+
 
 class TestRunCommandParsing:
     """Tests for run command parsing."""
@@ -229,3 +238,36 @@ class TestChainCommandParsing:
             print_error=False,
         )
         assert bound.args
+
+
+class TestNeighborhoodCommandParsing:
+    """Tests for neighborhood command parsing."""
+
+    def test_neighborhood_alias_nb(self) -> None:
+        """Test that nb alias resolves neighborhood command."""
+        _cmd, bound, _extra = app.parse_args(
+            ["nb", "tools/cq/cli_app/app.py:1", "--lang", "python"]
+        )
+        assert bound.args[0] == "tools/cq/cli_app/app.py:1"
+        assert str(bound.kwargs["lang"]) == "python"
+
+    def test_neighborhood_invalid_lang_fails(self) -> None:
+        """Test that invalid neighborhood language fails at parse time."""
+        with pytest.raises(SystemExit):
+            app.parse_args(
+                ["neighborhood", "tools/cq/cli_app/app.py:1", "--lang", "auto"],
+                exit_on_error=True,
+                print_error=False,
+            )
+
+
+class TestSetupCommandParsing:
+    """Tests for setup commands."""
+
+    def test_install_completion_parses(self) -> None:
+        """Test parsing --install-completion root command."""
+        _cmd, _bound, _extra = app.parse_args(["--install-completion"])
+
+    def test_repl_command_parses(self) -> None:
+        """Test parsing repl command."""
+        _cmd, _bound, _extra = app.parse_args(["repl"])

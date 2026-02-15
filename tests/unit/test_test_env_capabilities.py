@@ -21,9 +21,7 @@ from tests.test_helpers.optional_deps import (
 )
 
 
-def test_required_runtime_capabilities_available(
-    require_native_runtime: None,
-) -> None:
+def test_required_runtime_capabilities_available(require_native_runtime: None) -> None:
     """Fail fast when required runtime dependencies are missing."""
     _ = require_native_runtime
     datafusion = require_datafusion()

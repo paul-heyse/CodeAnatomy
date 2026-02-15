@@ -224,10 +224,7 @@ def _infer_entity_grain_by_join_key_signature(
         return ("edge", "per_edge")
     if ColumnType.FILE_ID in join_key_types or ColumnType.PATH in join_key_types:
         return ("file", "per_file")
-    if (
-        CompatibilityGroup.SYMBOL_IDENTITY in join_key_groups
-        or ColumnType.SYMBOL in join_key_types
-    ):
+    if CompatibilityGroup.SYMBOL_IDENTITY in join_key_groups or ColumnType.SYMBOL in join_key_types:
         return ("symbol", "per_symbol")
     return None
 

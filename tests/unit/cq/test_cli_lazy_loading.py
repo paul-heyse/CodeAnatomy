@@ -15,6 +15,10 @@ def test_lazy_command_resolution() -> None:
     assert app["search"] is not None
     assert app["run"] is not None
     assert app["chain"] is not None
+    assert app["ldmd"] is not None
+    assert app["artifact"] is not None
+    assert app["neighborhood"] is not None
+    assert app["nb"] is not None
 
 
 def test_lazy_help_render() -> None:

@@ -488,7 +488,6 @@ def _collect_cpg_outputs(
     return outputs
 
 
-
 def _collect_auxiliary_outputs(
     *,
     output_dir: Path,

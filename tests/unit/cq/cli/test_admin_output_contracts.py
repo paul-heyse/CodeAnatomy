@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from tools.cq.cli_app.commands import admin
 from tools.cq.cli_app.context import CliContext
-from tools.cq.cli_app.types import OutputFormat
+from tools.cq.cli_app.types import OutputFormat, SchemaKind
 
 
 def _json_ctx(tmp_path: Path) -> CliContext:
@@ -48,7 +48,7 @@ def test_admin_schema_result_json_output(
     tmp_path: Path,
 ) -> None:
     ctx = _json_ctx(tmp_path)
-    code = admin.schema(kind="result", ctx=ctx)
+    code = admin.schema(kind=SchemaKind.result, ctx=ctx)
     assert code == 0
     out = capsys.readouterr().out
     payload = json.loads(out)
@@ -62,7 +62,7 @@ def test_admin_schema_components_json_output(
     tmp_path: Path,
 ) -> None:
     ctx = _json_ctx(tmp_path)
-    code = admin.schema(kind="components", ctx=ctx)
+    code = admin.schema(kind=SchemaKind.components, ctx=ctx)
     assert code == 0
     out = capsys.readouterr().out
     payload = json.loads(out)

@@ -46,11 +46,11 @@ Canonical detailed behavior reference:
 |--------|---------|---------|-------------|
 | `--root` | `CQ_ROOT` | Auto-detect | Repository root path |
 | `--config` | `CQ_CONFIG` | `.cq.toml` | Config file path |
-| `--no-config` | `CQ_NO_CONFIG` | `false` | Skip config file loading |
+| `--use-config`, `--no-config` | `CQ_USE_CONFIG` | `true` | Enable/disable config file loading |
 | `--verbose`, `-v` | `CQ_VERBOSE` | `0` | Verbosity level (0-3) |
 | `--format` | `CQ_FORMAT` | `md` | Output format |
 | `--artifact-dir` | `CQ_ARTIFACT_DIR` | `.cq/artifacts` | Artifact output directory |
-| `--no-save-artifact` | `CQ_NO_SAVE_ARTIFACT` | `false` | Skip artifact saving |
+| `--save-artifact`, `--no-save-artifact` | `CQ_SAVE_ARTIFACT` | `true` | Enable/disable artifact saving |
 
 ### Filters
 

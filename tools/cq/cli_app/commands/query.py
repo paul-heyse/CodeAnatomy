@@ -13,6 +13,7 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.decorators import require_context, require_ctx
 from tools.cq.cli_app.options import QueryOptions, options_from_params
 from tools.cq.cli_app.params import QueryParams
 
@@ -27,6 +28,7 @@ def _has_query_tokens(query_string: str) -> bool:
     return bool(list(re.finditer(token_pattern, query_string)))
 
 
+@require_ctx
 def q(
     query_string: Annotated[str, Parameter(help='Query string (e.g., "entity=function name=foo")')],
     *,
@@ -42,9 +44,6 @@ def q(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.core.bootstrap import resolve_runtime_services
@@ -55,9 +54,7 @@ def q(
     from tools.cq.query.parser import QueryParseError, parse_query
     from tools.cq.query.planner import compile_query
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     if opts is None:
         opts = QueryParams()

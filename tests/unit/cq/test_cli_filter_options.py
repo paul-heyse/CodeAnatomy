@@ -60,6 +60,23 @@ class TestFilterOptionsFromCLI:
         opts = bound.kwargs["opts"]
         assert opts.include == ["src/", "tools/"]
 
+    def test_include_consume_multiple_tokens(self) -> None:
+        """Test include parsing with consume_multiple token lists."""
+        _cmd, bound, _extra = app.parse_args(
+            [
+                "calls",
+                "foo",
+                "--include",
+                "src/",
+                "tools/",
+                "--exclude",
+                "tests/",
+            ]
+        )
+        opts = bound.kwargs["opts"]
+        assert opts.include == ["src/", "tools/"]
+        assert opts.exclude == ["tests/"]
+
     def test_limit_from_cli(self) -> None:
         """Test limit parsed from CLI."""
         _cmd, bound, _extra = app.parse_args(["calls", "foo", "--limit", "25"])
@@ -69,5 +86,13 @@ class TestFilterOptionsFromCLI:
     def test_impact_filter_flag(self) -> None:
         """Test --impact flag."""
         _cmd, bound, _extra = app.parse_args(["calls", "foo", "--impact", "high,med"])
+        opts = bound.kwargs["opts"]
+        assert [str(value) for value in opts.impact] == ["high", "med"]
+
+    def test_impact_filter_multi_token(self) -> None:
+        """Test --impact supports multiple tokens after one flag."""
+        _cmd, bound, _extra = app.parse_args(
+            ["calls", "foo", "--impact", "high", "med", "--confidence", "high"]
+        )
         opts = bound.kwargs["opts"]
         assert [str(value) for value in opts.impact] == ["high", "med"]

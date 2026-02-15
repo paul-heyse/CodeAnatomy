@@ -153,8 +153,6 @@ def _collect_env_overrides() -> dict[str, object]:
         data["artifact_dir"] = value
     if (value := _env_value("CQ_SAVE_ARTIFACT")) is not None:
         data["save_artifact"] = value
-    if (value := _env_value("CQ_NO_SAVE_ARTIFACT")) is not None:
-        data["no_save_artifact"] = value
 
     return data
 
@@ -217,7 +215,6 @@ def _coerce_config_data(data: dict[str, object]) -> dict[str, object] | None:
         "output_format",
         "artifact_dir",
         "save_artifact",
-        "no_save_artifact",
     }
     coerced: dict[str, object] = {}
 
@@ -231,20 +228,13 @@ def _coerce_config_data(data: dict[str, object]) -> dict[str, object] | None:
             coerced_value = _coerce_str(value)
         elif normalized_key == "verbose":
             coerced_value = _coerce_int(value)
-        elif normalized_key in {"save_artifact", "no_save_artifact"}:
+        elif normalized_key == "save_artifact":
             coerced_value = _coerce_bool(value)
         else:
             coerced_value = None
         if coerced_value is None:
             return None
         coerced[normalized_key] = coerced_value
-
-    if "no_save_artifact" in coerced and "save_artifact" not in coerced:
-        no_save = coerced.pop("no_save_artifact")
-        if isinstance(no_save, bool):
-            coerced["save_artifact"] = not no_save
-    else:
-        coerced.pop("no_save_artifact", None)
 
     return coerced or None
 

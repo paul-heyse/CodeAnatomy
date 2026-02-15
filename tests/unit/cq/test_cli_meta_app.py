@@ -151,4 +151,9 @@ class TestConfigChain:
     def test_no_config_option_exists(self) -> None:
         """Test that --no-config option is available."""
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--no-config"])
-        assert bound.kwargs["config_opts"].no_config is True
+        assert bound.kwargs["config_opts"].use_config is False
+
+    def test_save_artifact_negative_flag(self) -> None:
+        """Test that --no-save-artifact sets save_artifact to false."""
+        _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--no-save-artifact"])
+        assert bound.kwargs["global_opts"].save_artifact is False

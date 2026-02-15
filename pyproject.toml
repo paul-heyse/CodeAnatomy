@@ -95,6 +95,9 @@ extend-exclude = ["docs/**", "rust/**"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["PLR2004", "PLR6301", "PLC1901", "D103", "D100"]
+"tests/integration/test_rust_engine_e2e.py" = ["PLR0914"]
+"tests/unit/test_test_env_capabilities.py" = ["PLR0914"]
+"tools/cq/cli_app/telemetry.py" = ["BLE001"]
 
 [tool.ruff.format]
 quote-style = "double"

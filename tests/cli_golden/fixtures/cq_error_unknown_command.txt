@@ -1,0 +1,89 @@
+Usage: cq COMMAND
+
+Code Query - High-signal code analysis macros
+
+╭─ Commands ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --help (-h)  Display this message and exit.                                                                          │
+│ --version    Display application version.                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Global Options ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Options applied to every CQ command.                                                                                 │
+│                                                                                                                      │
+│ --root                              Repository root [env var: CQ_ROOT, CQ_ROOT] [default: None]                      │
+│ --verbose -v                        Verbosity level [env var: CQ_VERBOSE, CQ_VERBOSE] [default: 0]                   │
+│ --format                            Output format [choices: md, json, both, summary, mermaid, mermaid-class, dot,    │
+│                                     ldmd] [env var: CQ_FORMAT, CQ_FORMAT] [default: md]                              │
+│ --artifact-dir                      Artifact directory [env var: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR] [default: None]   │
+│ --save-artifact --no-save-artifact  Persist output artifacts [env var: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT] [default: │
+│                                     True]                                                                            │
+│ --config                            Config file path [env var: CQ_CONFIG, CQ_CONFIG] [default: None]                 │
+│ --use-config --no-config            Enable config file loading [env var: CQ_USE_CONFIG, CQ_USE_CONFIG] [default:     │
+│                                     True]                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Analysis ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Static and structural analysis commands.                                                                             │
+│                                                                                                                      │
+│                                                                                                                      │
+│ Static and structural analysis commands.                                                                             │
+│                                                                                                                      │
+│ bytecode-surface   Analyze bytecode for hidden dependencies.                                                         │
+│ calls              Census all call sites for a function.                                                             │
+│ chain              Execute chained CQ commands via the shared run engine.                                            │
+│ exceptions         Analyze exception handling patterns.                                                              │
+│ impact             Trace data flow from a function parameter.                                                        │
+│ imports            Analyze import structure and cycles.                                                              │
+│ neighborhood (nb)  Analyze semantic neighborhood of a target symbol or location.                                     │
+│ q                  Run a declarative code query using ast-grep.                                                      │
+│ report             Run target-scoped report bundles.                                                                 │
+│ run                Execute a multi-step CQ run plan.                                                                 │
+│ scopes             Analyze scope capture (closures).                                                                 │
+│ search             Search for code patterns with semantic enrichment.                                                │
+│ side-effects       Detect import-time side effects.                                                                  │
+│ sig-impact         Analyze impact of a signature change.                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Administration ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Maintenance and schema export commands.                                                                              │
+│                                                                                                                      │
+│                                                                                                                      │
+│ Maintenance and schema export commands.                                                                              │
+│                                                                                                                      │
+│ cache   Handle deprecated cache management flags.                                                                    │
+│ index   Handle deprecated index management flags.                                                                    │
+│ schema  Emit msgspec JSON Schema for CQ types.                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Protocols ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Protocol/data access subcommands.                                                                                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│ Protocol/data access subcommands.                                                                                    │
+│                                                                                                                      │
+│ artifact  Retrieve cache-backed CQ artifacts                                                                         │
+│ ldmd      LDMD progressive disclosure protocol                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Setup ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Shell and developer setup commands.                                                                                  │
+│                                                                                                                      │
+│                                                                                                                      │
+│ Shell and developer setup commands.                                                                                  │
+│                                                                                                                      │
+│ repl                  Launch an interactive CQ shell session.                                                        │
+│ --install-completion  Install CQ shell completion scripts.                                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+Examples:
+  cq search build_graph --lang python
+  cq q "entity=function name=~^build"
+  cq run --steps '[{"type":"q","query":"entity=function"}]'
+  cq neighborhood tools/cq/cli_app/app.py:1 --lang python
+
+Environment Variables:
+  CQ_ROOT           Repository root path
+  CQ_FORMAT         Output format (md, json, both, summary, mermaid, dot, ldmd)
+  CQ_VERBOSE        Verbosity level
+  CQ_ARTIFACT_DIR   Artifact output directory
+  CQ_SAVE_ARTIFACT  Enable/disable artifact persistence
+╭─ Error ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Unknown command "unknown-command". Available commands: impact, calls, imports, exceptions, sig-impact, side-effects, │
+│ scopes, bytecode-surface, ...                                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

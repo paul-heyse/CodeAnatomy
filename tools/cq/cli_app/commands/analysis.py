@@ -12,6 +12,7 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.decorators import require_context, require_ctx
 from tools.cq.cli_app.options import (
     BytecodeSurfaceOptions,
     CommonFilters,
@@ -33,6 +34,7 @@ from tools.cq.cli_app.params import (
 )
 
 
+@require_ctx
 def impact(
     function: Annotated[str, Parameter(help="Function name to analyze")],
     *,
@@ -48,21 +50,13 @@ def impact(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected or required options are missing.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.impact import ImpactRequest, cmd_impact
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     options = options_from_params(opts, type_=ImpactOptions)
-    if options.param is None:
-        msg = "Parameter name is required"
-        raise RuntimeError(msg)
 
     request = ImpactRequest(
         tc=ctx.toolchain,
@@ -77,6 +71,7 @@ def impact(
     return CliResult(result=result, context=ctx, filters=options)
 
 
+@require_ctx
 def calls(
     function: Annotated[str, Parameter(help="Function name to find calls for")],
     *,
@@ -92,17 +87,12 @@ def calls(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.core.bootstrap import resolve_runtime_services
     from tools.cq.core.services import CallsServiceRequest
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     if opts is None:
         opts = FilterParams()
@@ -121,6 +111,7 @@ def calls(
     return CliResult(result=result, context=ctx, filters=options)
 
 
+@require_ctx
 def imports(
     *,
     opts: Annotated[ImportsParams, Parameter(name="*")] | None = None,
@@ -134,16 +125,11 @@ def imports(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.imports import ImportRequest, cmd_imports
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     if opts is None:
         opts = ImportsParams()
@@ -163,6 +149,7 @@ def imports(
     return CliResult(result=result, context=ctx, filters=options)
 
 
+@require_ctx
 def exceptions(
     *,
     opts: Annotated[ExceptionsParams, Parameter(name="*")] | None = None,
@@ -176,16 +163,11 @@ def exceptions(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.exceptions import cmd_exceptions
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     if opts is None:
         opts = ExceptionsParams()
@@ -203,6 +185,7 @@ def exceptions(
     return CliResult(result=result, context=ctx, filters=options)
 
 
+@require_ctx
 def sig_impact(
     symbol: Annotated[str, Parameter(help="Function name to analyze")],
     *,
@@ -218,21 +201,13 @@ def sig_impact(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected or `--to` is missing.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     options = options_from_params(opts, type_=SigImpactOptions)
-    if options.to is None:
-        msg = "Signature value is required"
-        raise RuntimeError(msg)
 
     request = SigImpactRequest(
         tc=ctx.toolchain,
@@ -246,6 +221,7 @@ def sig_impact(
     return CliResult(result=result, context=ctx, filters=options)
 
 
+@require_ctx
 def side_effects(
     *,
     opts: Annotated[SideEffectsParams, Parameter(name="*")] | None = None,
@@ -259,16 +235,11 @@ def side_effects(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     if opts is None:
         opts = SideEffectsParams()
@@ -287,6 +258,7 @@ def side_effects(
     return CliResult(result=result, context=ctx, filters=options)
 
 
+@require_ctx
 def scopes(
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,
@@ -302,16 +274,11 @@ def scopes(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     if opts is None:
         opts = FilterParams()
@@ -328,6 +295,7 @@ def scopes(
     return CliResult(result=result, context=ctx, filters=options)
 
 
+@require_ctx
 def bytecode_surface(
     target: Annotated[str, Parameter(help="File path or symbol name to analyze")],
     *,
@@ -343,16 +311,11 @@ def bytecode_surface(
 
     Returns:
         CliResult: Renderable command result payload.
-
-    Raises:
-        RuntimeError: If command context is not injected.
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
 
-    if ctx is None:
-        msg = "Context not injected"
-        raise RuntimeError(msg)
+    ctx = require_context(ctx)
 
     if opts is None:
         opts = BytecodeSurfaceParams()

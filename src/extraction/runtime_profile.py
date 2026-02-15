@@ -560,26 +560,24 @@ def _apply_runtime_profile_payload(
 ) -> DataFusionRuntimeProfile:
     target_partitions = _runtime_profile_int_value(profile_payload.get("target_partitions"))
     batch_size = _runtime_profile_int_value(profile_payload.get("batch_size"))
-    memory_pool_bytes = _runtime_profile_int_value(
-        profile_payload.get("memory_pool_bytes")
-    )
+    memory_pool_bytes = _runtime_profile_int_value(profile_payload.get("memory_pool_bytes"))
     return msgspec.structs.replace(
         df_profile,
         execution=msgspec.structs.replace(
             df_profile.execution,
             target_partitions=(
-                target_partitions if target_partitions is not None else df_profile.execution.target_partitions
+                target_partitions
+                if target_partitions is not None
+                else df_profile.execution.target_partitions
             ),
-            batch_size=(
-                batch_size if batch_size is not None else df_profile.execution.batch_size
-            ),
+            batch_size=(batch_size if batch_size is not None else df_profile.execution.batch_size),
             memory_limit_bytes=(
-                memory_pool_bytes if memory_pool_bytes is not None else df_profile.execution.memory_limit_bytes
+                memory_pool_bytes
+                if memory_pool_bytes is not None
+                else df_profile.execution.memory_limit_bytes
             ),
             memory_pool=(
-                "fair"
-                if memory_pool_bytes is not None
-                else df_profile.execution.memory_pool
+                "fair" if memory_pool_bytes is not None else df_profile.execution.memory_pool
             ),
         ),
     )

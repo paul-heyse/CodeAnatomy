@@ -40,13 +40,13 @@ Code Query - High-signal code analysis macros
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Analysis**:
 
@@ -67,9 +67,9 @@ Options applied to every CQ command.
 
 **Administration**:
 
-* [`cache`](#cq-cache): Handle deprecated cache management flags.
-* [`index`](#cq-index): Handle deprecated index management flags.
-* [`schema`](#cq-schema): Emit msgspec JSON Schema for CQ types.
+* [`cache`](#cq-cache): Show deprecation notice for removed cache management command.
+* [`index`](#cq-index): Show deprecation notice for removed index management command.
+* [`schema`](#cq-schema): Export JSON schema payloads for CQ contracts.
 
 **Protocols**:
 
@@ -91,30 +91,30 @@ Trace data flow from a function parameter.
 
 **Parameters**:
 
-* `FUNCTION, --function`: Function name to analyze  **[required]**  *[env: CQ_FUNCTION]*
-* `--param`: Parameter name to trace  **[required]**  *[env: CQ_PARAM]*
-* `--depth`: Maximum call depth  *[env: CQ_DEPTH]*  *[default: 5]*
+* `FUNCTION, --function`: Function name to analyze  **[required]**
+* `--param`: Parameter name to trace  **[required]**
+* `--depth`: Maximum call depth  *[default: 5]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq calls
 
@@ -126,28 +126,28 @@ Census all call sites for a function.
 
 **Parameters**:
 
-* `FUNCTION, --function`: Function name to find calls for  **[required]**  *[env: CQ_FUNCTION]*
+* `FUNCTION, --function`: Function name to find calls for  **[required]**
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq imports
 
@@ -159,29 +159,29 @@ Analyze import structure and cycles.
 
 **Parameters**:
 
-* `--cycles, --no-cycles`: Run cycle detection  *[env: CQ_CYCLES]*  *[default: False]*
-* `--module`: Focus on specific module  *[env: CQ_MODULE]*  *[default: None]*
+* `--cycles, --no-cycles`: Run cycle detection  *[default: False]*
+* `--module`: Focus on specific module  *[default: None]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq exceptions
 
@@ -193,28 +193,28 @@ Analyze exception handling patterns.
 
 **Parameters**:
 
-* `--function`: Focus on specific function  *[env: CQ_FUNCTION]*  *[default: None]*
+* `--function`: Focus on specific function  *[default: None]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq sig-impact
 
@@ -226,29 +226,29 @@ Analyze impact of a signature change.
 
 **Parameters**:
 
-* `SYMBOL, --symbol`: Function name to analyze  **[required]**  *[env: CQ_SYMBOL]*
-* `--to`: New signature (e.g., "foo(a, b, *, c=None)")  **[required]**  *[env: CQ_TO]*
+* `SYMBOL, --symbol`: Function name to analyze  **[required]**
+* `--to`: New signature (e.g., "foo(a, b, *, c=None)")  **[required]**
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq side-effects
 
@@ -260,28 +260,28 @@ Detect import-time side effects.
 
 **Parameters**:
 
-* `--max-files`: Maximum files to scan  *[env: CQ_MAX_FILES]*  *[default: 2000]*
+* `--max-files`: Maximum files to scan  *[default: 2000]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq scopes
 
@@ -293,28 +293,28 @@ Analyze scope capture (closures).
 
 **Parameters**:
 
-* `TARGET, --target`: File path or symbol name to analyze  **[required]**  *[env: CQ_TARGET]*
+* `TARGET, --target`: File path or symbol name to analyze  **[required]**
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq bytecode-surface
 
@@ -326,29 +326,29 @@ Analyze bytecode for hidden dependencies.
 
 **Parameters**:
 
-* `TARGET, --target`: File path or symbol name to analyze  **[required]**  *[env: CQ_TARGET]*
-* `--show`: What to show: globals,attrs,constants,opcodes  *[env: CQ_SHOW]*  *[default: globals,attrs,constants]*
+* `TARGET, --target`: File path or symbol name to analyze  **[required]**
+* `--show`: What to show: globals,attrs,constants,opcodes  *[default: globals,attrs,constants]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq q
 
@@ -360,29 +360,29 @@ Run a declarative code query using ast-grep.
 
 **Parameters**:
 
-* `QUERY-STRING, --query-string`: Query string (e.g., "entity=function name=foo")  **[required]**  *[env: CQ_QUERY_STRING]*
-* `--explain-files, --no-explain-files`: Include file filtering diagnostics  *[env: CQ_EXPLAIN_FILES]*  *[default: False]*
+* `QUERY-STRING, --query-string`: Query string (e.g., "entity=function name=foo")  **[required]**
+* `--explain-files, --no-explain-files`: Include file filtering diagnostics  *[default: False]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq search
 
@@ -394,37 +394,37 @@ Search for code patterns with semantic enrichment.
 
 **Parameters**:
 
-* `QUERY, --query`: Search query  **[required]**  *[env: CQ_QUERY]*
-* `--include-strings, --no-include-strings`: Include matches in strings/comments/docstrings  *[env: CQ_INCLUDE_STRINGS]*  *[default: False]*
-* `--with-neighborhood, --no-with-neighborhood`: Include structural neighborhood preview (slower)  *[env: CQ_WITH_NEIGHBORHOOD]*  *[default: False]*
-* `--in`: Restrict to directory  *[env: CQ_IN]*  *[default: None]*
-* `--lang`: Search language scope (auto, python, rust)  *[choices: auto, python, rust]*  *[env: CQ_LANG]*  *[default: auto]*
+* `QUERY, --query`: Search query  **[required]**
+* `--include-strings, --no-include-strings`: Include matches in strings/comments/docstrings  *[default: False]*
+* `--with-neighborhood, --no-with-neighborhood`: Include structural neighborhood preview (slower)  *[default: False]*
+* `--in`: Restrict to directory  *[default: None]*
+* `--lang`: Search language scope (auto, python, rust)  *[choices: auto, python, rust]*  *[default: auto]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 **Search Mode**:
 
-* `--regex, --no-regex`: Treat query as regex  *[env: CQ_REGEX]*  *[default: False]*
-* `--literal, --no-literal`: Treat query as literal  *[env: CQ_LITERAL]*  *[default: False]*
+* `--regex, --no-regex`: Treat query as regex  *[default: False]*
+* `--literal, --no-literal`: Treat query as literal  *[default: False]*
 
 ## cq report
 
@@ -436,33 +436,33 @@ Run target-scoped report bundles.
 
 **Parameters**:
 
-* `PRESET, --preset`: Report preset (refactor-impact, safety-reliability, change-propagation, dependency-health)  **[required]**  *[choices: refactor-impact, safety-reliability, change-propagation, dependency-health]*  *[env: CQ_PRESET]*
-* `--target`: Target spec (function:foo, class:Bar, module:pkg.mod, path:src/...)  **[required]**  *[env: CQ_TARGET]*
-* `--in`: Restrict analysis to a directory  *[env: CQ_IN]*  *[default: None]*
-* `--param`: Parameter name for impact analysis  *[env: CQ_PARAM]*  *[default: None]*
-* `--to`: Proposed signature for sig-impact analysis  *[env: CQ_TO]*  *[default: None]*
-* `--bytecode-show`: Bytecode surface fields  *[env: CQ_BYTECODE_SHOW]*  *[default: None]*
+* `PRESET, --preset`: Report preset (refactor-impact, safety-reliability, change-propagation, dependency-health)  **[required]**  *[choices: refactor-impact, safety-reliability, change-propagation, dependency-health]*
+* `--target`: Target spec (function:foo, class:Bar, module:pkg.mod, path:src/...)  **[required]**
+* `--in`: Restrict analysis to a directory  *[default: None]*
+* `--param`: Parameter name for impact analysis  *[default: None]*
+* `--to`: Proposed signature for sig-impact analysis  *[default: None]*
+* `--bytecode-show`: Bytecode surface fields  *[default: None]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 ## cq run
 
@@ -474,34 +474,34 @@ Execute a multi-step CQ run plan.
 
 **Parameters**:
 
-* `--stop-on-error, --no-stop-on-error`: Stop execution on the first step error  *[env: CQ_STOP_ON_ERROR]*  *[default: False]*
+* `--stop-on-error, --no-stop-on-error`: Stop execution on the first step error  *[default: False]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 **Filters**:
 
-* `--include, --empty-include`: Include files matching pattern (glob or ~regex, repeatable)  *[env: CQ_INCLUDE]*  *[default: []]*
-* `--exclude, --empty-exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[env: CQ_EXCLUDE]*  *[default: []]*
-* `--impact, --empty-impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_IMPACT]*  *[default: []]*
-* `--confidence, --empty-confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[env: CQ_CONFIDENCE]*  *[default: []]*
-* `--severity, --empty-severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[env: CQ_SEVERITY]*  *[default: []]*
-* `--limit`: Maximum number of findings  *[env: CQ_LIMIT]*  *[default: None]*
+* `--include`: Include files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--exclude`: Exclude files matching pattern (glob or ~regex, repeatable)  *[default: []]*
+* `--impact`: Filter by impact bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--confidence`: Filter by confidence bucket (comma-separated: low,med,high)  *[choices: low, med, high]*  *[default: []]*
+* `--severity`: Filter by severity (comma-separated: error,warning,info)  *[choices: info, warning, error]*  *[default: []]*
+* `--limit`: Maximum number of findings  *[default: None]*
 
 **Run Input**:
 
-* `--plan`: Path to a run plan TOML file  *[env: CQ_PLAN]*  *[default: None]*
-* `--step, --empty-step`: Repeatable JSON step object (e.g., '{"type":"q","query":"..."}')  *[env: CQ_STEP]*  *[default: []]*
-* `--steps, --empty-steps`: JSON array of steps (e.g., '[{"type":"q",...},{"type":"calls",...}]')  *[env: CQ_STEPS]*  *[default: []]*
+* `--plan`: Path to a run plan TOML file  *[default: None]*
+* `--step`: Repeatable JSON step object (e.g., '{"type":"q","query":"..."}')  *[default: []]*
+* `--steps`: JSON array of steps (e.g., '[{"type":"q",...},{"type":"calls",...}]')  *[default: []]*
 
 ## cq chain
 
@@ -513,19 +513,19 @@ Execute chained CQ commands via the shared run engine.
 
 **Parameters**:
 
-* `--delimiter`: Token used to split command segments.  *[env: CQ_DELIMITER]*  *[default: AND]*
+* `--delimiter`: Token used to split command segments.  *[default: AND]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 ## cq neighborhood
 
@@ -537,72 +537,62 @@ Analyze semantic neighborhood of a target symbol or location.
 
 **Parameters**:
 
-* `TARGET, --target`: Target location (file:line[:col] or symbol)  **[required]**  *[env: CQ_TARGET]*
-* `--lang`: Query language (python, rust)  *[choices: python, rust]*  *[env: CQ_LANG]*  *[default: python]*
-* `--top-k`: Max items per slice  *[env: CQ_TOP_K]*  *[default: 10]*
-* `--semantic-enrichment, --no-semantic-enrichment`: Enable semantic enrichment  *[env: CQ_SEMANTIC_ENRICHMENT]*  *[default: True]*
+* `TARGET, --target`: Target location (file:line[:col] or symbol)  **[required]**
+* `--lang`: Query language (python, rust)  *[choices: python, rust]*  *[default: python]*
+* `--top-k`: Max items per slice  *[default: 10]*
+* `--semantic-enrichment, --no-semantic-enrichment`: Enable semantic enrichment  *[default: True]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 ## cq index
 
 ```console
-cq index [OPTIONS]
+cq index
 ```
 
-Handle deprecated index management flags.
-
-**Parameters**:
-
-* `--rebuild, --no-rebuild`: (Deprecated) Rebuild index  *[env: CQ_REBUILD]*  *[default: False]*
-* `--status, --no-status`: (Deprecated) Show index status  *[env: CQ_STATUS]*  *[default: False]*
+Show deprecation notice for removed index management command.
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 ## cq cache
 
 ```console
-cq cache [OPTIONS]
+cq cache
 ```
 
-Handle deprecated cache management flags.
-
-**Parameters**:
-
-* `--stats, --no-stats`: (Deprecated) Show cache statistics  *[env: CQ_STATS]*  *[default: False]*
-* `--clear, --no-clear`: (Deprecated) Clear cache  *[env: CQ_CLEAR]*  *[default: False]*
+Show deprecation notice for removed cache management command.
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 ## cq schema
 
@@ -610,23 +600,23 @@ Options applied to every CQ command.
 cq schema [OPTIONS]
 ```
 
-Emit msgspec JSON Schema for CQ types.
+Export JSON schema payloads for CQ contracts.
 
 **Parameters**:
 
-* `--kind`: Schema kind: result, query, or components  *[choices: result, query, components]*  *[env: CQ_KIND]*  *[default: result]*
+* `--kind`: Schema export kind  *[choices: result, query, components]*  *[default: result]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 ## cq ldmd
 
@@ -636,13 +626,13 @@ LDMD progressive disclosure protocol
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 ### cq ldmd index
 
@@ -706,13 +696,13 @@ Retrieve cache-backed CQ artifacts
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 ### cq artifact list
 
@@ -752,13 +742,13 @@ Launch an interactive CQ shell session.
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*
 
 ## cq --install-completion
 
@@ -770,17 +760,17 @@ Install CQ shell completion scripts.
 
 **Parameters**:
 
-* `--shell`: Shell type for completion. If not specified, attempts to auto-detect current shell.  *[choices: zsh, bash, fish]*  *[env: CQ_SHELL]*  *[default: None]*
-* `--output, -o`: Output path for the completion script. If not specified, uses shell-specific default.  *[env: CQ_O]*  *[default: None]*
+* `--shell`: Shell type for completion. If not specified, attempts to auto-detect current shell.  *[choices: zsh, bash, fish]*  *[default: None]*
+* `--output, -o`: Output path for the completion script. If not specified, uses shell-specific default.  *[default: None]*
 
 **Global Options**:
 
 Options applied to every CQ command.
 
-* `--root`: Repository root  *[env: CQ_ROOT, CQ_ROOT]*  *[default: None]*
-* `--verbose, -v`: Verbosity level  *[env: CQ_VERBOSE, CQ_VERBOSE]*  *[default: 0]*
-* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT, CQ_FORMAT]*  *[default: md]*
-* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR]*  *[default: None]*
-* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT]*  *[default: True]*
-* `--config`: Config file path  *[env: CQ_CONFIG, CQ_CONFIG]*  *[default: None]*
-* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG, CQ_USE_CONFIG]*  *[default: True]*
+* `--root`: Repository root  *[env: CQ_ROOT]*  *[default: None]*
+* `--verbose, -v`: Verbosity level; repeat flag for higher verbosity  *[env: CQ_VERBOSE]*  *[default: 0]*
+* `--format`: Output format  *[choices: md, json, both, summary, mermaid, mermaid-class, dot, ldmd]*  *[env: CQ_FORMAT]*  *[default: md]*
+* `--artifact-dir`: Artifact directory  *[env: CQ_ARTIFACT_DIR]*  *[default: None]*
+* `--save-artifact, --no-save-artifact`: Persist output artifacts  *[env: CQ_SAVE_ARTIFACT]*  *[default: True]*
+* `--config`: Config file path  *[env: CQ_CONFIG]*  *[default: None]*
+* `--use-config, --no-config`: Enable config file loading  *[env: CQ_USE_CONFIG]*  *[default: True]*

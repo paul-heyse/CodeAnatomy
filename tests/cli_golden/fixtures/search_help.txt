@@ -3,46 +3,37 @@ Usage: cq search [OPTIONS] QUERY
 Search for code patterns with semantic enrichment.
 
 ╭─ Parameters ─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ *  QUERY --query                               Search query [env var: CQ_SEARCH_QUERY] [required]                    │
-│    --include-strings --no-include-strings      Include matches in strings/comments/docstrings [env var:              │
-│                                                CQ_SEARCH_INCLUDE_STRINGS] [default: False]                           │
-│    --with-neighborhood --no-with-neighborhood  Include structural neighborhood preview (slower) [env var:            │
-│                                                CQ_SEARCH_WITH_NEIGHBORHOOD] [default: False]                         │
-│    --in                                        Restrict to directory [env var: CQ_SEARCH_IN] [default: None]         │
+│ *  QUERY --query                               Search query [required]                                               │
+│    --include-strings --no-include-strings      Include matches in strings/comments/docstrings [default: False]       │
+│    --with-neighborhood --no-with-neighborhood  Include structural neighborhood preview (slower) [default: False]     │
+│    --in                                        Restrict to directory [default: None]                                 │
 │    --lang                                      Search language scope (auto, python, rust) [choices: auto, python,    │
-│                                                rust] [env var: CQ_SEARCH_LANG] [default: auto]                       │
+│                                                rust] [default: auto]                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Global Options ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Options applied to every CQ command.                                                                                 │
 │                                                                                                                      │
-│ --root                              Repository root [env var: CQ_ROOT, CQ_SEARCH_ROOT] [default: None]               │
-│ --verbose -v                        Verbosity level [env var: CQ_VERBOSE, CQ_SEARCH_VERBOSE] [default: 0]            │
+│ --root                              Repository root [env var: CQ_ROOT] [default: None]                               │
+│ --verbose -v                        Verbosity level; repeat flag for higher verbosity [env var: CQ_VERBOSE]          │
+│                                     [default: 0]                                                                     │
 │ --format                            Output format [choices: md, json, both, summary, mermaid, mermaid-class, dot,    │
-│                                     ldmd] [env var: CQ_FORMAT, CQ_SEARCH_FORMAT] [default: md]                       │
-│ --artifact-dir                      Artifact directory [env var: CQ_ARTIFACT_DIR, CQ_SEARCH_ARTIFACT_DIR] [default:  │
-│                                     None]                                                                            │
-│ --save-artifact --no-save-artifact  Persist output artifacts [env var: CQ_SAVE_ARTIFACT, CQ_SEARCH_SAVE_ARTIFACT]    │
-│                                     [default: True]                                                                  │
-│ --config                            Config file path [env var: CQ_CONFIG, CQ_SEARCH_CONFIG] [default: None]          │
-│ --use-config --no-config            Enable config file loading [env var: CQ_USE_CONFIG, CQ_SEARCH_USE_CONFIG]        │
-│                                     [default: True]                                                                  │
+│                                     ldmd] [env var: CQ_FORMAT] [default: md]                                         │
+│ --artifact-dir                      Artifact directory [env var: CQ_ARTIFACT_DIR] [default: None]                    │
+│ --save-artifact --no-save-artifact  Persist output artifacts [env var: CQ_SAVE_ARTIFACT] [default: True]             │
+│ --config                            Config file path [env var: CQ_CONFIG] [default: None]                            │
+│ --use-config --no-config            Enable config file loading [env var: CQ_USE_CONFIG] [default: True]              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Filters ────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ --include --empty-include        Include files matching pattern (glob or ~regex, repeatable) [env var:               │
-│                                  CQ_SEARCH_INCLUDE] [default: []]                                                    │
-│ --exclude --empty-exclude        Exclude files matching pattern (glob or ~regex, repeatable) [env var:               │
-│                                  CQ_SEARCH_EXCLUDE] [default: []]                                                    │
-│ --impact --empty-impact          Filter by impact bucket (comma-separated: low,med,high) [choices: low, med, high]   │
-│                                  [env var: CQ_SEARCH_IMPACT] [default: []]                                           │
-│ --confidence --empty-confidence  Filter by confidence bucket (comma-separated: low,med,high) [choices: low, med,     │
-│                                  high] [env var: CQ_SEARCH_CONFIDENCE] [default: []]                                 │
-│ --severity --empty-severity      Filter by severity (comma-separated: error,warning,info) [choices: info, warning,   │
-│                                  error] [env var: CQ_SEARCH_SEVERITY] [default: []]                                  │
-│ --limit                          Maximum number of findings [env var: CQ_SEARCH_LIMIT] [default: None]               │
+│ --include     Include files matching pattern (glob or ~regex, repeatable) [default: []]                              │
+│ --exclude     Exclude files matching pattern (glob or ~regex, repeatable) [default: []]                              │
+│ --impact      Filter by impact bucket (comma-separated: low,med,high) [choices: low, med, high] [default: []]        │
+│ --confidence  Filter by confidence bucket (comma-separated: low,med,high) [choices: low, med, high] [default: []]    │
+│ --severity    Filter by severity (comma-separated: error,warning,info) [choices: info, warning, error] [default: []] │
+│ --limit       Maximum number of findings [default: None]                                                             │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Search Mode ────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ --regex --no-regex      Treat query as regex [env var: CQ_SEARCH_REGEX] [default: False]                             │
-│ --literal --no-literal  Treat query as literal [env var: CQ_SEARCH_LITERAL] [default: False]                         │
+│ --regex --no-regex      Treat query as regex [default: False]                                                        │
+│ --literal --no-literal  Treat query as literal [default: False]                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 

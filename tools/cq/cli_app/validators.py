@@ -73,3 +73,25 @@ def validate_target_spec(value: str) -> tuple[str, str]:
         raise ValueError(msg)
 
     return kind, target_value
+
+
+def validate_launcher_invariants(**kwargs: object) -> None:
+    """Validate cross-option launcher invariants after config injection.
+
+    Raises:
+        ValueError: If launcher options violate cross-option invariants.
+    """
+    config_opts = kwargs.get("config_opts")
+    if config_opts is not None:
+        use_config = getattr(config_opts, "use_config", None)
+        config_file = getattr(config_opts, "config", None)
+        if use_config is False and config_file is not None:
+            msg = "--config cannot be combined with --no-config"
+            raise ValueError(msg)
+
+    global_opts = kwargs.get("global_opts")
+    if global_opts is not None:
+        verbose = getattr(global_opts, "verbose", None)
+        if isinstance(verbose, int) and verbose < 0:
+            msg = "--verbose cannot be negative"
+            raise ValueError(msg)

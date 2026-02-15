@@ -8,7 +8,12 @@ These tests verify that:
 
 from __future__ import annotations
 
-from tools.cq.cli_app.app import app
+from tools.cq.cli_app.app import (
+    ConfigOptionArgs,
+    GlobalOptionArgs,
+    _build_launch_context,
+    app,
+)
 
 
 class TestMetaAppParsing:
@@ -22,9 +27,13 @@ class TestMetaAppParsing:
         assert bound.kwargs["global_opts"].output_format is not None
 
     def test_meta_parses_verbose(self) -> None:
-        """Test that --verbose flag is parsed by meta app."""
-        # Verbose is an int, so provide a value
-        _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--verbose", "1"])
+        """Test that repeated verbosity flags are counted by meta app."""
+        _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "-vv"])
+        assert bound.kwargs["global_opts"].verbose == 2
+
+    def test_meta_parses_verbose_long_flag(self) -> None:
+        """Test that --verbose increments verbosity without a value."""
+        _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--verbose"])
         assert bound.kwargs["global_opts"].verbose == 1
 
     def test_meta_parses_root(self) -> None:
@@ -157,3 +166,26 @@ class TestConfigChain:
         """Test that --no-save-artifact sets save_artifact to false."""
         _cmd, bound, _extra = app.meta.parse_args(["calls", "foo", "--no-save-artifact"])
         assert bound.kwargs["global_opts"].save_artifact is False
+
+    def test_build_launch_context_config_enabled(self) -> None:
+        """Test launch context config chain with config files enabled."""
+        launch = _build_launch_context(
+            argv=["calls", "foo"],
+            config_opts=ConfigOptionArgs(),
+            global_opts=GlobalOptionArgs(),
+        )
+        assert launch.output_format is not None
+        assert app.config is not None
+        assert len(app.config) == 2
+
+    def test_build_launch_context_no_config_keeps_env(self) -> None:
+        """Test launch context config chain with --no-config."""
+        launch = _build_launch_context(
+            argv=["calls", "foo"],
+            config_opts=ConfigOptionArgs(use_config=False),
+            global_opts=GlobalOptionArgs(),
+        )
+        assert launch.output_format is not None
+        assert app.config is not None
+        assert len(app.config) == 1
+        assert app.config[0].__class__.__name__ == "Env"

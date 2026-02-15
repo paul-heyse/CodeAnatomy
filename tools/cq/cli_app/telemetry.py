@@ -6,13 +6,15 @@ import time
 from dataclasses import dataclass
 
 from cyclopts import App
-from cyclopts._result_action import handle_result_action
-from cyclopts._run import _run_maybe_async_command
 from cyclopts.bind import normalize_tokens
 from cyclopts.exceptions import CycloptsError
 
 from tools.cq.cli_app.context import CliContext
-from tools.cq.cli_app.result_action import cq_result_action
+from tools.cq.cli_app.dispatch import dispatch_bound_command
+from tools.cq.cli_app.result_action import (
+    CQ_DEFAULT_RESULT_ACTION,
+    apply_result_action,
+)
 from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
 
 
@@ -33,9 +35,11 @@ class CqInvokeEvent:
 
 
 def _apply_result_action(app: App, result: object) -> int:
-    action = app.app_stack.resolve("result_action", fallback=cq_result_action)
-    processed = handle_result_action(result, action, app.console.print)
-    return int(processed) if isinstance(processed, int) else 0
+    action = app.app_stack.resolve("result_action", fallback=CQ_DEFAULT_RESULT_ACTION)
+    processed = apply_result_action(result, action)
+    if isinstance(processed, bool):
+        return 0 if processed else 1
+    return processed if isinstance(processed, int) else 0
 
 
 def _classify_error_stage(exc: CycloptsError) -> str:
@@ -87,11 +91,7 @@ def invoke_with_telemetry(
 
             t1 = time.perf_counter()
             try:
-                result = _run_maybe_async_command(
-                    command,
-                    bound,
-                    app.app_stack.resolve("backend", fallback="asyncio"),
-                )
+                result = dispatch_bound_command(command, bound)
             except CycloptsError as exc:
                 exec_ms = (time.perf_counter() - t1) * 1000.0
                 event = CqInvokeEvent(

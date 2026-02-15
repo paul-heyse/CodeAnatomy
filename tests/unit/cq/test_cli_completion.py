@@ -10,7 +10,8 @@ from tools.cq.cli_app.completion import generate_completion_scripts
 
 def test_generate_completion_scripts(tmp_path: Path) -> None:
     """Ensure completion helper writes scripts for bash/zsh/fish."""
-    generate_completion_scripts(app, tmp_path, program_name="cq")
+    written = generate_completion_scripts(app, tmp_path, program_name="cq")
+    assert set(written) == {"bash", "zsh", "fish"}
     for shell in ("bash", "zsh", "fish"):
         output_path = tmp_path / f"cq.{shell}"
         assert output_path.exists()

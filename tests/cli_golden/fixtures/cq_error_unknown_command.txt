@@ -9,23 +9,17 @@ Code Query - High-signal code analysis macros
 ╭─ Global Options ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Options applied to every CQ command.                                                                                 │
 │                                                                                                                      │
-│ --root                              Repository root [env var: CQ_ROOT, CQ_ROOT] [default: None]                      │
-│ --verbose -v                        Verbosity level [env var: CQ_VERBOSE, CQ_VERBOSE] [default: 0]                   │
+│ --root                              Repository root [env var: CQ_ROOT] [default: None]                               │
+│ --verbose -v                        Verbosity level; repeat flag for higher verbosity [env var: CQ_VERBOSE]          │
+│                                     [default: 0]                                                                     │
 │ --format                            Output format [choices: md, json, both, summary, mermaid, mermaid-class, dot,    │
-│                                     ldmd] [env var: CQ_FORMAT, CQ_FORMAT] [default: md]                              │
-│ --artifact-dir                      Artifact directory [env var: CQ_ARTIFACT_DIR, CQ_ARTIFACT_DIR] [default: None]   │
-│ --save-artifact --no-save-artifact  Persist output artifacts [env var: CQ_SAVE_ARTIFACT, CQ_SAVE_ARTIFACT] [default: │
-│                                     True]                                                                            │
-│ --config                            Config file path [env var: CQ_CONFIG, CQ_CONFIG] [default: None]                 │
-│ --use-config --no-config            Enable config file loading [env var: CQ_USE_CONFIG, CQ_USE_CONFIG] [default:     │
-│                                     True]                                                                            │
+│                                     ldmd] [env var: CQ_FORMAT] [default: md]                                         │
+│ --artifact-dir                      Artifact directory [env var: CQ_ARTIFACT_DIR] [default: None]                    │
+│ --save-artifact --no-save-artifact  Persist output artifacts [env var: CQ_SAVE_ARTIFACT] [default: True]             │
+│ --config                            Config file path [env var: CQ_CONFIG] [default: None]                            │
+│ --use-config --no-config            Enable config file loading [env var: CQ_USE_CONFIG] [default: True]              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Analysis ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Static and structural analysis commands.                                                                             │
-│                                                                                                                      │
-│                                                                                                                      │
-│ Static and structural analysis commands.                                                                             │
-│                                                                                                                      │
 │ bytecode-surface   Analyze bytecode for hidden dependencies.                                                         │
 │ calls              Census all call sites for a function.                                                             │
 │ chain              Execute chained CQ commands via the shared run engine.                                            │
@@ -42,33 +36,18 @@ Code Query - High-signal code analysis macros
 │ sig-impact         Analyze impact of a signature change.                                                             │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Administration ─────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Maintenance and schema export commands.                                                                              │
-│                                                                                                                      │
-│                                                                                                                      │
-│ Maintenance and schema export commands.                                                                              │
-│                                                                                                                      │
-│ cache   Handle deprecated cache management flags.                                                                    │
-│ index   Handle deprecated index management flags.                                                                    │
-│ schema  Emit msgspec JSON Schema for CQ types.                                                                       │
+│ cache   Show deprecation notice for removed cache management command.                                                │
+│ index   Show deprecation notice for removed index management command.                                                │
+│ schema  Export JSON schema payloads for CQ contracts.                                                                │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Protocols ──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Protocol/data access subcommands.                                                                                    │
-│                                                                                                                      │
-│                                                                                                                      │
-│ Protocol/data access subcommands.                                                                                    │
-│                                                                                                                      │
 │ artifact  Retrieve cache-backed CQ artifacts                                                                         │
 │ ldmd      LDMD progressive disclosure protocol                                                                       │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭─ Setup ──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Shell and developer setup commands.                                                                                  │
-│                                                                                                                      │
-│                                                                                                                      │
-│ Shell and developer setup commands.                                                                                  │
-│                                                                                                                      │
-│ repl                  Launch an interactive CQ shell session.                                                        │
-│ --install-completion  Install CQ shell completion scripts.                                                           │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Setup:
+  repl: Launch an interactive CQ shell session.
+  --install-completion: Install CQ shell completion scripts.
+
 
 
 Examples:

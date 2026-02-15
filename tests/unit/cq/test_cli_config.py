@@ -2,7 +2,7 @@
 
 These tests verify that:
 1. build_config_chain returns correct provider types
-2. no_config=True returns empty list
+2. use_config=False keeps env provider and disables file providers
 3. explicit config file is handled correctly
 """
 
@@ -25,10 +25,11 @@ class TestBuildConfigChain:
         # Second provider should be Toml
         assert providers[1].__class__.__name__ == "Toml"
 
-    def test_no_config_returns_empty(self) -> None:
-        """Test that no_config=True returns empty list."""
-        providers = build_config_chain(no_config=True)
-        assert providers == []
+    def test_use_config_false_keeps_env_only(self) -> None:
+        """Test that use_config=False returns only the env provider."""
+        providers = build_config_chain(use_config=False)
+        assert len(providers) == 1
+        assert providers[0].__class__.__name__ == "Env"
 
     def test_explicit_config_file(self, tmp_path: Path) -> None:
         """Test that explicit config file is added to chain."""

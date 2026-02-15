@@ -69,6 +69,15 @@ class TestCallsCommandParsing:
         assert opts.exclude == ["tests/"]
         assert opts.limit == 50
 
+    def test_calls_empty_include_flag_rejected(self) -> None:
+        """Test that deprecated iterable empty flags are not exposed."""
+        with pytest.raises(SystemExit):
+            app.parse_args(
+                ["calls", "foo", "--empty-include"],
+                exit_on_error=True,
+                print_error=False,
+            )
+
 
 class TestQueryCommandParsing:
     """Tests for q (query) command argument parsing."""
@@ -226,6 +235,15 @@ class TestRunCommandParsing:
         opts = bound.kwargs["opts"]
         assert opts.step
 
+    def test_run_empty_step_flag_rejected(self) -> None:
+        """Test that run input iterable empty flags are not exposed."""
+        with pytest.raises(SystemExit):
+            app.parse_args(
+                ["run", "--empty-step"],
+                exit_on_error=True,
+                print_error=False,
+            )
+
 
 class TestChainCommandParsing:
     """Tests for chain command parsing."""
@@ -271,3 +289,7 @@ class TestSetupCommandParsing:
     def test_repl_command_parses(self) -> None:
         """Test parsing repl command."""
         _cmd, _bound, _extra = app.parse_args(["repl"])
+
+    def test_help_command_parses(self) -> None:
+        """Test parsing hidden help command used by REPL."""
+        _cmd, _bound, _extra = app.parse_args(["help"])

@@ -25,11 +25,41 @@ def _build_parser() -> argparse.ArgumentParser:
         default="docs/reference/cq_cli.md",
         help="Output path for generated markdown docs.",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Fail if the output file is missing or stale.",
+    )
     return parser
 
 
-def main() -> int:
+def _render_cq_reference() -> str:
+    return app.generate_docs(output_format="markdown", recursive=True, include_hidden=False)
+
+
+def generate_cq_reference(output_path: Path) -> str:
     """Render and write CQ CLI docs.
+
+    Returns:
+    -------
+    str
+        Rendered markdown documentation text.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    docs = _render_cq_reference()
+    output_path.write_text(docs, encoding="utf-8")
+    return docs
+
+
+def cq_reference_needs_update(output_path: Path) -> bool:
+    """Return whether CQ docs are missing or stale."""
+    if not output_path.exists():
+        return True
+    return output_path.read_text(encoding="utf-8") != _render_cq_reference()
+
+
+def main() -> int:
+    """Render, write, or freshness-check CQ CLI docs.
 
     Returns:
         int: Exit status code.
@@ -38,10 +68,9 @@ def main() -> int:
     args = parser.parse_args()
 
     output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    docs = app.generate_docs(output_format="markdown", recursive=True, include_hidden=False)
-    output_path.write_text(docs, encoding="utf-8")
+    if args.check:
+        return 1 if cq_reference_needs_update(output_path) else 0
+    generate_cq_reference(output_path)
     return 0
 
 

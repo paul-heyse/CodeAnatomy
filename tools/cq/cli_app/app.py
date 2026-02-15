@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
@@ -12,8 +11,7 @@ from typing import Annotated
 from cyclopts import App, Parameter
 from rich.console import Console
 
-from tools.cq.cli_app.config import build_config_chain, load_typed_config, load_typed_env_config
-from tools.cq.cli_app.config_types import CqConfig
+from tools.cq.cli_app.config import build_config_chain
 from tools.cq.cli_app.context import CliContext, CliContextOptions
 from tools.cq.cli_app.groups import (
     admin_group,
@@ -21,9 +19,10 @@ from tools.cq.cli_app.groups import (
     global_group,
     setup_group,
 )
-from tools.cq.cli_app.result_action import cq_result_action
+from tools.cq.cli_app.result_action import CQ_DEFAULT_RESULT_ACTION
 from tools.cq.cli_app.telemetry import invoke_with_telemetry
 from tools.cq.cli_app.types import OutputFormat
+from tools.cq.cli_app.validators import validate_launcher_invariants
 from tools.cq.core.structs import CqStruct
 
 VERSION = "0.4.0"
@@ -44,16 +43,6 @@ Environment Variables:
 """
 
 
-class GlobalOptions(CqStruct, frozen=True):
-    """Resolved global options for launcher configuration."""
-
-    root: Path | None = None
-    verbose: int = 0
-    output_format: OutputFormat = OutputFormat.md
-    artifact_dir: Path | None = None
-    save_artifact: bool = True
-
-
 @dataclass(frozen=True, slots=True)
 class ConfigOptionArgs:
     """Parsed CLI config options."""
@@ -62,7 +51,7 @@ class ConfigOptionArgs:
         str | None,
         Parameter(
             name="--config",
-            env_var="CQ_CONFIG",
+            show_env_var=True,
             group=global_group,
             help="Config file path",
         ),
@@ -73,7 +62,7 @@ class ConfigOptionArgs:
             name="--use-config",
             negative="--no-config",
             negative_bool=(),
-            env_var="CQ_USE_CONFIG",
+            show_env_var=True,
             group=global_group,
             help="Enable config file loading",
         ),
@@ -88,7 +77,7 @@ class GlobalOptionArgs:
         Path | None,
         Parameter(
             name="--root",
-            env_var="CQ_ROOT",
+            show_env_var=True,
             group=global_group,
             help="Repository root",
         ),
@@ -97,16 +86,17 @@ class GlobalOptionArgs:
         int,
         Parameter(
             name=["--verbose", "-v"],
-            env_var="CQ_VERBOSE",
+            count=True,
+            show_env_var=True,
             group=global_group,
-            help="Verbosity level",
+            help="Verbosity level; repeat flag for higher verbosity",
         ),
     ] = 0
     output_format: Annotated[
         OutputFormat,
         Parameter(
             name="--format",
-            env_var="CQ_FORMAT",
+            show_env_var=True,
             group=global_group,
             help="Output format",
         ),
@@ -115,7 +105,7 @@ class GlobalOptionArgs:
         Path | None,
         Parameter(
             name="--artifact-dir",
-            env_var="CQ_ARTIFACT_DIR",
+            show_env_var=True,
             group=global_group,
             help="Artifact directory",
         ),
@@ -126,7 +116,7 @@ class GlobalOptionArgs:
             name="--save-artifact",
             negative="--no-save-artifact",
             negative_bool=(),
-            env_var="CQ_SAVE_ARTIFACT",
+            show_env_var=True,
             group=global_group,
             help="Persist output artifacts",
         ),
@@ -168,10 +158,11 @@ app = App(
     help="Code Query - High-signal code analysis macros",
     version=VERSION,
     help_format="rich",
+    help_formatter="default",
     help_epilogue=_HELP_EPILOGUE,
     name_transform=lambda s: s.replace("_", "-"),
-    default_parameter=Parameter(show_default=True, show_env_var=True),
-    result_action=cq_result_action,
+    default_parameter=Parameter(show_default=True, show_env_var=False),
+    result_action=CQ_DEFAULT_RESULT_ACTION,
     config=build_config_chain(),
     console=console,
     error_console=error_console,
@@ -182,82 +173,22 @@ app = App(
 app.meta.group_parameters = global_group
 
 
-def _apply_config_overrides(opts: GlobalOptions, config: CqConfig | None) -> GlobalOptions:
-    if config is None:
-        return opts
-
-    root = opts.root
-    if root is None and config.root:
-        root = Path(config.root)
-
-    verbose = opts.verbose
-    if verbose == 0 and config.verbose is not None:
-        verbose = config.verbose
-
-    output_format = opts.output_format
-    if output_format == OutputFormat.md and config.output_format:
-        with suppress(ValueError):
-            output_format = OutputFormat(config.output_format)
-
-    artifact_dir = opts.artifact_dir
-    if artifact_dir is None and config.artifact_dir:
-        artifact_dir = Path(config.artifact_dir)
-
-    save_artifact = opts.save_artifact
-    if config.save_artifact is not None and opts.save_artifact:
-        save_artifact = config.save_artifact
-
-    return GlobalOptions(
-        root=root,
-        verbose=verbose,
-        output_format=output_format,
-        artifact_dir=artifact_dir,
-        save_artifact=save_artifact,
-    )
-
-
-def _resolve_global_options(
-    cli_opts: GlobalOptions,
-    config: CqConfig | None,
-    env: CqConfig | None,
-) -> GlobalOptions:
-    opts = _apply_config_overrides(cli_opts, config)
-    return _apply_config_overrides(opts, env)
-
-
 def _build_launch_context(
     argv: list[str],
     config_opts: ConfigOptionArgs,
     global_opts: GlobalOptionArgs,
 ) -> LaunchContext:
-    no_config = not config_opts.use_config
-    if config_opts.config or no_config:
-        app.config = build_config_chain(
-            config_file=config_opts.config,
-            no_config=no_config,
-        )
-
-    typed_config = load_typed_config(
+    app.config = build_config_chain(
         config_file=config_opts.config,
-        no_config=no_config,
+        use_config=config_opts.use_config,
     )
-    typed_env = None if no_config else load_typed_env_config()
-
-    cli_opts = GlobalOptions(
+    return LaunchContext(
+        argv=argv,
         root=global_opts.root,
         verbose=global_opts.verbose,
         output_format=global_opts.output_format,
         artifact_dir=global_opts.artifact_dir,
         save_artifact=global_opts.save_artifact,
-    )
-    resolved = _resolve_global_options(cli_opts, typed_config, typed_env)
-    return LaunchContext(
-        argv=argv,
-        root=resolved.root,
-        verbose=resolved.verbose,
-        output_format=resolved.output_format,
-        artifact_dir=resolved.artifact_dir,
-        save_artifact=resolved.save_artifact,
     )
 
 
@@ -272,7 +203,7 @@ def _build_cli_context(launch: LaunchContext) -> CliContext:
     return CliContext.build(argv=launch.argv, options=options)
 
 
-@app.meta.default
+@app.meta.default(validator=validate_launcher_invariants)
 def launcher(
     *tokens: Annotated[str, Parameter(show=False, allow_leading_hyphen=True)],
     global_opts: GlobalOptionArgs | None = None,
@@ -345,6 +276,12 @@ app.command(
 
 # Setup commands
 app.command("tools.cq.cli_app.commands.repl:repl", group=setup_group)
+app.command(
+    "tools.cq.cli_app.commands.repl:repl_help",
+    name="help",
+    group=setup_group,
+    show=False,
+)
 app.register_install_completion_command(
     name="--install-completion",
     add_to_startup=False,

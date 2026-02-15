@@ -13,7 +13,11 @@ from pathlib import Path
 from tools.cq.cli_app.app import app
 from tools.cq.cli_app.context import CliContext, CliResult, FilterConfig
 from tools.cq.cli_app.result import render_result
-from tools.cq.cli_app.result_action import cq_result_action
+from tools.cq.cli_app.result_action import (
+    CQ_DEFAULT_RESULT_ACTION,
+    apply_result_action,
+    cq_result_action,
+)
 from tools.cq.cli_app.telemetry import invoke_with_telemetry
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.schema import CqResult, RunMeta
@@ -164,6 +168,12 @@ class TestResultAction:
         ctx = CliContext.build(argv=["cq", "cache"], root=tmp_path)
         wrapped = CliResult(result=5, context=ctx)
         assert cq_result_action(wrapped) == 5
+
+    def test_apply_result_action_pipeline_default(self, tmp_path: Path) -> None:
+        """Test default result-action pipeline returns a normalized exit code."""
+        ctx = CliContext.build(argv=["cq", "cache"], root=tmp_path)
+        wrapped = CliResult(result=5, context=ctx)
+        assert apply_result_action(wrapped, CQ_DEFAULT_RESULT_ACTION) == 5
 
 
 class TestInvokeWithTelemetry:

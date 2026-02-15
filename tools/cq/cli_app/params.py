@@ -23,10 +23,21 @@ from tools.cq.cli_app.types import (
 )
 
 search_mode = Group("Search Mode", validator=validators.mutually_exclusive)
-filter_group = Group("Filters", default_parameter=Parameter(show_choices=True))
+filter_group = Group(
+    "Filters",
+    default_parameter=Parameter(
+        show_choices=True,
+        negative_iterable=(),
+        show_env_var=False,
+    ),
+)
 run_input = Group(
     "Run Input",
     validator=validators.LimitedChoice(min=1, max=3),
+    default_parameter=Parameter(
+        negative_iterable=(),
+        show_env_var=False,
+    ),
 )
 
 _LIMIT_VALIDATOR = validators.Number(gte=1, lte=1_000_000)

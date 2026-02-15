@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING, cast
 
 import msgspec
 
-from tools.cq.search._shared.core import node_text as _shared_node_text
 from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryExecutionSettingsV1,
     QueryExecutionTelemetryV1,
     QueryWindowV1,
 )
+from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_python_lane_payload
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1, load_pack_rules
 from tools.cq.search.tree_sitter.core.change_windows import (
     contains_window,
@@ -25,10 +25,7 @@ from tools.cq.search.tree_sitter.core.change_windows import (
     windows_from_changed_ranges,
 )
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
-from tools.cq.search.tree_sitter.core.runtime import (
-    QueryExecutionCallbacksV1,
-    run_bounded_query_captures,
-)
+from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
 from tools.cq.search.tree_sitter.diagnostics.collector import collect_tree_sitter_diagnostics
 from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
@@ -264,6 +261,11 @@ def _safe_cursor_captures(
     predicate_callback: object | None = None,
     budget_ms: int | None = None,
 ) -> tuple[dict[str, list[Node]], QueryExecutionTelemetryV1]:
+    from tools.cq.search.tree_sitter.core.runtime import (
+        QueryExecutionCallbacksV1,
+        run_bounded_query_captures,
+    )
+
     typed_predicate = (
         cast(
             "Callable[[str, object, int, Mapping[str, Sequence[object]]], bool]",
@@ -292,7 +294,7 @@ def _safe_cursor_captures(
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
-    return _shared_node_text(node, source_bytes)
+    return _ts_node_text(node, source_bytes)
 
 
 def _extract_parse_quality(
@@ -630,7 +632,7 @@ def enrich_python_context_by_byte_range(
         payload["enrichment_status"] = "skipped"
         payload["degrade_reason"] = "source_too_large"
         payload["parse_quality"] = _default_parse_quality()
-        return payload
+        return canonicalize_python_lane_payload(payload)
 
     parsed = _parse_tree_for_enrichment(
         payload,
@@ -638,7 +640,7 @@ def enrich_python_context_by_byte_range(
         cache_key=cache_key,
     )
     if parsed is None:
-        return payload
+        return canonicalize_python_lane_payload(payload)
 
     root, source_bytes, changed_ranges = parsed
     window_start, window_end = _effective_capture_window(
@@ -670,7 +672,7 @@ def enrich_python_context_by_byte_range(
         windows=query_windows,
         match_limit=1024,
     )
-    payload["tree_sitter_diagnostics"] = [msgspec.to_builtins(row) for row in diagnostics]
+    payload["cst_diagnostics"] = [msgspec.to_builtins(row) for row in diagnostics]
 
     _apply_capture_fields(
         payload,
@@ -687,7 +689,7 @@ def enrich_python_context_by_byte_range(
         byte_end=byte_end,
     )
     _merge_fallback_resolution(payload, fallback)
-    return payload
+    return canonicalize_python_lane_payload(payload)
 
 
 __all__ = [

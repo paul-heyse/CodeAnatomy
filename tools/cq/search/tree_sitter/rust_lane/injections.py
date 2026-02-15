@@ -93,7 +93,7 @@ def _resolve_language_name(
     return ""
 
 
-def _plan_from_node(  # noqa: PLR0913
+def _plan_from_node(
     *,
     node: NodeLike,
     language: str,

@@ -9,7 +9,6 @@ import ast
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -22,20 +21,13 @@ from tools.cq.core.schema import (
     mk_result,
     ms,
 )
-from tools.cq.core.scoring import (
-    ConfidenceSignals,
-    ImpactSignals,
-    bucket,
-    build_detail_payload,
-    confidence_score,
-    impact_score,
-)
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.graph_utils import find_sccs
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.macros.scope_filters import resolve_macro_files, scope_filter_applied
-
-if TYPE_CHECKING:
-    from tools.cq.core.toolchain import Toolchain
+from tools.cq.macros.contracts import ScopedMacroRequestBase
+from tools.cq.macros.scan_utils import iter_files
+from tools.cq.macros.scope_filters import scope_filter_applied
+from tools.cq.macros.scoring_utils import macro_scoring_details
 
 _STDLIB_PREFIXES: set[str] = {
     "os",
@@ -140,16 +132,11 @@ class ModuleDeps(msgspec.Struct):
     depends_on: set[str] = msgspec.field(default_factory=set)
 
 
-class ImportRequest(msgspec.Struct, frozen=True):
+class ImportRequest(ScopedMacroRequestBase, frozen=True):
     """Inputs required for the imports macro."""
 
-    tc: Toolchain
-    root: Path
-    argv: list[str]
     cycles: bool = False
     module: str | None = None
-    include: list[str] = msgspec.field(default_factory=list)
-    exclude: list[str] = msgspec.field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -286,20 +273,6 @@ def _find_import_cycles(deps: dict[str, ModuleDeps], internal_prefix: str) -> li
     return find_sccs(dict(graph))
 
 
-def _iter_python_files(
-    root: Path,
-    *,
-    include: list[str] | None = None,
-    exclude: list[str] | None = None,
-) -> list[Path]:
-    return resolve_macro_files(
-        root=root,
-        include=include,
-        exclude=exclude,
-        extensions=(".py",),
-    )
-
-
 def _collect_imports(
     root: Path,
     *,
@@ -309,10 +282,11 @@ def _collect_imports(
     repo_root = resolve_repo_context(root).repo_root
     deps: dict[str, ModuleDeps] = {}
     all_imports: list[ImportInfo] = []
-    for pyfile in _iter_python_files(
-        repo_root,
+    for pyfile in iter_files(
+        root=repo_root,
         include=include,
         exclude=exclude,
+        extensions=(".py",),
     ):
         rel_str = str(pyfile.relative_to(repo_root))
         try:
@@ -548,30 +522,6 @@ def _build_imports_summary(
     return summary
 
 
-def _build_imports_scoring(
-    ctx: ImportContext,
-    *,
-    max_cycle_len: int,
-) -> dict[str, object]:
-    imp_signals = ImpactSignals(
-        sites=len(ctx.all_imports),
-        files=len(ctx.deps),
-        depth=max_cycle_len,
-        breakages=0,
-        ambiguities=0,
-    )
-    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    return {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
-
-
 def _build_imports_result(
     ctx: ImportContext,
     *,
@@ -602,7 +552,12 @@ def _build_imports_result(
         cycles_found=len(found_cycles),
     )
 
-    scoring_details = _build_imports_scoring(ctx, max_cycle_len=max_cycle_len)
+    scoring_details = macro_scoring_details(
+        sites=len(ctx.all_imports),
+        files=len(ctx.deps),
+        depth=max_cycle_len,
+        evidence_kind="resolved_ast",
+    )
 
     if ctx.request.cycles:
         _append_cycle_section(result, found_cycles, scoring_details)

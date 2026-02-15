@@ -6,7 +6,9 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from tools.cq.core.contracts import require_mapping, summary_contract_to_mapping
+from tools.cq.core.contracts_constraints import enforce_mapping_constraints
 from tools.cq.core.requests import SummaryBuildRequest
+from tools.cq.core.summary_contracts import build_summary_envelope, summary_envelope_to_mapping
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope, expand_language_scope
 from tools.cq.search._shared.search_contracts import (
     LanguagePartitionStats,
@@ -95,7 +97,9 @@ def build_multilang_summary(request: SummaryBuildRequest) -> dict[str, object]:
     )
     summary = summary_contract_to_mapping(contract, common=request.common)
     assert_multilang_summary(summary)
-    return summary
+    enforce_mapping_constraints(summary)
+    envelope = build_summary_envelope(summary=summary)
+    return require_mapping(summary_envelope_to_mapping(envelope).get("summary", {}))
 
 
 def _coerce_enrichment_telemetry(

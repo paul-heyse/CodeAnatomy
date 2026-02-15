@@ -14,6 +14,7 @@ import msgspec
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.structs import CqSettingsStruct, CqStruct
+from tools.cq.core.typed_boundary import convert_lax
 from tools.cq.query.language import QueryLanguage
 
 if TYPE_CHECKING:
@@ -104,7 +105,7 @@ def sg_node_text(node: SgNode | None) -> str | None:
 
 def convert_from_attributes(obj: object, *, type_: object) -> object:
     """Convert runtime objects to target type using attribute access."""
-    return msgspec.convert(obj, type=type_, from_attributes=True, strict=False)
+    return convert_lax(obj, type_=type_, from_attributes=True)
 
 
 class RuntimeBoundarySummary(CqStruct, frozen=True):

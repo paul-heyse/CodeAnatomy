@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Annotated
-
 import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import RecordType
+from tools.cq.core.contracts_constraints import NonNegativeInt
 from tools.cq.core.structs import CqCacheStruct
 from tools.cq.search.objects.render import SearchObjectSummaryV1, SearchOccurrenceV1
 from tools.cq.search.tree_sitter.contracts.core_models import TreeSitterArtifactBundleV1
-
-NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
 
 
 class SgRecordCacheV1(CqCacheStruct, frozen=True):

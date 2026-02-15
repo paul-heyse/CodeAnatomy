@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.search.tree_sitter.contracts.core_models import (
@@ -11,51 +10,29 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryWindowV1,
     TreeSitterDiagnosticV1,
 )
-from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches
+from tools.cq.search.tree_sitter.core.language_runtime import load_language
 from tools.cq.search.tree_sitter.diagnostics.recovery_hints import recovery_hints_for_node
+from tools.cq.search.tree_sitter.query.resource_paths import diagnostics_query_path
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Query
 
 try:
-    import tree_sitter_python as _tree_sitter_python
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_python = None
-
-try:
-    import tree_sitter_rust as _tree_sitter_rust
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_rust = None
-
-try:
-    from tree_sitter import Language as _TreeSitterLanguage
     from tree_sitter import Query as _TreeSitterQuery
 except ImportError:  # pragma: no cover - optional dependency
-    _TreeSitterLanguage = None
     _TreeSitterQuery = None
 
 
 @lru_cache(maxsize=2)
 def _language(language: str) -> Language:
-    if _TreeSitterLanguage is None:
-        msg = "tree_sitter language bindings are unavailable"
-        raise RuntimeError(msg)
-    if language == "python":
-        if _tree_sitter_python is None:
-            msg = "tree_sitter_python bindings are unavailable"
-            raise RuntimeError(msg)
-        return _TreeSitterLanguage(_tree_sitter_python.language())
-    if _tree_sitter_rust is None:
-        msg = "tree_sitter_rust bindings are unavailable"
-        raise RuntimeError(msg)
-    return _TreeSitterLanguage(_tree_sitter_rust.language())
+    return load_language(language)
 
 
 @lru_cache(maxsize=2)
 def _diagnostic_query(language: str) -> Query | None:
     if _TreeSitterQuery is None:
         return None
-    path = Path(__file__).with_suffix("").parent / "queries" / language / "95_diagnostics.scm"
+    path = diagnostics_query_path(language)
     if not path.exists():
         return None
     try:
@@ -87,6 +64,8 @@ def collect_tree_sitter_diagnostics(
     query = _diagnostic_query(language)
     if query is None:
         return ()
+    from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches
+
     matches, _telemetry = run_bounded_query_matches(
         query,
         root,

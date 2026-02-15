@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from tools.cq.core.locations import SourceSpan, byte_col_to_char_col, span_from_rg_match
-from tools.cq.search.pipeline.profiles import SearchLimits
 from tools.cq.search.rg.codec import (
     RgAnyEvent,
     RgMatchData,
@@ -23,6 +22,7 @@ from tools.cq.search.rg.codec import (
 )
 
 if TYPE_CHECKING:
+    from tools.cq.search.pipeline.profiles import SearchLimits
     from tools.cq.search.pipeline.smart_search import RawMatch
 
 

@@ -7,6 +7,8 @@ from typing import Literal
 
 import msgspec
 
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
+
 
 class RgText(msgspec.Struct, omit_defaults=True):
     """Ripgrep text payload."""
@@ -134,8 +136,8 @@ def as_match_data(event: RgAnyEvent) -> RgMatchData | None:
     if not isinstance(event.data, Mapping):
         return None
     try:
-        return msgspec.convert(event.data, type=RgMatchData, strict=False)
-    except (msgspec.ValidationError, msgspec.DecodeError, TypeError, ValueError):
+        return convert_lax(event.data, type_=RgMatchData)
+    except BoundaryDecodeError:
         return None
 
 
@@ -148,8 +150,8 @@ def as_summary_data(event: RgAnyEvent) -> RgSummaryData | None:
     if not isinstance(event.data, Mapping):
         return None
     try:
-        return msgspec.convert(event.data, type=RgSummaryData, strict=False)
-    except (msgspec.ValidationError, msgspec.DecodeError, TypeError, ValueError):
+        return convert_lax(event.data, type_=RgSummaryData)
+    except BoundaryDecodeError:
         return None
 
 

@@ -5,6 +5,7 @@ Provides preset search limits for different use cases (interactive, audit, liter
 
 from __future__ import annotations
 
+from tools.cq.core.contracts_constraints import PositiveFloat, PositiveInt
 from tools.cq.core.structs import CqSettingsStruct
 
 
@@ -28,12 +29,12 @@ class SearchLimits(CqSettingsStruct, frozen=True):
 
     """
 
-    max_files: int = 5000
-    max_matches_per_file: int = 1000
-    max_total_matches: int = 10000
-    timeout_seconds: float = 30.0
-    max_depth: int = 25
-    max_file_size_bytes: int = 2 * 1024 * 1024
+    max_files: PositiveInt = 5000
+    max_matches_per_file: PositiveInt = 1000
+    max_total_matches: PositiveInt = 10000
+    timeout_seconds: PositiveFloat = 30.0
+    max_depth: PositiveInt = 25
+    max_file_size_bytes: PositiveInt = 2 * 1024 * 1024
 
 
 # Default limits for general-purpose searches

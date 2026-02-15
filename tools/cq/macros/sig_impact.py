@@ -21,19 +21,13 @@ from tools.cq.core.schema import (
     mk_result,
     ms,
 )
-from tools.cq.core.scoring import (
-    ConfidenceSignals,
-    ImpactSignals,
-    bucket,
-    build_detail_payload,
-    confidence_score,
-    impact_score,
-)
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.macros.calls import collect_call_sites, group_candidates, rg_find_candidates
+from tools.cq.macros.contracts import MacroRequestBase
+from tools.cq.macros.scoring_utils import macro_scoring_details
 from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
 
 if TYPE_CHECKING:
-    from tools.cq.core.toolchain import Toolchain
     from tools.cq.macros.calls import CallSite
 
 _MAX_SITES_DISPLAY = 30
@@ -63,12 +57,9 @@ class SigParam(msgspec.Struct):
     is_kwarg: bool
 
 
-class SigImpactRequest(msgspec.Struct, frozen=True):
+class SigImpactRequest(MacroRequestBase, frozen=True):
     """Inputs required for signature impact analysis."""
 
-    tc: Toolchain
-    root: Path
-    argv: list[str]
     symbol: str
     to: str
 
@@ -382,23 +373,13 @@ def cmd_sig_impact(request: SigImpactRequest) -> CqResult:
         | {site.file for site, _ in buckets["ambiguous"]}
         | {site.file for site, _ in buckets["ok"]}
     )
-    imp_signals = ImpactSignals(
+    scoring_details = macro_scoring_details(
         sites=len(all_sites),
         files=unique_files,
-        depth=0,
         breakages=len(buckets["would_break"]),
         ambiguities=len(buckets["ambiguous"]),
+        evidence_kind="resolved_ast",
     )
-    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    scoring_details: dict[str, object] = {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
 
     # Key findings
     if buckets["would_break"]:

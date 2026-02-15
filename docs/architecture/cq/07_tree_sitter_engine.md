@@ -1,10 +1,10 @@
 # 07 — Tree-Sitter & Structural Parsing Engine
 
-**Version**: 0.4.0
+**Version**: 0.5.0
 **Status**: Foundation Documentation
 **Scope**: Tree-sitter subsystem architecture, language lanes, AST-grep integration, and file scanning infrastructure
 
-This document describes CQ's tree-sitter-based structural parsing engine, a cross-cutting subsystem (~7,600 LOC across 12 subdirectories) that provides AST-level code analysis for Python and Rust. The engine supports bounded query execution, language-specific enrichment lanes, diagnostic collection, and structural exports. It serves as the foundation for search enrichment (stage 5) and neighborhood analysis.
+This document describes CQ's tree-sitter-based structural parsing engine, a cross-cutting subsystem (~8,100 LOC across 12 subdirectories) that provides AST-level code analysis for Python and Rust. The engine supports bounded query execution, language-specific enrichment lanes, diagnostic collection, and structural exports. It serves as the foundation for search enrichment (stage 5) and neighborhood analysis.
 
 **Cross-References**:
 - Doc 02: Search enrichment pipeline (consumes tree-sitter stage 5)
@@ -19,17 +19,17 @@ The tree-sitter subsystem lives in `tools/cq/search/tree_sitter/` with the follo
 
 | Subdirectory | Purpose | Key Files | Approx LOC |
 |--------------|---------|-----------|------------|
-| `core/` | Runtime execution, budgeting, windowing, autotune | `runtime.py`, `parse.py`, `adaptive_runtime.py`, `autotune.py`, `windowing.py`, `budgeting.py`, `work_queue.py` | ~1,800 |
-| `contracts/` | Shared data models for tree-sitter subsystem | `core_models.py`, `query_models.py` | ~350 |
-| `python_lane/` | Python-specific enrichment | `facts.py`, `runtime.py`, `fallback_support.py` | ~850 |
-| `rust_lane/` | Rust-specific enrichment, injection runtime | `runtime.py`, `injections.py`, `injection_runtime.py`, `injection_settings.py`, `injection_profiles.py`, `bundle.py` | ~1,400 |
-| `query/` | Query planning, registry, predicates, specialization | `planner.py`, `registry.py`, `predicates.py`, `specialization.py`, `grammar_drift.py`, `pack_metadata.py`, `lint.py` | ~900 |
+| `core/` | Runtime execution, budgeting, windowing, autotune, language loading, query pack execution, text utils | `runtime.py`, `parse.py`, `adaptive_runtime.py`, `autotune.py`, `windowing.py`, `budgeting.py`, `work_queue.py`, `language_runtime.py`, `query_pack_executor.py`, `text_utils.py` | ~2,050 |
+| `contracts/` | Shared data models for tree-sitter subsystem, lane payload contracts | `core_models.py`, `query_models.py`, `lane_payloads.py` | ~420 |
+| `python_lane/` | Python-specific enrichment | `facts.py`, `runtime.py`, `fallback_support.py` | ~1,310 |
+| `rust_lane/` | Rust-specific enrichment, injection runtime | `runtime.py`, `injections.py`, `injection_runtime.py`, `injection_settings.py`, `injection_profiles.py`, `bundle.py` | ~2,210 |
+| `query/` | Query planning, registry, predicates, specialization, resource paths, cache adapter | `planner.py`, `registry.py`, `predicates.py`, `specialization.py`, `grammar_drift.py`, `pack_metadata.py`, `lint.py`, `resource_paths.py`, `cache_adapter.py` | ~970 |
 | `schema/` | Node schema, code generation, generated types | `node_schema.py`, `node_codegen.py`, `generated.py`, `runtime.py` | ~600 |
 | `structural/` | Structural export, token export, match rows | `export.py`, `token_export.py`, `match_rows.py` | ~450 |
 | `diagnostics/` | Diagnostic collection, recovery hints | `collector.py`, `recovery_hints.py` | ~300 |
 | `tags/` | Tagging runtime for Rust | `runtime.py`, `contracts.py` | ~250 |
 
-**Total**: ~7,600 LOC
+**Total**: ~8,100 LOC
 
 **Related Infrastructure**:
 - `tools/cq/astgrep/` — AST-grep integration (~1,180 LOC)
@@ -40,11 +40,92 @@ The tree-sitter subsystem lives in `tools/cq/search/tree_sitter/` with the follo
 
 ## Core Runtime
 
+### Language Loading Infrastructure
+
+**Location**: `tools/cq/search/tree_sitter/core/language_runtime.py` (~39 LOC)
+
+Provides canonical language and parser construction functions for tree-sitter lanes.
+
+**Primary Functions**:
+```python
+def load_language(language: str) -> Language:
+    """Load a tree-sitter language or raise a runtime error."""
+
+def make_parser(language: str) -> Parser:
+    """Construct a parser bound to one language lane."""
+```
+
+**Features**:
+- Language loader with exception handling (raises `RuntimeError` if unavailable)
+- Parser constructor with automatic language binding
+- Handles both modern (`Parser(language)`) and legacy (`parser.language = lang`) APIs
+- Backed by `load_tree_sitter_language()` from language registry (LRU cache with maxsize=4)
+
+### Query Pack Executor
+
+**Location**: `tools/cq/search/tree_sitter/core/query_pack_executor.py` (~148 LOC)
+
+Shared delegation wrappers for executing query packs with bounded captures and matches. Eliminates duplicate match-row building logic across Python and Rust lanes.
+
+**Primary Functions**:
+```python
+def execute_pack_rows(
+    *,
+    query: Query,
+    query_name: str,
+    root: Node,
+    source_bytes: bytes,
+    windows: tuple[QueryWindowV1, ...],
+    settings: QueryExecutionSettingsV1,
+    callbacks: QueryExecutionCallbacksV1 | None = None,
+) -> tuple[
+    dict[str, list[Node]],
+    tuple[ObjectEvidenceRowV1, ...],
+    tuple[TreeSitterQueryHitV1, ...],
+    QueryExecutionTelemetryV1,
+    QueryExecutionTelemetryV1,
+]:
+    """Execute captures + matches and project row/hit payloads for one query pack."""
+
+def execute_pack_rows_with_matches(...) -> tuple[...]:
+    """Execute captures + matches and include raw match tuples."""
+```
+
+**Features**:
+- Delegating wrappers to `run_bounded_query_captures()` and `run_bounded_query_matches()` from core runtime
+- Automatic match settings adjustment (containment_preferred mode for matches)
+- Single-call captures + matches + evidence row projection via `build_match_rows_with_query_hits()`
+- Returns separate telemetry for captures and matches phases
+
+### Text Extraction Utilities
+
+**Location**: `tools/cq/search/tree_sitter/core/text_utils.py` (~25 LOC)
+
+Shared UTF-8 text extraction helper for tree-sitter node byte spans.
+
+**Primary Function**:
+```python
+def node_text(
+    node: object,
+    source_bytes: bytes,
+    *,
+    strip: bool = True,
+    max_len: int | None = None,
+) -> str:
+    """Extract UTF-8 text for a tree-sitter node byte span."""
+```
+
+**Features**:
+- UTF-8 decoding with error replacement (`errors="replace"`)
+- Optional whitespace stripping (default: enabled)
+- Optional truncation with `...` suffix
+- Handles empty/invalid spans gracefully
+
 ### TreeSitterRuntime: Main Execution Engine
 
-**Location**: `tools/cq/search/tree_sitter/core/runtime.py` (~520 LOC)
+**Location**: `tools/cq/search/tree_sitter/core/runtime.py` (~568 LOC)
 
-The core runtime provides bounded query execution with budget management, windowing, and telemetry collection. All queries execute within configurable resource limits.
+The core runtime provides bounded query execution with budget management, windowing, and telemetry collection. All queries execute within configurable resource limits. This module has been refactored to delegate language loading and query pack execution to specialized modules.
 
 **Primary Entry Point**:
 ```python
@@ -146,15 +227,74 @@ Provides shared msgspec-based data models for the tree-sitter subsystem. All con
 - **Evidence**: `ObjectEvidenceRowV1` — Metadata-backed object evidence row
 - **Injection**: `InjectionRuntimeResultV1` — Result of parsing injected ranges
 - **Work Queue**: `TreeSitterWorkItemV1` — Queued changed-range work item
+- **Query Hits**: `TreeSitterQueryHitV1` — Query match hit metadata
 
 ### Query Models
 
-**Location**: `tools/cq/search/tree_sitter/contracts/query_models.py`
+**Location**: `tools/cq/search/tree_sitter/contracts/query_models.py` (~280 LOC)
 
-Contracts for query planning, packs, and metadata:
+Contracts for query planning, packs, and metadata. This module now uses typed boundary integration for YAML contract loading.
+
+**Key Contracts**:
 - `QueryPatternPlanV1` — Per-pattern planning metadata (pattern_idx, rooted, non_local, guaranteed_step0, assertions, capture_quantifiers, score)
 - `QueryPackPlanV1` — Pack-level planning metadata (pack_name, query_hash, plans, score)
 - `QueryPackRulesV1` — Query pack validation rules (require_rooted, forbid_non_local)
+- `QueryPackContractsFileV1` — **NEW**: Top-level contracts file payload with language, version, and rules
+
+**Typed Boundary Integration**:
+```python
+def load_pack_rules(language: str) -> QueryPackRulesV1:
+    """Load query-pack rules from contracts.yaml, falling back to defaults."""
+    path = query_contracts_path(language)
+    if not path.exists():
+        return QueryPackRulesV1()
+    try:
+        payload = decode_yaml_strict(path.read_bytes(), type_=QueryPackContractsFileV1)
+    except (OSError, BoundaryDecodeError):
+        return QueryPackRulesV1()
+    # ...
+```
+
+This replaces ~100 LOC of inline YAML parsing with strict type-safe decoding via `decode_yaml_strict()` from `tools.cq.core.typed_boundary`.
+
+### Lane Payload Contracts
+
+**Location**: `tools/cq/search/tree_sitter/contracts/lane_payloads.py` (~66 LOC) **NEW**
+
+Typed contracts and canonicalization helpers for lane-specific payload keys. Handles legacy key migration (`tree_sitter_diagnostics` → `cst_diagnostics`).
+
+**Key Contracts**:
+```python
+class PythonTreeSitterPayloadV1(CqOutputStruct, frozen=True):
+    """Canonical Python lane payload contract subset."""
+    language: str = "python"
+    enrichment_status: str = "applied"
+    cst_diagnostics: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    cst_query_hits: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    query_runtime: dict[str, Any] = msgspec.field(default_factory=dict)
+
+class RustTreeSitterPayloadV1(CqOutputStruct, frozen=True):
+    """Canonical Rust lane payload contract subset."""
+    # Same structure as Python
+```
+
+**Canonicalization Functions**:
+```python
+def canonicalize_python_lane_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Canonicalize Python lane payload diagnostics/query-hit keys."""
+    # Migrates tree_sitter_diagnostics -> cst_diagnostics
+    # Coerces diagnostics/query_hits to mapping rows
+    # Validates via msgspec.convert()
+
+def canonicalize_rust_lane_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Canonicalize Rust lane payload diagnostics/query-hit keys."""
+```
+
+**Features**:
+- Legacy key migration without breaking existing callers
+- Type-safe conversion via `msgspec.convert()` with `strict=False`
+- Mapping-row coercion for list-of-dict fields
+- Shared pattern for both Python and Rust lanes
 
 ---
 
@@ -164,21 +304,28 @@ The Python lane provides Python-specific structural fact extraction and enrichme
 
 ### Python Facts Extraction
 
-**Location**: `tools/cq/search/tree_sitter/python_lane/facts.py` (~550 LOC)
+**Location**: `tools/cq/search/tree_sitter/python_lane/facts.py` (~603 LOC)
 
 **Primary Entry Point**:
 ```python
-def collect_python_facts(
+def build_python_tree_sitter_facts(
+    source: str,
     *,
-    source: str | bytes,
-    file_key: str = "",
-    changed_ranges: Iterable[tuple[int, int]] | None = None,
-    pack_names: Iterable[str] | None = None,
-) -> tuple[tuple[ObjectEvidenceRowV1, ...], dict[str, object]]:
-    """Collect Python facts from source using tree-sitter queries."""
+    byte_start: int,
+    byte_end: int,
+    cache_key: str | None = None,
+    match_limit: int = 4096,
+    query_budget_ms: int | None = None,
+) -> dict[str, object] | None:
+    """Build tree-sitter-first structural facts for one byte range."""
 ```
 
 Facts are extracted via query packs loaded from `.scm` files with validation (rooted pattern checks, non-local pattern checks).
+
+**Refactoring Changes**:
+- Now uses `execute_pack_rows()` from `query_pack_executor.py` to eliminate duplicate match-row building
+- Uses `node_text()` helper from `text_utils.py` for consistent text extraction
+- Returns canonicalized payload via `canonicalize_python_lane_payload()`
 
 **Key Operations**:
 - **Anchor Lifting**: Lifts match anchors to containing syntactic structures (call, attribute, assignment, import, function_definition, class_definition)
@@ -186,9 +333,14 @@ Facts are extracted via query packs loaded from `.scm` files with validation (ro
 
 ### Python Runtime
 
-**Location**: `tools/cq/search/tree_sitter/python_lane/runtime.py` (~300 LOC)
+**Location**: `tools/cq/search/tree_sitter/python_lane/runtime.py` (~702 LOC)
 
 Provides Python-specific parsing, incremental parsing, and runtime helpers. Includes availability check (`is_tree_sitter_python_available()`), incremental parsing (`parse_python_tree_with_ranges()`), and changed range window integration.
+
+**Refactoring Changes**:
+- Uses `_ts_node_text()` helper from `text_utils.py` for text extraction
+- Returns canonicalized payloads via `canonicalize_python_lane_payload()`
+- Consistent with Rust lane payload canonicalization pattern
 
 ### Python Fallback Support
 
@@ -204,10 +356,16 @@ The Rust lane provides Rust-specific enrichment with injection support for embed
 
 ### Rust Runtime
 
-**Location**: `tools/cq/search/tree_sitter/rust_lane/runtime.py` (~650 LOC)
+**Location**: `tools/cq/search/tree_sitter/rust_lane/runtime.py` (~1,992 LOC)
 
 **Enrichment Contract**:
 All fields produced by the Rust lane are strictly additive. They never affect confidence scores, match counts, category classification, or relevance ranking. They may affect `containing_scope` display (used only for grouping in output).
+
+**Refactoring Changes**:
+- Uses `execute_pack_rows_with_matches()` from `query_pack_executor.py` for captures + matches + rows + hits
+- Uses `_ts_node_text()` helper from `text_utils.py` for consistent text extraction
+- Returns canonicalized payloads via `canonicalize_rust_lane_payload()`
+- Consistent payload structure with Python lane
 
 **Primary Entry Point**:
 ```python
@@ -284,9 +442,13 @@ Profiles define language resolution heuristics for common Rust patterns: sql, js
 
 ### Rust Bundle
 
-**Location**: `tools/cq/search/tree_sitter/rust_lane/bundle.py`
+**Location**: `tools/cq/search/tree_sitter/rust_lane/bundle.py` (~221 LOC)
 
 Bundles Rust grammar and query sources for runtime loading.
+
+**Refactoring Changes**:
+- Uses `RustTreeSitterPayloadV1` contract for type-safe payload validation
+- Consistent with Python lane contract usage
 
 ---
 
@@ -312,11 +474,56 @@ Builds deterministic per-pattern planning rows with scoring.
 - `build_pack_plan()` — Build pack summary for scheduling and cache keys
 - `sort_pack_plans()` — Sort query packs from highest to lowest score
 
+### Query Resource Paths
+
+**Location**: `tools/cq/search/tree_sitter/query/resource_paths.py` (~35 LOC) **NEW**
+
+Canonical query resource path helpers for tree-sitter lanes. Eliminates duplicate path construction logic across modules.
+
+**Functions**:
+```python
+def query_pack_dir(language: str) -> Path:
+    """Return the query pack directory for one language lane."""
+
+def query_pack_path(language: str, pack_name: str) -> Path:
+    """Return the absolute path for one query pack source file."""
+
+def query_contracts_path(language: str) -> Path:
+    """Return the absolute path for one query contracts YAML file."""
+
+def diagnostics_query_path(language: str) -> Path:
+    """Return the absolute path for one diagnostics query pack file."""
+```
+
+All paths are computed relative to `_QUERY_ROOT = Path(__file__).resolve().parents[2] / "queries"`.
+
+### Query Registry Cache Adapter
+
+**Location**: `tools/cq/search/tree_sitter/query/cache_adapter.py` (~32 LOC) **NEW**
+
+Lazy cache adapter for tree-sitter query registry usage. Provides stampede guards for query pack loading.
+
+**Function**:
+```python
+def query_registry_cache(*, root: Path | None = None) -> FanoutCache | None:
+    """Return a cache object for query registry stampede guards."""
+```
+
+**Features**:
+- Lazy import to avoid import-time cycles between query modules and cache bootstrap modules
+- Returns `None` when cache backend is unavailable
+- Validates cache object has required `get` and `set` methods
+- Used by query registry for memoized stampede-guarded loading
+
 ### Query Registry
 
-**Location**: `tools/cq/search/tree_sitter/query/registry.py`
+**Location**: `tools/cq/search/tree_sitter/query/registry.py` (~235 LOC)
 
 Loads query packs from `.scm` files and manages pack metadata. Packs loaded from `tools/cq/search/queries/{language}/*.scm`.
+
+**Refactoring Changes**:
+- Uses `query_registry_cache()` from cache_adapter for stampede guards
+- Uses `query_pack_dir()` from resource_paths for canonical path construction
 
 ### Query Predicates
 
@@ -405,7 +612,7 @@ Metadata keys: `cq.emit`, `cq.kind`, `cq.anchor` (capture name to use as anchor 
 
 ### Diagnostic Collector
 
-**Location**: `tools/cq/search/tree_sitter/diagnostics/collector.py` (~150 LOC)
+**Location**: `tools/cq/search/tree_sitter/diagnostics/collector.py` (~112 LOC)
 
 Collects tree-sitter syntax diagnostics (ERROR/MISSING nodes) with recovery hints.
 
@@ -417,6 +624,11 @@ Diagnostics collected via `.scm` files (`queries/{python,rust}/95_diagnostics.sc
 (ERROR) @error
 (MISSING) @missing
 ```
+
+**Refactoring Changes**:
+- Uses `load_language()` from `language_runtime.py` for language loading
+- Uses `diagnostics_query_path()` from `resource_paths.py` for query file paths
+- Complexity reduced via shared utilities
 
 ### Recovery Hints
 
@@ -733,6 +945,61 @@ flowchart TD
 
 ---
 
+## Refactoring Summary (v0.5.0)
+
+The recent refactoring introduced several cross-cutting improvements:
+
+### New Modules
+
+1. **Language Runtime** (`core/language_runtime.py`): Canonical `load_language()` and `make_parser()` functions replace scattered language loading logic.
+
+2. **Query Pack Executor** (`core/query_pack_executor.py`): Shared `execute_pack_rows()` and `execute_pack_rows_with_matches()` eliminate duplicate match-row building across Python and Rust lanes.
+
+3. **Text Utilities** (`core/text_utils.py`): Shared `node_text()` function for UTF-8 text extraction with strip/truncation.
+
+4. **Resource Paths** (`query/resource_paths.py`): Canonical path helpers (`query_pack_dir()`, `query_pack_path()`, `query_contracts_path()`, `diagnostics_query_path()`) eliminate path duplication.
+
+5. **Cache Adapter** (`query/cache_adapter.py`): Lazy cache backend for query registry stampede guards, avoiding import-time cycles.
+
+6. **Lane Payloads** (`contracts/lane_payloads.py`): Typed contracts (`PythonTreeSitterPayloadV1`, `RustTreeSitterPayloadV1`) and canonicalization functions for legacy key migration (`tree_sitter_diagnostics` → `cst_diagnostics`).
+
+### Modified Modules
+
+1. **Query Models** (`contracts/query_models.py`): Added `QueryPackContractsFileV1` contract and uses `decode_yaml_strict()` for typed YAML loading, eliminating ~100 LOC of inline parsing.
+
+2. **Python Facts** (`python_lane/facts.py`): Uses `execute_pack_rows()` for match-row building and `node_text()` for text extraction.
+
+3. **Python Runtime** (`python_lane/runtime.py`): Returns canonicalized payloads via `canonicalize_python_lane_payload()`.
+
+4. **Rust Runtime** (`rust_lane/runtime.py`): Uses `execute_pack_rows_with_matches()` and returns canonicalized payloads via `canonicalize_rust_lane_payload()`.
+
+5. **Rust Bundle** (`rust_lane/bundle.py`): Uses `RustTreeSitterPayloadV1` contract for validation.
+
+6. **Diagnostics Collector** (`diagnostics/collector.py`): Uses `load_language()` and `diagnostics_query_path()`.
+
+7. **Core Runtime** (`core/runtime.py`): Complexity reduced via delegation to language_runtime and query_pack_executor.
+
+8. **Query Registry** (`query/registry.py`): Uses `query_registry_cache()` and `query_pack_dir()`.
+
+### Contract Exports
+
+**Updated** (`contracts/__init__.py`): Now exports all lane payload contracts:
+- `PythonTreeSitterPayloadV1`
+- `RustTreeSitterPayloadV1`
+- `canonicalize_python_lane_payload`
+- `canonicalize_rust_lane_payload`
+
+### Key Benefits
+
+- **Reduced Duplication**: Query pack execution, text extraction, and path construction logic now centralized
+- **Type Safety**: YAML boundary loading uses strict typed contracts
+- **Legacy Compatibility**: Canonicalization functions handle old `tree_sitter_diagnostics` key migration
+- **Consistency**: Python and Rust lanes use parallel payload structures and validation
+- **Maintainability**: Smaller, focused modules with clear responsibilities
+
+---
+
 **Version History**:
+- 0.5.0 (2026-02-15): Refactoring: language runtime, query pack executor, text utils, resource paths, cache adapter, lane payloads, typed YAML boundaries
 - 0.4.0 (2026-02-15): Complete rewrite focusing on tree-sitter engine architecture
 - 0.3.0 (prior): Mixed AST-grep and formatting doc (deprecated)

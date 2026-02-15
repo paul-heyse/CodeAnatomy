@@ -1,6 +1,6 @@
 # 06 — Cross-Cutting Contracts & Orchestration
 
-**Version:** 0.4.0
+**Version:** 0.5.0
 **Date:** 2026-02-15
 **Scope:** System-wide contracts and orchestration primitives that span CQ subsystems
 
@@ -18,6 +18,9 @@ This document defines the cross-cutting contracts, orchestration layers, and ser
 - Enrichment facts system and code fact clusters
 - Scoring system (impact/confidence/buckets)
 - Core schema models (CqResult, Finding, Section, Anchor)
+- Typed boundary protocol (conversion, validation, error taxonomy)
+- Contract codec (centralized serialization authority)
+- Contract constraints (annotated types and validation policies)
 - Serialization infrastructure and module boundary protocol
 
 **Out of scope:**
@@ -36,11 +39,11 @@ CQ enforces a strict three-tier type system for module boundaries:
 
 | Tier | Purpose | Base Class | Characteristics |
 |------|---------|------------|-----------------|
-| **Serialized Contracts** | Cross-module payloads | `CqStruct`, `CqOutputStruct`, `CqSettingsStruct` | msgspec.Struct, frozen, kw_only |
+| **Serialized Contracts** | Cross-module payloads | `CqStruct`, `CqOutputStruct`, `CqStrictOutputStruct`, `CqSettingsStruct` | msgspec.Struct, frozen, kw_only |
 | **Runtime-Only Objects** | In-process state | dataclass or plain class | Not serialized |
 | **External Handles** | Parser/cache references | None | Never crosses boundaries |
 
-**Module:** `tools/cq/core/structs.py` (34 LOC)
+**Module:** `tools/cq/core/structs.py` (43 LOC)
 
 ```python
 class CqStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True):
@@ -52,6 +55,9 @@ class CqSettingsStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=
 class CqOutputStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True):
     """Base struct for serializable CQ output/public contracts."""
 
+class CqStrictOutputStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True, forbid_unknown_fields=True):
+    """Strict output boundary contract for persisted/external payloads."""
+
 class CqCacheStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=True, forbid_unknown_fields=True):
     """Base struct for serializable CQ cache payload contracts."""
 ```
@@ -60,7 +66,7 @@ class CqCacheStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=Tru
 - `kw_only=True` prevents positional argument confusion
 - `frozen=True` ensures immutability for thread safety and caching
 - `omit_defaults=True` produces compact JSON output
-- `forbid_unknown_fields=True` (settings/cache only) rejects invalid payloads
+- `forbid_unknown_fields=True` (strict output/settings/cache) rejects invalid payloads
 
 ### Why msgspec Over Pydantic
 
@@ -1415,33 +1421,558 @@ class Artifact(msgspec.Struct):
 
 ---
 
+## Typed Boundary Protocol
+
+**Module:** `tools/cq/core/typed_boundary.py` (129 LOC)
+
+The typed boundary protocol provides centralized conversion helpers and error taxonomy for all CQ module boundaries. It enforces strict type validation at deserialization points and provides format-specific decoders for JSON, TOML, and YAML payloads.
+
+### Boundary Error Taxonomy
+
+**Exception Hierarchy:**
+
+```python
+class BoundaryDecodeError(RuntimeError):
+    """Raised when payload conversion fails at CQ boundaries."""
+```
+
+All conversion failures (msgspec validation errors, decode errors, type errors) are normalized to `BoundaryDecodeError` for consistent error handling across module boundaries.
+
+### Conversion Functions
+
+**Strict Conversion:**
+
+```python
+def convert_strict[T](
+    payload: object,
+    *,
+    type_: object,
+    from_attributes: bool = False,
+) -> T:
+    """Convert payload with strict msgspec semantics.
+
+    Raises:
+        BoundaryDecodeError: If conversion fails.
+    """
+```
+
+**Strict conversion** rejects:
+- Extra fields in mappings (when struct uses `forbid_unknown_fields=True`)
+- Type mismatches (no implicit coercion)
+- Missing required fields
+
+**Lax Conversion:**
+
+```python
+def convert_lax[T](
+    payload: object,
+    *,
+    type_: object,
+    from_attributes: bool = False,
+) -> T:
+    """Convert payload with lax msgspec semantics.
+
+    Raises:
+        BoundaryDecodeError: If conversion fails.
+    """
+```
+
+**Lax conversion** tolerates:
+- Extra fields in mappings (ignored)
+- Some type coercions (int → float, etc.)
+- Missing optional fields
+
+**Use Cases:**
+
+| Scenario | Use |
+|----------|-----|
+| External config files (TOML/YAML) | `convert_lax` |
+| Internal contract boundaries | `convert_strict` |
+| Cache payload deserialization | `convert_strict` |
+| Legacy payload migration | `convert_lax` |
+
+### Format-Specific Decoders
+
+**JSON Decoder:**
+
+```python
+def decode_json_strict[T](payload: bytes | str, *, type_: object) -> T:
+    """Decode JSON payload with strict schema validation.
+
+    Raises:
+        BoundaryDecodeError: If decoding fails.
+    """
+```
+
+**TOML Decoder:**
+
+```python
+def decode_toml_strict[T](payload: bytes | str, *, type_: object) -> T:
+    """Decode TOML payload with strict schema validation.
+
+    Raises:
+        BoundaryDecodeError: If decoding fails.
+    """
+```
+
+**YAML Decoder:**
+
+```python
+def decode_yaml_strict[T](payload: bytes | str, *, type_: object) -> T:
+    """Decode YAML payload with strict schema validation.
+
+    Raises:
+        BoundaryDecodeError: If decoding fails.
+    """
+```
+
+**Design Pattern:**
+- All decoders accept `bytes | str` payloads for convenience
+- All decoders use strict validation by default
+- All decoders normalize errors to `BoundaryDecodeError`
+- String payloads are automatically encoded to UTF-8 bytes
+
+### Usage Examples
+
+**Strict Boundary Validation:**
+
+```python
+from tools.cq.core.typed_boundary import convert_strict, BoundaryDecodeError
+
+try:
+    config = convert_strict(raw_dict, type_=SearchConfig)
+except BoundaryDecodeError as exc:
+    # Handle invalid payload at boundary
+    logger.error(f"Config validation failed: {exc}")
+```
+
+**Lax External Config:**
+
+```python
+from tools.cq.core.typed_boundary import decode_toml_strict
+
+# TOML files use lax semantics by default
+config = decode_toml_strict(toml_bytes, type_=RunPlan)
+```
+
+---
+
+## Contract Codec
+
+**Module:** `tools/cq/core/contract_codec.py` (104 LOC)
+
+The contract codec module is the **single source of truth** for all CQ serialization operations. All other serialization modules (`serialization.py`, `codec.py`, `contracts.py`) delegate to this module.
+
+### Codec Singletons
+
+**JSON Codecs:**
+
+```python
+JSON_ENCODER = msgspec.json.Encoder(order="deterministic")
+JSON_DECODER = msgspec.json.Decoder(strict=True)
+JSON_RESULT_DECODER = msgspec.json.Decoder(type=CqResult, strict=True)
+```
+
+**MessagePack Codecs:**
+
+```python
+MSGPACK_ENCODER = msgspec.msgpack.Encoder()
+MSGPACK_DECODER = msgspec.msgpack.Decoder(type=object)
+MSGPACK_RESULT_DECODER = msgspec.msgpack.Decoder(type=CqResult)
+```
+
+**Design Pattern:**
+- All encoders/decoders are module-level singletons (no per-call instantiation)
+- JSON encoder uses deterministic key ordering for stable output
+- JSON decoder uses strict validation by default
+- Typed decoders (`JSON_RESULT_DECODER`, `MSGPACK_RESULT_DECODER`) provide fast-path for CqResult
+
+### Core Encoding Functions
+
+**JSON Encoding:**
+
+```python
+def encode_json(value: object, *, indent: int | None = None) -> str:
+    """Encode any contract payload to deterministic JSON."""
+```
+
+**Encoding Pipeline:**
+1. Convert value to builtins via `to_contract_builtins(value)`
+2. Encode to JSON bytes with deterministic key ordering
+3. Optionally pretty-print with `msgspec.json.format(payload, indent=indent)`
+4. Decode bytes to UTF-8 string
+
+**MessagePack Encoding:**
+
+```python
+def encode_msgpack(value: object) -> bytes:
+    """Encode payload to msgpack bytes."""
+```
+
+### Core Decoding Functions
+
+**JSON Decoding:**
+
+```python
+def decode_json(payload: bytes | str) -> object:
+    """Decode JSON payload to builtins value."""
+
+def decode_json_result(payload: bytes | str) -> CqResult:
+    """Decode JSON payload to typed CQ result."""
+```
+
+**MessagePack Decoding:**
+
+```python
+def decode_msgpack(payload: bytes | bytearray | memoryview) -> object:
+    """Decode msgpack payload to builtins value."""
+
+def decode_msgpack_result(payload: bytes | bytearray | memoryview) -> CqResult:
+    """Decode msgpack payload to typed CQ result."""
+```
+
+### Contract Conversion Helpers
+
+**Builtins Conversion:**
+
+```python
+def to_contract_builtins(value: object) -> object:
+    """Convert a CQ value to builtins with deterministic contract settings."""
+```
+
+**Conversion Policy:**
+- Deterministic key ordering (`order="deterministic"`)
+- String keys enforced (`str_keys=True`)
+- Nested structs recursively converted to dicts
+- Collections (list, tuple, set) preserved
+
+**Struct-to-Dict:**
+
+```python
+def to_public_dict(value: msgspec.Struct) -> dict[str, object]:
+    """Convert one msgspec Struct into mapping payload."""
+
+def to_public_list(values: Iterable[msgspec.Struct]) -> list[dict[str, object]]:
+    """Convert iterable of structs into mapping rows."""
+```
+
+**Mapping Validation:**
+
+```python
+def require_mapping(value: object) -> dict[str, object]:
+    """Require mapping-shaped builtins payload."""
+```
+
+**Validation Pipeline:**
+1. Convert value to builtins via `to_contract_builtins(value)`
+2. Assert result is dict-shaped
+3. Enforce mapping constraints via `enforce_mapping_constraints(payload)`
+4. Return validated mapping
+
+### Module Consolidation
+
+**All serialization modules now delegate to contract_codec:**
+
+| Module | Delegation Target |
+|--------|------------------|
+| `tools/cq/core/serialization.py` | `encode_json`, `decode_json_result`, `encode_msgpack`, `decode_msgpack`, `decode_msgpack_result`, `to_contract_builtins` |
+| `tools/cq/core/codec.py` | `encode_json`, `decode_json`, `decode_json_result`, codec singletons |
+| `tools/cq/core/contracts.py` | `to_contract_builtins`, `to_public_dict`, `require_mapping` |
+| `tools/cq/core/diagnostics_contracts.py` | `convert_lax` (from `typed_boundary`) |
+| `tools/cq/core/cache/typed_codecs.py` | Uses `convert_lax` for typed cache boundaries |
+
+**Design Rationale:**
+- Centralizes all codec instantiation (prevents duplicate encoder/decoder instances)
+- Ensures consistent serialization settings across CQ
+- Provides single point for instrumentation/logging of serialization operations
+- Simplifies testing (mock one module instead of many)
+
+---
+
+## Contract Constraints
+
+**Module:** `tools/cq/core/contracts_constraints.py` (57 LOC)
+
+Provides reusable annotated constraint types and validation policies for public CQ contract payloads.
+
+### Annotated Constraint Types
+
+**Numeric Constraints:**
+
+```python
+PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
+NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
+PositiveFloat = Annotated[float, msgspec.Meta(gt=0.0)]
+BoundedRatio = Annotated[float, msgspec.Meta(ge=0.0, le=1.0)]
+```
+
+**String Constraints:**
+
+```python
+NonEmptyStr = Annotated[str, msgspec.Meta(min_length=1)]
+```
+
+**Usage in Contract Definitions:**
+
+```python
+class SearchLimits(CqStruct, frozen=True):
+    max_results: PositiveInt = 100              # Must be >= 1
+    timeout_seconds: PositiveFloat = 30.0       # Must be > 0.0
+    confidence_threshold: BoundedRatio = 0.5    # Must be [0.0, 1.0]
+    run_id: NonEmptyStr                         # Must have length >= 1
+```
+
+**Validation:**
+- msgspec enforces constraints during struct construction
+- Constraint violations raise `msgspec.ValidationError`
+- Constraints are type-system visible (improve IDE hints)
+
+### Contract Constraint Policy
+
+**Global Policy:**
+
+```python
+class ContractConstraintPolicyV1(CqStruct, frozen=True):
+    """Global constraints applied to mapping-like output contracts."""
+
+    max_key_count: int = 10_000              # Prevent DoS via huge payloads
+    max_key_length: int = 128                # Prevent malformed keys
+    max_string_length: int = 100_000         # Prevent unbounded strings
+```
+
+**Enforcement Function:**
+
+```python
+def enforce_mapping_constraints(
+    payload: Mapping[str, object],
+    *,
+    policy: ContractConstraintPolicyV1 | None = None,
+) -> None:
+    """Validate mapping payload against shared contract constraints."""
+```
+
+**Validation Rules:**
+1. Total key count <= `max_key_count`
+2. Each key length <= `max_key_length`
+3. Each string value length <= `max_string_length`
+
+**Use Cases:**
+- External config file validation (prevent malicious payloads)
+- Cache payload validation (prevent cache poisoning)
+- API boundary validation (enforce resource limits)
+
+**Integration:**
+
+```python
+from tools.cq.core.contract_codec import require_mapping
+
+# require_mapping() automatically calls enforce_mapping_constraints()
+validated_dict = require_mapping(external_payload)
+```
+
+---
+
+## Summary Envelope Contract
+
+**Module:** `tools/cq/core/summary_contracts.py` (45 LOC)
+
+Provides canonical summary envelope for report/render boundaries with strict output validation.
+
+### Schema
+
+**Summary Envelope:**
+
+```python
+class SummaryEnvelopeV1(CqStrictOutputStruct, frozen=True):
+    """Canonical summary envelope for report/render boundaries."""
+
+    summary: dict[str, Any] = msgspec.field(default_factory=dict)
+    diagnostics: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    telemetry: dict[str, Any] = msgspec.field(default_factory=dict)
+```
+
+**Contract Properties:**
+- Inherits from `CqStrictOutputStruct` (forbids unknown fields)
+- Three well-defined surfaces: summary, diagnostics, telemetry
+- All fields use factory defaults (never None)
+
+### Builders
+
+**Envelope Construction:**
+
+```python
+def build_summary_envelope(
+    *,
+    summary: Mapping[str, Any],
+    diagnostics: list[dict[str, Any]] | None = None,
+    telemetry: Mapping[str, Any] | None = None,
+) -> SummaryEnvelopeV1:
+    """Build a typed summary envelope from mapping surfaces."""
+```
+
+**Envelope Conversion:**
+
+```python
+def summary_envelope_to_mapping(envelope: SummaryEnvelopeV1) -> dict[str, Any]:
+    """Convert summary envelope to mapping payload."""
+```
+
+**Design Pattern:**
+- Builders accept nullable inputs and normalize to non-null defaults
+- Conversion to mapping uses `require_mapping()` (enforces constraints)
+- Strict output contract prevents accidental field additions
+
+---
+
+## Typed Cache Codecs
+
+**Module:** `tools/cq/core/cache/typed_codecs.py` (74 LOC)
+
+Provides typed cache boundary helpers for msgpack and mapping payload boundaries.
+
+### Msgpack Typed Decoding
+
+**Typed Decoder:**
+
+```python
+def decode_msgpack_typed[T](payload: object, *, type_: type[T]) -> T | None:
+    """Decode msgpack payload into a typed struct or container.
+
+    Returns:
+        Decoded typed payload when possible, otherwise None.
+    """
+```
+
+**Decoder Caching:**
+- Uses `@lru_cache(maxsize=64)` for decoder instance caching
+- One cached decoder per type (prevents redundant instantiation)
+- Thread-safe (decoder instances are immutable)
+
+**Fail-Open Semantics:**
+- Returns `None` on decode failure (no exceptions)
+- Gracefully handles invalid payloads, type mismatches, malformed data
+- Suitable for cache hit paths (missing/corrupt cache → cache miss)
+
+### Mapping Typed Conversion
+
+**Typed Conversion:**
+
+```python
+def convert_mapping_typed[T](payload: object, *, type_: type[T]) -> T | None:
+    """Convert mapping-like payload into a typed contract.
+
+    Returns:
+        Converted typed payload when possible, otherwise None.
+    """
+```
+
+**Conversion Pipeline:**
+- Uses `convert_lax()` from typed boundary (tolerates extra fields)
+- Catches `BoundaryDecodeError` and returns `None`
+- Suitable for legacy cache payloads (schema evolution)
+
+### Msgpack Encoding
+
+**Encoding Functions:**
+
+```python
+def encode_msgpack_payload(payload: object) -> bytes | object:
+    """Encode payload to msgpack, falling back to builtins on failure.
+
+    Returns:
+        Encoded bytes on success, or builtins payload fallback on failure.
+    """
+
+def encode_msgpack_into(payload: object, *, buffer: bytearray) -> int:
+    """Encode payload into a provided buffer.
+
+    Returns:
+        Number of bytes appended to buffer.
+    """
+```
+
+**Design Patterns:**
+- `encode_msgpack_payload()` uses fail-open fallback (returns builtins on encode failure)
+- `encode_msgpack_into()` uses pre-allocated buffer (reduces allocations in hot paths)
+
+### Cache Integration
+
+**Cache Hit Path:**
+
+```python
+from tools.cq.core.cache.typed_codecs import decode_msgpack_typed
+
+# Cache lookup
+raw_payload = cache_store.get(cache_key)
+if raw_payload is not None:
+    # Typed decode with fail-open
+    cached_result = decode_msgpack_typed(raw_payload, type_=CqResult)
+    if cached_result is not None:
+        return cached_result
+# Cache miss or decode failure → recompute
+```
+
+**Cache Write Path:**
+
+```python
+from tools.cq.core.cache.typed_codecs import encode_msgpack_payload
+
+# Encode result with fail-open fallback
+encoded = encode_msgpack_payload(result)
+cache_store.set(cache_key, encoded)
+```
+
+---
+
 ## Serialization Infrastructure
 
 ### msgspec Codecs
 
+**All CQ serialization now delegates to `contract_codec.py`.**
+
 **JSON Encoder/Decoder:**
 
 ```python
-import msgspec
-
-encoder = msgspec.json.Encoder()
-decoder = msgspec.json.Decoder()
+from tools.cq.core.contract_codec import JSON_ENCODER, JSON_DECODER
 
 # Encode struct to JSON bytes
-json_bytes = encoder.encode(finding)
+json_bytes = JSON_ENCODER.encode(finding)
 
-# Decode JSON bytes to struct
-finding = decoder.decode(json_bytes, type=Finding)
+# Decode JSON bytes to object
+value = JSON_DECODER.decode(json_bytes)
+```
+
+**Typed Decoding:**
+
+```python
+from tools.cq.core.contract_codec import JSON_RESULT_DECODER
+
+# Decode JSON directly to CqResult
+result = JSON_RESULT_DECODER.decode(json_bytes)
 ```
 
 **Type-Safe Conversion:**
 
 ```python
-# Convert untyped dict to typed struct
-finding = msgspec.convert(raw_dict, Finding)
+from tools.cq.core.typed_boundary import convert_strict, convert_lax
+
+# Strict conversion (rejects extra fields)
+finding = convert_strict(raw_dict, type_=Finding)
+
+# Lax conversion (ignores extra fields)
+config = convert_lax(raw_dict, type_=SearchConfig)
+```
+
+**Contract Conversion:**
+
+```python
+from tools.cq.core.contract_codec import to_contract_builtins, to_public_dict
 
 # Convert struct to dict
-raw_dict = msgspec.to_builtins(finding)
+raw_dict = to_public_dict(finding)
+
+# Convert any value to builtins
+builtins_value = to_contract_builtins(finding)
 ```
 
 ### Boundary Contracts
@@ -1452,6 +1983,7 @@ raw_dict = msgspec.to_builtins(finding)
 |--------------|----------|------------|
 | **Commands/Requests** | `SearchInsightBuildRequestV1`, `LanguageSemanticEnrichmentRequest`, `MergeResultsRequest` | `CqStruct` |
 | **Outcomes/Responses** | `FrontDoorInsightV1`, `SemanticOutcomeV1`, `CqResult` | `CqStruct`, `CqOutputStruct` |
+| **Strict Outputs** | `SummaryEnvelopeV1`, persisted artifacts | `CqStrictOutputStruct` |
 | **Settings/Config** | `InsightBudgetV1`, `SemanticRequestBudgetV1` | `CqSettingsStruct` |
 | **Cache Payloads** | `SemanticOutcomeCacheV1` | `CqCacheStruct` |
 
@@ -1467,11 +1999,14 @@ raw_dict = msgspec.to_builtins(finding)
 
 **Serialization Principles:**
 
-1. **Explicit Contracts:** All cross-module data uses msgspec.Struct subclasses
-2. **Frozen by Default:** All contracts are immutable (frozen=True)
-3. **Keyword-Only:** All contracts use kw_only=True to prevent positional confusion
-4. **Compact Defaults:** omit_defaults=True reduces JSON payload size
-5. **Strict Validation:** Settings/cache structs use forbid_unknown_fields=True
+1. **Centralized Codec Authority:** All serialization delegates to `contract_codec.py`
+2. **Explicit Contracts:** All cross-module data uses msgspec.Struct subclasses
+3. **Frozen by Default:** All contracts are immutable (frozen=True)
+4. **Keyword-Only:** All contracts use kw_only=True to prevent positional confusion
+5. **Compact Defaults:** omit_defaults=True reduces JSON payload size
+6. **Strict Validation:** Strict output/settings/cache structs use forbid_unknown_fields=True
+7. **Typed Boundaries:** Use `convert_strict` for internal boundaries, `convert_lax` for external boundaries
+8. **Constraint Enforcement:** All mapping-shaped payloads validated via `enforce_mapping_constraints()`
 
 **Anti-Patterns:**
 
@@ -1479,6 +2014,39 @@ raw_dict = msgspec.to_builtins(finding)
 - ❌ Mutating shared state (use frozen structs)
 - ❌ Serializing parser/cache handles (keep runtime-only)
 - ❌ Using Pydantic in hot paths (use msgspec)
+- ❌ Creating new encoder/decoder instances (use singletons from `contract_codec`)
+- ❌ Bypassing `contract_codec` for serialization (delegate to canonical authority)
+
+---
+
+## Module Map
+
+**Cross-Cutting Contracts & Serialization:**
+
+| Module | LOC | Purpose |
+|--------|-----|---------|
+| `tools/cq/core/structs.py` | 43 | Base msgspec struct classes |
+| `tools/cq/core/typed_boundary.py` | 129 | Typed boundary protocol (conversion, validation, error taxonomy) |
+| `tools/cq/core/contract_codec.py` | 104 | Centralized serialization authority (encoders, decoders, conversion) |
+| `tools/cq/core/contracts_constraints.py` | 57 | Annotated constraint types and validation policies |
+| `tools/cq/core/summary_contracts.py` | 45 | Summary envelope contract for report/render boundaries |
+| `tools/cq/core/cache/typed_codecs.py` | 74 | Typed cache boundary helpers (msgpack, mapping conversion) |
+| `tools/cq/core/serialization.py` | ~99 | Public serialization API (delegates to contract_codec) |
+| `tools/cq/core/codec.py` | ~71 | JSON/msgpack codec API (delegates to contract_codec) |
+| `tools/cq/core/contracts.py` | ~75 | Contract conversion helpers (delegates to contract_codec) |
+| `tools/cq/core/diagnostics_contracts.py` | ~96 | Diagnostics artifact contracts (uses typed boundary) |
+| `tools/cq/core/schema_export.py` | ~110 | JSON Schema export for CQ contracts |
+
+**Cross-Subsystem Contracts:**
+
+| Module | LOC | Purpose |
+|--------|-----|---------|
+| `tools/cq/core/front_door_insight.py` | 1,171 | FrontDoor Insight V1 canonical schema |
+| `tools/cq/core/multilang_orchestrator.py` | 481 | Multi-language partition dispatch and merging |
+| `tools/cq/search/semantic/models.py` | 507 | LSP integration contracts and semantic state machine |
+| `tools/cq/core/enrichment_facts.py` | 596 | Enrichment facts system and resolution pipeline |
+| `tools/cq/core/scoring.py` | 252 | Impact/confidence scoring and bucketing |
+| `tools/cq/core/schema.py` | ~600 | Core schema models (CqResult, Finding, Section, Anchor) |
 
 ---
 
@@ -1492,6 +2060,11 @@ This document is the **primary home** for:
 - Enrichment facts system and resolution pipeline
 - Scoring system (impact/confidence/buckets)
 - Core schema models (CqResult, Finding, Section, Anchor, ScoreDetails, DetailPayload)
+- Typed boundary protocol (conversion, validation, error taxonomy)
+- Contract codec (centralized serialization authority)
+- Contract constraints (annotated types and validation policies)
+- Summary envelope contract
+- Typed cache codecs
 - Serialization infrastructure and module boundary protocol
 
 **Other documents will cross-reference here:**
@@ -1505,6 +2078,8 @@ This document is the **primary home** for:
 | **Doc 07 (Tree-sitter)** | Enrichment facts extraction from tree-sitter payloads |
 | **Doc 08 (Neighborhood)** | Neighborhood slice mapping to insight slices |
 | **Doc 10 (Run)** | Multi-language orchestration for run plans |
+| **All Docs** | Typed boundary protocol for all module boundaries |
+| **All Docs** | Contract codec for all serialization operations |
 
 ---
 
@@ -1526,6 +2101,16 @@ This document has established the foundational cross-cutting contracts and orche
 
 7. **Core schema models** define the fundamental result structures (CqResult, Finding, Section, Anchor) used across all CQ macros.
 
-8. **Serialization infrastructure** enforces strict module boundary protocol with msgspec.Struct base classes and frozen/kw_only/omit_defaults contracts.
+8. **Typed boundary protocol** (`typed_boundary.py`) provides centralized conversion helpers and error taxonomy for all CQ module boundaries, with strict/lax semantics and format-specific decoders (JSON, TOML, YAML).
 
-These primitives form the stable foundation upon which all CQ subsystems integrate.
+9. **Contract codec** (`contract_codec.py`) serves as the single source of truth for all CQ serialization operations, providing codec singletons, encoding/decoding functions, and contract conversion helpers that all other serialization modules delegate to.
+
+10. **Contract constraints** (`contracts_constraints.py`) provides reusable annotated constraint types (PositiveInt, NonEmptyStr, BoundedRatio) and validation policies for public contract payloads.
+
+11. **Summary envelope contract** (`summary_contracts.py`) provides canonical summary envelope for report/render boundaries with strict output validation.
+
+12. **Typed cache codecs** (`cache/typed_codecs.py`) provides typed cache boundary helpers for msgpack and mapping payload boundaries with fail-open semantics.
+
+13. **Serialization infrastructure** enforces strict module boundary protocol with msgspec.Struct base classes (CqStruct, CqOutputStruct, CqStrictOutputStruct, CqSettingsStruct, CqCacheStruct), centralized codec authority, typed boundary validation, and constraint enforcement.
+
+These primitives form the stable foundation upon which all CQ subsystems integrate. The recent consolidation of serialization infrastructure into `contract_codec.py` ensures consistent serialization behavior, eliminates duplicate codec instances, and provides a single point for instrumentation and testing of all CQ serialization operations.

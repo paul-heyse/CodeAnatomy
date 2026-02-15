@@ -9,7 +9,6 @@ import dis
 from collections.abc import Iterator
 from pathlib import Path
 from types import CodeType
-from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -22,19 +21,10 @@ from tools.cq.core.schema import (
     mk_result,
     ms,
 )
-from tools.cq.core.scoring import (
-    ConfidenceSignals,
-    ImpactSignals,
-    bucket,
-    build_detail_payload,
-    confidence_score,
-    impact_score,
-)
-from tools.cq.index.files import build_repo_file_index, tabulate_files
-from tools.cq.index.repo import resolve_repo_context
-
-if TYPE_CHECKING:
-    from tools.cq.core.toolchain import Toolchain
+from tools.cq.core.scoring import build_detail_payload
+from tools.cq.macros.contracts import MacroRequestBase
+from tools.cq.macros.scoring_utils import macro_scoring_details
+from tools.cq.macros.target_resolution import resolve_target_files
 
 _DEFAULT_SHOW = "globals,attrs,constants"
 _MAX_CONST_STR_LEN = 100
@@ -81,12 +71,9 @@ class BytecodeSurface(msgspec.Struct):
     opcodes: dict[str, int] = msgspec.field(default_factory=dict)
 
 
-class BytecodeSurfaceRequest(msgspec.Struct, frozen=True):
+class BytecodeSurfaceRequest(MacroRequestBase, frozen=True):
     """Inputs required for bytecode surface analysis."""
 
-    tc: Toolchain
-    root: Path
-    argv: list[str]
     target: str
     show: str = _DEFAULT_SHOW
     max_files: int = 500
@@ -174,39 +161,6 @@ def _analyze_code_object(co: CodeType, file: str) -> BytecodeSurface:
 def _parse_show_set(show: str) -> set[str]:
     show_set = {s.strip() for s in show.split(",") if s.strip()}
     return show_set or set(_DEFAULT_SHOW.split(","))
-
-
-def _iter_search_files(root: Path, max_files: int) -> Iterator[Path]:
-    repo_context = resolve_repo_context(root)
-    repo_index = build_repo_file_index(repo_context)
-    result = tabulate_files(
-        repo_index,
-        [repo_context.repo_root],
-        None,
-        extensions=(".py",),
-    )
-    yield from result.files[:max_files]
-
-
-def _resolve_target_files(root: Path, target: str, max_files: int) -> list[Path]:
-    # Handle both absolute and relative paths
-    target_as_path = Path(target)
-    # Check if target is already an absolute or relative path that exists
-    if target_as_path.exists() and target_as_path.is_file():
-        return [target_as_path.resolve()]
-    target_path = root / target
-    if target_path.exists() and target_path.is_file():
-        return [target_path]
-
-    files: list[Path] = []
-    for pyfile in _iter_search_files(root, max_files=max_files):
-        try:
-            source = pyfile.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        if f"def {target}" in source or f"class {target}" in source:
-            files.append(pyfile)
-    return files
 
 
 def _collect_surfaces(root: Path, files: list[Path]) -> list[BytecodeSurface]:
@@ -416,7 +370,12 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
     """
     started = ms()
     show_set = _parse_show_set(request.show)
-    files = _resolve_target_files(request.root, request.target, request.max_files)
+    files = resolve_target_files(
+        root=request.root,
+        target=request.target,
+        max_files=request.max_files,
+        extensions=(".py",),
+    )
     all_surfaces = _collect_surfaces(request.root, files)
     all_globals, all_attrs, total_opcodes = _aggregate_surfaces(all_surfaces)
 
@@ -438,23 +397,11 @@ def cmd_bytecode_surface(request: BytecodeSurfaceRequest) -> CqResult:
 
     # Compute scoring signals - bytecode uses "bytecode" evidence kind
     unique_files = len({s.file for s in all_surfaces})
-    imp_signals = ImpactSignals(
+    scoring_details = macro_scoring_details(
         sites=len(all_surfaces),
         files=unique_files,
-        depth=0,
-        breakages=0,
-        ambiguities=0,
+        evidence_kind="bytecode",
     )
-    conf_signals = ConfidenceSignals(evidence_kind="bytecode")
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    scoring_details: dict[str, object] = {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
 
     # Key findings
     if all_globals:

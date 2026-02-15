@@ -12,8 +12,15 @@ from tools.cq.core.schema import CqResult
 from tools.cq.core.scoring import ConfidenceSignals, ImpactSignals
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.ir import Query
+from tools.cq.run.spec import RunPlan, RunStep
+from tools.cq.search._shared.search_contracts import SearchSummaryContract
 from tools.cq.search.pipeline.models import SearchConfig
 from tools.cq.search.pipeline.profiles import SearchLimits
+from tools.cq.search.tree_sitter.contracts.core_models import (
+    TreeSitterArtifactBundleV1,
+    TreeSitterDiagnosticV1,
+    TreeSitterQueryHitV1,
+)
 
 
 def _schema_hook(type_: object) -> dict[str, Any] | None:
@@ -78,6 +85,12 @@ def cq_schema_components() -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
         [
             CqResult,
             Query,
+            RunPlan,
+            RunStep,
+            SearchSummaryContract,
+            TreeSitterArtifactBundleV1,
+            TreeSitterDiagnosticV1,
+            TreeSitterQueryHitV1,
             SearchLimits,
             Toolchain,
             ImpactSignals,

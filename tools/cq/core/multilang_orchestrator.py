@@ -14,6 +14,7 @@ from tools.cq.core.requests import MergeResultsRequest, SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, DetailPayload, Finding, Section, mk_result
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 from tools.cq.query.language import (
     QueryLanguage,
     QueryLanguageScope,
@@ -165,9 +166,13 @@ def _zero_semantic_telemetry() -> dict[str, int]:
 def _coerce_semantic_telemetry(value: object) -> dict[str, int]:
     if not isinstance(value, Mapping):
         return _zero_semantic_telemetry()
+    try:
+        normalized = convert_lax(value, type_=dict[str, int])
+    except BoundaryDecodeError:
+        normalized: dict[str, int] = {}
     telemetry = _zero_semantic_telemetry()
     for key in telemetry:
-        raw = value.get(key)
+        raw = normalized.get(key)
         telemetry[key] = raw if isinstance(raw, int) and not isinstance(raw, bool) else 0
     return telemetry
 

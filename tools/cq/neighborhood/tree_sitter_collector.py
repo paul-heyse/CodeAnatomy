@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -25,31 +24,21 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryWindowV1,
     TreeSitterDiagnosticV1,
 )
+from tools.cq.search.tree_sitter.core.language_runtime import make_parser
 from tools.cq.search.tree_sitter.core.parser_controls import (
     apply_parser_controls,
     parser_controls_from_env,
 )
+from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
 from tools.cq.search.tree_sitter.structural.diagnostic_export import collect_diagnostic_rows
 from tools.cq.search.tree_sitter.structural.export import export_structural_rows
 
 if TYPE_CHECKING:
-    from tree_sitter import Language, Node, Parser
+    from tree_sitter import Node, Parser
 
 try:
-    import tree_sitter_python as _tree_sitter_python
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_python = None
-
-try:
-    import tree_sitter_rust as _tree_sitter_rust
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_rust = None
-
-try:
-    from tree_sitter import Language as _TreeSitterLanguage
     from tree_sitter import Parser as _TreeSitterParser
 except ImportError:  # pragma: no cover - optional dependency
-    _TreeSitterLanguage = None
     _TreeSitterParser = None
 
 _SCOPE_KINDS: frozenset[str] = frozenset(
@@ -113,40 +102,17 @@ class _AnchorNeighborhood:
     callees: list[Node]
 
 
-@lru_cache(maxsize=1)
-def _python_language() -> Language:
-    if _tree_sitter_python is None or _TreeSitterLanguage is None:
-        msg = "tree_sitter_python language bindings are unavailable"
-        raise RuntimeError(msg)
-    return _TreeSitterLanguage(_tree_sitter_python.language())
-
-
-@lru_cache(maxsize=1)
-def _rust_language() -> Language:
-    if _tree_sitter_rust is None or _TreeSitterLanguage is None:
-        msg = "tree_sitter_rust language bindings are unavailable"
-        raise RuntimeError(msg)
-    return _TreeSitterLanguage(_tree_sitter_rust.language())
-
-
 def _parser(language: str) -> Parser:
     if _TreeSitterParser is None:
         msg = "tree_sitter parser bindings are unavailable"
         raise RuntimeError(msg)
-    parser = _TreeSitterParser(_rust_language() if language == "rust" else _python_language())
+    parser = make_parser(language)
     apply_parser_controls(parser, parser_controls_from_env())
     return parser
 
 
 def _node_text(node: Node, source_bytes: bytes, *, max_len: int = 120) -> str:
-    start = int(getattr(node, "start_byte", 0))
-    end = int(getattr(node, "end_byte", start))
-    if end <= start:
-        return ""
-    text = source_bytes[start:end].decode("utf-8", errors="replace").strip()
-    if len(text) > max_len:
-        return text[: max_len - 3] + "..."
-    return text
+    return _ts_node_text(node, source_bytes, max_len=max_len)
 
 
 def _walk_named(root: Node, *, max_nodes: int = _MAX_WALK_NODES) -> Iterable[Node]:

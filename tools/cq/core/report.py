@@ -23,6 +23,7 @@ from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 from tools.cq.core.serialization import to_builtins
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 from tools.cq.query.language import QueryLanguage
 from tools.cq.search.objects.render import is_applicability_not_applicable
 
@@ -1371,12 +1372,10 @@ def _render_insight_card_from_summary(summary: dict[str, object]) -> list[str]:
     if isinstance(raw, FrontDoorInsightV1):
         return render_insight_card(raw)
     if isinstance(raw, dict):
-        import msgspec
-
         try:
-            insight = msgspec.convert(raw, FrontDoorInsightV1)
+            insight = convert_lax(raw, type_=FrontDoorInsightV1)
             return render_insight_card(insight)
-        except (msgspec.ValidationError, TypeError):
+        except BoundaryDecodeError:
             return []
     return []
 

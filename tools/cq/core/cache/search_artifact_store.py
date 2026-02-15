@@ -25,6 +25,11 @@ from tools.cq.core.cache.tree_sitter_blob_store import (
     read_blob,
     write_blob,
 )
+from tools.cq.core.cache.typed_codecs import (
+    convert_mapping_typed,
+    decode_msgpack_typed,
+    encode_msgpack_into,
+)
 
 try:
     from diskcache import Deque, Index
@@ -48,9 +53,6 @@ _NAMESPACE: Final[str] = "search_artifacts"
 _VERSION: Final[str] = "v2"
 _MAX_INDEX_ROWS: Final[int] = 1000
 _BLOB_THRESHOLD_BYTES: Final[int] = 64 * 1024
-
-_ENCODER = msgspec.msgpack.Encoder()
-_DECODER = msgspec.msgpack.Decoder(type=SearchArtifactBundleV1)
 
 
 def _store_root(policy: CqCachePolicyV1) -> Path:
@@ -116,10 +118,7 @@ def _decode_entry(value: object) -> SearchArtifactIndexEntryV1 | None:
     if isinstance(value, SearchArtifactIndexEntryV1):
         return value
     if isinstance(value, dict):
-        try:
-            return msgspec.convert(value, type=SearchArtifactIndexEntryV1)
-        except (RuntimeError, TypeError, ValueError):
-            return None
+        return convert_mapping_typed(value, type_=SearchArtifactIndexEntryV1)
     return None
 
 
@@ -183,7 +182,9 @@ def persist_search_artifact_bundle(
         macro=bundle.macro,
         extras=key_extras,
     )
-    payload = _ENCODER.encode(bundle)
+    payload_buffer = bytearray()
+    encode_msgpack_into(bundle, buffer=payload_buffer)
+    payload = bytes(payload_buffer)
     stored_value: object
     if len(payload) > _BLOB_THRESHOLD_BYTES:
         blob_ref = write_blob(root=root, payload=payload)
@@ -316,27 +317,18 @@ def _decode_bundle_payload(
     attempted = False
     if isinstance(payload, (bytes, bytearray, memoryview)):
         attempted = True
-        try:
-            bundle = _DECODER.decode(payload)
-        except (RuntimeError, TypeError, ValueError):
-            bundle = None
+        bundle = decode_msgpack_typed(payload, type_=SearchArtifactBundleV1)
     elif isinstance(payload, dict):
         attempted = True
         blob_ref = decode_blob_pointer(payload)
         if blob_ref is not None:
             blob_payload = read_blob(root=root, ref=blob_ref)
             if isinstance(blob_payload, (bytes, bytearray, memoryview)):
-                try:
-                    bundle = _DECODER.decode(blob_payload)
-                except (RuntimeError, TypeError, ValueError):
-                    bundle = None
+                bundle = decode_msgpack_typed(blob_payload, type_=SearchArtifactBundleV1)
             else:
                 bundle = None
         else:
-            try:
-                bundle = msgspec.convert(payload, type=SearchArtifactBundleV1)
-            except (RuntimeError, TypeError, ValueError):
-                bundle = None
+            bundle = convert_mapping_typed(payload, type_=SearchArtifactBundleV1)
     return bundle, attempted
 
 

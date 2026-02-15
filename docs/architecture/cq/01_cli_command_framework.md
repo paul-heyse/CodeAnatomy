@@ -1,8 +1,9 @@
 # 01 — CLI & Command Framework
 
-**Version:** 0.4.0
+**Version:** 0.5.0
 **Scope:** `tools/cq/cli_app/` — Command-line interface, routing, configuration, output rendering
 **Phase:** Phase 2 documentation (Command Interface Layer)
+**Last Updated:** 2026-02-15 — Typed boundary integration, CLI-specific run-step contracts
 
 ---
 
@@ -31,19 +32,19 @@ The CLI & Command Framework provides the external interface to CQ's analysis cap
 ## Module Map
 
 ```
-tools/cq/cli_app/                    (3,831 LOC total)
+tools/cq/cli_app/                    (3,844 LOC total)
 ├── __init__.py                      (49 LOC) - Package re-exports
 ├── app.py                           (290 LOC) - Root App, launcher, command registration
 ├── config.py                        (35 LOC) - Config provider chain (TOML, env)
 ├── context.py                       (189 LOC) - CliContext, CliResult, CliTextResult
+├── contracts.py                     (164 LOC) - CLI-specific run-step contracts, boundary conversion
 ├── decorators.py                    (42 LOC) - Context injection decorators
 ├── dispatch.py                      (42 LOC) - Dispatch pipeline (async support)
 ├── groups.py                        (44 LOC) - Cyclopts command groups
-├── options.py                       (127 LOC) - Typed option structs
-├── params.py                        (280 LOC) - Parameter groups
+├── options.py                       (128 LOC) - Typed option structs
+├── params.py                        (281 LOC) - Parameter groups
 ├── result.py                        (381 LOC) - Result rendering dispatch, artifact persistence
 ├── result_action.py                 (81 LOC) - Cyclopts result action handlers
-├── step_types.py                    (151 LOC) - Run step type definitions
 ├── telemetry.py                     (156 LOC) - Telemetry capture and error classification
 ├── types.py                         (288 LOC) - Output format enums, custom converters
 ├── validators.py                    (97 LOC) - Input validators
@@ -62,6 +63,63 @@ tools/cq/cli_app/                    (3,831 LOC total)
     ├── run.py                       (53 LOC) - Multi-step execution
     └── search.py                    (80 LOC) - Smart search command
 ```
+
+---
+
+## Run-Step Contracts and Typed Boundary
+
+### CLI-Specific Run-Step Types
+
+**Location:** `cli_app/contracts.py:12-138`
+
+The CLI layer defines its own run-step contract types that mirror the canonical `RunStep` union from `tools/cq/run/spec.py`. These CLI-specific types enable cyclopts to parse JSON payloads from `--step` and `--steps` parameters.
+
+**CLI Step Types:**
+
+- `QStepCli` - Query command step
+- `SearchStepCli` - Search command step
+- `CallsStepCli` - Calls analysis step
+- `ImpactStepCli` - Impact analysis step
+- `ImportsStepCli` - Import analysis step
+- `ExceptionsStepCli` - Exception analysis step
+- `SigImpactStepCli` - Signature impact analysis step
+- `SideEffectsStepCli` - Side effects analysis step
+- `ScopesStepCli` - Scope analysis step
+- `BytecodeSurfaceStepCli` - Bytecode surface analysis step
+- `NeighborhoodStepCli` - Neighborhood assembly step
+
+All CLI step types are Python dataclasses (not msgspec structs) to maintain compatibility with cyclopts' parameter binding system.
+
+### Typed Boundary Conversion
+
+**Location:** `cli_app/contracts.py:141-147`
+
+```python
+def to_run_step(payload: dict[str, object]) -> RunStep:
+    """Convert a CLI mapping payload into canonical run-step union."""
+    try:
+        return convert_strict(payload, type_=RunStep)
+    except BoundaryDecodeError as exc:
+        msg = f"Invalid run step payload: {exc}"
+        raise ValueError(msg) from exc
+```
+
+**Boundary Protocol:**
+
+The `to_run_step()` converter uses the typed boundary protocol (`tools/cq/core/typed_boundary.py`) to transform CLI-layer payloads into canonical run-step contracts. This provides:
+
+1. **Type validation** - Ensures step payloads match expected schemas
+2. **Error reporting** - `BoundaryDecodeError` provides detailed validation failures
+3. **Canonical conversion** - CLI types converted to execution layer types
+
+**Integration Points:**
+
+- **options.py** - `RunOptions.step` and `RunOptions.steps` are now typed as `list[RunStep]` (previously `list[dict[str, object]]`)
+- **params.py** - `RunParams.step` and `RunParams.steps` use `list[RunStepCli]` for parameter binding, then converted via `options_from_params()`
+
+**Why Separate CLI Types:**
+
+The CLI layer uses dataclasses for cyclopts compatibility, while the execution layer uses msgspec structs for performance. The typed boundary protocol bridges these representations, ensuring validation occurs at the CLI ingress point before execution begins.
 
 ---
 
@@ -349,6 +407,103 @@ class CliTextResult(CqStruct, frozen=True):
 ```
 
 Protocol commands (LDMD, artifact) that return raw text or JSON use `CliTextResult` instead of `CqResult`.
+
+---
+
+## Parameter Groups and Options Conversion
+
+### Parameter Groups for Cyclopts
+
+**Location:** `cli_app/params.py:48-280`
+
+Parameter groups are dataclass-based reusable parameter bundles that can be flattened into command signatures via cyclopts `Parameter(name="*")`. Each command has a corresponding `*Params` dataclass that defines its parameter set.
+
+**Parameter Group Examples:**
+
+- `FilterParams` - Common filters (include, exclude, impact, confidence, severity, limit)
+- `QueryParams` - Query command parameters (extends `FilterParams`)
+- `SearchParams` - Search command parameters (extends `FilterParams`)
+- `RunParams` - Run command parameters with step/steps fields
+- `ImpactParams` - Impact analysis parameters
+- `ImportsParams` - Import analysis parameters
+- And others...
+
+**RunParams Step Fields:**
+
+**Location:** `cli_app/params.py:254-273`
+
+```python
+step: Annotated[
+    list[RunStepCli],
+    Parameter(
+        name="--step",
+        group=run_input,
+        n_tokens=1,
+        accepts_keys=False,
+        help='Repeatable JSON step object (e.g., \'{"type":"q","query":"..."}\')',
+    ),
+] = field(default_factory=list)
+
+steps: Annotated[
+    list[RunStepCli],
+    Parameter(
+        name="--steps",
+        group=run_input,
+        n_tokens=1,
+        accepts_keys=False,
+        help='JSON array of steps (e.g., \'[{"type":"q",...},{"type":"calls",...}]\')',
+    ),
+] = field(default_factory=list)
+```
+
+**Key Observations:**
+
+- `RunParams.step` and `RunParams.steps` are typed as `list[RunStepCli]` (CLI-layer dataclasses)
+- Cyclopts automatically deserializes JSON payloads into these dataclass instances
+- The typed boundary protocol later converts CLI types to canonical execution types
+
+### Options Conversion from Params
+
+**Location:** `cli_app/options.py:119-127`
+
+```python
+def options_from_params[T](params: Any, *, type_: type[T]) -> T:
+    """Convert a CLI params dataclass into a CQ options struct.
+
+    Returns:
+    -------
+    T
+        Parsed options struct of the requested type.
+    """
+    return convert_strict(params, type_=type_, from_attributes=True)
+```
+
+**Conversion Mechanism:**
+
+The `options_from_params()` helper uses the typed boundary protocol (`convert_strict()`) with `from_attributes=True` to transform cyclopts param dataclasses into typed option structs. This approach:
+
+1. **Eliminates manual dict conversion** - No need for `asdict()` calls
+2. **Provides type safety** - Validation at the CLI boundary
+3. **Enables field transformation** - Automatic conversion between compatible types
+4. **Supports nested structures** - Recursive conversion for complex payloads
+
+**Example Conversion Flow:**
+
+```
+User Input (JSON)
+  → Cyclopts Parameter Binding
+  → RunStepCli (dataclass instance)
+  → options_from_params()
+  → convert_strict(..., from_attributes=True)
+  → RunStep (msgspec struct)
+  → Execution Layer
+```
+
+**Why Two Type Layers:**
+
+- **CLI Layer (dataclasses)** - Cyclopts requires dataclasses for parameter binding
+- **Execution Layer (msgspec structs)** - Msgspec provides zero-copy serialization and better performance
+- **Typed Boundary** - `convert_strict()` bridges the two representations with validation
 
 ---
 
@@ -759,6 +914,21 @@ class Artifact(CqStruct, frozen=True):
 ---
 
 ## Architectural Observations
+
+### Typed Boundary Integration
+
+**Strength:**
+
+The typed boundary protocol (`convert_strict()`) successfully decouples the CLI layer (cyclopts dataclasses) from the execution layer (msgspec structs). This enables:
+
+- Type validation at the CLI ingress point
+- Zero-copy serialization in the execution layer
+- Clear separation between parameter binding and execution
+- Graceful error handling with `BoundaryDecodeError`
+
+**Observation:**
+
+The dual-type-layer pattern (CLI dataclasses → typed boundary → execution structs) adds complexity but provides strong guarantees. The `from_attributes=True` conversion eliminates the need for manual `asdict()` calls and enables field-level transformations.
 
 ### CLI Configuration Coupling
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
+
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
 
@@ -197,11 +199,9 @@ def _emit_insight_card(lines: list[str], result: CqResult) -> None:
     if isinstance(raw, FrontDoorInsightV1):
         insight = raw
     elif isinstance(raw, dict):
-        import msgspec
-
         try:
-            insight = msgspec.convert(raw, FrontDoorInsightV1)
-        except (msgspec.ValidationError, TypeError):
+            insight = convert_lax(raw, type_=FrontDoorInsightV1)
+        except BoundaryDecodeError:
             return
     if insight is None:
         return

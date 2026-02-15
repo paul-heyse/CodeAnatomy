@@ -186,8 +186,6 @@ def _python_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]
     parse_quality = payload.get("parse_quality")
     rows: list[dict[str, object]] = []
     tree_sitter_rows = payload.get("cst_diagnostics")
-    if not isinstance(tree_sitter_rows, list):
-        tree_sitter_rows = payload.get("tree_sitter_diagnostics")
     if isinstance(tree_sitter_rows, list):
         rows.extend(
             {
@@ -218,8 +216,6 @@ def _python_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]
 def _rust_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]]:
     rows = _mapping_list(payload.get("degrade_events"), limit=16)
     tree_sitter_rows = payload.get("cst_diagnostics")
-    if not isinstance(tree_sitter_rows, list):
-        tree_sitter_rows = payload.get("tree_sitter_diagnostics")
     if isinstance(tree_sitter_rows, list):
         rows.extend(
             {

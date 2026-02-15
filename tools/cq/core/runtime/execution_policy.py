@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-from typing import Annotated
 
 import msgspec
 
+from tools.cq.core.contracts_constraints import NonNegativeInt, PositiveFloat, PositiveInt
 from tools.cq.core.runtime.env_namespace import (
     NamespacePatternV1,
     parse_namespace_bool_overrides,
@@ -25,11 +25,6 @@ _DEFAULT_CACHE_SIZE_LIMIT_BYTES = 2_147_483_648
 _DEFAULT_CACHE_CULL_LIMIT = 16
 _DEFAULT_CACHE_EVICTION_POLICY = "least-recently-stored"
 _ENV_PREFIX = "CQ_RUNTIME_"
-
-
-PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
-NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
-PositiveFloat = Annotated[float, msgspec.Meta(gt=0.0)]
 
 
 class ParallelismPolicy(CqSettingsStruct, frozen=True):

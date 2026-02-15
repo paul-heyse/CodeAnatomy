@@ -7,8 +7,13 @@ from typing import cast
 
 import msgspec
 
-from tools.cq.core.public_serialization import to_public_dict
-from tools.cq.core.serialization import to_builtins
+from tools.cq.core.contract_codec import (
+    require_mapping as require_contract_mapping,
+)
+from tools.cq.core.contract_codec import (
+    to_contract_builtins,
+    to_public_dict,
+)
 from tools.cq.core.structs import CqOutputStruct
 from tools.cq.search._shared.search_contracts import SearchSummaryContract, summary_contract_to_dict
 
@@ -33,7 +38,7 @@ def contract_to_builtins(value: object) -> object:
         and all(isinstance(item, msgspec.Struct) for item in value)
     ):
         return [to_public_dict(cast("msgspec.Struct", item)) for item in value]
-    return to_builtins(value)
+    return to_contract_builtins(value)
 
 
 def summary_contract_to_mapping(
@@ -58,11 +63,7 @@ def require_mapping(value: object) -> dict[str, object]:
     Raises:
         TypeError: If the payload is not mapping-shaped after conversion.
     """
-    payload = contract_to_builtins(value)
-    if isinstance(payload, dict):
-        return cast("dict[str, object]", payload)
-    msg = f"Expected mapping contract payload, got {type(payload).__name__}"
-    raise TypeError(msg)
+    return require_contract_mapping(value)
 
 
 __all__ = [

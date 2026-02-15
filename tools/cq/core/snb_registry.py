@@ -14,6 +14,7 @@ from tools.cq.core.snb_schema import (
     SemanticNeighborhoodBundleV1,
     SemanticNodeRefV1,
 )
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 DETAILS_KIND_REGISTRY: dict[str, type[msgspec.Struct]] = {
     "cq.snb.bundle_ref.v1": SemanticNeighborhoodBundleRefV1,
@@ -87,8 +88,8 @@ def decode_finding_details(details: dict[str, object]) -> msgspec.Struct | None:
         return None
 
     try:
-        return msgspec.convert(details, type=struct_type)
-    except (msgspec.ValidationError, TypeError):
+        return convert_lax(details, type_=struct_type)
+    except BoundaryDecodeError:
         return None
 
 

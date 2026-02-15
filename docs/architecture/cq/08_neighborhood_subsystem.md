@@ -258,6 +258,13 @@ def collect_callers_callees(
     # ... filter and classify as callers/callees
 ```
 
+**Runtime Dependencies** (see **Doc 07: Tree-Sitter Subsystem**):
+- `core/language_runtime.py` — `load_language()` for multi-language grammar loading
+- `core/text_utils.py` — `node_text()` for UTF-8 byte-span extraction with max_len truncation
+- `query/resource_paths.py` — `query_pack_path()` for canonical query pack path resolution
+
+These shared utilities replace inline language loading, text extraction, and query path logic with centralized implementations, ensuring consistency across the tree-sitter subsystem.
+
 **Cross-Reference**: See **Doc 07** for `run_bounded_query_matches()`, `QueryExecutionSettingsV1`, and tree-sitter runtime details.
 
 **Key Data Structures**:
@@ -569,10 +576,15 @@ The neighborhood subsystem leverages CQ's tree-sitter engine (see **Doc 07**) fo
 
 **Key Operations**:
 
-1. **Parse**: Use language-specific parser (`_language()` factory)
+1. **Parse**: Use `make_parser(language)` from `core/language_runtime.py`
 2. **Anchor Resolution**: Cursor-based node-at-position lookup
 3. **Structural Queries**: Execute `.scm` queries via `run_bounded_query_matches()`
 4. **Relationship Extraction**: Walk tree for parents/children/siblings
+
+**Runtime Dependencies** (see **Doc 07**):
+- `core/language_runtime.py` — `make_parser()` for parser instantiation with language binding
+- `core/text_utils.py` — `node_text()` for UTF-8 text extraction with strip/max_len support
+- `core/parser_controls.py` — `apply_parser_controls()` for environment-driven parser tuning
 
 **Query Packs Used**:
 - `10_definitions.scm` — Function/class definition extraction
@@ -585,10 +597,18 @@ The neighborhood subsystem leverages CQ's tree-sitter engine (see **Doc 07**) fo
 **Function**: `collect_callers_callees()`
 
 **Pipeline**:
-1. Compile query: `_compile_query(language, "10_calls.scm")`
-2. Execute bounded query: `run_bounded_query_matches(tree_root, query, source_bytes, settings)`
-3. Filter matches to `anchor_name`
-4. Classify as callers (node references anchor) or callees (anchor calls node)
+1. Load language: `_language(language)` → `load_language()` from `core/language_runtime.py`
+2. Resolve query pack path: `query_pack_path(language, "10_calls.scm")` from `query/resource_paths.py`
+3. Compile query: `_compile_query(language, "10_calls.scm")`
+4. Execute bounded query: `run_bounded_query_matches(tree_root, query, source_bytes, settings)`
+5. Extract node text: `_node_text(node, source_bytes)` → `node_text()` from `core/text_utils.py`
+6. Filter matches to `anchor_name`
+7. Classify as callers (node references anchor) or callees (anchor calls node)
+
+**Runtime Dependencies** (see **Doc 07**):
+- `core/language_runtime.py` — `load_language()` replaces inline `_TreeSitterLanguage` construction
+- `core/text_utils.py` — `node_text()` replaces inline byte-span extraction logic
+- `query/resource_paths.py` — `query_pack_path()` replaces inline `Path` construction for query pack resolution
 
 **Budget Constraints**:
 
@@ -600,11 +620,15 @@ settings = QueryExecutionSettingsV1(
 )
 ```
 
+**Key Refactoring**:
+The query engine now delegates language loading, text extraction, and query path resolution to shared utilities from the tree-sitter subsystem (Doc 07), eliminating code duplication and ensuring consistency with other tree-sitter consumers.
+
 **Cross-Reference**: See **Doc 07** for:
 - `run_bounded_query_matches()` implementation
 - `QueryExecutionSettingsV1` fields
 - Budget enforcement and telemetry
 - Windowing and autotune
+- `load_language()`, `node_text()`, and `query_pack_path()` implementations
 
 ---
 
@@ -741,7 +765,19 @@ no_lsp = false
 
 ### Design Rationale
 
-#### 1. Tree-Sitter-First Structural Collection
+#### 1. Shared Tree-Sitter Runtime Dependencies
+
+As of the recent refactoring, the neighborhood subsystem delegates tree-sitter primitives to shared utilities from the tree-sitter subsystem (**Doc 07**):
+
+- **Language Loading**: `load_language()` and `make_parser()` from `core/language_runtime.py` replace inline grammar loading
+- **Text Extraction**: `node_text()` from `core/text_utils.py` replaces inline byte-span slicing
+- **Query Path Resolution**: `query_pack_path()` from `query/resource_paths.py` replaces inline `Path` construction
+
+**Rationale**: Eliminates code duplication across tree-sitter consumers (neighborhood, search, structural export) and ensures consistency in language binding, text handling, and query pack resolution.
+
+**Migration**: The `tree_sitter_neighborhood_query_engine.py` and `tree_sitter_collector.py` modules now import shared utilities instead of maintaining parallel implementations.
+
+#### 2. Tree-Sitter-First Structural Collection
 
 The tree-sitter-based collector replaces the old ast-grep-based collector for:
 
@@ -751,7 +787,7 @@ The tree-sitter-based collector replaces the old ast-grep-based collector for:
 
 **Trade-off**: Requires tree-sitter grammar maintenance, but gains deeper structural access.
 
-#### 2. Capability-Gated LSP Enrichment
+#### 3. Capability-Gated LSP Enrichment
 
 The capability gating system (`plan_feasible_slices()`) enables graceful degradation when LSP servers lack required capabilities.
 
@@ -761,7 +797,7 @@ The capability gating system (`plan_feasible_slices()`) enables graceful degrada
 
 **Current Policy**: Conservative. Explicit capability checks prevent wasted LSP calls.
 
-#### 3. 17-Slot Deterministic Section Layout
+#### 4. 17-Slot Deterministic Section Layout
 
 Fixed `SECTION_ORDER` prevents drift from collector return order. Critical for:
 - LLM consumption (consistent section ordering across queries)
@@ -772,7 +808,7 @@ Fixed `SECTION_ORDER` prevents drift from collector return order. Critical for:
 - User-configurable section order via `.cq.toml`
 - Conditional section emission (skip empty sections)
 
-#### 4. 4-Phase Sequential Assembly
+#### 5. 4-Phase Sequential Assembly
 
 **Why not parallel execution?**
 - Phase 1 must complete before Phase 2 (LSP needs target anchor)
@@ -782,7 +818,7 @@ Fixed `SECTION_ORDER` prevents drift from collector return order. Critical for:
 
 **Potential Optimization**: Parallel LSP calls within Phase 2 (currently not implemented).
 
-#### 5. Progressive Disclosure via Artifact Pointers
+#### 6. Progressive Disclosure via Artifact Pointers
 
 Heavy slices (where `total > len(preview)`) are externalized to JSON artifacts. This prevents bloating the main bundle.
 
@@ -792,7 +828,7 @@ Heavy slices (where `total > len(preview)`) are externalized to JSON artifacts. 
 
 **Extension Point**: Replace `_store_artifacts_with_preview()` with object-store adapter (S3, GCS).
 
-#### 6. Anchor-First Target Resolution
+#### 7. Anchor-First Target Resolution
 
 Prioritizes file:line:col anchors over symbol names for:
 - **Disambiguation**: Multiple definitions with same name in same file
@@ -805,7 +841,7 @@ Prioritizes file:line:col anchors over symbol names for:
 
 **Improvement Vector**: Add column-aware resolution (currently `target_col` is advisory).
 
-#### 7. Typed Degradation Events
+#### 8. Typed Degradation Events
 
 `DegradeEventV1` provides structured failure tracking with:
 - `stage` — Where failure occurred
@@ -933,6 +969,7 @@ The neighborhood subsystem provides a robust, extensible framework for semantic 
 - Progressive disclosure via artifact externalization
 - Multi-language support (Python/Rust) with unified schema
 - Tree-sitter-first structural collection for precision
+- Shared runtime utilities from tree-sitter subsystem (eliminates code duplication)
 
 **Key Extension Points**:
 - New slice kinds (imports, tests, related code)

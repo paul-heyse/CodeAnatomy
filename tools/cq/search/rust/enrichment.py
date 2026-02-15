@@ -10,6 +10,7 @@ import msgspec
 from ast_grep_py import SgRoot
 
 from tools.cq.core.locations import byte_offset_to_line_col
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 from tools.cq.search._shared.core import RustEnrichmentRequest
 from tools.cq.search._shared.core import sg_node_text as _shared_sg_node_text
 from tools.cq.search._shared.core import source_hash as _shared_source_hash
@@ -530,8 +531,8 @@ def _macro_requests(payload: dict[str, object]) -> tuple[RustMacroExpansionReque
         if not isinstance(item, dict):
             continue
         try:
-            rows.append(msgspec.convert(item, type=RustMacroExpansionRequestV1, strict=False))
-        except (TypeError, ValueError, msgspec.ValidationError):
+            rows.append(convert_lax(item, type_=RustMacroExpansionRequestV1))
+        except BoundaryDecodeError:
             continue
     return tuple(rows)
 

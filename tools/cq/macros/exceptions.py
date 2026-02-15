@@ -9,7 +9,6 @@ from __future__ import annotations
 import ast
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -22,19 +21,12 @@ from tools.cq.core.schema import (
     mk_result,
     ms,
 )
-from tools.cq.core.scoring import (
-    ConfidenceSignals,
-    ImpactSignals,
-    bucket,
-    build_detail_payload,
-    confidence_score,
-    impact_score,
-)
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.macros.scope_filters import resolve_macro_files, scope_filter_applied
-
-if TYPE_CHECKING:
-    from tools.cq.core.toolchain import Toolchain
+from tools.cq.macros.contracts import ScopedMacroRequestBase
+from tools.cq.macros.scan_utils import iter_files
+from tools.cq.macros.scope_filters import scope_filter_applied
+from tools.cq.macros.scoring_utils import macro_scoring_details
 
 _TOP_EXCEPTION_TYPES = 15
 _BARE_EXCEPT_LIMIT = 20
@@ -103,6 +95,12 @@ class CatchSite(msgspec.Struct):
     has_handler: bool = True
     is_bare_except: bool = False
     reraises: bool = False
+
+
+class ExceptionsRequest(ScopedMacroRequestBase, frozen=True):
+    """Inputs required for exception handling analysis."""
+
+    function: str | None = None
 
 
 def _safe_unparse(node: ast.AST, *, default: str) -> str:
@@ -265,27 +263,6 @@ class ExceptionVisitor(ast.NodeVisitor):
         return "<unknown>"
 
 
-def _iter_python_files(
-    root: Path,
-    *,
-    include: list[str] | None = None,
-    exclude: list[str] | None = None,
-) -> list[Path]:
-    """Collect Python files under root using gitignore semantics.
-
-    Returns:
-    -------
-    list[Path]
-        Python files under the repository root.
-    """
-    return resolve_macro_files(
-        root=root,
-        include=include,
-        exclude=exclude,
-        extensions=(".py",),
-    )
-
-
 def _scan_exceptions(
     root: Path,
     *,
@@ -304,10 +281,11 @@ def _scan_exceptions(
     all_raises: list[RaiseSite] = []
     all_catches: list[CatchSite] = []
     files_scanned = 0
-    for pyfile in _iter_python_files(
-        repo_root,
+    for pyfile in iter_files(
+        root=repo_root,
         include=include,
         exclude=exclude,
+        extensions=(".py",),
     ):
         rel_str = str(pyfile.relative_to(repo_root))
         try:
@@ -486,35 +464,6 @@ def _append_exception_evidence(
         )
 
 
-def _build_exception_scoring(
-    *,
-    all_raises: list[RaiseSite],
-    all_catches: list[CatchSite],
-) -> tuple[dict[str, object], list[CatchSite]]:
-    unique_files = len({r.file for r in all_raises} | {c.file for c in all_catches})
-    bare_excepts = [caught for caught in all_catches if caught.is_bare_except]
-    imp_signals = ImpactSignals(
-        sites=len(all_raises),
-        files=unique_files,
-        depth=0,
-        breakages=len(bare_excepts),
-        ambiguities=0,
-    )
-    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
-    impact_value = impact_score(imp_signals)
-    confidence_value = confidence_score(conf_signals)
-    return (
-        {
-            "impact_score": impact_value,
-            "impact_bucket": bucket(impact_value),
-            "confidence_score": confidence_value,
-            "confidence_bucket": bucket(confidence_value),
-            "evidence_kind": conf_signals.evidence_kind,
-        },
-        bare_excepts,
-    )
-
-
 def _apply_rust_fallback(
     result: CqResult,
     root: Path,
@@ -542,26 +491,13 @@ def _apply_rust_fallback(
     )
 
 
-def cmd_exceptions(
-    tc: Toolchain,
-    root: Path,
-    argv: list[str],
-    function: str | None = None,
-    include: list[str] | None = None,
-    exclude: list[str] | None = None,
-) -> CqResult:
+def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
     """Analyze exception handling patterns.
 
     Parameters
     ----------
-    tc : Toolchain
-        Available tools.
-    root : Path
-        Repository root.
-    argv : list[str]
-        Original command arguments.
-    function : str | None
-        Focus on specific function.
+    request : ExceptionsRequest
+        Exception-analysis request payload.
 
     Returns:
     -------
@@ -571,20 +507,20 @@ def cmd_exceptions(
     started = ms()
 
     all_raises, all_catches, files_scanned = _scan_exceptions(
-        root,
-        include=include,
-        exclude=exclude,
+        request.root,
+        include=request.include,
+        exclude=request.exclude,
     )
 
     # Filter by function if specified
-    if function:
-        all_raises = [r for r in all_raises if r.in_function == function]
-        all_catches = [c for c in all_catches if c.in_function == function]
+    if request.function:
+        all_raises = [r for r in all_raises if r.in_function == request.function]
+        all_catches = [c for c in all_catches if c.in_function == request.function]
 
     run = RunContext.from_parts(
-        root=root,
-        argv=argv,
-        tc=tc,
+        root=request.root,
+        argv=request.argv,
+        tc=request.tc,
         started_ms=started,
     ).to_runmeta("exceptions")
     result = mk_result(run)
@@ -594,7 +530,7 @@ def cmd_exceptions(
     result.summary = {
         "files_scanned": files_scanned,
         "scope_file_count": files_scanned,
-        "scope_filter_applied": scope_filter_applied(include, exclude),
+        "scope_filter_applied": scope_filter_applied(request.include, request.exclude),
         "total_raises": len(all_raises),
         "total_catches": len(all_catches),
         "unique_exception_types": len(raise_types),
@@ -602,9 +538,12 @@ def cmd_exceptions(
         "reraises": sum(1 for r in all_raises if r.is_reraise),
     }
 
-    scoring_details, bare_excepts = _build_exception_scoring(
-        all_raises=all_raises,
-        all_catches=all_catches,
+    bare_excepts = [caught for caught in all_catches if caught.is_bare_except]
+    scoring_details = macro_scoring_details(
+        sites=len(all_raises),
+        files=len({r.file for r in all_raises} | {c.file for c in all_catches}),
+        breakages=len(bare_excepts),
+        evidence_kind="resolved_ast",
     )
 
     # Key findings
@@ -649,4 +588,4 @@ def cmd_exceptions(
         scoring_details=scoring_details,
     )
 
-    return _apply_rust_fallback(result, root, function)
+    return _apply_rust_fallback(result, request.root, request.function)

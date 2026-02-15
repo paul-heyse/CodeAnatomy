@@ -4,16 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
-import msgspec
-
+from tools.cq.core.contract_codec import (
+    JSON_DECODER,
+    JSON_ENCODER,
+    JSON_RESULT_DECODER,
+    MSGPACK_DECODER,
+    MSGPACK_ENCODER,
+    MSGPACK_RESULT_DECODER,
+    decode_json,
+    decode_json_result,
+    encode_json,
+)
 from tools.cq.core.schema import CqResult
-
-JSON_ENCODER = msgspec.json.Encoder(order="deterministic")
-JSON_DECODER = msgspec.json.Decoder(strict=True)
-JSON_RESULT_DECODER = msgspec.json.Decoder(type=CqResult, strict=True)
-MSGPACK_ENCODER = msgspec.msgpack.Encoder()
-MSGPACK_DECODER = msgspec.msgpack.Decoder(type=object)
-MSGPACK_RESULT_DECODER = msgspec.msgpack.Decoder(type=CqResult)
 
 
 def dumps_json_value(value: Any, *, indent: int | None = None) -> str:
@@ -31,11 +33,7 @@ def dumps_json_value(value: Any, *, indent: int | None = None) -> str:
     str
         JSON string.
     """
-    payload = JSON_ENCODER.encode(value)
-    if indent is None:
-        return payload.decode("utf-8")
-    formatted = msgspec.json.format(payload, indent=indent)
-    return formatted.decode("utf-8")
+    return encode_json(value, indent=indent)
 
 
 def loads_json_value(payload: bytes | str) -> Any:
@@ -46,9 +44,7 @@ def loads_json_value(payload: bytes | str) -> Any:
     Any
         Decoded value.
     """
-    if isinstance(payload, str):
-        payload = payload.encode("utf-8")
-    return JSON_DECODER.decode(payload)
+    return decode_json(payload)
 
 
 def loads_json_result(payload: bytes | str) -> CqResult:
@@ -59,9 +55,7 @@ def loads_json_result(payload: bytes | str) -> CqResult:
     CqResult
         Decoded result.
     """
-    if isinstance(payload, str):
-        payload = payload.encode("utf-8")
-    return JSON_RESULT_DECODER.decode(payload)
+    return decode_json_result(payload)
 
 
 __all__ = [

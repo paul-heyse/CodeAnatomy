@@ -8,7 +8,7 @@ from typing import Literal, cast
 import msgspec
 
 from tools.cq.core.public_serialization import to_public_dict
-from tools.cq.core.structs import CqOutputStruct
+from tools.cq.core.structs import CqOutputStruct, CqStrictOutputStruct
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope
 
 Severity = Literal["info", "warning", "error"]
@@ -368,7 +368,7 @@ def coerce_python_semantic_diagnostics(
     return rows
 
 
-class SearchSummaryContract(CqOutputStruct, frozen=True):
+class SearchSummaryContract(CqStrictOutputStruct, frozen=True):
     """Canonical multi-language summary contract for CQ outputs."""
 
     lang_scope: QueryLanguageScope

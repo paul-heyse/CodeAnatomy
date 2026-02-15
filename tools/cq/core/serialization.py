@@ -4,22 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-import msgspec
-
-from tools.cq.core.codec import (
-    JSON_ENCODER as _JSON_ENCODER,
-)
-from tools.cq.core.codec import (
-    JSON_RESULT_DECODER as _JSON_DECODER,
-)
-from tools.cq.core.codec import (
-    MSGPACK_DECODER as _GENERIC_MSGPACK_DECODER,
-)
-from tools.cq.core.codec import (
-    MSGPACK_ENCODER as _MSGPACK_ENCODER,
-)
-from tools.cq.core.codec import (
-    MSGPACK_RESULT_DECODER as _MSGPACK_DECODER,
+from tools.cq.core.contract_codec import (
+    decode_json_result,
+    decode_msgpack,
+    decode_msgpack_result,
+    encode_json,
+    encode_msgpack,
+    to_contract_builtins,
 )
 from tools.cq.core.schema import CqResult
 
@@ -39,11 +30,7 @@ def dumps_json(result: CqResult, *, indent: int | None = 2) -> str:
     str
         JSON string representation.
     """
-    payload = _JSON_ENCODER.encode(result)
-    if indent is None:
-        return payload.decode("utf-8")
-    formatted = msgspec.json.format(payload, indent=indent)
-    return formatted.decode("utf-8")
+    return encode_json(result, indent=indent)
 
 
 def loads_json(payload: bytes | str) -> CqResult:
@@ -54,9 +41,7 @@ def loads_json(payload: bytes | str) -> CqResult:
     CqResult
         Parsed CQ result.
     """
-    if isinstance(payload, str):
-        payload = payload.encode("utf-8")
-    return _JSON_DECODER.decode(payload)
+    return decode_json_result(payload)
 
 
 def dumps_msgpack(value: Any) -> bytes:
@@ -67,7 +52,7 @@ def dumps_msgpack(value: Any) -> bytes:
     bytes
         MessagePack-encoded bytes.
     """
-    return _MSGPACK_ENCODER.encode(value)
+    return encode_msgpack(value)
 
 
 def loads_msgpack(payload: bytes | bytearray | memoryview) -> Any:
@@ -78,7 +63,7 @@ def loads_msgpack(payload: bytes | bytearray | memoryview) -> Any:
     Any
         Decoded Python value.
     """
-    return _GENERIC_MSGPACK_DECODER.decode(payload)
+    return decode_msgpack(payload)
 
 
 def loads_msgpack_result(payload: bytes | bytearray | memoryview) -> CqResult:
@@ -89,7 +74,7 @@ def loads_msgpack_result(payload: bytes | bytearray | memoryview) -> CqResult:
     CqResult
         Decoded CQ result.
     """
-    return _MSGPACK_DECODER.decode(payload)
+    return decode_msgpack_result(payload)
 
 
 def to_builtins(value: Any) -> Any:
@@ -100,7 +85,7 @@ def to_builtins(value: Any) -> Any:
     Any
         Builtins-only representation.
     """
-    return msgspec.to_builtins(value)
+    return to_contract_builtins(value)
 
 
 __all__ = [

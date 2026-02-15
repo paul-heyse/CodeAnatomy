@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import cast
 
 import msgspec
+
+from tools.cq.core.contract_codec import to_public_dict as _to_public_dict
+from tools.cq.core.contract_codec import to_public_list as _to_public_list
 
 
 def to_public_dict(value: msgspec.Struct) -> dict[str, object]:
@@ -17,14 +19,7 @@ def to_public_dict(value: msgspec.Struct) -> dict[str, object]:
     Raises:
         TypeError: If the serialized payload is not a dictionary.
     """
-    payload = msgspec.to_builtins(
-        value,
-        builtin_types=(str, int, float, bool, type(None), list, dict),
-    )
-    if isinstance(payload, dict):
-        return cast("dict[str, object]", payload)
-    msg = f"Expected dict payload, got {type(payload).__name__}"
-    raise TypeError(msg)
+    return _to_public_dict(value)
 
 
 def to_public_list(values: Iterable[msgspec.Struct]) -> list[dict[str, object]]:
@@ -33,7 +28,7 @@ def to_public_list(values: Iterable[msgspec.Struct]) -> list[dict[str, object]]:
     Returns:
         List of builtins dictionaries.
     """
-    return [to_public_dict(value) for value in values]
+    return _to_public_list(values)
 
 
 __all__ = ["to_public_dict", "to_public_list"]

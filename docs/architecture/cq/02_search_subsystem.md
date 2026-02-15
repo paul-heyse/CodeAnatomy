@@ -62,7 +62,10 @@ tools/cq/search/
 | `context_window.py` | 118 | Context snippet extraction with window computation |
 | `candidate_normalizer.py` | 101 | Definition candidate selection |
 | `models.py` | 75 | SearchConfig, SearchRequest, SmartSearchContext |
-| `profiles.py` | 65 | SearchLimits presets (DEFAULT, INTERACTIVE, AUDIT) |
+| `profiles.py` | 65 | SearchLimits presets with constraint annotations (DEFAULT, INTERACTIVE, AUDIT) |
+| `__init__.py` | 41 | Package facade with lazy module loading |
+
+**Lazy Loading:** The `__init__.py` uses `__getattr__` to defer imports until first access, reducing startup overhead and preventing import cycles. Exports include `SearchContext`, `SearchPipeline`, `SearchResultAssembly`, `assemble_result`, and `run_smart_search_pipeline`.
 
 #### `python/` — Python Enrichment
 
@@ -867,38 +870,69 @@ The search pipeline builds `FrontDoorInsightV1` cards that include:
 
 **Purpose:** Predefined search limit profiles for different use cases.
 
-### Profiles
+### SearchLimits Structure
 
-**INTERACTIVE** (default for `cq search`):
+**Class:** `SearchLimits`
+
 ```python
-INTERACTIVE = SearchLimits(
-    max_files=200,
-    max_matches_per_file=50,
-    max_total_matches=500,
-    max_file_size_bytes=2 * 1024 * 1024,  # 2MB
-    timeout_seconds=30.0,
-)
+class SearchLimits(CqSettingsStruct, frozen=True):
+    max_files: PositiveInt = 5000
+    max_matches_per_file: PositiveInt = 1000
+    max_total_matches: PositiveInt = 10000
+    timeout_seconds: PositiveFloat = 30.0
+    max_depth: PositiveInt = 25
+    max_file_size_bytes: PositiveInt = 2 * 1024 * 1024
 ```
+
+**Constraint Annotations:** All numeric fields use `PositiveInt` and `PositiveFloat` constraint types from `tools/cq/core/contracts_constraints.py` (see **doc 06 § Contract Constraints**). These constraints provide compile-time and runtime validation that values are positive.
+
+### Profiles
 
 **DEFAULT** (for programmatic use):
 ```python
 DEFAULT = SearchLimits(
+    max_files=5000,
+    max_matches_per_file=1000,
+    max_total_matches=10000,
+    max_file_size_bytes=2 * 1024 * 1024,  # 2MB
+    timeout_seconds=30.0,
+    max_depth=25,
+)
+```
+
+**INTERACTIVE** (default for `cq search`):
+```python
+INTERACTIVE = SearchLimits(
     max_files=1000,
-    max_matches_per_file=100,
-    max_total_matches=5000,
-    max_file_size_bytes=5 * 1024 * 1024,  # 5MB
-    timeout_seconds=60.0,
+    max_matches_per_file=1000,
+    max_total_matches=10000,
+    max_file_size_bytes=1 * 1024 * 1024,  # 1MB
+    timeout_seconds=10.0,
+    max_depth=20,
 )
 ```
 
 **AUDIT** (for exhaustive search):
 ```python
 AUDIT = SearchLimits(
-    max_files=10000,
+    max_files=50000,
     max_matches_per_file=1000,
-    max_total_matches=50000,
+    max_total_matches=100000,
     max_file_size_bytes=10 * 1024 * 1024,  # 10MB
     timeout_seconds=300.0,
+    max_depth=50,
+)
+```
+
+**LITERAL** (for simple string searches):
+```python
+LITERAL = SearchLimits(
+    max_files=2000,
+    max_matches_per_file=500,
+    max_total_matches=10000,
+    max_file_size_bytes=2 * 1024 * 1024,  # 2MB
+    timeout_seconds=30.0,
+    max_depth=25,
 )
 ```
 

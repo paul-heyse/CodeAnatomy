@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 
 if TYPE_CHECKING:
     from tools.cq.core.schema import CqResult
@@ -50,15 +51,13 @@ def build_diagnostics_artifact_payload(result: CqResult) -> DiagnosticsArtifactP
             root=result.run.root,
             run_id=result.run.run_id,
         ),
-        enrichment_telemetry=_coerce_dict(summary.get("enrichment_telemetry")),
-        python_semantic_telemetry=_coerce_dict(summary.get("python_semantic_telemetry")),
-        rust_semantic_telemetry=_coerce_dict(summary.get("rust_semantic_telemetry")),
-        semantic_planes=_coerce_dict(summary.get("semantic_planes")),
-        python_semantic_diagnostics=_coerce_list_of_dict(
-            summary.get("python_semantic_diagnostics")
-        ),
-        language_capabilities=_coerce_dict(summary.get("language_capabilities")),
-        cross_language_diagnostics=_coerce_list_of_dict(summary.get("cross_language_diagnostics")),
+        enrichment_telemetry=_safe_dict(summary.get("enrichment_telemetry")),
+        python_semantic_telemetry=_safe_dict(summary.get("python_semantic_telemetry")),
+        rust_semantic_telemetry=_safe_dict(summary.get("rust_semantic_telemetry")),
+        semantic_planes=_safe_dict(summary.get("semantic_planes")),
+        python_semantic_diagnostics=_safe_list_of_dict(summary.get("python_semantic_diagnostics")),
+        language_capabilities=_safe_dict(summary.get("language_capabilities")),
+        cross_language_diagnostics=_safe_list_of_dict(summary.get("cross_language_diagnostics")),
     )
     has_data = any(
         (
@@ -76,14 +75,18 @@ def build_diagnostics_artifact_payload(result: CqResult) -> DiagnosticsArtifactP
     return payload
 
 
-def _coerce_dict(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, dict) else {}
+def _safe_dict(value: object) -> dict[str, object]:
+    try:
+        return convert_lax(value, type_=dict[str, object])
+    except BoundaryDecodeError:
+        return {}
 
 
-def _coerce_list_of_dict(value: object) -> list[dict[str, object]]:
-    if not isinstance(value, list):
+def _safe_list_of_dict(value: object) -> list[dict[str, object]]:
+    try:
+        return convert_lax(value, type_=list[dict[str, object]])
+    except BoundaryDecodeError:
         return []
-    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 __all__ = [

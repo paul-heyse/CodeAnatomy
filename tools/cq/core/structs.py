@@ -23,6 +23,16 @@ class CqOutputStruct(msgspec.Struct, kw_only=True, frozen=True, omit_defaults=Tr
     """Base struct for serializable CQ output/public contracts."""
 
 
+class CqStrictOutputStruct(
+    msgspec.Struct,
+    kw_only=True,
+    frozen=True,
+    omit_defaults=True,
+    forbid_unknown_fields=True,
+):
+    """Strict output boundary contract for persisted/external payloads."""
+
+
 class CqCacheStruct(
     msgspec.Struct,
     kw_only=True,

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import msgspec
 
@@ -20,19 +20,12 @@ from tools.cq.core.schema import (
     mk_result,
     ms,
 )
-from tools.cq.core.scoring import (
-    ConfidenceSignals,
-    ImpactSignals,
-    bucket,
-    build_detail_payload,
-    confidence_score,
-    impact_score,
-)
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.repo import resolve_repo_context
-from tools.cq.macros.scope_filters import resolve_macro_files, scope_filter_applied
-
-if TYPE_CHECKING:
-    from tools.cq.core.toolchain import Toolchain
+from tools.cq.macros.contracts import ScopedMacroRequestBase
+from tools.cq.macros.scan_utils import iter_files
+from tools.cq.macros.scope_filters import scope_filter_applied
+from tools.cq.macros.scoring_utils import macro_scoring_details
 
 _MAX_EFFECTS_DISPLAY = 40
 
@@ -243,31 +236,10 @@ class SideEffectVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-class SideEffectsRequest(msgspec.Struct, frozen=True):
+class SideEffectsRequest(ScopedMacroRequestBase, frozen=True):
     """Inputs required for side effect analysis."""
 
-    tc: Toolchain
-    root: Path
-    argv: list[str]
     max_files: int = 2000
-    include: list[str] = msgspec.field(default_factory=list)
-    exclude: list[str] = msgspec.field(default_factory=list)
-
-
-def _iter_python_files(
-    root: Path,
-    max_files: int,
-    *,
-    include: list[str] | None = None,
-    exclude: list[str] | None = None,
-) -> list[Path]:
-    files = resolve_macro_files(
-        root=root,
-        include=include,
-        exclude=exclude,
-        extensions=(".py",),
-    )
-    return files[:max_files]
 
 
 def _scan_side_effects(
@@ -282,11 +254,12 @@ def _scan_side_effects(
     all_effects: list[SideEffect] = []
     files_scanned = 0
 
-    for pyfile in _iter_python_files(
-        repo_root,
-        max_files,
+    for pyfile in iter_files(
+        root=repo_root,
         include=include,
         exclude=exclude,
+        extensions=(".py",),
+        max_files=max_files,
     ):
         rel = pyfile.relative_to(repo_root)
         try:
@@ -438,23 +411,11 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
 
     # Compute scoring signals
     unique_files = len({e.file for e in all_effects})
-    imp_signals = ImpactSignals(
+    scoring_details = macro_scoring_details(
         sites=len(all_effects),
         files=unique_files,
-        depth=0,
-        breakages=0,
-        ambiguities=0,
+        evidence_kind="resolved_ast",
     )
-    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    scoring_details: dict[str, object] = {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
 
     # Key findings
     if by_kind.get("top_level_call"):

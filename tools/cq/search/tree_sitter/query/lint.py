@@ -145,7 +145,10 @@ def _lint_language(language: str) -> tuple[str, ...]:
         return ()
 
     schema_index = build_schema_index(schema)
-    sources = load_query_pack_sources(language, include_distribution=False)
+    try:
+        sources = load_query_pack_sources(language, include_distribution=False)
+    except (RuntimeError, TypeError, ValueError):
+        return (f"{language}:query_registry_unavailable:failed to load query pack sources",)
     if not sources:
         return ()
     drift_report = build_grammar_drift_report(language=language, query_sources=sources)

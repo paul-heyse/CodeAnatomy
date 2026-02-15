@@ -11,7 +11,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import msgspec
 
@@ -24,22 +24,14 @@ from tools.cq.core.schema import (
     mk_result,
     ms,
 )
-from tools.cq.core.scoring import (
-    ConfidenceSignals,
-    ImpactSignals,
-    bucket,
-    build_detail_payload,
-    confidence_score,
-    impact_score,
-)
+from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_bound_call
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
 from tools.cq.index.def_index import DefIndex, FnDecl
+from tools.cq.macros.contracts import MacroRequestBase
+from tools.cq.macros.scoring_utils import macro_scoring_details
 from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
 from tools.cq.search.rg.adapter import find_callers
-
-if TYPE_CHECKING:
-    from tools.cq.core.toolchain import Toolchain
 
 _DEFAULT_MAX_DEPTH = 5
 _SECTION_SITE_LIMIT = 50
@@ -91,12 +83,9 @@ class TaintState(msgspec.Struct):
     visited: set[str] = msgspec.field(default_factory=set)
 
 
-class ImpactRequest(msgspec.Struct, frozen=True):
+class ImpactRequest(MacroRequestBase, frozen=True):
     """Inputs required for the impact macro."""
 
-    tc: Toolchain
-    root: Path
-    argv: list[str]
     function_name: str
     param_name: str
     max_depth: int = _DEFAULT_MAX_DEPTH
@@ -773,24 +762,13 @@ def _build_impact_scoring(
 ) -> tuple[dict[str, object], dict[int, int], set[str]]:
     depth_counts, files_affected = _collect_depth_stats(all_sites)
     max_depth = max(depth_counts.keys()) if depth_counts else 0
-    imp_signals = ImpactSignals(
+    evidence_kind = "resolved_ast" if max_depth == 0 else "cross_file_taint"
+    scoring_details = macro_scoring_details(
         sites=len(all_sites),
         files=len(files_affected),
         depth=max_depth,
-        breakages=0,
-        ambiguities=0,
+        evidence_kind=evidence_kind,
     )
-    evidence_kind = "resolved_ast" if max_depth == 0 else "cross_file_taint"
-    conf_signals = ConfidenceSignals(evidence_kind=evidence_kind)
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    scoring_details: dict[str, object] = {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
     return scoring_details, depth_counts, files_affected
 
 

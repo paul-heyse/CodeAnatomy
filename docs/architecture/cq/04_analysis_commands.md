@@ -19,14 +19,21 @@ This document targets advanced LLM programmers seeking to propose architectural 
 **Primary Macros** (`tools/cq/macros/`):
 - `calls.py` (2311 lines) - Call site census with argument shape analysis and FrontDoor insight
 - `calls_target.py` (741 lines) - Target resolution with persistent cache, callee extraction
-- `impact.py` (902 lines) - Taint/data flow propagation with inter-procedural analysis
-- `sig_impact.py` (446 lines) - Signature change impact simulation with compatibility classification
-- `scopes.py` (414 lines) - Closure/scope capture analysis via symtable introspection
-- `bytecode.py` (494 lines) - Bytecode surface analysis for hidden dependencies
-- `side_effects.py` (502 lines) - Import-time side effect detection
-- `imports.py` (664 lines) - Import structure and cycle analysis
-- `exceptions.py` (653 lines) - Exception handling pattern analysis
+- `impact.py` (880 lines) - Taint/data flow propagation with inter-procedural analysis
+- `sig_impact.py` (427 lines) - Signature change impact simulation with compatibility classification
+- `scopes.py` (361 lines) - Closure/scope capture analysis via symtable introspection
+- `bytecode.py` (441 lines) - Bytecode surface analysis for hidden dependencies
+- `side_effects.py` (463 lines) - Import-time side effect detection
+- `imports.py` (619 lines) - Import structure and cycle analysis
+- `exceptions.py` (592 lines) - Exception handling pattern analysis
 - `scope_filters.py` (51 lines) - Shared scope filtering helpers for macro file enumeration
+
+**Shared Macro Infrastructure** (`tools/cq/macros/`):
+- `contracts.py` (64 lines) - Base request contracts: `MacroRequestBase`, `ScopedMacroRequestBase`
+- `scan_utils.py` (30 lines) - File scan helper with glob filters
+- `scoring_utils.py` (67 lines) - Normalized scoring payload builders
+- `target_resolution.py` (44 lines) - File/symbol target resolution
+- `common/` - Re-export package for shared contracts, scoring, targets
 
 **Cross-Language Fallback** (`tools/cq/macros/`):
 - `multilang_fallback.py` (82 lines) - Shared multilang summary assembly and diagnostics
@@ -46,6 +53,135 @@ This document targets advanced LLM programmers seeking to propose architectural 
 **Scoring and Caching**:
 - `core/scoring.py` (200 lines) - Impact and confidence scoring with evidence-kind mapping
 - `core/cache.py` - Persistent disk cache infrastructure (used by calls_target)
+
+## Shared Macro Infrastructure
+
+All analysis macros have been refactored to use common infrastructure for request handling, target resolution, file scanning, and scoring. This eliminates code duplication and establishes consistent patterns across macro implementations.
+
+### Base Request Contracts
+
+**MacroRequestBase** (`macros/contracts.py:16-22`):
+```python
+class MacroRequestBase(CqStruct, frozen=True):
+    """Base request envelope shared by macro entry points."""
+    tc: Toolchain
+    root: Path
+    argv: list[str]
+```
+
+All macro request types extend `MacroRequestBase` to ensure consistent access to toolchain, repository root, and command-line arguments.
+
+**ScopedMacroRequestBase** (`macros/contracts.py:24-28`):
+```python
+class ScopedMacroRequestBase(MacroRequestBase, frozen=True):
+    """Macro request base with shared include/exclude scope filters."""
+    include: list[str] = msgspec.field(default_factory=list)
+    exclude: list[str] = msgspec.field(default_factory=list)
+```
+
+Macros that scan multiple files extend `ScopedMacroRequestBase` to inherit standard scope filtering capability.
+
+**Usage Hierarchy**:
+- `MacroRequestBase` ← `BytecodeSurfaceRequest`, `ScopeRequest`
+- `ScopedMacroRequestBase` ← `ExceptionsRequest`, `ImportRequest`, `SideEffectsRequest`
+- `MacroRequestBase` ← `ImpactRequest`, `SigImpactRequest` (no scope filtering needed)
+
+### Target Resolution
+
+**resolve_target_files** (`macros/target_resolution.py:10-42`):
+```python
+def resolve_target_files(
+    *,
+    root: Path,
+    target: str,
+    max_files: int,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    extensions: tuple[str, ...] = (".py",),
+) -> list[Path]:
+    """Resolve explicit path targets or symbol-hint file candidates."""
+```
+
+**Resolution Strategy**:
+1. **Explicit Path**: Check if target is absolute or relative path to existing file
+2. **Rooted Path**: Try `root / target` as file path
+3. **Symbol Search**: Scan files matching include/exclude/extensions for `def {target}` or `class {target}`
+
+**Used By**:
+- `bytecode.py:373` - Resolve bytecode analysis targets
+- `scopes.py:283` - Resolve scope analysis targets
+
+### File Scanning
+
+**iter_files** (`macros/scan_utils.py:10-27`):
+```python
+def iter_files(
+    *,
+    root: Path,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    extensions: tuple[str, ...] = (".py",),
+    max_files: int | None = None,
+) -> list[Path]:
+    """Resolve files for macro scans with optional include/exclude globs."""
+```
+
+Wraps `resolve_macro_files` from `scope_filters.py` with optional max_files truncation.
+
+**Used By**:
+- `exceptions.py:284` - File iteration for exception analysis
+- `imports.py:285` - File iteration for import analysis
+- `side_effects.py:257` - File iteration for side-effect analysis
+
+### Scoring Utilities
+
+**macro_scoring_details** (`macros/scoring_utils.py:17-43`):
+```python
+def macro_scoring_details(
+    *,
+    sites: int,
+    files: int,
+    depth: int = 0,
+    breakages: int = 0,
+    ambiguities: int = 0,
+    evidence_kind: str = "resolved_ast",
+) -> dict[str, object]:
+    """Build a normalized scoring-details mapping for macro findings."""
+```
+
+Constructs scoring payload from `ImpactSignals` and `ConfidenceSignals` with normalized bucket classification.
+
+**macro_score_payload** (`macros/scoring_utils.py:46-64`):
+```python
+def macro_score_payload(*, files: int, findings: int) -> MacroScorePayloadV1:
+    """Build a normalized macro scoring payload from simple counters."""
+```
+
+Convenience builder for simple file/finding count payloads.
+
+**Used By** (all macros):
+- `bytecode.py:400` - Bytecode scoring with `evidence_kind="bytecode"`
+- `exceptions.py:542` - Exception scoring with breakages count
+- `imports.py:555` - Import scoring with depth from cycle length
+- `scopes.py:309` - Scope scoring with `evidence_kind="resolved_ast"`
+- `side_effects.py:414` - Side-effect scoring
+- `impact.py:766` - Impact scoring with cross-file taint evidence
+- `sig_impact.py:376` - Signature impact scoring with breakages/ambiguities
+
+### Common Re-Exports
+
+The `macros/common/` package provides clean re-export surfaces for shared infrastructure:
+
+**contracts.py** (`macros/common/contracts.py:1-19`):
+- Re-exports: `MacroRequestBase`, `ScopedMacroRequestBase`, `MacroExecutionRequestV1`, `MacroTargetResolutionV1`, `MacroScorePayloadV1`
+
+**scoring.py** (`macros/common/scoring.py:1-7`):
+- Re-exports: `macro_score_payload`
+
+**targets.py** (`macros/common/targets.py:1-7`):
+- Re-exports: `resolve_target_files`
+
+**Usage**: These re-exports allow future macro implementations to import from `tools.cq.macros.common` without knowing the internal module structure.
 
 ## Architecture Patterns
 
@@ -437,9 +573,14 @@ insight = build_calls_insight(
 
 **Purpose**: Trace how data flows from a specific parameter through function calls.
 
+**Request Type**: Extends `MacroRequestBase` (`impact.py:86-91`)
+
+**Shared Infrastructure Usage**:
+- Uses `macro_scoring_details` with cross-file taint evidence (`impact.py:766`)
+
 #### Data Structures
 
-**TaintedSite** (`impact.py:49-74`):
+**TaintedSite** (`impact.py:41-65`):
 ```python
 class TaintedSite(msgspec.Struct):
     file: str
@@ -450,7 +591,7 @@ class TaintedSite(msgspec.Struct):
     depth: int               # Propagation depth
 ```
 
-**TaintState** (`impact.py:76-92`):
+**TaintState** (`impact.py:68-83`):
 ```python
 class TaintState(msgspec.Struct):
     tainted_vars: set[str]          # Currently tainted variables
@@ -465,13 +606,13 @@ class TaintState(msgspec.Struct):
 - Resolve function by name or qualified name
 - Filter functions containing target parameter
 
-**2. Intra-Procedural Taint Tracking** (`impact.py:125-270`):
+**2. Intra-Procedural Taint Tracking** (`impact.py:114-259`):
 - Initialize tainted set with target parameter name
 - Visit assignments: propagate taint from RHS to LHS
 - Visit calls: record tainted arguments for inter-procedural analysis
 - Visit returns: record tainted return values
 
-**3. Taint Propagation Handlers** (`impact.py:272-443`):
+**3. Taint Propagation Handlers** (`impact.py:261-432`):
 
 Dictionary mapping AST node types to taint checking functions:
 
@@ -483,7 +624,7 @@ Dictionary mapping AST node types to taint checking functions:
 - **Lambda**: Never tainted (conservative)
 - **Comprehensions**: Taint if iterating over tainted data
 
-**4. Inter-Procedural Propagation** (`impact.py:500-557`):
+**4. Inter-Procedural Propagation** (`impact.py:489-545`):
 ```python
 def _analyze_function(fn: FnDecl, tainted_params: set[str], ...):
     # Run TaintVisitor on function body
@@ -499,11 +640,11 @@ def _analyze_function(fn: FnDecl, tainted_params: set[str], ...):
             _analyze_function(target, new_tainted, context, current_depth + 1)
 ```
 
-**5. External Callers** (`impact.py:559-593`):
+**5. External Callers** (`impact.py:548-581`):
 - Use ripgrep to find potential callers
 - Convert absolute paths to relative paths
 
-**Scoring** (`impact.py:771-795`):
+**Scoring** (`impact.py:760-772`):
 - ImpactSignals: sites, files, max_depth
 - ConfidenceSignals:
   - "cross_file_taint" if max_depth > 0
@@ -518,9 +659,14 @@ def _analyze_function(fn: FnDecl, tainted_params: set[str], ...):
 
 **Purpose**: Simulate a signature change and classify call sites as would_break, ambiguous, or ok.
 
+**Request Type**: Extends `MacroRequestBase` (`sig_impact.py:60-64`)
+
+**Shared Infrastructure Usage**:
+- Uses `macro_scoring_details` with breakages and ambiguities counts (`sig_impact.py:376`)
+
 #### Data Structures
 
-**SigParam** (`sig_impact.py:42-64`):
+**SigParam** (`sig_impact.py:36-57`):
 ```python
 class SigParam(msgspec.Struct):
     name: str
@@ -532,7 +678,7 @@ class SigParam(msgspec.Struct):
 
 #### Algorithm
 
-**1. Signature Parsing** (`sig_impact.py:76-157`):
+**1. Signature Parsing** (`sig_impact.py:67-147`):
 ```python
 def _parse_signature(sig: str) -> list[SigParam]:
     # Extract inside parens via regex
@@ -541,10 +687,10 @@ def _parse_signature(sig: str) -> list[SigParam]:
     # Track defaults for positional and keyword-only params
 ```
 
-**2. Call Site Collection** (`sig_impact.py:217-242`):
+**2. Call Site Collection** (`sig_impact.py:208-232`):
 - Reuse calls.py infrastructure: `rg_find_candidates`, `collect_call_sites`
 
-**3. Call Classification** (`sig_impact.py:159-215`):
+**3. Call Classification** (`sig_impact.py:150-205`):
 
 **Ambiguous**: Call uses *args or **kwargs
 
@@ -590,9 +736,15 @@ for kw in site.kwargs:
 
 **Purpose**: Analyze scope capture for closures and nested functions via symtable introspection.
 
+**Request Type**: Extends `MacroRequestBase` (`scopes.py:67-71`)
+
+**Shared Infrastructure Usage**:
+- Uses `resolve_target_files` for file/symbol target resolution (`scopes.py:283`)
+- Uses `macro_scoring_details` with `evidence_kind="resolved_ast"` (`scopes.py:309`)
+
 #### Data Structures
 
-**ScopeInfo** (`scopes.py:41-75`):
+**ScopeInfo** (`scopes.py:31-64`):
 ```python
 class ScopeInfo(msgspec.Struct):
     name: str                # Scope name (qualified)
@@ -608,12 +760,12 @@ class ScopeInfo(msgspec.Struct):
 
 #### Algorithm
 
-**1. File Resolution** (`scopes.py:185-204`):
-- Check if target is file path (absolute or relative)
-- Otherwise search for files containing `def {target}` or `class {target}`
-- Limit to max_files
+**1. Target Resolution** (`scopes.py:283-289`):
+- Uses shared `resolve_target_files` helper
+- Resolves explicit paths or searches for symbol definitions
+- Returns list of candidate files for scope analysis
 
-**2. Scope Extraction** (`scopes.py:123-171`):
+**2. Scope Extraction** (`scopes.py:110-157`):
 ```python
 def _extract_scopes(st: symtable.SymbolTable, file: str, parent_name: str = ""):
     # Build symtable via symtable.symtable(source, file, "exec")
@@ -647,9 +799,15 @@ def _extract_scopes(st: symtable.SymbolTable, file: str, parent_name: str = ""):
 
 **Purpose**: Analyze compiled bytecode for hidden dependencies without execution.
 
+**Request Type**: Extends `MacroRequestBase` (`bytecode.py:74-79`)
+
+**Shared Infrastructure Usage**:
+- Uses `resolve_target_files` for file/symbol target resolution (`bytecode.py:373`)
+- Uses `macro_scoring_details` with `evidence_kind="bytecode"` (`bytecode.py:400`)
+
 #### Data Structures
 
-**BytecodeSurface** (`bytecode.py:54-82`):
+**BytecodeSurface** (`bytecode.py:44-72`):
 ```python
 class BytecodeSurface(msgspec.Struct):
     qualname: str            # Qualified name
@@ -710,9 +868,16 @@ def _analyze_code_object(co: CodeType, file: str):
 
 **Purpose**: Detect function calls at module top-level, global state writes, and ambient reads.
 
+**Request Type**: Extends `ScopedMacroRequestBase` (`side_effects.py:239-242`)
+
+**Shared Infrastructure Usage**:
+- Uses `iter_files` for scoped file scanning with max_files limit (`side_effects.py:257`)
+- Uses `scope_filter_applied` for summary telemetry (`side_effects.py:402`)
+- Uses `macro_scoring_details` with `evidence_kind="resolved_ast"` (`side_effects.py:414`)
+
 #### Data Structures
 
-**SideEffect** (`side_effects.py:80-99`):
+**SideEffect** (`side_effects.py:73-92`):
 ```python
 class SideEffect(msgspec.Struct):
     file: str
@@ -723,7 +888,7 @@ class SideEffect(msgspec.Struct):
 
 #### Algorithm
 
-**Visitor Pattern** (`side_effects.py:142-244`):
+**Visitor Pattern** (`side_effects.py:135-236`):
 
 ```python
 class SideEffectVisitor(ast.NodeVisitor):
@@ -752,7 +917,7 @@ class SideEffectVisitor(ast.NodeVisitor):
                 self.effects.append(SideEffect(..., kind="ambient_read"))
 ```
 
-**Known Safe Patterns** (`side_effects.py:48-77`):
+**Known Safe Patterns** (`side_effects.py:42-70`):
 - Type annotations: TypeVar, Generic, Protocol
 - Dataclass decorators: dataclass, field, NamedTuple
 - ABC patterns: abstractmethod, property, staticmethod
@@ -771,9 +936,16 @@ class SideEffectVisitor(ast.NodeVisitor):
 
 **Purpose**: Analyze module import structure, identify cycles, and map dependencies.
 
+**Request Type**: Extends `ScopedMacroRequestBase` (`imports.py:135-139`)
+
+**Shared Infrastructure Usage**:
+- Uses `iter_files` for scoped file scanning (`imports.py:285`)
+- Uses `scope_filter_applied` for summary telemetry (`imports.py:513`)
+- Uses `macro_scoring_details` with max_cycle_len as depth (`imports.py:555`)
+
 #### Data Structures
 
-**ImportInfo** (`imports.py:92-123`):
+**ImportInfo** (`imports.py:84-114`):
 ```python
 class ImportInfo(msgspec.Struct):
     file: str
@@ -786,7 +958,7 @@ class ImportInfo(msgspec.Struct):
     alias: str | None       # Import alias if present
 ```
 
-**ModuleDeps** (`imports.py:125-141`):
+**ModuleDeps** (`imports.py:117-133`):
 ```python
 class ModuleDeps(msgspec.Struct):
     file: str
@@ -796,7 +968,7 @@ class ModuleDeps(msgspec.Struct):
 
 #### Algorithm
 
-**1. Relative Import Resolution** (`imports.py:177-205`):
+**1. Relative Import Resolution** (`imports.py:164-191`):
 ```python
 def _resolve_relative_import(importing_file: str, level: int, module: str | None):
     # Go up 'level' directories
@@ -805,7 +977,7 @@ def _resolve_relative_import(importing_file: str, level: int, module: str | None
     # Resolve to absolute module name
 ```
 
-**2. Import Visitor** (`imports.py:207-252`):
+**2. Import Visitor** (`imports.py:194-238`):
 ```python
 class ImportVisitor(ast.NodeVisitor):
     def visit_Import(self, node):
@@ -820,7 +992,7 @@ class ImportVisitor(ast.NodeVisitor):
             resolved = _resolve_relative_import(self.file, node.level, node.module)
 ```
 
-**3. Cycle Detection** (`imports.py:257-287`):
+**3. Cycle Detection** (`imports.py:244-273`):
 ```python
 def _find_import_cycles(deps: dict[str, ModuleDeps], internal_prefix: str):
     # Build adjacency graph using only internal modules
@@ -849,9 +1021,16 @@ def _find_import_cycles(deps: dict[str, ModuleDeps], internal_prefix: str):
 
 **Purpose**: Analyze exception handling patterns, identify uncaught exceptions, and map exception propagation.
 
+**Request Type**: Extends `ScopedMacroRequestBase` (`exceptions.py:100-103`)
+
+**Shared Infrastructure Usage**:
+- Uses `iter_files` for scoped file scanning (`exceptions.py:284`)
+- Uses `scope_filter_applied` for summary telemetry (`exceptions.py:533`)
+- Uses `macro_scoring_details` with bare_excepts as breakages (`exceptions.py:542`)
+
 #### Data Structures
 
-**RaiseSite** (`exceptions.py:45-73`):
+**RaiseSite** (`exceptions.py:37-65`):
 ```python
 class RaiseSite(msgspec.Struct):
     file: str
@@ -863,7 +1042,7 @@ class RaiseSite(msgspec.Struct):
     is_reraise: bool         # Whether this is a bare raise
 ```
 
-**CatchSite** (`exceptions.py:75-106`):
+**CatchSite** (`exceptions.py:67-98`):
 ```python
 class CatchSite(msgspec.Struct):
     file: str
@@ -878,7 +1057,7 @@ class CatchSite(msgspec.Struct):
 
 #### Algorithm
 
-**1. Exception Visitor** (`exceptions.py:115-266`):
+**1. Exception Visitor** (`exceptions.py:113-264`):
 
 ```python
 class ExceptionVisitor(ast.NodeVisitor):
@@ -909,7 +1088,7 @@ class ExceptionVisitor(ast.NodeVisitor):
             self.catches.append(CatchSite(exception_types=exc_types, reraises=reraises))
 ```
 
-**2. Uncaught Detection** (`exceptions.py:383-395`):
+**2. Uncaught Detection** (`exceptions.py:361-372`):
 ```python
 def _has_matching_catch(raise_site: RaiseSite, catches: list[CatchSite]):
     for caught in catches:
@@ -1428,6 +1607,35 @@ This separate risk model provides more transparent, actionable risk assessment f
 - Uniform scope filtering: Add to all macros that scan multiple files
 - Scope presets: Predefined filters like --scope=tests or --scope=src
 - Scope validation: Warn when filters exclude all files
+
+## Shared Infrastructure Benefits
+
+The refactoring to shared macro infrastructure provides several architectural improvements:
+
+**Code Deduplication**:
+- Eliminated ~200 lines of duplicated request handling code across 7 macros
+- Centralized target resolution logic in single authoritative implementation
+- Unified scoring payload construction with consistent signal mapping
+
+**Consistency Guarantees**:
+- All macros inherit standard `tc`, `root`, `argv` contract
+- Scope-filtered macros share identical `include`/`exclude` semantics
+- Scoring details use consistent `ImpactSignals`/`ConfidenceSignals` mapping
+
+**Maintenance Simplification**:
+- Request contract changes propagate automatically to all macros
+- Target resolution bug fixes apply to all consumers
+- Scoring formula adjustments centralized in single module
+
+**Extensibility**:
+- New macros can extend `MacroRequestBase` or `ScopedMacroRequestBase`
+- Re-export package (`macros/common/`) provides clean import surface
+- Future request fields (e.g., timeout, cache_policy) added in single location
+
+**Migration Path**:
+- Remaining macros (`calls`, `calls_target`) can adopt shared infrastructure incrementally
+- No breaking changes to CLI or run-plan interfaces
+- Backward-compatible with existing request payloads
 
 ## Design Tensions Summary
 

@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
-from tools.cq.search._shared.core import node_text as _shared_node_text
 from tools.cq.search.tree_sitter.contracts.core_models import (
     ObjectEvidenceRowV1,
     TreeSitterQueryHitV1,
 )
+from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
 from tools.cq.search.tree_sitter.query.pack_metadata import first_capture, pattern_settings
 from tools.cq.search.tree_sitter.structural.query_hits import export_query_hits
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
-    return _shared_node_text(node, source_bytes)
+    return _ts_node_text(node, source_bytes)
 
 
 def _capture_payload(capture_map: dict[str, list[Node]], source_bytes: bytes) -> dict[str, str]:

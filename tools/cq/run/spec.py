@@ -6,6 +6,7 @@ from typing import TypeGuard
 
 import msgspec
 
+from tools.cq.core.typed_boundary import convert_strict
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE, QueryLanguageScope
 
 
@@ -152,6 +153,17 @@ def is_run_step(obj: object) -> TypeGuard[RunStep]:
     return isinstance(obj, RunStepBase)
 
 
+def coerce_run_step(payload: object) -> RunStep:
+    """Convert payload into canonical run-step tagged union.
+
+    Returns:
+    -------
+    RunStep
+        Parsed run-step union member.
+    """
+    return convert_strict(payload, type_=RunStep)
+
+
 _STEP_TAGS: dict[type[RunStep], str] = {
     QStep: "q",
     SearchStep: "search",
@@ -217,6 +229,7 @@ __all__ = [
     "SearchStep",
     "SideEffectsStep",
     "SigImpactStep",
+    "coerce_run_step",
     "is_run_step",
     "normalize_step_ids",
     "step_type",

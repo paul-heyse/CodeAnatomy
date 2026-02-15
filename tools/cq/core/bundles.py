@@ -14,7 +14,7 @@ from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms
 from tools.cq.core.services import CallsServiceRequest
 from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
-from tools.cq.macros.exceptions import cmd_exceptions
+from tools.cq.macros.exceptions import ExceptionsRequest, cmd_exceptions
 from tools.cq.macros.impact import ImpactRequest, cmd_impact
 from tools.cq.macros.imports import ImportRequest, cmd_imports
 from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
@@ -347,7 +347,14 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
     function_filter = target.value if target.kind in {"function", "method"} else None
     results.append(
         BundleStepResult(
-            result=cmd_exceptions(ctx.tc, ctx.root, ctx.argv, function=function_filter)
+            result=cmd_exceptions(
+                ExceptionsRequest(
+                    tc=ctx.tc,
+                    root=ctx.root,
+                    argv=ctx.argv,
+                    function=function_filter,
+                )
+            )
         )
     )
     results.append(
@@ -363,7 +370,14 @@ def _run_safety_reliability(ctx: BundleContext) -> list[BundleStepResult]:
     function_filter = ctx.target.value if ctx.target.kind in {"function", "method"} else None
     results.append(
         BundleStepResult(
-            result=cmd_exceptions(ctx.tc, ctx.root, ctx.argv, function=function_filter)
+            result=cmd_exceptions(
+                ExceptionsRequest(
+                    tc=ctx.tc,
+                    root=ctx.root,
+                    argv=ctx.argv,
+                    function=function_filter,
+                )
+            )
         )
     )
     results.append(

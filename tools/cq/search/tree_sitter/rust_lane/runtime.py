@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING
 import msgspec
 
 from tools.cq.core.locations import byte_offset_to_line_col
-from tools.cq.search._shared.core import node_text as _shared_node_text
 from tools.cq.search._shared.core import truncate as _shared_truncate
 from tools.cq.search.rust.macro_expansion_contracts import RustMacroExpansionRequestV1
 from tools.cq.search.tree_sitter.contracts.core_models import (
@@ -31,6 +30,7 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterDiagnosticV1,
     TreeSitterQueryHitV1,
 )
+from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_rust_lane_payload
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1, load_pack_rules
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 from tools.cq.search.tree_sitter.core.change_windows import (
@@ -39,11 +39,11 @@ from tools.cq.search.tree_sitter.core.change_windows import (
     windows_from_changed_ranges,
 )
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
+from tools.cq.search.tree_sitter.core.query_pack_executor import execute_pack_rows_with_matches
 from tools.cq.search.tree_sitter.core.runtime import (
     QueryExecutionCallbacksV1,
-    run_bounded_query_captures,
-    run_bounded_query_matches,
 )
+from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
 from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
 from tools.cq.search.tree_sitter.query.predicates import (
@@ -61,7 +61,6 @@ from tools.cq.search.tree_sitter.rust_lane.injections import (
     build_injection_plan_from_matches,
 )
 from tools.cq.search.tree_sitter.structural.diagnostic_export import collect_diagnostic_rows
-from tools.cq.search.tree_sitter.structural.match_rows import build_match_rows_with_query_hits
 from tools.cq.search.tree_sitter.tags.contracts import RustTagEventV1
 from tools.cq.search.tree_sitter.tags.runtime import build_tag_events
 
@@ -423,7 +422,7 @@ def _capture_texts_from_captures(
     return out
 
 
-def _collect_query_pack_captures(  # noqa: PLR0914
+def _collect_query_pack_captures(
     *,
     root: Node,
     source_bytes: bytes,
@@ -456,25 +455,20 @@ def _collect_query_pack_captures(  # noqa: PLR0914
                 if predicate_callback is not None
                 else None
             )
-            pack_captures, capture_telemetry = run_bounded_query_captures(
-                query,
-                root,
+            (
+                pack_captures,
+                pack_matches,
+                pack_rows,
+                pack_hits,
+                capture_telemetry,
+                match_telemetry,
+            ) = execute_pack_rows_with_matches(
+                query=query,
+                query_name=pack_name,
+                root=root,
+                source_bytes=source_bytes,
                 windows=windows,
                 settings=settings,
-                callbacks=callbacks,
-            )
-            pack_matches, match_telemetry = run_bounded_query_matches(
-                query,
-                root,
-                windows=windows,
-                settings=QueryExecutionSettingsV1(
-                    match_limit=settings.match_limit,
-                    max_start_depth=settings.max_start_depth,
-                    budget_ms=settings.budget_ms,
-                    timeout_micros=settings.timeout_micros,
-                    require_containment=True,
-                    window_mode="containment_preferred",
-                ),
                 callbacks=callbacks,
             )
         except _ENRICHMENT_ERRORS:
@@ -496,12 +490,6 @@ def _collect_query_pack_captures(  # noqa: PLR0914
                 )
             )
         tag_events.extend(build_tag_events(matches=pack_matches, source_bytes=source_bytes))
-        pack_rows, pack_hits = build_match_rows_with_query_hits(
-            query=query,
-            matches=pack_matches,
-            source_bytes=source_bytes,
-            query_name=pack_name,
-        )
         rows.extend(pack_rows)
         query_hits.extend(pack_hits)
     return (
@@ -522,7 +510,7 @@ def _collect_query_pack_captures(  # noqa: PLR0914
 def _node_text(node: Node | None, source_bytes: bytes) -> str | None:
     if node is None:
         return None
-    text = _shared_node_text(node, source_bytes)
+    text = _ts_node_text(node, source_bytes)
     return text or None
 
 
@@ -1434,7 +1422,7 @@ def _build_enrichment_payload(
     return payload
 
 
-def _collect_query_pack_payload(  # noqa: PLR0914
+def _collect_query_pack_payload(
     *,
     root: Node,
     source_bytes: bytes,
@@ -1805,7 +1793,7 @@ def _aggregate_query_runtime(query_telemetry: dict[str, object]) -> dict[str, ob
     }
 
 
-def _attach_query_pack_payload(  # noqa: PLR0913
+def _attach_query_pack_payload(
     *,
     payload: dict[str, object],
     rows: tuple[ObjectEvidenceRowV1, ...],
@@ -1922,7 +1910,7 @@ def enrich_rust_context(
     except _ENRICHMENT_ERRORS:
         return None
     else:
-        return payload
+        return canonicalize_rust_lane_payload(payload)
 
 
 def enrich_rust_context_by_byte_range(
@@ -1991,7 +1979,7 @@ def enrich_rust_context_by_byte_range(
     except _ENRICHMENT_ERRORS:
         return None
     else:
-        return payload
+        return canonicalize_rust_lane_payload(payload)
 
 
 __all__ = [

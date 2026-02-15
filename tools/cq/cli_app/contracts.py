@@ -1,9 +1,12 @@
-"""CLI parsing types for cq run steps."""
+"""CLI contracts for run-step payload parsing."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_strict
+from tools.cq.run.spec import RunStep
 
 
 @dataclass(frozen=True)
@@ -135,6 +138,15 @@ RunStepCli = (
 )
 
 
+def to_run_step(payload: dict[str, object]) -> RunStep:
+    """Convert a CLI mapping payload into canonical run-step union."""
+    try:
+        return convert_strict(payload, type_=RunStep)
+    except BoundaryDecodeError as exc:
+        msg = f"Invalid run step payload: {exc}"
+        raise ValueError(msg) from exc
+
+
 __all__ = [
     "BytecodeSurfaceStepCli",
     "CallsStepCli",
@@ -148,4 +160,5 @@ __all__ = [
     "SearchStepCli",
     "SideEffectsStepCli",
     "SigImpactStepCli",
+    "to_run_step",
 ]

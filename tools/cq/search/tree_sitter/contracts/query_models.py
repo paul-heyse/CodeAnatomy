@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import msgspec
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.typed_boundary import BoundaryDecodeError, decode_yaml_strict
+from tools.cq.search.tree_sitter.query.resource_paths import query_contracts_path
 from tools.cq.search.tree_sitter.schema.node_schema import GrammarSchemaIndex
 
 if TYPE_CHECKING:
@@ -111,105 +112,31 @@ _FIELD_PATTERN = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:")
 _PREDICATE_PATTERN = re.compile(r"#([A-Za-z0-9_.!?-]+)")
 _CAPTURE_PATTERN = re.compile(r"@([A-Za-z_][A-Za-z0-9_.-]*)")
 _IGNORED_NODE_KINDS = frozenset({"ERROR", "MISSING", "_"})
-_RULES_BASE_INDENT = 2
 
 
-def _contracts_path(language: str) -> Path:
-    return Path(__file__).resolve().parents[2] / "queries" / language / "contracts.yaml"
+class QueryPackContractsFileV1(CqStruct, frozen=True):
+    """Top-level tree-sitter query contracts file payload."""
+
+    language: str | None = None
+    version: int = 1
+    rules: QueryPackRulesV1 = msgspec.field(default_factory=QueryPackRulesV1)
 
 
-def _truthy(raw: str) -> bool:
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _parse_inline_list(raw: str) -> tuple[str, ...]:
-    value = raw.strip()
-    if not value:
-        return ()
-    if value.startswith("[") and value.endswith("]"):
-        value = value[1:-1]
-    if not value:
-        return ()
-    return tuple(
-        item.strip().strip("'").strip('"')
-        for item in value.split(",")
-        if item.strip().strip("'").strip('"')
-    )
-
-
-def load_pack_rules(language: str) -> QueryPackRulesV1:  # noqa: C901, PLR0912, PLR0914, PLR0915
+def load_pack_rules(language: str) -> QueryPackRulesV1:
     """Load query-pack rules from ``contracts.yaml``, falling back to defaults."""
-    path = _contracts_path(language)
+    path = query_contracts_path(language)
     if not path.exists():
         return QueryPackRulesV1()
     try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError:
+        payload = decode_yaml_strict(path.read_bytes(), type_=QueryPackContractsFileV1)
+    except (OSError, BoundaryDecodeError):
         return QueryPackRulesV1()
-    require_rooted = True
-    forbid_non_local = True
-    required_metadata_keys: list[str] = []
-    forbidden_capture_names: list[str] = []
-    in_rules = False
-    active_list_key: str | None = None
-
-    for raw_line in raw.splitlines():
-        line_no_comment = raw_line.split("#", maxsplit=1)[0] if "#" in raw_line else raw_line
-        stripped_line = line_no_comment.rstrip()
-        if not stripped_line.strip():
-            continue
-        indent = len(stripped_line) - len(stripped_line.lstrip(" "))
-        stripped = stripped_line.strip()
-        if stripped == "rules:":
-            in_rules = True
-            active_list_key = None
-            continue
-        if not in_rules:
-            continue
-        if indent < _RULES_BASE_INDENT:
-            in_rules = False
-            active_list_key = None
-            continue
-        if stripped.startswith("- "):
-            item = stripped[2:].strip().strip("'").strip('"')
-            if not item:
-                continue
-            if active_list_key == "required_metadata_keys":
-                required_metadata_keys.append(item)
-            elif active_list_key == "forbidden_capture_names":
-                forbidden_capture_names.append(item)
-            continue
-        key, sep, value = stripped.partition(":")
-        if not sep:
-            continue
-        key = key.strip()
-        value = value.strip()
-        if key == "require_rooted":
-            require_rooted = _truthy(value)
-            active_list_key = None
-        elif key == "forbid_non_local":
-            forbid_non_local = _truthy(value)
-            active_list_key = None
-        elif key == "required_metadata_keys":
-            active_list_key = key
-            required_metadata_keys.extend(_parse_inline_list(value))
-        elif key == "forbidden_capture_names":
-            active_list_key = key
-            forbidden_capture_names.extend(_parse_inline_list(value))
-        else:
-            active_list_key = None
-
-    unique_required = tuple(key for key in required_metadata_keys if key and key not in {"-", "[]"})
-    unique_forbidden = tuple(
-        key for key in forbidden_capture_names if key and key not in {"-", "[]"}
-    )
-    return QueryPackRulesV1(
-        require_rooted=require_rooted,
-        forbid_non_local=forbid_non_local,
-        required_metadata_keys=unique_required
-        if unique_required
-        else QueryPackRulesV1().required_metadata_keys,
-        forbidden_capture_names=unique_forbidden,
+    rules = payload.rules
+    if rules.required_metadata_keys:
+        return rules
+    return msgspec.structs.replace(
+        rules,
+        required_metadata_keys=QueryPackRulesV1().required_metadata_keys,
     )
 
 
@@ -340,6 +267,7 @@ __all__ = [
     "SUPPORTED_QUERY_PREDICATES",
     "SUPPORTED_QUERY_PREDICATE_NAMES",
     "GrammarDriftReportV1",
+    "QueryPackContractsFileV1",
     "QueryPackLintIssueV1",
     "QueryPackLintSummaryV1",
     "QueryPackPlanV1",

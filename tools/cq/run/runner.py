@@ -989,13 +989,15 @@ def _execute_imports(step: ImportsStep, ctx: CliContext) -> CqResult:
 
 
 def _execute_exceptions(step: ExceptionsStep, ctx: CliContext) -> CqResult:
-    from tools.cq.macros.exceptions import cmd_exceptions
+    from tools.cq.macros.exceptions import ExceptionsRequest, cmd_exceptions
 
     return cmd_exceptions(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        function=step.function,
+        ExceptionsRequest(
+            tc=ctx.toolchain,
+            root=ctx.root,
+            argv=ctx.argv,
+            function=step.function,
+        )
     )
 
 

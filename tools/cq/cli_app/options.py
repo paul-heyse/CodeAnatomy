@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +9,8 @@ import msgspec
 
 from tools.cq.cli_app.types import QueryLanguageToken
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.typed_boundary import convert_strict
+from tools.cq.run.spec import RunStep
 
 
 class CommonFilters(CqStruct, frozen=True, kw_only=True):
@@ -110,8 +111,8 @@ class RunOptions(CommonFilters, frozen=True, kw_only=True):
     """Options for the run command."""
 
     plan: Path | None = None
-    step: list[dict[str, object]] = msgspec.field(default_factory=list)
-    steps: list[dict[str, object]] = msgspec.field(default_factory=list)
+    step: list[RunStep] = msgspec.field(default_factory=list)
+    steps: list[RunStep] = msgspec.field(default_factory=list)
     stop_on_error: bool = False
 
 
@@ -123,5 +124,4 @@ def options_from_params[T](params: Any, *, type_: type[T]) -> T:
     T
         Parsed options struct of the requested type.
     """
-    data = asdict(params)
-    return msgspec.convert(data, type=type_, strict=True)
+    return convert_strict(params, type_=type_, from_attributes=True)

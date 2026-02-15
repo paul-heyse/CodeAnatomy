@@ -25,6 +25,12 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterStructuralNodeV1,
     TreeSitterWorkItemV1,
 )
+from tools.cq.search.tree_sitter.contracts.lane_payloads import (
+    PythonTreeSitterPayloadV1,
+    RustTreeSitterPayloadV1,
+    canonicalize_python_lane_payload,
+    canonicalize_rust_lane_payload,
+)
 from tools.cq.search.tree_sitter.contracts.query_models import (
     ALIASED_QUERY_PREDICATE_NAMES,
     SUPPORTED_QUERY_PREDICATE_NAMES,
@@ -51,6 +57,7 @@ __all__ = [
     "ObjectEvidenceRowV1",
     "ParseSessionStatsV1",
     "PointV1",
+    "PythonTreeSitterPayloadV1",
     "QueryExecutionSettingsV1",
     "QueryExecutionTelemetryV1",
     "QueryPackLintIssueV1",
@@ -64,6 +71,7 @@ __all__ = [
     "QueryWindowSetV1",
     "QueryWindowSourceV1",
     "QueryWindowV1",
+    "RustTreeSitterPayloadV1",
     "TreeSitterArtifactBundleV1",
     "TreeSitterCstTokenV1",
     "TreeSitterDiagnosticV1",
@@ -74,6 +82,8 @@ __all__ = [
     "TreeSitterStructuralExportV1",
     "TreeSitterStructuralNodeV1",
     "TreeSitterWorkItemV1",
+    "canonicalize_python_lane_payload",
+    "canonicalize_rust_lane_payload",
     "lint_query_pack_source",
     "load_pack_rules",
 ]

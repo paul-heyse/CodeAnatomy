@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
-from tools.cq.search._shared.core import node_text as _shared_node_text
 from tools.cq.search.tree_sitter.contracts.core_models import (
     ObjectEvidenceRowV1,
     QueryExecutionSettingsV1,
@@ -17,18 +16,15 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterDiagnosticV1,
     TreeSitterQueryHitV1,
 )
+from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_python_lane_payload
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1, load_pack_rules
-from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 from tools.cq.search.tree_sitter.core.change_windows import (
     contains_window,
     ensure_query_windows,
     windows_from_changed_ranges,
 )
-from tools.cq.search.tree_sitter.core.runtime import (
-    QueryExecutionCallbacksV1,
-    run_bounded_query_captures,
-    run_bounded_query_matches,
-)
+from tools.cq.search.tree_sitter.core.query_pack_executor import execute_pack_rows
+from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
 from tools.cq.search.tree_sitter.python_lane.locals_index import (
     build_locals_index,
@@ -46,7 +42,6 @@ from tools.cq.search.tree_sitter.query.predicates import (
 from tools.cq.search.tree_sitter.query.registry import load_query_pack_sources
 from tools.cq.search.tree_sitter.query.specialization import specialize_query
 from tools.cq.search.tree_sitter.structural.diagnostic_export import collect_diagnostic_rows
-from tools.cq.search.tree_sitter.structural.match_rows import build_match_rows_with_query_hits
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Query
@@ -98,7 +93,7 @@ def _compile_query(
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
-    return _shared_node_text(node, source_bytes)
+    return _ts_node_text(node, source_bytes)
 
 
 def _lift_anchor(node: Node) -> Node:
@@ -238,6 +233,8 @@ def _collect_query_pack_captures(
     dict[str, object],
     tuple[TreeSitterQueryHitV1, ...],
 ]:
+    from tools.cq.search.tree_sitter.core.runtime import QueryExecutionCallbacksV1
+
     all_captures: dict[str, list[Node]] = {}
     all_rows: list[ObjectEvidenceRowV1] = []
     all_hits: list[TreeSitterQueryHitV1] = []
@@ -255,24 +252,13 @@ def _collect_query_pack_captures(
                 if predicate_callback is not None
                 else None
             )
-            captures, run_telemetry = run_bounded_query_captures(
-                query,
-                root,
+            captures, pack_rows, pack_hits, run_telemetry, match_telemetry = execute_pack_rows(
+                query=query,
+                query_name=pack_name,
+                root=root,
+                source_bytes=source_bytes,
                 windows=windows,
                 settings=settings,
-                callbacks=callbacks,
-            )
-            matches, match_telemetry = run_bounded_query_matches(
-                query,
-                root,
-                windows=windows,
-                settings=QueryExecutionSettingsV1(
-                    match_limit=settings.match_limit,
-                    max_start_depth=settings.max_start_depth,
-                    budget_ms=settings.budget_ms,
-                    require_containment=True,
-                    window_mode="containment_preferred",
-                ),
                 callbacks=callbacks,
             )
         except (RuntimeError, TypeError, ValueError, AttributeError):
@@ -284,12 +270,6 @@ def _collect_query_pack_captures(
         for capture_name, nodes in captures.items():
             bucket = all_captures.setdefault(capture_name, [])
             bucket.extend(nodes)
-        pack_rows, pack_hits = build_match_rows_with_query_hits(
-            query=query,
-            matches=matches,
-            source_bytes=source_bytes,
-            query_name=pack_name,
-        )
         all_rows.extend(pack_rows)
         all_hits.extend(pack_hits)
     return all_captures, tuple(all_rows), telemetry, tuple(all_hits)
@@ -455,7 +435,7 @@ def _build_binding_candidates(names: list[str], scope_chain: list[str]) -> list[
     return rows
 
 
-def _build_payload(  # noqa: PLR0913, PLR0914
+def _build_payload(
     *,
     anchor: Node,
     source_bytes: bytes,
@@ -532,10 +512,10 @@ def _build_payload(  # noqa: PLR0913, PLR0914
     if parse_quality.get("has_error") is True:
         payload["degrade_reason"] = "parse_error"
         payload["enrichment_status"] = "degraded"
-    return payload
+    return canonicalize_python_lane_payload(payload)
 
 
-def build_python_tree_sitter_facts(  # noqa: PLR0914
+def build_python_tree_sitter_facts(
     source: str,
     *,
     byte_start: int,
@@ -566,6 +546,8 @@ def build_python_tree_sitter_facts(  # noqa: PLR0914
     if anchor is None:
         return None
     anchor = _lift_anchor(anchor)
+
+    from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 
     effective_budget_ms = adaptive_query_budget_ms(
         language="python",

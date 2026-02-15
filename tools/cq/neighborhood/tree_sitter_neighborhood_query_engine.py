@@ -3,72 +3,43 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryExecutionSettingsV1,
     QueryWindowV1,
 )
+from tools.cq.search.tree_sitter.core.language_runtime import load_language
 from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches
+from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
+from tools.cq.search.tree_sitter.query.resource_paths import query_pack_path
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Query
 
 try:
-    import tree_sitter_python as _tree_sitter_python
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_python = None
-
-try:
-    import tree_sitter_rust as _tree_sitter_rust
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_rust = None
-
-try:
-    from tree_sitter import Language as _TreeSitterLanguage
     from tree_sitter import Query as _TreeSitterQuery
 except ImportError:  # pragma: no cover - optional dependency
-    _TreeSitterLanguage = None
     _TreeSitterQuery = None
 
 
 def _node_text(node: Node | None, source_bytes: bytes) -> str | None:
     if node is None:
         return None
-    start = int(getattr(node, "start_byte", 0))
-    end = int(getattr(node, "end_byte", start))
-    if end <= start:
-        return None
-    text = source_bytes[start:end].decode("utf-8", errors="replace").strip()
+    text = _ts_node_text(node, source_bytes)
     return text or None
-
-
-def _query_path(language: str, pack_name: str) -> Path:
-    return Path(__file__).with_suffix("").parent / "queries" / language / pack_name
 
 
 @lru_cache(maxsize=2)
 def _language(language: str) -> Language:
-    if _TreeSitterLanguage is None:
-        msg = "tree_sitter language bindings are unavailable"
-        raise RuntimeError(msg)
-    if language == "python":
-        if _tree_sitter_python is None:
-            msg = "tree_sitter_python bindings are unavailable"
-            raise RuntimeError(msg)
-        return _TreeSitterLanguage(_tree_sitter_python.language())
-    if _tree_sitter_rust is None:
-        msg = "tree_sitter_rust bindings are unavailable"
-        raise RuntimeError(msg)
-    return _TreeSitterLanguage(_tree_sitter_rust.language())
+    return load_language(language)
 
 
 @lru_cache(maxsize=16)
 def _compile_query(language: str, pack_name: str) -> Query | None:
     if _TreeSitterQuery is None:
         return None
-    path = _query_path(language, pack_name)
+    path = query_pack_path(language, pack_name)
     if not path.exists():
         return None
     try:

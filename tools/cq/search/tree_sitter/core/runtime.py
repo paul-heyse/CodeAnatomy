@@ -320,7 +320,7 @@ def _cursor_matches(
     return cursor.matches(root)
 
 
-def run_bounded_query_captures(  # noqa: PLR0914
+def run_bounded_query_captures(
     query: Query,
     root: Node,
     *,
@@ -427,7 +427,7 @@ def run_bounded_query_captures(  # noqa: PLR0914
     return merged, telemetry
 
 
-def run_bounded_query_matches(  # noqa: PLR0914
+def run_bounded_query_matches(
     query: Query,
     root: Node,
     *,

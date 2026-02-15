@@ -23,13 +23,13 @@ from tools.cq.core.cache.tree_sitter_blob_store import (
     write_blob,
 )
 from tools.cq.core.cache.tree_sitter_cache_store_contracts import TreeSitterCacheEnvelopeV1
+from tools.cq.core.cache.typed_codecs import convert_mapping_typed, decode_msgpack_typed
 
 _NAMESPACE: Final[str] = "tree_sitter"
 _VERSION: Final[str] = "v3"
 _BLOB_THRESHOLD_BYTES: Final[int] = 64 * 1024
 
 _ENCODER = msgspec.msgpack.Encoder()
-_DECODER = msgspec.msgpack.Decoder(type=TreeSitterCacheEnvelopeV1)
 
 
 def build_tree_sitter_cache_key(
@@ -121,27 +121,18 @@ def _decode_tree_sitter_payload(
     attempted = False
     if isinstance(payload, (bytes, bytearray, memoryview)):
         attempted = True
-        try:
-            envelope = _DECODER.decode(payload)
-        except (RuntimeError, TypeError, ValueError):
-            envelope = None
+        envelope = decode_msgpack_typed(payload, type_=TreeSitterCacheEnvelopeV1)
     elif isinstance(payload, dict):
         attempted = True
         blob_ref = decode_blob_pointer(payload)
         if blob_ref is not None:
             blob_payload = read_blob(root=root, ref=blob_ref)
             if isinstance(blob_payload, (bytes, bytearray, memoryview)):
-                try:
-                    envelope = _DECODER.decode(blob_payload)
-                except (RuntimeError, TypeError, ValueError):
-                    envelope = None
+                envelope = decode_msgpack_typed(blob_payload, type_=TreeSitterCacheEnvelopeV1)
             else:
                 envelope = None
         else:
-            try:
-                envelope = msgspec.convert(payload, type=TreeSitterCacheEnvelopeV1)
-            except (RuntimeError, TypeError, ValueError):
-                envelope = None
+            envelope = convert_mapping_typed(payload, type_=TreeSitterCacheEnvelopeV1)
     return envelope, attempted
 
 

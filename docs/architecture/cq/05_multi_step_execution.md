@@ -17,9 +17,9 @@ Located under `tools/cq/run/` and `tools/cq/cli_app/commands/`, the subsystem co
 ## Module Map
 
 ### Core Execution Engine
-- `tools/cq/run/runner.py` (1038 LOC) - Main execution orchestration, batching strategy, language scope expansion, result collapse
-- `tools/cq/run/spec.py` (211 LOC) - RunPlan data model, 11 step type variants, step ID normalization
-- `tools/cq/run/loader.py` (93 LOC) - TOML/JSON plan loading, inline step coercion
+- `tools/cq/run/runner.py` (1324 LOC) - Main execution orchestration, batching strategy, language scope expansion, result collapse
+- `tools/cq/run/spec.py` (237 LOC) - RunPlan data model, 11 step type variants, step ID normalization, `coerce_run_step()` helper
+- `tools/cq/run/loader.py` (85 LOC) - TOML/JSON plan loading via typed boundary protocol, inline step coercion
 
 ### Frontend Interfaces
 - `tools/cq/run/chain.py` (192 LOC) - Command chaining compiler, token parsing, step builder dispatch
@@ -141,9 +141,10 @@ function = "build_graph"
 ```
 
 Loaded via `_load_plan_file()`:
-- Parses TOML with `tomllib` (stdlib in Python 3.11+, `tomli` fallback)
-- Validates schema via `msgspec.convert(data, type=RunPlan, strict=True)`
-- Raises `RunPlanError` on parse or validation failure
+- Reads file as bytes (`path.read_bytes()`)
+- Decodes TOML via typed boundary protocol: `decode_toml_strict(payload, type_=RunPlan)`
+- Raises `RunPlanError` wrapping `BoundaryDecodeError` on parse or validation failure
+- Typed boundary protocol centralizes TOML parsing (uses `tomllib` stdlib in Python 3.11+, `tomli` fallback)
 
 #### 2. Inline JSON Step
 ```bash
@@ -163,13 +164,42 @@ Multiple steps provided as JSON array. Combined with `--plan` steps if both prov
 `_coerce_step(item: object) -> RunStep`:
 1. If already a `RunStep`, return as-is
 2. If dataclass, convert to dict via `asdict()`
-3. If dict, validate via `msgspec.convert(item, type=RunStep, strict=True)`
+3. If dict, call `coerce_run_step(item)` (delegating to `convert_strict()` from typed boundary)
 4. Otherwise, raise `RunPlanError`
+
+The `coerce_run_step()` helper (in `spec.py`) provides the canonical conversion entry point:
+```python
+def coerce_run_step(payload: object) -> RunStep:
+    """Convert payload into canonical run-step tagged union."""
+    return convert_strict(payload, type_=RunStep)
+```
+
+This delegation to the typed boundary protocol ensures consistent strict validation and error taxonomy across all run-step deserialization paths.
+
+### Error Taxonomy Integration
+
+Plan loading and step coercion use the typed boundary protocol error hierarchy:
+
+- **`BoundaryDecodeError`**: Base exception for all typed boundary decode failures
+  - Wraps TOML parse errors from `tomllib.TOMLDecodeError`
+  - Wraps msgspec validation errors from `msgspec.ValidationError`
+- **`RunPlanError`**: Domain-specific wrapper that adds context (file path, step type)
+
+Error flow example:
+```
+TOML parse failure → BoundaryDecodeError → RunPlanError("Invalid TOML in plan file: {path}")
+Schema validation failure → BoundaryDecodeError → RunPlanError("Invalid step schema: {exc}")
+```
+
+This taxonomy enables:
+- Centralized error handling in typed boundary layer
+- Consistent error messages across all deserialization paths
+- Context preservation through error chain
 
 ### Architectural Observations for Improvement Proposals
 
 **Plan Loading Design Tensions**:
-- TOML is human-friendly but requires external parser (`tomllib`/`tomli`)
+- TOML is human-friendly but requires external parser (now centralized in typed boundary)
 - JSON is verbose but supports inline CLI usage without escaping
 - No plan validation beyond schema (e.g., query syntax not checked until execution)
 - Step ordering is significant but not validated (e.g., using results from later steps)
@@ -314,16 +344,40 @@ def _execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext) -> CqResu
 - New step types only need to add an entry to `_NON_SEARCH_DISPATCH` and implement the executor function
 - All non-Q steps go through `_apply_run_scope_filter` for consistent scope enforcement
 
-Each step type maps to a corresponding macro:
+Each step type maps to a corresponding macro. All macro invocations now use typed request structs:
+
 - `CallsStep` → `tools.cq.macros.calls.cmd_calls()` (see [04_analysis_macros.md](04_analysis_macros.md))
-- `ImpactStep` → `tools.cq.macros.impact.cmd_impact()` (see [04_analysis_macros.md](04_analysis_macros.md))
-- `ImportsStep` → `tools.cq.macros.imports.cmd_imports()` (see [04_analysis_macros.md](04_analysis_macros.md))
-- `ExceptionsStep` → `tools.cq.macros.exceptions.cmd_exceptions()` (see [04_analysis_macros.md](04_analysis_macros.md))
-- `SigImpactStep` → `tools.cq.macros.sig_impact.cmd_sig_impact()` (see [04_analysis_macros.md](04_analysis_macros.md))
-- `SideEffectsStep` → `tools.cq.macros.side_effects.cmd_side_effects()` (see [04_analysis_macros.md](04_analysis_macros.md))
-- `ScopesStep` → `tools.cq.macros.scopes.cmd_scopes()` (see [04_analysis_macros.md](04_analysis_macros.md))
-- `BytecodeSurfaceStep` → `tools.cq.macros.bytecode.cmd_bytecode_surface()` (see [04_analysis_macros.md](04_analysis_macros.md))
-- `NeighborhoodStep` → `tools.cq.neighborhood.bundle_builder.build_neighborhood_bundle()` (see [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md))
+- `ImpactStep` → `tools.cq.macros.impact.cmd_impact()` with `ImpactRequest`
+- `ImportsStep` → `tools.cq.macros.imports.cmd_imports()` with `ImportRequest`
+- `ExceptionsStep` → `tools.cq.macros.exceptions.cmd_exceptions()` with `ExceptionsRequest`
+- `SigImpactStep` → `tools.cq.macros.sig_impact.cmd_sig_impact()` with `SigImpactRequest`
+- `SideEffectsStep` → `tools.cq.macros.side_effects.cmd_side_effects()` with `SideEffectsRequest`
+- `ScopesStep` → `tools.cq.macros.scopes.cmd_scopes()` with `ScopeRequest`
+- `BytecodeSurfaceStep` → `tools.cq.macros.bytecode.cmd_bytecode_surface()` with `BytecodeSurfaceRequest`
+- `NeighborhoodStep` → `tools.cq.neighborhood.bundle_builder.build_neighborhood_bundle()` with `BundleBuildRequest` (see [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md))
+
+**Executor Implementation Pattern:**
+
+Each executor function (`_execute_*`) constructs the appropriate request struct before calling its macro. Example from `_execute_exceptions()`:
+
+```python
+def _execute_exceptions(step: ExceptionsStep, ctx: CliContext) -> CqResult:
+    from tools.cq.macros.exceptions import ExceptionsRequest, cmd_exceptions
+
+    return cmd_exceptions(
+        ExceptionsRequest(
+            tc=ctx.toolchain,
+            root=ctx.root,
+            argv=ctx.argv,
+            function=step.function,
+        )
+    )
+```
+
+This pattern ensures:
+- Type-safe macro invocation with structured requests
+- Explicit field mapping from step spec to request
+- Consistent error handling at struct construction time
 
 ### Search Fallback Logic
 `_handle_query_parse_error()` provides fallback:

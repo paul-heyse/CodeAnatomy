@@ -13,8 +13,6 @@ from tools.cq.search.tree_sitter.query.grammar_drift import build_grammar_drift_
 from tools.cq.search.tree_sitter.query.registry import (
     QueryPackProfileV1,
     QueryPackSourceV1,
-    load_query_pack_sources,
-    load_query_pack_sources_for_profile,
 )
 
 
@@ -59,6 +57,26 @@ _RUST_QUERY_PROFILES: dict[str, QueryPackProfileV1] = {
         required_pack_names=("00_defs.scm", "10_refs.scm", "20_calls.scm"),
     ),
 }
+
+
+def _load_query_pack_sources(
+    language: str,
+    *,
+    include_distribution: bool,
+) -> tuple[QueryPackSourceV1, ...]:
+    from tools.cq.search.tree_sitter.query.registry import load_query_pack_sources
+
+    return load_query_pack_sources(language, include_distribution=include_distribution)
+
+
+def _load_query_pack_sources_for_profile(
+    language: str,
+    *,
+    profile: QueryPackProfileV1,
+) -> tuple[QueryPackSourceV1, ...]:
+    from tools.cq.search.tree_sitter.query.registry import load_query_pack_sources_for_profile
+
+    return load_query_pack_sources_for_profile(language, profile=profile)
 
 
 def _profile_for_name(profile_name: str) -> QueryPackProfileV1:
@@ -152,9 +170,9 @@ def load_rust_grammar_bundle(
         else profile.include_distribution
     )
     if include_distribution_queries is None:
-        query_sources = load_query_pack_sources_for_profile("rust", profile=profile)
+        query_sources = _load_query_pack_sources_for_profile("rust", profile=profile)
     else:
-        query_sources = load_query_pack_sources(
+        query_sources = _load_query_pack_sources(
             "rust",
             include_distribution=include_distribution,
         )
@@ -187,11 +205,11 @@ def load_rust_query_sources(
     """
     profile = _profile_for_name(profile_name)
     if include_distribution_queries is not None:
-        return load_query_pack_sources(
+        return _load_query_pack_sources(
             "rust",
             include_distribution=include_distribution_queries,
         )
-    return load_query_pack_sources_for_profile("rust", profile=profile)
+    return _load_query_pack_sources_for_profile("rust", profile=profile)
 
 
 __all__ = [

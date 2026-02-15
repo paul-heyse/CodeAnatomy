@@ -15,6 +15,7 @@ import msgspec
 
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 from tools.cq.search.semantic.models import (
     SemanticContractStateInputV1,
     SemanticStatus,
@@ -694,8 +695,8 @@ def coerce_front_door_insight(payload: object) -> FrontDoorInsightV1 | None:
     if not isinstance(payload, dict):
         return None
     try:
-        return msgspec.convert(payload, FrontDoorInsightV1)
-    except (TypeError, msgspec.ValidationError):
+        return convert_lax(payload, type_=FrontDoorInsightV1)
+    except BoundaryDecodeError:
         return None
 
 

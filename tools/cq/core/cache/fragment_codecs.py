@@ -2,21 +2,16 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
-
-import msgspec
-
-_MSGPACK_ENCODER = msgspec.msgpack.Encoder()
+from tools.cq.core.cache.typed_codecs import (
+    convert_mapping_typed,
+    decode_msgpack_typed,
+    encode_msgpack_payload,
+)
 
 
 def is_fragment_cache_payload(payload: object) -> bool:
     """Return whether payload looks like a supported cache artifact encoding."""
     return isinstance(payload, (dict, bytes, bytearray, memoryview))
-
-
-@lru_cache(maxsize=32)
-def _msgpack_decoder[T](*, type_: type[T]) -> msgspec.msgpack.Decoder[T]:
-    return msgspec.msgpack.Decoder(type=type_)
 
 
 def decode_fragment_payload[T](payload: object, *, type_: type[T]) -> T | None:
@@ -25,17 +20,12 @@ def decode_fragment_payload[T](payload: object, *, type_: type[T]) -> T | None:
     Returns:
         T | None: Decoded payload on success, otherwise ``None``.
     """
-    if isinstance(payload, (bytes, bytearray, memoryview)):
-        try:
-            return _msgpack_decoder(type_=type_).decode(payload)
-        except (RuntimeError, TypeError, ValueError):
-            return None
+    decoded = decode_msgpack_typed(payload, type_=type_)
+    if decoded is not None:
+        return decoded
     if not isinstance(payload, dict):
         return None
-    try:
-        return msgspec.convert(payload, type=type_)
-    except (RuntimeError, TypeError, ValueError):
-        return None
+    return convert_mapping_typed(payload, type_=type_)
 
 
 def encode_fragment_payload(payload: object) -> object:
@@ -44,10 +34,7 @@ def encode_fragment_payload(payload: object) -> object:
     Returns:
         object: msgspec-compatible built-in value.
     """
-    try:
-        return _MSGPACK_ENCODER.encode(payload)
-    except (RuntimeError, TypeError, ValueError):
-        return msgspec.to_builtins(payload)
+    return encode_msgpack_payload(payload)
 
 
 __all__ = [

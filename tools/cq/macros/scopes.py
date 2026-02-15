@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import symtable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -20,19 +19,10 @@ from tools.cq.core.schema import (
     mk_result,
     ms,
 )
-from tools.cq.core.scoring import (
-    ConfidenceSignals,
-    ImpactSignals,
-    bucket,
-    build_detail_payload,
-    confidence_score,
-    impact_score,
-)
-from tools.cq.index.files import build_repo_file_index, tabulate_files
-from tools.cq.index.repo import resolve_repo_context
-
-if TYPE_CHECKING:
-    from tools.cq.core.toolchain import Toolchain
+from tools.cq.core.scoring import build_detail_payload
+from tools.cq.macros.contracts import MacroRequestBase
+from tools.cq.macros.scoring_utils import macro_scoring_details
+from tools.cq.macros.target_resolution import resolve_target_files
 
 _MAX_FILES_ANALYZED = 50
 _MAX_SCOPES_DISPLAY = 30
@@ -74,12 +64,9 @@ class ScopeInfo(msgspec.Struct):
     locals: list[str] = msgspec.field(default_factory=list)
 
 
-class ScopeRequest(msgspec.Struct, frozen=True):
+class ScopeRequest(MacroRequestBase, frozen=True):
     """Inputs required for scope capture analysis."""
 
-    tc: Toolchain
-    root: Path
-    argv: list[str]
     target: str
     max_files: int = 500
 
@@ -168,39 +155,6 @@ def _extract_scopes(st: symtable.SymbolTable, file: str, parent_name: str = "") 
         scopes.extend(_extract_scopes(child, file, child_parent))
 
     return scopes
-
-
-def _iter_search_files(root: Path, max_files: int) -> list[Path]:
-    repo_context = resolve_repo_context(root)
-    repo_index = build_repo_file_index(repo_context)
-    result = tabulate_files(
-        repo_index,
-        [repo_context.repo_root],
-        None,
-        extensions=(".py",),
-    )
-    return result.files[:max_files]
-
-
-def _resolve_target_files(root: Path, target: str, max_files: int) -> list[Path]:
-    # Handle both absolute and relative paths
-    target_as_path = Path(target)
-    # Check if target is already an absolute or relative path that exists
-    if target_as_path.exists() and target_as_path.is_file():
-        return [target_as_path.resolve()]
-    target_path = root / target
-    if target_path.exists() and target_path.is_file():
-        return [target_path]
-
-    files: list[Path] = []
-    for pyfile in _iter_search_files(root, max_files):
-        try:
-            source = pyfile.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        if f"def {target}" in source or f"class {target}" in source:
-            files.append(pyfile)
-    return files
 
 
 def _collect_scopes(root: Path, files: list[Path]) -> list[ScopeInfo]:
@@ -327,7 +281,12 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
     """
     started = ms()
 
-    files = _resolve_target_files(request.root, request.target, request.max_files)
+    files = resolve_target_files(
+        root=request.root,
+        target=request.target,
+        max_files=request.max_files,
+        extensions=(".py",),
+    )
     all_scopes = _collect_scopes(request.root, files)
 
     run_ctx = RunContext.from_parts(
@@ -347,23 +306,11 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
 
     # Compute scoring signals
     unique_files = len({s.file for s in all_scopes})
-    imp_signals = ImpactSignals(
+    scoring_details = macro_scoring_details(
         sites=len(all_scopes),
         files=unique_files,
-        depth=0,
-        breakages=0,
-        ambiguities=0,
+        evidence_kind="resolved_ast",
     )
-    conf_signals = ConfidenceSignals(evidence_kind="resolved_ast")
-    imp = impact_score(imp_signals)
-    conf = confidence_score(conf_signals)
-    scoring_details: dict[str, object] = {
-        "impact_score": imp,
-        "impact_bucket": bucket(imp),
-        "confidence_score": conf,
-        "confidence_bucket": bucket(conf),
-        "evidence_kind": conf_signals.evidence_kind,
-    }
 
     # Key findings
     closures = [s for s in all_scopes if s.free_vars]

@@ -162,14 +162,14 @@ def exceptions(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.macros.exceptions import cmd_exceptions
+    from tools.cq.macros.exceptions import ExceptionsRequest, cmd_exceptions
 
     ctx = require_context(ctx)
     if opts is None:
         opts = ExceptionsParams()
     options = options_from_params(opts, type_=ExceptionsOptions)
 
-    result = cmd_exceptions(
+    request = ExceptionsRequest(
         tc=ctx.toolchain,
         root=ctx.root,
         argv=ctx.argv,
@@ -177,6 +177,7 @@ def exceptions(
         include=options.include,
         exclude=options.exclude,
     )
+    result = cmd_exceptions(request)
 
     return CliResult(result=result, context=ctx, filters=options)
 

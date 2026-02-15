@@ -29,3 +29,6 @@ def test_cq_schema_components_exports() -> None:
     assert len(schema_docs) >= 2
     assert isinstance(components, dict)
     assert components
+    component_keys = set(components)
+    assert "RunPlan" in component_keys or "RunStep" in component_keys
+    assert "TreeSitterArtifactBundleV1" in component_keys

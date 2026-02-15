@@ -7,11 +7,11 @@ from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.structs import CqStruct
 from tools.cq.search.tree_sitter.contracts.query_models import GrammarDriftReportV1
-from tools.cq.search.tree_sitter.core.adaptive_runtime import memoized_value
+from tools.cq.search.tree_sitter.query.cache_adapter import query_registry_cache
 from tools.cq.search.tree_sitter.query.grammar_drift import build_grammar_drift_report
+from tools.cq.search.tree_sitter.query.resource_paths import query_pack_dir
 
 if TYPE_CHECKING:
     from diskcache import FanoutCache
@@ -45,7 +45,7 @@ class QueryPackProfileV1(CqStruct, frozen=True):
 
 
 def _local_query_dir(language: str) -> Path:
-    return Path(__file__).with_suffix("").parent / "queries" / language
+    return query_pack_dir(language)
 
 
 def _load_local_query_sources(language: str) -> list[QueryPackSourceV1]:
@@ -125,22 +125,15 @@ def _load_sources_uncached(
 
 
 def _fanout_cache() -> FanoutCache | None:
-    backend = get_cq_cache_backend(root=Path.cwd())
-    cache = getattr(backend, "cache", None)
-    if cache is None:
-        return None
-    try:
-        _ = cache.get
-        _ = cache.set
-    except AttributeError:
-        return None
-    return cache
+    return query_registry_cache(root=Path.cwd())
 
 
 def _stamped_loader(language: str) -> object | None:
     cache = _fanout_cache()
     if cache is None or memoize_stampede is None:
         return None
+
+    from tools.cq.search.tree_sitter.core.adaptive_runtime import memoized_value
 
     @memoize_stampede(cache, expire=_STAMP_TTL_SECONDS, tag=_STAMP_TAG)
     def _load(*, include_distribution: bool, local_hash: str) -> tuple[QueryPackSourceV1, ...]:

@@ -12,7 +12,7 @@ from typing import Annotated
 
 from cyclopts import Group, Parameter, validators
 
-from tools.cq.cli_app.step_types import RunStepCli
+from tools.cq.cli_app.contracts import RunStepCli
 from tools.cq.cli_app.types import (
     ConfidenceBucket,
     ImpactBucket,

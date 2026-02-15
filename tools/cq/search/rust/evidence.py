@@ -7,6 +7,7 @@ from collections.abc import Mapping
 import msgspec
 
 from tools.cq.core.structs import CqOutputStruct
+from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
 from tools.cq.search.rust.macro_expansion_contracts import RustMacroExpansionResultV1
 from tools.cq.search.rust.module_graph_builder import build_module_graph
 from tools.cq.search.rust.module_graph_contracts import (
@@ -36,13 +37,15 @@ class RustFactPayloadV1(CqOutputStruct, frozen=True):
 
     scope_chain: tuple[str, ...] = ()
     call_target: str | None = None
+    cst_diagnostics: tuple[dict[str, object], ...] = msgspec.field(default_factory=tuple)
+    cst_query_hits: tuple[dict[str, object], ...] = msgspec.field(default_factory=tuple)
     macro_expansions: tuple[dict[str, object], ...] = msgspec.field(default_factory=tuple)
     rust_module_graph: dict[str, object] = msgspec.field(default_factory=dict)
 
 
 def coerce_fact_payload(payload: dict[str, object]) -> RustFactPayloadV1:
     """Coerce a generic payload into typed Rust fact payload."""
-    return msgspec.convert(payload, type=RustFactPayloadV1, strict=False)
+    return convert_lax(payload, type_=RustFactPayloadV1)
 
 
 def _normalize_macro_name(value: object) -> str | None:
@@ -65,8 +68,8 @@ def _expansion_result_rows(payload: Mapping[str, object]) -> tuple[RustMacroExpa
         if not isinstance(item, Mapping):
             continue
         try:
-            out.append(msgspec.convert(dict(item), type=RustMacroExpansionResultV1, strict=False))
-        except (TypeError, ValueError, msgspec.ValidationError):
+            out.append(convert_lax(dict(item), type_=RustMacroExpansionResultV1))
+        except BoundaryDecodeError:
             continue
     return tuple(out)
 
@@ -195,7 +198,7 @@ def build_rust_module_graph(payload: Mapping[str, object]) -> RustModuleGraphV1:
         module_rows, import_rows = _fallback_module_rows(payload)
 
     built = build_module_graph(module_rows=module_rows, import_rows=import_rows)
-    return msgspec.convert(built, type=RustModuleGraphV1, strict=False)
+    return convert_lax(built, type_=RustModuleGraphV1)
 
 
 def attach_rust_module_graph(payload: dict[str, object]) -> dict[str, object]:

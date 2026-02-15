@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import msgspec
 
+from tools.cq.core.contract_codec import to_contract_builtins
 from tools.cq.core.structs import CqOutputStruct, CqSettingsStruct
 from tools.cq.search._shared.core import RgRunRequest
 from tools.cq.search.rg.runner import RgProcessResult
@@ -49,7 +50,7 @@ def result_from_process(result: RgProcessResult) -> RgProcessResultV1:
         stderr=result.stderr,
         events=tuple(
             row
-            for row in (msgspec.to_builtins(event) for event in result.events)
+            for row in (to_contract_builtins(event) for event in result.events)
             if isinstance(row, dict)
         ),
     )

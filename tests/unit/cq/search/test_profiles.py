@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.profiles import (
+from tools.cq.search.pipeline.profiles import (
     AUDIT,
     DEFAULT,
     INTERACTIVE,

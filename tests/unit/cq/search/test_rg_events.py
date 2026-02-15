@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import msgspec
-from tools.cq.search.rg_events import (
+from tools.cq.search.rg.codec import (
     RgMatchData,
     RgMatchEvent,
     RgSummaryData,

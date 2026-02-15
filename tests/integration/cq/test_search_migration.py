@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.search import (
-    INTERACTIVE,
-    SearchLimits,
+from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search.rg.adapter import (
     find_call_candidates,
     find_callers,
     find_files_with_pattern,

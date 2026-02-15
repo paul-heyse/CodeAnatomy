@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.search.python_analysis_session import get_python_analysis_session
-from tools.cq.search.python_native_resolution import enrich_python_resolution_by_byte_range
+from tools.cq.search.python.analysis_session import get_python_analysis_session
+from tools.cq.search.python.resolution_index import enrich_python_resolution_by_byte_range
 
 _SOURCE = """\
 import os as operating_system

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.rust_module_graph import build_rust_module_graph
+from tools.cq.search.rust.evidence import build_rust_module_graph
 
 
 def test_build_rust_module_graph_links_module_prefixed_imports() -> None:

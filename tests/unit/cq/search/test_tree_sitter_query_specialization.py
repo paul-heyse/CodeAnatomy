@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter_query_specialization import specialize_query
+from tools.cq.search.tree_sitter.query.specialization import specialize_query
 
 
 class _FakeQuery:

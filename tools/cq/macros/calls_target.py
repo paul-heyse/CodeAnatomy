@@ -35,8 +35,8 @@ from tools.cq.core.scoring import build_detail_payload
 from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage
 from tools.cq.query.sg_parser import SgRecord, sg_scan
-from tools.cq.search import INTERACTIVE
-from tools.cq.search.adapter import find_files_with_pattern
+from tools.cq.search.pipeline.profiles import INTERACTIVE
+from tools.cq.search.rg.adapter import find_files_with_pattern
 
 _CALLS_TARGET_CALLEE_PREVIEW = 10
 _RUST_DEF_RE = re.compile(

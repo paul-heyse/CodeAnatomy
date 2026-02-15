@@ -42,8 +42,8 @@ from tools.cq.macros.calls_target import (
     infer_target_language,
 )
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file, list_scan_files, sg_scan
-from tools.cq.search import INTERACTIVE, find_call_candidates
-from tools.cq.search.adapter import find_def_lines, find_files_with_pattern
+from tools.cq.search.pipeline.profiles import INTERACTIVE
+from tools.cq.search.rg.adapter import find_call_candidates, find_def_lines, find_files_with_pattern
 
 if TYPE_CHECKING:
     from tools.cq.core.front_door_insight import (
@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     )
     from tools.cq.core.toolchain import Toolchain
     from tools.cq.query.language import QueryLanguage, QueryLanguageScope
-    from tools.cq.search import SearchLimits
+    from tools.cq.search.pipeline.profiles import SearchLimits
 
 _ARG_PREVIEW_LIMIT = 3
 _KW_PREVIEW_LIMIT = 2
@@ -1758,7 +1758,7 @@ def _apply_calls_semantic(
     request: CallsSemanticRequest,
 ) -> tuple[FrontDoorInsightV1, QueryLanguage | None, int, int, int, int, tuple[str, ...]]:
     from tools.cq.core.front_door_insight import augment_insight_with_semantic
-    from tools.cq.search.language_front_door_adapter import (
+    from tools.cq.search.semantic.models import (
         LanguageSemanticEnrichmentRequest,
         enrich_with_language_semantics,
         provider_for_language,
@@ -1962,7 +1962,7 @@ def _build_calls_front_door_state(
     score: ScoreDetails | None,
 ) -> CallsFrontDoorState:
     from tools.cq.core.front_door_insight import InsightNeighborhoodV1
-    from tools.cq.search.language_front_door_adapter import infer_language_for_path
+    from tools.cq.search.semantic.models import infer_language_for_path
 
     resolved_target_language = infer_target_language(ctx.root, ctx.function_name)
     target_location, target_callees, target_language_hint = attach_target_metadata(
@@ -2052,10 +2052,10 @@ def _build_calls_front_door_insight(
         InsightLocationV1,
         build_calls_insight,
     )
-    from tools.cq.search.language_front_door_adapter import provider_for_language
-    from tools.cq.search.semantic_contract_state import (
+    from tools.cq.search.semantic.models import (
         SemanticContractStateInputV1,
         derive_semantic_contract_state,
+        provider_for_language,
     )
 
     semantic_provider = (
@@ -2156,10 +2156,10 @@ def _finalize_calls_semantic_state(
     top_level_applied: int,
     reasons: tuple[str, ...],
 ) -> FrontDoorInsightV1:
-    from tools.cq.search.language_front_door_adapter import provider_for_language
-    from tools.cq.search.semantic_contract_state import (
+    from tools.cq.search.semantic.models import (
         SemanticContractStateInputV1,
         derive_semantic_contract_state,
+        provider_for_language,
     )
 
     telemetry_key = (

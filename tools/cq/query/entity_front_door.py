@@ -26,17 +26,15 @@ from tools.cq.core.front_door_insight import (
 from tools.cq.core.schema import CqResult, Finding
 from tools.cq.core.snb_schema import SemanticNodeRefV1
 from tools.cq.query.language import QueryLanguage
-from tools.cq.search.language_front_door_adapter import (
+from tools.cq.search.semantic.models import (
     LanguageSemanticEnrichmentRequest,
+    SemanticContractStateInputV1,
+    SemanticProvider,
+    derive_semantic_contract_state,
     enrich_with_language_semantics,
     infer_language_for_path,
     provider_for_language,
     semantic_runtime_enabled,
-)
-from tools.cq.search.semantic_contract_state import (
-    SemanticContractStateInputV1,
-    SemanticProvider,
-    derive_semantic_contract_state,
 )
 
 

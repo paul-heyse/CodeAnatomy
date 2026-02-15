@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tools.cq.search.adapter import (
+from tools.cq.search.pipeline.profiles import SearchLimits
+from tools.cq.search.rg.adapter import (
     find_call_candidates,
     find_callers,
     find_files_with_pattern,
     search_content,
 )
-from tools.cq.search.profiles import SearchLimits
 
 
 @pytest.fixture
@@ -201,7 +201,7 @@ class TestFindFilesWithPattern:
         self, sample_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Test timeout handling returns empty results."""
-        from tools.cq.search import adapter as adapter_module
+        from tools.cq.search.rg import adapter as adapter_module
 
         def _raise_timeout(*_args: object, **_kwargs: object) -> list[object]:
             msg = "timeout"

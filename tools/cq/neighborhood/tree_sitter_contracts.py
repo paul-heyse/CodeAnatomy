@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 from tools.cq.core.snb_schema import DegradeEventV1, NeighborhoodSliceV1, SemanticNodeRefV1
 from tools.cq.core.structs import CqStruct
-from tools.cq.search.tree_sitter_structural_contracts import (
+from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterCstTokenV1,
     TreeSitterStructuralExportV1,
 )

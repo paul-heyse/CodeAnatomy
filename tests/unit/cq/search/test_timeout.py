@@ -6,7 +6,7 @@ import asyncio
 import time
 
 import pytest
-from tools.cq.search.timeout import (
+from tools.cq.search._shared.core import (
     search_async_with_timeout,
     search_sync_with_timeout,
 )

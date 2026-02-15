@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tools.cq.search.tree_sitter_change_windows import (
+from tools.cq.search.tree_sitter.contracts.core_models import QueryWindowV1
+from tools.cq.search.tree_sitter.core.change_windows import (
     contains_window,
     ensure_query_windows,
     windows_from_changed_ranges,
 )
-from tools.cq.search.tree_sitter_runtime_contracts import QueryWindowV1
 
 
 @dataclass(frozen=True)

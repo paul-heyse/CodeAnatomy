@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from tools.cq.core.locations import SourceSpan
-from tools.cq.search.object_resolver import build_object_resolved_view
-from tools.cq.search.smart_search import EnrichedMatch
+from tools.cq.search.objects.resolve import build_object_resolved_view
+from tools.cq.search.pipeline.smart_search import EnrichedMatch
 
 
 def _span(file: str, line: int, col: int = 0) -> SourceSpan:

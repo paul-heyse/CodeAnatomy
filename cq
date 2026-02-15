@@ -14,4 +14,50 @@ if [[ -z "${PY}" ]]; then
     fi
 fi
 
-exec "${PY}" -m tools.cq.cli "$@"
+# Normalize global options so they work regardless of position.
+rest=()
+args=("$@")
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+    arg="${args[$i]}"
+    case "$arg" in
+        --root|--verbose|-v|--format|--artifact-dir|--config)
+            i=$((i + 1))
+            if [[ $i -lt ${#args[@]} ]]; then
+                value="${args[$i]}"
+                case "$arg" in
+                    --root) export CQ_ROOT="$value" ;;
+                    --verbose|-v) export CQ_VERBOSE="$value" ;;
+                    --format) export CQ_FORMAT="$value" ;;
+                    --artifact-dir) export CQ_ARTIFACT_DIR="$value" ;;
+                    --config) export CQ_CONFIG="$value" ;;
+                esac
+            fi
+            ;;
+        --root=*|--verbose=*|--format=*|--artifact-dir=*|--config=*)
+            key="${arg%%=*}"
+            value="${arg#*=}"
+            case "$key" in
+                --root) export CQ_ROOT="$value" ;;
+                --verbose) export CQ_VERBOSE="$value" ;;
+                --format) export CQ_FORMAT="$value" ;;
+                --artifact-dir) export CQ_ARTIFACT_DIR="$value" ;;
+                --config) export CQ_CONFIG="$value" ;;
+            esac
+            ;;
+        --save-artifact|--no-save-artifact|--use-config|--no-config)
+            case "$arg" in
+                --save-artifact) export CQ_SAVE_ARTIFACT="1" ;;
+                --no-save-artifact) export CQ_SAVE_ARTIFACT="0" ;;
+                --use-config) export CQ_USE_CONFIG="1" ;;
+                --no-config) export CQ_USE_CONFIG="0" ;;
+            esac
+            ;;
+        *)
+            rest+=("$arg")
+            ;;
+    esac
+    i=$((i + 1))
+done
+
+exec "${PY}" -m tools.cq.cli "${rest[@]}"

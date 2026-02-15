@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import msgspec
 
+from tools.cq.core.structs import CqOutputStruct
+
 EnrichmentStatus = str
 
 
-class EnrichmentMeta(msgspec.Struct):
+class EnrichmentMeta(CqOutputStruct, frozen=True):
     """Common enrichment metadata."""
 
     language: str
@@ -19,14 +21,14 @@ class EnrichmentMeta(msgspec.Struct):
     truncated_fields: list[str] | None = None
 
 
-class PythonEnrichmentPayload(msgspec.Struct):
+class PythonEnrichmentPayload(CqOutputStruct, frozen=True):
     """Typed Python enrichment payload wrapper."""
 
     meta: EnrichmentMeta
     data: dict[str, object] = msgspec.field(default_factory=dict)
 
 
-class RustEnrichmentPayload(msgspec.Struct):
+class RustEnrichmentPayload(CqOutputStruct, frozen=True):
     """Typed Rust enrichment payload wrapper."""
 
     meta: EnrichmentMeta

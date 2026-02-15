@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter_language_registry import load_language_registry
+from tools.cq.search.tree_sitter.core.language_registry import load_language_registry
 
 
 def test_load_language_registry_python_returns_node_and_field_sets() -> None:

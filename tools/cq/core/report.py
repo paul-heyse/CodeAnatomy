@@ -24,7 +24,7 @@ from tools.cq.core.schema import Artifact, CqResult, Finding, Section
 from tools.cq.core.serialization import to_builtins
 from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage
-from tools.cq.search.object_fact_attachment import is_applicability_not_applicable
+from tools.cq.search.objects.render import is_applicability_not_applicable
 
 # Maximum evidence items to show before truncating
 MAX_EVIDENCE_DISPLAY = 20
@@ -795,7 +795,7 @@ def _compute_render_enrichment_payload_from_anchor(
         return {}
 
     from tools.cq.core.locations import SourceSpan
-    from tools.cq.search.smart_search import RawMatch, build_finding, classify_match
+    from tools.cq.search.pipeline.smart_search import RawMatch, build_finding, classify_match
 
     match_start, match_end, match_text = _compute_match_columns(
         line_text,

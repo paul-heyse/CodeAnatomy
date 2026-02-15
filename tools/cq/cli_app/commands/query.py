@@ -66,7 +66,7 @@ def q(
     except QueryParseError as e:
         if not has_tokens:
             from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE_SCOPE
-            from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
+            from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
 
             # Build include globs from include patterns
             include_globs = options.include if options.include else None

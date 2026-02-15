@@ -16,7 +16,7 @@ from tools.cq.core.services import EntityFrontDoorRequest
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.ir import Query
 from tools.cq.query.language import QueryLanguage
-from tools.cq.search.multilang_diagnostics import (
+from tools.cq.search.semantic.diagnostics import (
     build_capability_diagnostics,
     build_cross_language_diagnostics,
     build_language_capabilities,
@@ -107,7 +107,7 @@ def _mark_entity_insight_partial_from_summary(result: CqResult) -> None:
         mark_partial_for_missing_languages,
         to_public_front_door_insight_dict,
     )
-    from tools.cq.search.semantic_contract_state import (
+    from tools.cq.search.semantic.models import (
         SemanticContractStateInputV1,
         SemanticProvider,
         derive_semantic_contract_state,

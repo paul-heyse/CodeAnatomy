@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search.tree_sitter_query_planner import (
+from tools.cq.search.tree_sitter.query.planner import (
     build_pack_plan,
     build_pattern_plan,
     sort_pack_plans,

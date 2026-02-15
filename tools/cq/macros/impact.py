@@ -35,7 +35,8 @@ from tools.cq.core.scoring import (
 from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_bound_call
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
 from tools.cq.index.def_index import DefIndex, FnDecl
-from tools.cq.search import INTERACTIVE, SearchLimits, find_callers
+from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search.rg.adapter import find_callers
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain

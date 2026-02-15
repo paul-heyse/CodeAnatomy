@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.python_enrichment import _build_agreement_section
+from tools.cq.search.python.extractors import _build_agreement_section
 
 
 def test_agreement_full_with_python_resolution_source() -> None:

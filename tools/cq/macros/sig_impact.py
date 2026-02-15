@@ -30,7 +30,7 @@ from tools.cq.core.scoring import (
     impact_score,
 )
 from tools.cq.macros.calls import collect_call_sites, group_candidates, rg_find_candidates
-from tools.cq.search import INTERACTIVE, SearchLimits
+from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain

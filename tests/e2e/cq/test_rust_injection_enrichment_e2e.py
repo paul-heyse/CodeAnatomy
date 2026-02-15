@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search.tree_sitter_rust import (
+from tools.cq.search.tree_sitter.rust_lane.runtime import (
     enrich_rust_context_by_byte_range,
     is_tree_sitter_rust_available,
 )

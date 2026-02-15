@@ -26,7 +26,7 @@ from tools.cq.core.front_door_insight import (
 )
 from tools.cq.core.schema import Anchor, DetailPayload, Finding, ScoreDetails
 from tools.cq.core.snb_schema import NeighborhoodSliceV1, SemanticNodeRefV1
-from tools.cq.search.semantic_contract_state import (
+from tools.cq.search.semantic.models import (
     SemanticContractStateInputV1,
     derive_semantic_contract_state,
 )

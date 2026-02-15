@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-import msgspec
-
+from tools.cq.search._shared.core import encode_mapping
 from tools.cq.search.enrichment.contracts import (
     EnrichmentMeta,
     PythonEnrichmentPayload,
@@ -23,7 +22,7 @@ def payload_size_hint(payload: Mapping[str, object]) -> int:
     Returns:
         Estimated serialized payload size in bytes.
     """
-    return len(msgspec.json.encode(payload))
+    return len(encode_mapping(dict(payload)))
 
 
 def has_value(value: object) -> bool:

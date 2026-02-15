@@ -5,12 +5,12 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from tools.cq.search import tree_sitter_runtime
-from tools.cq.search.tree_sitter_runtime_contracts import (
+from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryExecutionSettingsV1,
     QueryPointWindowV1,
     QueryWindowV1,
 )
+from tools.cq.search.tree_sitter.core import runtime as tree_sitter_runtime
 
 if TYPE_CHECKING:
     from tree_sitter import Node, Query

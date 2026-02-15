@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search.tree_sitter_structural_export import export_structural_rows
+from tools.cq.search.tree_sitter.structural.export import export_structural_rows
 
 try:
     import tree_sitter_python

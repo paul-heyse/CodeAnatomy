@@ -10,7 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from tools.cq.core.schema import Anchor, DetailPayload, Finding
-from tools.cq.search.multilang_diagnostics import (
+from tools.cq.search.semantic.diagnostics import (
     build_capability_diagnostics,
     features_from_macro,
 )
@@ -32,8 +32,8 @@ def rust_fallback_search(
     Returns:
         Tuple of (rust_findings, capability_diagnostics, rust_partition_stats).
     """
-    from tools.cq.search.adapter import search_content
-    from tools.cq.search.profiles import INTERACTIVE
+    from tools.cq.search.pipeline.profiles import INTERACTIVE
+    from tools.cq.search.rg.adapter import search_content
 
     matches: list[tuple[Path, int, str]] = []
     with suppress(OSError, TimeoutError, RuntimeError, ValueError):

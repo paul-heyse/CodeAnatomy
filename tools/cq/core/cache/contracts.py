@@ -8,8 +8,8 @@ import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import RecordType
 from tools.cq.core.structs import CqCacheStruct
-from tools.cq.search.object_resolution_contracts import SearchObjectSummaryV1, SearchOccurrenceV1
-from tools.cq.search.tree_sitter_artifact_contracts import TreeSitterArtifactBundleV1
+from tools.cq.search.objects.render import SearchObjectSummaryV1, SearchOccurrenceV1
+from tools.cq.search.tree_sitter.contracts.core_models import TreeSitterArtifactBundleV1
 
 NonNegativeInt = Annotated[int, msgspec.Meta(ge=0)]
 

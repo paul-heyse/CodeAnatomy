@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter_node_codegen import render_node_types_module
-from tools.cq.search.tree_sitter_node_schema import GrammarNodeTypeV1, GrammarSchemaV1
+from tools.cq.search.tree_sitter.schema.node_codegen import render_node_types_module
+from tools.cq.search.tree_sitter.schema.node_schema import GrammarNodeTypeV1, GrammarSchemaV1
 
 
 def test_render_node_types_module_emits_python_source() -> None:

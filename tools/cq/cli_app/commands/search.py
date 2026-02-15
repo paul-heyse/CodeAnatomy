@@ -36,8 +36,8 @@ def search(
     from tools.cq.core.bootstrap import resolve_runtime_services
     from tools.cq.core.services import SearchServiceRequest
     from tools.cq.query.language import parse_query_language_scope
-    from tools.cq.search.classifier import QueryMode
-    from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
+    from tools.cq.search.pipeline.classifier import QueryMode
+    from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
 
     ctx = require_context(ctx)
     # Determine mode

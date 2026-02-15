@@ -11,7 +11,7 @@ from tools.cq.core.cache import (
     reset_cache_telemetry,
     snapshot_cache_telemetry,
 )
-from tools.cq.search.smart_search import smart_search
+from tools.cq.search.pipeline.smart_search import smart_search
 
 
 @pytest.fixture(autouse=True)

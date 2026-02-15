@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter_custom_predicates import make_query_predicate
+from tools.cq.search.tree_sitter.query.predicates import make_query_predicate
 
 
 class _Node:

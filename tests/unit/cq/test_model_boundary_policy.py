@@ -33,8 +33,7 @@ def test_contract_modules_use_msgspec() -> None:
     repo = _repo_root()
     contract_files = [
         repo / "tools/cq/core/contracts.py",
-        repo / "tools/cq/search/contracts.py",
-        repo / "tools/cq/search/contracts_runtime_boundary.py",
+        repo / "tools/cq/search/_shared/core.py",
         repo / "tools/cq/search/enrichment/contracts.py",
     ]
     missing: list[Path] = []

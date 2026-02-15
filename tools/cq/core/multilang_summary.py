@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from tools.cq.core.contracts import require_mapping, summary_contract_to_mapping
 from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope, expand_language_scope
-from tools.cq.search.contracts import (
+from tools.cq.search._shared.search_contracts import (
     LanguagePartitionStats,
     SearchSummaryContract,
     coerce_diagnostics,
@@ -17,7 +17,7 @@ from tools.cq.search.contracts import (
 )
 
 if TYPE_CHECKING:
-    from tools.cq.search.contracts import EnrichmentTelemetry
+    from tools.cq.search._shared.search_contracts import EnrichmentTelemetry
 
 _REQUIRED_KEYS: tuple[str, ...] = (
     "lang_scope",
@@ -101,7 +101,7 @@ def build_multilang_summary(request: SummaryBuildRequest) -> dict[str, object]:
 def _coerce_enrichment_telemetry(
     payload: Mapping[str, object],
 ) -> EnrichmentTelemetry | None:
-    from tools.cq.search.contracts import EnrichmentTelemetry
+    from tools.cq.search._shared.search_contracts import EnrichmentTelemetry
 
     return EnrichmentTelemetry.from_mapping(payload)
 

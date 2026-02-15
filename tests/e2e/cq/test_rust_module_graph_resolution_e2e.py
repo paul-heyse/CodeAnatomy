@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search.rust_enrichment import enrich_rust_context_by_byte_range
-from tools.cq.search.tree_sitter_rust import is_tree_sitter_rust_available
+from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
+from tools.cq.search.tree_sitter.rust_lane.runtime import is_tree_sitter_rust_available
 
 
 @pytest.mark.skipif(not is_tree_sitter_rust_available(), reason="tree-sitter-rust unavailable")

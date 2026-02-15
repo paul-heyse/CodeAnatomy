@@ -60,14 +60,14 @@ from tools.cq.run.spec import (
     normalize_step_ids,
     step_type,
 )
-from tools.cq.search.multilang_diagnostics import (
+from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
+from tools.cq.search.semantic.diagnostics import (
     build_capability_diagnostics,
     build_cross_language_diagnostics,
     build_language_capabilities,
     diagnostics_to_summary_payload,
     is_python_oriented_query_text,
 )
-from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
 from tools.cq.utils.uuid_factory import uuid7_str
 
 RUN_STEP_NON_FATAL_EXCEPTIONS = (
@@ -894,11 +894,11 @@ def _execute_search_step(
 
     mode = None
     if step.regex:
-        from tools.cq.search.classifier import QueryMode
+        from tools.cq.search.pipeline.classifier import QueryMode
 
         mode = QueryMode.REGEX
     elif step.literal:
-        from tools.cq.search.classifier import QueryMode
+        from tools.cq.search.pipeline.classifier import QueryMode
 
         mode = QueryMode.LITERAL
 

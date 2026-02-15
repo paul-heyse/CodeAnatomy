@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search import rust_enrichment
+from tools.cq.search.rust import enrichment as rust_enrichment
 
 
 def test_schema_lint_has_no_deprecated_key_errors() -> None:

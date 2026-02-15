@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter_rust_injection_profiles import resolve_rust_injection_profile
+from tools.cq.search.tree_sitter.rust_lane.injection_profiles import (
+    resolve_rust_injection_profile,
+)
 
 
 def test_resolve_sql_profile() -> None:

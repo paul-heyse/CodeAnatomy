@@ -21,13 +21,13 @@ from tools.cq.neighborhood.tree_sitter_contracts import (
     TreeSitterNeighborhoodCollectResult,
 )
 from tools.cq.neighborhood.tree_sitter_neighborhood_query_engine import collect_callers_callees
-from tools.cq.search.tree_sitter_diagnostics import collect_tree_sitter_diagnostics
-from tools.cq.search.tree_sitter_parser_controls import (
+from tools.cq.search.tree_sitter.contracts.core_models import QueryWindowV1
+from tools.cq.search.tree_sitter.core.parser_controls import (
     apply_parser_controls,
     parser_controls_from_env,
 )
-from tools.cq.search.tree_sitter_runtime_contracts import QueryWindowV1
-from tools.cq.search.tree_sitter_structural_export import export_structural_rows
+from tools.cq.search.tree_sitter.diagnostics.collector import collect_tree_sitter_diagnostics
+from tools.cq.search.tree_sitter.structural.export import export_structural_rows
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Parser
@@ -569,7 +569,7 @@ def _parse_tree_for_request(
     try:
         source_bytes = source_path.read_bytes()
         parser = _parser(request.language)
-        from tools.cq.search.tree_sitter_stream_source import parse_streaming_source
+        from tools.cq.search.tree_sitter.core.stream_source import parse_streaming_source
 
         tree = parse_streaming_source(parser, source_bytes)
     except (OSError, RuntimeError, TypeError, ValueError, AttributeError) as exc:

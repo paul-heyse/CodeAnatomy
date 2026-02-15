@@ -161,7 +161,7 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
     """
     from tools.cq.cli_app.context import FilterConfig
     from tools.cq.cli_app.types import OutputFormat
-    from tools.cq.search.smart_search import pop_search_object_view_for_run
+    from tools.cq.search.pipeline.smart_search import pop_search_object_view_for_run
 
     non_cq_exit = _handle_non_cq_result(cli_result)
     if non_cq_exit is not None:
@@ -314,7 +314,7 @@ def _build_search_artifact_bundle(
 ) -> SearchArtifactBundleV1:
     import msgspec
 
-    from tools.cq.search.object_resolution_contracts import SearchObjectResolvedViewV1
+    from tools.cq.search.objects.render import SearchObjectResolvedViewV1
 
     resolved_view = msgspec.convert(object_view, type=SearchObjectResolvedViewV1)
     return SearchArtifactBundleV1(

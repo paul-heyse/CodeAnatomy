@@ -715,15 +715,15 @@ def from_runtime(obj: object, *, tp: object):
 
 ## Implementation Checklist
 
-- [ ] S1. Establish Target Topology and LOC Guardrails
-- [ ] S2. Centralize Shared Helpers and Runtime-vs-Serializable Contracts
-- [ ] S3. Consolidate Ripgrep Lane (`rg/`) and Search Inputs
-- [ ] S4. Split Smart Search Orchestration into `pipeline/` Modules
-- [ ] S5. Split Python Lane into Focused Modules
-- [ ] S6. Consolidate Rust Lane and Evidence Modules
-- [ ] S7. Repackage Tree-Sitter Core and Contracts
-- [ ] S8. Consolidate Semantic Front Door, Diagnostics, and Object Views
-- [ ] S9. Msgspec Capability Uplift and Final API Cleanup
-- [ ] D1 Decommission Batch
-- [ ] D2 Decommission Batch
-- [ ] D3 Decommission Batch
+- [x] S1. Establish Target Topology and LOC Guardrails
+- [x] S2. Centralize Shared Helpers and Runtime-vs-Serializable Contracts
+- [x] S3. Consolidate Ripgrep Lane (`rg/`) and Search Inputs
+- [x] S4. Split Smart Search Orchestration into `pipeline/` Modules
+- [x] S5. Split Python Lane into Focused Modules
+- [x] S6. Consolidate Rust Lane and Evidence Modules
+- [x] S7. Repackage Tree-Sitter Core and Contracts
+- [x] S8. Consolidate Semantic Front Door, Diagnostics, and Object Views
+- [x] S9. Msgspec Capability Uplift and Final API Cleanup
+- [x] D1 Decommission Batch
+- [x] D2 Decommission Batch
+- [x] D3 Decommission Batch

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from tools.cq.search.rust_macro_expansion_bridge import build_macro_expansion_evidence
+from tools.cq.search.rust.evidence import build_macro_expansion_evidence
 
 
 def test_build_macro_expansion_evidence_from_call_facts() -> None:
-    payload = {
+    payload: dict[str, object] = {
         "rust_tree_sitter_facts": {
             "calls": ["sql!", "helper_fn", "regex!"],
         }

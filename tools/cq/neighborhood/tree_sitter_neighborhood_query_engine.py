@@ -6,8 +6,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.cq.search.tree_sitter_runtime import run_bounded_query_matches
-from tools.cq.search.tree_sitter_runtime_contracts import QueryExecutionSettingsV1, QueryWindowV1
+from tools.cq.search.tree_sitter.contracts.core_models import (
+    QueryExecutionSettingsV1,
+    QueryWindowV1,
+)
+from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Query

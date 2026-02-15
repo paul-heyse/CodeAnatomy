@@ -12,8 +12,8 @@ from tools.cq.core.schema import CqResult
 from tools.cq.core.scoring import ConfidenceSignals, ImpactSignals
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.ir import Query
-from tools.cq.search.models import SearchConfig
-from tools.cq.search.profiles import SearchLimits
+from tools.cq.search.pipeline.models import SearchConfig
+from tools.cq.search.pipeline.profiles import SearchLimits
 
 
 def _schema_hook(type_: object) -> dict[str, Any] | None:

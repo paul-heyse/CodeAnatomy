@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tools.cq.search.classifier import (
+from tools.cq.search.pipeline.classifier import (
     QueryMode,
     classify_from_node,
     classify_from_records,

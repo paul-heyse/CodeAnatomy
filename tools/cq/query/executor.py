@@ -97,8 +97,9 @@ from tools.cq.query.language import (
 )
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import filter_records_by_kind, list_scan_files, sg_scan
-from tools.cq.search import SearchLimits, find_files_with_pattern
-from tools.cq.search.multilang_diagnostics import (
+from tools.cq.search.pipeline.profiles import SearchLimits
+from tools.cq.search.rg.adapter import find_files_with_pattern
+from tools.cq.search.semantic.diagnostics import (
     build_language_capabilities,
 )
 from tools.cq.utils.interval_index import FileIntervalIndex, IntervalIndex

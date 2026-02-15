@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from tools.cq.core.schema import CqResult, Finding, RunMeta
 from tools.cq.core.structs import CqStruct
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope
-from tools.cq.search.contracts import CrossLanguageDiagnostic, LanguageCapabilities
+from tools.cq.search._shared.search_contracts import CrossLanguageDiagnostic, LanguageCapabilities
 
 
 class SummaryBuildRequest(CqStruct, frozen=True):

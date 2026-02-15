@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter_stream_source import build_stream_reader, parse_streaming_source
+from tools.cq.search.tree_sitter.core.stream_source import (
+    build_stream_reader,
+    parse_streaming_source,
+)
 
 
 class _Parser:

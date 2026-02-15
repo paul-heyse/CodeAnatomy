@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search.tree_sitter_runtime_contracts import QueryWindowV1
-from tools.cq.search.tree_sitter_work_queue import dequeue_window, enqueue_windows
+from tools.cq.search.tree_sitter.contracts.core_models import QueryWindowV1
+from tools.cq.search.tree_sitter.core.work_queue import dequeue_window, enqueue_windows
 
 
 class _Cache:
@@ -35,7 +35,7 @@ class _FanoutLike:
 
 
 def test_enqueue_and_dequeue_windows_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
-    import tools.cq.search.tree_sitter_work_queue as queue_mod
+    import tools.cq.search.tree_sitter.core.work_queue as queue_mod
 
     cache = _Cache()
     monkeypatch.setattr(queue_mod, "_cache", lambda: cache)
@@ -53,7 +53,7 @@ def test_enqueue_and_dequeue_windows_roundtrip(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_enqueue_dequeue_windows_with_named_subcache(monkeypatch: pytest.MonkeyPatch) -> None:
-    import tools.cq.search.tree_sitter_work_queue as queue_mod
+    import tools.cq.search.tree_sitter.core.work_queue as queue_mod
 
     cache = _FanoutLike()
     monkeypatch.setattr(queue_mod, "_cache", lambda: cache)

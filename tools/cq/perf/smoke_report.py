@@ -16,7 +16,7 @@ from tools.cq.macros.calls import cmd_calls
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
-from tools.cq.search.smart_search import smart_search
+from tools.cq.search.pipeline.smart_search import smart_search
 
 
 class PerfMeasurement(msgspec.Struct, frozen=True):

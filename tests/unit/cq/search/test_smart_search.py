@@ -9,10 +9,9 @@ from typing import cast
 
 import pytest
 from tools.cq.core.locations import SourceSpan
-from tools.cq.search.classifier import QueryMode, clear_caches
-from tools.cq.search.language_front_door_adapter import LanguageSemanticEnrichmentOutcome
-from tools.cq.search.models import SearchConfig
-from tools.cq.search.smart_search import (
+from tools.cq.search.pipeline.classifier import QueryMode, clear_caches
+from tools.cq.search.pipeline.models import SearchConfig
+from tools.cq.search.pipeline.smart_search import (
     SMART_SEARCH_LIMITS,
     EnrichedMatch,
     RawMatch,
@@ -31,7 +30,8 @@ from tools.cq.search.smart_search import (
     compute_relevance_score,
     smart_search,
 )
-from tools.cq.search.tree_sitter_rust import is_tree_sitter_rust_available
+from tools.cq.search.semantic.models import LanguageSemanticEnrichmentOutcome
+from tools.cq.search.tree_sitter.rust_lane.runtime import is_tree_sitter_rust_available
 
 
 def _span(
@@ -901,7 +901,7 @@ class TestSmartSearch:
         """Evidence should respect MAX_EVIDENCE cap."""
         import importlib
 
-        smart_search_module = importlib.import_module("tools.cq.search.smart_search")
+        smart_search_module = importlib.import_module("tools.cq.search.pipeline.smart_search")
 
         clear_caches()
         monkeypatch.setattr(smart_search_module, "MAX_EVIDENCE", 1)
@@ -1198,7 +1198,9 @@ class TestSmartSearchFiltersAndEnrichment:
             msg = "fallback python_semantic call should not run when prefetched payload exists"
             raise AssertionError(msg)
 
-        monkeypatch.setattr("tools.cq.search.smart_search._python_semantic_enrich_match", _boom)
+        monkeypatch.setattr(
+            "tools.cq.search.pipeline.smart_search._python_semantic_enrich_match", _boom
+        )
         enriched, _overview, telemetry, diagnostics = _attach_python_semantic_enrichment(
             ctx=ctx,
             matches=[match],
@@ -1276,14 +1278,14 @@ class TestSmartSearchFiltersAndEnrichment:
             return []
 
         monkeypatch.setattr(
-            "tools.cq.search.smart_search._run_candidate_phase", _fake_candidate_phase
+            "tools.cq.search.pipeline.smart_search._run_candidate_phase", _fake_candidate_phase
         )
         monkeypatch.setattr(
-            "tools.cq.search.smart_search._prefetch_python_semantic_for_raw_matches",
+            "tools.cq.search.pipeline.smart_search._prefetch_python_semantic_for_raw_matches",
             _fake_prefetch,
         )
         monkeypatch.setattr(
-            "tools.cq.search.smart_search._run_classification_phase", _fake_classification
+            "tools.cq.search.pipeline.smart_search._run_classification_phase", _fake_classification
         )
 
         result = _run_single_partition(ctx, "python", mode=QueryMode.IDENTIFIER)
@@ -1300,7 +1302,7 @@ class TestSmartSearchFiltersAndEnrichment:
         clear_caches()
         import importlib
 
-        smart_search_module = importlib.import_module("tools.cq.search.smart_search")
+        smart_search_module = importlib.import_module("tools.cq.search.pipeline.smart_search")
 
         def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
             msg = "forced enrichment failure"
@@ -1356,7 +1358,7 @@ def test_search_rust_front_door_uses_rust_semantic_adapter(
     clear_caches()
 
     monkeypatch.setattr(
-        "tools.cq.search.smart_search.enrich_with_language_semantics",
+        "tools.cq.search.pipeline.smart_search.enrich_with_language_semantics",
         lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
             payload={
                 "call_graph": {
@@ -1392,7 +1394,7 @@ def test_search_python_capability_probe_unavailable_is_non_fatal(
     clear_caches()
 
     monkeypatch.setattr(
-        "tools.cq.search.smart_search.enrich_with_language_semantics",
+        "tools.cq.search.pipeline.smart_search.enrich_with_language_semantics",
         lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
             payload={
                 "coverage": {"status": "applied", "reason": None},
@@ -1431,7 +1433,7 @@ def test_search_python_timeout_reason_not_collapsed_to_session_unavailable(
     clear_caches()
 
     monkeypatch.setattr(
-        "tools.cq.search.smart_search.enrich_with_language_semantics",
+        "tools.cq.search.pipeline.smart_search.enrich_with_language_semantics",
         lambda *_args, **_kwargs: LanguageSemanticEnrichmentOutcome(
             payload=None,
             timed_out=True,

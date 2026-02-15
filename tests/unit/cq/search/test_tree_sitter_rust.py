@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search import tree_sitter_rust
-from tools.cq.search.tree_sitter_rust import MAX_SOURCE_BYTES
+from tools.cq.search.tree_sitter.rust_lane import runtime as tree_sitter_rust
+from tools.cq.search.tree_sitter.rust_lane.runtime import MAX_SOURCE_BYTES
 
 _RUST_SAMPLE = 'mod outer {\n    fn build_graph() {\n        println!("hello");\n    }\n}\n'
 

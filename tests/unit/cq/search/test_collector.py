@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from tools.cq.search.collector import RgCollector
-from tools.cq.search.profiles import SearchLimits
-from tools.cq.search.rg_events import RgEvent
-from tools.cq.search.smart_search import RawMatch
+from tools.cq.search.pipeline.profiles import SearchLimits
+from tools.cq.search.pipeline.smart_search import RawMatch
+from tools.cq.search.rg.codec import RgEvent
+from tools.cq.search.rg.collector import RgCollector
 
 
 def test_rgcollector_collects_matches_and_summary() -> None:

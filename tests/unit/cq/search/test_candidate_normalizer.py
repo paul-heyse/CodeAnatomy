@@ -7,14 +7,14 @@ from typing import cast
 
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.schema import Anchor, DetailPayload, Finding
-from tools.cq.search.candidate_normalizer import (
+from tools.cq.search.pipeline.candidate_normalizer import (
     build_definition_candidate_finding,
     definition_kind_from_text,
     definition_name_from_text,
     is_definition_candidate_match,
 )
-from tools.cq.search.classifier import MatchCategory
-from tools.cq.search.smart_search import EnrichedMatch
+from tools.cq.search.pipeline.classifier import MatchCategory
+from tools.cq.search.pipeline.smart_search import EnrichedMatch
 
 
 def _build_match(

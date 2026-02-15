@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search.query_pack_lint import lint_search_query_packs
-from tools.cq.search.tree_sitter_python import (
+from tools.cq.search.tree_sitter.python_lane.runtime import (
     clear_tree_sitter_python_cache,
     enrich_python_context_by_byte_range,
     is_tree_sitter_python_available,
 )
+from tools.cq.search.tree_sitter.query.lint import lint_search_query_packs
 
 
 @pytest.fixture(autouse=True)

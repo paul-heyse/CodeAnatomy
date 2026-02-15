@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
-from tools.cq.search.tree_sitter_parse_session import ParseSession
+from tools.cq.search.tree_sitter.core.parse import ParseSession
 
 if TYPE_CHECKING:
     from tree_sitter import Parser

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.multilang_diagnostics import (
+from tools.cq.search.semantic.diagnostics import (
     CAPABILITY_MATRIX,
     build_capability_diagnostics,
     build_cross_language_diagnostics,

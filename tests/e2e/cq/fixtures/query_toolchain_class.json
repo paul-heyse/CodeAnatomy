@@ -316,7 +316,7 @@
       "counts": {
         "diagnostics": 0,
         "injections": 0,
-        "locals": 3,
+        "locals": 4,
         "semantic_tokens": 2
       },
       "degradation": [],
@@ -325,6 +325,10 @@
         "diagnostics": [],
         "injections": [],
         "locals": [
+          {
+            "kind": "scope",
+            "name": "<module>"
+          },
           {
             "kind": "qualified_name",
             "name": "CqStruct"

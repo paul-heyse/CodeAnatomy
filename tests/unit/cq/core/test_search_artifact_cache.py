@@ -11,7 +11,7 @@ from tools.cq.core.artifacts import (
 )
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 from tools.cq.core.schema import CqResult, RunMeta
-from tools.cq.search.object_resolution_contracts import ResolvedObjectRef, SearchObjectSummaryV1
+from tools.cq.search.objects.render import ResolvedObjectRef, SearchObjectSummaryV1
 
 
 def test_save_and_load_search_artifact_bundle(tmp_path: Path) -> None:

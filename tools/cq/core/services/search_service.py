@@ -8,9 +8,9 @@ from tools.cq.core.schema import CqResult
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.query.language import QueryLanguageScope
-from tools.cq.search.classifier import QueryMode
-from tools.cq.search.profiles import SearchLimits
-from tools.cq.search.smart_search import smart_search
+from tools.cq.search.pipeline.classifier import QueryMode
+from tools.cq.search.pipeline.profiles import SearchLimits
+from tools.cq.search.pipeline.smart_search import smart_search
 
 
 class SearchServiceRequest(CqStruct, frozen=True):

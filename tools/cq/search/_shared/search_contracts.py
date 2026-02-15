@@ -7,7 +7,7 @@ from typing import Literal, cast
 
 import msgspec
 
-from tools.cq.core.public_serialization import to_public_dict
+from tools.cq.core.contract_codec import to_public_dict
 from tools.cq.core.structs import CqOutputStruct, CqStrictOutputStruct
 from tools.cq.query.language import QueryLanguage, QueryLanguageScope
 

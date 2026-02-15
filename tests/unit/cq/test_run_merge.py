@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import msgspec
+from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.front_door_insight import FrontDoorInsightV1, InsightSliceV1, InsightTargetV1
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
-from tools.cq.core.requests import MergeResultsRequest
 from tools.cq.core.schema import CqResult, Finding, RunMeta, Section
 
 

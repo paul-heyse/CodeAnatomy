@@ -10,7 +10,7 @@ import msgspec
 
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.typed_boundary import BoundaryDecodeError, decode_yaml_strict
-from tools.cq.search.tree_sitter.query.resource_paths import query_contracts_path
+from tools.cq.search.tree_sitter.query.support import query_contracts_path
 from tools.cq.search.tree_sitter.schema.node_schema import GrammarSchemaIndex
 
 if TYPE_CHECKING:

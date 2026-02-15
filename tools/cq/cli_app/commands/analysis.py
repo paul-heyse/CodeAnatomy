@@ -12,7 +12,7 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.decorators import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context, require_ctx
 from tools.cq.cli_app.options import (
     BytecodeSurfaceOptions,
     CommonFilters,
@@ -32,6 +32,7 @@ from tools.cq.cli_app.params import (
     SideEffectsParams,
     SigImpactParams,
 )
+from tools.cq.core.request_factory import RequestContextV1, RequestFactory
 
 
 @require_ctx
@@ -52,15 +53,14 @@ def impact(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.macros.impact import ImpactRequest, cmd_impact
+    from tools.cq.macros.impact import cmd_impact
 
     ctx = require_context(ctx)
     options = options_from_params(opts, type_=ImpactOptions)
 
-    request = ImpactRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.impact(
+        request_ctx,
         function_name=function,
         param_name=options.param,
         max_depth=options.depth,
@@ -89,22 +89,17 @@ def calls(
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.core.bootstrap import resolve_runtime_services
-    from tools.cq.core.services import CallsServiceRequest
 
     ctx = require_context(ctx)
     if opts is None:
         opts = FilterParams()
     options = options_from_params(opts, type_=CommonFilters)
 
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.calls(request_ctx, function_name=function)
+
     services = resolve_runtime_services(ctx.root)
-    result = services.calls.execute(
-        CallsServiceRequest(
-            root=ctx.root,
-            function_name=function,
-            tc=ctx.toolchain,
-            argv=ctx.argv,
-        )
-    )
+    result = services.calls.execute(request)
 
     return CliResult(result=result, context=ctx, filters=options)
 
@@ -125,17 +120,16 @@ def imports(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.macros.imports import ImportRequest, cmd_imports
+    from tools.cq.macros.imports import cmd_imports
 
     ctx = require_context(ctx)
     if opts is None:
         opts = ImportsParams()
     options = options_from_params(opts, type_=ImportsOptions)
 
-    request = ImportRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.imports_cmd(
+        request_ctx,
         cycles=options.cycles,
         module=options.module,
         include=options.include,
@@ -162,17 +156,16 @@ def exceptions(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.macros.exceptions import ExceptionsRequest, cmd_exceptions
+    from tools.cq.macros.exceptions import cmd_exceptions
 
     ctx = require_context(ctx)
     if opts is None:
         opts = ExceptionsParams()
     options = options_from_params(opts, type_=ExceptionsOptions)
 
-    request = ExceptionsRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.exceptions(
+        request_ctx,
         function=options.function,
         include=options.include,
         exclude=options.exclude,
@@ -200,18 +193,13 @@ def sig_impact(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
+    from tools.cq.macros.sig_impact import cmd_sig_impact
 
     ctx = require_context(ctx)
     options = options_from_params(opts, type_=SigImpactOptions)
 
-    request = SigImpactRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        symbol=symbol,
-        to=options.to,
-    )
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.sig_impact(request_ctx, symbol=symbol, to=options.to)
     result = cmd_sig_impact(request)
 
     return CliResult(result=result, context=ctx, filters=options)
@@ -233,17 +221,16 @@ def side_effects(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
+    from tools.cq.macros.side_effects import cmd_side_effects
 
     ctx = require_context(ctx)
     if opts is None:
         opts = SideEffectsParams()
     options = options_from_params(opts, type_=SideEffectsOptions)
 
-    request = SideEffectsRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.side_effects(
+        request_ctx,
         max_files=options.max_files,
         include=options.include,
         exclude=options.exclude,
@@ -271,19 +258,15 @@ def scopes(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
+    from tools.cq.macros.scopes import cmd_scopes
 
     ctx = require_context(ctx)
     if opts is None:
         opts = FilterParams()
     options = options_from_params(opts, type_=CommonFilters)
 
-    request = ScopeRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        target=target,
-    )
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.scopes(request_ctx, target=target)
     result = cmd_scopes(request)
 
     return CliResult(result=result, context=ctx, filters=options)
@@ -307,20 +290,15 @@ def bytecode_surface(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
+    from tools.cq.macros.bytecode import cmd_bytecode_surface
 
     ctx = require_context(ctx)
     if opts is None:
         opts = BytecodeSurfaceParams()
     options = options_from_params(opts, type_=BytecodeSurfaceOptions)
 
-    request = BytecodeSurfaceRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        target=target,
-        show=options.show,
-    )
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.bytecode_surface(request_ctx, target=target, show=options.show)
     result = cmd_bytecode_surface(request)
 
     return CliResult(result=result, context=ctx, filters=options)

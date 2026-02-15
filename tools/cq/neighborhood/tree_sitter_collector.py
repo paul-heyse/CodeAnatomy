@@ -15,7 +15,7 @@ from tools.cq.core.snb_schema import (
     SemanticEdgeV1,
     SemanticNodeRefV1,
 )
-from tools.cq.neighborhood.tree_sitter_contracts import (
+from tools.cq.neighborhood.contracts import (
     TreeSitterNeighborhoodCollectRequest,
     TreeSitterNeighborhoodCollectResult,
 )
@@ -24,14 +24,14 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryWindowV1,
     TreeSitterDiagnosticV1,
 )
-from tools.cq.search.tree_sitter.core.language_runtime import make_parser
-from tools.cq.search.tree_sitter.core.parser_controls import (
+from tools.cq.search.tree_sitter.core.infrastructure import (
     apply_parser_controls,
+    make_parser,
     parser_controls_from_env,
 )
-from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
-from tools.cq.search.tree_sitter.structural.diagnostic_export import collect_diagnostic_rows
+from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.structural.export import export_structural_rows
+from tools.cq.search.tree_sitter.structural.exports import collect_diagnostic_rows
 
 if TYPE_CHECKING:
     from tree_sitter import Node, Parser
@@ -111,10 +111,6 @@ def _parser(language: str) -> Parser:
     return parser
 
 
-def _node_text(node: Node, source_bytes: bytes, *, max_len: int = 120) -> str:
-    return _ts_node_text(node, source_bytes, max_len=max_len)
-
-
 def _walk_named(root: Node, *, max_nodes: int = _MAX_WALK_NODES) -> Iterable[Node]:
     stack: list[Node] = [root]
     count = 0
@@ -129,14 +125,14 @@ def _walk_named(root: Node, *, max_nodes: int = _MAX_WALK_NODES) -> Iterable[Nod
 def _display_name(node: Node, source_bytes: bytes) -> str:
     name_node = node.child_by_field_name("name")
     if name_node is not None:
-        name_text = _node_text(name_node, source_bytes)
+        name_text = node_text(name_node, source_bytes)
         if name_text:
             return name_text
     if node.type in {"identifier", "type_identifier"}:
-        ident = _node_text(node, source_bytes)
+        ident = node_text(node, source_bytes)
         if ident:
             return ident
-    fallback = _node_text(node, source_bytes)
+    fallback = node_text(node, source_bytes)
     return fallback or node.type
 
 
@@ -183,12 +179,12 @@ def _find_definition_by_name(
         name_node = node.child_by_field_name("name")
         if name_node is None:
             continue
-        if _node_text(name_node, source_bytes) == target_name:
+        if node_text(name_node, source_bytes) == target_name:
             return node
     for node in _walk_named(root):
         if node.type not in {"identifier", "type_identifier"}:
             continue
-        if _node_text(node, source_bytes) == target_name:
+        if node_text(node, source_bytes) == target_name:
             return node
     return None
 

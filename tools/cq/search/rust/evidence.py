@@ -8,13 +8,13 @@ import msgspec
 
 from tools.cq.core.structs import CqOutputStruct
 from tools.cq.core.typed_boundary import BoundaryDecodeError, convert_lax
-from tools.cq.search.rust.macro_expansion_contracts import RustMacroExpansionResultV1
-from tools.cq.search.rust.module_graph_builder import build_module_graph
-from tools.cq.search.rust.module_graph_contracts import (
+from tools.cq.search.rust.contracts import (
     RustImportEdgeV1,
+    RustMacroExpansionResultV1,
     RustModuleGraphV1,
     RustModuleNodeV1,
 )
+from tools.cq.search.rust.extensions import build_module_graph
 
 
 class RustMacroEvidenceV1(CqOutputStruct, frozen=True):

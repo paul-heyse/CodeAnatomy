@@ -9,9 +9,8 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.structs import CqStruct
 from tools.cq.search.tree_sitter.contracts.query_models import GrammarDriftReportV1
-from tools.cq.search.tree_sitter.query.cache_adapter import query_registry_cache
-from tools.cq.search.tree_sitter.query.grammar_drift import build_grammar_drift_report
-from tools.cq.search.tree_sitter.query.resource_paths import query_pack_dir
+from tools.cq.search.tree_sitter.query.drift import build_grammar_drift_report
+from tools.cq.search.tree_sitter.query.support import query_pack_dir, query_registry_cache
 
 if TYPE_CHECKING:
     from diskcache import FanoutCache

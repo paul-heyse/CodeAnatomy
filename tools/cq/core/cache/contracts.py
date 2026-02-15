@@ -1,10 +1,22 @@
-"""Typed cache payload contracts for CQ runtime cache namespaces."""
+"""Typed cache payload contracts for CQ runtime cache namespaces.
+
+For lightweight contracts without heavy dependencies, see base_contracts.py.
+This module contains search-related contracts that depend on heavy modules
+like search and tree-sitter.
+"""
 
 from __future__ import annotations
 
 import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import RecordType
+from tools.cq.core.cache.base_contracts import (
+    CacheMaintenanceSnapshotV1,
+    CacheRuntimeTuningV1,
+    LaneCoordinationPolicyV1,
+    TreeSitterBlobRefV1,
+    TreeSitterCacheEnvelopeV1,
+)
 from tools.cq.core.contracts_constraints import NonNegativeInt
 from tools.cq.core.structs import CqCacheStruct
 from tools.cq.search.objects.render import SearchObjectSummaryV1, SearchOccurrenceV1
@@ -126,7 +138,10 @@ class SearchArtifactIndexV1(CqCacheStruct, frozen=True):
 
 
 __all__ = [
+    "CacheMaintenanceSnapshotV1",
+    "CacheRuntimeTuningV1",
     "CallsTargetCacheV1",
+    "LaneCoordinationPolicyV1",
     "PatternFragmentCacheV1",
     "QueryEntityScanCacheV1",
     "ScopeFileStatCacheV1",
@@ -139,4 +154,6 @@ __all__ = [
     "SearchPartitionCacheV1",
     "SgRecordCacheV1",
     "TreeSitterArtifactBundleV1",
+    "TreeSitterBlobRefV1",
+    "TreeSitterCacheEnvelopeV1",
 ]

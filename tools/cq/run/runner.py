@@ -14,12 +14,14 @@ from tools.cq.cli_app.context import CliContext
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.cache import maybe_evict_run_cache_tag
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
+from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.merge import merge_step_results
 from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
-from tools.cq.core.requests import MergeResultsRequest
+from tools.cq.core.request_factory import RequestContextV1, RequestFactory
+from tools.cq.core.result_factory import build_error_result
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding, assign_result_finding_ids, mk_result, ms
@@ -905,69 +907,57 @@ def _execute_search_step(
     include_globs = _build_search_includes(plan.in_dir, step.in_dir)
     exclude_globs = list(plan.exclude) if plan.exclude else None
 
-    from tools.cq.core.services import SearchServiceRequest
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.search(
+        request_ctx,
+        query=step.query,
+        mode=mode,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        include_strings=step.include_strings,
+        lang_scope=step.lang_scope,
+        limits=SMART_SEARCH_LIMITS,
+        run_id=run_id,
+    )
 
     services = resolve_runtime_services(ctx.root)
-    return services.search.execute(
-        SearchServiceRequest(
-            root=ctx.root,
-            query=step.query,
-            mode=mode,
-            include_globs=include_globs,
-            exclude_globs=exclude_globs,
-            include_strings=step.include_strings,
-            lang_scope=step.lang_scope,
-            limits=SMART_SEARCH_LIMITS,
-            tc=ctx.toolchain,
-            argv=ctx.argv,
-            run_id=run_id,
-        )
-    )
+    return services.search.execute(request)
 
 
 def _execute_search_fallback(query: str, plan: RunPlan, ctx: CliContext) -> CqResult:
     include_globs = _build_search_includes(plan.in_dir, None)
     exclude_globs = list(plan.exclude) if plan.exclude else None
-    from tools.cq.core.services import SearchServiceRequest
+
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.search(
+        request_ctx,
+        query=query,
+        mode=None,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        include_strings=False,
+        lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+        limits=SMART_SEARCH_LIMITS,
+    )
 
     services = resolve_runtime_services(ctx.root)
-    return services.search.execute(
-        SearchServiceRequest(
-            root=ctx.root,
-            query=query,
-            mode=None,
-            include_globs=include_globs,
-            exclude_globs=exclude_globs,
-            include_strings=False,
-            lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-            limits=SMART_SEARCH_LIMITS,
-            tc=ctx.toolchain,
-            argv=ctx.argv,
-        )
-    )
+    return services.search.execute(request)
 
 
 def _execute_calls(step: CallsStep, ctx: CliContext) -> CqResult:
-    from tools.cq.core.services import CallsServiceRequest
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.calls(request_ctx, function_name=step.function)
 
     services = resolve_runtime_services(ctx.root)
-    return services.calls.execute(
-        CallsServiceRequest(
-            root=ctx.root,
-            function_name=step.function,
-            tc=ctx.toolchain,
-            argv=ctx.argv,
-        )
-    )
+    return services.calls.execute(request)
 
 
 def _execute_impact(step: ImpactStep, ctx: CliContext) -> CqResult:
-    from tools.cq.macros.impact import ImpactRequest, cmd_impact
+    from tools.cq.macros.impact import cmd_impact
 
-    request = ImpactRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.impact(
+        request_ctx,
         function_name=step.function,
         param_name=step.param,
         max_depth=step.depth,
@@ -976,76 +966,51 @@ def _execute_impact(step: ImpactStep, ctx: CliContext) -> CqResult:
 
 
 def _execute_imports(step: ImportsStep, ctx: CliContext) -> CqResult:
-    from tools.cq.macros.imports import ImportRequest, cmd_imports
+    from tools.cq.macros.imports import cmd_imports
 
-    request = ImportRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        cycles=step.cycles,
-        module=step.module,
-    )
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.imports_cmd(request_ctx, cycles=step.cycles, module=step.module)
     return cmd_imports(request)
 
 
 def _execute_exceptions(step: ExceptionsStep, ctx: CliContext) -> CqResult:
-    from tools.cq.macros.exceptions import ExceptionsRequest, cmd_exceptions
+    from tools.cq.macros.exceptions import cmd_exceptions
 
-    return cmd_exceptions(
-        ExceptionsRequest(
-            tc=ctx.toolchain,
-            root=ctx.root,
-            argv=ctx.argv,
-            function=step.function,
-        )
-    )
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.exceptions(request_ctx, function=step.function)
+    return cmd_exceptions(request)
 
 
 def _execute_sig_impact(step: SigImpactStep, ctx: CliContext) -> CqResult:
-    from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
+    from tools.cq.macros.sig_impact import cmd_sig_impact
 
-    request = SigImpactRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        symbol=step.symbol,
-        to=step.to,
-    )
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.sig_impact(request_ctx, symbol=step.symbol, to=step.to)
     return cmd_sig_impact(request)
 
 
 def _execute_side_effects(step: SideEffectsStep, ctx: CliContext) -> CqResult:
-    from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
+    from tools.cq.macros.side_effects import cmd_side_effects
 
-    request = SideEffectsRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        max_files=step.max_files,
-    )
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.side_effects(request_ctx, max_files=step.max_files)
     return cmd_side_effects(request)
 
 
 def _execute_scopes(step: ScopesStep, ctx: CliContext) -> CqResult:
-    from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
+    from tools.cq.macros.scopes import cmd_scopes
 
-    request = ScopeRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
-        target=step.target,
-        max_files=step.max_files,
-    )
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.scopes(request_ctx, target=step.target, max_files=step.max_files)
     return cmd_scopes(request)
 
 
 def _execute_bytecode_surface(step: BytecodeSurfaceStep, ctx: CliContext) -> CqResult:
-    from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
+    from tools.cq.macros.bytecode import cmd_bytecode_surface
 
-    request = BytecodeSurfaceRequest(
-        tc=ctx.toolchain,
-        root=ctx.root,
-        argv=ctx.argv,
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.bytecode_surface(
+        request_ctx,
         target=step.target,
         show=step.show,
         max_files=step.max_files,
@@ -1074,9 +1039,10 @@ def _execute_neighborhood_step(
         Neighborhood analysis result.
     """
     from tools.cq.core.schema import mk_runmeta, ms
+    from tools.cq.core.target_specs import parse_target_spec
     from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
     from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
-    from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
+    from tools.cq.neighborhood.target_resolution import resolve_target
 
     started = ms()
     active_run_id = run_id or uuid7_str()
@@ -1299,14 +1265,14 @@ def _tabulate_files(
 
 
 def _error_result(step_id: str, macro: str, exc: Exception, ctx: CliContext) -> CqResult:
-    run_ctx = RunContext.from_parts(
+    result = build_error_result(
+        macro=macro,
         root=ctx.root,
         argv=ctx.argv,
         tc=ctx.toolchain,
         started_ms=ms(),
+        error=exc,
     )
-    result = mk_result(run_ctx.to_runmeta(macro))
-    result.summary["error"] = str(exc)
     result.key_findings.append(
         Finding(category="error", message=f"{step_id}: {exc}", severity="error")
     )

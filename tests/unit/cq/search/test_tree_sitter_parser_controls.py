@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.search.tree_sitter.core.parser_controls import (
+from tools.cq.search.tree_sitter.core.infrastructure import (
     ParserControlSettingsV1,
     apply_parser_controls,
 )

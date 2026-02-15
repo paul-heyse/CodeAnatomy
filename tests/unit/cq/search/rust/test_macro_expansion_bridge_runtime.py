@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from tools.cq.search.rust.macro_expansion_bridge import expand_macro
-from tools.cq.search.rust.macro_expansion_contracts import RustMacroExpansionRequestV1
+from tools.cq.search.rust.contracts import RustMacroExpansionRequestV1
+from tools.cq.search.rust.extensions import expand_macro
 
 
 class _FakeClient:

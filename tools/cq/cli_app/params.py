@@ -12,7 +12,6 @@ from typing import Annotated
 
 from cyclopts import Group, Parameter, validators
 
-from tools.cq.cli_app.contracts import RunStepCli
 from tools.cq.cli_app.types import (
     ConfidenceBucket,
     ImpactBucket,
@@ -21,6 +20,8 @@ from tools.cq.cli_app.types import (
     comma_separated_enum,
     comma_separated_list,
 )
+from tools.cq.run.spec import RunStep
+from tools.cq.run.step_decode import parse_run_step_json, parse_run_steps_json
 
 search_mode = Group("Search Mode", validator=validators.mutually_exclusive)
 filter_group = Group(
@@ -252,22 +253,24 @@ class RunParams(FilterParams):
         ),
     ] = None
     step: Annotated[
-        list[RunStepCli],
+        list[RunStep],
         Parameter(
             name="--step",
             group=run_input,
             n_tokens=1,
             accepts_keys=False,
+            converter=lambda raw: parse_run_step_json(raw) if isinstance(raw, str) else raw,
             help='Repeatable JSON step object (e.g., \'{"type":"q","query":"..."}\')',
         ),
     ] = field(default_factory=list)
     steps: Annotated[
-        list[RunStepCli],
+        list[RunStep],
         Parameter(
             name="--steps",
             group=run_input,
             n_tokens=1,
             accepts_keys=False,
+            converter=lambda raw: parse_run_steps_json(raw) if isinstance(raw, str) else raw,
             help='JSON array of steps (e.g., \'[{"type":"q",...},{"type":"calls",...}]\')',
         ),
     ] = field(default_factory=list)

@@ -8,7 +8,10 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryPointWindowV1,
     QueryWindowV1,
 )
-from tools.cq.search.tree_sitter.core.windowing import apply_byte_window, apply_point_window
+from tools.cq.search.tree_sitter.core.runtime_support import (
+    apply_byte_window,
+    apply_point_window,
+)
 
 
 def test_apply_byte_window_prefers_containing_range_when_supported() -> None:

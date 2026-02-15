@@ -7,8 +7,7 @@ from typing import Annotated
 from cyclopts import App, Parameter, validators
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.decorators import require_context, require_ctx
-from tools.cq.cli_app.groups import analysis_group
+from tools.cq.cli_app.infrastructure import analysis_group, require_context, require_ctx
 from tools.cq.cli_app.types import NeighborhoodLanguageToken
 from tools.cq.core.cache import maybe_evict_run_cache_tag
 from tools.cq.core.schema import assign_result_finding_ids, mk_runmeta, ms
@@ -55,9 +54,10 @@ def neighborhood(
     Returns:
         CLI result containing rendered neighborhood findings.
     """
+    from tools.cq.core.target_specs import parse_target_spec
     from tools.cq.neighborhood.bundle_builder import BundleBuildRequest, build_neighborhood_bundle
     from tools.cq.neighborhood.snb_renderer import RenderSnbRequest, render_snb_result
-    from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
+    from tools.cq.neighborhood.target_resolution import resolve_target
 
     ctx = require_context(ctx)
     started = ms()

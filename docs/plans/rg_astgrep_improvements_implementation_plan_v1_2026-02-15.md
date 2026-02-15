@@ -2,15 +2,16 @@
 
 ## Scope Summary
 
-This plan covers 16 scope items organized into three groups that elevate CQ's ripgrep and ast-grep-py utilization to best-in-class:
+This plan covers 21 scope items organized into four groups that elevate CQ's ripgrep and ast-grep-py utilization to best-in-class while fixing confirmed execution-path correctness gaps:
 
-- **Group A (7 items):** Ripgrep improvements — multi-pattern OR, word-boundary mode, context lines, count probes, file enumeration, deterministic sort, PCRE2 detection.
-- **Group B (6 items):** ast-grep-py improvements — variadic captures, YAML rule packs, shared utility rules, constraint-driven filtering, refinement predicates, pattern objects.
-- **Group C (3 items):** Combined/new capabilities — ripgrep-accelerated prefiltering for ast-grep, multiline text search, begin/end file events.
+- **Group A (9 items):** Ripgrep improvements — multi-pattern OR, boundary mode standardization, context lines, count probes, file enumeration, deterministic sort, multiline mode, JSON fidelity, capability negotiation.
+- **Group B (7 items):** ast-grep-py improvements — variadic captures, dynamic metavariable extraction, YAML rule packs, shared utility rules, constraint pushdown, refinement predicates, pattern-object execution.
+- **Group C (3 items):** Combined/new capabilities — ripgrep prefiltering for ast-grep scans, begin/end file events, neighborhood ripgrep-lane consolidation.
+- **Group D (2 items):** Query correctness hardening — planner/executor threading fixes and pattern runtime parity for composite/nthChild/pattern-object semantics.
 
 **Design stance:** Hard additions — no compatibility shims. New fields use defaults so existing callers are unaffected. No tree-sitter scope overlap: ripgrep handles text-level candidate generation, ast-grep handles structural classification, tree-sitter owns semantic enrichment.
 
-**Priority order:** C1, A2, A1, B1, A3, B5, A4, B4, C2, A5, B6, C3, A6, B2, B3, A7.
+**Priority order:** D1, D2, B7, B4, B6, B1, A3, C3, A8, A2, A1, A4, A5, C2, C1, B5, A6, B2, B3, A7, A9.
 
 ## Design Principles
 
@@ -19,25 +20,38 @@ This plan covers 16 scope items organized into three groups that elevate CQ's ri
 3. **msgspec contracts at boundaries** — All new serializable types use `msgspec.Struct` base classes (`CqStruct`, `CqSettingsStruct`, `CqOutputStruct`). Runtime-only handles stay as `dataclass` or plain objects.
 4. **Test parity** — Every new module or function gets a corresponding test file. Existing test files gain parametrized cases for new behavior.
 5. **Minimal Python post-processing** — Push filtering, matching, and ordering into ripgrep/ast-grep native engines wherever the API supports it.
+6. **Execution-path correctness first** — Any scope item that changes behavior already represented in `Query`/`ToolPlan` must land before performance-oriented items. Specifically, planner/executor pattern threading and metavariable capture fidelity are blocking prerequisites for prefilter and profile optimization work.
 
 ## Current Baseline
 
 - **`tools/cq/search/rg/runner.py`** (236 LOC): `build_rg_command()` emits 11 flags (`--json`, `--line-number`, `--column`, `--max-count`, `--max-depth`, `--max-filesize`, `--type`, `-g`, `-F`, `-e`). Single pattern only: `command.extend(["-e", pattern, "."])` at line 98. No `-w`, `-U`, `-P`, `-C/-A/-B`, `--count`, `--files`, `--sort`.
-- **`tools/cq/search/rg/codec.py`** (222 LOC): Typed decoder handles `RgMatchEvent` and `RgSummaryEvent` only. `RgEvent` fallback captures unknown types but discards them. No `context`, `begin`, or `end` event types.
-- **`tools/cq/search/rg/collector.py`** (211 LOC): `RgCollector.handle_event()` dispatches on `type == "match"` and `type == "summary"`, ignores all others. No context line storage.
-- **`tools/cq/search/rg/adapter.py`** (244 LOC): `find_call_candidates()` manually builds `rf"\b{symbol}\s*\("` — should use `-w` instead. `find_def_lines()` reads files with Python instead of ripgrep.
+- **`tools/cq/search/rg/codec.py`** (222 LOC): Typed decoder handles `RgMatchEvent` and `RgSummaryEvent` only. `RgEvent` fallback captures unknown types but discards them. No `context`, `begin`, or `end` event types, and typed payloads omit `absolute_offset` and richer end-event stats.
+- **`tools/cq/search/rg/collector.py`** (211 LOC): `RgCollector.handle_event()` dispatches on `type == "match"` and `type == "summary"`, ignores all others. No context line storage, no begin/end file accounting, and no typed `absolute_offset` usage.
+- **`tools/cq/search/rg/adapter.py`** (244 LOC): `find_call_candidates()` manually builds `rf"\b{symbol}\s*\("`; smart-search has a separate identifier-boundary construction path, so boundary semantics are duplicated across callsites. `find_def_lines()` reads files with Python instead of ripgrep.
 - **`tools/cq/search/rg/contracts.py`** (65 LOC): `RgRunSettingsV1` has `pattern: str` (single), `mode: str`, `lang_types`, globs. No multi-pattern or context fields.
 - **`tools/cq/search/_shared/core.py`** (384 LOC): `RgRunRequest` has `pattern: str` (single). No multi-pattern, context, sort, or multiline fields.
 - **`tools/cq/search/pipeline/profiles.py`** (67 LOC): `SearchLimits` has 6 fields with 4 presets (`DEFAULT`, `INTERACTIVE`, `AUDIT`, `LITERAL`). No `context_before`, `context_after`, `sort_by_path`, or `multiline` fields.
-- **`tools/cq/search/pipeline/classifier.py`**: `QueryMode` enum has 3 values: `IDENTIFIER`, `REGEX`, `LITERAL`. No `MULTILINE` mode.
-- **`tools/cq/astgrep/sgpy_scanner.py`** (533 LOC): `scan_with_pattern()` accepts only `pattern: str` — no pattern objects, no constraints. `_extract_metavars()` iterates 21 hardcoded names calling `get_match()` only — never calls `get_multiple_matches()`.
+- **`tools/cq/search/pipeline/classifier.py`**: `QueryMode` enum has 3 values: `IDENTIFIER`, `REGEX`, `LITERAL`. Multiline behavior is correctly modeled as a search option rather than a query-mode dimension.
+- **`tools/cq/astgrep/sgpy_scanner.py`** (533 LOC): `scan_with_pattern()` accepts only `pattern: str` and is only exercised by scanner unit tests. Query execution does not call this function. `_extract_metavars()` iterates hardcoded names calling `get_match()` only — never calls `get_multiple_matches()`.
 - **`tools/cq/astgrep/rules_py.py`**: 23 Python rules as `RuleSpec` objects.
 - **`tools/cq/astgrep/rules_rust.py`**: 8 Rust rules as `RuleSpec` objects.
 - **`tools/cq/core/toolchain.py`** (148 LOC): `Toolchain` has no PCRE2 detection field. `_detect_rg()` only runs `rg --version`.
 - **`tools/cq/query/ir.py`**: `PatternSpec` already has `context: str | None` and `selector: str | None` fields.
-- **`tools/cq/query/parser.py`**: `_parse_pattern_object()` parses `pattern.context` and `pattern.selector` from tokens into `PatternSpec`. Context/selector are stored in metadata but NOT passed to ast-grep-py Config execution.
+- **`tools/cq/query/parser.py`**: `_parse_pattern_object()` parses `pattern.context` and `pattern.selector` from tokens into `PatternSpec`. Parser also captures `composite` and `nth_child` for pattern queries.
+- **`tools/cq/query/planner.py`**: `_compile_pattern_query()` threads `pattern/context/selector/strictness` into `AstGrepRule` but currently drops `query.composite` and `query.nth_child`.
+- **`tools/cq/query/executor.py`**: `_iter_rule_matches()` uses only `find_all(pattern=...)` / `find_all(kind=...)` and does not use inline rule execution for pattern findings. `_iter_rule_matches_for_spans()` has inline-rule support, so span filtering and finding generation currently use different rule execution semantics.
+- **`tools/cq/query/executor.py`**: Metavariable extraction is hardcoded to `_COMMON_METAVAR_NAMES`; captures for valid names outside that list (e.g., `$FOO123`) are dropped.
+- **`tools/cq/query/metavar.py`**: Contains richer metavariable parsing helpers (`parse_metavariables`) but these are not currently integrated into query execution.
 - **`tools/cq/search/pipeline/classifier_runtime.py`**: `_is_docstring_context()` walks parent chain in Python — candidate for `node.inside()` replacement.
 - **`tools/cq/search/python/extractors.py`**: 25+ `.parent()`/`.kind()` chains for context classification — candidates for refinement predicate replacement.
+- **`tools/cq/neighborhood/target_resolution.py`**: Uses direct `subprocess.run(["rg", ...])` rather than the shared rg runner/contracts path.
+- **`tools/cq/search/rg/runner.py`**: `detect_rg_types()` exists but is not consumed by runtime capability gating.
+- **`tools/cq/astgrep/rules/python_facts/*.yml`**: 23 existing CLI-mode YAML rule files already externalize the Python rules for ast-grep's CLI runner. These define rules using ast-grep's native YAML schema (`id`, `language`, `severity`, `rule`, `metadata`). The `metadata.record` and `metadata.kind` fields map to `RuleSpec.record_type` and `RuleSpec.kind`. Example: `py_def_function.yml` uses `rule.kind: function_definition` with `metadata: {record: def, kind: function}`.
+- **`tools/cq/astgrep/sgconfig.yml`**: ast-grep CLI config already declares `utilDirs: [utils]` — the shared utility rule directory mechanism is pre-configured. `ruleDirs` points to `rules/python_facts`.
+- **`tools/cq/astgrep/rules_py.py`**: 23 Python `RuleSpec` objects are hand-translated equivalents of the CLI-mode YAML rules — NOT auto-generated. Comment says "Converts all YAML rules" but this is descriptive, not automated.
+- **`tools/cq/astgrep/rules_rust.py`**: 8 Rust `RuleSpec` objects with **no** corresponding CLI-mode YAML files.
+- **`tools/cq/core/typed_boundary.py`**: Contains `decode_yaml_strict()` — the canonical CQ pattern for YAML boundary decoding using `msgspec.yaml.decode(raw, type=type_, strict=True)` with `BoundaryDecodeError` wrapping. Already used in `tools/cq/search/tree_sitter/contracts/query_models.py:load_pack_rules()` for loading YAML-defined query pack contracts.
+- **YAML tooling**: CQ uses `msgspec.yaml` (which wraps PyYAML SafeLoader internally) for all YAML operations. No raw `pyyaml` API usage exists. No custom loader subclassing, tag constructors, or representers are needed.
 
 ---
 
@@ -45,13 +59,13 @@ This plan covers 16 scope items organized into three groups that elevate CQ's ri
 
 ### Goal
 
-Eliminate 90%+ of unnecessary file reads and AST parses in `scan_files()` by using ripgrep `--files-with-matches` (`-l`) as a fast text-level prefilter before ast-grep structural scanning. Extract literal substrings from ast-grep patterns to construct the ripgrep prefilter query automatically.
+Eliminate unnecessary file reads and AST parses in multi-file ast-grep scans by using ripgrep `--files-with-matches` (`-l`) as a text prefilter before structural matching. Apply this in the real execution path (`query/sg_parser.py` + query batch flows), not only in test helper paths.
 
 ### Representative Code Snippets
 
 ```python
 # tools/cq/search/rg/prefilter.py
-"""Ripgrep-accelerated file prefiltering for ast-grep batch scans."""
+"""Ripgrep prefilter helpers for ast-grep batch scans."""
 
 from __future__ import annotations
 
@@ -60,73 +74,50 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tools.cq.astgrep.sgpy_scanner import RuleSpec
+
 if TYPE_CHECKING:
-    from tools.cq.query.language import QueryLanguage, QueryLanguageScope
+    from tools.cq.query.language import QueryLanguageScope
 
 
-# Metavariable pattern: $X, $$X, $$$X
-_METAVAR_RE = re.compile(r"\${1,3}[A-Z_][A-Z0-9_]*")
+_METAVAR_TOKEN_RE = re.compile(r"\${1,3}_?[A-Z][A-Z0-9_]*")
 
 
 def extract_literal_fragments(pattern: str) -> list[str]:
-    """Extract longest non-metavariable substrings from an ast-grep pattern.
-
-    Parameters
-    ----------
-    pattern
-        ast-grep pattern string (e.g., ``eval($X)`` or ``def $F($$$ARGS): $$$``).
-
-    Returns
-    -------
-    list[str]
-        Non-empty literal fragments sorted by length descending.
-    """
-    fragments = _METAVAR_RE.split(pattern)
+    """Return non-metavariable literal fragments sorted by selectivity."""
+    fragments = _METAVAR_TOKEN_RE.split(pattern)
     cleaned = [f.strip() for f in fragments if f.strip()]
     return sorted(cleaned, key=len, reverse=True)
 
 
-def rg_prefilter(
+def collect_prefilter_fragments(rules: tuple[RuleSpec, ...]) -> tuple[str, ...]:
+    """Collect candidate literals from rule pattern strings."""
+    fragments: list[str] = []
+    for rule in rules:
+        pattern = rule.to_config().get("pattern")
+        if isinstance(pattern, str):
+            fragments.extend(extract_literal_fragments(pattern)[:2])
+    # De-duplicate while preserving high-selectivity order.
+    unique = sorted({f for f in fragments if len(f) >= 3}, key=len, reverse=True)
+    return tuple(unique[:8])
+
+
+def rg_prefilter_files(
     root: Path,
-    pattern: str,
     *,
     files: list[Path],
-    lang_types: tuple[str, ...] = (),
+    literals: tuple[str, ...],
+    lang_scope: QueryLanguageScope,
     timeout_seconds: float = 10.0,
 ) -> list[Path]:
-    """Return only files containing literal fragments from an ast-grep pattern.
+    """Return subset of files that contain at least one literal."""
+    if not literals:
+        return files
 
-    Parameters
-    ----------
-    root
-        Repository root.
-    pattern
-        ast-grep pattern from which literal fragments are extracted.
-    files
-        Candidate file list to filter.
-    lang_types
-        Ripgrep type filters.
-    timeout_seconds
-        Subprocess timeout.
-
-    Returns
-    -------
-    list[Path]
-        Subset of ``files`` containing at least one literal fragment.
-    """
-    fragments = extract_literal_fragments(pattern)
-    if not fragments:
-        return files  # No literal content — cannot prefilter
-
-    # Use longest fragment for best selectivity
-    literal = fragments[0]
-    if len(literal) < 3:
-        return files  # Too short to be selective
-
-    command = ["rg", "--files-with-matches", "-F", "-l", "--no-heading"]
-    for lt in lang_types:
-        command.extend(["--type", lt])
-    command.extend(["-e", literal, "."])
+    command = ["rg", "--files-with-matches", "-F", "--no-heading"]
+    for literal in literals:
+        command.extend(["-e", literal])
+    command.extend(["."])
 
     proc = subprocess.run(
         command,
@@ -139,23 +130,15 @@ def rg_prefilter(
     if proc.returncode not in (0, 1):
         return files  # Fail open
 
-    matching_files = {
-        (root / line.strip()).resolve()
-        for line in proc.stdout.splitlines()
-        if line.strip()
-    }
-    if not matching_files:
+    matched = {(root / line.strip()).resolve() for line in proc.stdout.splitlines() if line.strip()}
+    if not matched:
         return []
-
-    file_set = {f.resolve() for f in files}
-    return sorted(file_set & matching_files)
+    return sorted({path.resolve() for path in files} & matched)
 ```
 
 ```python
-# tools/cq/astgrep/sgpy_scanner.py — Integration point in scan_files()
-# After file list construction, before the scan loop:
-
-from tools.cq.search.rg.prefilter import rg_prefilter
+# tools/cq/astgrep/sgpy_scanner.py — integrate prefilter into production scan path
+from tools.cq.search.rg.prefilter import collect_prefilter_fragments, rg_prefilter_files
 
 def scan_files(
     files: list[Path],
@@ -165,27 +148,45 @@ def scan_files(
     *,
     prefilter: bool = True,
 ) -> list[SgRecord]:
-    if prefilter and rules:
-        # Extract representative pattern from first rule with a pattern key
-        representative = _extract_representative_pattern(rules)
-        if representative:
-            files = rg_prefilter(root, representative, files=files)
-    # ... existing scan loop ...
+    candidate_files = files
+    if prefilter and len(files) > 1 and rules:
+        literals = collect_prefilter_fragments(rules)
+        candidate_files = rg_prefilter_files(
+            root,
+            files=files,
+            literals=literals,
+            lang_scope="python" if lang == "python" else "rust",
+        )
+
+    for file_path in candidate_files:
+        ...
+```
+
+```python
+# tools/cq/query/sg_parser.py — enable prefilter where it matters
+records = scan_files(files, rules, root, lang=lang, prefilter=True)
+```
+
+```python
+# tools/cq/search/pipeline/classifier_runtime.py — keep single-file classification direct
+records = scan_files([file_path], rules, root, lang=lang, prefilter=False)
 ```
 
 ### Files to Edit
 
-- `tools/cq/astgrep/sgpy_scanner.py` — Add `prefilter` parameter to `scan_files()`, call `rg_prefilter()` before scanning.
-- `tools/cq/search/pipeline/smart_search.py` — Pass prefilter option through to ast-grep scan calls.
+- `tools/cq/search/rg/prefilter.py` — Add fragment extraction and `rg_prefilter_files()` helpers.
+- `tools/cq/astgrep/sgpy_scanner.py` — Add `prefilter` parameter to `scan_files()` and apply prefilter prior to parse loop.
+- `tools/cq/query/sg_parser.py` — Enable prefilter for batch scans used in query execution.
+- `tools/cq/search/pipeline/classifier_runtime.py` — Explicitly disable prefilter for single-file classification lane.
 
 ### New Files to Create
 
-- `tools/cq/search/rg/prefilter.py` — `extract_literal_fragments()`, `rg_prefilter()`.
-- `tests/unit/cq/search/rg/test_prefilter.py` — Tests for literal extraction and prefilter logic.
+- `tools/cq/search/rg/prefilter.py` — Ripgrep prefilter helper module.
+- `tests/unit/cq/search/rg/test_prefilter.py` — Literal extraction + prefilter behavior tests.
 
 ### Legacy Decommission/Delete Scope
 
-- None — this is purely additive.
+- None — additive optimization with fail-open behavior.
 
 ---
 
@@ -193,44 +194,57 @@ def scan_files(
 
 ### Goal
 
-When `QueryMode.IDENTIFIER` is active, pass ripgrep's native `-w` flag instead of relying on manual `\b` wrapping in callers. This produces more correct word-boundary matching that handles Unicode, punctuation, and edge cases better than manual regex construction.
+Standardize identifier boundary behavior on ripgrep `-w` everywhere identifier mode is used. Remove duplicated manual `\b` wrapping in adapter and smart-search candidate generation so behavior is consistent and centralized.
 
 ### Representative Code Snippets
 
 ```python
 # tools/cq/search/rg/runner.py — build_rg_command() addition
-# After the literal-mode check and before the pattern extension:
-
-    if mode.value == "literal":
-        command.append("-F")
-    elif mode.value == "identifier":
-        command.append("-w")
-    command.extend(["-e", pattern, "."])
+if mode.value == "literal":
+    command.append("-F")
+elif mode.value == "identifier":
+    command.append("-w")
+command.extend(["-e", pattern, "."])
 ```
 
 ```python
-# tools/cq/search/rg/adapter.py — find_call_candidates() simplification
-# Before (line 130):
-#     symbol = function_name.rsplit(".", maxsplit=1)[-1]
-#     pattern = rf"\b{symbol}\s*\("
-# After:
-    symbol = function_name.rsplit(".", maxsplit=1)[-1]
-    pattern = rf"{symbol}\s*\("
-    # Word boundary is handled by -w flag via QueryMode.IDENTIFIER
+# tools/cq/search/rg/adapter.py — remove manual \b wrapping
+import re
+
+symbol = function_name.rsplit(".", maxsplit=1)[-1]
+pattern = rf"{re.escape(symbol)}\s*\("
+request = RgRunRequest(
+    root=root,
+    pattern=pattern,
+    mode=QueryMode.IDENTIFIER,
+    ...
+)
+```
+
+```python
+# tools/cq/search/pipeline/smart_search.py — centralize identifier pattern escaping
+def _identifier_pattern(query: str) -> str:
+    return re.escape(query)
+
+def _run_candidate_phase(...):
+    pattern = _identifier_pattern(ctx.query) if mode == QueryMode.IDENTIFIER else ctx.query
+    ...
 ```
 
 ### Files to Edit
 
-- `tools/cq/search/rg/runner.py` — Add `-w` flag when `mode == IDENTIFIER` in `build_rg_command()`.
-- `tools/cq/search/rg/adapter.py` — Remove manual `\b` wrapping from `find_call_candidates()` pattern construction; use `QueryMode.IDENTIFIER` to let `-w` handle it.
+- `tools/cq/search/rg/runner.py` — Emit `-w` for identifier mode.
+- `tools/cq/search/rg/adapter.py` — Remove manual boundary wrapping and keep identifier mode selection.
+- `tools/cq/search/pipeline/smart_search.py` — Replace manual `\b...\b` construction with escaped identifier pattern and rely on `-w`.
 
 ### New Files to Create
 
-- None — existing test files gain new parametrized cases.
+- None — update existing runner/adapter/smart-search tests.
 
 ### Legacy Decommission/Delete Scope
 
-- `tools/cq/search/rg/adapter.py:130` — Remove manual `\b` prefix from pattern `rf"\b{symbol}\s*\("`. The `\b` becomes redundant with `-w`.
+- `tools/cq/search/rg/adapter.py` — Delete `rf"\b{symbol}\s*\("` pattern construction.
+- `tools/cq/search/pipeline/smart_search.py` — Delete manual `rf"\b{re.escape(query)}\b"` wrappers in candidate command generation.
 
 ---
 
@@ -315,62 +329,57 @@ class RgRunSettingsV1(CqSettingsStruct, frozen=True):
 
 ### Goal
 
-Extend `_extract_metavars()` in `sgpy_scanner.py` to call `get_multiple_matches()` for `$$$`-prefixed variadic metavariable names, enabling individual argument-level captures. Currently, patterns like `print($$$ARGS)` lose individual argument captures because only `get_match()` is called.
+Capture variadic metavariables as first-class structured data instead of dropping them. Extend match extraction to call `get_multiple_matches()` whenever a metavariable is known to be variadic, and preserve both per-node captures and aggregate text.
 
 ### Representative Code Snippets
 
 ```python
-# tools/cq/astgrep/sgpy_scanner.py — _extract_metavars() extension
+# tools/cq/astgrep/sgpy_scanner.py — structured single+multi capture extraction
+def _extract_metavars(
+    match: SgNode,
+    *,
+    metavar_names: tuple[str, ...],
+    variadic_names: frozenset[str],
+) -> dict[str, dict[str, object]]:
+    captures: dict[str, dict[str, object]] = {}
+    for name in metavar_names:
+        single = match.get_match(name)
+        if single is not None:
+            captures[name] = _node_payload(single)
+            captures[f"${name}"] = captures[name]
 
-# Known variadic metavariable names ($$$ prefix captures)
-_VARIADIC_NAMES = frozenset({"ARGS", "KWARGS", "PARAMS", "BODY", "ITEMS"})
-
-
-def _extract_metavars(match: SgNode) -> dict[str, dict[str, Any]]:
-    """Extract metavariable captures from a match."""
-    metavars: dict[str, dict[str, Any]] = {}
-
-    for name in common_names:
-        # Try single capture first
-        captured = match.get_match(name)
-        if captured is not None:
-            range_obj = captured.range()
-            payload = {
-                "text": captured.text(),
-                "start": {"line": range_obj.start.line, "column": range_obj.start.column},
-                "end": {"line": range_obj.end.line, "column": range_obj.end.column},
-            }
-            metavars[name] = payload
-            metavars[f"${name}"] = payload
-
-        # Try variadic multi-capture for known variadic names
-        if name in _VARIADIC_NAMES:
+        if name in variadic_names:
             multi = match.get_multiple_matches(name)
             if multi:
-                items = []
-                for node in multi:
-                    r = node.range()
-                    items.append({
-                        "text": node.text(),
-                        "start": {"line": r.start.line, "column": r.start.column},
-                        "end": {"line": r.end.line, "column": r.end.column},
-                    })
-                metavars[f"${name}_items"] = {"items": items, "count": len(items)}
+                captures[f"$$${name}"] = {
+                    "kind": "multi",
+                    "nodes": [_node_payload(node) for node in multi],
+                }
+    return captures
+```
 
-    return metavars
+```python
+# tools/cq/query/executor.py — include variadic captures in pattern findings
+captures = _extract_match_metavars(
+    match,
+    metavar_names=rule_ctx.metavar_names,
+    include_multi=True,
+)
+finding.details["metavar_captures"] = captures
 ```
 
 ### Files to Edit
 
-- `tools/cq/astgrep/sgpy_scanner.py` — Extend `_extract_metavars()` to call `get_multiple_matches()` for variadic names. Add `_VARIADIC_NAMES` constant.
+- `tools/cq/astgrep/sgpy_scanner.py` — Add structured multi-capture extraction and thread known metavariable names.
+- `tools/cq/query/executor.py` — Include multi-capture extraction in pattern-finding detail payloads.
 
 ### New Files to Create
 
-- None — existing test file `tests/unit/cq/test_sgpy_scanner.py` gains new cases.
+- None — extend existing scanner/query executor tests with variadic capture cases.
 
 ### Legacy Decommission/Delete Scope
 
-- None — additive extension to existing function.
+- Remove single-only metavariable extraction paths that call only `get_match()` for variadic names.
 
 ---
 
@@ -649,75 +658,56 @@ def run_rg_count(
 
 ### Goal
 
-Extend `scan_with_pattern()` to accept optional constraint dicts and pass them to ast-grep-py's Config-based search. This pushes filtering into the native Rust engine instead of Python post-processing. Currently, constraints are used in exactly one place (`find_import_aliases()`).
+Push eligible metavariable filters into ast-grep `constraints` in the production pattern-query runtime (`query/executor.py`). This removes avoidable Python-side post-filtering for positive regex filters while preserving Python fallback for unsupported forms (for example negated filters).
 
 ### Representative Code Snippets
 
 ```python
-# tools/cq/astgrep/sgpy_scanner.py — scan_with_pattern() extension
-
-def scan_with_pattern(
-    files: list[Path],
-    pattern: str,
-    root: Path,
-    rule_id: str = "pattern_query",
-    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
-    *,
-    constraints: dict[str, dict[str, str]] | None = None,
-) -> list[dict[str, Any]]:
-    """Scan files with a pattern and optional metavariable constraints.
-
-    Parameters
-    ----------
-    constraints
-        Optional metavariable constraints, e.g.,
-        ``{"TYPE": {"regex": "^(int|str|float)$"}}`` constrains ``$TYPE``
-        to match only those type names.
-    """
-    matches: list[dict[str, Any]] = []
-
-    for file_path in files:
-        try:
-            src = file_path.read_text(encoding="utf-8")
-        except OSError:
+# tools/cq/query/metavar.py — partition filters into pushdown + residual
+def partition_metavar_filters(
+    filters: tuple[MetaVarFilter, ...],
+) -> tuple[dict[str, dict[str, str]], tuple[MetaVarFilter, ...]]:
+    constraints: dict[str, dict[str, str]] = {}
+    residual: list[MetaVarFilter] = []
+    for item in filters:
+        if item.negate:
+            residual.append(item)
             continue
+        constraints[item.name] = {"regex": item.pattern}
+    return constraints, tuple(residual)
+```
 
-        sg_root = SgRoot(src, lang)
-        node = sg_root.root()
+```python
+# tools/cq/query/executor.py — apply constraints in ast-grep config path
+constraints, residual_filters = partition_metavar_filters(ctx.query.metavar_filters)
+config: Config = {"rule": cast("Rule", rule.to_yaml_dict())}
+if constraints:
+    config["constraints"] = constraints
+matches = list(node.find_all(config=config))
 
-        if constraints:
-            # Build Config with constraints for native Rust filtering
-            config: Config = {
-                "rule": {"pattern": pattern},
-                "constraints": constraints,
-            }
-            file_matches = node.find_all(config=config)
-        else:
-            file_matches = node.find_all(pattern=pattern)
-
-        for match in file_matches:
-            match_dict = _node_to_match_dict(match, file_path, root, rule_id)
-            matches.append(match_dict)
-
-    return matches
+# Keep Python fallback for residual filters only.
+if residual_filters:
+    captures = _parse_sgpy_metavariables(match, metavar_names=rule_ctx.metavar_names)
+    if not apply_metavar_filters(captures, residual_filters):
+        continue
 ```
 
 ### Files to Edit
 
-- `tools/cq/astgrep/sgpy_scanner.py` — Add `constraints` parameter to `scan_with_pattern()`, build Config with constraints when provided.
-- `tools/cq/query/executor.py` — Thread constraint dicts from query IR through to `scan_with_pattern()` calls.
+- `tools/cq/query/metavar.py` — Add filter partitioning helper for ast-grep constraint pushdown.
+- `tools/cq/query/executor.py` — Thread pushdown constraints into inline rule execution, preserve residual Python filtering path.
 
 ### New Files to Create
 
-- None — existing test file gains constraint parametrized cases.
+- None — extend existing pattern query tests with pushdown/residual mixed cases.
 
 ### Legacy Decommission/Delete Scope
 
-- None — existing Python-side post-filtering for constraints in callers can be removed as callers migrate.
+- Remove Python-only filtering passes that are superseded by ast-grep `constraints` for positive regex metavariable filters.
 
 ---
 
-## S9. C2 — Multiline Ripgrep (`-U`) for Cross-Line Pattern Matching
+## S9. A8 — Multiline Ripgrep (`-U`) for Cross-Line Pattern Matching
 
 ### Goal
 
@@ -858,101 +848,60 @@ def list_candidate_files(
 - None — additive function.
 
 ---
-
 ## S11. B6 — Pattern Object Syntax (`context` + `selector`) Threading
 
 ### Goal
 
-Thread the already-parsed `pattern.context` and `pattern.selector` from `PatternSpec` through to ast-grep-py's Config-based search execution. Currently, the query parser creates `PatternSpec` with these fields populated, but the executor only stores them as metadata — they are never passed to ast-grep-py.
+Execute `pattern.context`, `pattern.selector`, and non-default strictness in the production pattern-query runtime. Parser and IR already preserve these fields; this scope ensures they are used for matching instead of only appearing in summary metadata.
 
 ### Representative Code Snippets
 
 ```python
-# tools/cq/astgrep/sgpy_scanner.py — scan_with_pattern() pattern object support
-
-def scan_with_pattern(
-    files: list[Path],
-    pattern: str,
-    root: Path,
-    rule_id: str = "pattern_query",
-    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+# tools/cq/query/executor.py — execute pattern-object rules via Config path
+def _matches_for_rule(
+    node: SgNode,
+    rule: AstGrepRule,
     *,
     constraints: dict[str, dict[str, str]] | None = None,
-    context: str | None = None,
-    selector: str | None = None,
-) -> list[dict[str, Any]]:
-    """Scan files with a pattern, optional constraints, and pattern object fields.
-
-    Parameters
-    ----------
-    context
-        Pattern context for disambiguation (e.g., ``class Foo:\\n  $X``).
-    selector
-        Node kind selector for disambiguation (e.g., ``expression_statement``).
-    """
-    matches: list[dict[str, Any]] = []
-
-    for file_path in files:
-        try:
-            src = file_path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-
-        sg_root = SgRoot(src, lang)
-        node = sg_root.root()
-
-        if context or selector:
-            # Build pattern object for Config-based search
-            pattern_obj: dict[str, str] = {}
-            if context:
-                pattern_obj["context"] = context
-                pattern_obj["selector"] = selector or pattern
-            else:
-                pattern_obj["selector"] = selector
-                pattern_obj["context"] = pattern
-            config: Config = {"rule": {"pattern": pattern_obj}}
-            if constraints:
-                config["constraints"] = constraints
-            file_matches = node.find_all(config=config)
-        elif constraints:
-            config = {"rule": {"pattern": pattern}, "constraints": constraints}
-            file_matches = node.find_all(config=config)
-        else:
-            file_matches = node.find_all(pattern=pattern)
-
-        for match in file_matches:
-            match_dict = _node_to_match_dict(match, file_path, root, rule_id)
-            matches.append(match_dict)
-
-    return matches
+) -> list[SgNode]:
+    if rule.requires_inline_rule() or constraints:
+        config: Config = {"rule": cast("Rule", rule.to_yaml_dict())}
+        if constraints:
+            config["constraints"] = constraints
+        return list(node.find_all(config=config))
+    if rule.kind and rule.pattern in {"$FUNC", "$METHOD", "$CLASS"}:
+        return list(node.find_all(kind=rule.kind))
+    return list(node.find_all(pattern=rule.pattern))
 ```
 
 ```python
-# tools/cq/query/executor.py — Thread PatternSpec fields to scan_with_pattern()
-# Where scan_with_pattern is called with pattern_spec:
-    results = scan_with_pattern(
-        files=candidate_files,
-        pattern=query.pattern_spec.pattern,
-        root=root,
-        rule_id=f"pq_{query.pattern_spec.pattern[:40]}",
-        lang=lang,
-        context=query.pattern_spec.context,
-        selector=query.pattern_spec.selector,
-    )
+# tools/cq/query/planner.py — keep context/selector/strictness threaded
+rule = AstGrepRule(
+    pattern=query.pattern_spec.pattern,
+    context=query.pattern_spec.context,
+    selector=query.pattern_spec.selector,
+    strictness=query.pattern_spec.strictness,
+)
+```
+
+```python
+# tools/cq/query/executor.py — use same matcher in findings + span collection
+for match in _matches_for_rule(node, rule, constraints=constraints):
+    ...
 ```
 
 ### Files to Edit
 
-- `tools/cq/astgrep/sgpy_scanner.py` — Add `context` and `selector` parameters to `scan_with_pattern()`, construct pattern objects for Config-based search.
-- `tools/cq/query/executor.py` — Pass `pattern_spec.context` and `pattern_spec.selector` to `scan_with_pattern()`.
+- `tools/cq/query/executor.py` — Add shared rule-matching helper and route pattern-object execution through Config.
+- `tools/cq/query/planner.py` — Keep compile-time threading explicit for context/selector/strictness fields.
 
 ### New Files to Create
 
-- None — existing tests gain pattern object cases.
+- None — extend existing planner/executor tests with pattern-object runtime cases.
 
 ### Legacy Decommission/Delete Scope
 
-- `tools/cq/query/executor.py` — Remove metadata-only storage of `pattern_spec.context`/`pattern_spec.selector` (lines that store them in common metadata dict without threading to ast-grep).
+- Remove pattern-object metadata-only execution behavior in `tools/cq/query/executor.py`.
 
 ---
 
@@ -960,61 +909,42 @@ def scan_with_pattern(
 
 ### Goal
 
-Handle ripgrep's `type: "begin"` and `type: "end"` JSON events to collect file-level metadata without additional syscalls. Provides accurate file count even when no matches are found, early binary file detection, and per-file timing.
+Handle ripgrep `type: "begin"` and `type: "end"` JSON events so file accounting is event-driven and accurate. This provides reliable scanned-file counts, binary-file detection, and per-file lifecycle metadata without extra syscalls.
 
 ### Representative Code Snippets
 
 ```python
-# tools/cq/search/rg/codec.py — New begin/end event types
-
+# tools/cq/search/rg/codec.py — typed begin/end payloads
 class RgBeginData(msgspec.Struct, omit_defaults=True):
-    """Typed ripgrep begin event data payload."""
-
     path: RgPath | None = None
 
 
 class RgEndData(msgspec.Struct, omit_defaults=True):
-    """Typed ripgrep end event data payload."""
-
     path: RgPath | None = None
     binary_offset: int | None = None
     stats: RgSummaryStats | None = None
 
 
 class RgBeginEvent(msgspec.Struct, frozen=True, tag_field="type", tag="begin"):
-    """Typed ripgrep begin event."""
-
     data: RgBeginData
-
-    @property
-    def type(self) -> Literal["begin"]:
-        """Return tagged event type."""
-        return "begin"
 
 
 class RgEndEvent(msgspec.Struct, frozen=True, tag_field="type", tag="end"):
-    """Typed ripgrep end event."""
-
     data: RgEndData
 
-    @property
-    def type(self) -> Literal["end"]:
-        """Return tagged event type."""
-        return "end"
 
-
-# Updated unions:
-type RgTypedEvent = RgMatchEvent | RgSummaryEvent | RgContextEvent | RgBeginEvent | RgEndEvent
-type RgAnyEvent = RgMatchEvent | RgSummaryEvent | RgContextEvent | RgBeginEvent | RgEndEvent | RgEvent
+type RgTypedEvent = (
+    RgMatchEvent | RgSummaryEvent | RgContextEvent | RgBeginEvent | RgEndEvent
+)
 ```
 
 ```python
-# tools/cq/search/rg/collector.py — File tracking in RgCollector
+# tools/cq/search/rg/collector.py — file lifecycle tracking
 @dataclass
 class RgCollector:
-    # ... existing fields ...
-    file_count: int = 0
-    binary_files: list[str] = field(default_factory=list)
+    files_started: set[str] = field(default_factory=set)
+    files_completed: set[str] = field(default_factory=set)
+    binary_files: set[str] = field(default_factory=set)
 
     def handle_event(self, event: RgAnyEvent) -> None:
         if event.type == "begin":
@@ -1023,31 +953,27 @@ class RgCollector:
         if event.type == "end":
             self._handle_end(event)
             return
-        # ... existing dispatch ...
+        ...
+```
 
-    def _handle_begin(self, event: RgAnyEvent) -> None:
-        if isinstance(event, RgBeginEvent) and event.data.path:
-            self.file_count += 1
-
-    def _handle_end(self, event: RgAnyEvent) -> None:
-        if isinstance(event, RgEndEvent) and event.data.binary_offset is not None:
-            path = event.data.path.text if event.data.path else None
-            if path:
-                self.binary_files.append(path)
+```python
+# tools/cq/search/pipeline/smart_search.py — prefer event-driven file counts
+scanned_files = len(collector.files_completed or collector.files_started)
 ```
 
 ### Files to Edit
 
-- `tools/cq/search/rg/codec.py` — Add `RgBeginData`, `RgEndData`, `RgBeginEvent`, `RgEndEvent` types; update union types and decoder.
-- `tools/cq/search/rg/collector.py` — Add `file_count`, `binary_files` fields; add `_handle_begin()`, `_handle_end()` methods; update `handle_event()`.
+- `tools/cq/search/rg/codec.py` — Add begin/end event payload types and union support.
+- `tools/cq/search/rg/collector.py` — Track started/completed files and binary-file markers from begin/end events.
+- `tools/cq/search/pipeline/smart_search.py` — Use begin/end-driven file stats for summary fields.
 
 ### New Files to Create
 
-- None — existing test files gain begin/end event cases.
+- None — extend codec/collector/smart-search tests with begin/end fixtures.
 
 ### Legacy Decommission/Delete Scope
 
-- None — additive with backward-compatible defaults.
+- Remove fallback-only scanned-file inference where begin/end metadata is available.
 
 ---
 
@@ -1103,141 +1029,206 @@ CI = SearchLimits(
 
 ### Goal
 
-Externalize the 23 Python rules and 8 Rust rules from hardcoded `RuleSpec` objects in Python files to version-controlled YAML files. Enables non-developer authoring, swappable rule packs, and clean evolution. Migration path: generate YAML from existing Python rules, validate round-trip, then switch loader.
+Unify the dual rule systems — 23 CLI-mode YAML rules at `tools/cq/astgrep/rules/python_facts/*.yml` and 23 hand-translated Python `RuleSpec` objects in `rules_py.py` — into a single YAML-authoritative loader. The CLI-mode YAML rules already exist and use ast-grep's native schema; this scope item builds a schema bridge that loads those files into `RuleSpec` tuples at runtime, replacing the hand-maintained Python equivalents. The 8 Rust rules in `rules_rust.py` have no YAML equivalents and need new YAML files created.
+
+**Key design decision:** Use `decode_yaml_strict()` from `tools/cq/core/typed_boundary.py` as the canonical YAML decode path, consistent with `load_pack_rules()` in `query_models.py`. Do NOT create standalone `msgspec.yaml.Decoder` instances — all YAML decoding in CQ goes through the typed boundary layer for uniform `BoundaryDecodeError` handling.
 
 ### Representative Code Snippets
 
 ```yaml
-# tools/cq/astgrep/rulepacks/python.yaml
-version: "1"
-defaults:
-  language: python
-  overlap_policy: first
-rules:
-  - id: py_def_function
-    record_type: def
-    kind: function
-    config:
-      rule:
-        kind: function_definition
+# tools/cq/astgrep/rules/python_facts/py_def_function.yml — EXISTING (no changes needed)
+# These 23 files already define rules in ast-grep's native YAML schema.
+# The loader bridges this schema to RuleSpec objects.
+id: py_def_function
+language: python
+severity: hint
+rule:
+  kind: function_definition
+  regex: "^def "
+  not:
+    has:
+      kind: type_parameter
+metadata:
+  record: def
+  kind: function
+```
 
-  - id: py_def_class
-    record_type: def
-    kind: class
-    config:
-      rule:
-        kind: class_definition
-
-  - id: py_call_name
-    record_type: call
-    kind: name_call
-    config:
-      rule:
-        pattern: "$F($$$)"
-        kind: call
+```yaml
+# tools/cq/astgrep/rules/rust_facts/rs_def_function.yml — NEW (8 Rust rules)
+# Only Rust rules need new YAML files; Python rules already exist.
+id: rs_def_function
+language: rust
+severity: hint
+rule:
+  kind: function_item
+metadata:
+  record: def
+  kind: function
 ```
 
 ```python
 # tools/cq/astgrep/rulepack_loader.py
-"""YAML rule pack loader for ast-grep-py rules."""
+"""YAML rule pack loader for ast-grep-py rules.
+
+Bridges the existing CLI-mode YAML rule files (ast-grep native schema)
+into RuleSpec tuples for the Python-side scanner runtime. Uses
+decode_yaml_strict() from typed_boundary for all YAML decoding.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import msgspec
 
 from tools.cq.astgrep.sgpy_scanner import RuleSpec
 from tools.cq.core.structs import CqStruct
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
+from tools.cq.core.typed_boundary import BoundaryDecodeError, decode_yaml_strict
 
 
-class RulePackEntry(CqStruct, frozen=True):
-    """Single rule entry in a YAML rule pack."""
+class CliRuleMetadata(CqStruct, frozen=True):
+    """Metadata section from ast-grep CLI YAML rule format."""
+
+    record: str = ""
+    kind: str = ""
+
+
+class CliRuleFile(CqStruct, frozen=True):
+    """Single ast-grep CLI YAML rule file schema.
+
+    Maps the native ast-grep CLI format (id, language, severity, rule, metadata)
+    to a structure that can be converted to RuleSpec.
+    """
 
     id: str
-    record_type: str
-    kind: str
-    config: dict[str, object] = msgspec.field(default_factory=dict)
+    language: str = "python"
+    severity: str = "hint"
+    rule: dict[str, object] = msgspec.field(default_factory=dict)
+    metadata: CliRuleMetadata = CliRuleMetadata()
 
 
-class RulePack(CqStruct, frozen=True):
-    """Parsed YAML rule pack."""
-
-    version: str
-    defaults: dict[str, str] = msgspec.field(default_factory=dict)
-    rules: tuple[RulePackEntry, ...] = ()
-
-
-_YAML_DECODER = msgspec.yaml.Decoder(type=RulePack)
-
-
-def load_rulepack(path: Path) -> tuple[RuleSpec, ...]:
-    """Load a YAML rule pack file and convert to RuleSpec tuple.
+def load_cli_rule_file(path: Path) -> RuleSpec | None:
+    """Load a single ast-grep CLI YAML rule file and convert to RuleSpec.
 
     Parameters
     ----------
     path
-        Path to the YAML rule pack file.
+        Path to a CLI-mode YAML rule file.
+
+    Returns
+    -------
+    RuleSpec | None
+        Converted RuleSpec, or None if decoding fails.
+    """
+    try:
+        parsed = decode_yaml_strict(path.read_bytes(), type_=CliRuleFile)
+    except (OSError, BoundaryDecodeError):
+        return None
+    return RuleSpec(
+        rule_id=parsed.id,
+        record_type=parsed.metadata.record,
+        kind=parsed.metadata.kind,
+        config={"rule": dict(parsed.rule)},
+    )
+
+
+def load_rules_from_directory(rule_dir: Path) -> tuple[RuleSpec, ...]:
+    """Load all YAML rule files from a directory into a RuleSpec tuple.
+
+    Parameters
+    ----------
+    rule_dir
+        Directory containing ``*.yml`` rule files.
 
     Returns
     -------
     tuple[RuleSpec, ...]
-        Tuple of RuleSpec objects loaded from the YAML pack.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the rule pack file does not exist.
+        Sorted tuple of loaded RuleSpec objects.
     """
-    raw = path.read_bytes()
-    pack = _YAML_DECODER.decode(raw)
-    return tuple(
-        RuleSpec(
-            rule_id=entry.id,
-            record_type=entry.record_type,
-            kind=entry.kind,
-            config=dict(entry.config),
-        )
-        for entry in pack.rules
-    )
+    if not rule_dir.is_dir():
+        return ()
+    specs: list[RuleSpec] = []
+    for yaml_file in sorted(rule_dir.glob("*.yml")):
+        spec = load_cli_rule_file(yaml_file)
+        if spec is not None:
+            specs.append(spec)
+    return tuple(specs)
 
 
 def load_default_rulepacks() -> dict[str, tuple[RuleSpec, ...]]:
-    """Load all built-in rule packs from the rulepacks directory.
+    """Load all built-in rule packs from the rules directory.
+
+    Scans ``rules/python_facts/`` (23 existing files) and
+    ``rules/rust_facts/`` (8 new files) relative to the astgrep
+    package directory.
 
     Returns
     -------
     dict[str, tuple[RuleSpec, ...]]
         Mapping of language name to rule tuple.
     """
-    pack_dir = Path(__file__).parent / "rulepacks"
+    base = Path(__file__).parent / "rules"
     packs: dict[str, tuple[RuleSpec, ...]] = {}
-    if pack_dir.is_dir():
-        for yaml_file in sorted(pack_dir.glob("*.yaml")):
-            lang = yaml_file.stem
-            packs[lang] = load_rulepack(yaml_file)
+    for facts_dir in sorted(base.glob("*_facts")):
+        lang = facts_dir.name.removesuffix("_facts")
+        rules = load_rules_from_directory(facts_dir)
+        if rules:
+            packs[lang] = rules
     return packs
+```
+
+```python
+# tests/unit/cq/astgrep/test_rulepack_loader.py — Round-trip parity test
+"""Validate YAML rules produce identical RuleSpec configs to Python rules."""
+
+from __future__ import annotations
+
+import pytest
+
+from tools.cq.astgrep.rulepack_loader import load_default_rulepacks
+from tools.cq.astgrep.rules_py import PYTHON_RULES
+
+
+def test_yaml_python_rule_parity() -> None:
+    """Every YAML-loaded Python rule must match the hand-coded Python RuleSpec."""
+    packs = load_default_rulepacks()
+    yaml_rules = packs.get("python", ())
+    yaml_by_id = {r.rule_id: r for r in yaml_rules}
+    python_by_id = {r.rule_id: r for r in PYTHON_RULES}
+
+    # Same rule IDs
+    assert set(yaml_by_id.keys()) == set(python_by_id.keys()), (
+        f"Rule ID mismatch: YAML-only={set(yaml_by_id) - set(python_by_id)}, "
+        f"Python-only={set(python_by_id) - set(yaml_by_id)}"
+    )
+
+    # Same record_type and kind per rule
+    for rule_id in yaml_by_id:
+        yaml_r = yaml_by_id[rule_id]
+        py_r = python_by_id[rule_id]
+        assert yaml_r.record_type == py_r.record_type, (
+            f"{rule_id}: record_type mismatch: YAML={yaml_r.record_type}, Python={py_r.record_type}"
+        )
+        assert yaml_r.kind == py_r.kind, (
+            f"{rule_id}: kind mismatch: YAML={yaml_r.kind}, Python={py_r.kind}"
+        )
 ```
 
 ### Files to Edit
 
 - `tools/cq/astgrep/sgpy_scanner.py` — Add optional `rulepack_path` parameter to `scan_files()`, fallback to Python rules when YAML not available.
+- `tools/cq/astgrep/rules.py` — Update language-aware rule dispatcher to prefer YAML-loaded rules when available, falling back to Python rule modules.
 
 ### New Files to Create
 
-- `tools/cq/astgrep/rulepack_loader.py` — YAML rule pack loader.
-- `tools/cq/astgrep/rulepacks/python.yaml` — Externalized Python rules (23 rules).
-- `tools/cq/astgrep/rulepacks/rust.yaml` — Externalized Rust rules (8 rules).
-- `tests/unit/cq/astgrep/test_rulepack_loader.py` — Round-trip tests, validation tests.
+- `tools/cq/astgrep/rulepack_loader.py` — YAML rule pack loader using `decode_yaml_strict()` to bridge CLI-mode YAML schema to `RuleSpec`.
+- `tools/cq/astgrep/rules/rust_facts/` — New directory with 8 YAML rule files for Rust (the 23 Python YAML rules already exist at `rules/python_facts/`).
+- `tests/unit/cq/astgrep/test_rulepack_loader.py` — Round-trip parity tests validating YAML rules produce identical `RuleSpec` configs to existing Python rules, plus Rust rule loading tests.
 
 ### Legacy Decommission/Delete Scope
 
-- `tools/cq/astgrep/rules_py.py` — Entire file becomes legacy once YAML loader is validated and active. Keep as fallback during migration, delete after validation.
-- `tools/cq/astgrep/rules_rust.py` — Same as above.
+- `tools/cq/astgrep/rules_py.py` — Entire file becomes legacy once YAML loader is validated via round-trip parity tests and active. Keep as fallback during migration, delete after parity test passes.
+- `tools/cq/astgrep/rules_rust.py` — Same as above, after Rust YAML rules are created and validated.
 
 ---
 
@@ -1245,78 +1236,77 @@ def load_default_rulepacks() -> dict[str, tuple[RuleSpec, ...]]:
 
 ### Goal
 
-Define reusable sub-matcher rules (e.g., `is-literal`, `is-builtin-call`, `is-dunder-method`) in the `utils` section of ast-grep-py Config and reference them via `matches` in complex rules. This reduces duplication across rules and improves classification consistency.
+Create reusable utility-rule packs for both Python and Rust and consume them through `matches`. The `utilDirs: [utils]` wiring already exists in `sgconfig.yml`; this scope item makes utility rules first-class in the Python runtime loader path and de-duplicates repeated rule fragments.
 
 ### Representative Code Snippets
 
 ```yaml
-# tools/cq/astgrep/rulepacks/python.yaml — Shared utils section
-version: "1"
-defaults:
-  language: python
-utils:
-  is-literal:
-    any:
-      - kind: string
-      - kind: integer
-      - kind: float
-      - kind: true
-      - kind: false
-      - kind: none
+# tools/cq/astgrep/utils/is-python-literal.yml
+id: is-python-literal
+language: python
+rule:
+  any:
+    - kind: string
+    - kind: integer
+    - kind: float
+    - kind: true
+    - kind: false
+    - kind: none
+```
 
-  is-builtin-call:
-    pattern: "$F($$$)"
-    constraints:
-      F:
-        regex: "^(print|len|type|isinstance|hasattr|getattr|setattr|range|enumerate|zip|map|filter|sorted|reversed|list|dict|set|tuple|str|int|float|bool)$"
+```yaml
+# tools/cq/astgrep/utils/is-rust-test-attr.yml
+id: is-rust-test-attr
+language: rust
+rule:
+  kind: attribute_item
+  regex: "^#\\[(test|tokio::test)\\]"
+```
 
-  is-dunder-method:
-    pattern: "def $M($$$):"
-    constraints:
-      M:
-        regex: "^__[a-z]+__$"
-
-  is-decorator:
-    kind: decorator
-
-rules:
-  - id: py_call_builtin
-    record_type: call
-    kind: builtin_call
-    config:
-      rule:
-        matches: is-builtin-call
-
-  - id: py_literal_assignment
-    record_type: assign_ctor
-    kind: literal_assign
-    config:
-      rule:
-        kind: assignment
-        has:
-          matches: is-literal
+```yaml
+# tools/cq/astgrep/rules/rust_facts/rs_def_test_function.yml
+id: rs_def_test_function
+language: rust
+severity: hint
+rule:
+  all:
+    - kind: function_item
+    - has:
+        matches: is-rust-test-attr
+metadata:
+  record: def
+  kind: test_function
 ```
 
 ```python
-# tools/cq/astgrep/rulepack_loader.py — Utils handling
-# The existing loader passes the full YAML config (including utils)
-# through to ast-grep-py Config, which handles utils natively.
-# No special Python-side handling needed — ast-grep resolves
-# `matches` references against the `utils` section internally.
+# tools/cq/astgrep/rulepack_loader.py — inject utils into Python runtime configs
+def load_utils(utils_dir: Path) -> dict[str, dict[str, object]]:
+    ...
+
+def build_runtime_config(rule: CliRuleFile, utils: dict[str, dict[str, object]]) -> Config:
+    config: Config = {"rule": dict(rule.rule)}
+    if utils:
+        config["utils"] = utils
+    return config
 ```
 
 ### Files to Edit
 
-- `tools/cq/astgrep/rulepack_loader.py` — Ensure `utils` section from YAML is passed through to Config objects.
-- `tools/cq/astgrep/rulepacks/python.yaml` — Add `utils` section with shared matchers; update rules to use `matches`.
+- `tools/cq/astgrep/rulepack_loader.py` — Load `utils/` files and inject utility maps into runtime Config objects.
+- `tools/cq/astgrep/sgpy_scanner.py` — Ensure Config-based scan path preserves `utils` sections.
+- `tools/cq/astgrep/rules/python_facts/*.yml` — Replace duplicated inline sub-rules with `matches` references where applicable.
+- `tools/cq/astgrep/rules/rust_facts/*.yml` — Adopt utility rules for reusable Rust attribute/call-site predicates.
 
 ### New Files to Create
 
-- None — integrated into B2 infrastructure.
+- `tools/cq/astgrep/utils/is-python-literal.yml` — Python literal utility matcher.
+- `tools/cq/astgrep/utils/is-python-builtin-call.yml` — Python builtin-call utility matcher.
+- `tools/cq/astgrep/utils/is-rust-test-attr.yml` — Rust test attribute utility matcher.
+- `tests/unit/cq/astgrep/test_rulepack_utils.py` — Utility loading + `matches` resolution tests.
 
 ### Legacy Decommission/Delete Scope
 
-- Duplicated pattern checks across individual Python rules that are superseded by shared utils (e.g., multiple rules checking "is this a literal?" independently).
+- Remove duplicated per-rule fragments that become utility-rule references (especially repeated literal and attribute matcher blocks).
 
 ---
 
@@ -1324,81 +1314,50 @@ rules:
 
 ### Goal
 
-Detect PCRE2 availability at bootstrap via `rg --pcre2-version`, store the capability in `Toolchain`, and conditionally use `-P` for patterns containing lookaround syntax. This enables more powerful regex patterns when the environment supports them.
+Detect and publish ripgrep PCRE2 capability once at bootstrap (`rg --pcre2-version`) and use that signal for safe conditional advanced-regex execution. This is the capability-negotiation scope; JSON fidelity improvements land in S21.
 
 ### Representative Code Snippets
 
 ```python
-# tools/cq/core/toolchain.py — PCRE2 detection
-
-def _detect_pcre2() -> bool:
-    """Detect whether ripgrep was compiled with PCRE2 support.
-
-    Returns
-    -------
-    bool
-        True if PCRE2 is available.
-    """
+# tools/cq/core/toolchain.py — detect and store PCRE2 capability
+def _detect_pcre2() -> tuple[bool, str | None]:
     proc = subprocess.run(
         ["rg", "--pcre2-version"],
         check=False,
         capture_output=True,
         text=True,
     )
-    return proc.returncode == 0 and bool(proc.stdout.strip())
+    if proc.returncode != 0:
+        return False, None
+    line = proc.stdout.splitlines()[0].strip() if proc.stdout else ""
+    return True, line or None
 
 
 class Toolchain(CqStruct, frozen=True):
-    """Available tools and versions."""
-
     rg_available: bool
     rg_version: str | None
-    rg_pcre2_available: bool = False  # New field
-    sgpy_available: bool
-    sgpy_version: str | None
-    # ... remaining fields ...
-
-    @staticmethod
-    def detect() -> Toolchain:
-        rg_available, rg_version = _detect_rg()
-        rg_pcre2 = _detect_pcre2() if rg_available else False
-        # ... rest of detection ...
-        return Toolchain(
-            rg_available=rg_available,
-            rg_version=rg_version,
-            rg_pcre2_available=rg_pcre2,
-            # ... rest ...
-        )
+    rg_pcre2_available: bool = False
+    rg_pcre2_version: str | None = None
+    ...
 ```
 
 ```python
-# tools/cq/search/rg/runner.py — Conditional PCRE2 flag
-import re
-
+# tools/cq/search/rg/runner.py — optional lookaround-aware fallback
 _LOOKAROUND_RE = re.compile(r"\(\?[<!=]")
 
-
-def build_rg_command(
-    *,
-    pattern: str,
-    mode: QueryMode,
-    # ...
-    pcre2_available: bool = False,
-) -> list[str]:
-    # ... existing construction ...
-    if pcre2_available and _LOOKAROUND_RE.search(pattern):
-        command.append("-P")
-    # ...
+if pcre2_available and _LOOKAROUND_RE.search(pattern):
+    command.append("-P")
 ```
 
 ### Files to Edit
 
-- `tools/cq/core/toolchain.py` — Add `_detect_pcre2()` function; add `rg_pcre2_available: bool = False` field to `Toolchain`; update `detect()`.
-- `tools/cq/search/rg/runner.py` — Add `pcre2_available` parameter to `build_rg_command()`; add lookaround detection regex; conditionally emit `-P` flag.
+- `tools/cq/core/toolchain.py` — Add PCRE2 detection and capability/version fields.
+- `tools/cq/search/rg/runner.py` — Accept capability input and guard conditional `-P` usage.
+- `tools/cq/search/pipeline/smart_search.py` — Surface PCRE2 capability in summary/telemetry.
 
 ### New Files to Create
 
-- None — existing test files gain PCRE2 detection cases.
+- None — add capability detection and runner behavior tests in existing files.
 
 ### Legacy Decommission/Delete Scope
 
@@ -1406,67 +1365,335 @@ def build_rg_command(
 
 ---
 
+## S17. B7 — Dynamic Metavariable Discovery and Unified Capture Model
+
+### Goal
+
+Replace hardcoded metavariable name lists with parser-driven discovery from pattern/rule text. Use one capture model across scanner and query executor for single (`$X`), unnamed (`$$OP`), and variadic (`$$$ARGS`) metavariables.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/query/metavar.py — extract names from pattern/rule strings
+_METAVAR_TOKEN_RE = re.compile(r"\${1,3}([A-Z][A-Z0-9_]*)")
+
+def extract_metavar_names(text: str) -> tuple[str, ...]:
+    return tuple(sorted({m.group(1) for m in _METAVAR_TOKEN_RE.finditer(text)}))
+
+def extract_rule_metavars(rule: AstGrepRule) -> tuple[str, ...]:
+    parts = [rule.pattern]
+    for item in (rule.context, rule.inside, rule.has, rule.precedes, rule.follows):
+        if item:
+            parts.append(item)
+    if rule.composite:
+        parts.extend(rule.composite.patterns)
+    return tuple(sorted({name for part in parts for name in extract_metavar_names(part)}))
+```
+
+```python
+# tools/cq/query/executor.py — remove _COMMON_METAVAR_NAMES
+metavar_names = extract_rule_metavars(rule_ctx.rule)
+captures = _extract_match_metavars(
+    match,
+    metavar_names=metavar_names,
+    include_multi=True,
+)
+```
+
+### Files to Edit
+
+- `tools/cq/query/metavar.py` — Add dynamic metavariable name extraction helpers.
+- `tools/cq/query/executor.py` — Replace hardcoded metavariable constants with dynamic extraction.
+- `tools/cq/astgrep/sgpy_scanner.py` — Reuse dynamic metavariable names in scanner match serialization.
+
+### New Files to Create
+
+- None — extend existing metavariable parsing and pattern-query tests.
+
+### Legacy Decommission/Delete Scope
+
+- Delete `_COMMON_METAVAR_NAMES` in `tools/cq/query/executor.py`.
+- Delete hardcoded `common_names` lists in `tools/cq/astgrep/sgpy_scanner.py`.
+
+---
+
+## S18. D1 — Pattern Planner Completeness (`composite`, `nthChild`)
+
+### Goal
+
+Thread parser-supported `Query.composite` and `Query.nth_child` fields into planner-generated `AstGrepRule` so pattern queries preserve full semantics through execution planning.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/query/planner.py — _compile_pattern_query()
+rule = AstGrepRule(
+    pattern=query.pattern_spec.pattern,
+    context=query.pattern_spec.context,
+    selector=query.pattern_spec.selector,
+    strictness=query.pattern_spec.strictness,
+    composite=query.composite,
+    nth_child=query.nth_child,
+)
+```
+
+```python
+# tests/unit/cq/query/test_planner.py
+def test_compile_pattern_query_threads_composite_and_nth_child() -> None:
+    ...
+    plan = compile_query(query)
+    assert plan.sg_rules[0].composite is not None
+    assert plan.sg_rules[0].nth_child is not None
+```
+
+### Files to Edit
+
+- `tools/cq/query/planner.py` — Add composite/nthChild threading in `_compile_pattern_query()`.
+- `tests/unit/cq/query/test_planner.py` — Add compile-time parity coverage for composite/nthChild.
+
+### New Files to Create
+
+- None.
+
+### Legacy Decommission/Delete Scope
+
+- Remove planner behavior that silently drops `query.composite` and `query.nth_child`.
+
+---
+
+## S19. D2 — Unified Pattern Runtime Semantics (Findings + Span Filtering)
+
+### Goal
+
+Unify pattern match execution so findings generation and span filtering use the exact same rule execution path. This removes current semantic drift between `_iter_rule_matches()` and `_iter_rule_matches_for_spans()`.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/query/executor.py — single execution helper
+def _execute_rule_matches(
+    node: SgNode,
+    rule: AstGrepRule,
+    *,
+    constraints: dict[str, dict[str, str]] | None = None,
+) -> list[SgNode]:
+    if rule.requires_inline_rule() or constraints:
+        config: Config = {"rule": cast("Rule", rule.to_yaml_dict())}
+        if constraints:
+            config["constraints"] = constraints
+        return list(node.find_all(config=config))
+    if rule.kind and rule.pattern in {"$FUNC", "$METHOD", "$CLASS"}:
+        return list(node.find_all(kind=rule.kind))
+    return list(node.find_all(pattern=rule.pattern))
+```
+
+```python
+# tools/cq/query/executor.py — reuse in both flows
+for match in _execute_rule_matches(rule_ctx.node, rule_ctx.rule, constraints=rule_ctx.constraints):
+    ...
+
+for match in _execute_rule_matches(node, rule, constraints=constraints):
+    spans.append(_to_match_span(match, rel_path))
+```
+
+### Files to Edit
+
+- `tools/cq/query/executor.py` — Replace split match iterators with one shared execution function.
+- `tests/unit/cq/query/test_executor_pattern.py` — Add parity tests ensuring findings and spans match identical rule semantics.
+
+### New Files to Create
+
+- None.
+
+### Legacy Decommission/Delete Scope
+
+- Delete `_iter_rule_matches_for_spans()` and duplicate/misaligned execution logic in `tools/cq/query/executor.py`.
+
+---
+
+## S20. C2 — Neighborhood Ripgrep-Lane Consolidation
+
+### Goal
+
+Replace direct subprocess ripgrep calls in neighborhood target resolution with the shared ripgrep runner/contracts path. This consolidates timeout/error handling, language filtering, and command construction across CQ lanes.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/rg/adapter.py — reusable symbol probe helper
+def find_symbol_candidates(
+    root: Path,
+    symbol_name: str,
+    *,
+    lang_scope: QueryLanguageScope,
+    limits: SearchLimits,
+) -> list[tuple[str, int, str]]:
+    ...
+```
+
+```python
+# tools/cq/neighborhood/target_resolution.py — consume shared rg lane
+rows = find_symbol_candidates(
+    root=root,
+    symbol_name=symbol_name,
+    lang_scope="rust" if language == "rust" else "python",
+    limits=INTERACTIVE,
+)
+```
+
+### Files to Edit
+
+- `tools/cq/neighborhood/target_resolution.py` — Remove direct `subprocess.run(["rg", ...])` usage and call shared adapter helper.
+- `tools/cq/search/rg/adapter.py` — Add symbol-candidate helper built on shared runner/contracts.
+
+### New Files to Create
+
+- `tests/unit/cq/neighborhood/test_target_resolution_rg_lane.py` — Coverage for neighborhood symbol fallback through shared rg path.
+
+### Legacy Decommission/Delete Scope
+
+- Delete direct ripgrep command assembly and subprocess execution in `tools/cq/neighborhood/target_resolution.py`.
+
+---
+
+## S21. A9 — Ripgrep JSON Fidelity (`absolute_offset`, bytes/text unions, richer stats)
+
+### Goal
+
+Capture and use ripgrep JSON fidelity fields currently dropped in typed decoding (`absolute_offset`, richer summary stats, bytes/text unions). This improves byte-accurate anchoring and summary diagnostics without new scanning passes.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/rg/codec.py — preserve richer match/summary payload fields
+class RgMatchData(msgspec.Struct, omit_defaults=True):
+    path: RgPath | None = None
+    lines: RgText | None = None
+    line_number: int | None = None
+    absolute_offset: int | None = None
+    submatches: list[RgSubmatch] = msgspec.field(default_factory=list)
+
+
+class RgSummaryStats(msgspec.Struct, omit_defaults=True):
+    searches: int | None = None
+    searches_with_match: int | None = None
+    matches: int | None = None
+    matched_lines: int | None = None
+    bytes_searched: int | None = None
+    bytes_printed: int | None = None
+```
+
+```python
+# tools/cq/search/rg/collector.py — use absolute byte offsets when available
+absolute_base = data.absolute_offset if isinstance(data.absolute_offset, int) else 0
+match_abs_start = absolute_base + start
+match_abs_end = absolute_base + end
+```
+
+```python
+# tools/cq/search/pipeline/smart_search.py — expose richer stats
+summary["rg_stats"] = {
+    "matches": stats.total_matches,
+    "matched_lines": collector.summary_stats.get("matched_lines", 0),
+    "bytes_searched": collector.summary_stats.get("bytes_searched", 0),
+    "bytes_printed": collector.summary_stats.get("bytes_printed", 0),
+}
+```
+
+### Files to Edit
+
+- `tools/cq/search/rg/codec.py` — Add `absolute_offset` and richer summary-stat fields.
+- `tools/cq/search/rg/collector.py` — Track and propagate absolute byte offsets where available.
+- `tools/cq/search/pipeline/smart_search.py` — Surface richer ripgrep stats in summary output.
+
+### New Files to Create
+
+- None — add JSON fidelity fixtures to existing codec/collector test modules.
+
+### Legacy Decommission/Delete Scope
+
+- Remove assumptions that all byte offsets are line-relative when `absolute_offset` is available.
+
+---
+
 ## Cross-Scope Legacy Decommission and Deletion Plan
 
 ### Batch D1 (after S2/A2, S3/A1)
 
-- Delete manual `\b` prefix from `find_call_candidates()` pattern construction in `tools/cq/search/rg/adapter.py:130` — superseded by `-w` flag from A2. This deletion is safe only after both A2 (word-boundary mode) and A1 (multi-pattern which changes the `-e` line) are landed.
+- Delete all manual `\b` wrapping for identifier search patterns in `tools/cq/search/rg/adapter.py` and `tools/cq/search/pipeline/smart_search.py` — superseded by centralized `-w` handling.
 
 ### Batch D2 (after S14/B2, S15/B3)
 
-- Delete `tools/cq/astgrep/rules_py.py` (entire file) — superseded by `tools/cq/astgrep/rulepacks/python.yaml`. Only safe after YAML round-trip validation passes.
-- Delete `tools/cq/astgrep/rules_rust.py` (entire file) — superseded by `tools/cq/astgrep/rulepacks/rust.yaml`. Only safe after YAML round-trip validation passes.
+- Delete `tools/cq/astgrep/rules_py.py` after YAML parity tests pass for all Python rule IDs.
+- Delete `tools/cq/astgrep/rules_rust.py` after Rust YAML rule parity tests pass.
 
-### Batch D3 (after S6/B5, S8/B4, S11/B6)
+### Batch D3 (after S6/B5, S8/B4, S11/B6, S19/D2)
 
-- Remove Python-side post-filtering code in callers that manually walk parent chains or check context — superseded by native refinement predicates (B5), constraint filtering (B4), and pattern objects (B6). This spans multiple files:
-  - `tools/cq/search/pipeline/classifier_runtime.py` — Manual parent-chain walking in `_is_docstring_context()` and related helpers.
-  - `tools/cq/search/python/extractors.py` — 25+ `.parent()`/`.kind()` context classification patterns.
-  - `tools/cq/query/executor.py` — Metadata-only storage of context/selector fields (lines that store in dict without threading to ast-grep).
+- Remove remaining Python-side parent-chain and metadata-only pattern filtering paths superseded by refinement predicates, constraint pushdown, and unified inline-rule execution.
+
+### Batch D4 (after S17/B7, S19/D2)
+
+- Delete hardcoded metavariable-name constants in scanner/executor once dynamic metavariable extraction is the only path.
+
+### Batch D5 (after S20/C2, S21/A9)
+
+- Remove neighborhood-specific ripgrep subprocess wrappers and ad-hoc output parsing now replaced by shared rg lane contracts.
 
 ---
 
 ## Implementation Sequence
 
-1. **S1/C1 — Ripgrep prefiltering** (Highest priority, independent, greatest performance impact)
-2. **S2/A2 — Word-boundary mode** (Simple, unlocks cleaner patterns in adapter)
-3. **S3/A1 — Multi-pattern OR** (Contract-level change, needed by many callers)
-4. **S4/B1 — Variadic captures** (Independent, unblocks argument-level analysis)
-5. **S5/A3 — Context lines** (Codec + collector change, needed before C3)
-6. **S6/B5 — Refinement predicates** (Independent, replaces Python parent-chain walking)
-7. **S7/A4 — Count probes** (Independent, enables adaptive profiles)
-8. **S8/B4 — Constraint filtering** (Depends on scan_with_pattern being extensible)
-9. **S9/C2 — Multiline search** (Depends on S5 for SearchLimits extension pattern)
-10. **S10/A5 — File enumeration** (Independent, diagnostic utility)
-11. **S11/B6 — Pattern objects** (Depends on S8 for scan_with_pattern extension pattern, threads PatternSpec)
-12. **S12/C3 — Begin/end events** (Depends on S5 codec pattern for new event types)
-13. **S13/A6 — Sort mode** (Independent, small SearchLimits addition)
-14. **S14/B2 — YAML rule packs** (Large scope, independent, but informs B3)
-15. **S15/B3 — Shared utility rules** (Depends on S14 for YAML infrastructure)
-16. **S16/A7 — PCRE2 detection** (Independent, lowest priority, environment-dependent)
+1. **S18/D1 — Planner completeness (`composite`, `nthChild`)** (Correctness prerequisite for downstream runtime work)
+2. **S19/D2 — Unified pattern runtime semantics** (Eliminates semantic drift between findings and span filtering)
+3. **S17/B7 — Dynamic metavariable discovery** (Unblocks robust capture + filter parity)
+4. **S8/B4 — Constraint pushdown** (Moves positive metavariable filtering into native engine)
+5. **S11/B6 — Pattern object runtime threading** (Ensures context/selector/strictness are executed)
+6. **S4/B1 — Variadic captures** (Completes multi-capture fidelity after dynamic metavar threading)
+7. **S5/A3 — Context line support** (Foundation for richer ripgrep event handling)
+8. **S12/C3 — Begin/end event handling** (Accurate file accounting and binary detection)
+9. **S21/A9 — JSON fidelity fields** (Absolute offsets + richer stats)
+10. **S9/A8 — Multiline mode** (Cross-line text search mode)
+11. **S2/A2 — Word-boundary standardization** (Centralized identifier semantics)
+12. **S3/A1 — Multi-pattern OR** (Contract extension for batched probes)
+13. **S7/A4 — Count probes** (Adaptive preflight optimization)
+14. **S10/A5 — File-set enumeration** (Debug and diagnostics utility)
+15. **S20/C2 — Neighborhood rg-lane consolidation** (Shared execution stack across lanes)
+16. **S1/C1 — Ripgrep prefiltering for ast-grep scans** (Apply after correctness + lane unification)
+17. **S6/B5 — Refinement predicate migration** (Code cleanup/perf improvement path)
+18. **S13/A6 — Deterministic sort mode** (CI determinism toggle)
+19. **S14/B2 — YAML rule pack loader** (Schema bridge + parity scaffolding)
+20. **S15/B3 — Shared utility rule packs** (Deduplicate rule fragments after YAML loader lands)
+21. **S16/A7 — PCRE2 capability detection** (Capability telemetry and conditional advanced regex support)
 
-**Rationale:** C1 first because it delivers the largest performance gain. A2 and A1 next because they are small contract-level changes that many later items build upon. B-group items are interleaved to provide immediate value from refinement predicates (B5) while the larger YAML migration (B2/B3) is saved for later.
+**Rationale:** correctness-path scopes (D/B execution fidelity) land first, then ripgrep event/model fidelity, then optimization and ergonomics scopes, then rulepack migration and utility-rule consolidation.
 
 ---
 
 ## Implementation Checklist
 
-- [ ] S1/C1 — Ripgrep-accelerated file prefiltering for ast-grep batch scans
-- [ ] S2/A2 — Word-boundary mode (`-w`) for identifier searches
+- [ ] S1/C1 — Ripgrep-accelerated prefiltering for ast-grep batch scans
+- [ ] S2/A2 — Word-boundary mode (`-w`) standardization
 - [ ] S3/A1 — Multi-pattern OR search (`-e P1 -e P2`)
-- [ ] S4/B1 — `get_multiple_matches()` for variadic captures
-- [ ] S5/A3 — Context lines (`-C`/`-A`/`-B`) for richer match payloads
-- [ ] S6/B5 — Refinement predicates (`matches`/`inside`/`has`)
-- [ ] S7/A4 — `--count` / `--count-matches` for fast cardinality probes
-- [ ] S8/B4 — Constraint-driven metavariable filtering
-- [ ] S9/C2 — Multiline ripgrep (`-U`) for cross-line patterns
-- [ ] S10/A5 — `--files` mode for file-set enumeration
-- [ ] S11/B6 — Pattern object syntax (`context` + `selector`) threading
-- [ ] S12/C3 — Ripgrep `begin`/`end` events for file-level metadata
-- [ ] S13/A6 — `--sort path` for deterministic output ordering
-- [ ] S14/B2 — Externalized YAML/JSON rule packs
-- [ ] S15/B3 — Shared utility rules via `utils` + `matches`
-- [ ] S16/A7 — PCRE2 capability detection and conditional lookaround
-- [ ] D1 — Decommission manual `\b` wrapping (after S2, S3)
-- [ ] D2 — Decommission Python rule files (after S14, S15)
-- [ ] D3 — Decommission Python-side parent-chain filtering (after S6, S8, S11)
+- [ ] S4/B1 — Variadic metavariable captures via `get_multiple_matches()`
+- [ ] S5/A3 — Context lines (`-C`/`-A`/`-B`) in rg lane
+- [ ] S6/B5 — Refinement predicate migration (`matches`/`inside`/`has`)
+- [ ] S7/A4 — `--count` / `--count-matches` preflight probes
+- [ ] S8/B4 — Constraint pushdown for metavar filtering
+- [ ] S9/A8 — Multiline ripgrep mode (`-U --multiline-dotall`)
+- [ ] S10/A5 — `--files` candidate-set enumeration
+- [ ] S11/B6 — Pattern object runtime threading (`context` + `selector`)
+- [ ] S12/C3 — Ripgrep `begin`/`end` event handling
+- [ ] S13/A6 — `--sort path` deterministic ordering
+- [ ] S14/B2 — YAML-authoritative rule pack loading
+- [ ] S15/B3 — Shared utility rules (`utils` + `matches`)
+- [ ] S16/A7 — PCRE2 capability detection and conditional lookaround support
+- [ ] S17/B7 — Dynamic metavariable discovery + unified capture model
+- [ ] S18/D1 — Planner threading parity for `composite`/`nthChild`
+- [ ] S19/D2 — Unified pattern runtime semantics across findings/spans
+- [ ] S20/C2 — Neighborhood ripgrep-lane consolidation
+- [ ] S21/A9 — Ripgrep JSON fidelity (`absolute_offset`, bytes/text unions, richer stats)
+- [ ] D1 — Decommission manual identifier `\b` wrapping (after S2, S3)
+- [ ] D2 — Decommission Python rule modules (after S14, S15)
+- [ ] D3 — Decommission Python-side parent-chain/metadata filtering (after S6, S8, S11, S19)
+- [ ] D4 — Decommission hardcoded metavariable-name lists (after S17, S19)
+- [ ] D5 — Decommission neighborhood-specific rg subprocess wrappers (after S20, S21)

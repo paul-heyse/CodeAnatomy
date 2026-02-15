@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tools.cq.utils.uuid_temporal_contracts_models import RunIdentityContractV1, TemporalUuidInfoV1
+from tools.cq.utils.uuid_temporal_contracts import RunIdentityContractV1, TemporalUuidInfoV1
 
 
 def test_temporal_uuid_info_model() -> None:

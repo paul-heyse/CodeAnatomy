@@ -16,7 +16,7 @@ from tools.cq.search.objects.render import (
     SearchObjectSummaryV1,
     SearchOccurrenceV1,
 )
-from tools.cq.search.python.semantic_signal import evaluate_python_semantic_signal_from_mapping
+from tools.cq.search.python.evidence import evaluate_python_semantic_signal_from_mapping
 
 if TYPE_CHECKING:
     from tools.cq.search.pipeline.smart_search import EnrichedMatch

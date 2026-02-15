@@ -17,7 +17,7 @@ from tools.cq.core.cache import (
     load_search_artifact_bundle as load_search_artifact_bundle_from_store,
 )
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1, SearchArtifactIndexEntryV1
-from tools.cq.core.codec import dumps_json_value
+from tools.cq.core.contract_codec import dumps_json_value
 from tools.cq.core.diagnostics_contracts import build_diagnostics_artifact_payload
 from tools.cq.core.schema import Artifact, CqResult
 from tools.cq.core.serialization import to_builtins

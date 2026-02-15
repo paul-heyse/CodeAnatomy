@@ -9,10 +9,9 @@ import cyclopts
 import msgspec
 from cyclopts import validators
 
-from tools.cq.cli_app.context import CliContext, CliResult, CliTextResult
-from tools.cq.cli_app.decorators import require_context, require_ctx
-from tools.cq.cli_app.groups import protocol_group
-from tools.cq.cli_app.types import OutputFormat
+from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.infrastructure import protocol_group, require_context, require_ctx
+from tools.cq.cli_app.protocol_output import text_result, wants_json
 from tools.cq.core.artifacts import list_search_artifact_index_entries, load_search_artifact_bundle
 from tools.cq.core.cache.contracts import SearchArtifactBundleV1
 
@@ -30,25 +29,6 @@ _ArtifactKind = Literal[
     "snippets",
     "diagnostics",
 ]
-
-
-def _text_result(
-    ctx: CliContext,
-    text: str,
-    *,
-    media_type: str = "text/plain",
-    exit_code: int = 0,
-) -> CliResult:
-    return CliResult(
-        result=CliTextResult(text=text, media_type=media_type),
-        context=ctx,
-        exit_code=exit_code,
-        filters=None,
-    )
-
-
-def _wants_json(ctx: CliContext) -> bool:
-    return ctx.output_format == OutputFormat.json
 
 
 @artifact_app.command(name="list")
@@ -94,13 +74,13 @@ def list_artifacts(
             for row in entries
         ],
     }
-    if _wants_json(ctx):
-        return _text_result(ctx, json.dumps(payload, indent=2), media_type="application/json")
+    if wants_json(ctx):
+        return text_result(ctx, json.dumps(payload, indent=2), media_type="application/json")
     if not entries:
-        return _text_result(ctx, "No cached search artifacts found.")
+        return text_result(ctx, "No cached search artifacts found.")
     lines = [f"Cached search artifacts: {len(entries)}"]
     lines.extend(f"- run_id={row.run_id} query={row.query} key={row.cache_key}" for row in entries)
-    return _text_result(ctx, "\n".join(lines))
+    return text_result(ctx, "\n".join(lines))
 
 
 @artifact_app.command
@@ -124,14 +104,14 @@ def get(
     bundle, entry = load_search_artifact_bundle(root=ctx.root, run_id=run_id)
     if bundle is None:
         if entry is None:
-            return _text_result(ctx, f"No cached artifact found for run_id={run_id}", exit_code=2)
-        return _text_result(ctx, f"Cache decode failed for run_id={run_id}", exit_code=2)
+            return text_result(ctx, f"No cached artifact found for run_id={run_id}", exit_code=2)
+        return text_result(ctx, f"Cache decode failed for run_id={run_id}", exit_code=2)
 
     payload = _artifact_payload_for_kind(bundle, kind=kind)
     serialized = json.dumps(msgspec.to_builtins(payload), indent=2)
-    if _wants_json(ctx):
-        return _text_result(ctx, serialized, media_type="application/json")
-    return _text_result(ctx, serialized)
+    if wants_json(ctx):
+        return text_result(ctx, serialized, media_type="application/json")
+    return text_result(ctx, serialized)
 
 
 def _artifact_payload_for_kind(

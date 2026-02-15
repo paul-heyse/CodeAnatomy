@@ -11,11 +11,11 @@ from typing import Annotated
 from cyclopts import App, Parameter
 from rich.console import Console
 
-from tools.cq.cli_app.config import build_config_chain
 from tools.cq.cli_app.context import CliContext, CliContextOptions
-from tools.cq.cli_app.groups import (
+from tools.cq.cli_app.infrastructure import (
     admin_group,
     analysis_group,
+    build_config_chain,
     global_group,
     setup_group,
 )

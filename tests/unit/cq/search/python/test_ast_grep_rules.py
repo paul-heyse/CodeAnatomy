@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from tools.cq.search.python.ast_grep_rules import find_import_aliases
+from tools.cq.search.python.pipeline_support import find_import_aliases
 
 
 class _Node:

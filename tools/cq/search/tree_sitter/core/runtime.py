@@ -18,11 +18,12 @@ from tools.cq.search.tree_sitter.core.adaptive_runtime import (
     record_runtime_sample,
     runtime_snapshot,
 )
-from tools.cq.search.tree_sitter.core.autotune import (
+from tools.cq.search.tree_sitter.core.runtime_support import (
     QueryAutotunePlanV1,
+    apply_byte_window,
+    apply_point_window,
     build_autotune_plan,
 )
-from tools.cq.search.tree_sitter.core.windowing import apply_byte_window, apply_point_window
 
 if TYPE_CHECKING:
     from tree_sitter import Node, Query

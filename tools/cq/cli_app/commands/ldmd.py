@@ -9,10 +9,10 @@ from typing import Annotated
 import cyclopts
 from cyclopts import validators
 
-from tools.cq.cli_app.context import CliContext, CliResult, CliTextResult
-from tools.cq.cli_app.decorators import require_context, require_ctx
-from tools.cq.cli_app.groups import protocol_group
-from tools.cq.cli_app.types import LdmdSliceMode, OutputFormat
+from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.infrastructure import protocol_group, require_context, require_ctx
+from tools.cq.cli_app.protocol_output import text_result, wants_json
+from tools.cq.cli_app.types import LdmdSliceMode
 from tools.cq.ldmd.format import (
     LdmdParseError,
     build_index,
@@ -26,43 +26,6 @@ ldmd_app = cyclopts.App(
     help="LDMD progressive disclosure protocol",
     group=protocol_group,
 )
-
-
-def _text_result(
-    ctx: CliContext,
-    text: str,
-    *,
-    media_type: str = "text/plain",
-    exit_code: int = 0,
-) -> CliResult:
-    """Build a CLI text result handled by unified output pipeline.
-
-    Parameters
-    ----------
-    ctx
-        CLI context.
-    text
-        Text content to output.
-    media_type
-        MIME type of the content.
-    exit_code
-        Exit code for the result.
-
-    Returns:
-    -------
-    CliResult
-        Wrapped CLI result with text payload.
-    """
-    return CliResult(
-        result=CliTextResult(text=text, media_type=media_type),
-        context=ctx,
-        exit_code=exit_code,
-        filters=None,
-    )
-
-
-def _wants_json(ctx: CliContext) -> bool:
-    return ctx.output_format == OutputFormat.json
 
 
 @ldmd_app.command
@@ -89,13 +52,13 @@ def index(
     ctx = require_context(ctx)
     doc_path = Path(path)
     if not doc_path.exists():
-        return _text_result(ctx, f"Document not found: {path}", exit_code=2)
+        return text_result(ctx, f"Document not found: {path}", exit_code=2)
 
     content = doc_path.read_bytes()
     try:
         idx = build_index(content)
     except LdmdParseError as exc:
-        return _text_result(ctx, f"Failed to index document: {exc}", exit_code=2)
+        return text_result(ctx, f"Failed to index document: {exc}", exit_code=2)
 
     sections_json = [
         {
@@ -108,7 +71,7 @@ def index(
         for s in idx.sections
     ]
 
-    return _text_result(
+    return text_result(
         ctx,
         json.dumps(
             {
@@ -175,7 +138,7 @@ def get(
     ctx = require_context(ctx)
     doc_path = Path(path)
     if not doc_path.exists():
-        return _text_result(ctx, f"Document not found: {path}", exit_code=2)
+        return text_result(ctx, f"Document not found: {path}", exit_code=2)
 
     content = doc_path.read_bytes()
     try:
@@ -195,9 +158,9 @@ def get(
             limit_bytes=limit_bytes,
         )
     except LdmdParseError as exc:
-        return _text_result(ctx, f"Failed to extract section: {exc}", exit_code=2)
+        return text_result(ctx, f"Failed to extract section: {exc}", exit_code=2)
     extracted_text = slice_data.decode("utf-8", errors="replace")
-    if _wants_json(ctx):
+    if wants_json(ctx):
         payload = {
             "section_id": resolved_id,
             "mode": str(mode),
@@ -205,12 +168,12 @@ def get(
             "limit_bytes": limit_bytes,
             "content": extracted_text,
         }
-        return _text_result(
+        return text_result(
             ctx,
             json.dumps(payload, indent=2),
             media_type="application/json",
         )
-    return _text_result(ctx, extracted_text)
+    return text_result(ctx, extracted_text)
 
 
 @ldmd_app.command
@@ -240,16 +203,16 @@ def search(
     ctx = require_context(ctx)
     doc_path = Path(path)
     if not doc_path.exists():
-        return _text_result(ctx, f"Document not found: {path}", exit_code=2)
+        return text_result(ctx, f"Document not found: {path}", exit_code=2)
 
     content = doc_path.read_bytes()
     try:
         idx = build_index(content)
         matches = search_sections(content, idx, query=query)
     except LdmdParseError as exc:
-        return _text_result(ctx, f"Search failed: {exc}", exit_code=2)
+        return text_result(ctx, f"Search failed: {exc}", exit_code=2)
 
-    return _text_result(ctx, json.dumps(matches, indent=2), media_type="application/json")
+    return text_result(ctx, json.dumps(matches, indent=2), media_type="application/json")
 
 
 @ldmd_app.command
@@ -279,15 +242,15 @@ def neighbors(
     ctx = require_context(ctx)
     doc_path = Path(path)
     if not doc_path.exists():
-        return _text_result(ctx, f"Document not found: {path}", exit_code=2)
+        return text_result(ctx, f"Document not found: {path}", exit_code=2)
 
     content = doc_path.read_bytes()
     try:
         idx = build_index(content)
         nav = get_neighbors(idx, section_id=section_id)
     except LdmdParseError as exc:
-        return _text_result(ctx, f"Navigation failed: {exc}", exit_code=2)
-    if _wants_json(ctx):
+        return text_result(ctx, f"Navigation failed: {exc}", exit_code=2)
+    if wants_json(ctx):
         payload = {
             "section_id": nav.get("section_id"),
             "neighbors": {
@@ -295,12 +258,12 @@ def neighbors(
                 "next": nav.get("next"),
             },
         }
-        return _text_result(
+        return text_result(
             ctx,
             json.dumps(payload, indent=2),
             media_type="application/json",
         )
-    return _text_result(ctx, json.dumps(nav, indent=2), media_type="application/json")
+    return text_result(ctx, json.dumps(nav, indent=2), media_type="application/json")
 
 
 def get_app() -> cyclopts.App:

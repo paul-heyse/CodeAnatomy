@@ -8,8 +8,7 @@ from typing import Annotated, Any
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext
-from tools.cq.cli_app.decorators import require_context, require_ctx
-from tools.cq.cli_app.dispatch import dispatch_bound_command
+from tools.cq.cli_app.infrastructure import dispatch_bound_command, require_context, require_ctx
 
 
 def _dispatch_with_ctx(

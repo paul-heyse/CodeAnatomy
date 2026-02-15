@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from tools.cq.search.tree_sitter.query.drift_diff import diff_schema, has_breaking_changes
+from tools.cq.search.tree_sitter.query.drift import diff_schema, has_breaking_changes
 
 
 def test_diff_schema_reports_added_and_removed_members() -> None:

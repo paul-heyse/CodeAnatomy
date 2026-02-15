@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from tools.cq.search.pipeline import assembly as assembly_module
-from tools.cq.search.pipeline.models import SearchConfig
+from tools.cq.search.pipeline import orchestration as assembly_module
+from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search import SearchResultAssembly
 
 

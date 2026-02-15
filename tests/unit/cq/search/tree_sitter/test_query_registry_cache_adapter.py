@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from tools.cq.core.cache import diskcache_backend
-from tools.cq.search.tree_sitter.query.cache_adapter import query_registry_cache
+from tools.cq.search.tree_sitter.query.support import query_registry_cache
 
 
 class _CacheWithGetSet:

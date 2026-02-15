@@ -21,8 +21,8 @@ from tools.cq.core.schema import (
 )
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.macros.contracts import MacroRequestBase
-from tools.cq.macros.scoring_utils import macro_scoring_details
-from tools.cq.macros.target_resolution import resolve_target_files
+from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
+from tools.cq.macros.shared import macro_scoring_details, resolve_target_files
 
 _MAX_FILES_ANALYZED = 50
 _MAX_SCOPES_DISPLAY = 30
@@ -240,32 +240,6 @@ def _append_scope_evidence(
         )
 
 
-def _apply_rust_fallback(
-    result: CqResult,
-    root: Path,
-    target: str,
-) -> CqResult:
-    """Append Rust fallback findings and multilang summary to a scopes result.
-
-    Args:
-        result: Existing Python-only CqResult.
-        root: Repository root path.
-        target: Target symbol/file for Rust search.
-
-    Returns:
-        The mutated result with Rust fallback data merged in.
-    """
-    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
-
-    return apply_rust_macro_fallback(
-        result=result,
-        root=root,
-        pattern=target,
-        macro_name="scopes",
-        query=target,
-    )
-
-
 def cmd_scopes(request: ScopeRequest) -> CqResult:
     """Analyze scope capture for closures and nested functions.
 
@@ -357,4 +331,12 @@ def cmd_scopes(request: ScopeRequest) -> CqResult:
     _append_scope_section(result, all_scopes, scoring_details)
     _append_scope_evidence(result, all_scopes, scoring_details)
 
-    return _apply_rust_fallback(result, request.root, request.target)
+    return apply_rust_fallback_policy(
+        result,
+        root=request.root,
+        policy=RustFallbackPolicyV1(
+            macro_name="scopes",
+            pattern=request.target,
+            query=request.target,
+        ),
+    )

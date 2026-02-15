@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tools.cq.core.uuid_contracts import UuidIdentityContractV1
+from tools.cq.core.contracts import UuidIdentityContractV1
 
 
 def test_uuid_identity_contract_defaults() -> None:

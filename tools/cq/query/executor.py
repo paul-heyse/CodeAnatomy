@@ -52,7 +52,7 @@ from tools.cq.core.cache.telemetry import (
     record_cache_get,
     record_cache_set,
 )
-from tools.cq.core.contracts import contract_to_builtins
+from tools.cq.core.contracts import SummaryBuildRequest, contract_to_builtins
 from tools.cq.core.locations import SourceSpan
 from tools.cq.core.multilang_orchestrator import (
     execute_by_language_scope,
@@ -61,7 +61,8 @@ from tools.cq.core.multilang_summary import (
     build_multilang_summary,
     partition_stats_from_result_summary,
 )
-from tools.cq.core.requests import SummaryBuildRequest
+from tools.cq.core.pathing import normalize_repo_relative_path
+from tools.cq.core.result_factory import build_error_result
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -377,9 +378,15 @@ def _finalize_single_scope_summary(ctx: QueryExecutionContext, result: CqResult)
 
 
 def _empty_result(ctx: QueryExecutionContext, message: str) -> CqResult:
-    result = mk_result(_build_runmeta(ctx))
+    result = build_error_result(
+        macro="q",
+        root=ctx.root,
+        argv=ctx.argv,
+        tc=ctx.tc,
+        started_ms=ctx.started_ms,
+        error=message,
+    )
     result.summary.update(_summary_common_for_context(ctx))
-    result.summary["error"] = message
     _finalize_single_scope_summary(ctx, result)
     return assign_result_finding_ids(result)
 
@@ -533,7 +540,7 @@ def _build_entity_fragment_context(
 def _entity_fragment_entries(fragment_ctx: _EntityFragmentContext) -> list[FragmentEntryV1]:
     entries: list[FragmentEntryV1] = []
     for file_path in fragment_ctx.files:
-        rel_path = _normalize_match_file(str(file_path), fragment_ctx.root)
+        rel_path = normalize_repo_relative_path(str(file_path), root=fragment_ctx.root)
         content_hash = file_content_hash(file_path).digest
         entries.append(
             FragmentEntryV1(
@@ -577,7 +584,7 @@ def _assemble_entity_records(
 ) -> list[SgRecord]:
     ordered_records: list[SgRecord] = []
     for file_path in fragment_ctx.files:
-        rel_path = _normalize_match_file(str(file_path), fragment_ctx.root)
+        rel_path = normalize_repo_relative_path(str(file_path), root=fragment_ctx.root)
         ordered_records.extend(records_by_rel.get(rel_path, []))
     ordered_records.sort(key=_record_sort_key)
     return ordered_records
@@ -1356,7 +1363,7 @@ def _build_pattern_fragment_context(
 def _pattern_fragment_entries(fragment_ctx: _PatternFragmentContext) -> list[FragmentEntryV1]:
     entries: list[FragmentEntryV1] = []
     for file_path in fragment_ctx.paths:
-        rel_path = _normalize_match_file(str(file_path), fragment_ctx.root)
+        rel_path = normalize_repo_relative_path(str(file_path), root=fragment_ctx.root)
         content_hash = file_content_hash(file_path).digest
         entries.append(
             FragmentEntryV1(
@@ -1454,7 +1461,7 @@ def _assemble_pattern_output(
     records: list[SgRecord] = []
     raw_matches: list[dict[str, object]] = []
     for file_path in paths:
-        rel_path = _normalize_match_file(str(file_path), root)
+        rel_path = normalize_repo_relative_path(str(file_path), root=root)
         findings.extend(findings_by_rel.get(rel_path, []))
         records.extend(records_by_rel.get(rel_path, []))
         raw_matches.extend(raw_by_rel.get(rel_path, []))
@@ -1481,7 +1488,7 @@ def _process_ast_grep_file(
 
     sg_root = SgRoot(src, ctx.lang)
     node = sg_root.root()
-    rel_path = _normalize_match_file(str(file_path), ctx.root)
+    rel_path = normalize_repo_relative_path(str(file_path), root=ctx.root)
 
     for idx, rule in enumerate(ctx.rules):
         rule_ctx = AstGrepRuleContext(
@@ -1716,7 +1723,7 @@ def _collect_ast_grep_match_spans(
             continue
         sg_root = SgRoot(src, lang)
         node = sg_root.root()
-        rel_path = _normalize_match_file(str(file_path), root)
+        rel_path = normalize_repo_relative_path(str(file_path), root=root)
         for rule in rules:
             for match in _iter_rule_matches_for_spans(node, rule):
                 range_obj = match.range()
@@ -1807,23 +1814,6 @@ def _record_key(record: SgRecord) -> tuple[str, int, int, int, int]:
         record.end_line,
         record.end_col,
     )
-
-
-def _normalize_match_file(file_path: str, root: Path) -> str:
-    """Normalize match paths to repo-relative POSIX strings.
-
-    Returns:
-    -------
-    str
-        Repository-relative POSIX path.
-    """
-    path = Path(file_path)
-    if path.is_absolute():
-        try:
-            return path.relative_to(root).as_posix()
-        except ValueError:
-            return file_path
-    return path.as_posix()
 
 
 def _build_def_evidence_map(

@@ -7,7 +7,7 @@ from io import StringIO
 from rich.console import Console
 from tools.cq.cli_app.app import app
 from tools.cq.cli_app.commands.neighborhood import neighborhood_app
-from tools.cq.cli_app.groups import analysis_group
+from tools.cq.cli_app.infrastructure import analysis_group
 
 
 def test_lazy_command_resolution() -> None:

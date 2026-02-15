@@ -12,11 +12,11 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     PointV1,
     TreeSitterInputEditV1,
 )
-from tools.cq.search.tree_sitter.core.parser_controls import (
+from tools.cq.search.tree_sitter.core.infrastructure import (
     apply_parser_controls,
+    parse_streaming_source,
     parser_controls_from_env,
 )
-from tools.cq.search.tree_sitter.core.stream_source import parse_streaming_source
 
 if TYPE_CHECKING:
     from tree_sitter import Parser, Tree

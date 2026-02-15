@@ -19,11 +19,11 @@ from tools.cq.core.snb_schema import (
     SemanticNodeRefV1,
 )
 from tools.cq.core.structs import CqStruct
+from tools.cq.neighborhood.contracts import (
+    TreeSitterNeighborhoodCollectRequest,
+)
 from tools.cq.neighborhood.tree_sitter_collector import (
     collect_tree_sitter_neighborhood,
-)
-from tools.cq.neighborhood.tree_sitter_contracts import (
-    TreeSitterNeighborhoodCollectRequest,
 )
 
 

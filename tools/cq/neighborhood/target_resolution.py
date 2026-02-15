@@ -8,21 +8,10 @@ from pathlib import Path
 
 from tools.cq.core.snb_schema import DegradeEventV1
 from tools.cq.core.structs import CqStruct
+from tools.cq.core.target_specs import TargetSpecV1
 
-_TARGET_PARTS_WITH_COL = 3
-_TARGET_PARTS_WITH_LINE = 2
 _RG_ROW_MIN_PARTS = 2
 _RG_ROW_WITH_TEXT_PARTS = 3
-
-
-class TargetSpec(CqStruct, frozen=True):
-    """Parsed neighborhood target spec."""
-
-    raw: str
-    target_name: str | None = None
-    target_file: str | None = None
-    target_line: int | None = None
-    target_col: int | None = None
 
 
 class ResolvedTarget(CqStruct, frozen=True):
@@ -38,43 +27,8 @@ class ResolvedTarget(CqStruct, frozen=True):
     degrade_events: tuple[DegradeEventV1, ...] = ()
 
 
-def parse_target_spec(target: str) -> TargetSpec:
-    """Parse target string into target spec.
-
-    Returns:
-    -------
-    TargetSpec
-        Parsed file/line/column or symbol target metadata.
-    """
-    text = target.strip()
-    if not text:
-        return TargetSpec(raw=target)
-
-    parts = text.split(":")
-    if len(parts) >= _TARGET_PARTS_WITH_COL and parts[-1].isdigit() and parts[-2].isdigit():
-        file_part = ":".join(parts[:-2]).strip()
-        if file_part:
-            return TargetSpec(
-                raw=target,
-                target_file=file_part,
-                target_line=max(1, int(parts[-2])),
-                target_col=max(0, int(parts[-1])),
-            )
-
-    if len(parts) >= _TARGET_PARTS_WITH_LINE and parts[-1].isdigit():
-        file_part = ":".join(parts[:-1]).strip()
-        if file_part:
-            return TargetSpec(
-                raw=target,
-                target_file=file_part,
-                target_line=max(1, int(parts[-1])),
-            )
-
-    return TargetSpec(raw=target, target_name=text)
-
-
 def resolve_target(
-    spec: TargetSpec,
+    spec: TargetSpecV1,
     *,
     root: Path,
     language: str,
@@ -264,7 +218,5 @@ def _to_uri(root: Path, relative_path: str) -> str | None:
 
 __all__ = [
     "ResolvedTarget",
-    "TargetSpec",
-    "parse_target_spec",
     "resolve_target",
 ]

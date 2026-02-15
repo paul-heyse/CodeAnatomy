@@ -25,9 +25,8 @@ from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.graph_utils import find_sccs
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase
-from tools.cq.macros.scan_utils import iter_files
-from tools.cq.macros.scope_filters import scope_filter_applied
-from tools.cq.macros.scoring_utils import macro_scoring_details
+from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
+from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
 
 _STDLIB_PREFIXES: set[str] = {
     "os",
@@ -572,33 +571,6 @@ def _build_imports_result(
     return result
 
 
-def _apply_rust_fallback(
-    result: CqResult,
-    root: Path,
-    module: str | None,
-) -> CqResult:
-    """Append Rust fallback findings and multilang summary to an imports result.
-
-    Args:
-        result: Existing Python-only CqResult.
-        root: Repository root path.
-        module: Optional module filter used for Rust search pattern.
-
-    Returns:
-        The mutated result with Rust fallback data merged in.
-    """
-    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
-
-    pattern = module if module else "use "
-    return apply_rust_macro_fallback(
-        result=result,
-        root=root,
-        pattern=pattern,
-        macro_name="imports",
-        query=module,
-    )
-
-
 def cmd_imports(request: ImportRequest) -> CqResult:
     """Analyze import structure and optionally detect cycles.
 
@@ -615,4 +587,13 @@ def cmd_imports(request: ImportRequest) -> CqResult:
     started = ms()
     ctx = _prepare_import_context(request)
     result = _build_imports_result(ctx, started_ms=started)
-    return _apply_rust_fallback(result, request.root, request.module)
+    pattern = request.module if request.module else "use "
+    return apply_rust_fallback_policy(
+        result,
+        root=request.root,
+        policy=RustFallbackPolicyV1(
+            macro_name="imports",
+            pattern=pattern,
+            query=request.module,
+        ),
+    )

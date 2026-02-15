@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.multilang_summary import build_multilang_summary
-from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.search._shared.search_contracts import (
     CrossLanguageDiagnostic,
     EnrichmentTelemetry,

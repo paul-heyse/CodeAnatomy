@@ -6,20 +6,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING
 
 from tools.cq.core.bootstrap import resolve_runtime_services
 from tools.cq.core.merge import merge_step_results
+from tools.cq.core.request_factory import RequestContextV1, RequestFactory
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms
-from tools.cq.core.services import CallsServiceRequest
-from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
-from tools.cq.macros.exceptions import ExceptionsRequest, cmd_exceptions
-from tools.cq.macros.impact import ImpactRequest, cmd_impact
-from tools.cq.macros.imports import ImportRequest, cmd_imports
-from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
-from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
-from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
+from tools.cq.core.target_specs import BundleTargetKind, parse_target_spec
+from tools.cq.macros.bytecode import cmd_bytecode_surface
+from tools.cq.macros.exceptions import cmd_exceptions
+from tools.cq.macros.impact import cmd_impact
+from tools.cq.macros.imports import cmd_imports
+from tools.cq.macros.scopes import cmd_scopes
+from tools.cq.macros.side_effects import cmd_side_effects
+from tools.cq.macros.sig_impact import cmd_sig_impact
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
 from tools.cq.query.ir import Scope
 from tools.cq.query.parser import parse_query
@@ -28,14 +29,12 @@ from tools.cq.query.planner import compile_query
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
 
-TargetKind = Literal["function", "class", "method", "module", "path"]
-
 
 @dataclass(frozen=True)
 class TargetSpec:
     """Target specification for report bundles."""
 
-    kind: TargetKind
+    kind: BundleTargetKind
     value: str
 
 
@@ -73,19 +72,11 @@ class BundleContext:
     bytecode_show: str | None = None
 
 
-@dataclass(frozen=True)
-class BundleStepResult:
-    """Result for a bundle step with scope filtering behavior."""
-
-    result: CqResult
-    apply_scope: bool = True
-
-
-def parse_target_spec(value: str) -> TargetSpec:
-    """Parse a target spec string like 'function:foo'.
+def parse_bundle_target_spec(value: str) -> TargetSpec:
+    """Parse a bundle target spec string like ``function:foo``.
 
     Args:
-        value: Target specification string in `kind:value` form.
+        value: Target specification string in ``kind:value`` form.
 
     Returns:
         TargetSpec: Parsed target spec payload.
@@ -93,20 +84,19 @@ def parse_target_spec(value: str) -> TargetSpec:
     Raises:
         ValueError: If the target spec is malformed or unsupported.
     """
-    if ":" not in value:
+    parsed = parse_target_spec(value)
+    if parsed.bundle_kind is None or parsed.bundle_value is None:
         msg = "Target spec must be in the form kind:value"
         raise ValueError(msg)
-    kind, target_value = value.split(":", maxsplit=1)
-    kind = kind.strip().lower()
-    target_value = target_value.strip()
-    if kind not in {"function", "class", "method", "module", "path"}:
-        msg = f"Unsupported target kind: {kind}"
-        raise ValueError(msg)
-    if not target_value:
-        msg = "Target value cannot be empty"
-        raise ValueError(msg)
-    kind_literal = cast("TargetKind", kind)
-    return TargetSpec(kind=kind_literal, value=target_value)
+    return TargetSpec(kind=parsed.bundle_kind, value=parsed.bundle_value)
+
+
+@dataclass(frozen=True)
+class BundleStepResult:
+    """Result for a bundle step with scope filtering behavior."""
+
+    result: CqResult
+    apply_scope: bool = True
 
 
 def run_bundle(preset: str, ctx: BundleContext) -> CqResult:
@@ -270,51 +260,40 @@ def _bundle_steps(preset: str, ctx: BundleContext) -> list[BundleStepResult]:
 def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
     target = ctx.target
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
     services = resolve_runtime_services(ctx.root)
 
     if target.kind in {"function", "method"}:
+        request = RequestFactory.calls(request_ctx, function_name=target.value)
         results.append(
             BundleStepResult(
-                result=services.calls.execute(
-                    CallsServiceRequest(
-                        root=ctx.root,
-                        function_name=target.value,
-                        tc=ctx.tc,
-                        argv=ctx.argv,
-                    )
-                ),
+                result=services.calls.execute(request),
                 apply_scope=False,
             )
         )
         if ctx.param:
+            request = RequestFactory.impact(
+                request_ctx,
+                function_name=target.value,
+                param_name=ctx.param,
+            )
             results.append(
                 BundleStepResult(
-                    result=cmd_impact(
-                        ImpactRequest(
-                            tc=ctx.tc,
-                            root=ctx.root,
-                            argv=ctx.argv,
-                            function_name=target.value,
-                            param_name=ctx.param,
-                        )
-                    ),
+                    result=cmd_impact(request),
                     apply_scope=False,
                 )
             )
         else:
             results.append(BundleStepResult(result=_skip_result(ctx, "impact", "missing --param")))
         if ctx.signature:
+            request = RequestFactory.sig_impact(
+                request_ctx,
+                symbol=target.value,
+                to=ctx.signature,
+            )
             results.append(
                 BundleStepResult(
-                    result=cmd_sig_impact(
-                        SigImpactRequest(
-                            tc=ctx.tc,
-                            root=ctx.root,
-                            argv=ctx.argv,
-                            symbol=target.value,
-                            to=ctx.signature,
-                        )
-                    ),
+                    result=cmd_sig_impact(request),
                     apply_scope=False,
                 )
             )
@@ -332,95 +311,59 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
         )
 
     module_filter = target.value if target.kind == "module" else None
-    results.append(
-        BundleStepResult(
-            result=cmd_imports(
-                ImportRequest(
-                    tc=ctx.tc,
-                    root=ctx.root,
-                    argv=ctx.argv,
-                    module=module_filter,
-                )
-            )
-        )
-    )
+    request = RequestFactory.imports_cmd(request_ctx, module=module_filter)
+    results.append(BundleStepResult(result=cmd_imports(request)))
+
     function_filter = target.value if target.kind in {"function", "method"} else None
-    results.append(
-        BundleStepResult(
-            result=cmd_exceptions(
-                ExceptionsRequest(
-                    tc=ctx.tc,
-                    root=ctx.root,
-                    argv=ctx.argv,
-                    function=function_filter,
-                )
-            )
-        )
-    )
-    results.append(
-        BundleStepResult(
-            result=cmd_side_effects(SideEffectsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv))
-        )
-    )
+    request = RequestFactory.exceptions(request_ctx, function=function_filter)
+    results.append(BundleStepResult(result=cmd_exceptions(request)))
+
+    request = RequestFactory.side_effects(request_ctx)
+    results.append(BundleStepResult(result=cmd_side_effects(request)))
+
     return results
 
 
 def _run_safety_reliability(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
     function_filter = ctx.target.value if ctx.target.kind in {"function", "method"} else None
-    results.append(
-        BundleStepResult(
-            result=cmd_exceptions(
-                ExceptionsRequest(
-                    tc=ctx.tc,
-                    root=ctx.root,
-                    argv=ctx.argv,
-                    function=function_filter,
-                )
-            )
-        )
-    )
-    results.append(
-        BundleStepResult(
-            result=cmd_side_effects(SideEffectsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv))
-        )
-    )
+
+    request = RequestFactory.exceptions(request_ctx, function=function_filter)
+    results.append(BundleStepResult(result=cmd_exceptions(request)))
+
+    request = RequestFactory.side_effects(request_ctx)
+    results.append(BundleStepResult(result=cmd_side_effects(request)))
+
     return results
 
 
 def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
     target = ctx.target
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
     services = resolve_runtime_services(ctx.root)
 
     if target.kind in {"function", "method"}:
         if ctx.param:
+            request = RequestFactory.impact(
+                request_ctx,
+                function_name=target.value,
+                param_name=ctx.param,
+            )
             results.append(
                 BundleStepResult(
-                    result=cmd_impact(
-                        ImpactRequest(
-                            tc=ctx.tc,
-                            root=ctx.root,
-                            argv=ctx.argv,
-                            function_name=target.value,
-                            param_name=ctx.param,
-                        )
-                    ),
+                    result=cmd_impact(request),
                     apply_scope=False,
                 )
             )
         else:
             results.append(BundleStepResult(result=_skip_result(ctx, "impact", "missing --param")))
+
+        request = RequestFactory.calls(request_ctx, function_name=target.value)
         results.append(
             BundleStepResult(
-                result=services.calls.execute(
-                    CallsServiceRequest(
-                        root=ctx.root,
-                        function_name=target.value,
-                        tc=ctx.tc,
-                        argv=ctx.argv,
-                    )
-                ),
+                result=services.calls.execute(request),
                 apply_scope=False,
             )
         )
@@ -432,68 +375,38 @@ def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
             BundleStepResult(result=_skip_result(ctx, "calls", "requires function target"))
         )
 
+    request = RequestFactory.bytecode_surface(
+        request_ctx,
+        target=target.value,
+        show=ctx.bytecode_show or "globals,attrs,constants",
+    )
     results.append(
         BundleStepResult(
-            result=cmd_bytecode_surface(
-                BytecodeSurfaceRequest(
-                    tc=ctx.tc,
-                    root=ctx.root,
-                    argv=ctx.argv,
-                    target=target.value,
-                    show=ctx.bytecode_show or "globals,attrs,constants",
-                )
-            ),
+            result=cmd_bytecode_surface(request),
             apply_scope=False,
         )
     )
-    results.append(
-        BundleStepResult(
-            result=cmd_scopes(
-                ScopeRequest(
-                    tc=ctx.tc,
-                    root=ctx.root,
-                    argv=ctx.argv,
-                    target=target.value,
-                )
-            )
-        )
-    )
+
+    request = RequestFactory.scopes(request_ctx, target=target.value)
+    results.append(BundleStepResult(result=cmd_scopes(request)))
+
     return results
 
 
 def _run_dependency_health(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
     module_filter = ctx.target.value if ctx.target.kind == "module" else None
-    results.append(
-        BundleStepResult(
-            result=cmd_imports(
-                ImportRequest(
-                    tc=ctx.tc,
-                    root=ctx.root,
-                    argv=ctx.argv,
-                    cycles=True,
-                    module=module_filter,
-                )
-            )
-        )
-    )
-    results.append(
-        BundleStepResult(
-            result=cmd_side_effects(SideEffectsRequest(tc=ctx.tc, root=ctx.root, argv=ctx.argv))
-        )
-    )
-    results.append(
-        BundleStepResult(
-            result=cmd_scopes(
-                ScopeRequest(
-                    tc=ctx.tc,
-                    root=ctx.root,
-                    argv=ctx.argv,
-                    target=ctx.target.value,
-                )
-            )
-        )
-    )
+
+    request = RequestFactory.imports_cmd(request_ctx, cycles=True, module=module_filter)
+    results.append(BundleStepResult(result=cmd_imports(request)))
+
+    request = RequestFactory.side_effects(request_ctx)
+    results.append(BundleStepResult(result=cmd_side_effects(request)))
+
+    request = RequestFactory.scopes(request_ctx, target=ctx.target.value)
+    results.append(BundleStepResult(result=cmd_scopes(request)))
+
     return results
 
 

@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 from tools.cq.search.pipeline import smart_search as enrichment_module
-from tools.cq.search.pipeline.models import SearchConfig
+from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search import RawMatch
 
 

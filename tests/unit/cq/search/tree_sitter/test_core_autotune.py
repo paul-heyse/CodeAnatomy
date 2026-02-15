@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tools.cq.search.tree_sitter.contracts.core_models import AdaptiveRuntimeSnapshotV1
-from tools.cq.search.tree_sitter.core.autotune import build_autotune_plan
+from tools.cq.search.tree_sitter.core.runtime_support import build_autotune_plan
 
 
 def test_build_autotune_plan_scales_budget_and_split_target() -> None:

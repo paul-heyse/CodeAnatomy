@@ -7,9 +7,10 @@ from typing import Annotated
 
 from cyclopts import Parameter
 
-from tools.cq.cli_app.context import CliContext, CliResult, CliTextResult
-from tools.cq.cli_app.decorators import require_context, require_ctx
-from tools.cq.cli_app.types import OutputFormat, SchemaKind
+from tools.cq.cli_app.context import CliContext, CliResult
+from tools.cq.cli_app.infrastructure import require_context, require_ctx
+from tools.cq.cli_app.protocol_output import json_result, text_result, wants_json
+from tools.cq.cli_app.types import SchemaKind
 from tools.cq.core.schema_export import cq_result_schema, cq_schema_components, query_schema
 
 
@@ -19,12 +20,18 @@ def _emit_payload(
     *,
     text_fallback: str | None = None,
 ) -> CliResult:
-    if ctx.output_format == OutputFormat.json:
-        return CliResult(
-            result=CliTextResult(text=json.dumps(payload, indent=2), media_type="application/json"),
-            context=ctx,
-            filters=None,
-        )
+    """Emit payload as JSON or text based on output format.
+
+    Args:
+        ctx: CLI context with output format preference.
+        payload: Object to serialize.
+        text_fallback: Optional text fallback for non-JSON output.
+
+    Returns:
+        CliResult: Wrapped CLI result.
+    """
+    if wants_json(ctx):
+        return json_result(ctx, payload)
 
     if text_fallback is None and isinstance(payload, dict):
         message = payload.get("message")
@@ -33,11 +40,7 @@ def _emit_payload(
     if text_fallback is None:
         text_fallback = json.dumps(payload, indent=2)
 
-    return CliResult(
-        result=CliTextResult(text=text_fallback, media_type="text/plain"),
-        context=ctx,
-        filters=None,
-    )
+    return text_result(ctx, text_fallback)
 
 
 @require_ctx

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tools.cq.search.tree_sitter.tags.runtime import build_tag_events
+from tools.cq.search.tree_sitter.tags import build_tag_events
 
 
 @dataclass(frozen=True)

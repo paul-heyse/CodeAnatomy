@@ -17,14 +17,14 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterQueryHitV1,
 )
 from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_python_lane_payload
-from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1, load_pack_rules
+from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
 from tools.cq.search.tree_sitter.core.change_windows import (
     contains_window,
     ensure_query_windows,
     windows_from_changed_ranges,
 )
+from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.core.query_pack_executor import execute_pack_rows
-from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
 from tools.cq.search.tree_sitter.python_lane.locals_index import (
     build_locals_index,
@@ -34,17 +34,17 @@ from tools.cq.search.tree_sitter.python_lane.runtime import (
     is_tree_sitter_python_available,
     parse_python_tree_with_ranges,
 )
+from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
     make_query_predicate,
 )
 from tools.cq.search.tree_sitter.query.registry import load_query_pack_sources
-from tools.cq.search.tree_sitter.query.specialization import specialize_query
-from tools.cq.search.tree_sitter.structural.diagnostic_export import collect_diagnostic_rows
+from tools.cq.search.tree_sitter.structural.exports import collect_diagnostic_rows
 
 if TYPE_CHECKING:
-    from tree_sitter import Language, Node, Query
+    from tree_sitter import Language, Node
 
 try:
     import tree_sitter_python as _tree_sitter_python
@@ -66,34 +66,6 @@ def _python_language() -> Language:
         msg = "tree_sitter_python language bindings are unavailable"
         raise RuntimeError(msg)
     return _TreeSitterLanguage(_tree_sitter_python.language())
-
-
-@lru_cache(maxsize=64)
-def _compile_query(
-    pack_name: str,
-    source: str,
-    *,
-    request_surface: str = "artifact",
-) -> Query:
-    if _TreeSitterQuery is None:
-        msg = "tree_sitter query bindings are unavailable"
-        raise RuntimeError(msg)
-    _ = pack_name
-    query = _TreeSitterQuery(_python_language(), source)
-    rules = load_pack_rules("python")
-    pattern_count = int(getattr(query, "pattern_count", 0))
-    for pattern_idx in range(pattern_count):
-        if rules.require_rooted and not bool(query.is_pattern_rooted(pattern_idx)):
-            msg = f"python query pattern not rooted: {pattern_idx}"
-            raise ValueError(msg)
-        if rules.forbid_non_local and bool(query.is_pattern_non_local(pattern_idx)):
-            msg = f"python query pattern non-local: {pattern_idx}"
-            raise ValueError(msg)
-    return specialize_query(query, request_surface=request_surface)
-
-
-def _node_text(node: Node, source_bytes: bytes) -> str:
-    return _ts_node_text(node, source_bytes)
 
 
 def _lift_anchor(node: Node) -> Node:
@@ -120,7 +92,7 @@ def _anchor_call_target(anchor: Node, source_bytes: bytes) -> str | None:
         if current.type == "call":
             function_node = current.child_by_field_name("function")
             if function_node is not None:
-                text = _node_text(function_node, source_bytes)
+                text = node_text(function_node, source_bytes)
                 if text:
                     return text
         if current.type in _STOP_CONTEXT_KINDS or current.parent is None:
@@ -139,7 +111,7 @@ def _unique_text(
     seen: OrderedDict[str, None] = OrderedDict()
     for capture_name in capture_names:
         for node in captures.get(capture_name, []):
-            text = _node_text(node, source_bytes)
+            text = node_text(node, source_bytes)
             if not text or text in seen:
                 continue
             seen[text] = None
@@ -157,7 +129,7 @@ def _find_enclosing(anchor: Node, source_bytes: bytes, kind: str) -> str | None:
         name = current.child_by_field_name("name")
         if name is None:
             return None
-        text = _node_text(name, source_bytes)
+        text = node_text(name, source_bytes)
         if text:
             return text
     return None
@@ -182,9 +154,10 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
             source.source,
             build_pack_plan(
                 pack_name=source.pack_name,
-                query=_compile_query(
-                    source.pack_name,
-                    source.source,
+                query=compile_query(
+                    language="python",
+                    pack_name=source.pack_name,
+                    source=source.source,
                     request_surface="artifact",
                 ),
                 query_text=source.source,
@@ -241,7 +214,12 @@ def _collect_query_pack_captures(
     telemetry: dict[str, object] = {}
     for pack_name, query_source in _pack_sources():
         try:
-            query = _compile_query(pack_name, query_source, request_surface="artifact")
+            query = compile_query(
+                language="python",
+                pack_name=pack_name,
+                source=query_source,
+                request_surface="artifact",
+            )
             predicate_callback = (
                 make_query_predicate(source_bytes=source_bytes)
                 if has_custom_predicates(query_source)

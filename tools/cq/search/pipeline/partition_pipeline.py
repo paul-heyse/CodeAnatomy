@@ -36,11 +36,11 @@ from tools.cq.core.contracts import contract_to_builtins, require_mapping
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.query.language import QueryLanguage, constrain_include_globs_for_language
 from tools.cq.search.pipeline.classifier import QueryMode
-from tools.cq.search.pipeline.partition_contracts import SearchPartitionPlanV1
-from tools.cq.search.tree_sitter.core.parallel import run_file_lanes_parallel
+from tools.cq.search.pipeline.contracts import SearchPartitionPlanV1
+from tools.cq.search.tree_sitter.core.infrastructure import run_file_lanes_parallel
 
 if TYPE_CHECKING:
-    from tools.cq.search.pipeline.models import SmartSearchContext
+    from tools.cq.search.pipeline.contracts import SmartSearchContext
 
 
 @dataclass(frozen=True, slots=True)

@@ -18,6 +18,7 @@ import msgspec
 
 from tools.cq.core.cache import maybe_evict_run_cache_tag
 from tools.cq.core.definition_parser import extract_symbol_name
+from tools.cq.core.python_ast_utils import get_call_name, safe_unparse
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import (
@@ -41,6 +42,7 @@ from tools.cq.macros.calls_target import (
     attach_target_metadata,
     infer_target_language,
 )
+from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
 from tools.cq.query.sg_parser import SgRecord, group_records_by_file, list_scan_files, sg_scan
 from tools.cq.search.pipeline.profiles import INTERACTIVE
 from tools.cq.search.rg.adapter import find_call_candidates, find_def_lines, find_files_with_pattern
@@ -247,13 +249,6 @@ def _get_containing_function(tree: ast.AST, lineno: int) -> str:
     return "<module>"
 
 
-def _safe_unparse(expr: ast.AST, *, default: str) -> str:
-    try:
-        return ast.unparse(expr)
-    except (ValueError, TypeError):
-        return default
-
-
 def _truncate_text(text: str, *, limit: int, trim: int) -> str:
     if len(text) <= limit:
         return text
@@ -262,15 +257,15 @@ def _truncate_text(text: str, *, limit: int, trim: int) -> str:
 
 def _preview_arg(arg: ast.expr) -> str:
     if isinstance(arg, ast.Starred):
-        return f"*{_safe_unparse(arg.value, default='...')}"
-    text = _safe_unparse(arg, default="?")
+        return f"*{safe_unparse(arg.value, default='...')}"
+    text = safe_unparse(arg, default="?")
     return _truncate_text(text, limit=_ARG_TEXT_LIMIT, trim=_ARG_TEXT_TRIM)
 
 
 def _preview_kwarg(kw: ast.keyword) -> str:
     if kw.arg is None:
-        return f"**{_safe_unparse(kw.value, default='...')}"
-    val = _safe_unparse(kw.value, default="?")
+        return f"**{safe_unparse(kw.value, default='...')}"
+    val = safe_unparse(kw.value, default="?")
     val = _truncate_text(val, limit=_KW_TEXT_LIMIT, trim=_KW_TEXT_TRIM)
     return f"{kw.arg}={val}"
 
@@ -342,33 +337,6 @@ def _matches_target_expr(func: ast.expr, target_name: str) -> bool:
             return func.value.id == parts[-2]
         return func.attr == parts[-1]
     return False
-
-
-def _get_call_name(func: ast.expr) -> tuple[str, bool, str | None]:
-    """Extract call name and determine if method call.
-
-    Returns:
-    -------
-    tuple[str, bool, str | None]
-        (name, is_method, receiver_name) for the call.
-    """
-    if isinstance(func, ast.Name):
-        return (func.id, False, None)
-    if isinstance(func, ast.Attribute):
-        receiver = func.value
-        method = func.attr
-        if isinstance(receiver, ast.Name):
-            receiver_name = receiver.id
-            if receiver_name in {"self", "cls"}:
-                return (method, True, receiver_name)
-            return (f"{receiver_name}.{method}", True, receiver_name)
-        full = _safe_unparse(func, default=method)
-        parts = full.rsplit(".", 1)
-        if len(parts) == _MIN_QUAL_PARTS:
-            return (parts[1], True, parts[0])
-        return (full, True, None)
-    callee = _safe_unparse(func, default="<unknown>")
-    return (callee, False, None)
 
 
 def _build_call_index(tree: ast.AST) -> dict[tuple[int, int], ast.Call]:
@@ -804,7 +772,7 @@ class CallFinder(ast.NodeVisitor):
         if _matches_target_expr(node.func, self.target_name):
             info = _analyze_call(node)
             context = _get_containing_function(self.tree, node.lineno)
-            callee, _is_method, receiver = _get_call_name(node.func)
+            callee, _is_method, receiver = get_call_name(node.func)
             hazards = _detect_hazards(node, info)
             self.sites.append(
                 CallSite(
@@ -1214,7 +1182,7 @@ def _build_call_site_from_record(
         return None
     info = _analyze_call(call_node)
     context = _get_containing_function(ctx.tree, record.start_line)
-    callee, _is_method, receiver = _get_call_name(call_node.func)
+    callee, _is_method, receiver = get_call_name(call_node.func)
     hazards = _detect_hazards(call_node, info)
     enrichment = _enrich_call_site(ctx.source, context, ctx.rel_path)
     context_window = _compute_context_window(record.start_line, ctx.def_lines, ctx.total_lines)
@@ -1646,10 +1614,10 @@ def _build_calls_neighborhood(
         build_neighborhood_from_slices,
     )
     from tools.cq.core.snb_schema import SemanticNodeRefV1
-    from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
-    from tools.cq.neighborhood.tree_sitter_contracts import (
+    from tools.cq.neighborhood.contracts import (
         TreeSitterNeighborhoodCollectRequest,
     )
+    from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
 
     neighborhood = InsightNeighborhoodV1()
     neighborhood_findings: list[Finding] = []
@@ -2244,31 +2212,6 @@ def _build_calls_result(
     return result
 
 
-def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> CqResult:
-    """Append Rust fallback findings and multilang summary to a calls result.
-
-    Args:
-        result: Existing Python-only CqResult.
-        root: Repository root path.
-        function_name: Function name searched for.
-
-    Returns:
-        The mutated result with Rust fallback data merged in.
-    """
-    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
-
-    existing_summary = dict(result.summary) if isinstance(result.summary, dict) else {}
-    fallback_matches = existing_summary.get("total_sites")
-    return apply_rust_macro_fallback(
-        result=result,
-        root=root,
-        pattern=function_name,
-        macro_name="calls",
-        fallback_matches=fallback_matches if isinstance(fallback_matches, int) else 0,
-        query=function_name,
-    )
-
-
 def cmd_calls(
     tc: Toolchain,
     root: Path,
@@ -2302,7 +2245,16 @@ def cmd_calls(
     )
     scan_result = _scan_call_sites(ctx.root, ctx.function_name)
     result = _build_calls_result(ctx, scan_result, started_ms=started)
-    result = _apply_rust_fallback(result, ctx.root, ctx.function_name)
+    result = apply_rust_fallback_policy(
+        result,
+        root=ctx.root,
+        policy=RustFallbackPolicyV1(
+            macro_name="calls",
+            pattern=ctx.function_name,
+            query=ctx.function_name,
+            fallback_matches_summary_key="total_sites",
+        ),
+    )
     assign_result_finding_ids(result)
     if result.run.run_id:
         maybe_evict_run_cache_tag(root=ctx.root, language="python", run_id=result.run.run_id)

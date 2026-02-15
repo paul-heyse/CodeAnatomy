@@ -9,7 +9,7 @@ from pathlib import Path
 import msgspec
 
 from tools.cq.core.structs import CqStruct
-from tools.cq.search.tree_sitter.query.grammar_drift import build_grammar_drift_report
+from tools.cq.search.tree_sitter.query.drift import build_grammar_drift_report
 from tools.cq.search.tree_sitter.query.registry import (
     QueryPackProfileV1,
     QueryPackSourceV1,

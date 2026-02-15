@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.cli_app.config import build_config_chain
+from tools.cq.cli_app.infrastructure import build_config_chain
 
 
 class TestBuildConfigChain:

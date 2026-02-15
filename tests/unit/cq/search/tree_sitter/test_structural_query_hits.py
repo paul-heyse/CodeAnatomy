@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tools.cq.search.tree_sitter.structural.query_hits import export_query_hits
+from tools.cq.search.tree_sitter.structural.exports import export_query_hits
 
 
 @dataclass(frozen=True)

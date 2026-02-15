@@ -1,12 +1,16 @@
 """CQ runtime cache interfaces and disk-backed backend."""
 
+from tools.cq.core.cache.base_contracts import (
+    CacheMaintenanceSnapshotV1,
+    LaneCoordinationPolicyV1,
+    TreeSitterCacheEnvelopeV1,
+)
 from tools.cq.core.cache.content_hash import (
     FileContentHashV1,
     file_content_hash,
     reset_file_content_hash_cache,
 )
 from tools.cq.core.cache.coordination import publish_once_per_barrier, tree_sitter_lane_guard
-from tools.cq.core.cache.coordination_contracts import LaneCoordinationPolicyV1
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
 from tools.cq.core.cache.diskcache_backend import (
     DiskcacheBackend,
@@ -43,7 +47,6 @@ from tools.cq.core.cache.key_builder import (
     canonicalize_cache_payload,
 )
 from tools.cq.core.cache.maintenance import maintenance_tick
-from tools.cq.core.cache.maintenance_contracts import CacheMaintenanceSnapshotV1
 from tools.cq.core.cache.namespaces import (
     cache_namespace_env_suffix,
     is_namespace_cache_enabled,
@@ -88,7 +91,6 @@ from tools.cq.core.cache.tree_sitter_cache_store import (
     load_tree_sitter_payload,
     persist_tree_sitter_payload,
 )
-from tools.cq.core.cache.tree_sitter_cache_store_contracts import TreeSitterCacheEnvelopeV1
 
 __all__ = [
     "CacheMaintenanceSnapshotV1",

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import msgspec
 
+from tools.cq.core.python_ast_utils import safe_unparse
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -24,9 +25,8 @@ from tools.cq.core.schema import (
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase
-from tools.cq.macros.scan_utils import iter_files
-from tools.cq.macros.scope_filters import scope_filter_applied
-from tools.cq.macros.scoring_utils import macro_scoring_details
+from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
+from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
 
 _TOP_EXCEPTION_TYPES = 15
 _BARE_EXCEPT_LIMIT = 20
@@ -101,13 +101,6 @@ class ExceptionsRequest(ScopedMacroRequestBase, frozen=True):
     """Inputs required for exception handling analysis."""
 
     function: str | None = None
-
-
-def _safe_unparse(node: ast.AST, *, default: str) -> str:
-    try:
-        return ast.unparse(node)
-    except (ValueError, TypeError):
-        return default
 
 
 class ExceptionVisitor(ast.NodeVisitor):
@@ -226,7 +219,7 @@ class ExceptionVisitor(ast.NodeVisitor):
         if isinstance(exc, ast.Call):
             return self._get_name(exc.func)
         if isinstance(exc, ast.Attribute):
-            return _safe_unparse(exc, default=exc.attr)
+            return safe_unparse(exc, default=exc.attr)
         return "<unknown>"
 
     @staticmethod
@@ -259,7 +252,7 @@ class ExceptionVisitor(ast.NodeVisitor):
         if isinstance(node, ast.Name):
             return node.id
         if isinstance(node, ast.Attribute):
-            return _safe_unparse(node, default=node.attr)
+            return safe_unparse(node, default=node.attr)
         return "<unknown>"
 
 
@@ -464,33 +457,6 @@ def _append_exception_evidence(
         )
 
 
-def _apply_rust_fallback(
-    result: CqResult,
-    root: Path,
-    function: str | None,
-) -> CqResult:
-    """Append Rust fallback findings and multilang summary to an exceptions result.
-
-    Args:
-        result: Existing Python-only CqResult.
-        root: Repository root path.
-        function: Optional function focus for Rust search pattern.
-
-    Returns:
-        The mutated result with Rust fallback data merged in.
-    """
-    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
-
-    pattern = function if function else "panic!\\|unwrap\\|expect\\|Result<\\|Err("
-    return apply_rust_macro_fallback(
-        result=result,
-        root=root,
-        pattern=pattern,
-        macro_name="exceptions",
-        query=function,
-    )
-
-
 def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
     """Analyze exception handling patterns.
 
@@ -588,4 +554,13 @@ def cmd_exceptions(request: ExceptionsRequest) -> CqResult:
         scoring_details=scoring_details,
     )
 
-    return _apply_rust_fallback(result, request.root, request.function)
+    pattern = request.function if request.function else "panic!\\|unwrap\\|expect\\|Result<\\|Err("
+    return apply_rust_fallback_policy(
+        result,
+        root=request.root,
+        policy=RustFallbackPolicyV1(
+            macro_name="exceptions",
+            pattern=pattern,
+            query=request.function,
+        ),
+    )

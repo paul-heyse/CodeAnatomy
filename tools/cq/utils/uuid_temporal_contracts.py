@@ -6,13 +6,33 @@ import threading
 import uuid
 from typing import cast
 
+from tools.cq.core.structs import CqStruct
 from tools.cq.utils.uuid_factory import (
     UUID6_MODULE,
     legacy_compatible_event_id,
     normalize_legacy_identity,
     uuid7,
+    uuid7_time_ms,
 )
-from tools.cq.utils.uuid_temporal_contracts_models import RunIdentityContractV1, TemporalUuidInfoV1
+
+
+class TemporalUuidInfoV1(CqStruct, frozen=True):
+    """Normalized metadata for one UUID value."""
+
+    value: str
+    version: int
+    variant: str
+    time_ms: int | None = None
+
+
+class RunIdentityContractV1(CqStruct, frozen=True):
+    """Run identity contract with UUID temporal fields."""
+
+    run_id: str
+    run_uuid_version: int
+    run_variant: str
+    run_created_ms: int
+
 
 _UUID_ALT_LOCK = threading.Lock()
 _UUID7_VERSION = 7
@@ -32,12 +52,7 @@ def _variant_name(variant: object) -> str:
 
 def uuid_time_millis(value: uuid.UUID) -> int | None:
     """Return epoch milliseconds for UUIDv7 values."""
-    if value.version != _UUID7_VERSION:
-        return None
-    raw_time = getattr(value, "time", None)
-    if not isinstance(raw_time, int):
-        return None
-    return int(raw_time)
+    return uuid7_time_ms(value)
 
 
 def temporal_uuid_info(value: uuid.UUID) -> TemporalUuidInfoV1:
@@ -120,6 +135,8 @@ def resolve_run_identity_contract(run_id: str | None = None) -> RunIdentityContr
 
 
 __all__ = [
+    "RunIdentityContractV1",
+    "TemporalUuidInfoV1",
     "gated_uuid8",
     "legacy_event_uuid",
     "normalize_external_identity",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.rust.module_graph_builder import build_module_graph
+from tools.cq.search.rust.extensions import build_module_graph
 
 
 def test_build_module_graph_normalizes_nodes_and_edges() -> None:

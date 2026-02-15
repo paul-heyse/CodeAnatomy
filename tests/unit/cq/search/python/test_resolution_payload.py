@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.python.resolution_payload import (
+from tools.cq.search.python.pipeline_support import (
     PythonResolutionPayloadV1,
     coerce_resolution_payload,
 )

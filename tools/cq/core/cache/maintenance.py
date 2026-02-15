@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from tools.cq.core.cache.base_contracts import CacheMaintenanceSnapshotV1
 from tools.cq.core.cache.interface import CqCacheBackend
-from tools.cq.core.cache.maintenance_contracts import CacheMaintenanceSnapshotV1
 
 
 def _to_int(value: object) -> int:

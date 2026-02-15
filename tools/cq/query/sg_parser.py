@@ -38,6 +38,7 @@ from tools.cq.core.cache.fragment_codecs import (
     encode_fragment_payload,
     is_fragment_cache_payload,
 )
+from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.structs import CqStruct
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import RepoContext, resolve_repo_context
@@ -270,7 +271,9 @@ def _write_cached_file_inventory(request: FileInventoryWriteRequestV1) -> None:
         policy=request.policy,
         namespace=request.namespace,
     )
-    rel_files = [_normalize_match_file(str(path), request.root) for path in request.files]
+    rel_files = [
+        normalize_repo_relative_path(str(path), root=request.root) for path in request.files
+    ]
     payload = FileInventoryCacheV1(
         files=rel_files,
         snapshot_digest=request.scope.snapshot_digest,
@@ -349,21 +352,6 @@ def normalize_record_types(
         )
         raise QueryParseError(msg)
     return record_set
-
-
-def _normalize_match_file(file_path: str, root: Path) -> str:
-    """Normalize file paths to repo-relative POSIX paths.
-
-    Returns:
-        str: Normalized file path string.
-    """
-    path = Path(file_path)
-    if path.is_absolute():
-        try:
-            return path.relative_to(root).as_posix()
-        except ValueError:
-            return file_path
-    return path.as_posix()
 
 
 def _parse_rule_id(rule_id: str) -> tuple[RecordType | None, str]:

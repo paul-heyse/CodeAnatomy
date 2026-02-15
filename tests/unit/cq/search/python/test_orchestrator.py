@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 from tools.cq.search._shared.core import PythonByteRangeEnrichmentRequest
-from tools.cq.search.python import orchestrator as orchestrator_module
+from tools.cq.search.python import pipeline_support as orchestrator_module
 
 
 def test_run_python_enrichment_pipeline_merges_resolution(
@@ -22,8 +22,10 @@ def test_run_python_enrichment_pipeline_merges_resolution(
         "build_resolution_index",
         lambda **_kwargs: {"symbol": "foo"},
     )
+    from tools.cq.search.python import evidence as evidence_module
+
     monkeypatch.setattr(
-        orchestrator_module,
+        evidence_module,
         "evaluate_python_semantic_signal_from_mapping",
         lambda _payload: (True, ("ok",)),
     )

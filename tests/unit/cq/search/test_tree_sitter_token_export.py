@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from tools.cq.search.tree_sitter.structural.token_export import export_cst_tokens
+from tools.cq.search.tree_sitter.structural.exports import export_cst_tokens
 
 try:
     import tree_sitter_python

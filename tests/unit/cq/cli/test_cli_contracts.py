@@ -5,6 +5,10 @@ from __future__ import annotations
 from tools.cq.cli_app import contracts
 
 
-def test_cli_contracts_export_run_step_union() -> None:
-    assert hasattr(contracts, "RunStepCli")
-    assert callable(contracts.to_run_step)
+def test_cli_contracts_module_exists() -> None:
+    """Test CLI contracts module is importable.
+
+    Note: This module is now a placeholder for future CLI-specific contracts.
+    Run step parsing has moved to tools.cq.run.step_decode.
+    """
+    assert contracts.__all__ == []

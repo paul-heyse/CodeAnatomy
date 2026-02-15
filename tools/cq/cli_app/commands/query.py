@@ -13,9 +13,11 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.decorators import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context, require_ctx
 from tools.cq.cli_app.options import QueryOptions, options_from_params
 from tools.cq.cli_app.params import QueryParams
+from tools.cq.core.request_factory import RequestContextV1, RequestFactory
+from tools.cq.core.result_factory import build_error_result
 
 
 def _has_query_tokens(query_string: str) -> bool:
@@ -47,9 +49,7 @@ def q(
     """
     from tools.cq.cli_app.context import CliResult
     from tools.cq.core.bootstrap import resolve_runtime_services
-    from tools.cq.core.run_context import RunContext
-    from tools.cq.core.schema import mk_result, ms
-    from tools.cq.core.services import SearchServiceRequest
+    from tools.cq.core.schema import ms
     from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
     from tools.cq.query.parser import QueryParseError, parse_query
     from tools.cq.query.planner import compile_query
@@ -71,32 +71,29 @@ def q(
             # Build include globs from include patterns
             include_globs = options.include if options.include else None
 
-            services = resolve_runtime_services(ctx.root)
-            result = services.search.execute(
-                SearchServiceRequest(
-                    root=ctx.root,
-                    query=query_string,
-                    mode=None,  # Auto-detect
-                    lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-                    include_globs=include_globs,
-                    exclude_globs=options.exclude if options.exclude else None,
-                    include_strings=False,
-                    limits=SMART_SEARCH_LIMITS,
-                    tc=ctx.toolchain,
-                    argv=ctx.argv,
-                )
+            request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+            request = RequestFactory.search(
+                request_ctx,
+                query=query_string,
+                mode=None,  # Auto-detect
+                lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+                include_globs=include_globs,
+                exclude_globs=options.exclude if options.exclude else None,
+                include_strings=False,
+                limits=SMART_SEARCH_LIMITS,
             )
+
+            services = resolve_runtime_services(ctx.root)
+            result = services.search.execute(request)
             return CliResult(result=result, context=ctx, filters=options)
-        started_ms = ms()
-        run_ctx = RunContext.from_parts(
+        result = build_error_result(
+            macro="q",
             root=ctx.root,
             argv=ctx.argv,
             tc=ctx.toolchain,
-            started_ms=started_ms,
+            started_ms=ms(),
+            error=e,
         )
-        run = run_ctx.to_runmeta("q")
-        result = mk_result(run)
-        result.summary["error"] = str(e)
         return CliResult(result=result, context=ctx, filters=options)
 
     if options.explain_files and not parsed_query.explain:

@@ -9,36 +9,24 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryExecutionSettingsV1,
     QueryWindowV1,
 )
-from tools.cq.search.tree_sitter.core.language_runtime import load_language
+from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches
-from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
-from tools.cq.search.tree_sitter.query.resource_paths import query_pack_path
+from tools.cq.search.tree_sitter.query.compiler import compile_query
+from tools.cq.search.tree_sitter.query.support import query_pack_path
 
 if TYPE_CHECKING:
-    from tree_sitter import Language, Node, Query
-
-try:
-    from tree_sitter import Query as _TreeSitterQuery
-except ImportError:  # pragma: no cover - optional dependency
-    _TreeSitterQuery = None
-
-
-def _node_text(node: Node | None, source_bytes: bytes) -> str | None:
-    if node is None:
-        return None
-    text = _ts_node_text(node, source_bytes)
-    return text or None
-
-
-@lru_cache(maxsize=2)
-def _language(language: str) -> Language:
-    return load_language(language)
+    from tree_sitter import Node, Query
 
 
 @lru_cache(maxsize=16)
-def _compile_query(language: str, pack_name: str) -> Query | None:
-    if _TreeSitterQuery is None:
-        return None
+def _load_query(language: str, pack_name: str) -> Query | None:
+    """Load and compile a query pack from disk.
+
+    Returns:
+    -------
+    Query | None
+        Compiled query, or ``None`` when unavailable or invalid.
+    """
     path = query_pack_path(language, pack_name)
     if not path.exists():
         return None
@@ -47,7 +35,13 @@ def _compile_query(language: str, pack_name: str) -> Query | None:
     except OSError:
         return None
     try:
-        return _TreeSitterQuery(_language(language), source)
+        return compile_query(
+            language=language,
+            pack_name=pack_name,
+            source=source,
+            request_surface="artifact",
+            validate_rules=False,
+        )
     except (RuntimeError, TypeError, ValueError):
         return None
 
@@ -65,7 +59,7 @@ def collect_callers_callees(
     Returns:
         tuple[list[Node], list[Node]]: A tuple of ``(callers, callees)`` nodes.
     """
-    query = _compile_query(language, "10_calls.scm")
+    query = _load_query(language, "10_calls.scm")
     if query is None or not anchor_name:
         return [], []
 
@@ -103,7 +97,7 @@ def collect_callers_callees(
             continue
         if not isinstance(site_nodes, list) or not site_nodes:
             continue
-        callee_text = _node_text(callee_nodes[0], source_bytes)
+        callee_text = node_text(callee_nodes[0], source_bytes)
         if not isinstance(callee_text, str):
             continue
         if callee_text == anchor_name:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.macros.scoring_utils import macro_score_payload, macro_scoring_details
+from tools.cq.macros.shared import macro_score_payload, macro_scoring_details
 
 
 def test_macro_score_payload_populates_buckets() -> None:

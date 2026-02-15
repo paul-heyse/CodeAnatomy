@@ -18,23 +18,23 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryWindowV1,
 )
 from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_python_lane_payload
-from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1, load_pack_rules
+from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
 from tools.cq.search.tree_sitter.core.change_windows import (
     contains_window,
     ensure_query_windows,
     windows_from_changed_ranges,
 )
+from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
-from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
-from tools.cq.search.tree_sitter.diagnostics.collector import collect_tree_sitter_diagnostics
+from tools.cq.search.tree_sitter.diagnostics import collect_tree_sitter_diagnostics
+from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
     make_query_predicate,
 )
 from tools.cq.search.tree_sitter.query.registry import load_query_pack_sources
-from tools.cq.search.tree_sitter.query.specialization import specialize_query
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Parser, Query, Tree
@@ -58,7 +58,6 @@ _MAX_CAPTURE_TEXT_LEN = 120
 _DEFAULT_MATCH_LIMIT = 4_096
 _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
 _STOP_CONTEXT_KINDS: frozenset[str] = frozenset({"module", "source_file"})
-
 
 from tools.cq.search.tree_sitter.python_lane.fallback_support import (
     _capture_binding_candidates,
@@ -181,7 +180,7 @@ def clear_tree_sitter_python_cache() -> None:
     """Clear parser/query caches and reset observability counters."""
     clear_parse_session(language="python")
     _python_language.cache_clear()
-    _compile_query.cache_clear()
+    compile_query.cache_clear()
     _pack_source_rows.cache_clear()
 
 
@@ -212,9 +211,10 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
             source,
             build_pack_plan(
                 pack_name=pack_name,
-                query=_compile_query(
-                    pack_name,
-                    source,
+                query=compile_query(
+                    language="python",
+                    pack_name=pack_name,
+                    source=source,
                     request_surface="artifact",
                 ),
                 query_text=source,
@@ -227,29 +227,6 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
 
 def _query_sources() -> tuple[tuple[str, str], ...]:
     return tuple((pack_name, source) for pack_name, source, _ in _pack_source_rows())
-
-
-@lru_cache(maxsize=64)
-def _compile_query(
-    _filename: str,
-    source: str,
-    *,
-    request_surface: str = "artifact",
-) -> Query:
-    if _TreeSitterQuery is None:
-        msg = "tree_sitter query bindings are unavailable"
-        raise RuntimeError(msg)
-    query = _TreeSitterQuery(_python_language(), source)
-    rules = load_pack_rules("python")
-    pattern_count = int(getattr(query, "pattern_count", 0))
-    for pattern_idx in range(pattern_count):
-        if rules.require_rooted and not bool(query.is_pattern_rooted(pattern_idx)):
-            msg = f"python query pattern not rooted: {pattern_idx}"
-            raise ValueError(msg)
-        if rules.forbid_non_local and bool(query.is_pattern_non_local(pattern_idx)):
-            msg = f"python query pattern non-local: {pattern_idx}"
-            raise ValueError(msg)
-    return specialize_query(query, request_surface=request_surface)
 
 
 def _safe_cursor_captures(
@@ -293,10 +270,6 @@ def _safe_cursor_captures(
     return captures, telemetry
 
 
-def _node_text(node: Node, source_bytes: bytes) -> str:
-    return _ts_node_text(node, source_bytes)
-
-
 def _extract_parse_quality(
     root: Node,
     source_bytes: bytes,
@@ -308,10 +281,12 @@ def _extract_parse_quality(
     captures: dict[str, list[Node]]
     telemetry = QueryExecutionTelemetryV1()
     try:
-        query = _compile_query(
-            "__errors__.scm",
-            "(ERROR) @error (MISSING) @missing",
+        query = compile_query(
+            language="python",
+            pack_name="__errors__.scm",
+            source="(ERROR) @error (MISSING) @missing",
             request_surface="diagnostic",
+            validate_rules=False,
         )
         captures, telemetry = _safe_cursor_captures(
             query,
@@ -327,7 +302,7 @@ def _extract_parse_quality(
         nodes = captures.get(name, [])
         rows: list[str] = []
         for node in nodes[:_MAX_CAPTURE_ITEMS]:
-            text = _node_text(node, source_bytes)
+            text = node_text(node, source_bytes)
             if text:
                 rows.append(text[:_MAX_CAPTURE_TEXT_LEN])
             else:
@@ -356,7 +331,12 @@ def _capture_gap_fill_fields(
     window_split_count = 0
     for filename, source in _query_sources():
         try:
-            query = _compile_query(filename, source, request_surface="artifact")
+            query = compile_query(
+                language="python",
+                pack_name=filename,
+                source=source,
+                request_surface="artifact",
+            )
             predicate_callback = (
                 make_query_predicate(source_bytes=source_bytes)
                 if has_custom_predicates(source)
@@ -485,7 +465,7 @@ def _capture_call_target(captures: dict[str, list[Node]], source_bytes: bytes) -
         nodes = captures.get(capture_name, [])
         if not nodes:
             continue
-        text = _node_text(nodes[0], source_bytes)
+        text = node_text(nodes[0], source_bytes)
         if text:
             return text[:_MAX_CAPTURE_TEXT_LEN]
 
@@ -495,7 +475,7 @@ def _capture_call_target(captures: dict[str, list[Node]], source_bytes: bytes) -
     function_node = call_nodes[0].child_by_field_name("function")
     if function_node is None:
         return None
-    text = _node_text(function_node, source_bytes)
+    text = node_text(function_node, source_bytes)
     return text[:_MAX_CAPTURE_TEXT_LEN] if text else None
 
 

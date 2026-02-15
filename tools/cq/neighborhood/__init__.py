@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from tools.cq.neighborhood.tree_sitter_collector import (
-    collect_tree_sitter_neighborhood,
-)
-from tools.cq.neighborhood.tree_sitter_contracts import (
+from tools.cq.neighborhood.contracts import (
     TreeSitterNeighborhoodCollectRequest,
     TreeSitterNeighborhoodCollectResult,
+)
+from tools.cq.neighborhood.tree_sitter_collector import (
+    collect_tree_sitter_neighborhood,
 )
 
 __all__ = [

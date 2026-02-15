@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 from tools.cq.search.pipeline import smart_search as candidates_module
 from tools.cq.search.pipeline.classifier import QueryMode
-from tools.cq.search.pipeline.models import SearchConfig
+from tools.cq.search.pipeline.contracts import SearchConfig
 
 
 def test_run_candidate_phase_delegates(monkeypatch: pytest.MonkeyPatch) -> None:

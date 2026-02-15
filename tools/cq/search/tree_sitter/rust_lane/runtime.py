@@ -22,7 +22,7 @@ import msgspec
 
 from tools.cq.core.locations import byte_offset_to_line_col
 from tools.cq.search._shared.core import truncate as _shared_truncate
-from tools.cq.search.rust.macro_expansion_contracts import RustMacroExpansionRequestV1
+from tools.cq.search.rust.contracts import RustMacroExpansionRequestV1
 from tools.cq.search.tree_sitter.contracts.core_models import (
     ObjectEvidenceRowV1,
     QueryExecutionSettingsV1,
@@ -31,26 +31,26 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterQueryHitV1,
 )
 from tools.cq.search.tree_sitter.contracts.lane_payloads import canonicalize_rust_lane_payload
-from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1, load_pack_rules
+from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 from tools.cq.search.tree_sitter.core.change_windows import (
     contains_window,
     ensure_query_windows,
     windows_from_changed_ranges,
 )
+from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.core.parse import clear_parse_session, get_parse_session
 from tools.cq.search.tree_sitter.core.query_pack_executor import execute_pack_rows_with_matches
 from tools.cq.search.tree_sitter.core.runtime import (
     QueryExecutionCallbacksV1,
 )
-from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
+from tools.cq.search.tree_sitter.query.compiler import compile_query
 from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
     make_query_predicate,
 )
-from tools.cq.search.tree_sitter.query.specialization import specialize_query
 from tools.cq.search.tree_sitter.rust_lane.bundle import (
     load_rust_grammar_bundle,
     load_rust_query_sources,
@@ -60,12 +60,11 @@ from tools.cq.search.tree_sitter.rust_lane.injections import (
     InjectionPlanV1,
     build_injection_plan_from_matches,
 )
-from tools.cq.search.tree_sitter.structural.diagnostic_export import collect_diagnostic_rows
-from tools.cq.search.tree_sitter.tags.contracts import RustTagEventV1
-from tools.cq.search.tree_sitter.tags.runtime import build_tag_events
+from tools.cq.search.tree_sitter.structural.exports import collect_diagnostic_rows
+from tools.cq.search.tree_sitter.tags import RustTagEventV1, build_tag_events
 
 if TYPE_CHECKING:
-    from tree_sitter import Language, Node, Parser, Query, Tree
+    from tree_sitter import Language, Node, Parser, Tree
 
 try:
     import tree_sitter_rust as _tree_sitter_rust
@@ -165,7 +164,6 @@ _FIELD_GROUPS: dict[str, list[str]] = {
     ],
 }
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -236,7 +234,7 @@ def _optional_field_text(
         Truncated text, or ``None`` if the field is absent or empty.
     """
     child = parent.child_by_field_name(field_name)
-    text = _node_text(child, source_bytes)
+    text = node_text(child, source_bytes)
     if text is None:
         return None
     return _truncate(text, max_len)
@@ -325,7 +323,7 @@ def clear_tree_sitter_rust_cache() -> None:
     _TREE_CACHE.clear()
     _TREE_CACHE_EVICTIONS["value"] = 0
     _rust_language.cache_clear()
-    _compile_query.cache_clear()
+    compile_query.cache_clear()
     _pack_source_rows.cache_clear()
 
 
@@ -344,30 +342,6 @@ def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
     }
 
 
-@lru_cache(maxsize=128)
-def _compile_query(
-    pack_name: str,
-    source: str,
-    *,
-    request_surface: str = "artifact",
-) -> Query:
-    if _TreeSitterQuery is None:
-        msg = "tree_sitter query bindings are unavailable"
-        raise RuntimeError(msg)
-    _ = pack_name
-    query = _TreeSitterQuery(_rust_language(), source)
-    rules = load_pack_rules("rust")
-    pattern_count = int(getattr(query, "pattern_count", 0))
-    for pattern_idx in range(pattern_count):
-        if rules.require_rooted and not bool(query.is_pattern_rooted(pattern_idx)):
-            msg = f"rust query pattern not rooted: {pattern_idx}"
-            raise ValueError(msg)
-        if rules.forbid_non_local and bool(query.is_pattern_non_local(pattern_idx)):
-            msg = f"rust query pattern non-local: {pattern_idx}"
-            raise ValueError(msg)
-    return specialize_query(query, request_surface=request_surface)
-
-
 @lru_cache(maxsize=1)
 def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
     sources = load_rust_query_sources(profile_name="rust_search_enriched")
@@ -382,9 +356,10 @@ def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
                     source.source,
                     build_pack_plan(
                         pack_name=source.pack_name,
-                        query=_compile_query(
-                            source.pack_name,
-                            source.source,
+                        query=compile_query(
+                            language="rust",
+                            pack_name=source.pack_name,
+                            source=source.source,
                             request_surface="artifact",
                         ),
                         query_text=source.source,
@@ -412,7 +387,7 @@ def _capture_texts_from_captures(
     seen: set[str] = set()
     for capture_name in capture_names:
         for captured in captures.get(capture_name, []):
-            text = _node_text(captured, source_bytes)
+            text = node_text(captured, source_bytes)
             if text is None or text in seen:
                 continue
             seen.add(text)
@@ -444,7 +419,12 @@ def _collect_query_pack_captures(
     query_telemetry: dict[str, object] = {}
     for pack_name, query_source in _pack_sources():
         try:
-            query = _compile_query(pack_name, query_source, request_surface="artifact")
+            query = compile_query(
+                language="rust",
+                pack_name=pack_name,
+                source=query_source,
+                request_surface="artifact",
+            )
             predicate_callback = (
                 make_query_predicate(source_bytes=source_bytes)
                 if has_custom_predicates(query_source)
@@ -507,23 +487,16 @@ def _collect_query_pack_captures(
 # ---------------------------------------------------------------------------
 
 
-def _node_text(node: Node | None, source_bytes: bytes) -> str | None:
-    if node is None:
-        return None
-    text = _ts_node_text(node, source_bytes)
-    return text or None
-
-
 def _scope_name(scope_node: Node, source_bytes: bytes) -> str | None:
     kind = scope_node.type
     if kind == "impl_item":
-        return _node_text(scope_node.child_by_field_name("type"), source_bytes)
+        return node_text(scope_node.child_by_field_name("type"), source_bytes)
     if kind == "macro_invocation":
-        return _node_text(scope_node.child_by_field_name("macro"), source_bytes) or _node_text(
+        return node_text(scope_node.child_by_field_name("macro"), source_bytes) or node_text(
             scope_node.child_by_field_name("name"),
             source_bytes,
         )
-    return _node_text(scope_node.child_by_field_name("name"), source_bytes)
+    return node_text(scope_node.child_by_field_name("name"), source_bytes)
 
 
 def _scope_chain(node: Node, source_bytes: bytes, *, max_depth: int) -> list[str]:
@@ -608,7 +581,7 @@ def _extract_fn_params(fn_node: Node, source_bytes: bytes) -> list[str]:
         return []
     param_list: list[str] = []
     for child in params_node.named_children:
-        text = _node_text(child, source_bytes)
+        text = node_text(child, source_bytes)
         if text is not None:
             param_list.append(_truncate(text, _MAX_MEMBER_TEXT_LEN))
         if len(param_list) >= _MAX_PARAMS:
@@ -636,7 +609,7 @@ def _extract_fn_modifiers(fn_node: Node, source_bytes: bytes) -> tuple[bool, boo
     for child in fn_node.children:
         if child.type == "mutable_specifier":
             continue
-        child_text = _node_text(child, source_bytes)
+        child_text = node_text(child, source_bytes)
         if child_text == "async":
             is_async = True
         elif child_text == "unsafe":
@@ -714,7 +687,7 @@ def _extract_visibility(item_node: Node, source_bytes: bytes) -> str:
     if vis_node is None:
         return "private"
 
-    vis_text = _node_text(vis_node, source_bytes)
+    vis_text = node_text(vis_node, source_bytes)
     if vis_text is None:
         return "private"
 
@@ -755,7 +728,7 @@ def _extract_attributes(item_node: Node, source_bytes: bytes) -> list[str]:
     current: Node | None = item_node.prev_named_sibling
     while current is not None:
         if current.type == "attribute_item":
-            text = _node_text(current, source_bytes)
+            text = node_text(current, source_bytes)
             if text is not None:
                 if text.startswith("#!["):
                     current = current.prev_named_sibling
@@ -799,7 +772,7 @@ def _extract_impl_context(impl_node: Node, source_bytes: bytes) -> dict[str, obj
 
     trait_node = impl_node.child_by_field_name("trait")
     if trait_node is not None:
-        trait_text = _node_text(trait_node, source_bytes)
+        trait_text = node_text(trait_node, source_bytes)
         if trait_text is not None:
             result["impl_trait"] = trait_text
         result["impl_kind"] = "trait"
@@ -835,7 +808,7 @@ def _extract_field_expression(fn_node: Node, source_bytes: bytes) -> dict[str, o
     recv_text = _optional_field_text(fn_node, "value", source_bytes, max_len=_MAX_CALL_RECEIVER_LEN)
     if recv_text is not None:
         result["call_receiver"] = recv_text
-    method_text = _node_text(fn_node.child_by_field_name("field"), source_bytes)
+    method_text = node_text(fn_node.child_by_field_name("field"), source_bytes)
     if method_text is not None:
         result["call_method"] = method_text
     return result
@@ -862,13 +835,13 @@ def _extract_call_target(node: Node, source_bytes: bytes) -> dict[str, object]:
     if node.type == "call_expression":
         fn_node = node.child_by_field_name("function")
         if fn_node is not None:
-            target_text = _node_text(fn_node, source_bytes)
+            target_text = node_text(fn_node, source_bytes)
             if target_text is not None:
                 result["call_target"] = _truncate(target_text, _MAX_CALL_TARGET_LEN)
             if fn_node.type == "field_expression":
                 result.update(_extract_field_expression(fn_node, source_bytes))
     elif node.type == "macro_invocation":
-        macro_text = _node_text(node.child_by_field_name("macro"), source_bytes)
+        macro_text = node_text(node.child_by_field_name("macro"), source_bytes)
         if macro_text is not None:
             result["macro_name"] = macro_text
 
@@ -900,7 +873,7 @@ def _extract_struct_shape(struct_node: Node, source_bytes: bytes) -> dict[str, o
 
     fields: list[str] = []
     for field_node in field_nodes[:_MAX_FIELDS_SHOWN]:
-        text = _node_text(field_node, source_bytes)
+        text = node_text(field_node, source_bytes)
         if text is not None:
             fields.append(_truncate(text, _MAX_MEMBER_TEXT_LEN))
 
@@ -936,7 +909,7 @@ def _extract_enum_shape(enum_node: Node, source_bytes: bytes) -> dict[str, objec
 
     variants: list[str] = []
     for variant_node in variant_nodes[:_MAX_VARIANTS_SHOWN]:
-        text = _node_text(variant_node, source_bytes)
+        text = node_text(variant_node, source_bytes)
         if text is not None:
             variants.append(_truncate(text, _MAX_MEMBER_TEXT_LEN))
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from tools.cq.core.structs import CqStruct
-from tools.cq.search.tree_sitter.query.drift_diff import GrammarDiffV1, diff_schema
+from tools.cq.search.tree_sitter.query.drift import GrammarDiffV1, diff_schema
 
 
 class QueryPackSnapshotRowV1(CqStruct, frozen=True):

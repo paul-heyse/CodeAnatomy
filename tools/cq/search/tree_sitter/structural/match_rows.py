@@ -9,16 +9,12 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     ObjectEvidenceRowV1,
     TreeSitterQueryHitV1,
 )
-from tools.cq.search.tree_sitter.core.text_utils import node_text as _ts_node_text
-from tools.cq.search.tree_sitter.query.pack_metadata import first_capture, pattern_settings
-from tools.cq.search.tree_sitter.structural.query_hits import export_query_hits
+from tools.cq.search.tree_sitter.core.node_utils import node_text
+from tools.cq.search.tree_sitter.query.support import first_capture, pattern_settings
+from tools.cq.search.tree_sitter.structural.exports import export_query_hits
 
 if TYPE_CHECKING:
     from tree_sitter import Node, Query
-
-
-def _node_text(node: Node, source_bytes: bytes) -> str:
-    return _ts_node_text(node, source_bytes)
 
 
 def _capture_payload(capture_map: dict[str, list[Node]], source_bytes: bytes) -> dict[str, str]:
@@ -30,7 +26,7 @@ def _capture_payload(capture_map: dict[str, list[Node]], source_bytes: bytes) ->
             continue
         if not isinstance(nodes, list) or not nodes:
             continue
-        text = _node_text(nodes[0], source_bytes)
+        text = node_text(nodes[0], source_bytes)
         if not text:
             continue
         out[capture_name] = text

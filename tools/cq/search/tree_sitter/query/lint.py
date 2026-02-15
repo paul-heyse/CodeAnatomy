@@ -14,7 +14,7 @@ from tools.cq.search.tree_sitter.core.language_registry import (
     load_language_registry,
     load_tree_sitter_language,
 )
-from tools.cq.search.tree_sitter.query.grammar_drift import build_grammar_drift_report
+from tools.cq.search.tree_sitter.query.drift import build_grammar_drift_report
 from tools.cq.search.tree_sitter.query.registry import (
     QueryPackSourceV1,
     load_query_pack_sources,

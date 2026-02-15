@@ -29,6 +29,7 @@ from tools.cq.core.cache import (
 from tools.cq.core.cache.contracts import CallsTargetCacheV1
 from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.definition_parser import extract_definition_name, extract_symbol_name
+from tools.cq.core.python_ast_utils import get_call_name
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, Finding, ScoreDetails, Section
 from tools.cq.core.scoring import build_detail_payload
@@ -43,18 +44,6 @@ _RUST_DEF_RE = re.compile(
     r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?"
     r"(?:extern(?:\s+\"[^\"]+\")?\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b"
 )
-
-
-def _get_call_name(func: ast.expr) -> tuple[str, bool, str | None]:
-    if isinstance(func, ast.Name):
-        return func.id, False, None
-    if isinstance(func, ast.Attribute):
-        receiver = None
-        if isinstance(func.value, ast.Name):
-            receiver = func.value.id
-            return f"{receiver}.{func.attr}", True, receiver
-        return func.attr, True, receiver
-    return "", False, None
 
 
 def resolve_target_definition(
@@ -416,7 +405,7 @@ def _count_callees_in_node(
     for node in ast.walk(target_node):
         if not isinstance(node, ast.Call):
             continue
-        callee_name, _is_method, _receiver = _get_call_name(node.func)
+        callee_name, _is_method, _receiver = get_call_name(node.func)
         if callee_name and callee_name not in {function_name, base_name}:
             callee_counts[callee_name] += 1
     return callee_counts

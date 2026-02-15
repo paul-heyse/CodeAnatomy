@@ -7,9 +7,10 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.decorators import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context, require_ctx
 from tools.cq.cli_app.options import RunOptions, options_from_params
 from tools.cq.cli_app.params import RunParams
+from tools.cq.core.result_factory import build_error_result
 
 
 @require_ctx
@@ -27,8 +28,7 @@ def run(
     Returns:
         CliResult: Renderable command result payload.
     """
-    from tools.cq.core.run_context import RunContext
-    from tools.cq.core.schema import mk_result, ms
+    from tools.cq.core.schema import ms
     from tools.cq.run.loader import RunPlanError, load_run_plan
     from tools.cq.run.runner import execute_run_plan
 
@@ -39,14 +39,14 @@ def run(
     try:
         plan = load_run_plan(options)
     except RunPlanError as exc:
-        run_ctx = RunContext.from_parts(
+        result = build_error_result(
+            macro="run",
             root=ctx.root,
             argv=ctx.argv,
             tc=ctx.toolchain,
             started_ms=ms(),
+            error=exc,
         )
-        result = mk_result(run_ctx.to_runmeta("run"))
-        result.summary["error"] = str(exc)
         return CliResult(result=result, context=ctx, filters=options)
 
     result = execute_run_plan(plan, ctx, stop_on_error=options.stop_on_error)

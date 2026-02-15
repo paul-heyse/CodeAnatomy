@@ -11,9 +11,10 @@ from typing import Annotated
 from cyclopts import Parameter
 
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.decorators import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context, require_ctx
 from tools.cq.cli_app.options import SearchOptions, options_from_params
 from tools.cq.cli_app.params import SearchParams
+from tools.cq.core.request_factory import RequestContextV1, RequestFactory
 
 
 @require_ctx
@@ -34,7 +35,6 @@ def search(
         CliResult: Renderable command result payload.
     """
     from tools.cq.core.bootstrap import resolve_runtime_services
-    from tools.cq.core.services import SearchServiceRequest
     from tools.cq.query.language import parse_query_language_scope
     from tools.cq.search.pipeline.classifier import QueryMode
     from tools.cq.search.pipeline.smart_search import SMART_SEARCH_LIMITS
@@ -60,21 +60,20 @@ def search(
         looks_like_file = candidate.is_file() or (requested.suffix and not in_value.endswith("/"))
         include_globs.append(in_value if looks_like_file else f"{in_value}/**")
 
-    services = resolve_runtime_services(ctx.root)
-    result = services.search.execute(
-        SearchServiceRequest(
-            root=ctx.root,
-            query=query,
-            mode=mode,
-            lang_scope=parse_query_language_scope(str(options.lang)),
-            include_globs=include_globs if include_globs else None,
-            exclude_globs=list(options.exclude) if options.exclude else None,
-            include_strings=options.include_strings,
-            with_neighborhood=options.with_neighborhood,
-            limits=SMART_SEARCH_LIMITS,
-            tc=ctx.toolchain,
-            argv=ctx.argv,
-        )
+    request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.toolchain)
+    request = RequestFactory.search(
+        request_ctx,
+        query=query,
+        mode=mode,
+        lang_scope=parse_query_language_scope(str(options.lang)),
+        include_globs=include_globs if include_globs else None,
+        exclude_globs=list(options.exclude) if options.exclude else None,
+        include_strings=options.include_strings,
+        with_neighborhood=options.with_neighborhood,
+        limits=SMART_SEARCH_LIMITS,
     )
+
+    services = resolve_runtime_services(ctx.root)
+    result = services.search.execute(request)
 
     return CliResult(result=result, context=ctx, filters=options)

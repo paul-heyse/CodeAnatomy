@@ -7,6 +7,7 @@ from typing import Final
 
 import msgspec
 
+from tools.cq.core.cache.base_contracts import TreeSitterCacheEnvelopeV1
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.key_builder import build_cache_key
 from tools.cq.core.cache.namespaces import resolve_namespace_ttl_seconds
@@ -22,7 +23,6 @@ from tools.cq.core.cache.tree_sitter_blob_store import (
     read_blob,
     write_blob,
 )
-from tools.cq.core.cache.tree_sitter_cache_store_contracts import TreeSitterCacheEnvelopeV1
 from tools.cq.core.cache.typed_codecs import convert_mapping_typed, decode_msgpack_typed
 
 _NAMESPACE: Final[str] = "tree_sitter"

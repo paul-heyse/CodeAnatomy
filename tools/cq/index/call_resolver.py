@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
+from tools.cq.core.python_ast_utils import get_call_name
 from tools.cq.index.def_index import DefIndex, FnDecl
 
 _SELF_CLS: set[str] = {"self", "cls"}
@@ -67,13 +68,6 @@ class ResolvedCall:
     resolution_path: str
 
 
-def _safe_unparse(node: ast.AST, *, default: str) -> str:
-    try:
-        return ast.unparse(node)
-    except (ValueError, TypeError):
-        return default
-
-
 def _method_name(callee: str) -> str:
     return callee.rsplit(".", maxsplit=1)[-1] if "." in callee else callee
 
@@ -92,38 +86,6 @@ def _confidence_exact_likely(targets: list[FnDecl]) -> str:
     if targets:
         return "likely"
     return "unresolved"
-
-
-def _get_call_name(node: ast.Call) -> tuple[str, bool, str | None]:
-    """Extract call name and determine if method call.
-
-    Returns:
-    -------
-    tuple[str, bool, str | None]
-        (callee_name, is_method_call, receiver_name).
-    """
-    func = node.func
-
-    if isinstance(func, ast.Name):
-        return (func.id, False, None)
-
-    if isinstance(func, ast.Attribute):
-        receiver = func.value
-        method = func.attr
-        if isinstance(receiver, ast.Name):
-            receiver_name = receiver.id
-            if receiver_name in _SELF_CLS:
-                return (method, True, receiver_name)
-            return (f"{receiver_name}.{method}", True, receiver_name)
-
-        full = _safe_unparse(func, default=method)
-        parts = full.rsplit(".", 1)
-        if len(parts) == _CALL_SPLIT_PARTS:
-            return (parts[1], True, parts[0])
-        return (full, True, None)
-
-    callee = _safe_unparse(func, default="<unknown>")
-    return (callee, False, None)
 
 
 def extract_calls_from_file(file: str, source: str) -> list[CallInfo]:
@@ -150,7 +112,7 @@ def extract_calls_from_file(file: str, source: str) -> list[CallInfo]:
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            callee_name, is_method, receiver = _get_call_name(node)
+            callee_name, is_method, receiver = get_call_name(node.func)
             calls.append(
                 CallInfo(
                     file=file,

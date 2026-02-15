@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING
 from ast_grep_py import SgNode, SgRoot
 
 from tools.cq.core.locations import SourceSpan
+from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.query.executor import (
     AstGrepMatchSpan,
     _filter_match_spans_by_metavars,
     _group_match_spans,
     _iter_rule_matches_for_spans,
-    _normalize_match_file,
 )
 from tools.cq.query.language import QueryLanguage, file_extensions_for_language
 
@@ -64,7 +64,7 @@ def _collect_file_matches(
         src = file_path.read_text(encoding="utf-8")
     except OSError:
         return
-    rel_path = _normalize_match_file(str(file_path), root)
+    rel_path = normalize_repo_relative_path(str(file_path), root=root)
     roots_by_lang: dict[QueryLanguage, SgNode] = {}
 
     for idx, rules in enumerate(rule_sets):

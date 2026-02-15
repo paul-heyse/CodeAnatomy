@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
+from tools.cq.core.target_specs import parse_target_spec
+from tools.cq.neighborhood.target_resolution import resolve_target
 
 
 def test_parse_symbol_target() -> None:

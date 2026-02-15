@@ -10,7 +10,7 @@ from cyclopts.bind import normalize_tokens
 from cyclopts.exceptions import CycloptsError
 
 from tools.cq.cli_app.context import CliContext
-from tools.cq.cli_app.dispatch import dispatch_bound_command
+from tools.cq.cli_app.infrastructure import dispatch_bound_command
 from tools.cq.cli_app.result_action import (
     CQ_DEFAULT_RESULT_ACTION,
     apply_result_action,

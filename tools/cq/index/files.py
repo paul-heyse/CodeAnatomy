@@ -9,6 +9,7 @@ from pathlib import Path
 import pygit2
 from pathspec import GitIgnoreSpec
 
+from tools.cq.core.pathing import is_relative_to, match_ordered_globs
 from tools.cq.core.structs import CqStruct
 from tools.cq.index.gitignore import load_gitignore_spec
 from tools.cq.index.repo import RepoContext, open_repo
@@ -121,7 +122,7 @@ def tabulate_files(
         glob_excluded = False
         if rel_path is None or not _is_within_scope(rel_path, scope_prefixes):
             scope_excluded = True
-        if globs and (rel_path is None or not _matches_globs(rel_path, globs)):
+        if globs and (rel_path is None or not match_ordered_globs(rel_path, globs)):
             glob_excluded = True
         if scope_excluded or glob_excluded:
             if explain:
@@ -213,7 +214,7 @@ def _collect_untracked_files(
 ) -> tuple[set[Path], list[FileFilterDecision]]:
     files: set[Path] = set()
     decisions: list[FileFilterDecision] = []
-    if not _is_relative_to(config.scope_root, config.repo_root):
+    if not is_relative_to(config.scope_root, config.repo_root):
         return files, decisions
     if config.scope_root.is_file():
         return _collect_untracked_file(config)
@@ -278,19 +279,6 @@ def _is_candidate_file(path: Path, extensions: frozenset[str]) -> bool:
     return path.suffix in extensions
 
 
-def _matches_globs(rel_path: str, globs: Sequence[str]) -> bool:
-    if not globs:
-        return True
-    has_includes = any(not glob.startswith("!") for glob in globs)
-    include = not has_includes
-    for glob in globs:
-        negated = glob.startswith("!")
-        pattern = glob[1:] if negated else glob
-        if Path(rel_path).match(pattern):
-            include = not negated
-    return include
-
-
 def _is_within_scope(rel_path: str, scope_prefixes: tuple[str, ...]) -> bool:
     return any(_path_is_under(rel_path, prefix) for prefix in scope_prefixes)
 
@@ -318,12 +306,3 @@ def _normalize_relative_path(path: Path, repo_root: Path) -> str | None:
             return path.resolve().relative_to(repo_root).as_posix()
         except ValueError:
             return None
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    else:
-        return True

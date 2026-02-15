@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from contextlib import suppress
 
-from tools.cq.core.cache.cache_runtime_tuning_contracts import CacheRuntimeTuningV1
+from tools.cq.core.cache.base_contracts import CacheRuntimeTuningV1
 from tools.cq.core.cache.policy import CqCachePolicyV1
 
 

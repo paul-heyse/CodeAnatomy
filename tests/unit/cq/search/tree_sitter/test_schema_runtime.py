@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter.schema.runtime import build_runtime_field_ids, build_runtime_ids
+from tools.cq.search.tree_sitter.schema.node_schema import (
+    build_runtime_field_ids,
+    build_runtime_ids,
+)
 
 
 class _LanguageStub:

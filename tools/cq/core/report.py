@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-from tools.cq.core.codec import dumps_json_value
+from tools.cq.core.contract_codec import dumps_json_value
 from tools.cq.core.enrichment_facts import (
     additional_language_payload,
     resolve_fact_clusters,

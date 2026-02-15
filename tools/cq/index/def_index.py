@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
-from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from tools.cq.core.python_ast_utils import safe_unparse
 
 _SELF_CLS: set[str] = {"self", "cls"}
 
@@ -160,14 +161,6 @@ class ModuleInfo:
     symbol_aliases: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
-def _safe_unparse(node: ast.AST | None) -> str | None:
-    if node is None:
-        return None
-    with suppress(ValueError, TypeError):
-        return ast.unparse(node)
-    return None
-
-
 def _extract_param_info(arg: ast.arg, default: ast.expr | None) -> ParamInfo:
     """Extract parameter info from AST arg node.
 
@@ -176,8 +169,8 @@ def _extract_param_info(arg: ast.arg, default: ast.expr | None) -> ParamInfo:
     ParamInfo
         Parsed parameter information.
     """
-    annotation = _safe_unparse(arg.annotation) if arg.annotation else None
-    default_str = _safe_unparse(default) if default is not None else None
+    annotation = safe_unparse(arg.annotation) if arg.annotation else None
+    default_str = safe_unparse(default) if default is not None else None
 
     return ParamInfo(
         name=arg.arg,
@@ -253,14 +246,14 @@ def _extract_decorator_names(decorators: list[ast.expr]) -> list[str]:
         if isinstance(dec, ast.Name):
             names.append(dec.id)
         elif isinstance(dec, ast.Attribute):
-            decorator = _safe_unparse(dec)
+            decorator = safe_unparse(dec)
             if decorator is not None:
                 names.append(decorator)
         elif isinstance(dec, ast.Call):
             if isinstance(dec.func, ast.Name):
                 names.append(dec.func.id)
             elif isinstance(dec.func, ast.Attribute):
-                decorator = _safe_unparse(dec.func)
+                decorator = safe_unparse(dec.func)
                 if decorator is not None:
                     names.append(decorator)
     return names
@@ -352,7 +345,7 @@ class DefIndexVisitor(ast.NodeVisitor):
         """Visit a class definition."""
         bases: list[str] = []
         for base in node.bases:
-            base_name = _safe_unparse(base)
+            base_name = safe_unparse(base)
             if base_name is not None:
                 bases.append(base_name)
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 
@@ -14,8 +14,16 @@ from tools.cq.core.contract_codec import (
     to_contract_builtins,
     to_public_dict,
 )
-from tools.cq.core.structs import CqOutputStruct
-from tools.cq.search._shared.search_contracts import SearchSummaryContract, summary_contract_to_dict
+from tools.cq.core.structs import CqOutputStruct, CqStruct
+
+if TYPE_CHECKING:
+    from tools.cq.core.schema import CqResult, Finding, RunMeta
+    from tools.cq.query.language import QueryLanguage, QueryLanguageScope
+    from tools.cq.search._shared.search_contracts import (
+        CrossLanguageDiagnostic,
+        LanguageCapabilities,
+        SearchSummaryContract,
+    )
 
 
 class ContractEnvelope(CqOutputStruct, frozen=True):
@@ -51,6 +59,8 @@ def summary_contract_to_mapping(
     Returns:
         dict[str, object]: Summary mapping with deterministic, renderer-ready fields.
     """
+    from tools.cq.search._shared.search_contracts import summary_contract_to_dict
+
     return summary_contract_to_dict(contract, common=common)
 
 
@@ -66,8 +76,48 @@ def require_mapping(value: object) -> dict[str, object]:
     return require_contract_mapping(value)
 
 
+class SummaryBuildRequest(CqStruct, frozen=True):
+    """Input contract for canonical multilang summary assembly."""
+
+    lang_scope: QueryLanguageScope
+    languages: Mapping[QueryLanguage, Mapping[str, object]]
+    common: Mapping[str, object] | None = None
+    language_order: tuple[QueryLanguage, ...] | None = None
+    cross_language_diagnostics: Sequence[CrossLanguageDiagnostic | Mapping[str, object]] | None = (
+        None
+    )
+    language_capabilities: LanguageCapabilities | Mapping[str, object] | None = None
+    enrichment_telemetry: Mapping[str, object] | None = None
+
+
+class MergeResultsRequest(CqStruct, frozen=True):
+    """Input contract for multi-language CQ result merge."""
+
+    scope: QueryLanguageScope
+    results: Mapping[QueryLanguage, CqResult]
+    run: RunMeta
+    diagnostics: Sequence[Finding] | None = None
+    diagnostic_payloads: Sequence[Mapping[str, object]] | None = None
+    language_capabilities: Mapping[str, object] | None = None
+    summary_common: Mapping[str, object] | None = None
+    include_section_language_prefix: bool = True
+
+
+class UuidIdentityContractV1(CqStruct, frozen=True):
+    """Sortable UUID contract for CQ runtime identity fields."""
+
+    run_id: str
+    artifact_id: str
+    cache_key_uses_uuid: bool = False
+    run_uuid_version: int | None = None
+    run_created_ms: int | None = None
+
+
 __all__ = [
     "ContractEnvelope",
+    "MergeResultsRequest",
+    "SummaryBuildRequest",
+    "UuidIdentityContractV1",
     "contract_to_builtins",
     "require_mapping",
     "summary_contract_to_mapping",

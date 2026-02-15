@@ -4,15 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from tools.cq.search.tree_sitter.core.node_utils import node_text
+
 if TYPE_CHECKING:
     from tree_sitter import Node
 
 _MAX_CAPTURE_ITEMS = 8
 _MAX_CAPTURE_TEXT_LEN = 120
-
-
-def _node_text(node: Node, source_bytes: bytes) -> str:
-    return source_bytes[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
 def _capture_named_definition(
@@ -21,7 +19,7 @@ def _capture_named_definition(
     source_bytes: bytes,
 ) -> str | None:
     if name_nodes:
-        name = _node_text(name_nodes[0], source_bytes)
+        name = node_text(name_nodes[0], source_bytes)
         if name:
             return name
     if not fallback_nodes:
@@ -29,7 +27,7 @@ def _capture_named_definition(
     name_node = fallback_nodes[0].child_by_field_name("name")
     if name_node is None:
         return None
-    name = _node_text(name_node, source_bytes)
+    name = node_text(name_node, source_bytes)
     return name or None
 
 
@@ -42,7 +40,7 @@ def _capture_text_rows(
     for name in capture_names:
         nodes = captures.get(name, [])
         for node in nodes:
-            text = _node_text(node, source_bytes)
+            text = node_text(node, source_bytes)
             if text:
                 rows.append(text[:_MAX_CAPTURE_TEXT_LEN])
             if len(rows) >= _MAX_CAPTURE_ITEMS:
@@ -64,15 +62,15 @@ def _append_named_import_chain(
     source_bytes: bytes,
 ) -> None:
     if getattr(name_node, "type", "") != "aliased_import":
-        _append_chain_row(chain, key="module", value=_node_text(name_node, source_bytes))
+        _append_chain_row(chain, key="module", value=node_text(name_node, source_bytes))
         return
 
     module_node = name_node.child_by_field_name("name")
     alias_node = name_node.child_by_field_name("alias")
     if module_node is not None:
-        _append_chain_row(chain, key="module", value=_node_text(module_node, source_bytes))
+        _append_chain_row(chain, key="module", value=node_text(module_node, source_bytes))
     if alias_node is not None:
-        _append_chain_row(chain, key="alias", value=_node_text(alias_node, source_bytes))
+        _append_chain_row(chain, key="alias", value=node_text(alias_node, source_bytes))
 
 
 def _append_import_statement_chain(
@@ -97,7 +95,7 @@ def _append_import_from_statement_chain(
     for statement in captures.get("import.from_statement", []):
         module_node = statement.child_by_field_name("module_name")
         if module_node is not None:
-            _append_chain_row(chain, key="from", value=_node_text(module_node, source_bytes))
+            _append_chain_row(chain, key="from", value=node_text(module_node, source_bytes))
         name_node = statement.child_by_field_name("name")
         if name_node is not None:
             _append_named_import_chain(chain, name_node, source_bytes)
@@ -170,7 +168,7 @@ def _capture_binding_candidates(
     ):
         nodes = captures.get(capture_name, [])
         for node in nodes:
-            text = _node_text(node, source_bytes)
+            text = node_text(node, source_bytes)
             if not text:
                 continue
             row: dict[str, object] = {

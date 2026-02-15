@@ -10,7 +10,7 @@ from pathlib import Path
 
 import msgspec
 
-from tools.cq.core.codec import dumps_json_value
+from tools.cq.core.contract_codec import dumps_json_value
 from tools.cq.core.toolchain import Toolchain
 from tools.cq.macros.calls import cmd_calls
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan

@@ -22,9 +22,9 @@ from tools.cq.search.enrichment.core import (
     set_degraded,
 )
 from tools.cq.search.pipeline.classifier import get_node_index
+from tools.cq.search.rust.contracts import RustMacroExpansionRequestV1
 from tools.cq.search.rust.evidence import attach_rust_evidence
-from tools.cq.search.rust.macro_expansion_bridge import expand_macros
-from tools.cq.search.rust.macro_expansion_contracts import RustMacroExpansionRequestV1
+from tools.cq.search.rust.extensions import expand_macros
 from tools.cq.search.tree_sitter.rust_lane.runtime import (
     enrich_rust_context_by_byte_range as _ts_enrich,
 )

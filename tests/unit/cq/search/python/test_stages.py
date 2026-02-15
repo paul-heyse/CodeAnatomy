@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from tools.cq.search.python.stages import extract_signature_stage
+from tools.cq.search.python.pipeline_support import extract_signature_stage
 
 
 class _Node:

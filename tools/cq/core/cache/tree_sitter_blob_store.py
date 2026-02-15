@@ -9,10 +9,10 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import cast
 
+from tools.cq.core.cache.base_contracts import TreeSitterBlobRefV1
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.cache.namespaces import resolve_namespace_ttl_seconds
 from tools.cq.core.cache.policy import default_cache_policy
-from tools.cq.core.cache.tree_sitter_blob_store_contracts import TreeSitterBlobRefV1
 
 _BLOB_DIR = "tree_sitter_blobs"
 _BLOB_NAMESPACE = "tree_sitter"

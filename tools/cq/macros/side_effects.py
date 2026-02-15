@@ -11,6 +11,7 @@ from typing import Literal
 
 import msgspec
 
+from tools.cq.core.python_ast_utils import safe_unparse
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -23,9 +24,8 @@ from tools.cq.core.schema import (
 from tools.cq.core.scoring import build_detail_payload
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import ScopedMacroRequestBase
-from tools.cq.macros.scan_utils import iter_files
-from tools.cq.macros.scope_filters import scope_filter_applied
-from tools.cq.macros.scoring_utils import macro_scoring_details
+from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
+from tools.cq.macros.shared import iter_files, macro_scoring_details, scope_filter_applied
 
 _MAX_EFFECTS_DISPLAY = 40
 
@@ -89,13 +89,6 @@ class SideEffect(msgspec.Struct):
     line: int
     kind: str
     description: str
-
-
-def _safe_unparse(node: ast.AST) -> str:
-    try:
-        return ast.unparse(node)
-    except (ValueError, TypeError):
-        return "<unknown>"
 
 
 def _is_main_guard(node: ast.If) -> bool:
@@ -173,7 +166,7 @@ class SideEffectVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         """Visit a call expression for import-time calls."""
         if self._in_def == 0 and not self._in_main_guard:
-            callee = _safe_unparse(node.func)
+            callee = safe_unparse(node.func, default="<unknown>")
 
             # Skip decorators and type-related calls
             if callee not in SAFE_TOP_LEVEL:
@@ -193,7 +186,7 @@ class SideEffectVisitor(ast.NodeVisitor):
             for target in node.targets:
                 if isinstance(target, ast.Subscript):
                     # Dict/list mutation at module level
-                    target_str = _safe_unparse(target)
+                    target_str = safe_unparse(target, default="<unknown>")
                     self.effects.append(
                         SideEffect(
                             file=self.file,
@@ -207,7 +200,7 @@ class SideEffectVisitor(ast.NodeVisitor):
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         """Visit an augmented assignment for module-level mutations."""
         if self._in_def == 0 and not self._in_main_guard:
-            target_str = _safe_unparse(node.target)
+            target_str = safe_unparse(node.target, default="<unknown>")
             self.effects.append(
                 SideEffect(
                     file=self.file,
@@ -221,7 +214,7 @@ class SideEffectVisitor(ast.NodeVisitor):
     def visit_Attribute(self, node: ast.Attribute) -> None:
         """Visit attribute access for ambient reads."""
         if self._in_def == 0 and not self._in_main_guard:
-            full = _safe_unparse(node)
+            full = safe_unparse(node, default="<unknown>")
             for pattern, category in AMBIENT_PATTERNS.items():
                 if full.endswith(pattern) or pattern in full:
                     self.effects.append(
@@ -341,27 +334,6 @@ def _append_evidence(
         )
 
 
-def _apply_rust_fallback(result: CqResult, root: Path) -> CqResult:
-    """Append Rust fallback findings and multilang summary to a side-effects result.
-
-    Args:
-        result: Existing Python-only CqResult.
-        root: Repository root path.
-
-    Returns:
-        The mutated result with Rust fallback data merged in.
-    """
-    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
-
-    pattern = "static mut \\|lazy_static\\|thread_local\\|unsafe "
-    return apply_rust_macro_fallback(
-        result=result,
-        root=root,
-        pattern=pattern,
-        macro_name="side-effects",
-    )
-
-
 def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
     """Analyze import-time side effects.
 
@@ -459,4 +431,11 @@ def cmd_side_effects(request: SideEffectsRequest) -> CqResult:
     _append_kind_sections(result, by_kind, scoring_details)
     _append_evidence(result, all_effects, scoring_details)
 
-    return _apply_rust_fallback(result, request.root)
+    return apply_rust_fallback_policy(
+        result,
+        root=request.root,
+        policy=RustFallbackPolicyV1(
+            macro_name="side-effects",
+            pattern="static mut \\|lazy_static\\|thread_local\\|unsafe ",
+        ),
+    )

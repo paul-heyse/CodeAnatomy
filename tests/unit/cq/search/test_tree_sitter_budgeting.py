@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter.core.budgeting import (
+from tools.cq.search.tree_sitter.core.runtime_support import (
     budget_ms_per_anchor,
     deadline_from_budget_ms,
     is_deadline_expired,

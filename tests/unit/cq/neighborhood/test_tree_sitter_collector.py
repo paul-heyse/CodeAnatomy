@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectRequest
 from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
-from tools.cq.neighborhood.tree_sitter_contracts import TreeSitterNeighborhoodCollectRequest
 
 
 @pytest.mark.skipif(

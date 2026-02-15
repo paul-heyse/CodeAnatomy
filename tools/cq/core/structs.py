@@ -41,3 +41,7 @@ class CqCacheStruct(
     forbid_unknown_fields=True,
 ):
     """Base struct for serializable CQ cache payload contracts."""
+
+
+type JsonScalar = str | int | float | bool | None
+type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]

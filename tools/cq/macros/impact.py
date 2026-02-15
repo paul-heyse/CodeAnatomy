@@ -15,6 +15,7 @@ from typing import cast
 
 import msgspec
 
+from tools.cq.core.python_ast_utils import get_call_name
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import (
     Anchor,
@@ -29,7 +30,8 @@ from tools.cq.index.arg_binder import bind_call_to_params, tainted_params_from_b
 from tools.cq.index.call_resolver import CallInfo, resolve_call_targets
 from tools.cq.index.def_index import DefIndex, FnDecl
 from tools.cq.macros.contracts import MacroRequestBase
-from tools.cq.macros.scoring_utils import macro_scoring_details
+from tools.cq.macros.rust_fallback_policy import RustFallbackPolicyV1, apply_rust_fallback_policy
+from tools.cq.macros.shared import macro_scoring_details
 from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
 from tools.cq.search.rg.adapter import find_callers
 
@@ -178,7 +180,7 @@ class TaintVisitor(ast.NodeVisitor):
 
         if tainted_arg_indices or tainted_arg_values:
             # Record the call for inter-procedural analysis
-            callee_name = self._get_call_name(node.func)
+            callee_name, is_method, receiver = get_call_name(node.func)
             call_info = CallInfo(
                 file=self.file,
                 line=node.lineno,
@@ -186,8 +188,8 @@ class TaintVisitor(ast.NodeVisitor):
                 callee_name=callee_name,
                 args=node.args,
                 keywords=node.keywords,
-                is_method_call=isinstance(node.func, ast.Attribute),
-                receiver_name=self._get_receiver(node.func),
+                is_method_call=is_method,
+                receiver_name=receiver,
             )
             self.calls.append((call_info, tainted_arg_indices | tainted_arg_values))
 
@@ -236,26 +238,6 @@ class TaintVisitor(ast.NodeVisitor):
             keys_tainted = any(self.expr_tainted(k) for k in expr.keys if k is not None)
             return keys_tainted or any(self.expr_tainted(v) for v in expr.values)
         return False
-
-    @staticmethod
-    def _safe_unparse(expr: ast.AST, *, default: str) -> str:
-        with suppress(ValueError, TypeError):
-            return ast.unparse(expr)
-        return default
-
-    @classmethod
-    def _get_call_name(cls, func: ast.expr) -> str:
-        if isinstance(func, ast.Name):
-            return func.id
-        if isinstance(func, ast.Attribute):
-            return cls._safe_unparse(func, default=func.attr)
-        return cls._safe_unparse(func, default="<unknown>")
-
-    @staticmethod
-    def _get_receiver(func: ast.expr) -> str | None:
-        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-            return func.value.id
-        return None
 
 
 def _tainted_attribute(visitor: TaintVisitor, expr: ast.Attribute) -> bool:
@@ -836,28 +818,6 @@ def _build_impact_result(
     return result
 
 
-def _apply_rust_fallback(result: CqResult, root: Path, function_name: str) -> CqResult:
-    """Append Rust fallback findings and multilang summary to an impact result.
-
-    Args:
-        result: Existing Python-only CqResult.
-        root: Repository root path.
-        function_name: Function name searched for.
-
-    Returns:
-        The mutated result with Rust fallback data merged in.
-    """
-    from tools.cq.macros.multilang_fallback import apply_rust_macro_fallback
-
-    return apply_rust_macro_fallback(
-        result=result,
-        root=root,
-        pattern=function_name,
-        macro_name="impact",
-        query=function_name,
-    )
-
-
 def cmd_impact(request: ImpactRequest) -> CqResult:
     """Analyze impact/taint flow from a function parameter.
 
@@ -876,4 +836,12 @@ def cmd_impact(request: ImpactRequest) -> CqResult:
     functions = _resolve_functions(index, request.function_name)
     ctx = ImpactContext(request=request, index=index, functions=functions)
     result = _build_impact_result(ctx, started_ms=started)
-    return _apply_rust_fallback(result, request.root, request.function_name)
+    return apply_rust_fallback_policy(
+        result,
+        root=request.root,
+        policy=RustFallbackPolicyV1(
+            macro_name="impact",
+            pattern=request.function_name,
+            query=request.function_name,
+        ),
+    )

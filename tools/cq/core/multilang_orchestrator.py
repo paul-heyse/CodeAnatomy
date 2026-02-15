@@ -6,11 +6,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar, cast
 
+from tools.cq.core.contracts import MergeResultsRequest, SummaryBuildRequest
 from tools.cq.core.multilang_summary import (
     build_multilang_summary,
     partition_stats_from_result_summary,
 )
-from tools.cq.core.requests import MergeResultsRequest, SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import CqResult, DetailPayload, Finding, Section, mk_result

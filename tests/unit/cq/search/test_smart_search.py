@@ -10,7 +10,7 @@ from typing import cast
 import pytest
 from tools.cq.core.locations import SourceSpan
 from tools.cq.search.pipeline.classifier import QueryMode, clear_caches
-from tools.cq.search.pipeline.models import SearchConfig
+from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.smart_search import (
     SMART_SEARCH_LIMITS,
     EnrichedMatch,

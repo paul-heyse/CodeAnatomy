@@ -11,10 +11,11 @@ from cyclopts import Parameter
 
 # Import CliContext at runtime for cyclopts type hint resolution
 from tools.cq.cli_app.context import CliContext, CliResult
-from tools.cq.cli_app.decorators import require_context, require_ctx
+from tools.cq.cli_app.infrastructure import require_context, require_ctx
 from tools.cq.cli_app.options import ReportOptions, options_from_params
 from tools.cq.cli_app.params import ReportParams
 from tools.cq.cli_app.types import ReportPreset
+from tools.cq.core.result_factory import build_error_result
 
 
 @require_ctx
@@ -40,27 +41,24 @@ def report(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.core.bundles import BundleContext, parse_target_spec, run_bundle
-    from tools.cq.core.run_context import RunContext
-    from tools.cq.core.schema import mk_result, ms
+    from tools.cq.core.bundles import BundleContext, parse_bundle_target_spec, run_bundle
+    from tools.cq.core.schema import ms
 
     ctx = require_context(ctx)
     options = options_from_params(opts, type_=ReportOptions)
 
     # Parse target spec
     try:
-        target_spec = parse_target_spec(options.target)
+        target_spec = parse_bundle_target_spec(options.target)
     except ValueError as exc:
-        started_ms = ms()
-        run_ctx = RunContext.from_parts(
+        result = build_error_result(
+            macro="report",
             root=ctx.root,
             argv=ctx.argv,
             tc=ctx.toolchain,
-            started_ms=started_ms,
+            started_ms=ms(),
+            error=exc,
         )
-        run = run_ctx.to_runmeta("report")
-        result = mk_result(run)
-        result.summary["error"] = str(exc)
         return CliResult(result=result, context=ctx, filters=options)
 
     bundle_ctx = BundleContext(

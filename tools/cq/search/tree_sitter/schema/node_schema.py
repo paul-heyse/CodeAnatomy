@@ -1,10 +1,11 @@
-"""Static node-type schema loading for tree-sitter query-pack validation."""
+"""Static node-type schema loading, runtime id helpers, and code generation."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, cast
+from pathlib import Path
+from typing import Any, Protocol, cast
 
 from tools.cq.core.structs import CqStruct
 
@@ -169,10 +170,83 @@ def build_schema_index(schema: GrammarSchemaV1) -> GrammarSchemaIndex:
     )
 
 
+# -- Runtime Grammar-ID Helpers (absorbed from runtime.py) --------------------
+
+
+class RuntimeLanguage(Protocol):
+    """Subset of tree-sitter Language APIs used for runtime id lookups."""
+
+    def id_for_node_kind(self, name: str, named: object) -> int:
+        """Return node-kind id for a given name."""
+        ...
+
+    def field_id_for_name(self, name: str) -> int:
+        """Return field id for a given field name."""
+        ...
+
+
+def build_runtime_ids(language: RuntimeLanguage) -> dict[str, int]:
+    """Build runtime node-kind ids for frequently queried symbols."""
+    out: dict[str, int] = {}
+    named = True
+    for kind in ("identifier", "call", "function_definition"):
+        try:
+            out[kind] = int(language.id_for_node_kind(kind, named))
+        except (RuntimeError, TypeError, ValueError, AttributeError):
+            continue
+    return out
+
+
+def build_runtime_field_ids(language: RuntimeLanguage) -> dict[str, int]:
+    """Build runtime field ids for frequently queried field names."""
+    out: dict[str, int] = {}
+    for field_name in ("name", "body", "parameters"):
+        try:
+            out[field_name] = int(language.field_id_for_name(field_name))
+        except (RuntimeError, TypeError, ValueError, AttributeError):
+            continue
+    return out
+
+
+# -- Code Generation (absorbed from node_codegen.py) --------------------------
+
+
+def render_node_types_module(schema: GrammarSchemaV1) -> str:
+    """Render Python module source for generated NODE_TYPES snapshots.
+
+    Returns:
+        str: Generated Python module source.
+    """
+    rows = [
+        f'    ("{node.type}", {node.named}, {tuple(node.fields)!r}),'
+        for node in sorted(schema.node_types, key=lambda row: row.type)
+    ]
+    body = "\n".join(rows)
+    return (
+        f'"""Generated {schema.language} node-type snapshot."""\n\n'
+        "from __future__ import annotations\n\n"
+        "NODE_TYPES: tuple[tuple[str, bool, tuple[str, ...]], ...] = (\n"
+        f"{body}\n"
+        ")\n\n"
+        '__all__ = ["NODE_TYPES"]\n'
+    )
+
+
+def write_node_types_module(*, schema: GrammarSchemaV1, output_path: Path) -> None:
+    """Write a generated node-types module to disk."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(render_node_types_module(schema), encoding="utf-8")
+
+
 __all__ = [
     "GrammarNodeTypeV1",
     "GrammarSchemaIndex",
     "GrammarSchemaV1",
+    "RuntimeLanguage",
+    "build_runtime_field_ids",
+    "build_runtime_ids",
     "build_schema_index",
     "load_grammar_schema",
+    "render_node_types_module",
+    "write_node_types_module",
 ]

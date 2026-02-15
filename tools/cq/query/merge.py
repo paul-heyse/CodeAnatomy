@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import cast
 
 from tools.cq.core.bootstrap import resolve_runtime_services
+from tools.cq.core.contracts import MergeResultsRequest
 from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
-from tools.cq.core.requests import MergeResultsRequest
 from tools.cq.core.schema import CqResult
 from tools.cq.core.services import EntityFrontDoorRequest
 from tools.cq.core.toolchain import Toolchain

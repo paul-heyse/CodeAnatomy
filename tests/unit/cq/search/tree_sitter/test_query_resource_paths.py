@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter.query.resource_paths import (
+from tools.cq.search.tree_sitter.query.support import (
     diagnostics_query_path,
     query_contracts_path,
     query_pack_dir,

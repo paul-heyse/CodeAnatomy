@@ -21,15 +21,16 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     if name in {"SearchResultAssembly", "assemble_result"}:
-        from tools.cq.search.pipeline.assembly import SearchResultAssembly, assemble_result
+        from tools.cq.search.pipeline.orchestration import assemble_result
+        from tools.cq.search.pipeline.smart_search import SearchResultAssembly
 
         return SearchResultAssembly if name == "SearchResultAssembly" else assemble_result
     if name == "SearchPipeline":
-        from tools.cq.search.pipeline.legacy import SearchPipeline
+        from tools.cq.search.pipeline.orchestration import SearchPipeline
 
         return SearchPipeline
     if name == "SearchContext":
-        from tools.cq.search.pipeline.models import SmartSearchContext
+        from tools.cq.search.pipeline.contracts import SmartSearchContext
 
         return SmartSearchContext
     if name == "run_smart_search_pipeline":

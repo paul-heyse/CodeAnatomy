@@ -18,7 +18,8 @@ from tools.cq.core.cache import (
     maybe_evict_run_cache_tag,
     snapshot_backend_metrics,
 )
-from tools.cq.core.contracts import contract_to_builtins
+from tools.cq.core.contract_codec import to_public_dict, to_public_list
+from tools.cq.core.contracts import SummaryBuildRequest, contract_to_builtins
 from tools.cq.core.locations import (
     SourceSpan,
     line_relative_byte_range_to_absolute,
@@ -31,8 +32,6 @@ from tools.cq.core.multilang_summary import (
     assert_multilang_summary,
     build_multilang_summary,
 )
-from tools.cq.core.public_serialization import to_public_dict, to_public_list
-from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
 from tools.cq.core.schema import (
@@ -105,26 +104,26 @@ from tools.cq.search.pipeline.context_window import (
     compute_search_context_window,
     extract_search_context_snippet,
 )
-from tools.cq.search.pipeline.legacy import SearchPipeline
-from tools.cq.search.pipeline.models import (
+from tools.cq.search.pipeline.contracts import (
     CandidateSearchRequest,
     SearchConfig,
+    SearchPartitionPlanV1,
     SearchRequest,
     SmartSearchContext,
 )
-from tools.cq.search.pipeline.partition_contracts import SearchPartitionPlanV1
-from tools.cq.search.pipeline.partition_pipeline import run_search_partition
-from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
-from tools.cq.search.pipeline.section_builder import (
+from tools.cq.search.pipeline.orchestration import (
+    SearchPipeline,
     insert_neighborhood_preview,
     insert_target_candidates,
 )
+from tools.cq.search.pipeline.partition_pipeline import run_search_partition
+from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
 from tools.cq.search.python.analysis_session import get_python_analysis_session
+from tools.cq.search.python.evidence import evaluate_python_semantic_signal_from_mapping
 from tools.cq.search.python.extractors import (
     _ENRICHMENT_ERRORS as _PYTHON_ENRICHMENT_ERRORS,
 )
 from tools.cq.search.python.extractors import enrich_python_context_by_byte_range
-from tools.cq.search.python.semantic_signal import evaluate_python_semantic_signal_from_mapping
 from tools.cq.search.rg.collector import RgCollector
 from tools.cq.search.rg.runner import build_rg_command, run_rg_json
 from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
@@ -147,7 +146,7 @@ from tools.cq.search.semantic.models import (
     semantic_runtime_enabled,
 )
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
-from tools.cq.search.tree_sitter.core.budgeting import budget_ms_per_anchor
+from tools.cq.search.tree_sitter.core.runtime_support import budget_ms_per_anchor
 from tools.cq.search.tree_sitter.python_lane.runtime import get_tree_sitter_python_cache_stats
 from tools.cq.search.tree_sitter.query.lint import lint_search_query_packs
 from tools.cq.search.tree_sitter.rust_lane.runtime import get_tree_sitter_rust_cache_stats
@@ -3018,8 +3017,8 @@ def _build_structural_neighborhood_preview(
     definition_matches: list[EnrichedMatch],
 ) -> tuple[InsightNeighborhoodV1 | None, list[Finding], list[str]]:
     from tools.cq.core.front_door_insight import build_neighborhood_from_slices
+    from tools.cq.neighborhood.contracts import TreeSitterNeighborhoodCollectRequest
     from tools.cq.neighborhood.tree_sitter_collector import collect_tree_sitter_neighborhood
-    from tools.cq.neighborhood.tree_sitter_contracts import TreeSitterNeighborhoodCollectRequest
 
     if primary_target_finding is None or primary_target_finding.anchor is None:
         return None, [], []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.cq.search.tree_sitter.rust_lane.injection_settings import (
+from tools.cq.search.tree_sitter.rust_lane.injection_config import (
     InjectionSettingsV1,
     settings_for_pattern,
 )

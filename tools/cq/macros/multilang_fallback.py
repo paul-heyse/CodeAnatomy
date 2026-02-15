@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from tools.cq.core.contracts import SummaryBuildRequest
 from tools.cq.core.multilang_summary import (
     build_multilang_summary,
     partition_stats_from_result_summary,
 )
-from tools.cq.core.requests import SummaryBuildRequest
 from tools.cq.core.schema import CqResult
 from tools.cq.macros._rust_fallback import rust_fallback_search
 

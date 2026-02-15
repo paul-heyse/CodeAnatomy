@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from tools.cq.search.tree_sitter.contracts.core_models import TreeSitterDiagnosticV1
-from tools.cq.search.tree_sitter.structural.diagnostic_export import export_diagnostic_rows
+from tools.cq.search.tree_sitter.structural.exports import export_diagnostic_rows
 
 
 def test_export_diagnostic_rows_filters_to_typed_rows() -> None:

@@ -7,11 +7,10 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from tools.cq.core.structs import CqStruct
-from tools.cq.search.tree_sitter.rust_lane.injection_profiles import (
-    resolve_rust_injection_profile,
-)
-from tools.cq.search.tree_sitter.rust_lane.injection_settings import (
+from tools.cq.search.tree_sitter.core.node_utils import node_text
+from tools.cq.search.tree_sitter.rust_lane.injection_config import (
     InjectionSettingsV1,
+    resolve_rust_injection_profile,
     settings_for_pattern,
 )
 
@@ -56,14 +55,6 @@ class InjectionPlanBuildContextV1(CqStruct, frozen=True):
     default_language: str | None
 
 
-def _node_text(node: NodeLike, source_bytes: bytes) -> str:
-    start = int(getattr(node, "start_byte", 0))
-    end = int(getattr(node, "end_byte", start))
-    if end <= start:
-        return ""
-    return source_bytes[start:end].decode("utf-8", errors="replace")
-
-
 def _resolve_language_name(
     *,
     context: InjectionPlanBuildContextV1,
@@ -76,7 +67,7 @@ def _resolve_language_name(
         return settings.language
 
     if language_nodes:
-        language_text = _node_text(language_nodes[0], context.source_bytes)
+        language_text = node_text(language_nodes[0], context.source_bytes)
         if language_text:
             return language_text
 
@@ -157,7 +148,7 @@ def build_injection_plan_from_matches(
         macro_nodes = capture_map.get("injection.macro.name", [])
         macro_name = ""
         if macro_nodes:
-            macro_name = _node_text(macro_nodes[0], source_bytes)
+            macro_name = node_text(macro_nodes[0], source_bytes)
         profile = resolve_rust_injection_profile(macro_name or None)
 
         for node in content_nodes:

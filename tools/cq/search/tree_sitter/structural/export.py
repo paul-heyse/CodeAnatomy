@@ -9,7 +9,7 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterStructuralExportV1,
     TreeSitterStructuralNodeV1,
 )
-from tools.cq.search.tree_sitter.structural.token_export import export_cst_tokens
+from tools.cq.search.tree_sitter.structural.exports import export_cst_tokens
 
 if TYPE_CHECKING:
     from tree_sitter import Node

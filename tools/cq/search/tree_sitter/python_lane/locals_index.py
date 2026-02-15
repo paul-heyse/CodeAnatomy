@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.tree_sitter.core.node_utils import node_text
 
 
 class NodeLike(Protocol):
@@ -32,14 +33,6 @@ class LocalBindingV1(CqStruct, frozen=True):
     definition_start: int
 
 
-def _node_text(node: NodeLike, source_bytes: bytes) -> str:
-    start = int(getattr(node, "start_byte", 0))
-    end = int(getattr(node, "end_byte", start))
-    if end <= start:
-        return ""
-    return source_bytes[start:end].decode("utf-8", errors="replace")
-
-
 def _contains(container: NodeLike, item: NodeLike) -> bool:
     container_start = int(getattr(container, "start_byte", 0))
     container_end = int(getattr(container, "end_byte", container_start))
@@ -64,7 +57,7 @@ def _nearest_scope(node: NodeLike, scopes: Sequence[NodeLike]) -> NodeLike | Non
 def _scope_label(scope: NodeLike, source_bytes: bytes) -> str:
     name_node = scope.child_by_field_name("name")
     if name_node is not None:
-        name = _node_text(name_node, source_bytes)
+        name = node_text(name_node, source_bytes)
         if name:
             return name
     return str(getattr(scope, "type", "scope"))
@@ -79,7 +72,7 @@ def build_locals_index(
     """Build typed local-binding rows anchored to nearest local scope."""
     bindings: list[LocalBindingV1] = []
     for node in definitions:
-        name = _node_text(node, source_bytes)
+        name = node_text(node, source_bytes)
         if not name:
             continue
         scope = _nearest_scope(node, scopes)

@@ -14,10 +14,12 @@ This plan implements the approved Cyclopts improvement scope for CQ items 1 thro
 ## 4. Current Baseline
 - CQ app uses a meta launcher with forwarding tokens and global options in `tools/cq/cli_app/app.py`.
 - CQ telemetry imports Cyclopts private internals in `tools/cq/cli_app/telemetry.py` (`cyclopts._result_action`, `cyclopts._run`).
-- CQ registers admin commands from `tools.cq.cli_app.commands.admin:*` in `tools/cq/cli_app/app.py`, but `tools/cq/cli_app/commands/admin.py` is currently absent.
-- Direct parse of admin commands currently fails with `ImportError` (validated locally with `uv run` parse checks).
+- CQ admin commands are present and parseable in `tools/cq/cli_app/commands/admin.py`, but they currently emit directly to stdout and bypass the unified `CliResult` rendering path.
 - CQ uses both Cyclopts config providers and separate typed config/env loaders in `tools/cq/cli_app/config.py`, then merges manually in `tools/cq/cli_app/app.py`.
-- CQ help/docs currently show duplicated env var labels and iterable negative flags (`--empty-*`) in `docs/reference/cq_cli.md`.
+- CQ help/docs currently show duplicated env var labels and iterable negative flags (`--empty-*`), including run-input flags (`--empty-step`, `--empty-steps`), in `docs/reference/cq_cli.md`.
+- CQ already has CQ-specific generation scripts for docs/completion (`scripts/generate_cq_cli_docs.py`, `scripts/generate_cq_completion.py`) that should be hardened instead of replaced.
+- CQ chain execution now compiles to `RunPlan` in `tools/cq/run/chain.py` and executes through `tools/cq/run/runner.py` via `tools/cq/cli_app/commands/chain.py`.
+- Shared group constants are mostly centralized, but `tools/cq/cli_app/commands/neighborhood.py` still constructs an inline `Group("Analysis", sort_key=1)`.
 - CQ has broad `Parameter(parse=False)` use for context injection in command signatures, and uses `app.meta` as orchestration surface.
 
 ## 5. Per-Scope-Item Plan
@@ -39,11 +41,16 @@ from typing import Any
 
 
 def dispatch_bound_command(command: Callable[..., Any], bound: BoundArguments) -> Any:
-    """Execute a parsed command using only public Python/Cyclopts primitives."""
+    """Execute a parsed command using public APIs and explicit async policy."""
     result = command(*bound.args, **bound.kwargs)
-    if inspect.isawaitable(result):
+    if not inspect.isawaitable(result):
+        return result
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
         return asyncio.run(result)
-    return result
+    msg = "Awaitable command dispatched from sync invocation path; use main_async/run_async."
+    raise RuntimeError(msg)
 ```
 
 ```python
@@ -62,7 +69,6 @@ result = dispatch_bound_command(command, bound)
 
 ### Files to Edit
 - `tools/cq/cli_app/telemetry.py`
-- `tools/cq/cli_app/app.py`
 - `tests/unit/cq/test_cli_result_handling.py`
 
 ### New Files to Create
@@ -73,13 +79,13 @@ result = dispatch_bound_command(command, bound)
 - Delete private Cyclopts imports from `tools/cq/cli_app/telemetry.py`:
 - `from cyclopts._result_action import handle_result_action`
 - `from cyclopts._run import _run_maybe_async_command`
-- Delete private-internal execution path `_apply_result_action` if superseded by S2 result-action pipeline adoption.
+- Delete private-internal execution helpers superseded by explicit public dispatch and result-action policy.
 
 ---
 
 ## S2. Adopt Explicit CQ Result-Action Pipelines
 ### Goal
-Standardize CQ return handling through explicit Cyclopts `result_action` pipeline contracts for normal invocation, chain forwarding, and REPL behavior.
+Standardize CQ return handling through explicit Cyclopts `result_action` pipeline contracts for launcher invocation, telemetry-wrapped execution, and REPL behavior.
 
 ### Representative Code Snippets
 ```python
@@ -116,30 +122,20 @@ app = App(
 )
 ```
 
-```python
-# tools/cq/run/chain.py
-exit_code = app(
-    segment_tokens,
-    exit_on_error=False,
-    print_error=True,
-    result_action="return_int_as_exit_code_else_zero",
-)
-```
-
 ### Files to Edit
 - `tools/cq/cli_app/result_action.py`
 - `tools/cq/cli_app/app.py`
 - `tools/cq/cli_app/telemetry.py`
-- `tools/cq/run/chain.py`
+- `tools/cq/cli_app/commands/repl.py`
 - `tests/unit/cq/test_cli_result_handling.py`
-- `tests/unit/cq/test_chain_compilation.py`
+- `tests/unit/cq/cli/test_admin_output_contracts.py`
 
 ### New Files to Create
 - None.
 
 ### Legacy Decommission/Delete Scope
 - Delete manual `int(...) if isinstance(processed, int)` coercion fallback in `tools/cq/cli_app/telemetry.py` once pipeline policy is authoritative.
-- Delete duplicated result-normalization branches split across launcher and telemetry once `CQ_DEFAULT_RESULT_ACTION` is adopted everywhere.
+- Delete duplicated result-normalization branches split across launcher, telemetry, and command-local stdout emitters once `CQ_DEFAULT_RESULT_ACTION` is adopted everywhere.
 
 ---
 
@@ -262,9 +258,9 @@ def repl_help(
 
 ---
 
-## S5. Restore Admin Command Module and Fix CQ Command Graph Integrity
+## S5. Normalize Admin Command Contracts Through CQ Result Pipeline
 ### Goal
-Resolve broken admin command registrations by creating a CQ admin module at the registered import path and aligning parse/help/docs behavior.
+Keep existing admin command registrations but migrate command outputs to unified `CliResult`/`result_action` handling, removing direct stdout writes from admin command bodies.
 
 ### Representative Code Snippets
 ```python
@@ -281,11 +277,15 @@ from tools.cq.cli_app.decorators import require_context, require_ctx
 from tools.cq.cli_app.types import OutputFormat, SchemaKind
 
 
-def _emit_payload(ctx: CliContext, payload: dict[str, object]) -> CliResult:
-    text = json.dumps(payload, indent=2) if ctx.output_format == OutputFormat.json else payload["message"]  # type: ignore[index]
+def _emit_payload(ctx: CliContext, payload: dict[str, object], *, text_fallback: str) -> CliResult:
+    text = json.dumps(payload, indent=2) if ctx.output_format == OutputFormat.json else text_fallback
     return CliResult(
-        result=CliTextResult(text=text, media_type="application/json" if ctx.output_format == OutputFormat.json else "text/plain"),
+        result=CliTextResult(
+            text=text,
+            media_type="application/json" if ctx.output_format == OutputFormat.json else "text/plain",
+        ),
         context=ctx,
+        filters=None,
     )
 
 
@@ -295,36 +295,43 @@ def index(*, ctx: Annotated[CliContext | None, Parameter(parse=False)] = None) -
     return _emit_payload(
         resolved,
         {"deprecated": True, "message": "Index management has been removed. Caching is no longer used."},
+        text_fallback="Index management has been removed. Caching is no longer used.",
     )
 ```
 
 ```python
-# tools/cq/cli_app/app.py
-app.command("tools.cq.cli_app.commands.admin:index", group=admin_group)
-app.command("tools.cq.cli_app.commands.admin:cache", group=admin_group)
-app.command("tools.cq.cli_app.commands.admin:schema", group=admin_group)
+# tests/unit/cq/cli/test_admin_output_contracts.py
+from pathlib import Path
+
+from tools.cq.cli_app.commands import admin
+from tools.cq.cli_app.context import CliContext, CliResult, CliTextResult
+from tools.cq.cli_app.types import OutputFormat
+
+
+def test_admin_index_returns_cli_result(tmp_path: Path) -> None:
+    ctx = CliContext.build(argv=["cq", "index"], root=tmp_path, output_format=OutputFormat.json)
+    result = admin.index(ctx=ctx)
+    assert isinstance(result, CliResult)
+    assert isinstance(result.result, CliTextResult)
 ```
 
 ### Files to Edit
-- `tools/cq/cli_app/app.py`
-- `docs/reference/cq_cli.md`
-- `tests/unit/cq/test_cli_meta_app.py`
-- `tests/unit/cq/test_cli_parsing.py`
-- `tests/cli_golden/fixtures/cq_help_root.txt`
+- `tools/cq/cli_app/commands/admin.py`
+- `tests/unit/cq/cli/test_admin_output_contracts.py`
+- `tests/unit/cq/test_cli_result_handling.py`
 
 ### New Files to Create
-- `tools/cq/cli_app/commands/admin.py`
-- `tests/unit/cq/test_cli_admin_module.py`
+- None.
 
 ### Legacy Decommission/Delete Scope
-- Delete stale assumptions that admin commands are “present but non-importable”.
-- Delete error-handling branches in tests that treated missing admin module import as acceptable.
+- Delete direct stdout JSON/text emission branches inside admin command implementations.
+- Delete admin-only output normalization that duplicates shared CQ result pipeline behavior.
 
 ---
 
 ## S6. Consolidate CQ Config Semantics Around `App.config` Chain
 ### Goal
-Reduce duplicated config parsing/merge logic by treating Cyclopts config providers as the canonical source of parsed global options.
+Reduce duplicated config parsing/merge logic while preserving current CQ precedence semantics (`CLI > env > config-file > defaults`) and existing `--config`/`--no-config` behavior.
 
 ### Representative Code Snippets
 ```python
@@ -379,12 +386,13 @@ def _build_launch_context(
 - None.
 
 ### Legacy Decommission/Delete Scope
-- Delete typed config duplication in `tools/cq/cli_app/config.py`:
+- Phase decommission after parity tests land:
+- Delete typed config duplication in `tools/cq/cli_app/config.py` only when precedence parity is proven:
 - `load_typed_config`
 - `load_typed_env_config`
 - `_coerce_config_data`
 - `_convert_config_data`
-- Delete manual config merge helpers in `tools/cq/cli_app/app.py`:
+- Delete manual config merge helpers in `tools/cq/cli_app/app.py` only when equivalent behavior is covered by tests:
 - `_apply_config_overrides`
 - `_resolve_global_options`
 
@@ -392,7 +400,7 @@ def _build_launch_context(
 
 ## S7. Upgrade Help Presentation with App/Group `help_formatter` Controls
 ### Goal
-Use Cyclopts help formatter capabilities for clearer CQ panels, accessibility fallback, and deterministic panel layout.
+Use Cyclopts help formatter capabilities for clearer CQ panels, accessibility fallback, deterministic panel layout, and elimination of duplicated group-description rendering in CQ help output.
 
 ### Representative Code Snippets
 ```python
@@ -435,23 +443,33 @@ app = App(
 
 ### Legacy Decommission/Delete Scope
 - Delete CQ help panel formatting assumptions that require default formatter behavior only.
+- Delete duplicated group-description text in CQ help goldens once formatter/group wiring is finalized.
 
 ---
 
 ## S8. Reduce Help Noise from Iterable Negative Flags and Env Duplication
 ### Goal
-Simplify CQ help surface by removing low-value `--empty-*` iterable flags for filters and eliminating duplicated env var rendering.
+Simplify CQ help surface by removing low-value iterable negative flags (`--empty-*`) for filters and run-input arrays, and eliminating duplicated env var rendering.
 
 ### Representative Code Snippets
 ```python
 # tools/cq/cli_app/params.py
-from cyclopts import Group, Parameter
+from cyclopts import Group, Parameter, validators
 
 filter_group = Group(
     "Filters",
     default_parameter=Parameter(
         show_choices=True,
         negative_iterable=(),  # disable --empty-<filter>
+        show_env_var=False,
+    ),
+)
+
+run_input = Group(
+    "Run Input",
+    validator=validators.LimitedChoice(min=1, max=3),
+    default_parameter=Parameter(
+        negative_iterable=(),  # disable --empty-step / --empty-steps
         show_env_var=False,
     ),
 )
@@ -476,7 +494,9 @@ class GlobalOptionArgs:
 - `tools/cq/cli_app/app.py`
 - `docs/reference/cq_cli.md`
 - `tests/cli_golden/fixtures/cq_help_root.txt`
+- `tests/cli_golden/fixtures/run_help.txt`
 - `tests/cli_golden/test_cq_help_output.py`
+- `tests/cli_golden/test_run_golden.py`
 - `tests/unit/cq/test_cli_parsing.py`
 
 ### New Files to Create
@@ -484,6 +504,7 @@ class GlobalOptionArgs:
 
 ### Legacy Decommission/Delete Scope
 - Delete `--empty-include`, `--empty-exclude`, `--empty-impact`, `--empty-confidence`, `--empty-severity` from CQ filter help surface.
+- Delete `--empty-step` and `--empty-steps` from CQ run-input help surface.
 - Delete duplicated env annotations like `CQ_ROOT, CQ_ROOT` from generated CQ docs/goldens.
 
 ---
@@ -581,7 +602,7 @@ def launcher(
 
 ## S11. Enforce Shared Group Objects Across CQ Command Graph
 ### Goal
-Eliminate inline `Group(...)` construction in leaf command modules and enforce central group constants for stable help panel behavior.
+Eliminate the remaining inline `Group(...)` construction in CQ leaf modules (currently neighborhood) and enforce central group constants for stable help panel behavior.
 
 ### Representative Code Snippets
 ```python
@@ -607,7 +628,6 @@ def test_neighborhood_group_identity() -> None:
 
 ### Files to Edit
 - `tools/cq/cli_app/commands/neighborhood.py`
-- `tools/cq/cli_app/groups.py`
 - `tests/unit/cq/test_cli_lazy_loading.py`
 
 ### New Files to Create
@@ -620,61 +640,58 @@ def test_neighborhood_group_identity() -> None:
 
 ## S12. Automate CQ CLI Asset Generation (Docs + Completion) with Freshness Checks
 ### Goal
-Create deterministic CQ-only generation workflow for CLI help reference and completion scripts, with test/CI freshness checks.
+Harden existing CQ-only generation workflow for CLI docs and completion scripts with deterministic output controls and freshness checks, without introducing redundant replacement scripts.
 
 ### Representative Code Snippets
 ```python
-# scripts/generate_cq_cli_assets.py
+# scripts/generate_cq_cli_docs.py
 from __future__ import annotations
 
-from io import StringIO
 from pathlib import Path
 
-from rich.console import Console
-
 from tools.cq.cli_app.app import app
-from tools.cq.cli_app.completion import generate_completion_scripts
 
 
-def generate_cq_reference(output_path: Path) -> None:
-    buffer = StringIO()
-    console = Console(file=buffer, force_terminal=False, color_system=None, width=120)
-    app.help_print(tokens=[], console=console)
-    output_path.write_text(buffer.getvalue(), encoding="utf-8")
+def generate_cq_reference(output_path: Path) -> str:
+    docs = app.generate_docs(output_format="markdown", recursive=True, include_hidden=False)
+    output_path.write_text(docs, encoding="utf-8")
+    return docs
 
 
 def main() -> None:
     generate_cq_reference(Path("docs/reference/cq_cli.md"))
-    generate_completion_scripts(app, Path("build/cq_completion"), program_name="cq")
 ```
 
 ```python
 # tests/unit/cq/test_cli_asset_generation.py
 from pathlib import Path
 
-from scripts.generate_cq_cli_assets import generate_cq_reference
+from scripts.generate_cq_cli_docs import generate_cq_reference
 
 
 def test_generate_cq_reference(tmp_path: Path) -> None:
     out = tmp_path / "cq_cli.md"
-    generate_cq_reference(out)
-    text = out.read_text(encoding="utf-8")
+    text = generate_cq_reference(out)
     assert "Code Query - High-signal code analysis macros" in text
 ```
 
 ### Files to Edit
+- `scripts/generate_cq_cli_docs.py`
+- `scripts/generate_cq_completion.py`
+- `scripts/generate_cq_completion.sh`
 - `tools/cq/cli_app/completion.py`
 - `docs/reference/cq_cli.md`
 - `tests/unit/cq/test_cli_completion.py`
+- `tests/cli_golden/fixtures/cq_help_root.txt`
+- `tests/cli_golden/fixtures/run_help.txt`
 - `tests/cli_golden/test_cq_help_output.py`
 
 ### New Files to Create
-- `scripts/generate_cq_cli_assets.py`
 - `tests/unit/cq/test_cli_asset_generation.py`
 
 ### Legacy Decommission/Delete Scope
 - Delete manually maintained CQ CLI reference drift workflow (hand-edited help docs).
-- Delete ad hoc completion generation instructions not backed by deterministic script output.
+- Delete ad hoc completion/doc generation instructions that are not backed by `scripts/generate_cq_cli_docs.py` and `scripts/generate_cq_completion.py`.
 
 ---
 
@@ -684,29 +701,29 @@ def test_generate_cq_reference(tmp_path: Path) -> None:
 - Delete CQ-specific fallback code that emulates result-action behavior now covered by explicit pipeline policy.
 
 ### Batch D2 (after S5, S12)
-- Delete stale CQ docs/goldens that reference admin commands without a working module implementation.
-- Delete parse-error expectations that tolerate admin command import failure.
+- Delete direct admin-command stdout emission paths that bypass unified CQ output handling.
+- Delete tests that assert raw stdout side effects from admin command internals instead of `CliResult` contracts.
 
 ### Batch D3 (after S6, S10)
-- Delete duplicate typed config/env coercion path in `tools/cq/cli_app/config.py`.
-- Delete manual config precedence merge helpers from `tools/cq/cli_app/app.py`.
+- Delete duplicate typed config/env coercion path in `tools/cq/cli_app/config.py` after precedence parity tests pass.
+- Delete manual config precedence merge helpers from `tools/cq/cli_app/app.py` after equivalent behavior is covered by CQ config tests.
 
 ### Batch D4 (after S7, S8, S9, S11, S12)
-- Delete old CQ help/doc snapshots containing duplicate env var labels and iterable `--empty-*` flags.
+- Delete old CQ help/doc snapshots containing duplicate env var labels, duplicated group-description text, and iterable `--empty-*` flags.
 - Delete inline group construction patterns superseded by centralized group constants.
 
 ## 7. Implementation Sequence
-1. Implement S5 first to restore command-graph integrity and unblock parse/help reliability.
-2. Implement S1 to remove private Cyclopts dependency and establish a stable CQ dispatch seam.
-3. Implement S2 to standardize result handling contracts before further launcher/REPL work.
-4. Implement S6 to consolidate config precedence into one path before adding invariant rules.
-5. Implement S10 to enforce post-config cross-option invariants at the app/meta layer.
-6. Implement S11 to lock group identity before help formatting and doc regeneration.
-7. Implement S7 to improve panel rendering and deterministic help structure.
-8. Implement S8 to reduce help noise and clean env/negative-flag presentation.
-9. Implement S9 to finalize verbosity UX and update parse/help contracts.
-10. Implement S4 to make REPL context injection and in-shell help fully functional.
-11. Implement S3 to add async-safe entrypoint once core dispatcher/result policies are stable.
+1. Implement S1 first to remove private Cyclopts dependency and establish a stable CQ dispatch seam.
+2. Implement S2 to standardize result handling contracts across launcher/telemetry/REPL policy.
+3. Implement S5 to align admin command outputs with the unified CQ result pipeline.
+4. Implement S4 to make REPL context injection and in-shell help fully functional.
+5. Implement S3 to add async-safe entrypoint once dispatch/result policies are stable.
+6. Implement S6 to consolidate config precedence while preserving current behavior.
+7. Implement S10 to enforce post-config cross-option invariants at the app/meta layer.
+8. Implement S11 to remove remaining inline group construction.
+9. Implement S7 to improve panel rendering and deterministic help structure.
+10. Implement S8 to reduce help noise and clean env/negative-flag presentation.
+11. Implement S9 to finalize verbosity UX and update parse/help contracts.
 12. Implement S12 last to regenerate CQ docs/completions and lock new output contracts in tests.
 
 ## 8. Implementation Checklist
@@ -714,7 +731,7 @@ def test_generate_cq_reference(tmp_path: Path) -> None:
 - [ ] S2. Adopt explicit CQ result-action pipelines.
 - [ ] S3. Add async-safe CQ entrypoint (`run_async` path).
 - [ ] S4. Add REPL dispatcher with context injection and in-shell help command.
-- [ ] S5. Restore admin command module and fix CQ command graph integrity.
+- [ ] S5. Normalize admin command contracts through the CQ result pipeline.
 - [ ] S6. Consolidate CQ config semantics around `App.config` chain.
 - [ ] S7. Upgrade help presentation with App/Group `help_formatter` controls.
 - [ ] S8. Reduce help noise from iterable negative flags and env duplication.
@@ -723,6 +740,6 @@ def test_generate_cq_reference(tmp_path: Path) -> None:
 - [ ] S11. Enforce shared group objects across CQ command graph.
 - [ ] S12. Automate CQ CLI asset generation (docs + completion) with freshness checks.
 - [ ] D1. Decommission private Cyclopts internals and redundant result fallback code.
-- [ ] D2. Decommission stale admin failure docs/tests.
+- [ ] D2. Decommission admin command direct-stdout output paths/tests.
 - [ ] D3. Decommission duplicate typed config merge/coercion path.
 - [ ] D4. Decommission outdated help/docs/group snapshots and inline group patterns.

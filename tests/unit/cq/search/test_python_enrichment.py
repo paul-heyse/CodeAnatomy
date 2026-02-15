@@ -130,10 +130,13 @@ def _find_node(sg_root: SgRoot, line: int, col: int) -> SgNode | None:
     SgNode | None
         Matching node if found.
     """
-    from tools.cq.search.pipeline.classifier import _build_node_interval_index, _build_node_spans
+    from tools.cq.search.pipeline.classifier_runtime import (
+        _build_node_interval_index,
+        _build_node_spans,
+    )
 
     spans = _build_node_spans(sg_root.root())
-    from tools.cq.search.pipeline.classifier import NodeIntervalIndex
+    from tools.cq.search.pipeline.classifier_runtime import NodeIntervalIndex
 
     index = NodeIntervalIndex(line_index=_build_node_interval_index(spans))
     return index.find_containing(line, col)

@@ -489,13 +489,6 @@ def _capture_call_target(captures: dict[str, list[Node]], source_bytes: bytes) -
     text = _node_text(function_node, source_bytes)
     return text[:_MAX_CAPTURE_TEXT_LEN] if text else None
 
-    return {
-        "has_error": False,
-        "error_nodes": list[str](),
-        "missing_nodes": list[str](),
-        "did_exceed_match_limit": False,
-    }
-
 
 def _lift_anchor(node: Node) -> Node:
     current = node

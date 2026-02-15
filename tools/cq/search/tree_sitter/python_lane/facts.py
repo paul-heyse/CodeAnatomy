@@ -14,6 +14,8 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     ObjectEvidenceRowV1,
     QueryExecutionSettingsV1,
     QueryWindowV1,
+    TreeSitterDiagnosticV1,
+    TreeSitterQueryHitV1,
 )
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1, load_pack_rules
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
@@ -28,6 +30,10 @@ from tools.cq.search.tree_sitter.core.runtime import (
     run_bounded_query_matches,
 )
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
+from tools.cq.search.tree_sitter.python_lane.locals_index import (
+    build_locals_index,
+    scope_chain_for_anchor,
+)
 from tools.cq.search.tree_sitter.python_lane.runtime import (
     is_tree_sitter_python_available,
     parse_python_tree_with_ranges,
@@ -39,7 +45,8 @@ from tools.cq.search.tree_sitter.query.predicates import (
 )
 from tools.cq.search.tree_sitter.query.registry import load_query_pack_sources
 from tools.cq.search.tree_sitter.query.specialization import specialize_query
-from tools.cq.search.tree_sitter.structural.match_rows import build_match_rows
+from tools.cq.search.tree_sitter.structural.diagnostic_export import collect_diagnostic_rows
+from tools.cq.search.tree_sitter.structural.match_rows import build_match_rows_with_query_hits
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Query
@@ -146,23 +153,6 @@ def _unique_text(
     return list(seen)
 
 
-def _scope_chain(anchor: Node, source_bytes: bytes) -> list[str]:
-    chain: list[str] = []
-    current = anchor
-    while current.parent is not None:
-        current = current.parent
-        if current.type not in {"function_definition", "class_definition", "module"}:
-            continue
-        if current.type == "module":
-            chain.append("<module>")
-            continue
-        name = current.child_by_field_name("name")
-        text = _node_text(name, source_bytes) if name is not None else current.type
-        if text:
-            chain.append(text)
-    return list(reversed(chain))
-
-
 def _find_enclosing(anchor: Node, source_bytes: bytes, kind: str) -> str | None:
     current = anchor
     while current.parent is not None:
@@ -179,8 +169,8 @@ def _find_enclosing(anchor: Node, source_bytes: bytes, kind: str) -> str | None:
 
 
 def _parse_quality(captures: dict[str, list[Node]], source_bytes: bytes) -> dict[str, object]:
-    errors = _unique_text(captures, source_bytes, ("quality.error", "error"))
-    missing = _unique_text(captures, source_bytes, ("quality.missing", "missing"))
+    errors = _unique_text(captures, source_bytes, ("diag.error", "quality.error", "error"))
+    missing = _unique_text(captures, source_bytes, ("diag.missing", "quality.missing", "missing"))
     return {
         "has_error": bool(errors or missing),
         "error_nodes": errors,
@@ -242,9 +232,15 @@ def _collect_query_pack_captures(
     source_bytes: bytes,
     windows: tuple[QueryWindowV1, ...],
     settings: QueryExecutionSettingsV1,
-) -> tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], dict[str, object]]:
+) -> tuple[
+    dict[str, list[Node]],
+    tuple[ObjectEvidenceRowV1, ...],
+    dict[str, object],
+    tuple[TreeSitterQueryHitV1, ...],
+]:
     all_captures: dict[str, list[Node]] = {}
     all_rows: list[ObjectEvidenceRowV1] = []
+    all_hits: list[TreeSitterQueryHitV1] = []
     telemetry: dict[str, object] = {}
     for pack_name, query_source in _pack_sources():
         try:
@@ -275,6 +271,7 @@ def _collect_query_pack_captures(
                     max_start_depth=settings.max_start_depth,
                     budget_ms=settings.budget_ms,
                     require_containment=True,
+                    window_mode="containment_preferred",
                 ),
                 callbacks=callbacks,
             )
@@ -287,8 +284,15 @@ def _collect_query_pack_captures(
         for capture_name, nodes in captures.items():
             bucket = all_captures.setdefault(capture_name, [])
             bucket.extend(nodes)
-        all_rows.extend(build_match_rows(query=query, matches=matches, source_bytes=source_bytes))
-    return all_captures, tuple(all_rows), telemetry
+        pack_rows, pack_hits = build_match_rows_with_query_hits(
+            query=query,
+            matches=matches,
+            source_bytes=source_bytes,
+            query_name=pack_name,
+        )
+        all_rows.extend(pack_rows)
+        all_hits.extend(pack_hits)
+    return all_captures, tuple(all_rows), telemetry, tuple(all_hits)
 
 
 def _extract_fact_lists(
@@ -451,12 +455,13 @@ def _build_binding_candidates(names: list[str], scope_chain: list[str]) -> list[
     return rows
 
 
-def _build_payload(
+def _build_payload(  # noqa: PLR0913, PLR0914
     *,
     anchor: Node,
     source_bytes: bytes,
     captures: dict[str, list[Node]],
-    rows: tuple[ObjectEvidenceRowV1, ...],
+    query_hits: tuple[TreeSitterQueryHitV1, ...],
+    diagnostics: tuple[TreeSitterDiagnosticV1, ...],
     telemetry: dict[str, object],
     facts: tuple[list[str], list[str], list[str], list[str], list[str], list[str], list[str]],
 ) -> dict[str, object]:
@@ -469,10 +474,21 @@ def _build_payload(
         local_defs,
         local_refs,
     ) = facts
-    scope_chain = _scope_chain(anchor, source_bytes)
+    local_scope_nodes: list[Node] = captures.get("local.scope") or []
+    scope_chain = scope_chain_for_anchor(
+        anchor=anchor,
+        scopes=local_scope_nodes,
+        source_bytes=source_bytes,
+    )
     enclosing_callable = _find_enclosing(anchor, source_bytes, "function_definition")
     enclosing_class = _find_enclosing(anchor, source_bytes, "class_definition")
     parse_quality = _parse_quality(captures, source_bytes)
+    local_definition_nodes: list[Node] = captures.get("local.definition") or []
+    local_index_rows = build_locals_index(
+        definitions=local_definition_nodes,
+        scopes=local_scope_nodes,
+        source_bytes=source_bytes,
+    )
 
     qualified_candidates = _build_candidate_rows(
         [*def_names, *call_targets, *reference_names],
@@ -498,6 +514,7 @@ def _build_payload(
         "locals": {
             "definitions": local_defs,
             "references": local_refs,
+            "index": [msgspec.to_builtins(row) for row in local_index_rows],
         },
         "resolution": {
             "qualified_name_candidates": qualified_candidates,
@@ -509,7 +526,8 @@ def _build_payload(
         },
         "parse_quality": parse_quality,
         "tree_sitter_query_telemetry": telemetry,
-        "query_match_rows": [msgspec.to_builtins(row) for row in rows],
+        "cst_query_hits": [msgspec.to_builtins(row) for row in query_hits],
+        "cst_diagnostics": [msgspec.to_builtins(row) for row in diagnostics],
     }
     if parse_quality.get("has_error") is True:
         payload["degrade_reason"] = "parse_error"
@@ -517,7 +535,7 @@ def _build_payload(
     return payload
 
 
-def build_python_tree_sitter_facts(
+def build_python_tree_sitter_facts(  # noqa: PLR0914
     source: str,
     *,
     byte_start: int,
@@ -553,7 +571,11 @@ def build_python_tree_sitter_facts(
         language="python",
         fallback_budget_ms=query_budget_ms if query_budget_ms is not None else 200,
     )
-    settings = QueryExecutionSettingsV1(match_limit=match_limit, budget_ms=effective_budget_ms)
+    settings = QueryExecutionSettingsV1(
+        match_limit=match_limit,
+        budget_ms=effective_budget_ms,
+        window_mode="containment_preferred",
+    )
     anchor_start = int(getattr(anchor, "start_byte", byte_start))
     anchor_end = int(getattr(anchor, "end_byte", byte_end))
     window = QueryWindowV1(
@@ -570,18 +592,25 @@ def build_python_tree_sitter_facts(
         file_key=cache_key or "<memory>",
         windows=query_windows,
     )
-    captures, rows, telemetry = _collect_query_pack_captures(
+    captures, rows, telemetry, query_hits = _collect_query_pack_captures(
         root=tree.root_node,
         source_bytes=source_bytes,
         windows=query_windows,
         settings=settings,
+    )
+    diagnostics = collect_diagnostic_rows(
+        language="python",
+        root=tree.root_node,
+        windows=query_windows,
+        match_limit=1024,
     )
     facts = _extract_fact_lists(rows, captures, source_bytes)
     return _build_payload(
         anchor=anchor,
         source_bytes=source_bytes,
         captures=captures,
-        rows=rows,
+        query_hits=query_hits,
+        diagnostics=diagnostics,
         telemetry=telemetry,
         facts=facts,
     )

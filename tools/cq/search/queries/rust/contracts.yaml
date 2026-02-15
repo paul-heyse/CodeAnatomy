@@ -3,3 +3,9 @@ version: 1
 rules:
   require_rooted: true
   forbid_non_local: true
+  required_metadata_keys:
+    - cq.emit
+    - cq.kind
+    - cq.anchor
+  forbidden_capture_names:
+    - injection.combined

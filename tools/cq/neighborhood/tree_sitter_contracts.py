@@ -8,6 +8,8 @@ from tools.cq.core.snb_schema import DegradeEventV1, NeighborhoodSliceV1, Semant
 from tools.cq.core.structs import CqStruct
 from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterCstTokenV1,
+    TreeSitterDiagnosticV1,
+    TreeSitterQueryHitV1,
     TreeSitterStructuralExportV1,
 )
 
@@ -33,6 +35,8 @@ class TreeSitterNeighborhoodCollectResult(CqStruct, frozen=True):
     diagnostics: tuple[DegradeEventV1, ...] = ()
     structural_export: TreeSitterStructuralExportV1 | None = None
     cst_tokens: tuple[TreeSitterCstTokenV1, ...] = ()
+    cst_diagnostics: tuple[TreeSitterDiagnosticV1, ...] = ()
+    cst_query_hits: tuple[TreeSitterQueryHitV1, ...] = ()
 
 
 __all__ = [

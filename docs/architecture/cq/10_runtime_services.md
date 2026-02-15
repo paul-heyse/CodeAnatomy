@@ -1,23 +1,31 @@
 # Runtime Services Architecture
 
+**Version:** 0.4.0
+**Phase:** 1 (Foundation)
+**Audience:** Advanced LLM programmers proposing architectural improvements to CQ runtime infrastructure.
+
+---
+
 ## Overview
 
-The CQ runtime services tier provides process-global infrastructure for execution policy management, persistent caching, worker scheduling, and hexagonal service composition. This layer sits between the CLI/command layer and the domain-specific subsystems (search, query, calls, neighborhood), providing reusable concurrency primitives, cache backends, LSP runtime infrastructure, and service-oriented interfaces.
+The CQ runtime services tier provides process-global infrastructure for execution policy management, persistent caching, worker scheduling, and hexagonal service composition. This layer sits between the CLI/command layer and domain-specific subsystems (search, query, calls, neighborhood), providing reusable concurrency primitives, cache backends, LSP runtime infrastructure, and service-oriented interfaces.
 
 **Key Responsibilities:**
-- Runtime execution policy management with environment variable overrides
-- Dual-pool worker scheduling (CPU/process-based, I/O/thread-based)
+- Runtime execution policy with environment variable overrides
+- Dual-pool worker scheduling (CPU process-based, I/O thread-based)
 - Persistent disk-backed caching with fail-open semantics
-- Hexagonal service layer for search, entity, and calls commands
-- LSP runtime infrastructure (contract state, request budgets, session management)
-- Diagnostic artifact contracts and performance benchmarking
+- Hexagonal service layer for search, entity, and calls
+- LSP runtime infrastructure (sessions, budgets, capabilities)
+- Diagnostic artifact collection and telemetry
 
-**Design Philosophy:**
-- **Fail-open**: All caching and LSP operations degrade gracefully on errors
-- **Singleton management**: Workspace-keyed singletons with thread-safe initialization
-- **Composition root**: Central `CqRuntimeServices` bundle wires all services
-- **Contract-first**: All payloads and requests use msgspec structs
-- **Environment overrides**: All policies support `CQ_RUNTIME_*` environment variables
+**Design Principles:**
+- **Fail-open** - All caching and LSP operations degrade gracefully
+- **Singleton management** - Workspace-keyed singletons with thread-safe initialization
+- **Composition root** - Central `CqRuntimeServices` bundle wires dependencies
+- **Contract-first** - All payloads use msgspec structs
+- **Environment overrides** - All policies support `CQ_RUNTIME_*` variables
+
+---
 
 ## Architecture Topology
 
@@ -77,38 +85,13 @@ flowchart TB
 
 ---
 
-## Runtime Execution Policy
+## Runtime Policy Contracts
+
+Location: `tools/cq/core/runtime/execution_policy.py` (352 LOC)
 
 ### Three-Level Policy Hierarchy
 
-Runtime behavior is controlled by a three-level policy hierarchy defined in `tools/cq/core/runtime/execution_policy.py`:
-
 ```python
-class ParallelismPolicy(CqSettingsStruct, frozen=True):
-    """Worker policy for CPU and I/O execution."""
-    cpu_workers: PositiveInt
-    io_workers: PositiveInt
-    lsp_request_workers: PositiveInt
-    query_partition_workers: PositiveInt = 2
-    calls_file_workers: PositiveInt = 4
-    run_step_workers: PositiveInt = 4
-    enable_process_pool: bool = True
-
-class LspRuntimePolicy(CqSettingsStruct, frozen=True):
-    """LSP timing and budgeting policy."""
-    timeout_ms: PositiveInt = 2000
-    startup_timeout_ms: PositiveInt = 2000
-    max_targets_search: PositiveInt = 1
-    max_targets_calls: PositiveInt = 1
-    max_targets_entity: PositiveInt = 3
-
-class CacheRuntimePolicy(CqSettingsStruct, frozen=True):
-    """Cache policy for CQ runtime adapters."""
-    enabled: bool = True
-    ttl_seconds: PositiveInt = 900
-    shards: PositiveInt = 8
-    timeout_seconds: PositiveFloat = 0.05
-
 class RuntimeExecutionPolicy(CqSettingsStruct, frozen=True):
     """Top-level runtime policy envelope."""
     parallelism: ParallelismPolicy
@@ -121,22 +104,54 @@ class RuntimeExecutionPolicy(CqSettingsStruct, frozen=True):
 2. **LspRuntimePolicy** - LSP timeout budgets and target limits
 3. **CacheRuntimePolicy** - Disk cache behavior and TTL
 
-### Environment Variable Override System
+### ParallelismPolicy
 
-All policy fields support `CQ_RUNTIME_*` environment variable overrides:
+Worker pool configuration:
 
 ```python
-def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
-    """Build runtime policy from host defaults and optional env overrides."""
-    cpu_count = max(1, os.cpu_count() or 1)
-    cpu_workers = _env_int("CPU_WORKERS", max(1, cpu_count - 1))
-    io_workers = _env_int("IO_WORKERS", max(8, cpu_count))
-    lsp_workers = _env_int("LSP_REQUEST_WORKERS", 4)
-    enable_process_pool = _env_bool("ENABLE_PROCESS_POOL", default=True)
-    # ... (lines 103-149)
+class ParallelismPolicy(CqSettingsStruct, frozen=True):
+    cpu_workers: PositiveInt                        # ProcessPool workers
+    io_workers: PositiveInt                         # ThreadPool workers
+    lsp_request_workers: PositiveInt                # LSP concurrency
+    query_partition_workers: PositiveInt = 2
+    calls_file_workers: PositiveInt = 4
+    run_step_workers: PositiveInt = 4
+    enable_process_pool: bool = True                # Enable ProcessPool (else ThreadPool fallback)
 ```
 
-**Supported Environment Variables:**
+**Defaults:**
+- `cpu_workers` = `max(1, cpu_count - 1)`
+- `io_workers` = `max(8, cpu_count)`
+- `lsp_request_workers` = 4
+
+### LspRuntimePolicy
+
+LSP timing and budgeting:
+
+```python
+class LspRuntimePolicy(CqSettingsStruct, frozen=True):
+    timeout_ms: PositiveInt = 2000                  # Request timeout
+    startup_timeout_ms: PositiveInt = 2000          # Server startup timeout
+    max_targets_search: PositiveInt = 1             # Max targets for search
+    max_targets_calls: PositiveInt = 1              # Max targets for calls
+    max_targets_entity: PositiveInt = 3             # Max targets for entity
+```
+
+### CacheRuntimePolicy
+
+Cache configuration:
+
+```python
+class CacheRuntimePolicy(CqSettingsStruct, frozen=True):
+    enabled: bool = True
+    ttl_seconds: PositiveInt = 900                  # 15 minutes
+    shards: PositiveInt = 8                         # FanoutCache shards
+    timeout_seconds: PositiveFloat = 0.05           # Cache op timeout
+```
+
+### Environment Variable Overrides
+
+All policy fields support `CQ_RUNTIME_*` environment variable overrides:
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -146,22 +161,23 @@ def default_runtime_execution_policy() -> RuntimeExecutionPolicy:
 | `CQ_RUNTIME_QUERY_PARTITION_WORKERS` | int | `2` | Query partition workers |
 | `CQ_RUNTIME_CALLS_FILE_WORKERS` | int | `4` | Calls file workers |
 | `CQ_RUNTIME_RUN_STEP_WORKERS` | int | `4` | Run step workers |
-| `CQ_RUNTIME_ENABLE_PROCESS_POOL` | bool | `true` | Enable ProcessPool (else fallback to ThreadPool) |
-| `CQ_RUNTIME_LSP_TIMEOUT_MS` | int | `2000` | LSP request timeout (milliseconds) |
-| `CQ_RUNTIME_LSP_STARTUP_TIMEOUT_MS` | int | `2000` | LSP startup timeout (milliseconds) |
-| `CQ_RUNTIME_LSP_TARGETS_SEARCH` | int | `1` | Max LSP targets for search |
-| `CQ_RUNTIME_LSP_TARGETS_CALLS` | int | `1` | Max LSP targets for calls |
-| `CQ_RUNTIME_LSP_TARGETS_ENTITY` | int | `3` | Max LSP targets for entity queries |
+| `CQ_RUNTIME_ENABLE_PROCESS_POOL` | bool | `true` | Enable ProcessPool |
+| `CQ_RUNTIME_LSP_TIMEOUT_MS` | int | `2000` | LSP request timeout (ms) |
+| `CQ_RUNTIME_LSP_STARTUP_TIMEOUT_MS` | int | `2000` | LSP startup timeout (ms) |
+| `CQ_RUNTIME_LSP_TARGETS_SEARCH` | int | `1` | Max LSP targets (search) |
+| `CQ_RUNTIME_LSP_TARGETS_CALLS` | int | `1` | Max LSP targets (calls) |
+| `CQ_RUNTIME_LSP_TARGETS_ENTITY` | int | `3` | Max LSP targets (entity) |
 | `CQ_RUNTIME_CACHE_ENABLED` | bool | `true` | Enable disk cache |
 | `CQ_RUNTIME_CACHE_TTL_SECONDS` | int | `900` | Cache TTL (15 minutes) |
 | `CQ_RUNTIME_CACHE_SHARDS` | int | `8` | FanoutCache shards |
 | `CQ_RUNTIME_CACHE_TIMEOUT_SECONDS` | float | `0.05` | Cache operation timeout |
 
-**Environment Parsing Helpers:**
+**Parsing Helpers:**
 
 ```python
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
-    raw = os.getenv(f"{_ENV_PREFIX}{name}")
+    """Parse int from CQ_RUNTIME_{name} with fallback."""
+    raw = os.getenv(f"CQ_RUNTIME_{name}")
     if raw is None:
         return default
     try:
@@ -171,7 +187,8 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
     return max(minimum, value)
 
 def _env_bool(name: str, *, default: bool) -> bool:
-    raw = os.getenv(f"{_ENV_PREFIX}{name}")
+    """Parse bool from CQ_RUNTIME_{name} with fallback."""
+    raw = os.getenv(f"CQ_RUNTIME_{name}")
     if raw is None:
         return default
     value = raw.strip().lower()
@@ -188,12 +205,9 @@ All helpers apply safe parsing with fallback to defaults on parse failure.
 
 ## Worker Scheduler
 
+Location: `tools/cq/core/runtime/worker_scheduler.py` (218 LOC)
+
 ### Dual-Pool Architecture
-
-The `WorkerScheduler` in `tools/cq/core/runtime/worker_scheduler.py` manages two executor pools:
-
-1. **CPU Pool** - `ProcessPoolExecutor` with `spawn` multiprocessing context
-2. **I/O Pool** - `ThreadPoolExecutor` for I/O-bound tasks
 
 ```python
 class WorkerScheduler:
@@ -205,15 +219,6 @@ class WorkerScheduler:
         self._cpu_pool: ProcessPoolExecutor | None = None
         self._io_pool: ThreadPoolExecutor | None = None
 
-    def io_pool(self) -> ThreadPoolExecutor:
-        """Return shared IO pool."""
-        with self._lock:
-            if self._io_pool is None:
-                self._io_pool = ThreadPoolExecutor(
-                    max_workers=self._policy.io_workers
-                )
-            return self._io_pool
-
     def cpu_pool(self) -> ProcessPoolExecutor:
         """Return shared CPU pool configured with spawn context."""
         with self._lock:
@@ -224,51 +229,46 @@ class WorkerScheduler:
                     mp_context=ctx,
                 )
             return self._cpu_pool
+
+    def io_pool(self) -> ThreadPoolExecutor:
+        """Return shared IO pool."""
+        with self._lock:
+            if self._io_pool is None:
+                self._io_pool = ThreadPoolExecutor(
+                    max_workers=self._policy.io_workers
+                )
+            return self._io_pool
 ```
 
 **Why `spawn` Context:**
-- Avoids fork-related issues on macOS (especially with LSP client state)
+- Avoids fork-related issues on macOS (LSP client state)
 - Prevents accidental state sharing between workers
 - Safer for complex runtime state (LSP sessions, cache handles)
 
-**Design Note:** CPU pool is conditionally used based on `ParallelismPolicy.enable_process_pool`. If disabled, all tasks fall back to the I/O ThreadPool.
+**CPU Pool Conditional Usage:** If `enable_process_pool=False`, CPU tasks fall back to I/O ThreadPool.
 
 ### Task Submission API
 
 ```python
-def submit_io(
-    self,
-    fn: Callable[P, R],
-    /,
-    *args: P.args,
-    **kwargs: P.kwargs,
-) -> Future[R]:
+def submit_io(self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> Future[R]:
     """Submit an I/O task."""
     callable_fn = cast("Callable[..., R]", fn)
     return self.io_pool().submit(callable_fn, *args, **kwargs)
 
-def submit_cpu(
-    self,
-    fn: Callable[P, R],
-    /,
-    *args: P.args,
-    **kwargs: P.kwargs,
-) -> Future[R]:
-    """Submit a CPU task."""
+def submit_cpu(self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> Future[R]:
+    """Submit a CPU task (ProcessPool or fallback to ThreadPool)."""
     callable_fn = cast("Callable[..., R]", fn)
     if self._policy.enable_process_pool:
         return self.cpu_pool().submit(callable_fn, *args, **kwargs)
     return self.io_pool().submit(callable_fn, *args, **kwargs)
 ```
 
-**Usage Pattern:**
+**Usage Patterns:**
 - LSP requests → `submit_io()`
 - AST classification tasks → `submit_cpu()` (when enabled)
 - Search partition enrichment → `submit_cpu()`
 
 ### Bounded Collection with Deterministic Timeouts
-
-The scheduler provides `collect_bounded()` for timeout-based future collection:
 
 ```python
 @staticmethod
@@ -277,11 +277,7 @@ def collect_bounded(
     *,
     timeout_seconds: float,
 ) -> WorkerBatchResult[T]:
-    """Collect futures up to timeout, preserving deterministic completion order.
-
-    Returns:
-        Completed values and timeout count.
-    """
+    """Collect futures up to timeout, preserving deterministic completion order."""
     future_list = list(futures)
     if not future_list:
         return WorkerBatchResult(done=[], timed_out=0)
@@ -295,6 +291,7 @@ def collect_bounded(
 ```
 
 **WorkerBatchResult Contract:**
+
 ```python
 @dataclass(slots=True)
 class WorkerBatchResult[T]:
@@ -309,8 +306,6 @@ class WorkerBatchResult[T]:
 - Returns timed-out count for telemetry
 
 ### Process-Global Singleton
-
-Worker scheduler uses lazy singleton pattern with atexit cleanup:
 
 ```python
 class _SchedulerState:
@@ -342,7 +337,7 @@ atexit.register(close_worker_scheduler)
 
 **Lifecycle:**
 1. First call to `get_worker_scheduler()` builds policy and scheduler
-2. Scheduler pools are lazily initialized on first task submission
+2. Pools are lazily initialized on first task submission
 3. `atexit.register()` ensures cleanup on process exit
 4. `close()` shuts down pools with `cancel_futures=True`
 
@@ -350,20 +345,11 @@ atexit.register(close_worker_scheduler)
 
 ## Cache Infrastructure
 
-### Cache Architecture Overview
+### Cache Contracts
 
-The cache subsystem (`tools/cq/core/cache/`) provides fail-open persistent caching backed by `diskcache.FanoutCache`:
+Location: `tools/cq/core/cache/` (7 files, ~800 LOC total)
 
-```
-cache/
-├── interface.py          # CqCacheBackend protocol, NoopCacheBackend
-├── policy.py             # CqCachePolicyV1, default_cache_policy()
-├── key_builder.py        # build_cache_key() with SHA256 digest
-├── contracts.py          # Typed cache payload contracts
-└── diskcache_backend.py  # DiskcacheBackend, get_cq_cache_backend()
-```
-
-### CqCacheBackend Protocol
+#### CqCacheBackend Protocol
 
 Defined in `tools/cq/core/cache/interface.py`:
 
@@ -394,25 +380,15 @@ class CqCacheBackend(Protocol):
         """Close backend resources."""
 ```
 
-**NoopCacheBackend:**
-Used when caching is disabled via `CQ_CACHE_ENABLED=false`:
+**NoopCacheBackend:** Used when caching is disabled via `CQ_CACHE_ENABLED=false`.
 
-```python
-class NoopCacheBackend:
-    """No-op cache backend used when caching is disabled."""
-    def get(self, key: str) -> object | None:
-        return None
-    # ... all methods are no-ops
-```
-
-### Cache Policy
+#### Cache Policy
 
 Defined in `tools/cq/core/cache/policy.py`:
 
 ```python
 class CqCachePolicyV1(CqSettingsStruct, frozen=True):
     """Policy controlling disk-backed CQ cache behavior."""
-
     enabled: bool = True
     directory: str = ".cq_cache"
     shards: PositiveInt = 8
@@ -425,13 +401,9 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
     raw_enabled = os.getenv("CQ_CACHE_ENABLED")
     enabled = runtime.enabled
     if raw_enabled is not None:
-        enabled = raw_enabled.strip().lower() not in {
-            "0", "false", "no", "off"
-        }
-
+        enabled = raw_enabled.strip().lower() not in {"0", "false", "no", "off"}
     raw_dir = os.getenv("CQ_CACHE_DIR")
     directory = raw_dir.strip() if raw_dir else str(root / ".cq_cache")
-
     raw_ttl = os.getenv("CQ_CACHE_TTL_SECONDS")
     ttl_seconds = runtime.ttl_seconds
     if raw_ttl:
@@ -439,7 +411,6 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
             ttl_seconds = max(1, int(raw_ttl))
         except ValueError:
             ttl_seconds = runtime.ttl_seconds
-
     return CqCachePolicyV1(
         enabled=enabled,
         directory=directory,
@@ -449,12 +420,12 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
     )
 ```
 
-**Environment Variable Support:**
+**Environment Variables:**
 - `CQ_CACHE_ENABLED` - Enable/disable caching
 - `CQ_CACHE_DIR` - Override default `.cq_cache` directory
 - `CQ_CACHE_TTL_SECONDS` - Override default 900s TTL
 
-### Cache Key Builder
+#### Cache Key Builder
 
 Defined in `tools/cq/core/cache/key_builder.py`:
 
@@ -468,11 +439,7 @@ def build_cache_key(
     target: str,
     extras: dict[str, object] | None = None,
 ) -> str:
-    """Build a deterministic cache key string for CQ runtime data.
-
-    Returns:
-        Namespaced cache key that includes a stable payload digest.
-    """
+    """Build a deterministic cache key string for CQ runtime data."""
     payload = {
         "namespace": namespace,
         "version": version,
@@ -487,7 +454,8 @@ def build_cache_key(
 
 **Key Structure:** `cq:<namespace>:<version>:<sha256_digest>`
 
-**Cache Tags for Invalidation:**
+**Cache Tag Builders:**
+
 ```python
 def build_cache_tag(*, workspace: str, language: str) -> str:
     """Build tag used for bulk invalidation."""
@@ -495,13 +463,11 @@ def build_cache_tag(*, workspace: str, language: str) -> str:
 
 def build_run_cache_tag(*, workspace: str, language: str, run_id: str) -> str:
     """Build run-scoped cache invalidation tag."""
-    return "|".join(
-        (
-            f"ws:{_digest_text(workspace)}",
-            f"lang:{language}",
-            f"run:{_digest_text(run_id, size=24)}",
-        )
-    )
+    return "|".join((
+        f"ws:{_digest_text(workspace)}",
+        f"lang:{language}",
+        f"run:{_digest_text(run_id, size=24)}",
+    ))
 
 def build_namespace_cache_tag(
     *,
@@ -516,14 +482,15 @@ def build_namespace_cache_tag(
     # ws/lang/ns + optional scope/snapshot/run atoms in canonical order.
 ```
 
-### Typed Cache Payload Contracts
+#### Cache Payload Contracts
 
 Defined in `tools/cq/core/cache/contracts.py`:
 
+**SgRecordCacheV1** — Cached ast-grep record:
+
 ```python
 class SgRecordCacheV1(CqCacheStruct, frozen=True):
-    """Cache-safe serialization contract for one ast-grep record."""
-    record: RecordType = "def"
+    record: RecordType = "def"                      # "def" | "call" | "import"
     kind: str = ""
     file: str = ""
     start_line: NonNegativeInt = 0
@@ -532,15 +499,21 @@ class SgRecordCacheV1(CqCacheStruct, frozen=True):
     end_col: NonNegativeInt = 0
     text: str = ""
     rule_id: str = ""
+```
 
+**SearchCandidatesCacheV1** — Cached search candidates:
+
+```python
 class SearchCandidatesCacheV1(CqCacheStruct, frozen=True):
-    """Cached search candidate payload."""
     pattern: str
     raw_matches: list[dict[str, object]]
     stats: dict[str, object]
+```
 
+**SearchEnrichmentAnchorCacheV1** — Cached enrichment payload:
+
+```python
 class SearchEnrichmentAnchorCacheV1(CqCacheStruct, frozen=True):
-    """Cached enrichment payload for one search anchor."""
     file: str
     line: NonNegativeInt
     col: NonNegativeInt
@@ -548,28 +521,40 @@ class SearchEnrichmentAnchorCacheV1(CqCacheStruct, frozen=True):
     file_content_hash: str
     language: str
     enriched_match: dict[str, object]
+```
 
+**QueryEntityScanCacheV1** — Cached entity scan:
+
+```python
 class QueryEntityScanCacheV1(CqCacheStruct, frozen=True):
-    """Cached per-file entity/neighborhood scan fragment payload."""
     records: list[SgRecordCacheV1]
+```
 
+**PatternFragmentCacheV1** — Cached pattern fragment:
+
+```python
 class PatternFragmentCacheV1(CqCacheStruct, frozen=True):
-    """Cached per-file ast-grep pattern fragment payload."""
     findings: list[dict[str, object]] = msgspec.field(default_factory=list)
     records: list[SgRecordCacheV1] = msgspec.field(default_factory=list)
     raw_matches: list[dict[str, object]] = msgspec.field(default_factory=list)
+```
 
+**ScopeSnapshotCacheV1** — Cached scope snapshot:
+
+```python
 class ScopeSnapshotCacheV1(CqCacheStruct, frozen=True):
-    """Cached scope snapshot fingerprint payload."""
     language: str
     scope_globs: tuple[str, ...] = ()
     scope_roots: tuple[str, ...] = ()
     inventory_token: dict[str, object] = msgspec.field(default_factory=dict)
     files: list[ScopeFileStatCacheV1] = msgspec.field(default_factory=list)
     digest: str = ""
+```
 
+**CallsTargetCacheV1** — Cached calls-target metadata:
+
+```python
 class CallsTargetCacheV1(CqCacheStruct, frozen=True):
-    """Cached calls-target metadata payload."""
     target_location: tuple[str, int] | None = None
     target_callees: dict[str, int] = msgspec.field(default_factory=dict)
 ```
@@ -637,8 +622,7 @@ class DiskcacheBackend:
         self._cache.close()
 ```
 
-**Fail-Open Semantics:**
-All methods catch common exceptions and fail gracefully:
+**Fail-Open Semantics:** All methods catch common exceptions and fail gracefully:
 - `OSError` - Disk I/O failures
 - `RuntimeError` - Internal cache state errors
 - `ValueError` - Malformed cache data
@@ -688,6 +672,7 @@ atexit.register(close_cq_cache_backend)
 ```
 
 **Backend Construction:**
+
 ```python
 def _build_diskcache_backend(policy: CqCachePolicyV1) -> CqCacheBackend:
     cache = FanoutCache(
@@ -786,8 +771,6 @@ class SearchService:
         )
 ```
 
-**Delegation:** Service directly delegates to `smart_search()` from `tools/cq/search/smart_search.py`.
-
 #### EntityService
 
 Defined in `tools/cq/core/services/entity_service.py`:
@@ -811,8 +794,6 @@ class EntityService:
             ),
         )
 ```
-
-**Delegation:** Service delegates to `attach_entity_front_door_insight()` from `tools/cq/query/entity_front_door.py`.
 
 #### CallsService
 
@@ -839,8 +820,6 @@ class CallsService:
             function_name=request.function_name,
         )
 ```
-
-**Delegation:** Service delegates to `cmd_calls()` from `tools/cq/macros/calls.py`.
 
 ---
 
@@ -870,13 +849,6 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
         policy=default_runtime_execution_policy(),
     )
 ```
-
-**Bundle Contents:**
-- `search` - SearchService instance
-- `entity` - EntityService instance
-- `calls` - CallsService instance
-- `cache` - Workspace-keyed cache backend
-- `policy` - Runtime execution policy with env overrides
 
 ### Workspace-Scoped Singleton
 
@@ -909,12 +881,6 @@ atexit.register(clear_runtime_services)
 2. First call builds bundle and caches by resolved workspace path
 3. Subsequent calls for same workspace return cached bundle
 4. `atexit.register()` ensures cleanup on process exit
-
-**Integration Points:**
-- Search command → `services.search.execute(SearchServiceRequest(...))`
-- Query command → `services.entity.attach_front_door(EntityFrontDoorRequest(...))`
-- Calls command → `services.calls.execute(CallsServiceRequest(...))`
-- Run command → Uses services for step dispatch
 
 ---
 
@@ -949,42 +915,17 @@ class LspContractStateInputV1(CqStruct, frozen=True):
     timed_out: int = 0
     reasons: tuple[str, ...] = ()
 
-def derive_lsp_contract_state(
-    input_state: LspContractStateInputV1
-) -> LspContractStateV1:
+def derive_lsp_contract_state(input_state: LspContractStateInputV1) -> LspContractStateV1:
     """Derive canonical LSP state from capability + attempt telemetry."""
-    # ... (lines 38-89)
+    # Status derivation logic (lines 38-89)
 ```
 
-**Status Derivation Logic:**
-1. `unavailable` - LSP provider not available (`available=False`)
-2. `skipped` - LSP available but not attempted (`attempted=0`)
-3. `failed` - LSP attempted but no successful applications (`applied=0`)
+**Status Derivation:**
+1. `unavailable` - LSP provider not available
+2. `skipped` - LSP available but not attempted
+3. `failed` - LSP attempted but no successful applications
 4. `partial` - LSP applied to some targets but some failed
 5. `ok` - LSP applied to all targets successfully
-
-**Example:**
-```python
-input_state = LspContractStateInputV1(
-    provider="pyrefly",
-    available=True,
-    attempted=3,
-    applied=2,
-    failed=1,
-    timed_out=0,
-    reasons=("timeout on file.py",),
-)
-state = derive_lsp_contract_state(input_state)
-# → LspContractStateV1(
-#     provider="pyrefly",
-#     available=True,
-#     attempted=3,
-#     applied=2,
-#     failed=1,
-#     status="partial",
-#     reasons=("timeout on file.py",),
-# )
-```
 
 ### LSP Front Door Adapter
 
@@ -997,8 +938,8 @@ class LanguageLspEnrichmentRequest(CqStruct, frozen=True):
     mode: str
     root: Path
     file_path: Path
-    line: int
-    col: int
+    line: int                                       # 1-indexed
+    col: int                                        # 0-indexed
     symbol_hint: str | None = None
 
 def lsp_runtime_enabled() -> bool:
@@ -1007,14 +948,6 @@ def lsp_runtime_enabled() -> bool:
     if raw is None:
         return True
     return raw.strip().lower() not in {"0", "false", "no", "off"}
-
-def infer_language_for_path(file_path: Path) -> QueryLanguage | None:
-    """Infer CQ language from file suffix."""
-    if file_path.suffix in {".py", ".pyi"}:
-        return "python"
-    if file_path.suffix == ".rs":
-        return "rust"
-    return None
 
 def provider_for_language(language: QueryLanguage | str) -> LspProvider:
     """Map CQ language to canonical LSP provider id."""
@@ -1060,6 +993,7 @@ def enrich_with_language_lsp(
 ```
 
 **Cache Key Construction:**
+
 ```python
 def _cache_key_for_request(request: LanguageLspEnrichmentRequest) -> str:
     return build_cache_key(
@@ -1206,10 +1140,6 @@ class LspSessionManager[SessionT]:
 3. Create fresh session and retry `ensure_started()`
 4. Second failure propagates to caller
 
-**Usage:**
-- Pyrefly LSP sessions keyed by workspace root
-- Rust-analyzer LSP sessions keyed by workspace root
-
 ### LSP Capabilities
 
 Defined in `tools/cq/search/lsp/capabilities.py`:
@@ -1241,57 +1171,9 @@ def supports_method(capabilities: Mapping[str, object], method: str) -> bool:
         return False
     # ... special cases for diagnostic providers
     return bool(capabilities.get(capability_field))
-
-def coerce_capabilities(payload: object) -> dict[str, object]:
-    """Normalize capability payload to dictionary form."""
-    if isinstance(payload, Mapping):
-        return {str(key): value for key, value in payload.items()}
-    return {}
 ```
 
-**Capability Gating:**
-- Advanced LSP planes check capabilities before requesting methods
-- Prevents protocol errors when server doesn't support a method
-- Used by semantic overlays, diagnostics, code actions, etc.
-
-### LSP Status Derivation
-
-Defined in `tools/cq/search/lsp/status.py`:
-
-```python
-class LspStatus(StrEnum):
-    """Canonical LSP status values for front-door degradation."""
-    unavailable = "unavailable"
-    skipped = "skipped"
-    failed = "failed"
-    partial = "partial"
-    ok = "ok"
-
-class LspStatusTelemetry(CqStruct, frozen=True):
-    """Typed telemetry for deterministic LSP state derivation."""
-    available: bool = False
-    attempted: int = 0
-    applied: int = 0
-    failed: int = 0
-    timed_out: int = 0
-
-def derive_lsp_status(telemetry: LspStatusTelemetry) -> LspStatus:
-    """Derive canonical LSP status from attempt/apply counters."""
-    if not telemetry.available:
-        return LspStatus.unavailable
-    if telemetry.attempted <= 0:
-        return LspStatus.skipped
-    if telemetry.applied <= 0:
-        return LspStatus.failed
-    if telemetry.failed > 0 or telemetry.applied < telemetry.attempted:
-        return LspStatus.partial
-    return LspStatus.ok
-```
-
-**Status Classification:**
-- Used by front-door insight rendering
-- Determines degradation messaging in output
-- Feeds into confidence scoring
+**Capability Gating:** Advanced LSP planes check capabilities before requesting methods to prevent protocol errors.
 
 ### LSP Request Queue
 
@@ -1312,16 +1194,11 @@ def run_lsp_requests(
     return batch.done, batch.timed_out
 ```
 
-**Integration:**
-- Used by semantic overlays, diagnostics, code actions
-- Leverages shared `WorkerScheduler` I/O pool
-- Returns completed payloads + timeout count
-
 ---
 
 ## Diagnostic Contracts
 
-Defined in `tools/cq/core/diagnostics_contracts.py`:
+Location: `tools/cq/core/diagnostics_contracts.py`
 
 ```python
 class DiagnosticsArtifactRunMetaV1(CqStruct, frozen=True):
@@ -1339,70 +1216,27 @@ class DiagnosticsArtifactPayloadV1(CqStruct, frozen=True):
     lsp_advanced_planes: dict[str, object] = msgspec.field(default_factory=dict)
     pyrefly_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
     language_capabilities: dict[str, object] = msgspec.field(default_factory=dict)
-    cross_language_diagnostics: list[dict[str, object]] = msgspec.field(
-        default_factory=list
-    )
+    cross_language_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
 
-def build_diagnostics_artifact_payload(
-    result: CqResult
-) -> DiagnosticsArtifactPayloadV1 | None:
+def build_diagnostics_artifact_payload(result: CqResult) -> DiagnosticsArtifactPayloadV1 | None:
     """Build typed diagnostics artifact payload from result summary."""
-    summary = result.summary
-    if not isinstance(summary, dict):
-        return None
-    payload = DiagnosticsArtifactPayloadV1(
-        run_meta=DiagnosticsArtifactRunMetaV1(
-            macro=result.run.macro,
-            root=result.run.root,
-            run_id=result.run.run_id,
-        ),
-        enrichment_telemetry=_coerce_dict(summary.get("enrichment_telemetry")),
-        pyrefly_telemetry=_coerce_dict(summary.get("pyrefly_telemetry")),
-        rust_lsp_telemetry=_coerce_dict(summary.get("rust_lsp_telemetry")),
-        lsp_advanced_planes=_coerce_dict(summary.get("lsp_advanced_planes")),
-        pyrefly_diagnostics=_coerce_list_of_dict(
-            summary.get("pyrefly_diagnostics")
-        ),
-        language_capabilities=_coerce_dict(summary.get("language_capabilities")),
-        cross_language_diagnostics=_coerce_list_of_dict(
-            summary.get("cross_language_diagnostics")
-        ),
-    )
-    has_data = any(
-        (
-            payload.enrichment_telemetry,
-            payload.pyrefly_telemetry,
-            payload.rust_lsp_telemetry,
-            payload.lsp_advanced_planes,
-            payload.pyrefly_diagnostics,
-            payload.language_capabilities,
-            payload.cross_language_diagnostics,
-        )
-    )
-    if not has_data:
-        return None
-    return payload
+    # ... extraction logic
 ```
 
 **Payload Fields:**
 - `enrichment_telemetry` - Enrichment pipeline stats (5 stages)
 - `pyrefly_telemetry` - Pyrefly LSP session telemetry
 - `rust_lsp_telemetry` - Rust-analyzer LSP session telemetry
-- `lsp_advanced_planes` - Advanced LSP plane stats (semantic tokens, inlay hints, diagnostics, code actions)
+- `lsp_advanced_planes` - Advanced LSP plane stats
 - `pyrefly_diagnostics` - Pyrefly-reported diagnostics
 - `language_capabilities` - LSP server capability snapshots
 - `cross_language_diagnostics` - Cross-language diagnostic aggregation
-
-**Usage:**
-- Extracted from `CqResult.summary` dictionary
-- Persisted as JSON artifact for large result sets
-- Rendered separately from main output to reduce noise
 
 ---
 
 ## Performance Smoke Tests
 
-Defined in `tools/cq/perf/smoke_report.py`:
+Location: `tools/cq/perf/smoke_report.py`
 
 ```python
 class PerfMeasurement(msgspec.Struct, frozen=True):
@@ -1421,277 +1255,136 @@ class PerfSmokeReport(msgspec.Struct, frozen=True):
 
 def build_perf_smoke_report(*, workspace: Path) -> PerfSmokeReport:
     """Run representative CQ commands twice and return timing report."""
-    tc = Toolchain.detect()
-
-    search_measurement = _measure_pair(
-        lambda: smart_search(
-            root=workspace,
-            query="build_graph",
-            lang_scope="python",
-            tc=tc,
-            argv=[],
-        )
-    )
-    calls_measurement = _measure_pair(
-        lambda: cmd_calls(
-            tc=tc,
-            root=workspace,
-            argv=[],
-            function_name="build_graph",
-        )
-    )
-    query_obj = parse_query("entity=function name=build_graph lang=auto")
-    query_plan = compile_query(query_obj)
-    query_measurement = _measure_pair(
-        lambda: execute_plan(
-            query_plan,
-            query_obj,
-            tc=tc,
-            root=workspace,
-            argv=[],
-        )
-    )
-
-    return PerfSmokeReport(
-        generated_at_epoch_s=time.time(),
-        workspace=str(workspace),
-        search_python=search_measurement,
-        calls_python=calls_measurement,
-        query_entity_auto=query_measurement,
-    )
+    # ... (lines 60-105)
 ```
 
-**Measurement Logic:**
-```python
-def _time_call(fn: Callable[[], object], /) -> float:
-    start = time.perf_counter()
-    fn()
-    return (time.perf_counter() - start) * 1000.0
-
-def _measure_pair(fn: Callable[[], object], /) -> PerfMeasurement:
-    first = _time_call(fn)
-    second = _time_call(fn)
-    ratio = (first / second) if second > 0 else 0.0
-    return PerfMeasurement(
-        first_run_ms=first,
-        second_run_ms=second,
-        speedup_ratio=ratio,
-    )
-```
-
-**Speedup Ratio:**
-- `first_run_ms / second_run_ms`
-- Measures cache effectiveness (LSP sessions, disk cache, def index)
-- Expected ratio > 2.0 for cache-heavy operations
-
-**CLI Usage:**
-```bash
-uv run python -m tools.cq.perf.smoke_report \
-    --workspace tests/e2e/cq/_golden_workspace/python_project \
-    --output build/perf/cq_smoke_report.json
-```
-
-**Output Example:**
-```json
-{
-  "generated_at_epoch_s": 1707766800.0,
-  "workspace": "/path/to/workspace",
-  "search_python": {
-    "first_run_ms": 1250.5,
-    "second_run_ms": 450.2,
-    "speedup_ratio": 2.78
-  },
-  "calls_python": {
-    "first_run_ms": 980.3,
-    "second_run_ms": 320.1,
-    "speedup_ratio": 3.06
-  },
-  "query_entity_auto": {
-    "first_run_ms": 1100.7,
-    "second_run_ms": 410.4,
-    "speedup_ratio": 2.68
-  }
-}
-```
+**Speedup Ratio:** `first_run_ms / second_run_ms` — measures cache effectiveness (LSP sessions, disk cache, def index). Expected ratio > 2.0 for cache-heavy operations.
 
 ---
 
-## Integration Points
+## Integration Examples
 
-### Search Pipeline Integration
+### Search Pipeline
 
 ```python
 # tools/cq/search/smart_search.py
-from tools.cq.core.cache import get_cq_cache_backend, build_cache_key, build_cache_tag
-from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
-from tools.cq.search.lsp_front_door_adapter import enrich_with_language_lsp
+cache = get_cq_cache_backend(root=root)
+scheduler = get_worker_scheduler()
 
-def smart_search(...) -> CqResult:
-    # 1. Get workspace-keyed cache backend
-    cache = get_cq_cache_backend(root=root)
+# Submit classification tasks to CPU pool
+futures = [
+    scheduler.submit_cpu(classify_match, match)
+    for match in raw_matches
+]
 
-    # 2. Get worker scheduler for parallel classification
-    scheduler = get_worker_scheduler()
+# Collect with timeout
+batch = scheduler.collect_bounded(futures, timeout_seconds=classification_timeout)
 
-    # 3. Submit classification tasks to CPU pool
-    futures = [
-        scheduler.submit_cpu(classify_match, match)
-        for match in raw_matches
-    ]
-
-    # 4. Collect with timeout
-    batch = scheduler.collect_bounded(
-        futures,
-        timeout_seconds=classification_timeout,
+# LSP enrichment via front-door adapter
+for target in top_targets:
+    lsp_request = LanguageLspEnrichmentRequest(
+        language="python",
+        mode="search",
+        root=root,
+        file_path=target.file_path,
+        line=target.line,
+        col=target.col,
     )
-
-    # 5. LSP enrichment via front-door adapter
-    for target in top_targets:
-        lsp_request = LanguageLspEnrichmentRequest(
-            language="python",
-            mode="search",
-            root=root,
-            file_path=target.file_path,
-            line=target.line,
-            col=target.col,
-        )
-        payload, timed_out = enrich_with_language_lsp(lsp_request)
-        # ... merge LSP data into result
+    payload, timed_out = enrich_with_language_lsp(lsp_request)
+    # ... merge LSP data into result
 ```
 
 ### Query/Entity Integration
 
 ```python
 # tools/cq/query/entity_front_door.py
-from tools.cq.core.cache import get_cq_cache_backend, build_cache_key
-from tools.cq.search.lsp_front_door_adapter import enrich_with_language_lsp
+cache = get_cq_cache_backend(root=Path(result.run.root))
 
-def attach_entity_front_door_insight(result: CqResult, ...) -> None:
-    cache = get_cq_cache_backend(root=Path(result.run.root))
-
-    # Cache entity scan results
-    for partition in partitions:
-        cache_key = build_cache_key(
-            "query_entity_scan",
-            version="v1",
-            workspace=result.run.root,
-            language=partition.language,
-            target=partition.pattern,
+# Cache entity scan results
+for partition in partitions:
+    cache_key = build_cache_key(
+        "query_entity_scan",
+        version="v1",
+        workspace=result.run.root,
+        language=partition.language,
+        target=partition.pattern,
+    )
+    cached = cache.get(cache_key)
+    if cached is not None:
+        partition.records = cached.records
+    else:
+        # ... run entity scan
+        cache.set(
+            cache_key,
+            QueryEntityScanCacheV1(records=partition.records),
+            expire=900,
         )
-        cached = cache.get(cache_key)
-        if cached is not None:
-            partition.records = cached.records
-        else:
-            # ... run entity scan
-            cache.set(
-                cache_key,
-                QueryEntityScanCacheV1(records=partition.records),
-                expire=900,
-            )
-
-    # LSP enrichment for top entities
-    for entity in top_entities:
-        lsp_request = LanguageLspEnrichmentRequest(...)
-        payload, timed_out = enrich_with_language_lsp(lsp_request)
-        # ... attach LSP data to front-door insight
 ```
 
 ### Calls Macro Integration
 
 ```python
 # tools/cq/macros/calls.py
-from tools.cq.core.cache import get_cq_cache_backend, build_cache_key
-from tools.cq.search.lsp_front_door_adapter import enrich_with_language_lsp
+cache = get_cq_cache_backend(root=root)
 
-def cmd_calls(...) -> CqResult:
-    cache = get_cq_cache_backend(root=root)
-
-    # Cache target resolution
-    target_cache_key = build_cache_key(
-        "calls_target",
-        version="v1",
-        workspace=str(root),
-        language="python",
-        target=function_name,
+# Cache target resolution
+target_cache_key = build_cache_key(
+    "calls_target",
+    version="v1",
+    workspace=str(root),
+    language="python",
+    target=function_name,
+)
+cached_target = cache.get(target_cache_key)
+if isinstance(cached_target, CallsTargetCacheV1):
+    target_location = cached_target.target_location
+    target_callees = cached_target.target_callees
+else:
+    # ... resolve target
+    cache.set(
+        target_cache_key,
+        CallsTargetCacheV1(
+            target_location=target_location,
+            target_callees=target_callees,
+        ),
+        expire=900,
     )
-    cached_target = cache.get(target_cache_key)
-    if isinstance(cached_target, CallsTargetCacheV1):
-        target_location = cached_target.target_location
-        target_callees = cached_target.target_callees
-    else:
-        # ... resolve target
-        cache.set(
-            target_cache_key,
-            CallsTargetCacheV1(
-                target_location=target_location,
-                target_callees=target_callees,
-            ),
-            expire=900,
-        )
-
-    # LSP enrichment for target definition
-    if target_location:
-        lsp_request = LanguageLspEnrichmentRequest(
-            language="python",
-            mode="calls",
-            root=root,
-            file_path=Path(target_location[0]),
-            line=target_location[1],
-            col=0,
-            symbol_hint=function_name,
-        )
-        payload, timed_out = enrich_with_language_lsp(lsp_request)
-        # ... merge LSP data into result
 ```
 
 ### Run/Chain Integration
 
 ```python
 # tools/cq/run/runner.py
-from tools.cq.core.bootstrap import resolve_runtime_services
+services = resolve_runtime_services(root=root)
 
-def execute_run_plan(...) -> CqResult:
-    services = resolve_runtime_services(root=root)
-
-    for step in plan.steps:
-        if step.type == "search":
-            step_result = services.search.execute(
-                SearchServiceRequest(
-                    root=root,
-                    query=step.query,
-                    lang_scope=step.lang_scope,
-                    tc=tc,
-                    argv=argv,
-                )
+for step in plan.steps:
+    if step.type == "search":
+        step_result = services.search.execute(
+            SearchServiceRequest(
+                root=root,
+                query=step.query,
+                lang_scope=step.lang_scope,
+                tc=tc,
+                argv=argv,
             )
-        elif step.type == "calls":
-            step_result = services.calls.execute(
-                CallsServiceRequest(
-                    root=root,
-                    function_name=step.function_name,
-                    tc=tc,
-                    argv=argv,
-                )
+        )
+    elif step.type == "calls":
+        step_result = services.calls.execute(
+            CallsServiceRequest(
+                root=root,
+                function_name=step.function_name,
+                tc=tc,
+                argv=argv,
             )
-        elif step.type == "entity":
-            # Execute entity query, then attach front door
-            step_result = execute_entity_query(...)
-            services.entity.attach_front_door(
-                EntityFrontDoorRequest(
-                    result=step_result,
-                    relationship_detail_max_matches=50,
-                )
-            )
-        # ... merge step results
+        )
+    # ... merge step results
 ```
 
 ---
 
 ## Design Tensions and Improvement Vectors
 
-### Current Limitations
-
-#### 1. Cache Invalidation Granularity
+### 1. Cache Invalidation Granularity
 
 **Issue:** Tag-based eviction is coarse-grained (workspace + language level).
 
@@ -1701,12 +1394,12 @@ tag = build_cache_tag(workspace=str(root), language="python")
 cache.evict_tag(tag)  # Evicts ALL Python cache entries for workspace
 ```
 
-**Improvement Vector:**
+**Improvement Vectors:**
 - Add file-level tags: `{workspace}:{language}:{file_hash}`
 - Add function-level tags: `{workspace}:{language}:{function_signature_hash}`
 - Implement cache versioning with automatic migration
 
-#### 2. LSP Session Lifecycle Management
+### 2. LSP Session Lifecycle
 
 **Issue:** LSP sessions persist for process lifetime, even when idle.
 
@@ -1715,12 +1408,12 @@ cache.evict_tag(tag)  # Evicts ALL Python cache entries for workspace
 - Kept alive until `atexit` cleanup
 - No idle timeout or health monitoring
 
-**Improvement Vector:**
+**Improvement Vectors:**
 - Add idle timeout (e.g., 5 minutes of no requests)
 - Add periodic health checks with automatic restart
 - Add session pool size limits per workspace
 
-#### 3. Worker Pool Sizing Strategy
+### 3. Worker Pool Sizing Strategy
 
 **Issue:** Static pool sizes based on CPU count don't adapt to workload.
 
@@ -1730,26 +1423,21 @@ cpu_workers = max(1, cpu_count - 1)
 io_workers = max(8, cpu_count)
 ```
 
-**Improvement Vector:**
+**Improvement Vectors:**
 - Add adaptive pool sizing based on queue depth
-- Add per-command pool size profiles (search vs calls vs query)
+- Add per-command pool size profiles
 - Add pool saturation metrics for tuning
 
-#### 4. Cache Hit Rate Observability
+### 4. Cache Hit Rate Observability
 
 **Issue:** No visibility into cache effectiveness.
 
-**Current State:**
-- Cache hits/misses not tracked
-- No cache size monitoring
-- No eviction rate metrics
-
-**Improvement Vector:**
+**Improvement Vectors:**
 - Add `CacheMetrics` struct with hit/miss/evict counters
 - Expose metrics via `--verbose` or diagnostic artifacts
 - Add cache size limits with LRU eviction policy
 
-#### 5. LSP Retry Logic Limitations
+### 5. LSP Retry Logic Limitations
 
 **Issue:** Only retries on timeout, not on transient errors.
 
@@ -1762,79 +1450,49 @@ except (OSError, RuntimeError, ValueError, TypeError):
     return None, timed_out  # Fail immediately
 ```
 
-**Improvement Vector:**
+**Improvement Vectors:**
 - Add retry classification (transient vs permanent errors)
 - Add exponential backoff option
 - Add circuit breaker for repeatedly failing sessions
 
-#### 6. Service Layer Abstractions
+### 6. Service Layer Abstractions
 
 **Issue:** Services are thin wrappers with minimal abstraction value.
 
-**Current State:**
-```python
-class SearchService:
-    @staticmethod
-    def execute(request: SearchServiceRequest) -> CqResult:
-        return smart_search(...)  # Direct delegation
-```
-
-**Improvement Vector:**
+**Improvement Vectors:**
 - Add service middleware for cross-cutting concerns (logging, metrics, tracing)
 - Add service composition helpers for multi-step workflows
 - Add request/response interceptors for diagnostics
-
-#### 7. Diagnostic Artifact Size Management
-
-**Issue:** Diagnostic payloads can grow unbounded for large result sets.
-
-**Current State:**
-```python
-pyrefly_diagnostics: list[dict[str, object]] = msgspec.field(default_factory=list)
-```
-
-**Improvement Vector:**
-- Add diagnostic sampling (top N errors by file/severity)
-- Add diagnostic deduplication by error signature
-- Add diagnostic compression for artifact storage
-
-#### 8. Performance Benchmarking Coverage
-
-**Issue:** Smoke tests only measure 3 commands on small workspace.
-
-**Current State:**
-- Tests: search, calls, entity query
-- Workspace: Small golden workspace fixture
-- Metrics: First/second run times only
-
-**Improvement Vector:**
-- Add benchmark suite for all commands (neighborhood, run, chain, ldmd)
-- Add large workspace benchmarks (10k+ files)
-- Add memory profiling and GC metrics
-- Add percentile latency tracking (p50, p90, p99)
 
 ---
 
 ## Summary
 
-The CQ runtime services tier provides a unified infrastructure layer for execution policy management, persistent caching, worker scheduling, and service composition. Key design principles:
+The CQ runtime services tier provides unified infrastructure for execution policy management, persistent caching, worker scheduling, and service composition.
 
-1. **Fail-Open Semantics** - All caching and LSP operations degrade gracefully on errors
-2. **Workspace-Keyed Singletons** - Cache backends, service bundles, and LSP sessions are keyed by resolved workspace path
-3. **Environment Override System** - All policies support `CQ_RUNTIME_*` environment variables for tuning
+**Key Design Principles:**
+1. **Fail-Open Semantics** - All caching and LSP operations degrade gracefully
+2. **Workspace-Keyed Singletons** - Cache backends, service bundles, and LSP sessions keyed by resolved workspace path
+3. **Environment Override System** - All policies support `CQ_RUNTIME_*` environment variables
 4. **Dual-Pool Worker Architecture** - Separate CPU (ProcessPool/spawn) and I/O (ThreadPool) pools with bounded collection
 5. **Contract-First Design** - All requests, responses, and cache payloads use msgspec structs
 6. **LSP Runtime Infrastructure** - Comprehensive LSP lifecycle management with contract state, budgets, sessions, and capabilities
 7. **Composition Root Pattern** - Central `CqRuntimeServices` bundle wires all dependencies
 
 **File Locations:**
-- Runtime policy: `tools/cq/core/runtime/execution_policy.py`
-- Worker scheduler: `tools/cq/core/runtime/worker_scheduler.py`
-- Cache backend: `tools/cq/core/cache/diskcache_backend.py`
-- Service layer: `tools/cq/core/services/`, `tools/cq/core/ports.py`
-- Composition root: `tools/cq/core/bootstrap.py`
-- LSP infrastructure: `tools/cq/search/lsp_*.py`, `tools/cq/search/lsp/`
-- Diagnostics: `tools/cq/core/diagnostics_contracts.py`
-- Performance tests: `tools/cq/perf/smoke_report.py`
+- Runtime policy: `tools/cq/core/runtime/execution_policy.py` (352 LOC)
+- Worker scheduler: `tools/cq/core/runtime/worker_scheduler.py` (218 LOC)
+- Cache backend: `tools/cq/core/cache/diskcache_backend.py` (~200 LOC)
+- Cache contracts: `tools/cq/core/cache/contracts.py` (~400 LOC)
+- Service layer: `tools/cq/core/services/` (~300 LOC), `tools/cq/core/ports.py` (~100 LOC)
+- Composition root: `tools/cq/core/bootstrap.py` (~150 LOC)
+- LSP infrastructure: `tools/cq/search/lsp_*.py`, `tools/cq/search/lsp/` (~800 LOC)
+- Diagnostics: `tools/cq/core/diagnostics_contracts.py` (~200 LOC)
+- Performance tests: `tools/cq/perf/smoke_report.py` (~150 LOC)
 
 This layer enables CQ commands to focus on domain logic while delegating concurrency, caching, and LSP lifecycle management to reusable infrastructure.
+
+**Cross-References:**
+- Doc 02 (search) - Uses cache backend and LSP adapter
+- Doc 07 (tree-sitter) - Uses shared cache infrastructure via CQ cache backend
+- Doc 06 (data models) - Defines cache/runtime/service contracts (this doc is primary home)

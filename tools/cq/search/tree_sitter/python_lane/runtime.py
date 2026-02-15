@@ -15,10 +15,10 @@ import msgspec
 from tools.cq.search._shared.core import node_text as _shared_node_text
 from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryExecutionSettingsV1,
+    QueryExecutionTelemetryV1,
     QueryWindowV1,
 )
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1, load_pack_rules
-from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
 from tools.cq.search.tree_sitter.core.change_windows import (
     contains_window,
     ensure_query_windows,
@@ -263,7 +263,7 @@ def _safe_cursor_captures(
     match_limit: int,
     predicate_callback: object | None = None,
     budget_ms: int | None = None,
-) -> tuple[dict[str, list[Node]], bool, bool]:
+) -> tuple[dict[str, list[Node]], QueryExecutionTelemetryV1]:
     typed_predicate = (
         cast(
             "Callable[[str, object, int, Mapping[str, Sequence[object]]], bool]",
@@ -281,10 +281,14 @@ def _safe_cursor_captures(
         query,
         root,
         windows=windows,
-        settings=QueryExecutionSettingsV1(match_limit=match_limit, budget_ms=budget_ms),
+        settings=QueryExecutionSettingsV1(
+            match_limit=match_limit,
+            budget_ms=budget_ms,
+            window_mode="containment_preferred",
+        ),
         callbacks=callbacks,
     )
-    return captures, telemetry.exceeded_match_limit, telemetry.cancelled
+    return captures, telemetry
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
@@ -300,14 +304,14 @@ def _extract_parse_quality(
 ) -> dict[str, object]:
     quality: dict[str, object] = {"has_error": bool(getattr(root, "has_error", False))}
     captures: dict[str, list[Node]]
-    did_exceed_match_limit = False
+    telemetry = QueryExecutionTelemetryV1()
     try:
         query = _compile_query(
             "__errors__.scm",
             "(ERROR) @error (MISSING) @missing",
             request_surface="diagnostic",
         )
-        captures, did_exceed_match_limit, _cancelled = _safe_cursor_captures(
+        captures, telemetry = _safe_cursor_captures(
             query,
             root,
             windows=windows,
@@ -330,7 +334,7 @@ def _extract_parse_quality(
 
     quality["error_nodes"] = _collect("error")
     quality["missing_nodes"] = _collect("missing")
-    quality["did_exceed_match_limit"] = did_exceed_match_limit
+    quality["did_exceed_match_limit"] = telemetry.exceeded_match_limit
     return quality
 
 
@@ -345,11 +349,9 @@ def _capture_gap_fill_fields(
     payload: dict[str, object] = {}
     did_exceed_match_limit = False
     cancelled = False
-    fallback_budget = query_budget_ms if query_budget_ms is not None else 200
-    effective_budget_ms = adaptive_query_budget_ms(
-        language="python",
-        fallback_budget_ms=fallback_budget,
-    )
+    effective_budget_ms = query_budget_ms
+    degrade_reasons: set[str] = set()
+    window_split_count = 0
     for filename, source in _query_sources():
         try:
             query = _compile_query(filename, source, request_surface="artifact")
@@ -358,7 +360,7 @@ def _capture_gap_fill_fields(
                 if has_custom_predicates(source)
                 else None
             )
-            captures, exceeded, cancelled_one = _safe_cursor_captures(
+            captures, telemetry = _safe_cursor_captures(
                 query,
                 root,
                 windows=windows,
@@ -366,8 +368,11 @@ def _capture_gap_fill_fields(
                 predicate_callback=predicate_callback,
                 budget_ms=effective_budget_ms,
             )
-            did_exceed_match_limit = did_exceed_match_limit or exceeded
-            cancelled = cancelled or cancelled_one
+            did_exceed_match_limit = did_exceed_match_limit or telemetry.exceeded_match_limit
+            cancelled = cancelled or telemetry.cancelled
+            window_split_count += int(telemetry.window_split_count)
+            if isinstance(telemetry.degrade_reason, str) and telemetry.degrade_reason:
+                degrade_reasons.add(telemetry.degrade_reason)
         except _ENRICHMENT_ERRORS:
             continue
         _apply_gap_fill_from_captures(payload, captures, source_bytes)
@@ -376,6 +381,8 @@ def _capture_gap_fill_fields(
         "match_limit": match_limit,
         "did_exceed_match_limit": did_exceed_match_limit,
         "cancelled": cancelled,
+        "window_split_count": window_split_count,
+        "degrade_reasons": sorted(degrade_reasons),
     }
     return payload
 

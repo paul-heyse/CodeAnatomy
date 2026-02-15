@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import msgspec
 
@@ -36,6 +37,11 @@ class QueryExecutionSettingsV1(CqStruct, frozen=True):
     budget_ms: int | None = None
     timeout_micros: int | None = None
     require_containment: bool = False
+    window_mode: Literal[
+        "intersection",
+        "containment_preferred",
+        "containment_required",
+    ] = "intersection"
 
 
 class QueryExecutionTelemetryV1(CqStruct, frozen=True):
@@ -47,6 +53,8 @@ class QueryExecutionTelemetryV1(CqStruct, frozen=True):
     match_count: int = 0
     exceeded_match_limit: bool = False
     cancelled: bool = False
+    window_split_count: int = 0
+    degrade_reason: str | None = None
 
 
 class AdaptiveRuntimeSnapshotV1(CqStruct, frozen=True):
@@ -170,6 +178,17 @@ class TreeSitterCstTokenV1(CqStruct, frozen=True):
     end_col: int
 
 
+class TreeSitterQueryHitV1(CqStruct, frozen=True):
+    """Typed query-capture hit row for CST artifact exports."""
+
+    query_name: str
+    pattern_index: int
+    capture_name: str
+    node_id: str
+    start_byte: int
+    end_byte: int
+
+
 class TreeSitterStructuralExportV1(CqStruct, frozen=True):
     """Container for deterministic structural export payload."""
 
@@ -223,6 +242,8 @@ class TreeSitterArtifactBundleV1(CqCacheStruct, frozen=True):
     batches: list[TreeSitterEventBatchV1] = msgspec.field(default_factory=list)
     structural_exports: list[TreeSitterStructuralExportV1] = msgspec.field(default_factory=list)
     cst_tokens: list[TreeSitterCstTokenV1] = msgspec.field(default_factory=list)
+    cst_diagnostics: list[TreeSitterDiagnosticV1] = msgspec.field(default_factory=list)
+    cst_query_hits: list[TreeSitterQueryHitV1] = msgspec.field(default_factory=list)
     telemetry: dict[str, object] = msgspec.field(default_factory=dict)
     run_uuid_version: int | None = None
     run_created_ms: float | None = None
@@ -246,6 +267,7 @@ __all__ = [
     "TreeSitterEventBatchV1",
     "TreeSitterEventV1",
     "TreeSitterInputEditV1",
+    "TreeSitterQueryHitV1",
     "TreeSitterStructuralEdgeV1",
     "TreeSitterStructuralExportV1",
     "TreeSitterStructuralNodeV1",

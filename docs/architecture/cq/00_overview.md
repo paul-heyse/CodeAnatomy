@@ -1,23 +1,24 @@
 # CQ Architecture Overview
 
-This document provides a fully integrated architectural review of the CQ tool (`tools/cq/`, version 0.3.0), a multi-language code query and analysis system. It synthesizes the nine subsystem documents in this directory into a coherent picture of the system's design, data flow, cross-cutting concerns, and primary vectors for architectural improvement.
+This document provides a fully integrated architectural review of the CQ tool (`tools/cq/`, version 0.4.0), a multi-language code query and analysis system. It synthesizes the ten subsystem documents in this directory into a coherent picture of the system's design, data flow, cross-cutting concerns, and primary vectors for architectural improvement.
 
 **Target audience:** Advanced LLM programmers with deep Python expertise, seeking to propose architectural improvements.
 
 **Document map:**
 
-| Document | Scope | Lines |
-|----------|-------|-------|
-| [01_core_infrastructure.md](01_core_infrastructure.md) | CLI, config, toolchain, result pipeline, multi-language orchestration, error handling, serialization, code indexing | 1285 |
-| [02_search_subsystem.md](02_search_subsystem.md) | Smart search, 3-tier classification, 5-stage enrichment, parallel pools, Pyrefly LSP, cross-source agreement | 2837 |
-| [03_query_subsystem.md](03_query_subsystem.md) | Query DSL grammar, IR, parser, planner, executor, batch spans, metavariables, multi-language | 1378 |
-| [04_analysis_commands.md](04_analysis_commands.md) | 8 macro commands (calls, impact, sig-impact, scopes, bytecode, side-effects, imports, exceptions), DefIndex, scoring | 848 |
-| [05_multi_step_execution.md](05_multi_step_execution.md) | RunPlan model, 11 step types, TOML/JSON plans, shared scan, chain command, result merging, provenance | 890 |
-| [06_data_models.md](06_data_models.md) | Contract architecture, CqStruct, schema types, enrichment facts, FrontDoorInsightV1, serialization codecs, boundary protocol | 2697 |
-| [07_ast_grep_and_formatting.md](07_ast_grep_and_formatting.md) | ast-grep-py integration, rule system, output renderers, file scanning, gitignore, shared scan context | 1124 |
-| [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) | Semantic neighborhood assembly, SNB schema, 4-phase pipeline, capability gating, section layout, CLI/run integration | 1994 |
-| [09_ldmd_format.md](09_ldmd_format.md) | LDMD progressive disclosure format, parser/writer architecture, protocol commands, OutputFormat integration | 1505 |
-| [10_runtime_services.md](10_runtime_services.md) | Runtime services tier: execution policies, caching, workers, service layer | 1794 |
+| # | Title | File | Lines |
+|---|-------|------|-------|
+| 00 | CQ Architecture Overview | `00_overview.md` | 800+ |
+| 01 | CLI & Command Framework | `01_cli_command_framework.md` | 1,370 |
+| 02 | Search Pipeline | `02_search_subsystem.md` | 2,837 |
+| 03 | Query Subsystem | `03_query_subsystem.md` | 1,378 |
+| 04 | Analysis Commands | `04_analysis_commands.md` | 1,004 |
+| 05 | Multi-Step Execution | `05_multi_step_execution.md` | 890 |
+| 06 | Cross-Cutting Contracts & Orchestration | `06_cross_cutting_contracts.md` | 2,860 |
+| 07 | Tree-Sitter & Structural Parsing Engine | `07_tree_sitter_engine.md` | 1,612 |
+| 08 | Neighborhood Subsystem | `08_neighborhood_subsystem.md` | 1,994 |
+| 09 | LDMD Format & Protocol | `09_ldmd_format.md` | 1,505 |
+| 10 | Runtime Services | `10_runtime_services.md` | 1,794 |
 
 ---
 
@@ -39,6 +40,7 @@ CQ is a code query tool that occupies a specific niche: **AST-aware code analysi
 - Serialization: msgspec for zero-copy struct (de)serialization
 - Structural matching: ast-grep-py (library binding, not subprocess)
 - Text search: ripgrep for fast candidate generation
+- Tree-sitter: Multi-language AST parsing with bounded query execution
 - Parallelism: multiprocessing with `spawn` context (not `fork`)
 - Type enrichment: Pyrefly LSP for semantic hover data
 - Progressive disclosure: LDMD format for long document navigation
@@ -50,7 +52,7 @@ CQ is a code query tool that occupies a specific niche: **AST-aware code analysi
 
 ## 2. Architectural Topology
 
-CQ is organized as a layered system with four execution tiers and a shared infrastructure layer.
+CQ is organized as a layered system with four execution tiers, cross-cutting infrastructure, and a runtime services foundation.
 
 ```
                           CLI Layer (cyclopts)
@@ -68,11 +70,14 @@ CQ is organized as a layered system with four execution tiers and a shared infra
                neighborhood preview, degradation)
                               |
                     Shared Infrastructure
-              (ast-grep, DefIndex, scoring,
+              (tree-sitter, ast-grep, DefIndex, scoring,
                multi-lang, serialization, LDMD)
                               |
                     Multi-Step Execution
                   (run / chain / batch)
+                              |
+                    Runtime Services
+          (execution policy, cache, workers, LSP runtime)
 ```
 
 ### 2.1 Execution Tiers
@@ -87,11 +92,25 @@ Declarative code queries via a token-based DSL. Follows classic compiler archite
 Pre-built analysis commands: `calls` (call site census), `impact` (taint/data flow), `sig-impact` (signature change simulation), `scopes` (closure capture), `bytecode` (bytecode surface), `side-effects` (import-time effects), `imports` (structure/cycles), `exceptions` (handling patterns). Each uses two-stage collection (fast ripgrep pre-filter -> precise AST parse).
 
 **Tier 4: Neighborhood** (`tools/cq/neighborhood/`)
-Targeted semantic neighborhood analysis around code anchors. A 4-phase pipeline resolves a target (file:line:col or symbol), collects structural AST neighbors, enriches with LSP evidence (capability-gated), and emits a typed `SemanticNeighborhoodBundleV1`. Output is rendered to markdown with a deterministic 17-slot section layout or to LDMD for progressive disclosure.
+Targeted semantic neighborhood analysis around code anchors. A 4-phase pipeline resolves a target (file:line:col or symbol), collects structural AST neighbors via tree-sitter, enriches with LSP evidence (capability-gated), and emits a typed `SemanticNeighborhoodBundleV1`. Output is rendered to markdown with a deterministic 17-slot section layout or to LDMD for progressive disclosure.
 
-### 2.2 Multi-Step Composition
+### 2.2 Cross-Cutting Infrastructure
 
-The `run` and `chain` subsystems (`tools/cq/run/`) compose tiers into workflows. A `RunPlan` contains ordered steps that can mix search, query, analysis, and neighborhood commands (11 step types total). Multiple Q-steps sharing the same language scope are batched into a single ast-grep scan via `BatchEntityQuerySession`, avoiding redundant file I/O. NeighborhoodStep is the newest addition, enabling targeted semantic neighborhood analysis within automated workflows.
+**Tree-Sitter Engine** (`tools/cq/search/tree_sitter/`)
+Multi-language AST parsing engine (~7,600 LOC) providing bounded query execution, language-specific enrichment lanes (Python/Rust), diagnostic collection, and structural exports. Serves as the foundation for search enrichment stage 5 and neighborhood structural collection. Features include windowing, autotune, budget management, and injection runtime for Rust macro expansion.
+
+**FrontDoor Insight** (`tools/cq/core/front_door_insight.py`)
+Canonical cross-subsystem contract providing unified high-level analysis results across search/calls/entity commands. Embeds target identity, neighborhood preview, risk assessment, confidence metrics, degradation status, budget controls, and artifact references in a single compact schema.
+
+**LDMD Progressive Disclosure** (`tools/cq/ldmd/`)
+Structured markdown format with embedded section markers, byte-offset indexing, and protocol commands (index/get/search/neighbors). Enables random-access retrieval of large analysis artifacts without loading entire documents. Supports three extraction modes (full/preview/tldr) with depth control.
+
+**Runtime Services** (`tools/cq/core/runtime/`)
+Process-global infrastructure providing execution policy management, dual-pool worker scheduling (CPU process-based, I/O thread-based), persistent disk-backed caching with fail-open semantics, and LSP runtime coordination. Central `CqRuntimeServices` composition root wires dependencies.
+
+### 2.3 Multi-Step Composition
+
+The `run` and `chain` subsystems (`tools/cq/run/`) compose tiers into workflows. A `RunPlan` contains ordered steps that can mix search, query, analysis, and neighborhood commands (11 step types total). Multiple Q-steps sharing the same language scope are batched into a single ast-grep scan via `BatchEntityQuerySession`, avoiding redundant file I/O. NeighborhoodStep enables targeted semantic neighborhood analysis within automated workflows.
 
 ---
 
@@ -111,6 +130,9 @@ Config Resolution (CLI -> env -> .cq.toml -> defaults)
 CliContext Construction (root, toolchain, format, options)
     |
     v
+Runtime Services Bootstrap (policy, cache, workers, LSP)
+    |
+    v
 Command Dispatch (cyclopts @app.command routing)
     |
     v
@@ -121,6 +143,7 @@ Command Dispatch (cyclopts @app.command routing)
 | parallel ProcessPool   | entity/pattern match   | CallResolver binding  |
 | cross-source agreement | relational filtering   | taint propagation     |
 | Pyrefly LSP hover      | metavar extraction     | scoring               |
+| tree-sitter stage 5    | tree-sitter queries    | front-door insight    |
 +------------------------+------------------------+-----------------------+
                               |
                               v
@@ -130,7 +153,7 @@ Command Dispatch (cyclopts @app.command routing)
                               |
                               v
                     Render Dispatch
-          (md | json | mermaid | mermaid-class | dot | summary)
+          (md | json | mermaid | mermaid-class | dot | ldmd | summary)
                               |
                               v
                     Output (stdout) + Optional Artifact (.cq/artifacts/)
@@ -142,7 +165,7 @@ Command Dispatch (cyclopts @app.command routing)
 RunPlan (TOML/JSON/inline steps)
     |
     v
-Step Classification (Q-steps vs analysis steps vs search steps)
+Step Classification (Q-steps vs analysis steps vs search steps vs neighborhood)
     |
     v
 Q-Step Batching (same lang-scope steps -> BatchEntityQuerySession)
@@ -165,13 +188,15 @@ Merged CqResult (aggregated findings, per-step sections)
 | Boundary | Type | Direction |
 |----------|------|-----------|
 | User -> System | CLI args, `SearchRequest`, `Query` string | Input |
-| Config -> Runtime | `CqConfig`, `CliContext` | Internal |
+| Config -> Runtime | `CqConfig`, `CliContext`, `RuntimeExecutionPolicy` | Internal |
 | Search -> Enrichment | `RgCandidate`, `PythonNodeEnrichmentRequest` | Internal |
 | Query Parser -> Planner | `Query` (IR) | Internal |
 | Planner -> Executor | `ToolPlan` | Internal |
 | Executor -> Scanner | `AstGrepRule`, `RuleSpec` | Internal |
 | Scanner -> Executor | `SgRecord` | Internal |
+| Tree-sitter -> Enrichment | `QueryExecutionTelemetryV1`, capture nodes | Internal |
 | Analysis -> Index | `DefIndex`, `CallResolver`, `ArgBinder` | Internal |
+| Neighborhood -> LSP | `TargetCoordinatesV1`, capability gates | Internal |
 | Any front-door command -> Output | `FrontDoorInsightV1` in `summary.front_door_insight` | Output |
 | Any Command -> Output | `CqResult` | Output |
 | Output -> Disk | `ContractEnvelope` (msgpack) | Persistence |
@@ -180,15 +205,15 @@ Merged CqResult (aggregated findings, per-step sections)
 
 ## 4. Contract Architecture
 
-CQ enforces a strict boundary protocol for data types, documented fully in [06_data_models.md](06_data_models.md).
+CQ enforces a strict boundary protocol for data types, documented fully in [06_cross_cutting_contracts.md](06_cross_cutting_contracts.md).
 
 ### 4.1 Three-Tier Type System
 
-1. **Serialized Contracts** (msgspec.Struct): Cross module boundaries. Base class `CqStruct` provides `frozen=True`, `kw_only=True`, `omit_defaults=True`. Used for: `CqResult`, `Finding`, `SearchSummaryContract`, request types, `CqConfig`.
+1. **Serialized Contracts** (msgspec.Struct): Cross module boundaries. Base classes `CqStruct`, `CqOutputStruct`, `CqSettingsStruct`, `CqCacheStruct` provide `frozen=True`, `kw_only=True`, `omit_defaults=True`. Used for: `CqResult`, `Finding`, `SearchSummaryContract`, request types, `CqConfig`, `RuntimeExecutionPolicy`.
 
 2. **Runtime-Only Objects** (`@dataclass` or plain class): In-process state only. Used for: `ScanContext`, `EntityExecutionState`, `RunContext`, `DefIndex`.
 
-3. **External Handles**: Parser/cache objects never serialized. Used for: `SgRoot`, `SgNode`, `pygit2.Repository`.
+3. **External Handles**: Parser/cache objects never serialized. Used for: `SgRoot`, `SgNode`, `pygit2.Repository`, tree-sitter `Query`/`Node` objects.
 
 ### 4.2 Canonical Output: CqResult
 
@@ -264,9 +289,9 @@ CQ supports Python and Rust with extension-authoritative scope enforcement:
 - `rust` scope: `.rs`
 - `auto` scope: union of all
 
-Language scope flows through the entire stack: file enumeration, candidate collection, ast-grep rule selection, enrichment pipeline selection, result merging. The multi-language orchestrator (`core/multilang_orchestrator.py`) partitions execution by language and merges results with deterministic ordering (Python priority, deduplicated by span overlap).
+Language scope flows through the entire stack: file enumeration, candidate collection, ast-grep rule selection, tree-sitter query selection, enrichment pipeline selection, result merging. The multi-language orchestrator (`core/multilang_orchestrator.py`) partitions execution by language and merges results with deterministic ordering (Python priority, deduplicated by span overlap).
 
-**Asymmetry:** Python has full enrichment (5-stage pipeline, Pyrefly LSP, symtable, bytecode). Rust has 2-stage enrichment (tree-sitter syntax analysis). Analysis macros are Python-only. This asymmetry is fundamental to the architecture, not a gap to fill uniformly.
+**Asymmetry:** Python has full enrichment (5-stage pipeline, Pyrefly LSP, symtable, bytecode, tree-sitter). Rust has 2-stage enrichment plus tree-sitter with injection runtime for macro expansion. Analysis macros are Python-only. This asymmetry is fundamental to the architecture, not a gap to fill uniformly.
 
 ### 5.2 Error Handling: Fail-Open Architecture
 
@@ -277,8 +302,11 @@ CQ follows a consistent fail-open philosophy across all subsystems:
 - **External tool failures**: ast-grep errors fall back to ripgrep-only results. Ripgrep failures produce empty candidate sets.
 - **Multi-step failures**: `stop_on_error=False` (default) continues execution; errors accumulated in per-step results.
 - **Parallel worker failures**: ProcessPool with `spawn` context fails open to sequential execution.
+- **Cache failures**: All cache operations fail open; cache unavailability never blocks execution.
+- **LSP failures**: Capability-gated enrichment degrades gracefully; missing LSP never blocks core results.
+- **Tree-sitter failures**: Budget exhaustion and parse errors produce partial results with telemetry.
 
-**Degradation tracking:** Two layers. Findings retain `degrade_reasons: list[str]` for backward compatibility. The `FrontDoorInsightV1.degradation` field provides structured per-subsystem status (lsp, scan, scope_filter). The SNB schema provides typed `DegradeEventV1` events with stage/category/severity/correlation_key. Neighborhood and insight artifacts carry the most detailed degradation records.
+**Degradation tracking:** Three layers. Findings retain `degrade_reasons: list[str]` for backward compatibility. The `FrontDoorInsightV1.degradation` field provides structured per-subsystem status (lsp, scan, scope_filter). The SNB schema provides typed `DegradeEventV1` events with stage/category/severity/correlation_key. Neighborhood and insight artifacts carry the most detailed degradation records.
 
 ### 5.3 Performance Architecture
 
@@ -286,7 +314,9 @@ CQ follows a consistent fail-open philosophy across all subsystems:
 
 **Shared scan context:** `ScanContext` bundles ast-grep scan results (definition records, call records, interval index) for reuse across multiple queries in the same invocation. Typical speedup: 5-10x for multi-step plans.
 
-**Parallel enrichment:** `ProcessPoolExecutor` with `spawn` context (not `fork`, avoiding CPython GIL issues), max 4 workers, fail-open to sequential on worker errors.
+**Tree-sitter bounded execution:** Query execution uses configurable match limits, depth limits, and time budgets. Window-based execution processes bounded byte ranges. Autotune adjusts limits dynamically based on query performance.
+
+**Parallel enrichment:** `ProcessPoolExecutor` with `spawn` context (not `fork`, avoiding CPython GIL issues), max 4 workers, fail-open to sequential on worker errors. Dual-pool architecture separates CPU-intensive (process pool) from I/O-bound (thread pool) workloads.
 
 **Batch optimization:** Multiple Q-steps with the same language scope share a single ast-grep scan via `BatchEntityQuerySession`.
 
@@ -332,7 +362,7 @@ All analysis macros depend on the index infrastructure:
 - `CallResolver`: Uses `DefIndex` for call site -> declaration resolution (3-strategy: local -> import -> global)
 - `ArgBinder`: Uses `FnDecl` parameters from `DefIndex` for argument binding
 
-The index is rebuilt from scratch on every invocation. For analysis commands that need the full index (e.g., `calls` scanning the entire repo), this means O(n) startup cost proportional to repository size.
+The index is rebuilt from scratch on every invocation. For analysis commands that need the full index (e.g., `calls` scanning the entire repo), this means O(n) startup cost proportional to repository size. However, persistent caching of calls target metadata significantly reduces redundant work for repeated queries.
 
 ### 6.3 Multi-Step <-> All Subsystems
 
@@ -354,15 +384,15 @@ The `run` subsystem can invoke any other subsystem via `RunStep` types:
 
 Only Q-steps benefit from shared scan optimization. Analysis and search steps are executed independently, each rebuilding their own indexes and candidate sets. This is the most significant performance opportunity in the multi-step system.
 
-### 6.4 AST-Grep as Shared Infrastructure
+### 6.4 Tree-Sitter as Shared Infrastructure
 
-ast-grep-py is consumed by three subsystems:
+Tree-sitter is consumed by three subsystems:
 
-1. **Query executor**: Pattern matching via `SgRoot.find_all()` and inline `Rule` objects
-2. **Search classifier**: AST node classification for candidate enrichment
-3. **Analysis macros**: Entity scanning via `sg_scan()` for definition/call records
+1. **Search enrichment**: Stage 5 of the Python enrichment pipeline uses tree-sitter queries for structural metadata extraction
+2. **Neighborhood collection**: Structural collector uses tree-sitter queries for caller/callee/reference extraction
+3. **Rust enrichment**: Rust lane uses tree-sitter with injection runtime for macro expansion and syntax analysis
 
-The `RuleSpec` system (`tools/cq/astgrep/sgpy_scanner.py`) provides the canonical rule representation. Language-dispatched rule loading (`rules.py` -> `rules_py.py` / `rules_rust.py`) selects rules per language. Python has 23 rules covering 6 record types; Rust has 8 rules.
+The tree-sitter engine provides language-specific query selection, bounded execution with budgets/limits, windowing for large files, autotune for dynamic adjustment, and comprehensive telemetry. See [07_tree_sitter_engine.md](07_tree_sitter_engine.md) for full architecture.
 
 ### 6.5 LDMD as Progressive Disclosure Infrastructure
 
@@ -413,7 +443,25 @@ Failure path:  Input -> Partial Enrichment -> Degraded Finding + degrade_reasons
 Fatal path:    Input -> Error CqResult(success=False)
 ```
 
-The degradation tracking is the weakest part of this pattern. `degrade_reasons` is `list[str]`, providing no structure for downstream consumers to react to specific failure modes.
+The degradation tracking is evolving. Legacy `degrade_reasons: list[str]` provides backward compatibility. `InsightDegradationV1` provides compact per-subsystem status. `DegradeEventV1` in SNB provides typed events with stage/category/severity/correlation_key for detailed diagnostics.
+
+### 7.5 Hexagonal Service Layer
+
+Runtime services use port/adapter architecture:
+
+```python
+class SearchServicePort(Protocol):
+    def execute_search(self, request: SearchRequest) -> CqResult: ...
+
+class SearchService(SearchServicePort):
+    def __init__(self, runtime: CqRuntimeServices): ...
+```
+
+This pattern enables:
+- Clean dependency injection via composition root
+- Protocol-based boundaries (no concrete dependencies)
+- Testability (mock services via protocol)
+- Swappable implementations
 
 ---
 
@@ -423,31 +471,29 @@ The subsystem documents identify numerous per-module improvement opportunities. 
 
 ### 8.1 Persistent Index / Scan Cache
 
-**Status:** **IMPLEMENTED**
+**Status:** **PARTIALLY IMPLEMENTED**
 
 **Affected subsystems:** Search, Query, Analysis, Multi-Step
 
 **Current state:** Persistent DiskCache-backed caching implemented in `core/cache/` with TTL-based eviction (default 900s), workspace-scoped singletons, and fail-open semantics. Caching covers calls target metadata, search partitions, and entity scans. DefIndex per-invocation rebuild remains, but result caching reduces redundant work. See [10_runtime_services.md](10_runtime_services.md) for comprehensive documentation.
 
-**Systemic impact:** Repository scan is O(n) per invocation for DefIndex builds. For large repos (>50k files), this dominates execution time. However, higher-level result caching (calls targets, search partitions, entity scans) now persists across invocations, significantly reducing redundant work for repeated queries.
-
-**Remaining improvement opportunities:** Persistent DefIndex caching with file-mtime-based invalidation. Key design decisions: cache granularity (per-file SgRecord sets vs. full ScanContext), invalidation strategy (mtime vs. content hash), and cache format (msgpack for speed, JSON for debuggability).
+**Remaining improvement opportunities:** Persistent DefIndex caching with file-mtime-based invalidation, tree-sitter parse result caching, shared scan context persistence. Key design decisions: cache granularity (per-file SgRecord sets vs. full ScanContext), invalidation strategy (mtime vs. content hash), and cache format (msgpack for speed, JSON for debuggability).
 
 ### 8.2 Structured Error/Degradation Model
 
 **Affected subsystems:** All (error handling is cross-cutting)
 
-**Current state:** Degradation tracked as `list[str]` in `Finding.degrade_reasons`. Error results use `CqResult(success=False)` with error message in summary. No structured error types, severity levels, correlation IDs, or partial result recovery.
+**Current state:** Degradation tracked via three layers: legacy `list[str]` in `Finding.degrade_reasons`, compact `InsightDegradationV1` in front-door outputs, and typed `DegradeEventV1` in SNB. Error results use `CqResult(success=False)` with error message in summary. Structured degradation is implemented in SNB/neighborhood but not fully propagated to all subsystems.
 
-**Systemic impact:** Consumers cannot programmatically react to specific failure modes. Same root cause (e.g., Pyrefly timeout) appears as N independent string entries. No way to distinguish "no results found" from "error prevented results."
+**Systemic impact:** Consumers cannot uniformly react to specific failure modes across all subsystems. Same root cause (e.g., Pyrefly timeout) may appear as string entries in some contexts, typed events in others.
 
-**Improvement direction:** `DegradeEventV1` is now implemented in the SNB and neighborhood subsystems. `InsightDegradationV1` provides compact per-subsystem status in front-door outputs. Remaining work: propagate structured degradation to all findings (replacing flat `degrade_reasons`), aggregate related events with correlation keys, and support partial result recovery.
+**Improvement direction:** Consolidate on `DegradeEventV1` across all subsystems, replacing flat `degrade_reasons`. Aggregate related events with correlation keys. Support partial result recovery with explicit degradation metadata.
 
 ### 8.3 Request/Config Type Consolidation
 
 **Affected subsystems:** Search (5 request types), Query (3+ execution context types), Config (CqConfig + CLI params + env)
 
-**Current state:** Search has `SearchRequest`, `SearchConfig`, `CandidateSearchRequest`, `CandidateCollectionRequest`, `RgRunRequest` -- five types with significant field overlap. Query has `QueryExecutionContext`, `EntityExecutionState`, `PatternExecutionState`, `AstGrepExecutionContext`. Config resolution produces `CqConfig` that partially duplicates CLI parameter definitions.
+**Current state:** Search has `SearchRequest`, `SearchConfig`, `CandidateSearchRequest`, `CandidateCollectionRequest`, `RgRunRequest` -- five types with significant field overlap. Query has `QueryExecutionContext`, `EntityExecutionState`, `PatternExecutionState`, `AstGrepExecutionContext`. Runtime has `RuntimeExecutionPolicy` with hierarchical policy structs. Config resolution produces `CqConfig` that partially duplicates CLI parameter definitions.
 
 **Systemic impact:** Unclear which type is authoritative at each boundary. Field additions require updating multiple types. No provenance tracking for resolved values.
 
@@ -465,13 +511,13 @@ The subsystem documents identify numerous per-module improvement opportunities. 
 
 ### 8.5 Language Extensibility
 
-**Affected subsystems:** Multi-language orchestration, ast-grep rules, file enumeration, enrichment pipeline
+**Affected subsystems:** Multi-language orchestration, ast-grep rules, tree-sitter queries, file enumeration, enrichment pipeline
 
-**Current state:** Two languages (Python, Rust) with hard-coded extension mapping, hard-coded enrichment pipeline selection, hard-coded merge priority. Adding a language requires changes in 6+ locations: `language.py`, `rules.py`, `multilang_orchestrator.py`, `smart_search.py`, `files.py`, enrichment modules.
+**Current state:** Two languages (Python, Rust) with hard-coded extension mapping, hard-coded enrichment pipeline selection, hard-coded merge priority. Adding a language requires changes in 6+ locations: `language.py`, `rules.py`, `multilang_orchestrator.py`, `smart_search.py`, `files.py`, enrichment modules, tree-sitter lane dispatch.
 
 **Systemic impact:** The language abstraction is incomplete. Each subsystem reimplements language dispatch. No single registration point for a new language.
 
-**Improvement direction:** `LanguagePlugin` protocol defining: extensions, ast-grep rules, enrichment pipeline, merge priority. Central `LanguageRegistry` replaces scattered if/else dispatch. Not necessarily plugin-based (static registration is fine), but unified dispatch.
+**Improvement direction:** `LanguagePlugin` protocol defining: extensions, ast-grep rules, tree-sitter queries, enrichment pipeline, merge priority. Central `LanguageRegistry` replaces scattered if/else dispatch. Not necessarily plugin-based (static registration is fine), but unified dispatch.
 
 ### 8.6 Renderer Modularity
 
@@ -493,6 +539,16 @@ The subsystem documents identify numerous per-module improvement opportunities. 
 
 **Improvement direction:** Lift DefIndex construction into the RunPlan execution frame. Share a single DefIndex across all analysis steps in a run. Requires refactoring analysis macros to accept injected DefIndex rather than building their own.
 
+### 8.8 Tree-Sitter Query Optimization
+
+**Affected subsystems:** Tree-sitter engine, Search enrichment, Neighborhood collection
+
+**Current state:** Tree-sitter queries execute with conservative default limits. Autotune adjusts dynamically but starts from scratch per invocation. Query compilation happens per-file. No persistent query plan cache.
+
+**Systemic impact:** Large files trigger frequent limit exhaustion. Query compilation overhead adds up across many files. No learning across invocations.
+
+**Improvement direction:** Persistent autotune profiles keyed by file characteristics. Compiled query cache. Adaptive windowing based on file/query characteristics. Budget pooling across related queries.
+
 ---
 
 ## 9. Module Size and Complexity Profile
@@ -501,21 +557,22 @@ Understanding where code mass concentrates reveals maintenance hotspots and deco
 
 | Module | Lines | Subsystem | Complexity Note |
 |--------|-------|-----------|-----------------|
-| `search/smart_search.py` | 2514 | Search | Orchestration + parallel pools + result assembly |
-| `search/python_enrichment.py` | 2174 | Search | 5-stage pipeline + agreement validation |
-| `query/executor.py` | 2473 | Query | Entity + pattern execution + inline rules |
-| `macros/calls.py` | 1429 | Analysis | Call census + argument shape + scoring |
+| `search/pipeline/smart_search.py` | 3769 | Search | Orchestration + parallel pools + result assembly |
+| `query/executor.py` | 3235 | Query | Entity + pattern execution + inline rules |
+| `search/python/extractors.py` | 2236 | Search | 5-stage pipeline + agreement validation |
+| `macros/calls.py` | 2311 | Analysis | Call census + argument shape + scoring + insight |
 | `core/report.py` | 1383 | Rendering | Markdown + enrichment facts + context |
+| `core/front_door_insight.py` | 1171 | Cross-cutting | Insight contract + builders + rendering |
 | `run/runner.py` | 1038 | Multi-step | Batching + scope + language expansion |
-| `search/classifier.py` | 1025 | Search | 3-tier classification pipeline |
-| `macros/impact.py` | 901 | Analysis | Taint propagation + inter-procedural |
-| `query/parser.py` | 965 | Query | DSL tokenizer + parser + IR construction |
-| `query/ir.py` | 766 | Query | 17-field Query struct + PatternSpec + RelationalConstraint |
+| `query/parser.py` | 992 | Query | DSL tokenizer + parser + IR construction |
+| `impact.py` | 902 | Analysis | Taint propagation + inter-procedural |
+| `query/ir.py` | 765 | Query | 17-field Query struct + PatternSpec + RelationalConstraint |
+| `neighborhood/tree_sitter_collector.py` | 696 | Neighborhood | Tree-sitter structural collection |
 | `index/def_index.py` | 676 | Index | Full-repo function/class index |
-| `query/planner.py` | 659 | Query | IR -> ToolPlan compilation |
-| `query/enrichment.py` | 600+ | Query | Symtable/bytecode enrichment |
+| `query/planner.py` | 658 | Query | IR -> ToolPlan compilation |
+| `query/enrichment.py` | 629 | Query | Symtable/bytecode enrichment |
 
-Six modules exceed 1000 lines. The top three (`smart_search.py`, `python_enrichment.py`, `executor.py`) each carry multiple responsibilities that could be decomposed into smaller, independently testable units.
+Eight modules exceed 1000 lines. The top three (`smart_search.py`, `executor.py`, `extractors.py`) each carry multiple responsibilities that could be decomposed into smaller, independently testable units.
 
 ---
 
@@ -530,10 +587,12 @@ External dependencies and their roles:
 | `cyclopts` | CLI framework with parameter groups | CLI |
 | `pygit2` | Git index access (libgit2 bindings) | File enumeration |
 | `pathspec` | Gitignore pattern matching | File enumeration |
-| `pyrefly` | LSP-based type/symbol enrichment | Search (Python) |
+| `pyrefly` | LSP-based type/symbol enrichment | Search (Python), Neighborhood |
+| `tree-sitter` | Multi-language AST parsing | Search, Neighborhood, Tree-sitter engine |
+| `diskcache` | Persistent disk-backed cache | Runtime services |
 | ripgrep (`rg`) | Fast text search (subprocess) | Search, Analysis |
 
-**Notable:** ast-grep is used as a Python library binding (`from ast_grep_py import ...`), not via subprocess. This is a deliberate design choice: library-level access enables direct `SgNode` manipulation, metavariable extraction, and shared AST reuse. Ripgrep, conversely, is invoked via subprocess -- its Rust-native speed makes IPC overhead negligible relative to scan time.
+**Notable:** ast-grep is used as a Python library binding (`from ast_grep_py import ...`), not via subprocess. Tree-sitter is also used as a library via Python bindings. This is a deliberate design choice: library-level access enables direct node manipulation, metavariable extraction, and shared AST reuse. Ripgrep, conversely, is invoked via subprocess -- its Rust-native speed makes IPC overhead negligible relative to scan time.
 
 ---
 
@@ -541,9 +600,9 @@ External dependencies and their roles:
 
 ### 11.1 Library vs. Subprocess for AST Tools
 
-**Decision:** ast-grep as library, ripgrep as subprocess.
-**Rationale:** ast-grep results require deep integration (node traversal, metavar extraction, multi-rule sharing). Ripgrep results are flat text lines that need no post-processing beyond JSON parsing.
-**Trade-off:** Library binding ties CQ to ast-grep-py's Python API surface. Subprocess isolation would allow swapping implementations but at the cost of stdout parsing overhead.
+**Decision:** ast-grep and tree-sitter as libraries, ripgrep as subprocess.
+**Rationale:** ast-grep and tree-sitter results require deep integration (node traversal, metavar extraction, multi-rule sharing, bounded query execution). Ripgrep results are flat text lines that need no post-processing beyond JSON parsing.
+**Trade-off:** Library binding ties CQ to Python API surfaces. Subprocess isolation would allow swapping implementations but at the cost of serialization overhead and API expressiveness loss.
 
 ### 11.2 msgspec vs. Pydantic
 
@@ -557,19 +616,23 @@ External dependencies and their roles:
 **Rationale:** `fork` is unsafe with CPython's GIL in multi-threaded contexts. `spawn` avoids inheriting parent process state.
 **Trade-off:** Higher process creation overhead (full Python interpreter startup per worker). Mitigated by limiting to max 4 workers and fail-open semantics.
 
-### 11.4 No Persistent Index
+### 11.4 Persistent Cache with Fail-Open
 
-**Decision:** Rebuild all indexes per invocation.
-**Rationale:** Simplicity. No cache invalidation bugs. No stale index risk. No disk I/O for cache management.
-**Trade-off:** O(n) startup cost per invocation, proportional to repository size. Acceptable for repos <100k files; becomes bottleneck beyond that.
-
-**Status:** This decision has been **partially superseded**. Persistent caching for calls target metadata, search partitions, and entity scans is now implemented via DiskCache (see `core/cache/`). DefIndex per-invocation rebuild remains, but result caching reduces redundant work for repeated queries. See [10_runtime_services.md](10_runtime_services.md) for details on the persistent caching implementation.
+**Decision:** Workspace-scoped DiskCache for result-level caching; fail-open on all cache errors.
+**Rationale:** Persistent caching reduces redundant work for repeated queries. Fail-open ensures cache issues never block execution.
+**Trade-off:** Cache invalidation complexity. DefIndex per-invocation rebuild remains (not cached). Increased disk I/O and storage requirements.
 
 ### 11.5 Flat Finding Model
 
 **Decision:** `CqResult.findings` is a flat list, not a tree.
 **Rationale:** Simpler rendering, serialization, and merging. Flat lists compose well across multi-step execution.
 **Trade-off:** Cannot natively represent hierarchical relationships (class -> method -> callsite). Hierarchy is encoded in `Section` grouping or `DetailPayload` metadata.
+
+### 11.6 Tree-Sitter Bounded Execution
+
+**Decision:** All tree-sitter queries execute within configurable resource limits (match limits, depth limits, time budgets).
+**Rationale:** Prevents unbounded execution on pathological files or queries. Enables graceful degradation with telemetry.
+**Trade-off:** May miss results in large files when limits are exceeded. Requires tuning limits per use case.
 
 ---
 
@@ -578,6 +641,7 @@ External dependencies and their roles:
 CQ's test infrastructure is distributed across:
 
 - `tools/cq/core/tests/` - Core unit tests (schema, scoring, serialization)
+- `tests/unit/cq/search/tree_sitter/` - Tree-sitter subsystem tests (autotune, windowing, injection)
 - Integration tests embedded in subsystem test directories
 - The tool itself is used for self-analysis via `/cq` skill invocations
 
@@ -590,29 +654,32 @@ CQ's test infrastructure is distributed across:
 For someone planning architectural improvements, the recommended reading order depends on the target:
 
 **For performance improvements:**
-1. [07_ast_grep_and_formatting.md](07_ast_grep_and_formatting.md) - Shared scan context, file discovery
-2. [05_multi_step_execution.md](05_multi_step_execution.md) - Batch optimization, scan sharing limits
-3. [02_search_subsystem.md](02_search_subsystem.md) - Parallel pools, caching architecture
+1. [10_runtime_services.md](10_runtime_services.md) - Cache infrastructure, worker pools, runtime policy
+2. [07_tree_sitter_engine.md](07_tree_sitter_engine.md) - Bounded execution, windowing, autotune
+3. [05_multi_step_execution.md](05_multi_step_execution.md) - Batch optimization, scan sharing limits
+4. [02_search_subsystem.md](02_search_subsystem.md) - Parallel pools, enrichment pipeline
 
 **For extensibility improvements (new languages, formats):**
-1. [01_core_infrastructure.md](01_core_infrastructure.md) - Multi-language orchestration, render dispatch
-2. [07_ast_grep_and_formatting.md](07_ast_grep_and_formatting.md) - Rule system, format renderers
-3. [03_query_subsystem.md](03_query_subsystem.md) - Language scope, metavariable system
+1. [06_cross_cutting_contracts.md](06_cross_cutting_contracts.md) - Multi-language orchestration, contract boundaries
+2. [07_tree_sitter_engine.md](07_tree_sitter_engine.md) - Language lanes, query registry
+3. [01_cli_command_framework.md](01_cli_command_framework.md) - Output format dispatch, renderer architecture
+4. [03_query_subsystem.md](03_query_subsystem.md) - Language scope, metavariable system
 
 **For data model improvements:**
-1. [06_data_models.md](06_data_models.md) - Contract architecture, boundary protocol
-2. [01_core_infrastructure.md](01_core_infrastructure.md) - CqResult schema, error handling
+1. [06_cross_cutting_contracts.md](06_cross_cutting_contracts.md) - Contract architecture, FrontDoor Insight, boundary protocol
+2. [01_cli_command_framework.md](01_cli_command_framework.md) - CqResult schema, error handling
 3. [02_search_subsystem.md](02_search_subsystem.md) - Enrichment fact system, agreement tracking
 
 **For analysis capability improvements:**
 1. [04_analysis_commands.md](04_analysis_commands.md) - Macro architecture, scoring, taint analysis
 2. [03_query_subsystem.md](03_query_subsystem.md) - Query IR, relational constraints
-3. [06_data_models.md](06_data_models.md) - Scoring models, confidence signals
+3. [06_cross_cutting_contracts.md](06_cross_cutting_contracts.md) - Scoring models, confidence signals
 
 **For contextual analysis and progressive disclosure:**
 1. [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) - Semantic neighborhood assembly, 4-phase pipeline, LSP enrichment
 2. [09_ldmd_format.md](09_ldmd_format.md) - LDMD format specification, parser architecture, protocol commands
-3. [01_core_infrastructure.md](01_core_infrastructure.md) - OutputFormat integration, rendering pipeline
+3. [07_tree_sitter_engine.md](07_tree_sitter_engine.md) - Structural collection queries, bounded execution
+4. [01_cli_command_framework.md](01_cli_command_framework.md) - OutputFormat integration, rendering pipeline
 
 ---
 
@@ -626,20 +693,31 @@ For someone planning architectural improvements, the recommended reading order d
 
 4. **Compositional execution**: The multi-step framework with shared scan infrastructure enables complex analysis workflows without redundant I/O.
 
-5. **Agent-friendly output**: CqResult is designed for LLM consumption with priority ordering (key_findings -> sections -> evidence), Code Facts clusters, and structured metadata.
+5. **Agent-friendly output**: CqResult is designed for LLM consumption with priority ordering (key_findings -> sections -> evidence), Code Facts clusters, FrontDoor Insight contracts, and structured metadata.
 
 6. **Compiler-inspired query system**: The parse -> compile -> execute pipeline enables validation, optimization, and composability.
+
+7. **Tree-sitter bounded execution**: Resource-limited queries with telemetry prevent unbounded execution while preserving observability.
+
+8. **Progressive disclosure**: LDMD format enables efficient navigation of large artifacts without loading entire documents.
+
+9. **Runtime services composition**: Hexagonal architecture with protocol-based boundaries enables clean dependency injection and testability.
 
 ## 15. Summary of Systemic Improvement Opportunities
 
 | Priority | Theme | Subsystem Scope | Key Documents |
 |----------|-------|-----------------|---------------|
-| ~~High~~ **DONE** | ~~Persistent index/scan cache~~ Result-level caching implemented | All | 01, 02, 05, 07, 10 |
+| **PARTIAL** | Persistent index/scan cache (result-level done, DefIndex/tree-sitter remain) | All | 02, 05, 07, 10 |
 | High | Analysis macro scan sharing | Multi-step, Analysis | 04, 05 |
-| Medium | Structured error/degradation model | All | 01, 02, 04 |
+| High | Tree-sitter query optimization (persistent plans, autotune profiles) | Tree-sitter, Search, Neighborhood | 07, 02, 08 |
+| Medium | Structured error/degradation model (consolidate on DegradeEventV1) | All | 01, 02, 04, 06, 08 |
 | Medium | Request/config type consolidation | Search, Query, Config | 01, 02, 06 |
 | Medium | Scoring model maturation | Analysis, Search | 04, 06 |
-| Low | Language extensibility (plugin model) | All | 01, 03, 07 |
-| Low | Renderer modularity | Output | 01, 07 |
+| Low | Language extensibility (plugin model) | All | 01, 03, 06, 07 |
+| Low | Renderer modularity | Output | 01, 06 |
 
-These priorities reflect estimated impact-to-effort ratio. Persistent caching and analysis scan sharing yield the largest performance improvements for the least architectural disruption. Language plugins and renderer refactoring offer long-term extensibility at higher implementation cost.
+These priorities reflect estimated impact-to-effort ratio. Tree-sitter query optimization and analysis scan sharing yield the largest performance improvements for moderate architectural effort. Persistent DefIndex caching requires careful invalidation design. Language plugins and renderer refactoring offer long-term extensibility at higher implementation cost.
+
+---
+
+**End of Overview** — Consult the 10 subsystem documents for detailed architectural deep-dives.

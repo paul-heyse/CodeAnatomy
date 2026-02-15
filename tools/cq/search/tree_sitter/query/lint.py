@@ -6,7 +6,10 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.structs import CqStruct
-from tools.cq.search.tree_sitter.contracts.query_models import lint_query_pack_source
+from tools.cq.search.tree_sitter.contracts.query_models import (
+    lint_query_pack_source,
+    load_pack_rules,
+)
 from tools.cq.search.tree_sitter.core.language_registry import (
     load_language_registry,
     load_tree_sitter_language,
@@ -51,6 +54,43 @@ def _predicate_pack_missing_pushdown(*, pack_name: str, source_text: str) -> boo
     return not any(token in source_text for token in ("#match?", "#any-of?", "#eq?", "#cq-"))
 
 
+def _missing_required_metadata(
+    settings: dict[str, object],
+    required: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(key for key in required if key not in settings)
+
+
+def _contract_errors(
+    *,
+    language: str,
+    pack_name: str,
+    source_text: str,
+    compile_query: Callable[[str], Query],
+) -> list[str]:
+    rules = load_pack_rules(language)
+    if not rules.required_metadata_keys:
+        return []
+    try:
+        query = compile_query(source_text)
+    except (RuntimeError, TypeError, ValueError, AttributeError):
+        return []
+    settings_for_pattern = getattr(query, "pattern_settings", None)
+    if not callable(settings_for_pattern):
+        return []
+    pattern_count = int(getattr(query, "pattern_count", 0))
+    errors: list[str] = []
+    for pattern_idx in range(pattern_count):
+        raw_settings = settings_for_pattern(pattern_idx)
+        settings = raw_settings if isinstance(raw_settings, dict) else {}
+        missing = _missing_required_metadata(settings, rules.required_metadata_keys)
+        errors.extend(
+            f"{language}:{pack_name}:missing_required_metadata:pattern={pattern_idx}:{key}"
+            for key in missing
+        )
+    return errors
+
+
 def _lint_pack_sources(
     *,
     language: str,
@@ -70,6 +110,15 @@ def _lint_pack_sources(
         ):
             errors.append(
                 f"{language}:{pack_name}:predicate_pack_missing_pushdown:missing predicate filters"
+            )
+        if isinstance(source_text, str):
+            errors.extend(
+                _contract_errors(
+                    language=language,
+                    pack_name=pack_name,
+                    source_text=source_text,
+                    compile_query=compile_query,
+                )
             )
         issues = lint_query_pack_source(
             language=language,

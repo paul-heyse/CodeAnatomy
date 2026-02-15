@@ -1,10 +1,18 @@
 # Multi-Step Execution Architecture
 
+**Version:** 0.4.0
+
 ## Overview
 
 The multi-step execution subsystem enables running multiple CQ commands in a single invocation with shared file scanning infrastructure. This architecture optimizes performance by batching operations and reusing expensive parsing operations across multiple query steps.
 
 Located under `tools/cq/run/` and `tools/cq/cli_app/commands/`, the subsystem coordinates Q-step batching, language scope expansion, relational span collection, and result aggregation with provenance tracking.
+
+**Related Documentation:**
+- [02_search_subsystem.md](02_search_subsystem.md) - Smart search implementation (SearchStep)
+- [03_query_ir_subsystem.md](03_query_ir_subsystem.md) - Query IR and execution (QStep)
+- [04_analysis_macros.md](04_analysis_macros.md) - Analysis macros (CallsStep, ImpactStep, etc.)
+- [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) - Neighborhood assembly (NeighborhoodStep)
 
 ## Module Map
 
@@ -84,9 +92,10 @@ Global scope filters are applied to all steps:
 
 #### Neighborhood Steps
 - **NeighborhoodStep**: Semantic neighborhood assembly for a target
-  - Fields: `target: str`, `lang: str = "python"`, `top_k: int = 10`, `no_lsp: bool = False`
+  - Fields: `target: str`, `lang: str = "python"`, `top_k: int = 10`, `no_semantic_enrichment: bool = False`
   - Executes the full neighborhood pipeline: target resolution → structural collection → LSP enrichment → bundle assembly → rendering
   - Results are not batch-optimized (each neighborhood step is independent)
+  - Supports both position-based (`file.py:line:col`) and symbol-based (`function_name`) target specifications
   - See [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) for full pipeline documentation
 
 ### Step Base Protocol
@@ -306,15 +315,15 @@ def _execute_non_q_step(step: RunStep, plan: RunPlan, ctx: CliContext) -> CqResu
 - All non-Q steps go through `_apply_run_scope_filter` for consistent scope enforcement
 
 Each step type maps to a corresponding macro:
-- `CallsStep` → `tools.cq.macros.calls.cmd_calls()`
-- `ImpactStep` → `tools.cq.macros.impact.cmd_impact()`
-- `ImportsStep` → `tools.cq.macros.imports.cmd_imports()`
-- `ExceptionsStep` → `tools.cq.macros.exceptions.cmd_exceptions()`
-- `SigImpactStep` → `tools.cq.macros.sig_impact.cmd_sig_impact()`
-- `SideEffectsStep` → `tools.cq.macros.side_effects.cmd_side_effects()`
-- `ScopesStep` → `tools.cq.macros.scopes.cmd_scopes()`
-- `BytecodeSurfaceStep` → `tools.cq.macros.bytecode.cmd_bytecode_surface()`
-- `NeighborhoodStep` → `tools.cq.macros.neighborhood.cmd_neighborhood()`
+- `CallsStep` → `tools.cq.macros.calls.cmd_calls()` (see [04_analysis_macros.md](04_analysis_macros.md))
+- `ImpactStep` → `tools.cq.macros.impact.cmd_impact()` (see [04_analysis_macros.md](04_analysis_macros.md))
+- `ImportsStep` → `tools.cq.macros.imports.cmd_imports()` (see [04_analysis_macros.md](04_analysis_macros.md))
+- `ExceptionsStep` → `tools.cq.macros.exceptions.cmd_exceptions()` (see [04_analysis_macros.md](04_analysis_macros.md))
+- `SigImpactStep` → `tools.cq.macros.sig_impact.cmd_sig_impact()` (see [04_analysis_macros.md](04_analysis_macros.md))
+- `SideEffectsStep` → `tools.cq.macros.side_effects.cmd_side_effects()` (see [04_analysis_macros.md](04_analysis_macros.md))
+- `ScopesStep` → `tools.cq.macros.scopes.cmd_scopes()` (see [04_analysis_macros.md](04_analysis_macros.md))
+- `BytecodeSurfaceStep` → `tools.cq.macros.bytecode.cmd_bytecode_surface()` (see [04_analysis_macros.md](04_analysis_macros.md))
+- `NeighborhoodStep` → `tools.cq.neighborhood.bundle_builder.build_neighborhood_bundle()` (see [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md))
 
 ### Search Fallback Logic
 `_handle_query_parse_error()` provides fallback:
@@ -459,7 +468,7 @@ This reuses the main CQ CLI parser, ensuring command semantics match standalone 
 - `bound.args` for positional arguments
 - `bound.kwargs["opts"]` for options object
 
-Step builder registry:
+Step builder registry (10 of 11 step types supported):
 ```python
 _STEP_BUILDERS: dict[str, StepBuilder] = {
     "q": _build_q_step,
@@ -472,8 +481,12 @@ _STEP_BUILDERS: dict[str, StepBuilder] = {
     "side_effects": _build_side_effects_step,
     "scopes": _build_scopes_step,
     "bytecode_surface": _build_bytecode_surface_step,
+    # Note: neighborhood step not supported in chain command (use run --step instead)
 }
 ```
+
+**Neighborhood Chain Limitation:**
+The `NeighborhoodStep` is not supported in the `cq chain` command due to target resolution complexity. Use `cq run --step '{"type":"neighborhood","target":"..."}' ` or `cq run --steps '[...]'` for neighborhood analysis instead. See [08_neighborhood_subsystem.md](08_neighborhood_subsystem.md) for full neighborhood documentation.
 
 Each builder extracts step fields from args/opts:
 ```python
@@ -493,6 +506,7 @@ def _build_impact_step(args: tuple[object, ...], opts: object | None) -> RunStep
 - Error messages don't indicate which segment failed
 - No variable substitution or output piping between commands
 - Parse overhead: each segment re-parses CLI args
+- Neighborhood step not supported (use `run` command instead)
 
 **Potential Improvement Vectors**:
 - Structured chain DSL with proper escaping/quoting
@@ -500,6 +514,7 @@ def _build_impact_step(args: tuple[object, ...], opts: object | None) -> RunStep
 - Command substitution: `calls $(q "entity=function" | first)`
 - Better error context: show failing segment and its index
 - Compiled chain representation for repeated execution
+- Add neighborhood builder to support `cq chain neighborhood <target>` syntax
 
 ## Result Merging
 
@@ -874,17 +889,28 @@ Add commands to understand execution strategy:
 
 The multi-step execution architecture achieves significant performance gains through batching (4-5x speedup for entity queries) while maintaining a clean separation between plan specification, execution strategy, and result aggregation. The language scope expansion and result collapsing mechanisms enable seamless cross-language analysis without user-visible complexity.
 
-Key strengths:
+**Key strengths:**
 - Shared ast-grep scan eliminates redundant parsing
 - Parse caching optimizes relational span collection
 - Provenance tracking enables result attribution
 - Error boundaries prevent cascading failures
+- 11 step types support diverse analysis workflows (search, entity queries, pattern matching, call graphs, data flow, imports, exceptions, side effects, scopes, bytecode, neighborhoods)
+- Runtime services integration provides parallelism, LSP budgets, and policy control
 
-Key opportunities:
+**Key opportunities:**
 - Parallel execution for independent steps
 - Persistent parse cache across invocations
 - Adaptive batching based on file counts
 - Rich error reporting with suggestions
 - Plan introspection and cost estimation
+- Neighborhood step support in chain command
 
-The architecture is designed for extension: new step types require only implementing a builder function and adding a macro executor. The separation of concerns (plan loading, execution, result merging) enables independent evolution of each subsystem.
+**Extension Points:**
+New step types require:
+1. Add step class to `tools/cq/run/spec.py` with `RunStepBase` inheritance
+2. Add to `RunStep` union type and `RUN_STEP_TYPES` tuple
+3. Implement executor function in `runner.py`
+4. Add to `_NON_SEARCH_DISPATCH` dispatch table (or handle separately for special cases)
+5. Optionally add chain builder to `chain.py` for `cq chain` support
+
+The separation of concerns (plan loading, execution, result merging) enables independent evolution of each subsystem.

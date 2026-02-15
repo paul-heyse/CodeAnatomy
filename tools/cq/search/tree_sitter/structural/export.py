@@ -15,12 +15,14 @@ if TYPE_CHECKING:
     from tree_sitter import Node
 
 
-def _node_id(*, file_path: str, node: Node | None) -> str:
+def build_node_id(*, file_path: str, node: object | None) -> str:
+    """Build a stable structural node identifier from file and byte span."""
     if node is None:
         return f"{file_path}:::null"
+    node_type = str(getattr(node, "type", "unknown"))
     return (
         f"{file_path}:{int(getattr(node, 'start_byte', 0))}:"
-        f"{int(getattr(node, 'end_byte', 0))}:{node.type}"
+        f"{int(getattr(node, 'end_byte', 0))}:{node_type}"
     )
 
 
@@ -126,7 +128,7 @@ def export_structural_rows(
         if node is None:
             return TreeSitterStructuralExportV1(nodes=nodes, edges=edges, tokens=tokens)
         field_name = cursor.field_name if isinstance(cursor.field_name, str) else None
-        node_id = _node_id(file_path=file_path, node=node)
+        node_id = build_node_id(file_path=file_path, node=node)
         child_index = child_index_stack[-1] if child_index_stack else None
         nodes.append(
             _node_row(
@@ -150,4 +152,4 @@ def export_structural_rows(
             return TreeSitterStructuralExportV1(nodes=nodes, edges=edges, tokens=tokens)
 
 
-__all__ = ["export_structural_rows"]
+__all__ = ["build_node_id", "export_structural_rows"]

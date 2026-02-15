@@ -6,8 +6,12 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 from tools.cq.search._shared.core import node_text as _shared_node_text
-from tools.cq.search.tree_sitter.contracts.core_models import ObjectEvidenceRowV1
+from tools.cq.search.tree_sitter.contracts.core_models import (
+    ObjectEvidenceRowV1,
+    TreeSitterQueryHitV1,
+)
 from tools.cq.search.tree_sitter.query.pack_metadata import first_capture, pattern_settings
+from tools.cq.search.tree_sitter.structural.query_hits import export_query_hits
 
 if TYPE_CHECKING:
     from tree_sitter import Node, Query
@@ -75,4 +79,18 @@ def build_match_rows(
     return tuple(rows)
 
 
-__all__ = ["build_match_rows"]
+def build_match_rows_with_query_hits(
+    *,
+    query: Query,
+    matches: list[tuple[int, dict[str, list[Node]]]],
+    source_bytes: bytes,
+    query_name: str,
+) -> tuple[tuple[ObjectEvidenceRowV1, ...], tuple[TreeSitterQueryHitV1, ...]]:
+    """Build metadata evidence rows and typed query-hit rows together."""
+    return (
+        build_match_rows(query=query, matches=matches, source_bytes=source_bytes),
+        export_query_hits(file_path=query_name, matches=matches),
+    )
+
+
+__all__ = ["build_match_rows", "build_match_rows_with_query_hits"]

@@ -20,12 +20,16 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.core.locations import byte_offset_to_line_col
 from tools.cq.search._shared.core import node_text as _shared_node_text
 from tools.cq.search._shared.core import truncate as _shared_truncate
+from tools.cq.search.rust.macro_expansion_contracts import RustMacroExpansionRequestV1
 from tools.cq.search.tree_sitter.contracts.core_models import (
     ObjectEvidenceRowV1,
     QueryExecutionSettingsV1,
     QueryWindowV1,
+    TreeSitterDiagnosticV1,
+    TreeSitterQueryHitV1,
 )
 from tools.cq.search.tree_sitter.contracts.query_models import QueryPackPlanV1, load_pack_rules
 from tools.cq.search.tree_sitter.core.adaptive_runtime import adaptive_query_budget_ms
@@ -41,7 +45,6 @@ from tools.cq.search.tree_sitter.core.runtime import (
     run_bounded_query_matches,
 )
 from tools.cq.search.tree_sitter.core.work_queue import enqueue_windows
-from tools.cq.search.tree_sitter.diagnostics.collector import collect_tree_sitter_diagnostics
 from tools.cq.search.tree_sitter.query.planner import build_pack_plan, sort_pack_plans
 from tools.cq.search.tree_sitter.query.predicates import (
     has_custom_predicates,
@@ -53,8 +56,14 @@ from tools.cq.search.tree_sitter.rust_lane.bundle import (
     load_rust_query_sources,
 )
 from tools.cq.search.tree_sitter.rust_lane.injection_runtime import parse_injected_ranges
-from tools.cq.search.tree_sitter.rust_lane.injections import build_injection_plan
-from tools.cq.search.tree_sitter.structural.match_rows import build_match_rows
+from tools.cq.search.tree_sitter.rust_lane.injections import (
+    InjectionPlanV1,
+    build_injection_plan_from_matches,
+)
+from tools.cq.search.tree_sitter.structural.diagnostic_export import collect_diagnostic_rows
+from tools.cq.search.tree_sitter.structural.match_rows import build_match_rows_with_query_hits
+from tools.cq.search.tree_sitter.tags.contracts import RustTagEventV1
+from tools.cq.search.tree_sitter.tags.runtime import build_tag_events
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Parser, Query, Tree
@@ -86,7 +95,6 @@ _DEFAULT_SCOPE_DEPTH = 24
 _MAX_SCOPE_NODES = 256
 MAX_SOURCE_BYTES = 5 * 1024 * 1024  # 5 MB
 _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
-_QUERY_MATCH_LIMIT = 4_096
 
 # ---------------------------------------------------------------------------
 # Payload bounds constants
@@ -363,24 +371,29 @@ def _compile_query(
 
 @lru_cache(maxsize=1)
 def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
-    sources = load_rust_query_sources(include_distribution_queries=False)
-    source_rows = [
-        (
-            source.pack_name,
-            source.source,
-            build_pack_plan(
-                pack_name=source.pack_name,
-                query=_compile_query(
+    sources = load_rust_query_sources(profile_name="rust_search_enriched")
+    source_rows: list[tuple[str, str, QueryPackPlanV1]] = []
+    for source in sources:
+        if not source.pack_name.endswith(".scm"):
+            continue
+        try:
+            source_rows.append(
+                (
                     source.pack_name,
                     source.source,
-                    request_surface="artifact",
-                ),
-                query_text=source.source,
-            ),
-        )
-        for source in sources
-        if source.pack_name.endswith(".scm")
-    ]
+                    build_pack_plan(
+                        pack_name=source.pack_name,
+                        query=_compile_query(
+                            source.pack_name,
+                            source.source,
+                            request_surface="artifact",
+                        ),
+                        query_text=source.source,
+                    ),
+                )
+            )
+        except _ENRICHMENT_ERRORS:
+            continue
     return tuple(
         (pack_name, source, plan) for pack_name, source, plan in sort_pack_plans(source_rows)
     )
@@ -410,15 +423,25 @@ def _capture_texts_from_captures(
     return out
 
 
-def _collect_query_pack_captures(
+def _collect_query_pack_captures(  # noqa: PLR0914
     *,
     root: Node,
     source_bytes: bytes,
     windows: tuple[QueryWindowV1, ...],
     settings: QueryExecutionSettingsV1,
-) -> tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], dict[str, object]]:
+) -> tuple[
+    dict[str, list[Node]],
+    tuple[ObjectEvidenceRowV1, ...],
+    tuple[TreeSitterQueryHitV1, ...],
+    dict[str, object],
+    tuple[InjectionPlanV1, ...],
+    tuple[RustTagEventV1, ...],
+]:
     captures: dict[str, list[Node]] = {}
     rows: list[ObjectEvidenceRowV1] = []
+    query_hits: list[TreeSitterQueryHitV1] = []
+    injection_plans: list[InjectionPlanV1] = []
+    tag_events: list[RustTagEventV1] = []
     query_telemetry: dict[str, object] = {}
     for pack_name, query_source in _pack_sources():
         try:
@@ -450,6 +473,7 @@ def _collect_query_pack_captures(
                     budget_ms=settings.budget_ms,
                     timeout_micros=settings.timeout_micros,
                     require_containment=True,
+                    window_mode="containment_preferred",
                 ),
                 callbacks=callbacks,
             )
@@ -462,8 +486,32 @@ def _collect_query_pack_captures(
         for capture_name, nodes in pack_captures.items():
             bucket = captures.setdefault(capture_name, [])
             bucket.extend(nodes)
-        rows.extend(build_match_rows(query=query, matches=pack_matches, source_bytes=source_bytes))
-    return captures, tuple(rows), query_telemetry
+        if "injection.content" in pack_captures:
+            injection_plans.extend(
+                build_injection_plan_from_matches(
+                    query=query,
+                    matches=pack_matches,
+                    source_bytes=source_bytes,
+                    default_language="rust",
+                )
+            )
+        tag_events.extend(build_tag_events(matches=pack_matches, source_bytes=source_bytes))
+        pack_rows, pack_hits = build_match_rows_with_query_hits(
+            query=query,
+            matches=pack_matches,
+            source_bytes=source_bytes,
+            query_name=pack_name,
+        )
+        rows.extend(pack_rows)
+        query_hits.extend(pack_hits)
+    return (
+        captures,
+        tuple(rows),
+        tuple(query_hits),
+        query_telemetry,
+        tuple(injection_plans),
+        tuple(tag_events),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1386,7 +1434,7 @@ def _build_enrichment_payload(
     return payload
 
 
-def _collect_query_pack_payload(
+def _collect_query_pack_payload(  # noqa: PLR0914
     *,
     root: Node,
     source_bytes: bytes,
@@ -1423,19 +1471,29 @@ def _collect_query_pack_payload(
         fallback_budget_ms=query_budget_ms if query_budget_ms is not None else 200,
     )
     settings = QueryExecutionSettingsV1(
-        match_limit=_QUERY_MATCH_LIMIT,
         budget_ms=effective_budget_ms,
+        window_mode="containment_preferred",
     )
-    captures, rows, query_telemetry = _collect_query_pack_captures(
+    captures, rows, query_hits, query_telemetry, injection_plan, tag_events = (
+        _collect_query_pack_captures(
+            root=root,
+            source_bytes=source_bytes,
+            windows=windows,
+            settings=settings,
+        )
+    )
+    diagnostics = collect_diagnostic_rows(
+        language="rust",
         root=root,
-        source_bytes=source_bytes,
         windows=windows,
-        settings=settings,
+        match_limit=1024,
     )
 
     payload: dict[str, object] = (
         {"query_pack_telemetry": query_telemetry} if query_telemetry else {}
     )
+    if query_telemetry:
+        payload["query_runtime"] = _aggregate_query_runtime(query_telemetry)
     definitions, references, calls, imports, modules = _rust_fact_lists(captures, source_bytes)
     _extend_rust_fact_lists_from_rows(
         rows=rows,
@@ -1452,21 +1510,20 @@ def _collect_query_pack_payload(
         imports=imports,
         modules=modules,
     )
+    module_rows = _module_rows_from_matches(rows=rows, file_key=file_key)
+    import_rows = _import_rows_from_matches(rows=rows, module_rows=module_rows)
+    payload["rust_module_rows"] = module_rows
+    payload["rust_import_rows"] = import_rows
     _attach_query_pack_payload(
         payload=payload,
         rows=rows,
-        captures=captures,
+        query_hits=query_hits,
+        diagnostics=diagnostics,
+        injection_plan=injection_plan,
+        tag_events=tag_events,
         source_bytes=source_bytes,
+        file_key=file_key,
     )
-    payload["tree_sitter_diagnostics"] = [
-        msgspec.to_builtins(row)
-        for row in collect_tree_sitter_diagnostics(
-            language="rust",
-            root=root,
-            windows=windows,
-            match_limit=1024,
-        )
-    ]
     return payload
 
 
@@ -1493,6 +1550,11 @@ def _rust_fact_lists(
         "ref.macro.path",
     )
     calls = _capture_texts_from_captures(captures, source_bytes, "call.target", "call.macro.path")
+    macro_calls = _capture_texts_from_captures(captures, source_bytes, "call.macro.path")
+    for macro_name in macro_calls:
+        normalized = macro_name if macro_name.endswith("!") else f"{macro_name}!"
+        if normalized not in calls:
+            calls.append(normalized)
     imports = _capture_texts_from_captures(
         captures,
         source_bytes,
@@ -1541,7 +1603,12 @@ def _extend_rust_fact_lists_from_rows(
             _extend_fact_list(
                 target=calls,
                 captures=row.captures,
-                keys=("call.target", "call.macro.path"),
+                keys=("call.target",),
+            )
+            _extend_macro_fact_list(
+                target=calls,
+                captures=row.captures,
+                key="call.macro.path",
             )
         elif row.emit == "imports":
             _extend_fact_list(
@@ -1569,6 +1636,20 @@ def _extend_fact_list(
             target.append(value)
 
 
+def _extend_macro_fact_list(
+    *,
+    target: list[str],
+    captures: Mapping[str, object],
+    key: str,
+) -> None:
+    value = captures.get(key)
+    if not isinstance(value, str) or not value:
+        return
+    normalized = value if value.endswith("!") else f"{value}!"
+    if normalized not in target:
+        target.append(normalized)
+
+
 def _rust_fact_payload(
     *,
     definitions: list[str],
@@ -1586,19 +1667,173 @@ def _rust_fact_payload(
     }
 
 
-def _attach_query_pack_payload(
+def _module_rows_from_matches(
+    *,
+    rows: tuple[ObjectEvidenceRowV1, ...],
+    file_key: str | None,
+) -> list[dict[str, object]]:
+    out: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row.emit != "modules":
+            continue
+        module_name = None
+        for key in ("module.name", "def.module.name"):
+            value = row.captures.get(key)
+            if isinstance(value, str) and value:
+                module_name = value
+                break
+        if module_name is None or module_name in seen:
+            continue
+        seen.add(module_name)
+        out.append(
+            {
+                "module_id": f"module:{module_name}",
+                "module_name": module_name,
+                "file_path": file_key,
+            }
+        )
+    return out
+
+
+def _import_rows_from_matches(
+    *,
+    rows: tuple[ObjectEvidenceRowV1, ...],
+    module_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    module_lookup = {
+        str(row["module_name"]): str(row["module_id"])
+        for row in module_rows
+        if isinstance(row.get("module_name"), str) and isinstance(row.get("module_id"), str)
+    }
+    default_source = module_rows[0]["module_id"] if module_rows else "module:<root>"
+    out: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str, bool]] = set()
+    for row in rows:
+        if row.emit != "imports":
+            continue
+        target_path = None
+        for key in ("import.path", "import.extern.name"):
+            value = row.captures.get(key)
+            if isinstance(value, str) and value:
+                target_path = value
+                break
+        if target_path is None:
+            continue
+        visibility_capture = row.captures.get("import.visibility")
+        visibility_text = visibility_capture if isinstance(visibility_capture, str) else ""
+        visibility = "public" if visibility_text.startswith("pub") else "private"
+        is_reexport = visibility == "public"
+        source_module_id = str(default_source)
+        for module_name, module_id in module_lookup.items():
+            if target_path.startswith(f"{module_name}::"):
+                source_module_id = module_id
+                break
+        key = (source_module_id, target_path, visibility, is_reexport)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "source_module_id": source_module_id,
+                "target_path": target_path,
+                "visibility": visibility,
+                "is_reexport": is_reexport,
+            }
+        )
+    return out
+
+
+def _macro_expansion_requests(
+    *,
+    rows: tuple[ObjectEvidenceRowV1, ...],
+    source_bytes: bytes,
+    file_key: str | None,
+) -> tuple[RustMacroExpansionRequestV1, ...]:
+    file_path = file_key if isinstance(file_key, str) and file_key else "<memory>.rs"
+    out: list[RustMacroExpansionRequestV1] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row.emit != "calls":
+            continue
+        macro_name = row.captures.get("call.macro.path")
+        if not isinstance(macro_name, str) or not macro_name:
+            continue
+        line, col = byte_offset_to_line_col(source_bytes, row.anchor_start_byte)
+        macro_call_id = f"{file_path}:{row.anchor_start_byte}:{row.anchor_end_byte}:{macro_name}"
+        if macro_call_id in seen:
+            continue
+        seen.add(macro_call_id)
+        out.append(
+            RustMacroExpansionRequestV1(
+                file_path=file_path,
+                line=max(0, int(line) - 1),
+                col=max(0, int(col)),
+                macro_call_id=macro_call_id,
+            )
+        )
+    return tuple(out)
+
+
+def _aggregate_query_runtime(query_telemetry: dict[str, object]) -> dict[str, object]:
+    did_exceed_match_limit = False
+    cancelled = False
+    window_split_count = 0
+    degrade_reasons: set[str] = set()
+    for telemetry_row in query_telemetry.values():
+        if not isinstance(telemetry_row, dict):
+            continue
+        for phase in ("captures", "matches"):
+            phase_row = telemetry_row.get(phase)
+            if not isinstance(phase_row, dict):
+                continue
+            did_exceed_match_limit = did_exceed_match_limit or bool(
+                phase_row.get("exceeded_match_limit")
+            )
+            cancelled = cancelled or bool(phase_row.get("cancelled"))
+            split = phase_row.get("window_split_count")
+            if isinstance(split, int) and not isinstance(split, bool):
+                window_split_count += split
+            reason = phase_row.get("degrade_reason")
+            if isinstance(reason, str) and reason:
+                degrade_reasons.add(reason)
+    return {
+        "did_exceed_match_limit": did_exceed_match_limit,
+        "cancelled": cancelled,
+        "window_split_count": window_split_count,
+        "degrade_reasons": sorted(degrade_reasons),
+    }
+
+
+def _attach_query_pack_payload(  # noqa: PLR0913
     *,
     payload: dict[str, object],
     rows: tuple[ObjectEvidenceRowV1, ...],
-    captures: dict[str, list[Node]],
+    query_hits: tuple[TreeSitterQueryHitV1, ...],
+    diagnostics: tuple[TreeSitterDiagnosticV1, ...],
+    injection_plan: tuple[InjectionPlanV1, ...],
+    tag_events: tuple[RustTagEventV1, ...],
     source_bytes: bytes,
+    file_key: str | None,
 ) -> None:
-    payload["query_match_rows"] = [msgspec.to_builtins(row) for row in rows]
     payload["query_pack_bundle"] = msgspec.to_builtins(
-        load_rust_grammar_bundle(include_distribution_queries=False)
+        load_rust_grammar_bundle(profile_name="rust_search_enriched")
     )
-    injection_plan = build_injection_plan(source_bytes, captures=captures)
+    payload["cst_query_hits"] = [msgspec.to_builtins(row) for row in query_hits]
+    payload["cst_diagnostics"] = [msgspec.to_builtins(row) for row in diagnostics]
     payload["query_pack_injections"] = [msgspec.to_builtins(row) for row in injection_plan]
+    payload["query_pack_tags"] = [msgspec.to_builtins(row) for row in tag_events]
+    payload["query_pack_tag_summary"] = {
+        "definitions": sum(1 for row in tag_events if row.role == "definition"),
+        "references": sum(1 for row in tag_events if row.role == "reference"),
+    }
+    macro_requests = _macro_expansion_requests(
+        rows=rows,
+        source_bytes=source_bytes,
+        file_key=file_key,
+    )
+    if macro_requests:
+        payload["macro_expansion_requests"] = [msgspec.to_builtins(row) for row in macro_requests]
     payload["query_pack_injection_profiles"] = sorted(
         {
             str(row.profile_name)

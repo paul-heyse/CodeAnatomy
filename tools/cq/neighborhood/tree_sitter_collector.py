@@ -21,12 +21,15 @@ from tools.cq.neighborhood.tree_sitter_contracts import (
     TreeSitterNeighborhoodCollectResult,
 )
 from tools.cq.neighborhood.tree_sitter_neighborhood_query_engine import collect_callers_callees
-from tools.cq.search.tree_sitter.contracts.core_models import QueryWindowV1
+from tools.cq.search.tree_sitter.contracts.core_models import (
+    QueryWindowV1,
+    TreeSitterDiagnosticV1,
+)
 from tools.cq.search.tree_sitter.core.parser_controls import (
     apply_parser_controls,
     parser_controls_from_env,
 )
-from tools.cq.search.tree_sitter.diagnostics.collector import collect_tree_sitter_diagnostics
+from tools.cq.search.tree_sitter.structural.diagnostic_export import collect_diagnostic_rows
 from tools.cq.search.tree_sitter.structural.export import export_structural_rows
 
 if TYPE_CHECKING:
@@ -595,30 +598,22 @@ def _anchor_unresolved_result(target_name: str) -> TreeSitterNeighborhoodCollect
 
 def _tree_parse_diagnostics(
     *,
-    language: str,
     tree_root: Node,
+    diagnostic_rows: tuple[TreeSitterDiagnosticV1, ...],
 ) -> tuple[DegradeEventV1, ...]:
     if not tree_root.has_error:
         return ()
-    diagnostics = collect_tree_sitter_diagnostics(
-        language=language,
-        root=tree_root,
-        windows=(
-            QueryWindowV1(
-                start_byte=int(getattr(tree_root, "start_byte", 0)),
-                end_byte=int(getattr(tree_root, "end_byte", 0)),
-            ),
-        ),
-        match_limit=512,
-    )
-    if diagnostics:
-        first = diagnostics[0]
+    if diagnostic_rows:
+        first = diagnostic_rows[0]
         return (
             DegradeEventV1(
                 stage="tree_sitter.neighborhood",
                 severity="warning",
                 category="parse_error_nodes",
-                message=f"{first.kind} near line {first.start_line}",
+                message=(
+                    f"{getattr(first, 'kind', 'tree_sitter')} near line "
+                    f"{getattr(first, 'start_line', '?')}"
+                ),
             ),
         )
     return (
@@ -679,12 +674,25 @@ def collect_tree_sitter_neighborhood(
         root=anchor,
         source_bytes=source_bytes,
     )
+    diagnostic_rows = collect_diagnostic_rows(
+        language=request.language,
+        root=tree_root,
+        windows=(
+            QueryWindowV1(
+                start_byte=int(getattr(tree_root, "start_byte", 0)),
+                end_byte=int(getattr(tree_root, "end_byte", 0)),
+            ),
+        ),
+        match_limit=512,
+    )
     return TreeSitterNeighborhoodCollectResult(
         subject=subject,
         slices=tuple(slices),
-        diagnostics=_tree_parse_diagnostics(language=request.language, tree_root=tree_root),
+        diagnostics=_tree_parse_diagnostics(tree_root=tree_root, diagnostic_rows=diagnostic_rows),
         structural_export=structural_export,
         cst_tokens=tuple(structural_export.tokens),
+        cst_diagnostics=diagnostic_rows,
+        cst_query_hits=(),
     )
 
 

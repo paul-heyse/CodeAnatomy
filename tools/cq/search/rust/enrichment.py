@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import msgspec
 from ast_grep_py import SgRoot
 
 from tools.cq.core.locations import byte_offset_to_line_col
@@ -21,6 +22,8 @@ from tools.cq.search.enrichment.core import (
 )
 from tools.cq.search.pipeline.classifier import get_node_index
 from tools.cq.search.rust.evidence import attach_rust_evidence
+from tools.cq.search.rust.macro_expansion_bridge import expand_macros
+from tools.cq.search.rust.macro_expansion_contracts import RustMacroExpansionRequestV1
 from tools.cq.search.tree_sitter.rust_lane.runtime import (
     enrich_rust_context_by_byte_range as _ts_enrich,
 )
@@ -518,6 +521,37 @@ def _crosscheck_mismatches(
     return mismatches
 
 
+def _macro_requests(payload: dict[str, object]) -> tuple[RustMacroExpansionRequestV1, ...]:
+    raw_requests = payload.get("macro_expansion_requests")
+    if not isinstance(raw_requests, list):
+        return ()
+    rows: list[RustMacroExpansionRequestV1] = []
+    for item in raw_requests:
+        if not isinstance(item, dict):
+            continue
+        try:
+            rows.append(msgspec.convert(item, type=RustMacroExpansionRequestV1, strict=False))
+        except (TypeError, ValueError, msgspec.ValidationError):
+            continue
+    return tuple(rows)
+
+
+def _attach_macro_expansions(
+    payload: dict[str, object],
+    *,
+    macro_client: object | None,
+) -> None:
+    if macro_client is None:
+        return
+    requests = _macro_requests(payload)
+    if not requests:
+        return
+    results = expand_macros(client=macro_client, requests=requests)
+    payload["macro_expansion_results"] = [msgspec.to_builtins(row) for row in results]
+    if any(bool(row.applied) for row in results):
+        append_source(payload, "rust_analyzer")
+
+
 def enrich_rust_context_by_byte_range(
     source: str,
     *,
@@ -560,6 +594,8 @@ def enrich_rust_context_by_byte_range(
         return None
 
     merged = _merge_enrichment_payloads(ast_payload=ast_payload, ts_payload=ts_payload)
+    macro_client = merged.pop("_macro_client", None)
+    _attach_macro_expansions(merged, macro_client=macro_client)
     attach_rust_evidence(merged)
 
     if os.getenv(_CROSSCHECK_ENV) == "1" and ts_payload and ast_payload is not None:
@@ -698,7 +734,11 @@ def enrich_context_by_byte_range(
     byte_end: int,
 ) -> dict[str, object]:
     """Run Rust byte-range enrichment through the consolidated lane."""
-    payload = enrich_rust_context_by_byte_range(source, byte_start=byte_start, byte_end=byte_end)
+    payload = enrich_rust_context_by_byte_range(
+        source,
+        byte_start=byte_start,
+        byte_end=byte_end,
+    )
     return payload if isinstance(payload, dict) else {}
 
 

@@ -36,6 +36,14 @@ class QueryPackSourceV1(CqStruct, frozen=True):
     source_path: str | None = None
 
 
+class QueryPackProfileV1(CqStruct, frozen=True):
+    """Profile describing query-pack load behavior for one lane."""
+
+    profile_name: str
+    include_distribution: bool = False
+    required_pack_names: tuple[str, ...] = ()
+
+
 def _local_query_dir(language: str) -> Path:
     return Path(__file__).with_suffix("").parent / "queries" / language
 
@@ -201,13 +209,34 @@ def load_query_pack_sources(
     return loaded_rows
 
 
+def load_query_pack_sources_for_profile(
+    language: str,
+    *,
+    profile: QueryPackProfileV1,
+) -> tuple[QueryPackSourceV1, ...]:
+    """Load query-pack sources according to a profile contract."""
+    rows = load_query_pack_sources(
+        language,
+        include_distribution=profile.include_distribution,
+    )
+    required = set(profile.required_pack_names)
+    if not required:
+        return rows
+    present = {row.pack_name for row in rows}
+    if required.issubset(present):
+        return rows
+    return ()
+
+
 def get_last_grammar_drift_report(language: str) -> GrammarDriftReportV1 | None:
     """Return latest grammar drift report for a language load lane."""
     return _LAST_DRIFT_REPORTS.get(language)
 
 
 __all__ = [
+    "QueryPackProfileV1",
     "QueryPackSourceV1",
     "get_last_grammar_drift_report",
     "load_query_pack_sources",
+    "load_query_pack_sources_for_profile",
 ]

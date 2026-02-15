@@ -13,7 +13,16 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryPointWindowV1,
     QueryWindowV1,
 )
-from tools.cq.search.tree_sitter.core.adaptive_runtime import record_runtime_sample
+from tools.cq.search.tree_sitter.core.adaptive_runtime import (
+    derive_degrade_reason,
+    record_runtime_sample,
+    runtime_snapshot,
+)
+from tools.cq.search.tree_sitter.core.autotune import (
+    QueryAutotunePlanV1,
+    build_autotune_plan,
+)
+from tools.cq.search.tree_sitter.core.windowing import apply_byte_window, apply_point_window
 
 if TYPE_CHECKING:
     from tree_sitter import Node, Query
@@ -94,6 +103,38 @@ def _combined_progress_callback(
     return _budget_callback
 
 
+def _autotuned_settings(
+    settings: QueryExecutionSettingsV1,
+    *,
+    runtime_label: str,
+) -> tuple[QueryExecutionSettingsV1, QueryAutotunePlanV1]:
+    fallback_budget_ms = settings.budget_ms if settings.budget_ms is not None else 200
+    snapshot = runtime_snapshot(runtime_label, fallback_budget_ms=fallback_budget_ms)
+    plan = build_autotune_plan(
+        snapshot=snapshot,
+        default_budget_ms=fallback_budget_ms,
+        default_match_limit=settings.match_limit,
+    )
+    default_settings = QueryExecutionSettingsV1()
+    tuned_match_limit = (
+        plan.match_limit
+        if settings.match_limit == default_settings.match_limit
+        else settings.match_limit
+    )
+    tuned_budget = plan.budget_ms if settings.budget_ms is None else settings.budget_ms
+    return (
+        QueryExecutionSettingsV1(
+            match_limit=tuned_match_limit,
+            max_start_depth=settings.max_start_depth,
+            budget_ms=tuned_budget,
+            timeout_micros=settings.timeout_micros,
+            require_containment=settings.require_containment,
+            window_mode=settings.window_mode,
+        ),
+        plan,
+    )
+
+
 def _is_match_contained(
     *,
     capture_map: dict[str, list[Node]],
@@ -129,9 +170,16 @@ def _window_plan(
     root: Node,
     windows: Iterable[QueryWindowV1] | None,
     point_windows: Iterable[QueryPointWindowV1] | None,
+    split_target: int = 1,
 ) -> tuple[tuple[QueryWindowV1, QueryPointWindowV1 | None], ...]:
     windows_list = _normalized_windows(root, windows)
     point_windows_list = _normalized_point_windows(point_windows)
+    if point_windows_list is None and split_target > 1:
+        split_windows: list[QueryWindowV1] = []
+        for window in windows_list:
+            split_windows.extend(_split_window(window, split_target))
+        if split_windows:
+            windows_list = tuple(split_windows)
     total = len(point_windows_list) if point_windows_list is not None else len(windows_list)
     rows: list[tuple[QueryWindowV1, QueryPointWindowV1 | None]] = []
     for index in range(total):
@@ -143,53 +191,57 @@ def _window_plan(
     return tuple(rows)
 
 
+def _split_window(window: QueryWindowV1, split_target: int) -> tuple[QueryWindowV1, ...]:
+    if split_target <= 1:
+        return (window,)
+    start = int(window.start_byte)
+    end = int(window.end_byte)
+    width = end - start
+    if width <= 1:
+        return (window,)
+    step = max(1, width // split_target)
+    rows: list[QueryWindowV1] = []
+    cursor = start
+    while cursor < end:
+        next_cursor = min(end, cursor + step)
+        if next_cursor <= cursor:
+            break
+        rows.append(QueryWindowV1(start_byte=cursor, end_byte=next_cursor))
+        cursor = next_cursor
+    if not rows:
+        return (window,)
+    last = rows[-1]
+    if last.end_byte < end:
+        rows[-1] = QueryWindowV1(start_byte=last.start_byte, end_byte=end)
+    return tuple(rows)
+
+
+def _base_window_count(
+    *,
+    root: Node,
+    windows: Iterable[QueryWindowV1] | None,
+    point_windows: Iterable[QueryPointWindowV1] | None,
+) -> int:
+    point_rows = _normalized_point_windows(point_windows)
+    if point_rows is not None:
+        return len(point_rows)
+    return len(_normalized_windows(root, windows))
+
+
 def _apply_window(
     *,
     cursor: Any,
     window: QueryWindowV1,
     point_window: QueryPointWindowV1 | None,
-) -> None:
-    if point_window is not None:
-        cursor.set_point_range(
-            (point_window.start_row, point_window.start_col),
-            (point_window.end_row, point_window.end_col),
-        )
-        return
-    _ = window
-    # Avoid QueryCursor.set_byte_range due native instability on some trees.
-    # We apply window filtering in Python after query execution instead.
-    return
-
-
-def _node_overlaps_window(node: Node, window: QueryWindowV1) -> bool:
-    node_start = int(getattr(node, "start_byte", 0))
-    node_end = int(getattr(node, "end_byte", node_start))
-    return node_end > window.start_byte and node_start < window.end_byte
-
-
-def _capture_map_overlaps_window(
-    *,
-    capture_map: dict[str, list[Node]],
-    window: QueryWindowV1,
+    window_mode: str,
 ) -> bool:
-    for values in capture_map.values():
-        for node in values:
-            if _node_overlaps_window(node, window):
-                return True
-    return False
-
-
-def _filter_captures_by_window(
-    *,
-    captures: dict[str, list[Node]],
-    window: QueryWindowV1,
-) -> dict[str, list[Node]]:
-    out: dict[str, list[Node]] = {}
-    for capture_name, nodes in captures.items():
-        filtered = [node for node in nodes if _node_overlaps_window(node, window)]
-        if filtered:
-            out[capture_name] = filtered
-    return out
+    if point_window is not None:
+        return apply_point_window(
+            cursor=cursor,
+            window=point_window,
+            mode=window_mode,
+        )
+    return apply_byte_window(cursor=cursor, window=window, mode=window_mode)
 
 
 def _match_fingerprint(pattern_idx: int, capture_map: dict[str, list[Node]]) -> tuple[object, ...]:
@@ -268,7 +320,7 @@ def _cursor_matches(
     return cursor.matches(root)
 
 
-def run_bounded_query_captures(
+def run_bounded_query_captures(  # noqa: PLR0914
     query: Query,
     root: Node,
     *,
@@ -283,29 +335,61 @@ def run_bounded_query_captures(
         tuple[dict[str, list[Node]], QueryExecutionTelemetryV1]: Capture map and
             execution telemetry.
     """
-    effective_settings = settings or QueryExecutionSettingsV1()
+    input_settings = settings or QueryExecutionSettingsV1()
+    effective_settings, tune_plan = _autotuned_settings(
+        input_settings,
+        runtime_label="query_captures",
+    )
     callback_bundle = callbacks or QueryExecutionCallbacksV1()
     cursor = _build_cursor(query, effective_settings)
-    plan = _window_plan(root=root, windows=windows, point_windows=point_windows)
+    plan = _window_plan(
+        root=root,
+        windows=windows,
+        point_windows=point_windows,
+        split_target=tune_plan.window_split_target,
+    )
+    base_window_count = _base_window_count(root=root, windows=windows, point_windows=point_windows)
     progress = _combined_progress_callback(
         budget_ms=effective_settings.budget_ms,
         progress_callback=callback_bundle.progress_callback,
     )
     started = monotonic()
+    deadline = (
+        started + (float(effective_settings.budget_ms) / 1000.0)
+        if effective_settings.budget_ms is not None and effective_settings.budget_ms > 0
+        else None
+    )
 
     merged: dict[str, list[Node]] = {}
     windows_executed = 0
+    degrade_reason: str | None = None
+    budget_cancelled = False
     for window, point_window in plan:
-        _apply_window(cursor=cursor, window=window, point_window=point_window)
+        if deadline is not None and monotonic() >= deadline:
+            budget_cancelled = True
+            break
+        window_applied = _apply_window(
+            cursor=cursor,
+            window=window,
+            point_window=point_window,
+            window_mode=effective_settings.window_mode,
+        )
+        if not window_applied and effective_settings.window_mode == "containment_required":
+            degrade_reason = derive_degrade_reason(
+                exceeded_match_limit=False,
+                cancelled=False,
+                containment_required=True,
+                window_applied=False,
+            )
+            break
         if not _progress_allows(progress):
             break
-        raw_captures = _cursor_captures(
+        captures = _cursor_captures(
             cursor=cursor,
             root=root,
             predicate_callback=callback_bundle.predicate_callback,
             progress=progress,
         )
-        captures = _filter_captures_by_window(captures=raw_captures, window=window)
         windows_executed += 1
         if isinstance(captures, dict):
             for capture_name, nodes in captures.items():
@@ -318,23 +402,32 @@ def run_bounded_query_captures(
             break
 
     exceeded = bool(getattr(cursor, "did_exceed_match_limit", False))
+    cancelled = _cancelled(
+        progress=progress,
+        windows_executed=windows_executed,
+        windows_total=len(plan),
+        exceeded_match_limit=exceeded,
+    )
+    cancelled = cancelled or budget_cancelled
+    if degrade_reason is None:
+        degrade_reason = derive_degrade_reason(
+            exceeded_match_limit=exceeded,
+            cancelled=cancelled,
+        )
     telemetry = QueryExecutionTelemetryV1(
         windows_total=len(plan),
         windows_executed=windows_executed,
         capture_count=sum(len(nodes) for nodes in merged.values()),
         exceeded_match_limit=exceeded,
-        cancelled=_cancelled(
-            progress=progress,
-            windows_executed=windows_executed,
-            windows_total=len(plan),
-            exceeded_match_limit=exceeded,
-        ),
+        cancelled=cancelled,
+        window_split_count=max(0, len(plan) - base_window_count),
+        degrade_reason=degrade_reason,
     )
     record_runtime_sample("query_captures", (monotonic() - started) * 1000.0)
     return merged, telemetry
 
 
-def run_bounded_query_matches(
+def run_bounded_query_matches(  # noqa: PLR0914
     query: Query,
     root: Node,
     *,
@@ -349,21 +442,54 @@ def run_bounded_query_matches(
         tuple[list[tuple[int, dict[str, list[Node]]]], QueryExecutionTelemetryV1]:
             Match rows and execution telemetry.
     """
-    effective_settings = settings or QueryExecutionSettingsV1()
+    input_settings = settings or QueryExecutionSettingsV1()
+    effective_settings, tune_plan = _autotuned_settings(
+        input_settings,
+        runtime_label="query_matches",
+    )
     callback_bundle = callbacks or QueryExecutionCallbacksV1()
     cursor = _build_cursor(query, effective_settings)
-    plan = _window_plan(root=root, windows=windows, point_windows=point_windows)
+    plan = _window_plan(
+        root=root,
+        windows=windows,
+        point_windows=point_windows,
+        split_target=tune_plan.window_split_target,
+    )
+    base_window_count = _base_window_count(root=root, windows=windows, point_windows=point_windows)
     progress = _combined_progress_callback(
         budget_ms=effective_settings.budget_ms,
         progress_callback=callback_bundle.progress_callback,
     )
     started = monotonic()
+    deadline = (
+        started + (float(effective_settings.budget_ms) / 1000.0)
+        if effective_settings.budget_ms is not None and effective_settings.budget_ms > 0
+        else None
+    )
 
     merged: list[tuple[int, dict[str, list[Node]]]] = []
     seen_match_fingerprints: set[tuple[object, ...]] = set()
     windows_executed = 0
+    degrade_reason: str | None = None
+    budget_cancelled = False
     for window, point_window in plan:
-        _apply_window(cursor=cursor, window=window, point_window=point_window)
+        if deadline is not None and monotonic() >= deadline:
+            budget_cancelled = True
+            break
+        window_applied = _apply_window(
+            cursor=cursor,
+            window=window,
+            point_window=point_window,
+            window_mode=effective_settings.window_mode,
+        )
+        if not window_applied and effective_settings.window_mode == "containment_required":
+            degrade_reason = derive_degrade_reason(
+                exceeded_match_limit=False,
+                cancelled=False,
+                containment_required=True,
+                window_applied=False,
+            )
+            break
         if not _progress_allows(progress):
             break
         matches = _cursor_matches(
@@ -384,17 +510,26 @@ def run_bounded_query_matches(
             break
 
     exceeded = bool(getattr(cursor, "did_exceed_match_limit", False))
+    cancelled = _cancelled(
+        progress=progress,
+        windows_executed=windows_executed,
+        windows_total=len(plan),
+        exceeded_match_limit=exceeded,
+    )
+    cancelled = cancelled or budget_cancelled
+    if degrade_reason is None:
+        degrade_reason = derive_degrade_reason(
+            exceeded_match_limit=exceeded,
+            cancelled=cancelled,
+        )
     telemetry = QueryExecutionTelemetryV1(
         windows_total=len(plan),
         windows_executed=windows_executed,
         match_count=len(merged),
         exceeded_match_limit=exceeded,
-        cancelled=_cancelled(
-            progress=progress,
-            windows_executed=windows_executed,
-            windows_total=len(plan),
-            exceeded_match_limit=exceeded,
-        ),
+        cancelled=cancelled,
+        window_split_count=max(0, len(plan) - base_window_count),
+        degrade_reason=degrade_reason,
     )
     record_runtime_sample("query_matches", (monotonic() - started) * 1000.0)
     return merged, telemetry
@@ -413,12 +548,12 @@ def _merge_window_matches(
     for pattern_idx, capture_map in matches:
         if not isinstance(pattern_idx, int) or not isinstance(capture_map, dict):
             continue
-        if window is not None:
-            if require_containment:
-                if not _is_match_contained(capture_map=capture_map, window=window):
-                    continue
-            elif not _capture_map_overlaps_window(capture_map=capture_map, window=window):
-                continue
+        if (
+            window is not None
+            and require_containment
+            and not _is_match_contained(capture_map=capture_map, window=window)
+        ):
+            continue
         fingerprint = _match_fingerprint(pattern_idx, capture_map)
         if fingerprint in seen_match_fingerprints:
             continue

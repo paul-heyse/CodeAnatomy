@@ -109,6 +109,7 @@ def collect_callers_callees(
     settings = QueryExecutionSettingsV1(
         match_limit=4096,
         require_containment=True,
+        window_mode="containment_preferred",
     )
     all_matches, _ = run_bounded_query_matches(
         query,

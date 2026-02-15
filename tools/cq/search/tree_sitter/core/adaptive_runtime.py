@@ -151,8 +151,26 @@ def runtime_snapshot(language: str, *, fallback_budget_ms: int) -> AdaptiveRunti
     )
 
 
+def derive_degrade_reason(
+    *,
+    exceeded_match_limit: bool,
+    cancelled: bool,
+    containment_required: bool = False,
+    window_applied: bool = True,
+) -> str | None:
+    """Return deterministic degrade reason for query runtime telemetry."""
+    if containment_required and not window_applied:
+        return "containment_api_unavailable"
+    if exceeded_match_limit:
+        return "match_limit_exceeded"
+    if cancelled:
+        return "budget_cancelled"
+    return None
+
+
 __all__ = [
     "adaptive_query_budget_ms",
+    "derive_degrade_reason",
     "memoized_value",
     "record_runtime_sample",
     "runtime_snapshot",

@@ -1,67 +1,52 @@
 # Query Subsystem Architecture
 
+**Version:** 0.4.0
+**Document Status:** Phase 2 (Active)
+**Last Updated:** 2026-02-15
+
 ## Overview
 
 The CQ query subsystem (`tools/cq/query/`) implements a declarative code query system for Python and Rust codebases. It provides a token-based DSL for expressing semantic code queries that compile to executable plans using ast-grep-py for structural pattern matching.
 
-The subsystem follows a classic compiler architecture with three distinct phases: **parse** (DSL to IR), **compile** (IR to execution plan), and **execute** (plan to results). This separation enables query optimization, caching, and composability while maintaining deterministic semantics.
+The subsystem follows a classic compiler architecture with three distinct phases: **parse** (DSL to IR), **compile** (IR to execution plan), and **execute** (plan to results).
 
 ## Module Map
 
 | Module | Responsibility | Lines | Key Types |
 |--------|---------------|-------|-----------|
-| `parser.py` | Query DSL tokenization and parsing to IR | 965 | `parse_query()`, `_tokenize()`, `_EntityQueryState` |
-| `ir.py` | Intermediate representation type definitions | 766 | `Query`, `PatternSpec`, `RelationalConstraint`, `CompositeRule` |
-| `planner.py` | IR compilation to executable ToolPlan | 659 | `compile_query()`, `ToolPlan`, `AstGrepRule` |
-| `executor.py` | Plan execution and result generation | 2473 | `execute_plan()`, `ScanContext`, entity/pattern handlers |
+| `parser.py` | Query DSL tokenization and parsing to IR | 992 | `parse_query()`, `_tokenize()`, `_EntityQueryState` |
+| `ir.py` | Intermediate representation type definitions | 765 | `Query`, `PatternSpec`, `RelationalConstraint`, `CompositeRule` |
+| `planner.py` | IR compilation to executable ToolPlan | 658 | `compile_query()`, `ToolPlan`, `AstGrepRule` |
+| `executor.py` | Plan execution and result generation | 3235 | `execute_plan()`, `ScanContext`, entity/pattern handlers |
+| `entity_front_door.py` | Entity front-door insight assembly | 468 | `attach_entity_front_door_insight()`, `EntitySemanticTelemetry` |
+| `enrichment.py` | Symtable/bytecode enrichment | 629 | `SymtableEnricher`, `BytecodeInfo`, `SymtableInfo` |
+| `batch.py` | Batch query execution with shared scans | 170 | `BatchEntityQuerySession`, `build_batch_session()` |
+| `merge.py` | Multi-language result merging | 205 | `merge_auto_scope_query_results()` |
+| `symbol_resolver.py` | Symbol resolution and import tracking | 484 | `SymbolTable`, `SymbolKey`, `ImportBinding` |
+| `sg_parser.py` | ast-grep parser and file inventory | 409 | `sg_scan()`, `list_scan_files()`, `FileInventoryCacheV1` |
 | `batch_spans.py` | Batch relational span collection | 122 | `collect_span_filters()` |
-| `enrichment.py` | Symtable/bytecode enrichment | 600+ | `SymtableEnricher`, `BytecodeInfo`, `SymtableInfo` |
-| `execution_requests.py` | Request payloads for shared execution | 65 | `EntityQueryRequest`, `PatternQueryRequest` |
-| `execution_context.py` | Bundled execution context | 26 | `QueryExecutionContext` |
-| `entity_front_door.py` | Entity front-door insight assembly | 455 | `attach_entity_front_door_insight()`, `EntityLspTelemetry`, `CandidateNeighborhood` |
 | `language.py` | Multi-language scope resolution | 310 | `QueryLanguage`, `QueryLanguageScope`, extension mappings |
 | `metavar.py` | Metavariable parsing and filtering | 162 | `parse_metavariables()`, `apply_metavar_filters()` |
+| `execution_requests.py` | Request payloads for shared execution | 65 | `EntityQueryRequest`, `PatternQueryRequest` |
+| `execution_context.py` | Bundled execution context | 26 | `QueryExecutionContext` |
+
+**Total LOC:** ~8,700 lines
 
 ## CLI Entry Point
 
 Location: `tools/cq/cli_app/commands/query.py`
 
-The `q()` function handles user-facing query command execution with fallback behavior:
-
-```python
-def q(query_string: str, opts: QueryParams, ctx: CliContext) -> CliResult:
-    has_tokens = _has_query_tokens(query_string)  # Regex check for key=value
-
-    try:
-        parsed_query = parse_query(query_string)
-    except QueryParseError as e:
-        if not has_tokens:
-            # Fallback to smart_search for plain identifier queries
-            return smart_search(query_string, ...)
-        # Report parse error for tokenized queries
-        return error_result(str(e))
-
-    plan = compile_query(parsed_query)
-    result = execute_plan(plan, parsed_query, ...)
-    return CliResult(result=result, context=ctx, filters=opts)
-```
-
-**Token detection pattern**: `([\w.]+|\$+\w+)=(?:'([^']+)'|"([^"]+)"|([^\s]+))`
-
-This regex matches:
-- Dot-notation keys: `pattern.context=`, `inside.stopBy=`
-- Metavariable filter keys: `$NAME=`, `$$OP=`, `$$$ARGS=`
-- Quoted values (single/double quotes) or unquoted values
+The `q()` function handles query execution with smart fallback: plain identifier queries (no `key=value` tokens) fall back to smart_search, while tokenized queries use the parse-compile-execute pipeline. Token detection pattern: `([\w.]+|\$+\w+)=(?:'([^']+)'|"([^"]+)"|([^\s]+))`
 
 ## Query DSL Grammar
 
 The query language supports two primary modes: **entity queries** (search by semantic entity type) and **pattern queries** (search by AST structure).
 
-### Token Syntax
+### Token Categories
 
-All queries use `key=value` token pairs. Values may be quoted (single or double) for strings containing spaces or special characters.
+All queries use `key=value` token pairs. Values may be quoted for strings with spaces.
 
-### Core Tokens
+#### Core Tokens
 
 | Token | Purpose | Example |
 |-------|---------|---------|
@@ -76,9 +61,7 @@ All queries use `key=value` token pairs. Values may be quoted (single or double)
 | `explain` | Show plan explanation | `explain=true` |
 | `lang=<scope>` | Language scope | `lang=auto`, `lang=python`, `lang=rust` |
 
-### Relational Constraint Tokens
-
-Relational operators enable context-aware queries using ast-grep's relational rules.
+#### Relational Constraint Tokens
 
 | Token | Semantics | Example |
 |-------|-----------|---------|
@@ -91,9 +74,7 @@ Relational operators enable context-aware queries using ast-grep's relational ru
 - `<op>.stopBy=<mode>` - When to stop search: `neighbor` (default), `end`, or custom pattern
 - `<op>.field=<name>` - Constrain search to specific AST field (only `inside`/`has`)
 
-### Composite Logic Tokens
-
-Composite rules combine multiple patterns with boolean operators.
+#### Composite Logic Tokens
 
 | Token | Logic | Example |
 |-------|-------|---------|
@@ -101,9 +82,7 @@ Composite rules combine multiple patterns with boolean operators.
 | `any='<p1>,<p2>'` | OR - at least one pattern must match | `any='logger.$M,print'` |
 | `not='<pattern>'` | NOT - pattern must not match (single pattern only) | `not='pass'` |
 
-### Scope Filter Tokens
-
-Symtable-driven scope filtering for closure detection.
+#### Scope Filter Tokens
 
 | Token | Purpose | Example |
 |-------|---------|---------|
@@ -111,9 +90,7 @@ Symtable-driven scope filtering for closure detection.
 | `captures=<var>` | Filter by captured variables | `captures=x` |
 | `has_cells=<bool>` | Filter by cell variable presence | `has_cells=true` |
 
-### Decorator Filter Tokens
-
-Decorator-based filtering.
+#### Decorator Filter Tokens
 
 | Token | Purpose | Example |
 |-------|---------|---------|
@@ -121,7 +98,7 @@ Decorator-based filtering.
 | `decorator_count_min=<N>` | Minimum decorator count | `decorator_count_min=2` |
 | `decorator_count_max=<N>` | Maximum decorator count | `decorator_count_max=5` |
 
-### Metavariable Filter Tokens
+#### Metavariable Filter Tokens
 
 Post-filter pattern matches by captured metavariable content.
 
@@ -131,7 +108,7 @@ Examples:
 - `$$OP=~'^[<>=]'` - Binary comparison operators only
 - `$X!=~debug` - Exclude matches where `$X` captures "debug"
 
-### Pattern Disambiguation Tokens
+#### Pattern Disambiguation Tokens
 
 For ambiguous patterns that cannot parse standalone.
 
@@ -148,9 +125,7 @@ For ambiguous patterns that cannot parse standalone.
 - `relaxed` - Match AST nodes, ignore comments
 - `signature` - Match structure without comparing text
 
-### Positional Matching Tokens
-
-Match nodes by position among siblings.
+#### Positional Matching Tokens
 
 | Token | Purpose | Example |
 |-------|---------|---------|
@@ -161,7 +136,7 @@ Match nodes by position among siblings.
 
 ## Query IR (Intermediate Representation)
 
-Location: `tools/cq/query/ir.py` (766 lines)
+Location: `tools/cq/query/ir.py` (765 lines)
 
 The IR layer provides frozen, immutable structs representing parsed queries. All types use `msgspec.Struct` for serialization compatibility and performance.
 
@@ -179,106 +154,39 @@ MetaVarKind = Literal["single", "multi", "unnamed"]
 
 ### Key Structs
 
-**Query** (lines 553-658) - Top-level parsed query
-```python
-class Query(msgspec.Struct, frozen=True):
-    entity: EntityType | None = None
-    name: str | None = None
-    expand: tuple[Expander, ...] = ()
-    scope: Scope = msgspec.field(default_factory=Scope)
-    fields: tuple[FieldType, ...] = ("def",)
-    limit: int | None = None
-    explain: bool = False
-    pattern_spec: PatternSpec | None = None
-    relational: tuple[RelationalConstraint, ...] = ()
-    scope_filter: ScopeFilter | None = None
-    decorator_filter: DecoratorFilter | None = None
-    joins: tuple[JoinConstraint, ...] = ()
-    metavar_filters: tuple[MetaVarFilter, ...] = ()
-    composite: CompositeRule | None = None
-    nth_child: NthChildSpec | None = None
-    lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
+**Query** - Top-level parsed query
+- Must specify either `entity` OR `pattern_spec` (mutually exclusive, validated in `__post_init__`)
+- Fields: entity, name, expand, scope, fields, limit, explain, pattern_spec, relational, scope_filter, decorator_filter, joins, metavar_filters, composite, nth_child, lang_scope
 
-    def __post_init__(self):
-        # Validate: must specify either entity OR pattern_spec (mutually exclusive)
-```
+**PatternSpec** - Pattern specification with disambiguation
+- Fields: pattern, context (for ambiguous patterns), selector (node kind to extract), strictness
+- `requires_yaml_rule()` returns True if context, selector, or non-smart strictness present
+- `to_yaml_dict()` converts to ast-grep YAML format
 
-**PatternSpec** (lines 245-328) - Pattern specification with disambiguation
-```python
-class PatternSpec(msgspec.Struct, frozen=True):
-    pattern: str
-    context: str | None = None
-    selector: str | None = None
-    strictness: StrictnessMode = "smart"
+**RelationalConstraint** - Structural relationship
+- Fields: operator (inside/has/precedes/follows), pattern, stop_by (neighbor/end/custom), field_name (only valid for inside/has)
+- `to_ast_grep_dict()` converts to ast-grep rule format
 
-    def requires_yaml_rule(self) -> bool:
-        # True if context, selector, or non-smart strictness present
+**CompositeRule** - Boolean composition
+- Fields: operator (all/any/not), patterns (tuple), metavar_order (optional)
+- Validates 'not' has single pattern in `to_ast_grep_dict()`
 
-    def to_yaml_dict(self) -> dict[str, object]:
-        # Convert to ast-grep YAML rule format
-```
+**Expander** - Graph expansion operator
+- Fields: kind (ExpanderKind), depth (≥1, enforced by msgspec.Meta)
 
-**RelationalConstraint** (lines 331-396) - Structural relationship
-```python
-class RelationalConstraint(msgspec.Struct, frozen=True):
-    operator: RelationalOp
-    pattern: str
-    stop_by: StopByMode | str = "neighbor"
-    field_name: str | None = None  # Only valid for inside/has
+**Scope** - File scope constraints
+- Fields: in_dir, exclude (tuple), globs (tuple)
 
-    def to_ast_grep_dict(self) -> dict[str, object]:
-        # Convert to ast-grep rule format
-```
+**MetaVarCapture** - Captured metavariable
+- Fields: name, kind (single/multi/unnamed), text, nodes (list for multi captures)
 
-**CompositeRule** (lines 403-460) - Boolean composition
-```python
-class CompositeRule(msgspec.Struct, frozen=True):
-    operator: CompositeOp
-    patterns: tuple[str, ...]
-    metavar_order: tuple[str, ...] | None = None
-
-    def to_ast_grep_dict(self) -> dict[str, object]:
-        # Validates 'not' has single pattern, builds rule dict
-```
-
-**Expander** (lines 112-124) - Graph expansion operator
-```python
-class Expander(msgspec.Struct, frozen=True):
-    kind: ExpanderKind
-    depth: Annotated[int, msgspec.Meta(ge=1)] = 1
-```
-
-**Scope** (lines 127-142) - File scope constraints
-```python
-class Scope(msgspec.Struct, frozen=True):
-    in_dir: str | None = None
-    exclude: tuple[str, ...] = ()
-    globs: tuple[str, ...] = ()
-```
-
-**MetaVarCapture** (lines 145-174) - Captured metavariable
-```python
-class MetaVarCapture(msgspec.Struct, frozen=True):
-    name: str
-    kind: MetaVarKind
-    text: str
-    nodes: list[str] | None = None  # For multi captures, individual node texts
-```
-
-**MetaVarFilter** (lines 177-224) - Metavariable post-filter
-```python
-class MetaVarFilter(msgspec.Struct, frozen=True):
-    name: str
-    pattern: str  # Regex pattern
-    negate: bool = False
-
-    def matches(self, capture: MetaVarCapture) -> bool:
-        # Apply regex filter to capture text
-```
+**MetaVarFilter** - Metavariable post-filter
+- Fields: name, pattern (regex), negate (bool)
+- `matches(capture)` applies regex filter to capture text with optional negation
 
 ## Query Parser
 
-Location: `tools/cq/query/parser.py` (965 lines)
+Location: `tools/cq/query/parser.py` (992 lines)
 
 The parser converts query strings to Query IR using a stateful token handler pattern.
 
@@ -296,7 +204,7 @@ def parse_query(query_string: str) -> Query:
 
 ### Tokenization
 
-The `_tokenize()` function (lines 262-292) uses a regex to extract key-value pairs:
+The `_tokenize()` function uses regex to extract key-value pairs:
 
 ```python
 pattern = r"([\w.]+|\$+\w+)=(?:'([^']+)'|\"([^\"]+)\"|([^\s]+))"
@@ -311,10 +219,9 @@ This pattern handles:
 
 ### State-Based Parsing
 
-Entity queries use `_EntityQueryState` (lines 93-128) and pattern queries use `_PatternQueryState` (lines 131-156) to accumulate parsed components.
+Entity queries use `_EntityQueryState` and pattern queries use `_PatternQueryState` to accumulate parsed components.
 
-Token handlers (`_ENTITY_TOKEN_HANDLERS` at line 201) process tokens in a defined order (`_ENTITY_HANDLER_ORDER` at line 210):
-
+Token handlers process tokens in defined order:
 ```python
 _ENTITY_HANDLER_ORDER = ("name", "expand", "scope", "fields", "limit", "explain", "lang")
 ```
@@ -323,43 +230,23 @@ Each handler mutates the state object. After all handlers run, the state builds 
 
 ### Expander Parsing
 
-The `_parse_expanders()` function (lines 589-625) handles complex expander syntax:
-
-```python
-# Split by comma, respecting nested parentheses
-parts = _split_expanders(expand_str)
-
-for part in parts:
-    # Parse: kind(depth=N) or just kind
-    match = re.match(r"(\w+)(?:\(([^)]*)\))?", part)
-    kind = _parse_expander_kind(match.group(1))
-    depth = _parse_expander_params(match.group(2) or "")
-    expanders.append(Expander(kind=kind, depth=depth))
-```
+Handles complex expander syntax like `callers(depth=2),callees`:
+1. Split by comma, respecting nested parentheses
+2. Parse each part: `kind(depth=N)` or just `kind`
+3. Validate expander kind and extract depth parameter
+4. Build Expander tuple
 
 ### Relational Constraint Parsing
 
-The `_parse_relational_constraints()` function (lines 454-496) supports both dot notation and global fallbacks:
-
-```python
-global_stop_by = tokens.get("stopBy") or "neighbor"
-global_field = tokens.get("field")
-
-for op in ("inside", "has", "precedes", "follows"):
-    pattern = tokens.get(op)
-    if pattern:
-        # Try dot notation first, then underscore, then global
-        stop_by = tokens.get(f"{op}.stopBy") or tokens.get(f"{op}_stop_by") or global_stop_by
-        field_name = tokens.get(f"{op}.field") or tokens.get(f"{op}_field") or global_field
-
-        constraints.append(RelationalConstraint(
-            operator=op, pattern=pattern, stop_by=stop_by, field_name=field_name
-        ))
-```
+Supports both dot notation and global fallbacks:
+- Try `{op}.stopBy` first (e.g., `inside.stopBy`)
+- Fall back to `{op}_stop_by` (legacy underscore notation)
+- Fall back to global `stopBy` token
+- Same pattern for `field` modifiers
 
 ## Query Planner
 
-Location: `tools/cq/query/planner.py` (659 lines)
+Location: `tools/cq/query/planner.py` (658 lines)
 
 The planner compiles Query IR into an executable ToolPlan that specifies which tools to run and how.
 
@@ -367,16 +254,16 @@ The planner compiles Query IR into an executable ToolPlan that specifies which t
 
 ```python
 class ToolPlan(msgspec.Struct, frozen=True):
-    scope: Scope = msgspec.field(default_factory=Scope)
-    sg_record_types: frozenset[str] = frozenset({"def", "call", "import"})
-    need_symtable: bool = False
-    need_bytecode: bool = False
-    expand_ops: tuple[Expander, ...] = ()
-    explain: bool = False
-    sg_rules: tuple[AstGrepRule, ...] = ()
-    is_pattern_query: bool = False
-    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE
-    lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE
+    scope: Scope
+    sg_record_types: frozenset[str]  # e.g., {"def", "call", "import"}
+    need_symtable: bool  # For scope/callers/callees analysis
+    need_bytecode: bool  # For bytecode_surface expander
+    expand_ops: tuple[Expander, ...]
+    explain: bool
+    sg_rules: tuple[AstGrepRule, ...]
+    is_pattern_query: bool
+    lang: QueryLanguage
+    lang_scope: QueryLanguageScope
 ```
 
 ### AstGrepRule Structure
@@ -384,20 +271,20 @@ class ToolPlan(msgspec.Struct, frozen=True):
 ```python
 class AstGrepRule(msgspec.Struct, frozen=True):
     pattern: str
-    kind: str | None = None
-    context: str | None = None
-    selector: str | None = None
-    strictness: StrictnessMode = "smart"
-    inside: str | None = None
-    has: str | None = None
-    precedes: str | None = None
-    follows: str | None = None
-    inside_stop_by: str | None = None
-    has_stop_by: str | None = None
-    inside_field: str | None = None
-    has_field: str | None = None
-    composite: CompositeRule | None = None
-    nth_child: NthChildSpec | None = None
+    kind: str | None  # AST node kind constraint
+    context: str | None  # Surrounding code for parsing
+    selector: str | None  # Node kind to extract
+    strictness: StrictnessMode
+    inside: str | None  # Relational: inside ancestor
+    has: str | None  # Relational: contains descendant
+    precedes: str | None  # Relational: precedes sibling
+    follows: str | None  # Relational: follows sibling
+    inside_stop_by: str | None
+    has_stop_by: str | None
+    inside_field: str | None
+    has_field: str | None
+    composite: CompositeRule | None
+    nth_child: NthChildSpec | None
 
     def requires_inline_rule(self) -> bool:
         # True if features beyond simple pattern present
@@ -408,8 +295,6 @@ class AstGrepRule(msgspec.Struct, frozen=True):
 
 ### Compilation Strategy
 
-The `compile_query()` function (line 260) dispatches based on query type:
-
 ```python
 def compile_query(query: Query) -> ToolPlan:
     if query.is_pattern_query:
@@ -417,21 +302,22 @@ def compile_query(query: Query) -> ToolPlan:
     return _compile_entity_query(query)
 ```
 
-**Entity Query Compilation** (lines 282-313):
-1. Determine required record types via `_determine_record_types()` - union of entity type records, expander records, and field records
-2. Check if symtable needed via `_needs_symtable()` - True for scope expander, callers/callees expanders, or scope_filter present
-3. Check if bytecode needed via `_needs_bytecode()` - True for bytecode_surface expander or evidence field
-4. Generate ast-grep rules from relational constraints via `_entity_to_ast_grep_rules()`
+**Entity Query Compilation**:
+1. Determine required record types via `_determine_record_types()` - union of:
+   - Entity type records (e.g., function → `{"def"}`)
+   - Expander records (e.g., callers → `{"def", "call"}`)
+   - Field records (e.g., imports → `{"import"}`)
+2. Check if symtable needed - True for scope expander, callers/callees expanders, or scope_filter present
+3. Check if bytecode needed - True for bytecode_surface expander or evidence field
+4. Generate ast-grep rules from relational constraints
 
-**Pattern Query Compilation** (lines 316-350):
+**Pattern Query Compilation**:
 1. Build AstGrepRule from PatternSpec
-2. Apply relational constraints via `_apply_relational_constraints()`
+2. Apply relational constraints
 3. Set empty sg_record_types (not using standard record scanning)
 4. Mark `is_pattern_query=True`
 
 ### Record Type Inference
-
-Record types determine which ast-grep record patterns to scan for:
 
 ```python
 _ENTITY_RECORDS: dict[str, set[str]] = {
@@ -443,11 +329,7 @@ _ENTITY_RECORDS: dict[str, set[str]] = {
     "import": {"import"},
     "decorator": {"def"},
 }
-_ENTITY_EXTRA_RECORDS: dict[str, set[str]] = {
-    "function": {"call"},  # Need calls for caller/callee analysis
-    "class": {"call"},
-    "method": {"call"},
-}
+
 _EXPANDER_RECORDS: dict[str, set[str]] = {
     "callers": {"def", "call"},
     "callees": {"def", "call"},
@@ -459,10 +341,11 @@ _EXPANDER_RECORDS: dict[str, set[str]] = {
 
 ### Multi-Language Rule Generation
 
-For Rust queries, `_rust_entity_to_ast_grep_rules()` (lines 400-443) generates language-specific rules:
+For Rust queries, `_rust_entity_to_ast_grep_rules()` generates language-specific rules:
 
 ```python
 if entity == "class":
+    # Rust types map to struct/enum/trait
     type_kinds = ("struct_item", "enum_item", "trait_item")
     return tuple(
         _apply_relational_constraints(AstGrepRule(pattern="$TYPE", kind=kind), query.relational)
@@ -477,39 +360,16 @@ if entity == "method":
 
 ### Relational Constraint Compilation
 
-The `_apply_relational_constraints()` function (lines 458-491) merges constraints into AstGrepRule:
+Merges relational constraints into AstGrepRule:
+1. Build `_RelationalState` with current rule constraints
+2. Apply each constraint via `_apply_relational_constraint()`
+3. Merge state back into rule via `_merge_relational_state()`
 
-```python
-state = _RelationalState(
-    inside=rule.inside,
-    has=rule.has,
-    precedes=rule.precedes,
-    follows=rule.follows,
-    inside_stop_by=rule.inside_stop_by,
-    has_stop_by=rule.has_stop_by,
-    inside_field=rule.inside_field,
-    has_field=rule.has_field,
-)
-
-for constraint in constraints:
-    _apply_relational_constraint(state, constraint)
-
-return _merge_relational_state(rule, state)
-```
-
-The `_normalize_stop_by()` function (lines 521-529) applies heuristics:
-
-```python
-# For class/function inside constraints, use "end" to search to root
-if constraint.operator in {"inside", "has"}:
-    pattern = constraint.pattern.strip()
-    if pattern.startswith(("class ", "def ", "async def ")):
-        return "end"
-```
+Heuristic: For class/function `inside` constraints, use `stop_by="end"` to search to root rather than stopping at nearest neighbor.
 
 ## Query Executor
 
-Location: `tools/cq/query/executor.py` (2473 lines)
+Location: `tools/cq/query/executor.py` (3235 lines)
 
 The executor implements the runtime that executes ToolPlans and produces CqResult objects. It handles two execution paths: entity queries and pattern queries.
 
@@ -533,20 +393,9 @@ def execute_plan(
     return _execute_single_context(ctx)
 ```
 
-### Single-Context Execution
-
-The `_execute_single_context()` function (line 571) dispatches by query type:
-
-```python
-def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
-    if ctx.plan.is_pattern_query:
-        return _execute_pattern_query(ctx)
-    return _execute_entity_query(ctx)
-```
-
 ### Entity Query Execution Flow
 
-**Preparation Phase** (`_prepare_entity_state()`, lines 379-399):
+**Preparation Phase** (`_prepare_entity_state()`):
 1. Validate ast-grep availability via toolchain
 2. Resolve paths from scope constraints via `scope_to_paths()`
 3. Scan records via `sg_scan()` - runs ast-grep for required record types
@@ -554,7 +403,7 @@ def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
 5. Build entity candidates via `_build_entity_candidates()` - partitions by record type
 6. Apply rule spans via `_apply_rule_spans()` - filters candidates using relational constraint matches
 
-**Execution Phase** (`_execute_entity_query()`, lines 682-700):
+**Execution Phase** (`_execute_entity_query()`):
 1. Build result structure with RunMeta
 2. Apply entity-specific handlers via `_apply_entity_handlers()`
 3. Add file scan statistics
@@ -562,8 +411,6 @@ def _execute_single_context(ctx: QueryExecutionContext) -> CqResult:
 5. Finalize multi-language summary if needed
 
 ### ScanContext Structure
-
-The `ScanContext` dataclass (lines 83-92) bundles indexed scan results:
 
 ```python
 @dataclass
@@ -580,8 +427,6 @@ The interval indices enable O(log n) containment queries for finding which defin
 
 ### Entity Handler Dispatch
 
-The `_apply_entity_handlers()` function (lines 452-477) routes by entity type:
-
 ```python
 if query.entity == "import":
     _process_import_query(candidates.import_records, query, result, root, symtable=symtable)
@@ -596,7 +441,7 @@ else:
 
 ### Definition Query Processing
 
-The `_process_def_query()` function (lines 1345-1400) implements the core definition handler:
+The `_process_def_query()` function implements the core definition handler:
 
 1. Filter candidates by name pattern via `_filter_to_matching()`
 2. Convert records to findings via `_def_to_finding()`
@@ -609,13 +454,13 @@ The `_process_def_query()` function (lines 1345-1400) implements the core defini
 
 ### Pattern Query Execution Flow
 
-**Preparation Phase** (`_prepare_pattern_state()`, lines 421-449):
+**Preparation Phase** (`_prepare_pattern_state()`):
 1. Validate ast-grep availability
 2. Resolve paths from scope
 3. Tabulate files via `_tabulate_scope_files()` - applies extension filtering and glob rules
 4. Return error if no files match
 
-**Execution Phase** (`_execute_pattern_query()`, lines 746-786):
+**Execution Phase** (`_execute_pattern_query()`):
 1. Execute ast-grep rules via `_execute_ast_grep_rules()`
 2. Build result with findings
 3. Apply scope filter if present (symtable enrichment)
@@ -624,77 +469,41 @@ The `_process_def_query()` function (lines 1345-1400) implements the core defini
 
 ### AST-Grep Rule Execution
 
-The `_execute_ast_grep_rules()` function (lines 851-889) uses ast-grep-py directly:
-
-```python
-ctx = AstGrepExecutionContext(rules=rules, paths=paths, root=root, query=query, lang=query.primary_language if query is not None else DEFAULT_QUERY_LANGUAGE)
-state = AstGrepExecutionState(findings=[], records=[], raw_matches=[])
-
-for file_path in ctx.paths:
-    src = file_path.read_text(encoding="utf-8")
-    sg_root = SgRoot(src, ctx.lang)
-    node = sg_root.root()
-    rel_path = _normalize_match_file(str(file_path), ctx.root)
-
-    for idx, rule in enumerate(ctx.rules):
-        for match in _iter_rule_matches(node, rule):
-            match_data = _build_match_data(match, rule_id=f"pattern_{idx}", rel_path=rel_path)
-            if not _match_passes_filters(ctx, match):
-                continue
-            finding, record = _match_to_finding(match_data)
-            if finding:
-                _apply_metavar_details(ctx, match, finding)
-                state.findings.append(finding)
-            if record:
-                state.records.append(record)
-
-return state.findings, state.records, state.raw_matches
-```
+The `_execute_ast_grep_rules()` function uses ast-grep-py directly:
+1. Create execution context with rules, paths, root, query, language
+2. For each file path:
+   - Read source text
+   - Parse with SgRoot
+   - For each rule:
+     - Iterate matches via `_iter_rule_matches()`
+     - Build match data with rule_id and relative path
+     - Apply filters (scope, metavar)
+     - Convert to finding and record
+     - Apply metavar details
+     - Append to results
+3. Return findings, records, raw matches
 
 ### Multi-Language Execution
 
-The `_execute_auto_scope_plan()` function (lines 577-603) orchestrates parallel language execution:
-
-```python
-results = execute_by_language_scope(
-    query.lang_scope,
-    lambda lang: _run_scoped_auto_query(
-        query=query, lang=lang, tc=tc, root=root, argv=argv
-    ),
-)
-
-return _merge_auto_scope_results(
-    query, results, root=root, argv=argv, tc=tc, query_text=query_text
-)
-```
-
-Each language runs independently with scoped queries (`msgspec.structs.replace(query, lang_scope=cast("QueryLanguageScope", lang))`). Results are merged via `merge_language_cq_results()` with cross-language diagnostics.
+The `_execute_auto_scope_plan()` function orchestrates parallel language execution:
+1. Execute by language scope via `execute_by_language_scope()`
+2. Each language runs independently with scoped queries
+3. Results merged via `merge_language_cq_results()` with cross-language diagnostics
 
 ### Relational Span Collection
 
-For entity queries with relational constraints, `_collect_match_spans()` (lines 1095-1127) pre-computes spans:
+For entity queries with relational constraints, `_collect_match_spans()` pre-computes spans:
 
-```python
-# 1. Tabulate files for language scope
-file_result = tabulate_files(repo_index, paths, globs, extensions=file_extensions_for_scope(query.lang_scope))
+1. Tabulate files for language scope
+2. Collect ast-grep match spans via `_collect_ast_grep_match_spans()`
+3. Filter by metavariable constraints if present
+4. Group by file
 
-# 2. Collect ast-grep match spans
-matches = _collect_ast_grep_match_spans(file_result.files, rules, root, query.primary_language)
-
-# 3. Filter by metavariable constraints if present
-if query.metavar_filters:
-    return _filter_match_spans_by_metavars(matches, query.metavar_filters)
-
-# 4. Group by file
-return _group_match_spans(matches)
-```
-
-The `_filter_records_by_spans()` function (lines 1194-1217) then filters entity candidates to those overlapping matched spans.
+The `_filter_records_by_spans()` function then filters entity candidates to those overlapping matched spans.
 
 ### Caller/Callee Analysis
 
-The `_build_callers_section()` function (lines 2012-2032) implements transitive caller discovery:
-
+**Callers** (`_build_callers_section()`):
 1. Build target context via `_build_call_target_context()`:
    - Extract target names from definitions
    - Classify as function vs method (based on enclosing class)
@@ -707,49 +516,469 @@ The `_build_callers_section()` function (lines 2012-2032) implements transitive 
    - Enrich containing definitions with symtable/bytecode info
 4. Build caller findings with evidence attachment
 
-The `_build_callees_section()` function (lines 2130-2175) is simpler:
-
+**Callees** (`_build_callees_section()`):
 1. Iterate target definitions
 2. Extract calls within each definition (from `calls_by_def` mapping)
 3. Build callee findings with evidence
 
 ### Scope Enrichment
 
-The `_build_scope_section()` function (lines 2252-2296) provides closure analysis:
-
-```python
-enricher = SymtableEnricher(root)
-
-for def_record in target_defs:
-    base_finding = _def_to_finding(def_record, calls_by_def.get(def_record, []))
-    scope_info = enricher.enrich_function_finding(base_finding, def_record)
-
-    if scope_info:
-        free_vars = scope_info.get("free_vars", [])
-        cell_vars = scope_info.get("cell_vars", [])
-        label = "closure" if scope_info.get("is_closure") else "toplevel"
-        findings.append(...)
-```
+The `_build_scope_section()` function provides closure analysis using SymtableEnricher:
+- Enrich each function finding with scope info
+- Extract free_vars, cell_vars from symtable analysis
+- Label as "closure" or "toplevel" based on `is_closure` flag
+- Attach scope details to findings
 
 ### Bytecode Surface Analysis
 
-The `_build_bytecode_surface_section()` function (lines 2299-2352) extracts bytecode patterns:
+The `_build_bytecode_surface_section()` function extracts bytecode patterns:
+- Enrich target definitions with bytecode info via `enrich_records()`
+- Extract load_globals, load_attrs, call_functions from BytecodeInfo
+- Build findings with bytecode details attached
+
+## Entity Front-Door Insight Assembly
+
+Location: `tools/cq/query/entity_front_door.py` (468 lines)
+
+The entity front-door module builds and attaches `FrontDoorInsightV1` cards to entity query results, providing target identity, neighborhood preview, risk assessment, and confidence scoring.
+
+### Purpose
+
+Entity queries need a structured summary that captures:
+- **Target Identity** - What was found (definitions, primary candidate)
+- **Neighborhood Context** - Immediate relationships (callers, callees, scope)
+- **Risk Indicators** - Complexity signals (relationship counts, closure captures)
+- **Confidence Metrics** - Evidence quality and completeness
+- **Degradation Signals** - LSP/semantic availability, budget constraints, language gaps
+
+The front-door insight provides this in a canonical `FrontDoorInsightV1` contract that downstream tooling (formatters, UIs) can consume without re-parsing entity-specific fields.
+
+### Integration Point
+
+The executor calls `attach_entity_front_door_insight()` after entity query execution completes:
 
 ```python
-enrichment = enrich_records(target_defs, root)
+# In executor.py, after building entity result
+if not query.is_pattern_query:
+    attach_entity_front_door_insight(
+        result,
+        relationship_detail_max_matches=RELATIONSHIP_DETAIL_MAX_MATCHES,
+    )
+```
 
-for record in target_defs:
-    location = f"{record.file}:{record.start_line}:{record.start_col}"
-    info = enrichment.get(location, {})
-    bytecode_info = info.get("bytecode_info")
+### Integration Flow
 
-    if isinstance(bytecode_info, BytecodeInfo):
-        details = {
-            "globals": list(bytecode_info.load_globals),
-            "attrs": list(bytecode_info.load_attrs),
-            "calls": list(bytecode_info.call_functions),
-        }
-        findings.append(...)
+1. Extract definition findings from `result.key_findings`
+2. Build candidate neighborhood from top 3 definitions via `_build_candidate_neighborhood()`
+3. Compute risk from neighborhood counters (callers, callees, scope) via `risk_from_counters()`
+4. Build degradation status from result summary via `_build_degradation()`
+5. Build base insight via `build_entity_insight()`
+6. Execute language-aware semantic enrichment for candidates (budget-gated)
+7. Derive semantic contract state from telemetry
+8. Mark partial slices for missing languages
+9. Attach insight to `result.summary["front_door_insight"]`
+
+### Supporting Structs
+
+**EntitySemanticTelemetry**:
+```python
+@dataclass(slots=True)
+class EntitySemanticTelemetry:
+    semantic_attempted: int = 0
+    semantic_applied: int = 0
+    semantic_failed: int = 0
+    semantic_timed_out: int = 0
+    semantic_provider: SemanticProvider = "none"
+    py_attempted: int = 0
+    py_applied: int = 0
+    py_failed: int = 0
+    py_timed_out: int = 0
+    rust_attempted: int = 0
+    rust_applied: int = 0
+    rust_failed: int = 0
+    rust_timed_out: int = 0
+    reasons: list[str] = dataclass_field(default_factory=list)
+```
+
+**CandidateNeighborhood**:
+```python
+@dataclass(slots=True)
+class CandidateNeighborhood:
+    primary_target: Finding | None
+    candidates: list[Finding]
+    neighborhood: InsightNeighborhoodV1
+    confidence: InsightConfidenceV1
+```
+
+### Neighborhood Building
+
+Aggregates heuristic data from definition findings:
+
+**Callers slice**:
+- Sum `caller_count` from all candidates
+- Build preview nodes for candidates with callers
+
+**Callees slice**:
+- Sum `callee_count` from all candidates
+- Build preview nodes for candidates with callees
+
+**Hierarchy/scope slice**:
+- Extract unique `enclosing_scope` values from candidates
+- Filter out empty and `<module>` scopes
+- Build preview nodes sorted by scope name
+
+**Result**: `InsightNeighborhoodV1` with four canonical slices (callers, callees, references, hierarchy_or_scope).
+
+### Semantic Enrichment Integration
+
+**Language-aware routing**:
+1. For each candidate finding:
+   - Resolve target context (file, language)
+   - Skip if context unresolved
+   - Enrich via language-specific adapter (Python → pyrefly, Rust → rust-analyzer)
+   - Augment insight with semantic data (preview_per_slice=5)
+
+**Provider mapping**:
+- Python files (`.py`, `.pyi`) → `python_static` provider (pyrefly)
+- Rust files (`.rs`) → `rust_static` provider (rust-analyzer)
+
+**Budget controls**:
+- Semantic enrichment skipped when `match_count > relationship_detail_max_matches`
+- Semantic enrichment skipped when `semantic_runtime_enabled()` returns False
+- Per-candidate semantic requests use `budget_for_mode("entity")` timeouts
+
+### Semantic Contract State Derivation
+
+Canonical semantic status embedded in insight degradation:
+
+```python
+semantic_state = derive_semantic_contract_state(
+    SemanticContractStateInputV1(
+        provider=telemetry.semantic_provider,
+        available=telemetry.semantic_provider != "none",
+        attempted=telemetry.semantic_attempted,
+        applied=telemetry.semantic_applied,
+        failed=max(
+            telemetry.semantic_failed,
+            telemetry.semantic_attempted - telemetry.semantic_applied
+        ),
+        timed_out=telemetry.semantic_timed_out,
+        reasons=tuple(dict.fromkeys(telemetry.reasons)),
+    )
+)
+
+insight = msgspec.structs.replace(
+    insight,
+    degradation=msgspec.structs.replace(
+        insight.degradation,
+        semantic=semantic_state.status,
+        notes=tuple(dict.fromkeys([*insight.degradation.notes, *semantic_state.reasons])),
+    ),
+)
+```
+
+**Output**: Canonical `SemanticStatus` embedded in `insight.degradation.semantic` field.
+
+### Confidence Scoring
+
+Confidence derived from finding score metadata:
+
+```python
+def _confidence_from_candidates(candidates: list[Finding]) -> InsightConfidenceV1:
+    confidence = InsightConfidenceV1(evidence_kind="resolved_ast", score=0.8, bucket="high")
+    for finding in candidates:
+        score = finding.details.score
+        if score is None:
+            continue
+        return InsightConfidenceV1(
+            evidence_kind=score.evidence_kind or confidence.evidence_kind,
+            score=float(score.confidence_score) if score.confidence_score is not None else 0.8,
+            bucket=score.confidence_bucket or confidence.confidence_bucket,
+        )
+    return confidence
+```
+
+### Degradation Status Building
+
+Captures scan issues, scope filtering, and budget constraints:
+
+```python
+def _build_degradation(summary: dict[str, object]) -> InsightDegradationV1:
+    dropped = summary.get("dropped_by_scope")
+    scope_filter_status = "dropped" if isinstance(dropped, dict) and dropped else "none"
+    notes: list[str] = []
+    if isinstance(dropped, dict) and dropped:
+        notes.append(f"dropped_by_scope={dropped}")
+    return InsightDegradationV1(
+        semantic="skipped",  # Updated later by semantic contract state
+        scan=(
+            "timed_out"
+            if bool(summary.get("timed_out"))
+            else "truncated"
+            if bool(summary.get("truncated"))
+            else "ok"
+        ),
+        scope_filter=scope_filter_status,
+        notes=tuple(notes),
+    )
+```
+
+### Cross-Reference
+
+**FrontDoor Insight V1 Contract**: See [06_output_schema.md § FrontDoor Insight V1](06_output_schema.md#frontdoor-insight-v1) for the complete schema specification.
+
+**Bootstrap integration**: Entity queries invoke `resolve_runtime_services()` to obtain `EntityService` for entity scan caching via `QueryEntityScanCacheV1`.
+
+**See also**: [10_runtime_services.md](10_runtime_services.md) for runtime services documentation.
+
+## Batch Query Execution
+
+Location: `tools/cq/query/batch.py` (170 lines)
+
+For multi-query workflows (e.g., `cq run`), batch execution amortizes parse and scan costs by sharing ast-grep scans across multiple queries.
+
+### BatchEntityQuerySession Structure
+
+```python
+@dataclass(frozen=True)
+class BatchEntityQuerySession:
+    """Shared scan session for multiple entity queries."""
+
+    root: Path
+    tc: Toolchain
+    files: list[Path]
+    files_by_rel: dict[str, Path]
+    records: list[SgRecord]
+    scan: ScanContext
+    candidates: EntityCandidates
+    symtable: SymtableEnricher
+```
+
+### Session Building
+
+The `build_batch_session()` function creates a shared scan session:
+
+1. Tabulate files via `list_scan_files()`
+2. Index files by relative path
+3. Scan records:
+   - Normalize record types
+   - Get rules for types
+   - Scan files with rules
+   - Filter by record types
+4. Build scan context via `_build_scan_context()`
+5. Build entity candidates via `_build_entity_candidates()`
+6. Return session with shared symtable enricher
+
+### Scope Filtering
+
+The `filter_files_for_scope()` function filters pre-scanned files by scope constraints:
+
+1. Resolve scope paths via `scope_to_paths()`
+2. Return empty set if no paths
+3. Extract globs via `scope_to_globs()`
+4. For each file:
+   - Check if within scope paths
+   - Check if matches globs (if present)
+   - Add relative path to allowed set
+5. Return allowed paths
+
+## Multi-Language Result Merging
+
+Location: `tools/cq/query/merge.py` (205 lines)
+
+The merge module implements canonical auto-scope result merging for multi-language queries.
+
+### Merge Strategy
+
+The `merge_auto_scope_query_results()` function merges per-language results:
+
+1. Build cross-language diagnostics via `build_cross_language_diagnostics()`:
+   - Count Python and Rust matches
+   - Detect if query is Python-oriented
+   - Generate diagnostic messages
+2. Add capability diagnostics via `build_capability_diagnostics()`:
+   - Extract features from query
+   - Check feature support per language
+   - Generate capability warnings
+3. Merge results via `merge_language_cq_results()`:
+   - Combine findings from all languages
+   - Merge run metadata
+   - Attach diagnostics and payloads
+4. Attach front-door insight for entity queries:
+   - Check if insight already present (from individual language)
+   - If not, resolve runtime services and attach fresh insight
+   - Mark partial slices for missing languages
+
+### Semantic Telemetry Merging
+
+The `_merge_semantic_contract_inputs()` function aggregates per-language telemetry:
+
+```python
+py_attempted, py_applied, py_failed, py_timed_out = _coerce_semantic_telemetry(
+    summary.get("python_semantic_telemetry")
+)
+rust_attempted, rust_applied, rust_failed, rust_timed_out = _coerce_semantic_telemetry(
+    summary.get("rust_semantic_telemetry")
+)
+
+provider = "none"
+if rust_attempted > 0 and py_attempted <= 0:
+    provider = "rust_static"
+elif py_attempted > 0:
+    provider = "python_static"
+
+attempted = py_attempted + rust_attempted
+applied = py_applied + rust_applied
+failed = py_failed + rust_failed
+timed_out = py_timed_out + rust_timed_out
+```
+
+This creates a unified semantic contract input for cross-language insights.
+
+## Symbol Resolution
+
+Location: `tools/cq/query/symbol_resolver.py` (484 lines)
+
+The symbol resolver builds symbol tables and resolves references across files for advanced query features.
+
+### SymbolTable Structure
+
+```python
+@dataclass
+class SymbolTable:
+    """Symbol table for a codebase.
+
+    Provides resolution of names to definitions and tracking of imports.
+    """
+
+    # Mapping from symbol key to definition record
+    definitions: dict[str, SgRecord] = field(default_factory=dict)
+
+    # Mapping from (file, local_name) to import binding
+    imports: dict[tuple[str, str], ImportBinding] = field(default_factory=dict)
+
+    # Unresolved references with reasons
+    unresolved: list[tuple[str, str]] = field(default_factory=list)
+```
+
+### Symbol Key Format
+
+```python
+@dataclass
+class SymbolKey:
+    """Unique identifier for a symbol.
+
+    Format: module_path:qualname
+    Example: src/cli/app:meta_launcher
+    """
+
+    module_path: str
+    qualname: str
+
+    def __str__(self) -> str:
+        return f"{self.module_path}:{self.qualname}"
+```
+
+### Import Tracking
+
+```python
+@dataclass
+class ImportBinding:
+    """Represents an import binding.
+
+    Tracks what name is bound and where it comes from.
+    """
+
+    local_name: str  # Name as used in this module
+    source_module: str  # Module imported from
+    source_name: str | None  # Original name if different (for 'as' imports)
+    is_from_import: bool  # True for 'from x import y'
+```
+
+### Resolution Algorithm
+
+The `resolve()` method implements name resolution:
+
+```python
+def resolve(self, file: str, name: str) -> SgRecord | None:
+    # Check if it's an imported name
+    binding = self.imports.get((file, name))
+    if binding:
+        return self._resolve_import(binding)
+
+    # Try local definitions in same module
+    module_path = _file_to_module_path(file)
+    key = f"{module_path}:{name}"
+    if key in self.definitions:
+        return self.definitions[key]
+
+    # Track as unresolved
+    self.unresolved.append((file, name))
+    return None
+```
+
+## AST-Grep Parser and File Inventory
+
+Location: `tools/cq/query/sg_parser.py` (409 lines)
+
+The sg_parser module provides ast-grep-py integration with cache-backed file inventory.
+
+### sg_scan Function
+
+```python
+def sg_scan(
+    paths: list[Path],
+    record_types: Iterable[str] | Iterable[RecordType] | None = None,
+    root: Path | None = None,
+    globs: list[str] | None = None,
+    lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+) -> list[SgRecord]:
+    """Run ast-grep-py scan and return parsed records."""
+    # 1. Tabulate files (with caching)
+    files = _tabulate_scan_files(paths, root, globs, lang=lang)
+
+    # 2. Build ast-grep rules
+    normalized_record_types = normalize_record_types(record_types)
+    rules = get_rules_for_types(normalized_record_types, lang=lang)
+
+    # 3. Scan files
+    records = scan_files(files, rules, root, lang=lang)
+
+    # 4. Filter by record types
+    return filter_records_by_type(records, normalized_record_types)
+```
+
+### File Inventory Caching
+
+The `_tabulate_scan_files()` function implements cache-backed file inventory:
+
+1. Resolve scope via `resolve_scope()`:
+   - List files via `_list_files_for_inventory()`
+   - Generate inventory token via `_inventory_token_for_root()`
+2. Build cache key via `build_cache_key()`:
+   - Namespace: "file_inventory"
+   - Version: "v1"
+   - Workspace: scope.root
+   - Language: scope.language
+   - Target: scope.scope_hash or scope.language
+   - Extras: scope_globs, inventory_token
+3. Read from cache if enabled:
+   - Deserialize FileInventoryCacheV1 payload
+   - Validate inventory token (file count stability)
+   - Return cached files if valid
+4. Tabulate files from resolved scope
+5. Write to cache if enabled:
+   - Serialize FileInventoryCacheV1 payload
+   - Store with cache key
+
+**Cache payload**:
+```python
+class FileInventoryCacheV1(CqStruct, frozen=True):
+    """Cached file inventory payload for ast-grep scans."""
+
+    files: list[str]
+    snapshot_digest: str = ""
+    inventory_token: dict[str, int] = msgspec.field(default_factory=dict)
 ```
 
 ## Batch Span Collection
@@ -760,7 +989,7 @@ For multi-query workflows (e.g., `cq run`), batch span collection amortizes pars
 
 ### Collection Strategy
 
-The `collect_span_filters()` function (lines 25-52) implements shared parsing:
+The `collect_span_filters()` function implements shared parsing:
 
 ```python
 per_query: list[list[AstGrepMatchSpan]] = [[] for _ in queries]
@@ -781,7 +1010,7 @@ return _build_spans_by_query(per_query=per_query, queries=queries)
 
 ### Per-File Matching
 
-The `_collect_file_matches()` function (lines 55-93) caches SgRoot by language:
+The `_collect_file_matches()` function caches SgRoot by language:
 
 ```python
 roots_by_lang: dict[QueryLanguage, SgNode] = {}
@@ -807,7 +1036,7 @@ This ensures a file with Python and Rust queries is parsed once per language, no
 
 ## Enrichment Subsystem
 
-Location: `tools/cq/query/enrichment.py` (600+ lines)
+Location: `tools/cq/query/enrichment.py` (629 lines)
 
 The enrichment module provides symtable and bytecode analysis for query results. It's lazy-loaded only when needed (scope filters, evidence fields, scope expanders).
 
@@ -823,23 +1052,14 @@ class SymtableInfo:
 ```
 
 Extracted via `analyze_symtable()` which uses Python's `symtable` module:
-
-```python
-table = symtable.symtable(source, filename, "exec")
-
-def _process_symbol_table(st: symtable.SymbolTable) -> None:
-    if st.get_type() in {"function", "class"}:
-        name = st.get_name()
-        local_syms = tuple(sorted(sym.get_name() for sym in st.get_symbols() if sym.is_local()))
-        global_syms = tuple(sorted(sym.get_name() for sym in st.get_symbols() if sym.is_global()))
-        free_syms = tuple(sorted(sym.get_name() for sym in st.get_symbols() if sym.is_free()))
-        nested_count = len(st.get_children())
-
-        result[name] = SymtableInfo(locals=local_syms, globals_used=global_syms, free_vars=free_syms, nested_scopes=nested_count)
-
-    for child in st.get_children():
-        _process_symbol_table(child)
-```
+1. Parse source with `symtable.symtable()`
+2. Walk symbol table tree
+3. For each function/class scope:
+   - Extract local symbols (is_local())
+   - Extract global symbols (is_global())
+   - Extract free variables (is_free())
+   - Count nested scopes (get_children())
+4. Build SymtableInfo mapping
 
 ### BytecodeInfo
 
@@ -852,22 +1072,12 @@ class BytecodeInfo:
 ```
 
 Extracted via `analyze_bytecode()` which uses Python's `dis` module:
-
-```python
-instructions = list(dis.get_instructions(code_object))
-
-for i, instr in enumerate(instructions):
-    if instr.opname in {"LOAD_GLOBAL", "LOAD_NAME"} and instr.argval:
-        load_globals.add(str(instr.argval))
-
-    elif instr.opname == "LOAD_ATTR" and instr.argval:
-        load_attrs.add(str(instr.argval))
-
-    elif instr.opname in {"CALL", "CALL_FUNCTION", "CALL_METHOD"} and i > 0:
-        prev_instr = instructions[i - 1]
-        if prev_instr.opname in {"LOAD_ATTR", "LOAD_GLOBAL", "LOAD_NAME"} and prev_instr.argval:
-            call_functions.add(str(prev_instr.argval))
-```
+1. Disassemble code object with `dis.get_instructions()`
+2. Iterate instructions:
+   - LOAD_GLOBAL, LOAD_NAME → add to load_globals
+   - LOAD_ATTR → add to load_attrs
+   - CALL, CALL_FUNCTION, CALL_METHOD → extract previous instruction's target, add to call_functions
+3. Build BytecodeInfo
 
 ### SymtableEnricher
 
@@ -885,30 +1095,12 @@ class SymtableEnricher:
 ```
 
 Scope filtering via `filter_by_scope()`:
-
-```python
-def filter_by_scope(
-    findings: list[Finding],
-    scope_filter: ScopeFilter,
-    enricher: SymtableEnricher,
-    records: list[SgRecord],
-) -> list[Finding]:
-    filtered: list[Finding] = []
-
-    for finding, record in zip(findings, records):
-        scope_info = enricher.enrich_function_finding(finding, record)
-
-        if scope_filter.scope_type and not _matches_scope_type(scope_info, scope_filter.scope_type):
-            continue
-        if scope_filter.captures and not _matches_captures(scope_info, scope_filter.captures):
-            continue
-        if scope_filter.has_cells is not None and not _matches_has_cells(scope_info, scope_filter.has_cells):
-            continue
-
-        filtered.append(finding)
-
-    return filtered
-```
+1. Iterate findings with records
+2. Enrich each finding with symtable info
+3. Check scope_type filter (closure vs toplevel)
+4. Check captures filter (free_vars contains specified variable)
+5. Check has_cells filter (cell_vars present or not)
+6. Append passing findings to filtered list
 
 ## Execution Requests
 
@@ -934,7 +1126,7 @@ class EntityQueryRequest:
     symtable: SymtableEnricher | None = None  # Shared symtable enricher
 ```
 
-Used by `execute_entity_query_from_records()` (lines 703-743) to skip scanning phase.
+Used by `execute_entity_query_from_records()` to skip scanning phase.
 
 ### PatternQueryRequest
 
@@ -951,13 +1143,13 @@ class PatternQueryRequest:
     decisions: list[FileFilterDecision] | None = None  # File filter audit trail
 ```
 
-Used by `execute_pattern_query_with_files()` (lines 789-848) to skip file tabulation phase.
+Used by `execute_pattern_query_with_files()` to skip file tabulation phase.
 
 ## Execution Context
 
 Location: `tools/cq/query/execution_context.py` (26 lines)
 
-Bundled context for query execution:
+Bundled context for query execution.
 
 ```python
 class QueryExecutionContext(CqStruct, frozen=True):
@@ -971,141 +1163,6 @@ class QueryExecutionContext(CqStruct, frozen=True):
 ```
 
 This struct is threaded through the execution pipeline to provide consistent access to runtime parameters.
-
-## Entity Front-Door Insight Assembly
-
-Location: `tools/cq/query/entity_front_door.py` (455 lines)
-
-The entity front-door module builds and attaches `FrontDoorInsightV1` cards to entity query results, providing target identity, neighborhood preview, risk assessment, and confidence scoring.
-
-### Key Functions
-
-**Primary entry point:**
-```python
-def attach_entity_front_door_insight(
-    result: CqResult,
-    *,
-    relationship_detail_max_matches: int,
-) -> None:
-    """Build and attach front-door insight card to an entity result."""
-```
-
-**Integration flow:**
-1. Extract definition findings from result.key_findings
-2. Build candidate neighborhood from top 3 definitions
-3. Compute risk from neighborhood counters (callers, callees, scope)
-4. Execute language-aware LSP enrichment for candidates (budget-gated)
-5. Derive LSP contract state from telemetry
-6. Mark partial slices for missing languages
-7. Attach insight to result.summary["front_door_insight"]
-
-### Supporting Structs
-
-**EntityLspTelemetry** (dataclass):
-- Per-language LSP attempt/apply/fail/timeout counters
-- Provider tracking (`LspProvider = Literal["pyrefly", "rust_analyzer", "none"]`)
-- Reasons list for degradation tracking
-
-**CandidateNeighborhood** (dataclass):
-- `primary_target: Finding | None` — Top definition candidate
-- `candidates: list[Finding]` — Top 3 definition findings
-- `neighborhood: InsightNeighborhoodV1` — Aggregated slices (callers, callees, hierarchy_or_scope)
-- `confidence: InsightConfidenceV1` — Derived from candidate scoring
-
-### LSP Enrichment Integration
-
-**Language-aware routing:**
-```python
-for finding in candidates:
-    # Resolve target context (file, language)
-    target_context = _resolve_lsp_target_context(result, finding)
-    if target_context is None:
-        continue
-
-    # Enrich via language-specific adapter
-    payload, timed_out = enrich_with_language_lsp(
-        LanguageLspEnrichmentRequest(
-            language=target_language,
-            mode="entity",
-            root=Path(result.run.root),
-            file_path=target_file,
-            line=max(1, int(anchor.line)),
-            col=int(anchor.col or 0),
-            symbol_hint=str(finding.details.get("name")),
-        )
-    )
-
-    # Augment insight with LSP data
-    insight = augment_insight_with_lsp(insight, payload, preview_per_slice=5)
-```
-
-**Provider mapping:**
-- Python files (`.py`, `.pyi`) → `pyrefly` provider
-- Rust files (`.rs`) → `rust_analyzer` provider
-
-**Budget controls:**
-- LSP enrichment skipped when `match_count > relationship_detail_max_matches`
-- LSP enrichment skipped when `CQ_ENABLE_LSP` is disabled
-- Per-candidate LSP requests use `budget_for_mode("entity")` timeouts
-
-### LSP Contract State Derivation
-
-```python
-lsp_state = derive_lsp_contract_state(
-    LspContractStateInputV1(
-        provider=telemetry.lsp_provider,
-        available=telemetry.lsp_provider != "none",
-        attempted=telemetry.lsp_attempted,
-        applied=telemetry.lsp_applied,
-        failed=max(telemetry.lsp_failed, telemetry.lsp_attempted - telemetry.lsp_applied),
-        timed_out=telemetry.lsp_timed_out,
-        reasons=tuple(dict.fromkeys(telemetry.reasons)),
-    )
-)
-```
-
-**Output:** Canonical `LspStatus` embedded in insight.degradation.lsp field.
-
-### Neighborhood Building
-
-**Strategy:** Aggregate heuristic data from definition findings:
-
-```python
-# Callers slice
-callers_total = sum(_detail_int(finding, "caller_count") for finding in candidates)
-caller_preview = tuple(
-    _preview_node(finding, "caller")
-    for finding in candidates
-    if _detail_int(finding, "caller_count") > 0
-)
-
-# Callees slice
-callees_total = sum(_detail_int(finding, "callee_count") for finding in candidates)
-callee_preview = tuple(
-    _preview_node(finding, "callee")
-    for finding in candidates
-    if _detail_int(finding, "callee_count") > 0
-)
-
-# Hierarchy/scope slice (enclosing scopes)
-scope_values = {
-    str(finding.details.get("enclosing_scope"))
-    for finding in candidates
-    if isinstance(finding.details.get("enclosing_scope"), str)
-    and str(finding.details.get("enclosing_scope")) not in {"", "<module>"}
-}
-scope_preview = tuple(SemanticNodeRefV1(...) for value in sorted(scope_values))
-```
-
-**Result:** `InsightNeighborhoodV1` with four canonical slices (callers, callees, references, hierarchy_or_scope).
-
-### Cross-Reference
-
-**Bootstrap integration:** Entity queries invoke `resolve_runtime_services()` to obtain `EntityService` for entity scan caching via `QueryEntityScanCacheV1`.
-
-**Cache integration:** Entity scan results cached in persistent DiskCache layer.
-
-**See:** [10_runtime_services.md](10_runtime_services.md) for runtime services documentation.
 
 ## Multi-Language Support
 
@@ -1143,7 +1200,10 @@ LANGUAGE_FILE_EXTENSIONS: dict[QueryLanguage, tuple[str, ...]] = {
 
 ### Scope Enforcement
 
-Extension filtering is **authoritative**: when `lang=rust`, only `.rs` files are scanned. When `lang=python`, only `.py`/`.pyi` files are scanned. When `lang=auto`, the union is scanned and results are partitioned by detected language.
+Extension filtering is **authoritative**:
+- `lang=rust`: Only `.rs` files are scanned
+- `lang=python`: Only `.py`/`.pyi` files are scanned
+- `lang=auto`: Union is scanned and results are partitioned by detected language
 
 ```python
 def is_path_in_lang_scope(path: str | Path, scope: QueryLanguageScope) -> bool:
@@ -1180,7 +1240,7 @@ def get_metavar_kind(metavar: str) -> MetaVarKind:
 
 ### Capture Parsing
 
-The `parse_metavariables()` function (lines 16-80) extracts captures from ast-grep JSON output:
+The `parse_metavariables()` function extracts captures from ast-grep JSON output:
 
 ```python
 meta_vars = match_result.get("metaVariables")
@@ -1202,7 +1262,7 @@ for name, capture_list in meta_vars.get("multi", {}).items():
 
 ### Filter Application
 
-The `apply_metavar_filters()` function (lines 113-141) validates captures against filter specs:
+The `apply_metavar_filters()` function validates captures against filter specs:
 
 ```python
 for filter_spec in filters:
@@ -1216,7 +1276,7 @@ for filter_spec in filters:
 return True  # All filters passed
 ```
 
-The `MetaVarFilter.matches()` method (lines 208-224) applies regex with optional negation:
+The `MetaVarFilter.matches()` method applies regex with optional negation:
 
 ```python
 def matches(self, capture: MetaVarCapture) -> bool:
@@ -1224,7 +1284,7 @@ def matches(self, capture: MetaVarCapture) -> bool:
     return not match if self.negate else match
 ```
 
-## Architectural Observations for Improvement Proposals
+## Architectural Observations
 
 ### Parse-Compile-Execute Pipeline
 
@@ -1377,3 +1437,20 @@ The executor doesn't cache intermediate results:
 - Cache symtable/bytecode enrichment per file
 - Implement incremental query evaluation (reuse previous results when query changes minimally)
 - Add query cost estimation and adaptive execution (switch strategies based on estimated cost)
+
+## Cross-References
+
+- **FrontDoor Insight V1 Schema**: [06_output_schema.md § FrontDoor Insight V1](06_output_schema.md#frontdoor-insight-v1)
+- **AST-Grep Pattern Matching**: [07_analysis_engines.md § AST-Grep Engine](07_analysis_engines.md#ast-grep-engine)
+- **Tree-Sitter Queries**: [07_analysis_engines.md § Tree-Sitter Engine](07_analysis_engines.md#tree-sitter-engine)
+- **Runtime Services**: [10_runtime_services.md](10_runtime_services.md)
+- **Multi-Language Orchestration**: [05_multilang_orchestration.md](05_multilang_orchestration.md)
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 0.1.0 | 2025-01-15 | Initial architecture documentation |
+| 0.2.0 | 2025-02-01 | Added multi-language support, semantic enrichment |
+| 0.3.0 | 2025-02-10 | Added batch execution, symbol resolution |
+| 0.4.0 | 2026-02-15 | Added entity front-door insight assembly, updated LOC counts, new modules |

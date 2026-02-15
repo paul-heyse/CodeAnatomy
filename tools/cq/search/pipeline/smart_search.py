@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import multiprocessing
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -2093,7 +2094,20 @@ def _empty_enrichment_telemetry() -> dict[str, object]:
                 "tree_sitter": 0.0,
             },
         },
-        "rust": {"applied": 0, "degraded": 0, "skipped": 0},
+        "rust": {
+            "applied": 0,
+            "degraded": 0,
+            "skipped": 0,
+            "query_runtime": {
+                "did_exceed_match_limit": 0,
+                "cancelled": 0,
+            },
+            "query_pack_tags": 0,
+            "distribution_profile_hits": 0,
+            "drift_breaking_profile_hits": 0,
+            "drift_removed_node_kinds": 0,
+            "drift_removed_fields": 0,
+        },
     }
 
 
@@ -2153,6 +2167,72 @@ def _attach_enrichment_cache_stats(telemetry: dict[str, object]) -> None:
         python_bucket["tree_sitter_cache"] = get_tree_sitter_python_cache_stats()
 
 
+def _accumulate_rust_enrichment(
+    lang_bucket: dict[str, object],
+    payload: dict[str, object],
+) -> None:
+    def _int_counter(value: object) -> int:
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    tags = payload.get("query_pack_tags")
+    if isinstance(tags, list):
+        lang_bucket["query_pack_tags"] = _int_counter(lang_bucket.get("query_pack_tags")) + len(
+            tags
+        )
+    _accumulate_rust_runtime(lang_bucket=lang_bucket, payload=payload, counter=_int_counter)
+    _accumulate_rust_bundle(lang_bucket=lang_bucket, payload=payload, counter=_int_counter)
+
+
+def _accumulate_rust_runtime(
+    *,
+    lang_bucket: dict[str, object],
+    payload: dict[str, object],
+    counter: Callable[[object], int],
+) -> None:
+    runtime_payload = payload.get("query_runtime")
+    runtime_bucket = lang_bucket.get("query_runtime")
+    if not isinstance(runtime_payload, dict) or not isinstance(runtime_bucket, dict):
+        return
+    if bool(runtime_payload.get("did_exceed_match_limit")):
+        runtime_bucket["did_exceed_match_limit"] = (
+            counter(runtime_bucket.get("did_exceed_match_limit")) + 1
+        )
+    if bool(runtime_payload.get("cancelled")):
+        runtime_bucket["cancelled"] = counter(runtime_bucket.get("cancelled")) + 1
+
+
+def _accumulate_rust_bundle(
+    *,
+    lang_bucket: dict[str, object],
+    payload: dict[str, object],
+    counter: Callable[[object], int],
+) -> None:
+    bundle = payload.get("query_pack_bundle")
+    if not isinstance(bundle, dict):
+        return
+    if bool(bundle.get("distribution_included")):
+        lang_bucket["distribution_profile_hits"] = (
+            counter(lang_bucket.get("distribution_profile_hits")) + 1
+        )
+    if bundle.get("drift_compatible") is False:
+        lang_bucket["drift_breaking_profile_hits"] = (
+            counter(lang_bucket.get("drift_breaking_profile_hits")) + 1
+        )
+    schema_diff = bundle.get("drift_schema_diff")
+    if not isinstance(schema_diff, dict):
+        return
+    removed_nodes = schema_diff.get("removed_node_kinds")
+    removed_fields = schema_diff.get("removed_fields")
+    if isinstance(removed_nodes, list):
+        lang_bucket["drift_removed_node_kinds"] = counter(
+            lang_bucket.get("drift_removed_node_kinds")
+        ) + len(removed_nodes)
+    if isinstance(removed_fields, list):
+        lang_bucket["drift_removed_fields"] = counter(
+            lang_bucket.get("drift_removed_fields")
+        ) + len(removed_fields)
+
+
 def _build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, object]:
     """Build additive observability stats for enrichment stages.
 
@@ -2169,8 +2249,12 @@ def _build_enrichment_telemetry(matches: list[EnrichedMatch]) -> dict[str, objec
         payload = match.python_enrichment if match.language == "python" else match.rust_tree_sitter
         status = _status_from_enrichment(payload)
         lang_bucket[status] = cast("int", lang_bucket.get(status, 0)) + 1
-        if match.language == "python" and isinstance(payload, dict):
+        if not isinstance(payload, dict):
+            continue
+        if match.language == "python":
             _accumulate_python_enrichment(lang_bucket, payload)
+        elif match.language == "rust":
+            _accumulate_rust_enrichment(lang_bucket, payload)
 
     _attach_enrichment_cache_stats(telemetry)
     return telemetry

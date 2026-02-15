@@ -1,0 +1,38 @@
+"""Tests for Rust tags runtime helpers."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from tools.cq.search.tree_sitter.tags.runtime import build_tag_events
+
+
+@dataclass(frozen=True)
+class _FakeNode:
+    start_byte: int
+    end_byte: int
+
+
+def test_build_tag_events_emits_definition_and_reference_rows() -> None:
+    source_bytes = b"fn demo() { call(); }"
+    matches = [
+        (
+            0,
+            {
+                "role.definition": [_FakeNode(3, 7)],
+                "name": [_FakeNode(3, 7)],
+            },
+        ),
+        (
+            1,
+            {
+                "role.reference": [_FakeNode(12, 16)],
+                "name": [_FakeNode(12, 16)],
+            },
+        ),
+    ]
+    rows = build_tag_events(matches=matches, source_bytes=source_bytes)
+    assert len(rows) == 2
+    assert rows[0].role == "definition"
+    assert rows[0].name == "demo"
+    assert rows[1].role == "reference"

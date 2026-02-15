@@ -94,6 +94,7 @@ def collect_tree_sitter_diagnostics(
         settings=QueryExecutionSettingsV1(
             match_limit=match_limit,
             require_containment=True,
+            window_mode="containment_preferred",
         ),
     )
     rows: list[TreeSitterDiagnosticV1] = []

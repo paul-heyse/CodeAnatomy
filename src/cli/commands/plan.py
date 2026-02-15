@@ -7,7 +7,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from cyclopts import Parameter, validators
 
@@ -103,7 +103,7 @@ class _PlanRuntimeMetadata:
     runtime_profile_hash: str
 
 
-def plan_command(  # noqa: PLR0914
+def plan_command(
     repo_root: Annotated[
         Path,
         Parameter(validator=validators.Path(exists=True, dir_okay=True)),
@@ -125,9 +125,64 @@ def plan_command(  # noqa: PLR0914
     int
         Exit status code.
     """
+    _ = run_context
     resolved_root = repo_root.resolve()
-    config_contents = dict(run_context.config_contents) if run_context else {}
-    config_contents.setdefault("repo_root", str(resolved_root))
+    try:
+        payload = _build_plan_payload(resolved_root=resolved_root, options=options)
+    except RuntimeError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+
+    _write_payload(payload, options.output_file, options.output_format)
+    return 0
+
+
+def _load_plan_engine_module() -> Any:
+    try:
+        return importlib.import_module("codeanatomy_engine")
+    except ImportError as exc:
+        msg = (
+            "codeanatomy_engine Rust extension not built. "
+            "Run: bash scripts/rebuild_rust_artifacts.sh"
+        )
+        error_message = "Error: " + msg
+        raise RuntimeError(error_message) from exc
+
+
+def _load_plan_session_factory(*, engine_module: Any, profile: str) -> object:
+    try:
+        session_factory_cls = engine_module.SessionFactory
+    except AttributeError as exc:
+        error_message = f"Plan runtime initialization failed: {exc}"
+        raise RuntimeError(error_message) from exc
+
+    try:
+        return session_factory_cls.from_class(profile)
+    except (TypeError, ValueError, RuntimeError) as exc:
+        error_message = f"Plan runtime initialization failed: {exc}"
+        raise RuntimeError(error_message) from exc
+
+
+def _build_plan_request_payload(
+    *,
+    output_targets: list[str],
+    output_root: Path,
+    rulepack_profile: str,
+) -> dict[str, object]:
+    output_locations = {
+        name: str(output_root / "build" / name) for name in output_targets
+    }
+    return {
+        "input_locations": {},
+        "output_targets": output_targets,
+        "rulepack_profile": rulepack_profile,
+        "output_locations": output_locations,
+        "runtime": None,
+    }
+
+
+def _build_plan_payload(*, resolved_root: Path, options: PlanOptions) -> object:
+    import msgspec
 
     from planning_engine.output_contracts import ENGINE_CPG_OUTPUTS
     from planning_engine.spec_contracts import SemanticExecutionSpec
@@ -139,40 +194,20 @@ def plan_command(  # noqa: PLR0914
         runtime_profile_name=options.engine_profile,
         runtime_profile_hash="rust_session_factory",
     )
+    engine_module = _load_plan_engine_module()
+    session_factory = _load_plan_session_factory(
+        engine_module=engine_module,
+        profile=options.engine_profile,
+    )
     ir = build_semantic_ir()
     output_targets = list(ENGINE_CPG_OUTPUTS)
-    output_locations = {name: str(resolved_root / "build" / name) for name in output_targets}
+    build_request = _build_plan_request_payload(
+        output_targets=output_targets,
+        output_root=resolved_root,
+        rulepack_profile=options.rulepack_profile,
+    )
     try:
-        engine_module = importlib.import_module("codeanatomy_engine")
-    except ImportError:
-        msg = (
-            "codeanatomy_engine Rust extension not built. "
-            "Run: bash scripts/rebuild_rust_artifacts.sh"
-        )
-        sys.stderr.write(f"Error: {msg}\n")
-        return 1
-    try:
-        session_factory_cls = engine_module.SessionFactory
-        session_factory = session_factory_cls.from_class(options.engine_profile)
-    except AttributeError as exc:
-        sys.stderr.write(f"Plan runtime initialization failed: {exc}\n")
-        return 1
-    except (TypeError, ValueError, RuntimeError) as exc:
-        sys.stderr.write(f"Plan runtime initialization failed: {exc}\n")
-        return 1
-
-    import msgspec
-
-    compiler = engine_module.SemanticPlanCompiler()
-    build_request: dict[str, object] = {
-        "input_locations": {},
-        "output_targets": output_targets,
-        "rulepack_profile": options.rulepack_profile,
-        "output_locations": output_locations,
-        "runtime": None,
-    }
-
-    try:
+        compiler = engine_module.SemanticPlanCompiler()
         spec_json = compiler.build_spec_json(
             msgspec.json.encode(to_builtins(ir, str_keys=True)).decode(),
             msgspec.json.encode(build_request).decode(),
@@ -181,10 +216,10 @@ def plan_command(  # noqa: PLR0914
         compiled = compiler.compile(spec_json)
         compile_metadata = json.loads(compiler.compile_metadata_json(session_factory, spec_json))
     except (ValueError, RuntimeError) as exc:
-        sys.stderr.write(f"Plan compilation failed: {exc}\n")
-        return 1
+        error_message = f"Plan compilation failed: {exc}"
+        raise RuntimeError(error_message) from exc
 
-    payload = _build_payload(
+    return _build_payload(
         spec=spec,
         compiled=compiled,
         compile_metadata=compile_metadata,
@@ -198,9 +233,6 @@ def plan_command(  # noqa: PLR0914
             output_format=options.output_format,
         ),
     )
-
-    _write_payload(payload, options.output_file, options.output_format)
-    return 0
 
 
 def _build_payload(

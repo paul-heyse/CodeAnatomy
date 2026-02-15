@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from tools.cq.search.query_pack_lint import lint_search_query_packs
 from tools.cq.search.tree_sitter_python import (
     clear_tree_sitter_python_cache,
     enrich_python_context_by_byte_range,
     is_tree_sitter_python_available,
-    lint_python_query_packs,
 )
 
 
@@ -21,8 +21,9 @@ def _clear_tree_cache() -> None:
     reason="tree-sitter-python is not available in this environment",
 )
 def test_lint_python_query_packs_has_no_errors() -> None:
-    errors = lint_python_query_packs()
-    assert errors == []
+    result = lint_search_query_packs()
+    python_errors = [row for row in result.errors if row.startswith("python:")]
+    assert python_errors == []
 
 
 @pytest.mark.skipif(

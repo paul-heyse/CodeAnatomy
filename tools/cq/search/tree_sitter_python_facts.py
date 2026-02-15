@@ -9,9 +9,15 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.search.tree_sitter_match_row_contracts import ObjectEvidenceRowV1
+from tools.cq.search.tree_sitter_match_rows import build_match_rows
+from tools.cq.search.tree_sitter_pack_contracts import load_pack_rules
 from tools.cq.search.tree_sitter_python import is_tree_sitter_python_available, parse_python_tree
 from tools.cq.search.tree_sitter_query_registry import load_query_pack_sources
-from tools.cq.search.tree_sitter_runtime import run_bounded_query_captures
+from tools.cq.search.tree_sitter_runtime import (
+    run_bounded_query_captures,
+    run_bounded_query_matches,
+)
 from tools.cq.search.tree_sitter_runtime_contracts import (
     QueryExecutionSettingsV1,
     QueryWindowV1,
@@ -48,7 +54,17 @@ def _compile_query(pack_name: str, source: str) -> Query:
         msg = "tree_sitter query bindings are unavailable"
         raise RuntimeError(msg)
     _ = pack_name
-    return _TreeSitterQuery(_python_language(), source)
+    query = _TreeSitterQuery(_python_language(), source)
+    rules = load_pack_rules("python")
+    pattern_count = int(getattr(query, "pattern_count", 0))
+    for pattern_idx in range(pattern_count):
+        if rules.require_rooted and not bool(query.is_pattern_rooted(pattern_idx)):
+            msg = f"python query pattern not rooted: {pattern_idx}"
+            raise ValueError(msg)
+        if rules.forbid_non_local and bool(query.is_pattern_non_local(pattern_idx)):
+            msg = f"python query pattern non-local: {pattern_idx}"
+            raise ValueError(msg)
+    return query
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
@@ -163,10 +179,12 @@ def _pack_sources() -> tuple[tuple[str, str], ...]:
 def _collect_query_pack_captures(
     *,
     root: Node,
+    source_bytes: bytes,
     window: QueryWindowV1,
     settings: QueryExecutionSettingsV1,
-) -> tuple[dict[str, list[Node]], dict[str, object]]:
+) -> tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], dict[str, object]]:
     all_captures: dict[str, list[Node]] = {}
+    all_rows: list[ObjectEvidenceRowV1] = []
     telemetry: dict[str, object] = {}
     for pack_name, query_source in _pack_sources():
         try:
@@ -177,16 +195,32 @@ def _collect_query_pack_captures(
                 windows=(window,),
                 settings=settings,
             )
+            matches, match_telemetry = run_bounded_query_matches(
+                query,
+                root,
+                windows=(window,),
+                settings=QueryExecutionSettingsV1(
+                    match_limit=settings.match_limit,
+                    max_start_depth=settings.max_start_depth,
+                    budget_ms=settings.budget_ms,
+                    require_containment=True,
+                ),
+            )
         except (RuntimeError, TypeError, ValueError, AttributeError):
             continue
-        telemetry[pack_name] = msgspec.to_builtins(run_telemetry)
+        telemetry[pack_name] = {
+            "captures": msgspec.to_builtins(run_telemetry),
+            "matches": msgspec.to_builtins(match_telemetry),
+        }
         for capture_name, nodes in captures.items():
             bucket = all_captures.setdefault(capture_name, [])
             bucket.extend(nodes)
-    return all_captures, telemetry
+        all_rows.extend(build_match_rows(query=query, matches=matches, source_bytes=source_bytes))
+    return all_captures, tuple(all_rows), telemetry
 
 
 def _extract_fact_lists(
+    rows: tuple[ObjectEvidenceRowV1, ...],
     all_captures: dict[str, list[Node]],
     source_bytes: bytes,
 ) -> tuple[list[str], list[str], list[str], list[str], list[str], list[str], list[str]]:
@@ -222,15 +256,102 @@ def _extract_fact_lists(
     )
     local_defs = _unique_text(all_captures, source_bytes, ("local.definition", "assignment.target"))
     local_refs = _unique_text(all_captures, source_bytes, ("local.reference", "binding.identifier"))
-    return (
-        def_names,
-        reference_names,
-        call_targets,
-        import_modules,
-        import_aliases,
-        local_defs,
-        local_refs,
+
+    _extend_with_rows(
+        target=def_names,
+        values=_row_capture_values(
+            rows=rows,
+            emit="definitions",
+            capture_keys=("def.function.name", "def.class.name"),
+        ),
     )
+    _extend_with_rows(
+        target=reference_names,
+        values=_row_capture_values(
+            rows=rows,
+            emit="references",
+            capture_keys=("ref.identifier", "ref.attribute"),
+        ),
+    )
+    _extend_with_rows(
+        target=call_targets,
+        values=_row_capture_values(
+            rows=rows,
+            emit="calls",
+            capture_keys=("call.target.identifier", "call.target.attribute"),
+        ),
+    )
+    _extend_with_rows(
+        target=import_modules,
+        values=_row_capture_values(
+            rows=rows,
+            emit="imports",
+            capture_keys=("import.module", "import.from.module", "import.from.name"),
+        ),
+    )
+    _extend_with_rows(
+        target=import_aliases,
+        values=_row_capture_values(
+            rows=rows,
+            emit="imports",
+            capture_keys=("import.alias", "import.from.alias"),
+        ),
+    )
+    _extend_with_rows(
+        target=local_defs,
+        values=_row_capture_values(
+            rows=rows,
+            emit="locals",
+            row_kind="local_definition",
+            capture_keys=("local.definition",),
+        ),
+    )
+    _extend_with_rows(
+        target=local_refs,
+        values=_row_capture_values(
+            rows=rows,
+            emit="locals",
+            row_kind="local_reference",
+            capture_keys=("local.reference",),
+        ),
+    )
+    return (
+        def_names[:_MAX_CANDIDATES],
+        reference_names[:_MAX_CANDIDATES],
+        call_targets[:_MAX_CANDIDATES],
+        import_modules[:_MAX_CANDIDATES],
+        import_aliases[:_MAX_CANDIDATES],
+        local_defs[:_MAX_CANDIDATES],
+        local_refs[:_MAX_CANDIDATES],
+    )
+
+
+def _row_capture_values(
+    *,
+    rows: tuple[ObjectEvidenceRowV1, ...],
+    emit: str,
+    capture_keys: tuple[str, ...],
+    row_kind: str | None = None,
+) -> list[str]:
+    values: list[str] = []
+    for row in rows:
+        if row.emit != emit:
+            continue
+        if row_kind is not None and row.kind != row_kind:
+            continue
+        for key in capture_keys:
+            value = row.captures.get(key)
+            if isinstance(value, str) and value:
+                values.append(value)
+                break
+    return values
+
+
+def _extend_with_rows(*, target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value in target:
+            continue
+        target.append(value)
 
 
 def _build_candidate_rows(names: list[str], *, kind: str) -> list[dict[str, object]]:
@@ -263,6 +384,7 @@ def _build_payload(
     anchor: Node,
     source_bytes: bytes,
     captures: dict[str, list[Node]],
+    rows: tuple[ObjectEvidenceRowV1, ...],
     telemetry: dict[str, object],
     facts: tuple[list[str], list[str], list[str], list[str], list[str], list[str], list[str]],
 ) -> dict[str, object]:
@@ -285,7 +407,9 @@ def _build_payload(
         kind="tree_sitter",
     )
     binding_candidates = _build_binding_candidates([*local_defs, *reference_names], scope_chain)
-    resolved_call_target = call_targets[0] if call_targets else _anchor_call_target(anchor, source_bytes)
+    resolved_call_target = (
+        call_targets[0] if call_targets else _anchor_call_target(anchor, source_bytes)
+    )
     payload: dict[str, object] = {
         "language": "python",
         "enrichment_status": "applied",
@@ -313,6 +437,7 @@ def _build_payload(
         },
         "parse_quality": parse_quality,
         "tree_sitter_query_telemetry": telemetry,
+        "query_match_rows": [msgspec.to_builtins(row) for row in rows],
     }
     if parse_quality.get("has_error") is True:
         payload["degrade_reason"] = "parse_error"
@@ -359,16 +484,18 @@ def build_python_tree_sitter_facts(
         start_byte=anchor_start if anchor_end > anchor_start else byte_start,
         end_byte=anchor_end if anchor_end > anchor_start else byte_end,
     )
-    captures, telemetry = _collect_query_pack_captures(
+    captures, rows, telemetry = _collect_query_pack_captures(
         root=root,
+        source_bytes=source_bytes,
         window=window,
         settings=settings,
     )
-    facts = _extract_fact_lists(captures, source_bytes)
+    facts = _extract_fact_lists(rows, captures, source_bytes)
     return _build_payload(
         anchor=anchor,
         source_bytes=source_bytes,
         captures=captures,
+        rows=rows,
         telemetry=telemetry,
         facts=facts,
     )

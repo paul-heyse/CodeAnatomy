@@ -367,7 +367,9 @@ def test_render_query_import_finding_attaches_code_facts(tmp_path: Path) -> None
     assert "Symbol Role: N/A — enrichment unavailable" not in output
 
 
-def test_render_query_finding_attaches_context_and_enrichment(tmp_path: Path) -> None:
+def test_render_query_finding_attaches_enrichment_without_context_by_default(
+    tmp_path: Path,
+) -> None:
     repo = tmp_path / "repo"
     src = repo / "src"
     src.mkdir(parents=True)
@@ -394,7 +396,7 @@ def test_render_query_finding_attaches_context_and_enrichment(tmp_path: Path) ->
     )
     result = CqResult(run=run, key_findings=[finding])
     output = render_markdown(result)
-    assert "Context (lines" in output
+    assert "Context (lines" not in output
     assert "Code Facts:" in output
     assert "Details:" not in output
 

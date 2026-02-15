@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import msgspec
@@ -452,7 +453,7 @@ def _diagnostics_sink_from_value(value: str) -> DiagnosticsSink | None:
     raise ValueError(msg)
 
 
-def resolve_runtime_profile(  # noqa: PLR0914
+def resolve_runtime_profile(
     profile: str,
     *,
     determinism: DeterminismTier | None = None,
@@ -467,80 +468,13 @@ def resolve_runtime_profile(  # noqa: PLR0914
     df_profile = DataFusionRuntimeProfile(
         policies=PolicyBundleConfig(config_policy_name=profile),
     )
-    rust_profile_hash: str | None = None
-    rust_settings_hash: str | None = None
-    try:
-        import importlib
-
-        profile_class = _session_factory_class(profile)
-        engine_module = importlib.import_module("codeanatomy_engine")
-        rust_factory = engine_module.SessionFactory.from_class(profile_class)
-        profile_snapshot_value = getattr(rust_factory, "profile_snapshot", None)
-        profile_payload: dict[str, object] = {}
-        if callable(profile_snapshot_value):
-            candidate_payload = profile_snapshot_value()
-            if isinstance(candidate_payload, dict):
-                profile_payload = candidate_payload
-        rust_profile_hash_value = getattr(rust_factory, "profile_hash", None)
-        if callable(rust_profile_hash_value):
-            candidate = rust_profile_hash_value()
-            if isinstance(candidate, str) and candidate:
-                rust_profile_hash = candidate
-        rust_settings_hash_value = getattr(rust_factory, "settings_hash", None)
-        if callable(rust_settings_hash_value):
-            candidate = rust_settings_hash_value()
-            if isinstance(candidate, str) and candidate:
-                rust_settings_hash = candidate
-        if not profile_payload:
-            raw_profile_json = rust_factory.profile_json()
-            raw_profile_payload = msgspec.json.decode(raw_profile_json)
-            profile_payload = (
-                cast("dict[str, object]", raw_profile_payload)
-                if isinstance(raw_profile_payload, dict)
-                else {}
-            )
-        rust_profile_hash = (
-            rust_profile_hash
-            if rust_profile_hash is not None
-            else cast("str | None", profile_payload.get("profile_hash"))
-        )
-        rust_settings_hash = (
-            rust_settings_hash
-            if rust_settings_hash is not None
-            else cast("str | None", profile_payload.get("settings_hash"))
-        )
-        target_partitions = profile_payload.get("target_partitions")
-        batch_size = profile_payload.get("batch_size")
-        memory_pool_bytes = profile_payload.get("memory_pool_bytes")
-        df_profile = msgspec.structs.replace(
-            df_profile,
-            execution=msgspec.structs.replace(
-                df_profile.execution,
-                target_partitions=(
-                    int(target_partitions)
-                    if isinstance(target_partitions, (int, float))
-                    else df_profile.execution.target_partitions
-                ),
-                batch_size=(
-                    int(batch_size)
-                    if isinstance(batch_size, (int, float))
-                    else df_profile.execution.batch_size
-                ),
-                memory_limit_bytes=(
-                    int(memory_pool_bytes)
-                    if isinstance(memory_pool_bytes, (int, float))
-                    else df_profile.execution.memory_limit_bytes
-                ),
-                memory_pool=(
-                    "fair"
-                    if isinstance(memory_pool_bytes, (int, float))
-                    else df_profile.execution.memory_pool
-                ),
-            ),
-        )
-    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
-        rust_profile_hash = None
-        rust_settings_hash = None
+    rust_profile_snapshot = _collect_rust_profile_snapshot(profile)
+    rust_profile_hash = rust_profile_snapshot.profile_hash
+    rust_settings_hash = rust_profile_snapshot.settings_hash
+    df_profile = _apply_runtime_profile_payload(
+        df_profile=df_profile,
+        profile_payload=rust_profile_snapshot.payload,
+    )
     df_profile = _apply_named_profile_overrides(profile, df_profile)
     df_profile = _apply_memory_overrides(profile, df_profile, df_profile.settings_payload())
     df_profile = _apply_env_overrides(df_profile)
@@ -551,6 +485,110 @@ def resolve_runtime_profile(  # noqa: PLR0914
         rust_profile_hash=rust_profile_hash,
         rust_settings_hash=rust_settings_hash,
     )
+
+
+@dataclass(frozen=True)
+class _RustProfileSnapshot:
+    payload: dict[str, object]
+    profile_hash: str | None
+    settings_hash: str | None
+
+
+def _collect_rust_profile_snapshot(profile: str) -> _RustProfileSnapshot:
+    try:
+        import importlib
+
+        engine_module = importlib.import_module("codeanatomy_engine")
+        rust_factory = engine_module.SessionFactory.from_class(
+            _session_factory_class(profile),
+        )
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+        return _RustProfileSnapshot(payload={}, profile_hash=None, settings_hash=None)
+
+    profile_payload = _extract_rust_profile_payload(rust_factory)
+    profile_hash = _extract_rust_factory_text(rust_factory, "profile_hash")
+    settings_hash = _extract_rust_factory_text(rust_factory, "settings_hash")
+    return _RustProfileSnapshot(
+        payload=profile_payload,
+        profile_hash=(
+            profile_hash
+            if profile_hash is not None
+            else cast("str | None", profile_payload.get("profile_hash"))
+        ),
+        settings_hash=(
+            settings_hash
+            if settings_hash is not None
+            else cast("str | None", profile_payload.get("settings_hash"))
+        ),
+    )
+
+
+def _extract_rust_profile_payload(factory: object) -> dict[str, object]:
+    profile_snapshot_value = getattr(factory, "profile_snapshot", None)
+    if callable(profile_snapshot_value):
+        profile_payload = profile_snapshot_value()
+        if isinstance(profile_payload, dict):
+            return cast("dict[str, object]", profile_payload)
+    profile_json_getter = getattr(factory, "profile_json", None)
+    if not callable(profile_json_getter):
+        return {}
+    raw_profile_payload_source = profile_json_getter()
+    if not isinstance(raw_profile_payload_source, (str, bytes, bytearray, memoryview)):
+        return {}
+    raw_profile_payload = msgspec.json.decode(raw_profile_payload_source)
+    return (
+        cast("dict[str, object]", raw_profile_payload)
+        if isinstance(raw_profile_payload, dict)
+        else {}
+    )
+
+
+def _extract_rust_factory_text(factory: object, attr_name: str) -> str | None:
+    getter = getattr(factory, attr_name, None)
+    if not callable(getter):
+        return None
+    candidate = getter()
+    if isinstance(candidate, str) and candidate:
+        return candidate
+    return None
+
+
+def _apply_runtime_profile_payload(
+    *,
+    df_profile: DataFusionRuntimeProfile,
+    profile_payload: Mapping[str, object],
+) -> DataFusionRuntimeProfile:
+    target_partitions = _runtime_profile_int_value(profile_payload.get("target_partitions"))
+    batch_size = _runtime_profile_int_value(profile_payload.get("batch_size"))
+    memory_pool_bytes = _runtime_profile_int_value(
+        profile_payload.get("memory_pool_bytes")
+    )
+    return msgspec.structs.replace(
+        df_profile,
+        execution=msgspec.structs.replace(
+            df_profile.execution,
+            target_partitions=(
+                target_partitions if target_partitions is not None else df_profile.execution.target_partitions
+            ),
+            batch_size=(
+                batch_size if batch_size is not None else df_profile.execution.batch_size
+            ),
+            memory_limit_bytes=(
+                memory_pool_bytes if memory_pool_bytes is not None else df_profile.execution.memory_limit_bytes
+            ),
+            memory_pool=(
+                "fair"
+                if memory_pool_bytes is not None
+                else df_profile.execution.memory_pool
+            ),
+        ),
+    )
+
+
+def _runtime_profile_int_value(value: object) -> int | None:
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
 
 
 def _session_factory_class(profile: str) -> str:

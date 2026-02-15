@@ -306,6 +306,54 @@ class DiskcacheBackend:
         else:
             return removed
 
+    def touch(self, key: str, *, expire: int | None = None) -> bool:
+        """Refresh key TTL and return acknowledgement.
+
+        Returns:
+            bool: ``True`` when the key TTL was refreshed, ``False`` otherwise.
+        """
+        namespace = self._namespace_from_key(key)
+        ttl = expire if expire is not None else self.default_ttl_seconds
+        try:
+            return bool(self.cache.touch(key, expire=ttl, retry=True))
+        except Timeout:
+            self.record_timeout(namespace=namespace)
+            return False
+        except _NON_FATAL_ERRORS:
+            self.record_abort(namespace=namespace)
+            return False
+
+    def expire(self) -> int | None:
+        """Run expiry sweep and return removed row count.
+
+        Returns:
+            int | None: Number of entries removed, or ``None`` on non-fatal error.
+        """
+        try:
+            return int(self.cache.expire(retry=True))
+        except Timeout:
+            self.record_timeout(namespace="cache_backend")
+            return None
+        except _NON_FATAL_ERRORS:
+            self.record_abort(namespace="cache_backend")
+            return None
+
+    def check(self, *, fix: bool = False) -> int | None:
+        """Run cache integrity checks and return error count.
+
+        Returns:
+            int | None: Number of integrity errors detected, or ``None`` on
+                non-fatal error.
+        """
+        try:
+            return int(self.cache.check(fix=fix, retry=True))
+        except Timeout:
+            self.record_timeout(namespace="cache_backend")
+            return None
+        except _NON_FATAL_ERRORS:
+            self.record_abort(namespace="cache_backend")
+            return None
+
     def close(self) -> None:
         """Close cache resources."""
         try:

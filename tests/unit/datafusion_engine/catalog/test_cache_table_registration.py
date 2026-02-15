@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from datafusion_engine.catalog import introspection
+
+if TYPE_CHECKING:
+    from datafusion import SessionContext
+else:
+
+    class SessionContext:
+        """Fallback session context for environments without datafusion."""
 
 
 def test_register_cache_tables_uses_direct_extension_path(
@@ -33,8 +42,8 @@ def test_register_cache_tables_uses_direct_extension_path(
             "predicate_cache_size": "64 MiB",
         },
     )
-    ctx = object()
-    introspection.register_cache_introspection_functions(ctx=ctx)  # type: ignore[arg-type]
+    ctx: SessionContext = SessionContext()
+    introspection.register_cache_introspection_functions(ctx=ctx)
 
     assert captured["ctx"] is ctx
     payload = captured["payload"]
@@ -61,4 +70,4 @@ def test_register_cache_tables_raises_abi_mismatch(
         lambda _ctx: {"list_files_cache_ttl": "2m"},
     )
     with pytest.raises(RuntimeError, match="SessionContext ABI mismatch"):
-        introspection.register_cache_introspection_functions(ctx=object())  # type: ignore[arg-type]
+        introspection.register_cache_introspection_functions(ctx=SessionContext())

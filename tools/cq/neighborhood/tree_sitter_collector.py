@@ -20,6 +20,10 @@ from tools.cq.neighborhood.tree_sitter_contracts import (
     TreeSitterNeighborhoodCollectRequest,
     TreeSitterNeighborhoodCollectResult,
 )
+from tools.cq.neighborhood.tree_sitter_neighborhood_query_engine import collect_callers_callees
+from tools.cq.search.tree_sitter_diagnostics import collect_tree_sitter_diagnostics
+from tools.cq.search.tree_sitter_runtime_contracts import QueryWindowV1
+from tools.cq.search.tree_sitter_structural_export import export_structural_rows
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Parser
@@ -351,18 +355,19 @@ def _collect_callers_callees(
     anchor_name = _display_name(anchor, source_bytes)
     if not anchor_name:
         return [], []
+    callers, callees = collect_callers_callees(
+        language=language,
+        tree_root=tree_root,
+        anchor=anchor,
+        source_bytes=source_bytes,
+        anchor_name=anchor_name,
+    )
+    if callers or callees:
+        return callers, callees
 
     call_kinds = _call_kinds(language)
-    callees = [node for node in _walk_named(anchor) if node.type in call_kinds]
-
-    callers: list[Node] = []
-    for node in _walk_named(tree_root):
-        if node.type not in call_kinds:
-            continue
-        target_text = _node_text(node, source_bytes)
-        if anchor_name and anchor_name in target_text:
-            callers.append(node)
-    return callers, callees
+    fallback_callees = [node for node in _walk_named(anchor) if node.type in call_kinds]
+    return [], fallback_callees
 
 
 def _collect_parent_nodes(anchor: Node) -> list[Node]:
@@ -580,9 +585,34 @@ def _anchor_unresolved_result(target_name: str) -> TreeSitterNeighborhoodCollect
     )
 
 
-def _tree_parse_diagnostics(tree_root: Node) -> tuple[DegradeEventV1, ...]:
+def _tree_parse_diagnostics(
+    *,
+    language: str,
+    tree_root: Node,
+) -> tuple[DegradeEventV1, ...]:
     if not tree_root.has_error:
         return ()
+    diagnostics = collect_tree_sitter_diagnostics(
+        language=language,
+        root=tree_root,
+        windows=(
+            QueryWindowV1(
+                start_byte=int(getattr(tree_root, "start_byte", 0)),
+                end_byte=int(getattr(tree_root, "end_byte", 0)),
+            ),
+        ),
+        match_limit=512,
+    )
+    if diagnostics:
+        first = diagnostics[0]
+        return (
+            DegradeEventV1(
+                stage="tree_sitter.neighborhood",
+                severity="warning",
+                category="parse_error_nodes",
+                message=f"{first.kind} near line {first.start_line}",
+            ),
+        )
     return (
         DegradeEventV1(
             stage="tree_sitter.neighborhood",
@@ -639,7 +669,8 @@ def collect_tree_sitter_neighborhood(
     return TreeSitterNeighborhoodCollectResult(
         subject=subject,
         slices=tuple(slices),
-        diagnostics=_tree_parse_diagnostics(tree_root),
+        diagnostics=_tree_parse_diagnostics(language=request.language, tree_root=tree_root),
+        structural_export=export_structural_rows(file_path=request.target_file, root=anchor),
     )
 
 

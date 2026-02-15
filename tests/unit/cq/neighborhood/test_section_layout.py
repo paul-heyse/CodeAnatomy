@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from tools.cq.core.snb_schema import (
     BundleMetaV1,
     DegradeEventV1,
     NeighborhoodGraphSummaryV1,
+    NeighborhoodSliceKind,
     NeighborhoodSliceV1,
     SemanticNeighborhoodBundleV1,
     SemanticNodeRefV1,
@@ -77,7 +80,7 @@ def test_unknown_slice_kinds_at_end() -> None:
             total=2,
         ),
         NeighborhoodSliceV1(
-            kind="custom_experimental",  # type: ignore[arg-type]
+            kind=cast("NeighborhoodSliceKind", "custom_experimental"),
             title="Experimental Slice",
             total=1,
         ),

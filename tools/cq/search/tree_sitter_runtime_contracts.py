@@ -12,11 +12,22 @@ class QueryWindowV1(CqStruct, frozen=True):
     end_byte: int
 
 
+class QueryPointWindowV1(CqStruct, frozen=True):
+    """Inclusive-exclusive point window for row/column anchored execution."""
+
+    start_row: int
+    start_col: int
+    end_row: int
+    end_col: int
+
+
 class QueryExecutionSettingsV1(CqStruct, frozen=True):
     """Execution bounds for one query run."""
 
     match_limit: int = 4096
     max_start_depth: int | None = None
+    budget_ms: int | None = None
+    require_containment: bool = False
 
 
 class QueryExecutionTelemetryV1(CqStruct, frozen=True):
@@ -33,5 +44,6 @@ class QueryExecutionTelemetryV1(CqStruct, frozen=True):
 __all__ = [
     "QueryExecutionSettingsV1",
     "QueryExecutionTelemetryV1",
+    "QueryPointWindowV1",
     "QueryWindowV1",
 ]

@@ -42,6 +42,8 @@ class CqCachePolicyV1(CqSettingsStruct, frozen=True):
     cull_limit: NonNegativeInt = 16
     eviction_policy: str = "least-recently-stored"
     statistics_enabled: bool = False
+    max_tree_sitter_lanes: PositiveInt = 4
+    lane_lock_ttl_seconds: PositiveInt = 15
 
 
 def _env_bool(raw: str | None, *, default: bool) -> bool:
@@ -136,8 +138,8 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
     runtime = default_runtime_execution_policy().cache
     enabled = _env_bool(os.getenv("CQ_CACHE_ENABLED"), default=runtime.enabled)
 
-    raw_dir = os.getenv("CQ_CACHE_DIR")
-    directory = raw_dir.strip() if raw_dir else str(root / _DEFAULT_DIR)
+    directory_value = os.getenv("CQ_CACHE_DIR")
+    directory = directory_value.strip() if directory_value else str(root / _DEFAULT_DIR)
 
     ttl_seconds = _env_int(
         os.getenv("CQ_CACHE_TTL_SECONDS"),
@@ -172,16 +174,15 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
             os.getenv("CQ_CACHE_STATS_ENABLED"),
             default=runtime.statistics_enabled,
         )
-
-    evict_run_tag_on_exit = _env_bool(
-        os.getenv("CQ_CACHE_EVICT_RUN_TAG_ON_EXIT"),
-        default=runtime.evict_run_tag_on_exit,
+    max_tree_sitter_lanes = _env_int(
+        os.getenv("CQ_CACHE_MAX_TREE_SITTER_LANES"),
+        default=getattr(runtime, "max_tree_sitter_lanes", 4),
+        minimum=1,
     )
-
-    namespace_ttl_seconds = _resolve_namespace_ttl_from_env(defaults=runtime.namespace_ttl_seconds)
-    namespace_enabled = _resolve_namespace_enabled_from_env(defaults=runtime.namespace_enabled)
-    namespace_ephemeral = _resolve_namespace_ephemeral_from_env(
-        defaults=runtime.namespace_ephemeral,
+    lane_lock_ttl_seconds = _env_int(
+        os.getenv("CQ_CACHE_LANE_LOCK_TTL_SECONDS"),
+        default=getattr(runtime, "lane_lock_ttl_seconds", 15),
+        minimum=1,
     )
 
     return CqCachePolicyV1(
@@ -190,14 +191,23 @@ def default_cache_policy(*, root: Path) -> CqCachePolicyV1:
         shards=shards,
         timeout_seconds=timeout_seconds,
         ttl_seconds=ttl_seconds,
-        evict_run_tag_on_exit=evict_run_tag_on_exit,
-        namespace_ttl_seconds=namespace_ttl_seconds,
-        namespace_enabled=namespace_enabled,
-        namespace_ephemeral=namespace_ephemeral,
+        evict_run_tag_on_exit=_env_bool(
+            os.getenv("CQ_CACHE_EVICT_RUN_TAG_ON_EXIT"),
+            default=runtime.evict_run_tag_on_exit,
+        ),
+        namespace_ttl_seconds=_resolve_namespace_ttl_from_env(
+            defaults=runtime.namespace_ttl_seconds
+        ),
+        namespace_enabled=_resolve_namespace_enabled_from_env(defaults=runtime.namespace_enabled),
+        namespace_ephemeral=_resolve_namespace_ephemeral_from_env(
+            defaults=runtime.namespace_ephemeral,
+        ),
         size_limit_bytes=size_limit_bytes,
         cull_limit=cull_limit,
         eviction_policy=eviction_policy,
         statistics_enabled=statistics_enabled,
+        max_tree_sitter_lanes=max_tree_sitter_lanes,
+        lane_lock_ttl_seconds=lane_lock_ttl_seconds,
     )
 
 

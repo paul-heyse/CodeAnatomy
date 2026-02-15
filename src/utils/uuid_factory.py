@@ -45,6 +45,11 @@ def uuid7() -> uuid.UUID:
         return UUID6_MODULE.uuid7()
 
 
+def new_uuid7() -> uuid.UUID:
+    """Return UUIDv7 from the canonical UUID factory."""
+    return uuid7()
+
+
 def uuid7_str() -> str:
     """Return a UUIDv7 as a string.
 
@@ -54,6 +59,11 @@ def uuid7_str() -> str:
         String representation of UUIDv7.
     """
     return str(uuid7())
+
+
+def run_id() -> str:
+    """Return sortable run identifier string."""
+    return uuid7_str()
 
 
 def uuid7_hex() -> str:
@@ -67,11 +77,21 @@ def uuid7_hex() -> str:
     return uuid7().hex
 
 
+def artifact_id_hex() -> str:
+    """Return sortable artifact identifier (hex)."""
+    return uuid7_hex()
+
+
 def uuid7_suffix(length: int = 12) -> str:
     """Return a short suffix from the UUIDv7 random tail.
 
     Args:
         length: Description.
+
+    Returns:
+    -------
+    str
+        Suffix string from the UUIDv7 value.
 
     Raises:
         ValueError: If the operation cannot be completed.
@@ -83,6 +103,47 @@ def uuid7_suffix(length: int = 12) -> str:
         msg = "length must not exceed 32."
         raise ValueError(msg)
     return uuid7().hex[-length:]
+
+
+def normalize_legacy_identity(value: uuid.UUID) -> uuid.UUID:
+    """Normalize legacy UUIDv1 values to UUIDv6 when conversion is available.
+
+    Returns:
+    -------
+    uuid.UUID
+        The normalized UUID value when conversion succeeds.
+    """
+    if value.version != 1:
+        return value
+    if UUID6_MODULE is None:
+        return value
+    convert = getattr(UUID6_MODULE, "uuid1_to_uuid6", None)
+    if not callable(convert):
+        return value
+    try:
+        return cast("Callable[[uuid.UUID], uuid.UUID]", convert)(value)
+    except (RuntimeError, TypeError, ValueError):
+        return value
+
+
+def legacy_compatible_event_id(
+    *,
+    node: int | None = None,
+    clock_seq: int | None = None,
+) -> uuid.UUID:
+    """Return UUIDv6 for legacy-compatibility paths when available."""
+    if UUID6_MODULE is None:
+        return new_uuid7()
+    uuid6_fn = getattr(UUID6_MODULE, "uuid6", None)
+    if not callable(uuid6_fn):
+        return new_uuid7()
+    try:
+        return cast(
+            "Callable[..., uuid.UUID]",
+            uuid6_fn,
+        )(node=node, clock_seq=clock_seq)
+    except (RuntimeError, TypeError, ValueError):
+        return new_uuid7()
 
 
 def secure_token_hex(nbytes: int = 16) -> str:
@@ -103,6 +164,11 @@ def secure_token_hex(nbytes: int = 16) -> str:
 __all__ = [
     "UUID6_MODULE",
     "UUID7_HEX_LENGTH",
+    "artifact_id_hex",
+    "legacy_compatible_event_id",
+    "new_uuid7",
+    "normalize_legacy_identity",
+    "run_id",
     "secure_token_hex",
     "uuid7",
     "uuid7_hex",

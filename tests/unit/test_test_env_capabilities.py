@@ -21,7 +21,7 @@ from tests.test_helpers.optional_deps import (
 )
 
 
-def test_required_runtime_capabilities_available(  # noqa: PLR0914
+def test_required_runtime_capabilities_available(
     require_native_runtime: None,
 ) -> None:
     """Fail fast when required runtime dependencies are missing."""

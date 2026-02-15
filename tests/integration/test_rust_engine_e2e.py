@@ -217,7 +217,7 @@ def test_run_result_task_schedule_returns_schedule_payload(tmp_path: Path) -> No
 
 
 @pytest.mark.integration
-def test_rust_engine_identity_surfaces_stable_across_runs(  # noqa: PLR0914
+def test_rust_engine_identity_surfaces_stable_across_runs(
     tmp_path: Path,
 ) -> None:
     """Repeated Python materialization preserves envelope/planning/provider identity surfaces."""

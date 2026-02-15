@@ -51,7 +51,7 @@
     {
       "count": 1,
       "messages": [
-        "- **router.dispatch(operation, *args, **kwargs)** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
+        "- **router.dispatch** (tests/e2e/cq/_golden_workspace/python_project/app/dispatch.py)"
       ],
       "title": "Callees"
     },

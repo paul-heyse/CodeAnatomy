@@ -180,10 +180,13 @@ def _build_occurrence_row(match: EnrichedMatch, *, object_id: str) -> _ObjectOcc
     return _ObjectOccurrenceRow(
         occurrence=SearchOccurrenceV1(
             occurrence_id=occurrence_id,
+            line_id=occurrence_id,
             object_id=object_id,
             file=match.file,
             line=match.line,
             col=match.col,
+            block_start_line=context_start_line,
+            block_end_line=context_end_line,
             context_start_line=context_start_line,
             context_end_line=context_end_line,
             category=match.category,

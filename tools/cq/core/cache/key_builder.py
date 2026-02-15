@@ -162,21 +162,27 @@ def build_search_artifact_cache_key(
     run_id: str,
     query: str,
     macro: str = "search",
+    fingerprints: Mapping[str, str | None] | None = None,
 ) -> str:
     """Build deterministic cache key for one search artifact bundle.
 
     Returns:
         str: Cache key for the search artifact bundle.
     """
+    fingerprint_payload = dict(fingerprints) if isinstance(fingerprints, Mapping) else {}
     return build_cache_key(
         "search_artifacts",
-        version="v1",
+        version="v2",
         workspace=workspace,
         language="auto",
         target=run_id,
         extras={
             "query": query,
             "macro": macro,
+            "file_hash": fingerprint_payload.get("file_hash"),
+            "grammar_hash": fingerprint_payload.get("grammar_hash"),
+            "query_pack_hash": fingerprint_payload.get("query_pack_hash"),
+            "scope_hash": fingerprint_payload.get("scope_hash"),
         },
     )
 
@@ -193,7 +199,7 @@ def build_search_artifact_index_key(
     """
     return build_cache_key(
         "search_artifacts",
-        version="v1",
+        version="v2",
         workspace=workspace,
         language="auto",
         target=f"index:{run_id}",

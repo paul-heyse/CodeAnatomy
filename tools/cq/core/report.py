@@ -32,6 +32,7 @@ MAX_SECTION_FINDINGS = 50
 MAX_RENDER_ENRICH_FILES = 9  # original anchor file + next 8 files
 MAX_RENDER_ENRICH_WORKERS = 4
 SHOW_UNRESOLVED_FACTS_ENV = "CQ_SHOW_UNRESOLVED_FACTS"
+SHOW_CONTEXT_SNIPPETS_ENV = "CQ_RENDER_CONTEXT_SNIPPETS"
 MAX_CODE_OVERVIEW_ITEMS = 5
 MAX_FACT_VALUE_ITEMS = 8
 MAX_FACT_MAPPING_SCALAR_PAIRS = 4
@@ -207,6 +208,13 @@ def _format_finding_prefix(finding: Finding) -> str:
 
 def _format_context_block(finding: Finding, *, enabled: bool = True) -> list[str]:
     if not enabled:
+        return []
+    if os.environ.get(SHOW_CONTEXT_SNIPPETS_ENV, "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
         return []
     context_snippet = finding.details.get("context_snippet")
     if not isinstance(context_snippet, str) or not context_snippet:
@@ -415,13 +423,8 @@ def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
     lines = ["  Code Facts:"]
     show_unresolved = _show_unresolved_facts()
     for cluster in clusters:
-        candidate_rows = (
-            list(cluster.rows)
-            if show_unresolved
-            else [row for row in cluster.rows if row.reason != "not_applicable"]
-        )
         candidate_rows = [
-            row for row in candidate_rows if not is_applicability_not_applicable(row.reason)
+            row for row in cluster.rows if not is_applicability_not_applicable(row.reason)
         ]
         rows = (
             candidate_rows
@@ -429,20 +432,15 @@ def _format_enrichment_facts(payload: dict[str, object]) -> list[str]:
             else [row for row in candidate_rows if row.reason != "not_resolved"]
         )
         if not rows:
-            unresolved_only = any(row.reason == "not_resolved" for row in candidate_rows)
-            if not (show_unresolved and unresolved_only):
-                continue
-            lines.append(f"  - {cluster.title}")
-            lines.append(f"    - N/A: {_na('not_resolved')}")
             continue
         lines.append(f"  - {cluster.title}")
         for row in rows:
             if row.reason is not None:
-                lines.append(f"    - {row.label}: {_na(row.reason)}")
+                if show_unresolved and row.reason == "not_resolved":
+                    lines.append(f"    - {row.label}: {_na(row.reason)}")
                 continue
             values = _format_fact_values(row.value)
             if not values:
-                lines.append(f"    - {row.label}: {_na('not_resolved')}")
                 continue
             for idx, rendered in enumerate(values, start=1):
                 suffix = "" if idx == 1 else f" #{idx}"
@@ -494,8 +492,12 @@ def _format_resolved_object_occurrences(finding: Finding) -> list[str]:
         location = _format_location(file_value, line_value, col_value) or "<unknown>"
         block_ref = _clean_scalar(row.get("block_ref"))
         if block_ref is None:
-            start_line = _safe_int(row.get("context_start_line"))
-            end_line = _safe_int(row.get("context_end_line"))
+            start_line = _safe_int(row.get("block_start_line")) or _safe_int(
+                row.get("context_start_line")
+            )
+            end_line = _safe_int(row.get("block_end_line")) or _safe_int(
+                row.get("context_end_line")
+            )
             if file_value is not None and start_line is not None and end_line is not None:
                 block_ref = f"{file_value}:{start_line}-{end_line}"
             elif file_value is not None:

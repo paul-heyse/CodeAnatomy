@@ -33,6 +33,18 @@ def _mapping_list(value: object, *, limit: int = 16) -> list[dict[str, object]]:
 def _python_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]]:
     parse_quality = payload.get("parse_quality")
     rows: list[dict[str, object]] = []
+    tree_sitter_rows = payload.get("tree_sitter_diagnostics")
+    if isinstance(tree_sitter_rows, list):
+        rows.extend(
+            {
+                "kind": _string(item.get("kind")) or "tree_sitter",
+                "message": _string(item.get("message")) or "tree-sitter diagnostic",
+                "line": item.get("start_line"),
+                "col": item.get("start_col"),
+            }
+            for item in tree_sitter_rows[:8]
+            if isinstance(item, Mapping)
+        )
     if isinstance(parse_quality, Mapping):
         rows.extend(
             {"kind": kind, "message": text}
@@ -51,6 +63,18 @@ def _python_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]
 
 def _rust_diagnostics(payload: Mapping[str, object]) -> list[dict[str, object]]:
     rows = _mapping_list(payload.get("degrade_events"), limit=16)
+    tree_sitter_rows = payload.get("tree_sitter_diagnostics")
+    if isinstance(tree_sitter_rows, list):
+        rows.extend(
+            {
+                "kind": _string(item.get("kind")) or "tree_sitter",
+                "message": _string(item.get("message")) or "tree-sitter diagnostic",
+                "line": item.get("start_line"),
+                "col": item.get("start_col"),
+            }
+            for item in tree_sitter_rows[:8]
+            if isinstance(item, Mapping)
+        )
     if rows:
         return rows
     reason = _string(payload.get("degrade_reason"))

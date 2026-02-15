@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
@@ -19,12 +18,12 @@ from tools.cq.core.cache import (
     get_cq_cache_backend,
     is_namespace_cache_enabled,
     record_cache_decode_failure,
-    record_cache_delete,
     record_cache_get,
     record_cache_set,
     resolve_namespace_ttl_seconds,
     resolve_write_cache_tag,
 )
+from tools.cq.core.cache.coordination import publish_once_per_barrier, tree_sitter_lane_guard
 from tools.cq.core.cache.fragment_codecs import (
     decode_fragment_payload,
     encode_fragment_payload,
@@ -62,6 +61,8 @@ class _PipelineContext:
     scope_hash: str | None
     snapshot_digest: str
     budget: SemanticRequestBudgetV1
+    lane_limit: int
+    lane_ttl_seconds: int
 
 
 def run_language_semantic_enrichment(
@@ -88,30 +89,33 @@ def run_language_semantic_enrichment(
     if cached_outcome is not None:
         return cached_outcome
 
-    lock_acquired, waited_outcome = _single_flight_gate(
-        context=context,
-        request=request,
-        cache_namespace=cache_namespace,
-        lock_retry_count=lock_retry_count,
-        lock_retry_sleep_seconds=lock_retry_sleep_seconds,
-    )
-    if waited_outcome is not None:
-        return waited_outcome
-    try:
+    _ = (lock_retry_count, lock_retry_sleep_seconds)
+    with tree_sitter_lane_guard(
+        backend=context.cache,
+        lock_key=context.lock_key,
+        semaphore_key=f"cq:tree_sitter:lane:{request.language}",
+        lane_limit=context.lane_limit,
+        ttl_seconds=context.lane_ttl_seconds,
+    ):
+        waited = _probe_cached_outcome(context=context, cache_namespace=cache_namespace)
+        if waited is not None:
+            return waited
         outcome = _execute_provider(request=request, context=context)
-        _persist_outcome(
-            context=context,
-            outcome=outcome,
-            request=request,
-            cache_namespace=cache_namespace,
+
+        def _publish() -> None:
+            _persist_outcome(
+                context=context,
+                outcome=outcome,
+                request=request,
+                cache_namespace=cache_namespace,
+            )
+
+        publish_once_per_barrier(
+            backend=context.cache,
+            barrier_key=f"{context.lock_key}:publish",
+            publish_fn=_publish,
         )
         return outcome
-    finally:
-        _release_lock(
-            context=context,
-            lock_acquired=lock_acquired,
-            cache_namespace=cache_namespace,
-        )
 
 
 def _build_context(
@@ -168,6 +172,8 @@ def _build_context(
         scope_hash=scope_hash,
         snapshot_digest=snapshot_digest,
         budget=budget_for_mode(request.mode),
+        lane_limit=max(1, int(getattr(policy, "max_tree_sitter_lanes", 4))),
+        lane_ttl_seconds=max(1, int(getattr(policy, "lane_lock_ttl_seconds", 15))),
     )
 
 
@@ -198,34 +204,6 @@ def _probe_cached_outcome(
         failure_reason=payload.failure_reason,
         provider_root=context.provider_root,
     )
-
-
-def _single_flight_gate(
-    *,
-    context: _PipelineContext,
-    request: LanguageSemanticEnrichmentRequest,
-    cache_namespace: str,
-    lock_retry_count: int,
-    lock_retry_sleep_seconds: float,
-) -> tuple[bool, LanguageSemanticEnrichmentOutcome | None]:
-    if not context.cache_enabled:
-        return True, None
-    lock_acquired = context.cache.add(
-        context.lock_key,
-        {"owner": request.run_id or ""},
-        expire=max(
-            1,
-            int(context.budget.startup_timeout_seconds + context.budget.probe_timeout_seconds),
-        ),
-    )
-    if lock_acquired:
-        return True, None
-    for _ in range(lock_retry_count):
-        waiter = _probe_cached_outcome(context=context, cache_namespace=cache_namespace)
-        if waiter is not None:
-            return False, waiter
-        time.sleep(lock_retry_sleep_seconds)
-    return False, None
 
 
 def _execute_provider(
@@ -439,18 +417,6 @@ def _persist_outcome(
         tag=tag,
     )
     record_cache_set(namespace=cache_namespace, ok=ok, key=context.cache_key)
-
-
-def _release_lock(
-    *,
-    context: _PipelineContext,
-    lock_acquired: bool,
-    cache_namespace: str,
-) -> None:
-    if not (context.cache_enabled and lock_acquired):
-        return
-    ok = context.cache.delete(context.lock_key)
-    record_cache_delete(namespace=cache_namespace, ok=ok, key=context.lock_key)
 
 
 def _execute_semantic_task(

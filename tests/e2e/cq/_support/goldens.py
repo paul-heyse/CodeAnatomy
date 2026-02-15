@@ -1,4 +1,4 @@
-# ruff: noqa: C901, DOC201, DOC501, RET504
+# ruff: noqa: DOC201, DOC501, RET504
 """Golden snapshot utilities for CQ E2E tests."""
 
 from __future__ import annotations
@@ -33,53 +33,61 @@ def _normalize_result_for_snapshot(result: CqResult) -> dict[str, Any]:
     # Convert to dict first
     result_dict = _result_to_dict(result)
 
-    # Remove timestamp fields that vary between runs
-    if "run" in result_dict:
-        result_dict["run"].pop("started_ms", None)
-        result_dict["run"].pop("elapsed_ms", None)
-        result_dict["run"].pop("run_id", None)
-        root = result_dict["run"].get("root")
-        if isinstance(root, str):
-            result_dict["run"]["root"] = "<repo_root>"
-        toolchain = result_dict["run"].get("toolchain")
-        if isinstance(toolchain, dict) and isinstance(toolchain.get("rg"), str):
-            toolchain["rg"] = "<ripgrep>"
-
-    summary = result_dict.get("summary")
-    if isinstance(summary, dict):
-        summary.pop("cache", None)
-        summary.pop("cache_stats", None)
-        summary.pop("cache_backend", None)
-        summary.pop("step_summaries", None)
-
-    # Sort findings by file path and line number for deterministic ordering
-    def _finding_sort_key(finding: dict[str, object]) -> tuple[str, int]:
-        anchor = finding.get("anchor")
-        if isinstance(anchor, dict):
-            file_value = anchor.get("file")
-            line_value = anchor.get("line")
-            return (
-                file_value if isinstance(file_value, str) else "",
-                line_value if isinstance(line_value, int) else 0,
-            )
-        return ("", 0)
-
-    for key in ("key_findings", "evidence"):
-        if key in result_dict:
-            result_dict[key] = sorted(
-                result_dict[key],
-                key=_finding_sort_key,
-            )
-
-    if "sections" in result_dict:
-        for section in result_dict["sections"]:
-            if "findings" in section:
-                section["findings"] = sorted(
-                    section["findings"],
-                    key=_finding_sort_key,
-                )
+    _normalize_run_block(result_dict)
+    _normalize_summary_block(result_dict)
+    _sort_result_findings(result_dict)
 
     return cast("dict[str, Any]", _scrub_unstable(result_dict))
+
+
+def _finding_sort_key(finding: dict[str, object]) -> tuple[str, int]:
+    anchor = finding.get("anchor")
+    if isinstance(anchor, dict):
+        file_value = anchor.get("file")
+        line_value = anchor.get("line")
+        return (
+            file_value if isinstance(file_value, str) else "",
+            line_value if isinstance(line_value, int) else 0,
+        )
+    return ("", 0)
+
+
+def _normalize_run_block(result_dict: dict[str, Any]) -> None:
+    run = result_dict.get("run")
+    if not isinstance(run, dict):
+        return
+    run.pop("started_ms", None)
+    run.pop("elapsed_ms", None)
+    run.pop("run_id", None)
+    root = run.get("root")
+    if isinstance(root, str):
+        run["root"] = "<repo_root>"
+    toolchain = run.get("toolchain")
+    if isinstance(toolchain, dict) and isinstance(toolchain.get("rg"), str):
+        toolchain["rg"] = "<ripgrep>"
+
+
+def _normalize_summary_block(result_dict: dict[str, Any]) -> None:
+    summary = result_dict.get("summary")
+    if not isinstance(summary, dict):
+        return
+    summary.pop("cache", None)
+    summary.pop("cache_stats", None)
+    summary.pop("cache_backend", None)
+    summary.pop("step_summaries", None)
+
+
+def _sort_result_findings(result_dict: dict[str, Any]) -> None:
+    for key in ("key_findings", "evidence"):
+        if key in result_dict:
+            result_dict[key] = sorted(result_dict[key], key=_finding_sort_key)
+
+    sections = result_dict.get("sections")
+    if not isinstance(sections, list):
+        return
+    for section in sections:
+        if isinstance(section, dict) and "findings" in section:
+            section["findings"] = sorted(section["findings"], key=_finding_sort_key)
 
 
 def _normalize_json_value(value: object) -> object:

@@ -1,0 +1,114 @@
+"""Deterministic msgpack storage for tree-sitter enrichment payloads."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Final
+
+import msgspec
+
+from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
+from tools.cq.core.cache.key_builder import build_cache_key
+from tools.cq.core.cache.namespaces import resolve_namespace_ttl_seconds
+from tools.cq.core.cache.policy import default_cache_policy
+from tools.cq.core.cache.telemetry import (
+    record_cache_decode_failure,
+    record_cache_get,
+    record_cache_set,
+)
+from tools.cq.core.cache.tree_sitter_cache_store_contracts import TreeSitterCacheEnvelopeV1
+
+_NAMESPACE: Final[str] = "tree_sitter"
+_VERSION: Final[str] = "v3"
+
+_ENCODER = msgspec.msgpack.Encoder()
+_DECODER = msgspec.msgpack.Decoder(type=TreeSitterCacheEnvelopeV1)
+
+
+def build_tree_sitter_cache_key(
+    *,
+    workspace: str,
+    language: str,
+    target: str,
+    fingerprints: dict[str, str],
+) -> str:
+    """Build deterministic cache key for one tree-sitter payload.
+
+    Returns:
+        str: The canonical cache key.
+    """
+    return build_cache_key(
+        _NAMESPACE,
+        version=_VERSION,
+        workspace=workspace,
+        language=language,
+        target=target,
+        extras={
+            "file_hash": fingerprints.get("file_hash"),
+            "grammar_hash": fingerprints.get("grammar_hash"),
+            "query_pack_hash": fingerprints.get("query_pack_hash"),
+            "scope_hash": fingerprints.get("scope_hash"),
+        },
+    )
+
+
+def persist_tree_sitter_payload(
+    *,
+    root: Path,
+    cache_key: str,
+    envelope: TreeSitterCacheEnvelopeV1,
+    tag: str | None = None,
+) -> bool:
+    """Persist tree-sitter payload envelope as msgpack bytes.
+
+    Returns:
+        bool: ``True`` if the write was accepted by the backend.
+    """
+    backend = get_cq_cache_backend(root=root)
+    policy = default_cache_policy(root=root)
+    ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=_NAMESPACE)
+    ok = backend.set(
+        cache_key,
+        _ENCODER.encode(envelope),
+        expire=ttl_seconds,
+        tag=tag,
+    )
+    record_cache_set(namespace=_NAMESPACE, ok=ok, key=cache_key)
+    return ok
+
+
+def load_tree_sitter_payload(
+    *,
+    root: Path,
+    cache_key: str,
+) -> TreeSitterCacheEnvelopeV1 | None:
+    """Load tree-sitter payload envelope from cache.
+
+    Returns:
+        TreeSitterCacheEnvelopeV1 | None: Decoded payload envelope, or ``None``
+            when missing or invalid.
+    """
+    backend = get_cq_cache_backend(root=root)
+    cached = backend.get(cache_key)
+    hit = isinstance(cached, (bytes, bytearray, memoryview, dict))
+    record_cache_get(namespace=_NAMESPACE, hit=hit, key=cache_key)
+    if isinstance(cached, (bytes, bytearray, memoryview)):
+        try:
+            return _DECODER.decode(cached)
+        except (RuntimeError, TypeError, ValueError):
+            record_cache_decode_failure(namespace=_NAMESPACE)
+            return None
+    if isinstance(cached, dict):
+        try:
+            return msgspec.convert(cached, type=TreeSitterCacheEnvelopeV1)
+        except (RuntimeError, TypeError, ValueError):
+            record_cache_decode_failure(namespace=_NAMESPACE)
+            return None
+    return None
+
+
+__all__ = [
+    "build_tree_sitter_cache_key",
+    "load_tree_sitter_payload",
+    "persist_tree_sitter_payload",
+]

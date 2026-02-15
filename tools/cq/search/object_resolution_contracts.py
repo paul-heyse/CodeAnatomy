@@ -31,9 +31,14 @@ class SearchOccurrenceV1(CqOutputStruct, frozen=True):
     object_id: str
     file: str
     line: int
+    line_id: str | None = None
     col: int | None = None
+    block_start_line: int | None = None
+    block_end_line: int | None = None
     context_start_line: int | None = None
     context_end_line: int | None = None
+    byte_start: int | None = None
+    byte_end: int | None = None
     category: str = "reference"
     node_kind: str | None = None
     containing_scope: str | None = None

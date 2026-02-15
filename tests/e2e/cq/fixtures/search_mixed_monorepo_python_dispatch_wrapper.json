@@ -22,7 +22,7 @@
         "Siblings: 3 (top: @trace(\"runtime\"), LocalBackend, make_pipeline)",
         "Conjunction Peers: 1 (top: @trace(\"runtime\"))",
         "Callers: 1 (top: dispatch_wrapper(value))",
-        "Callees: 2 (top: LocalBackend(), resolver(payload))"
+        "Callees: 2 (top: LocalBackend, resolver)"
       ],
       "title": "Neighborhood Preview"
     },

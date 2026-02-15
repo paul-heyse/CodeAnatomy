@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
+from extraction.orchestrator import ExtractionResult
 from graph import build_pipeline
+from graph.build_pipeline import _AuxiliaryOutputOptions
 
 
 def test_collect_auxiliary_outputs_uses_contract_paths(tmp_path: Path) -> None:
-    extraction_result = SimpleNamespace(errors=[{"error": "x"}])
+    extraction_result = ExtractionResult(
+        delta_locations={},
+        semantic_input_locations={},
+        errors=[{"error": "x"}],
+        timing={},
+    )
     artifacts: dict[str, object] = {
         "manifest_path": str(tmp_path / "run_manifest"),
         "run_bundle_dir": str(tmp_path / "run_bundle"),
@@ -23,11 +29,12 @@ def test_collect_auxiliary_outputs_uses_contract_paths(tmp_path: Path) -> None:
     outputs = build_pipeline._collect_auxiliary_outputs(  # noqa: SLF001
         output_dir=tmp_path,
         artifacts=artifacts,
-        run_result={},
-        extraction_result=extraction_result,  # type: ignore[arg-type]
-        include_errors=True,
-        include_manifest=True,
-        include_run_bundle=True,
+        extraction_result=extraction_result,
+        options=_AuxiliaryOutputOptions(
+            include_errors=True,
+            include_manifest=True,
+            include_run_bundle=True,
+        ),
     )
 
     assert outputs["normalize_outputs_delta"]["path"] == str(tmp_path / "normalize_outputs")
@@ -39,15 +46,21 @@ def test_collect_auxiliary_outputs_uses_contract_paths(tmp_path: Path) -> None:
 
 
 def test_collect_auxiliary_outputs_falls_back_to_output_dir(tmp_path: Path) -> None:
-    extraction_result = SimpleNamespace(errors=[])
+    extraction_result = ExtractionResult(
+        delta_locations={},
+        semantic_input_locations={},
+        errors=[],
+        timing={},
+    )
     outputs = build_pipeline._collect_auxiliary_outputs(  # noqa: SLF001
         output_dir=tmp_path,
         artifacts={},
-        run_result={},
-        extraction_result=extraction_result,  # type: ignore[arg-type]
-        include_errors=False,
-        include_manifest=True,
-        include_run_bundle=True,
+        extraction_result=extraction_result,
+        options=_AuxiliaryOutputOptions(
+            include_errors=False,
+            include_manifest=True,
+            include_run_bundle=True,
+        ),
     )
 
     assert outputs["normalize_outputs_delta"]["path"] == str(tmp_path / "normalize_outputs")

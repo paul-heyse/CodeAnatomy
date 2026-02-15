@@ -88,4 +88,35 @@ def __dir__() -> list[str]:
     return sorted(list(globals()) + list(_EXPORT_MAP))
 
 
-__all__ = tuple(_EXPORT_MAP)
+__all__ = (
+    "DEFAULT_CALIBRATION_BOUNDS",
+    "RELATION_OUTPUT_NAME",
+    "RELATION_OUTPUT_ORDERING_KEYS",
+    "CalibrationBounds",
+    "CalibrationThresholds",
+    "CompiledExecutionPolicy",
+    "DecisionOutcome",
+    "DecisionProvenanceGraph",
+    "DecisionRecord",
+    "DiagnosticsPolicy",
+    "EvidenceRecord",
+    "ExecutionMetricsSummary",
+    "ExecutionPackageArtifact",
+    "InferenceConfidence",
+    "InferredDeps",
+    "InferredDepsInputs",
+    "PipelinePolicy",
+    "PolicyCalibrationResult",
+    "RelspecError",
+    "RelspecExecutionAuthorityError",
+    "RelspecValidationError",
+    "TableSizeTier",
+    "build_execution_package",
+    "calibrate_from_execution_metrics",
+    "classify_table_size",
+    "high_confidence",
+    "infer_deps_from_plan_bundle",
+    "infer_deps_from_view_nodes",
+    "low_confidence",
+    "validate_calibration_bounds",
+)

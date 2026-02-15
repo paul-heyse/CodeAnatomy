@@ -12,9 +12,12 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from tools.cq.core.cache import (
+    get_cq_cache_backend,
+    maintenance_tick,
     maybe_evict_run_cache_tag,
     snapshot_backend_metrics,
 )
+from tools.cq.core.contracts import contract_to_builtins
 from tools.cq.core.locations import (
     SourceSpan,
     line_relative_byte_range_to_absolute,
@@ -3616,6 +3619,9 @@ def _assemble_smart_search_result(
     )
     _register_search_object_view(run_id=run.run_id, view=inputs.object_runtime.view)
     result.summary["cache_backend"] = snapshot_backend_metrics(root=ctx.root)
+    result.summary["cache_maintenance"] = contract_to_builtins(
+        maintenance_tick(get_cq_cache_backend(root=ctx.root))
+    )
     return assign_result_finding_ids(result)
 
 

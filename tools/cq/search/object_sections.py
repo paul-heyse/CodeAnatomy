@@ -43,14 +43,22 @@ def build_resolved_objects_section(
         object_occurrences = by_object.get(object_ref.object_id, [])
         occurrence_rows = [
             {
-                "line_id": row.occurrence_id,
+                "line_id": row.line_id or row.occurrence_id,
                 "file": row.file,
                 "line": row.line,
                 "col": row.col,
+                "block_start_line": row.block_start_line or row.context_start_line,
+                "block_end_line": row.block_end_line or row.context_end_line,
                 "context_start_line": row.context_start_line,
                 "context_end_line": row.context_end_line,
-                "block_ref": _format_block(row.file, row.context_start_line, row.context_end_line),
+                "block_ref": _format_block(
+                    row.file,
+                    row.block_start_line or row.context_start_line,
+                    row.block_end_line or row.context_end_line,
+                ),
                 "category": row.category,
+                "byte_start": row.byte_start,
+                "byte_end": row.byte_end,
             }
             for row in object_occurrences
         ]
@@ -113,13 +121,17 @@ def build_occurrences_section(
     for row in occurrences[:_MAX_SECTION_ROWS]:
         symbol = object_symbols.get(row.object_id, row.object_id)
         location = _format_location(row.file, row.line, row.col)
-        block = _format_block(row.file, row.context_start_line, row.context_end_line)
+        block = _format_block(
+            row.file,
+            row.block_start_line or row.context_start_line,
+            row.block_end_line or row.context_end_line,
+        )
         findings.append(
             Finding(
                 category="occurrence",
                 message=(
                     f"{symbol}: {location} (block {block}) [{row.category}] "
-                    f"[object_id={row.object_id}] [line_id={row.occurrence_id}]"
+                    f"[object_id={row.object_id}] [line_id={row.line_id or row.occurrence_id}]"
                 ),
                 anchor=Anchor(
                     file=row.file, line=max(_DEFAULT_CONTEXT_LINE, row.line), col=row.col
@@ -129,13 +141,18 @@ def build_occurrences_section(
                     kind="occurrence",
                     data={
                         "occurrence_id": row.occurrence_id,
+                        "line_id": row.line_id or row.occurrence_id,
                         "object_id": row.object_id,
                         "symbol": symbol,
                         "file": row.file,
                         "line": row.line,
                         "col": row.col,
+                        "block_start_line": row.block_start_line or row.context_start_line,
+                        "block_end_line": row.block_end_line or row.context_end_line,
                         "context_start_line": row.context_start_line,
                         "context_end_line": row.context_end_line,
+                        "byte_start": row.byte_start,
+                        "byte_end": row.byte_end,
                         "category": row.category,
                         "node_kind": row.node_kind,
                         "containing_scope": row.containing_scope,

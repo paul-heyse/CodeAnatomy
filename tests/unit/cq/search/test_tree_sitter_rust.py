@@ -34,12 +34,12 @@ def test_enrich_rust_context_returns_scope_chain() -> None:
 def test_enrich_rust_context_fail_open_on_parser_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unexpected parser failures should degrade to None."""
 
-    def _boom(_source: bytes) -> object:
+    def _boom() -> object:
         msg = "forced parse failure"
         raise RuntimeError(msg)
 
     tree_sitter_rust.clear_tree_sitter_rust_cache()
-    monkeypatch.setattr(tree_sitter_rust, "_parse_tree", _boom)
+    monkeypatch.setattr(tree_sitter_rust, "_make_parser", _boom)
     payload = tree_sitter_rust.enrich_rust_context(_RUST_SAMPLE, line=2, col=8, cache_key="boom")
     assert payload is None
 

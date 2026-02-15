@@ -237,12 +237,7 @@ def compile_resolver_invariants_strict_mode() -> bool:
 
 def compile_resolver_invariant_artifact_payload(
     *,
-    label: str,
-    compile_count: int,
-    max_compiles: int,
-    distinct_resolver_count: int,
-    strict: bool,
-    violations: Sequence[str],
+    invariants: _CompileResolverInvariantInputs,
 ) -> dict[str, object]:
     """Return payload for ``compile_resolver_invariants_v1`` artifacts.
 
@@ -251,26 +246,94 @@ def compile_resolver_invariant_artifact_payload(
     dict[str, object]
         Normalized artifact payload for compile/resolver invariants.
     """
-    normalized_violations = tuple(item for item in violations if item)
+    normalized_violations = tuple(item for item in invariants.violations if item)
     return {
-        "label": label,
-        "compile_count": compile_count,
-        "max_compiles": max_compiles,
-        "distinct_resolver_count": distinct_resolver_count,
-        "strict": strict,
+        "label": invariants.label,
+        "compile_count": invariants.compile_count,
+        "max_compiles": invariants.max_compiles,
+        "distinct_resolver_count": invariants.distinct_resolver_count,
+        "strict": invariants.strict,
         "violations": normalized_violations,
     }
 
 
-def record_compile_resolver_invariants(  # noqa: PLR0913
+@dataclass(frozen=True)
+class _CompileResolverInvariantInputs:
+    label: str
+    compile_count: int
+    max_compiles: int
+    distinct_resolver_count: int
+    strict: bool
+    violations: Sequence[str]
+
+
+def _parse_compile_resolver_invariant_inputs(
+    invariants: _CompileResolverInvariantInputs | None,
+    kwargs: Mapping[str, object],
+) -> _CompileResolverInvariantInputs:
+    if invariants is not None:
+        if kwargs:
+            message = (
+                "Cannot pass legacy keyword arguments when `invariants` is provided."
+            )
+            raise TypeError(message)
+        return invariants
+    label = _coerce_str(kwargs.get("label"), "label")
+    compile_count = _coerce_int(kwargs.get("compile_count"), "compile_count")
+    max_compiles = _coerce_int(kwargs.get("max_compiles"), "max_compiles")
+    distinct_resolver_count = _coerce_int(
+        kwargs.get("distinct_resolver_count"),
+        "distinct_resolver_count",
+    )
+    strict = _coerce_bool(kwargs.get("strict"), "strict")
+    violations = _coerce_str_sequence(kwargs.get("violations"), "violations")
+    return _CompileResolverInvariantInputs(
+        label=label,
+        compile_count=compile_count,
+        max_compiles=max_compiles,
+        distinct_resolver_count=distinct_resolver_count,
+        strict=strict,
+        violations=violations,
+    )
+
+
+def _coerce_str(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        message = f"Field {field_name!r} must be a string."
+        raise TypeError(message)
+    return value
+
+
+def _coerce_int(value: object, field_name: str) -> int:
+    if not isinstance(value, int):
+        message = f"Field {field_name!r} must be an integer."
+        raise TypeError(message)
+    return value
+
+
+def _coerce_bool(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        message = f"Field {field_name!r} must be a boolean."
+        raise TypeError(message)
+    return value
+
+
+def _coerce_str_sequence(value: object, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        message = (
+            f"Field {field_name!r} must be a sequence of strings."
+        )
+        raise TypeError(message)
+    return tuple(item for item in value if isinstance(item, str))
+
+
+def record_compile_resolver_invariants(
     profile: DataFusionRuntimeProfile,
     *,
-    label: str,
-    compile_count: int,
-    max_compiles: int,
-    distinct_resolver_count: int,
-    strict: bool,
-    violations: Sequence[str],
+    invariants: _CompileResolverInvariantInputs | None = None,
+    **kwargs: object,
 ) -> tuple[str, ...]:
     """Record compile/resolver invariant artifact and optionally enforce strict mode.
 
@@ -282,20 +345,23 @@ def record_compile_resolver_invariants(  # noqa: PLR0913
     """
     from serde_artifact_specs import COMPILE_RESOLVER_INVARIANTS_SPEC
 
-    normalized_violations = tuple(item for item in violations if item)
+    invariants_payload = _parse_compile_resolver_invariant_inputs(invariants, kwargs)
+    normalized_violations = tuple(item for item in invariants_payload.violations if item)
+    normalized_payload = _CompileResolverInvariantInputs(
+        label=invariants_payload.label,
+        compile_count=invariants_payload.compile_count,
+        max_compiles=invariants_payload.max_compiles,
+        distinct_resolver_count=invariants_payload.distinct_resolver_count,
+        strict=invariants_payload.strict,
+        violations=normalized_violations,
+    )
     profile.record_artifact(
         COMPILE_RESOLVER_INVARIANTS_SPEC,
-        compile_resolver_invariant_artifact_payload(
-            label=label,
-            compile_count=compile_count,
-            max_compiles=max_compiles,
-            distinct_resolver_count=distinct_resolver_count,
-            strict=strict,
-            violations=normalized_violations,
-        ),
+        compile_resolver_invariant_artifact_payload(invariants=normalized_payload),
     )
-    if strict and normalized_violations:
-        raise RuntimeError("\n".join(normalized_violations))
+    if normalized_payload.strict and normalized_violations:
+        message = "\n".join(normalized_violations)
+        raise RuntimeError(message)
     return normalized_violations
 
 

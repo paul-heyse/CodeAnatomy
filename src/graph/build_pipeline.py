@@ -10,8 +10,9 @@ from __future__ import annotations
 import importlib
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import msgspec
 from opentelemetry import trace
@@ -33,6 +34,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
+
+
+@dataclass(frozen=True)
+class _AuxiliaryOutputOptions:
+    include_errors: bool
+    include_manifest: bool
+    include_run_bundle: bool
 
 
 class BuildResult(msgspec.Struct, frozen=True):
@@ -172,14 +180,16 @@ def orchestrate_build(request: OrchestrateBuildRequestV1) -> BuildResult:
             request.engine_profile,
         )
         cpg_outputs = _collect_cpg_outputs(run_result, output_dir=output_dir)
-        auxiliary_outputs = _collect_auxiliary_outputs(
-            output_dir=output_dir,
-            artifacts=run_artifacts,
-            run_result=run_result,
-            extraction_result=extraction_result,
+        auxiliary_output_options = _AuxiliaryOutputOptions(
             include_errors=request.include_errors,
             include_manifest=request.include_manifest,
             include_run_bundle=request.include_run_bundle,
+        )
+        auxiliary_outputs = _collect_auxiliary_outputs(
+            output_dir=output_dir,
+            artifacts=run_artifacts,
+            extraction_result=extraction_result,
+            options=auxiliary_output_options,
         )
         _record_observability(spec, run_result)
         warnings = _extract_warnings(run_result)
@@ -233,7 +243,7 @@ def _run_extraction_phase(
     return extraction_result
 
 
-def _compile_semantic_phase(  # noqa: PLR0914
+def _compile_semantic_phase(
     semantic_input_locations: dict[str, str],
     engine_profile: str,
     rulepack_profile: str,
@@ -241,66 +251,113 @@ def _compile_semantic_phase(  # noqa: PLR0914
     output_dir: Path,
     runtime_config: object | None,
 ) -> tuple[SemanticExecutionContext, SemanticExecutionSpec]:
+    execution_context = _build_semantic_execution_context(
+        semantic_input_locations=semantic_input_locations,
+        engine_profile=engine_profile,
+    )
+    spec = _build_semantic_execution_spec(
+        semantic_input_locations=semantic_input_locations,
+        rulepack_profile=rulepack_profile,
+        output_dir=output_dir,
+        runtime_config=runtime_config,
+        semantic_execution_context=execution_context,
+    )
+    return execution_context, spec
+
+
+def _build_semantic_execution_context(
+    *,
+    semantic_input_locations: dict[str, str],
+    engine_profile: str,
+) -> SemanticExecutionContext:
     from extraction.runtime_profile import resolve_runtime_profile
-    from planning_engine.spec_contracts import RuntimeConfig, SemanticExecutionSpec
     from semantics.compile_context import build_semantic_execution_context
-    from serde_msgspec import to_builtins
 
     with stage_span("semantic_ir_compile", stage="semantic", scope_name=SCOPE_PIPELINE):
-        t_ir_start = time.monotonic()
+        t_start = time.monotonic()
         runtime_profile = resolve_runtime_profile(engine_profile)
-        ctx = runtime_profile.datafusion.session_context()
-
         execution_context = build_semantic_execution_context(
             runtime_profile=runtime_profile.datafusion,
             outputs=None,
             policy="schema_only",
-            ctx=ctx,
+            ctx=runtime_profile.datafusion.session_context(),
             input_mapping=semantic_input_locations,
         )
-        ir_elapsed = time.monotonic() - t_ir_start
+        ir_elapsed = time.monotonic() - t_start
         logger.info(
             "Semantic IR compiled in %.2fs (%d views, %d join groups)",
             ir_elapsed,
             len(execution_context.manifest.semantic_ir.views),
             len(execution_context.manifest.semantic_ir.join_groups),
         )
+    return execution_context
+
+
+def _build_semantic_execution_spec(
+    *,
+    semantic_input_locations: dict[str, str],
+    rulepack_profile: str,
+    output_dir: Path,
+    runtime_config: object | None,
+    semantic_execution_context: SemanticExecutionContext,
+) -> SemanticExecutionSpec:
+    from planning_engine.spec_contracts import SemanticExecutionSpec
 
     with stage_span("spec_build", stage="semantic", scope_name=SCOPE_PIPELINE):
         t_spec_start = time.monotonic()
-        try:
-            engine_module = importlib.import_module("codeanatomy_engine")
-        except ImportError:
-            msg = (
-                "codeanatomy_engine Rust extension not built. "
-                "Run: bash scripts/rebuild_rust_artifacts.sh"
-            )
-            raise ImportError(msg) from None
-        semantic_ir = execution_context.manifest.semantic_ir
-        output_targets = _resolve_output_targets()
-        output_locations = _resolve_output_locations(output_dir, output_targets)
-        resolved_runtime = runtime_config if isinstance(runtime_config, RuntimeConfig) else None
-        request_payload: dict[str, object] = {
-            "input_locations": semantic_input_locations,
-            "output_targets": output_targets,
-            "rulepack_profile": rulepack_profile,
-            "output_locations": output_locations,
-            "runtime": (
-                to_builtins(resolved_runtime, str_keys=True)
-                if resolved_runtime is not None
-                else None
-            ),
-        }
+        engine_module = _load_codeanatomy_engine_module()
+        request_payload = _build_semantic_spec_request_payload(
+            semantic_input_locations=semantic_input_locations,
+            rulepack_profile=rulepack_profile,
+            output_dir=output_dir,
+            runtime_config=runtime_config,
+        )
         compiler = engine_module.SemanticPlanCompiler()
+        from serde_msgspec import to_builtins
+
         spec_json = compiler.build_spec_json(
-            msgspec.json.encode(to_builtins(semantic_ir, str_keys=True)).decode(),
+            msgspec.json.encode(
+                to_builtins(semantic_execution_context.manifest.semantic_ir, str_keys=True)
+            ).decode(),
             msgspec.json.encode(request_payload).decode(),
         )
         spec = msgspec.json.decode(spec_json, type=SemanticExecutionSpec)
         spec_elapsed = time.monotonic() - t_spec_start
         logger.info("Execution spec built in %.2fs", spec_elapsed)
+    return spec
 
-    return execution_context, spec
+
+def _load_codeanatomy_engine_module() -> Any:
+    try:
+        return importlib.import_module("codeanatomy_engine")
+    except ImportError as exc:
+        msg = (
+            "codeanatomy_engine Rust extension not built. "
+            "Run: bash scripts/rebuild_rust_artifacts.sh"
+        )
+        raise ImportError(msg) from exc
+
+
+def _build_semantic_spec_request_payload(
+    *,
+    semantic_input_locations: dict[str, str],
+    rulepack_profile: str,
+    output_dir: Path,
+    runtime_config: object | None,
+) -> dict[str, object]:
+    from planning_engine.spec_contracts import RuntimeConfig
+    from serde_msgspec import to_builtins
+
+    output_targets = _resolve_output_targets()
+    output_locations = _resolve_output_locations(output_dir, output_targets)
+    runtime = runtime_config if isinstance(runtime_config, RuntimeConfig) else None
+    return {
+        "input_locations": semantic_input_locations,
+        "output_targets": output_targets,
+        "rulepack_profile": rulepack_profile,
+        "output_locations": output_locations,
+        "runtime": to_builtins(runtime, str_keys=True) if runtime is not None else None,
+    }
 
 
 def _execute_engine_phase(
@@ -413,65 +470,35 @@ def _collect_cpg_outputs(
     output_dir: Path,
 ) -> dict[str, dict[str, object]]:
     with stage_span("collect_outputs", stage="orchestrator", scope_name=SCOPE_PIPELINE):
-        outputs: dict[str, dict[str, object]] = {}
         outputs_field = run_result.get("outputs")
         if not isinstance(outputs_field, (list, tuple)):
-            return outputs
+            return {}
 
+        outputs = {}
         for output in outputs_field:
-            if not isinstance(output, dict):
+            resolved = _build_cpg_output_payload(output=output, output_dir=output_dir)
+            if resolved is None:
                 continue
-            table_name = output.get("table_name")
-            delta_location = output.get("delta_location")
-            if not isinstance(table_name, str):
-                continue
-            canonical_name = canonical_cpg_output_name(table_name)
-            if canonical_name not in ENGINE_CPG_OUTPUTS:
-                continue
-            location = (
-                delta_location
-                if isinstance(delta_location, str) and delta_location
-                else str(output_dir / canonical_name)
-            )
-            rows = output.get("rows_written", 0)
-            row_count = int(rows) if isinstance(rows, (int, float)) else 0
-            payload: dict[str, object] = {
-                "table_name": canonical_name,
-                "path": location,
-                "rows": row_count,
-                "rows_written": row_count,
-                "partition_count": output.get("partition_count"),
-                "delta_version": output.get("delta_version"),
-                "files_added": output.get("files_added"),
-                "bytes_written": output.get("bytes_written"),
-                "error_rows": 0,
-                "paths": {
-                    "data": location,
-                    "errors": str(Path(location) / "_errors"),
-                    "stats": str(Path(location) / "_stats"),
-                    "alignment": str(Path(location) / "_alignment"),
-                },
-            }
-            outputs[canonical_name] = payload
-            legacy = CPG_OUTPUT_CANONICAL_TO_LEGACY.get(canonical_name)
-            if legacy is not None:
-                outputs[legacy] = payload
+            output_name, payload = resolved
+            outputs[output_name] = payload
+            legacy_name = CPG_OUTPUT_CANONICAL_TO_LEGACY.get(output_name)
+            if legacy_name is not None:
+                outputs[legacy_name] = payload
         logger.info("Collected %d CPG outputs", len(outputs))
     return outputs
 
 
-def _collect_auxiliary_outputs(  # noqa: PLR0913
+
+def _collect_auxiliary_outputs(
     *,
     output_dir: Path,
     artifacts: dict[str, object],
-    run_result: dict[str, object],
     extraction_result: ExtractionResult,
-    include_errors: bool,
-    include_manifest: bool,
-    include_run_bundle: bool,
+    options: _AuxiliaryOutputOptions,
 ) -> dict[str, dict[str, object]]:
+    run_result: dict[str, object] = {}
+    _ = run_result
     with stage_span("auxiliary_outputs", stage="orchestrator", scope_name=SCOPE_PIPELINE):
-        _ = run_result, extraction_result
         auxiliary: dict[str, dict[str, object]] = {}
         paths = _artifact_path_map(artifacts, output_dir=output_dir)
 
@@ -481,7 +508,7 @@ def _collect_auxiliary_outputs(  # noqa: PLR0913
             auxiliary["normalize_outputs_delta"] = payload
             auxiliary["write_normalize_outputs_delta"] = payload
 
-        if include_errors:
+        if options.include_errors:
             error_location = paths.get("extract_error_artifacts_delta")
             if isinstance(error_location, str) and error_location:
                 payload: dict[str, object] = {
@@ -491,14 +518,14 @@ def _collect_auxiliary_outputs(  # noqa: PLR0913
                 auxiliary["extract_error_artifacts_delta"] = payload
                 auxiliary["write_extract_error_artifacts_delta"] = payload
 
-        if include_manifest:
+        if options.include_manifest:
             manifest_location = paths.get("run_manifest_delta")
             if isinstance(manifest_location, str) and manifest_location:
                 payload: dict[str, object] = {"path": manifest_location}
                 auxiliary["run_manifest_delta"] = payload
                 auxiliary["write_run_manifest_delta"] = payload
 
-        if include_run_bundle:
+        if options.include_run_bundle:
             bundle_location = paths.get("run_bundle_dir")
             if isinstance(bundle_location, str) and bundle_location:
                 payload: dict[str, object] = {
@@ -511,6 +538,48 @@ def _collect_auxiliary_outputs(  # noqa: PLR0913
         logger.info("Collected %d auxiliary outputs from Rust artifacts", len(auxiliary))
 
     return auxiliary
+
+
+def _build_cpg_output_payload(
+    output: object,
+    *,
+    output_dir: Path,
+) -> tuple[str, dict[str, object]] | None:
+    if not isinstance(output, dict):
+        return None
+    table_name = output.get("table_name")
+    if not isinstance(table_name, str):
+        return None
+
+    canonical_name = canonical_cpg_output_name(table_name)
+    if canonical_name not in ENGINE_CPG_OUTPUTS:
+        return None
+
+    delta_location = output.get("delta_location")
+    location = (
+        delta_location
+        if isinstance(delta_location, str) and delta_location
+        else str(output_dir / canonical_name)
+    )
+    rows = output.get("rows_written", 0)
+    row_count = int(rows) if isinstance(rows, (int, float)) else 0
+    return canonical_name, {
+        "table_name": canonical_name,
+        "path": location,
+        "rows": row_count,
+        "rows_written": row_count,
+        "partition_count": output.get("partition_count"),
+        "delta_version": output.get("delta_version"),
+        "files_added": output.get("files_added"),
+        "bytes_written": output.get("bytes_written"),
+        "error_rows": 0,
+        "paths": {
+            "data": location,
+            "errors": str(Path(location) / "_errors"),
+            "stats": str(Path(location) / "_stats"),
+            "alignment": str(Path(location) / "_alignment"),
+        },
+    }
 
 
 def _artifact_path_map(

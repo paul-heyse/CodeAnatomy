@@ -122,6 +122,33 @@ class CqCacheBackend(Protocol):
         _ = self
         return None
 
+    def touch(self, key: str, *, expire: int | None = None) -> bool:
+        """Refresh key TTL when backend supports touch semantics.
+
+        Returns:
+            bool: ``True`` when TTL refresh succeeds, otherwise ``False``.
+        """
+        _ = (self, key, expire)
+        return False
+
+    def expire(self) -> int | None:
+        """Trigger backend expiry cleanup when supported.
+
+        Returns:
+            int | None: Number of expired entries removed.
+        """
+        _ = self
+        return None
+
+    def check(self, *, fix: bool = False) -> int | None:
+        """Run backend integrity check when supported.
+
+        Returns:
+            int | None: Integrity errors detected (or fixed) count.
+        """
+        _ = (self, fix)
+        return None
+
     def close(self) -> None:
         """Close backend resources.
 
@@ -244,6 +271,33 @@ class NoopCacheBackend:
             int | None: Always `None` in no-op backend.
         """
         _ = self
+        return None
+
+    def touch(self, key: str, *, expire: int | None = None) -> bool:
+        """No-op touch.
+
+        Returns:
+            bool: Always ``False`` in no-op backend.
+        """
+        _ = (self, key, expire)
+        return False
+
+    def expire(self) -> int | None:
+        """No-op expiry sweep.
+
+        Returns:
+            int | None: Always ``None`` in no-op backend.
+        """
+        _ = self
+        return None
+
+    def check(self, *, fix: bool = False) -> int | None:
+        """No-op integrity check.
+
+        Returns:
+            int | None: Always ``None`` in no-op backend.
+        """
+        _ = (self, fix)
         return None
 
     def close(self) -> None:

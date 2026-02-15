@@ -6,11 +6,14 @@ payload that never alters ranking, counts, or category classification.
 
 from __future__ import annotations
 
-import re
 from functools import lru_cache
-from hashlib import blake2b
 from typing import TYPE_CHECKING
 
+import msgspec
+
+from tools.cq.search.tree_sitter_diagnostics import collect_tree_sitter_diagnostics
+from tools.cq.search.tree_sitter_pack_contracts import load_pack_rules
+from tools.cq.search.tree_sitter_parse_session import clear_parse_session, get_parse_session
 from tools.cq.search.tree_sitter_query_registry import load_query_pack_sources
 from tools.cq.search.tree_sitter_runtime import run_bounded_query_captures
 from tools.cq.search.tree_sitter_runtime_contracts import (
@@ -34,33 +37,12 @@ except ImportError:  # pragma: no cover - optional dependency
     _TreeSitterQuery = None
     _TreeSitterQueryCursor = None
 
-_MAX_TREE_CACHE_ENTRIES = 64
-_TREE_CACHE: dict[str, tuple[Tree, str]] = {}
 _MAX_SOURCE_BYTES = 5 * 1024 * 1024
 _MAX_CAPTURE_ITEMS = 8
 _MAX_CAPTURE_TEXT_LEN = 120
 _DEFAULT_MATCH_LIMIT = 4_096
-_QUERY_TIMEOUT_SECONDS = 0.035
 _ENRICHMENT_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError, UnicodeError)
-_COMPILE_ERRORS = (RuntimeError, TypeError, ValueError, AttributeError)
 _STOP_CONTEXT_KINDS: frozenset[str] = frozenset({"module", "source_file"})
-
-
-class _CacheStats:
-    """Mutable cache counter holder."""
-
-    def __init__(self) -> None:
-        """Initialize zeroed cache counters."""
-        self.hits = 0
-        self.misses = 0
-        self.evictions = 0
-
-
-_CACHE_STATS = _CacheStats()
-
-
-def _source_hash(source_bytes: bytes) -> str:
-    return blake2b(source_bytes, digest_size=16).hexdigest()
 
 
 def is_tree_sitter_python_available() -> bool:
@@ -101,42 +83,45 @@ def _parse_tree(source_bytes: bytes) -> Tree:
     return tree
 
 
-def _get_tree(source: str, *, cache_key: str | None) -> tuple[Tree, bytes]:
+def _parse_with_session(source: str, *, cache_key: str | None) -> tuple[Tree | None, bytes]:
     source_bytes = source.encode("utf-8", errors="replace")
-    if cache_key is None:
-        _CACHE_STATS.misses += 1
-        return _parse_tree(source_bytes), source_bytes
-
-    content_hash = _source_hash(source_bytes)
-    cached = _TREE_CACHE.get(cache_key)
-    if cached is not None:
-        cached_tree, cached_hash = cached
-        if cached_hash == content_hash:
-            _CACHE_STATS.hits += 1
-            return cached_tree, source_bytes
-
-    _CACHE_STATS.misses += 1
-    tree = _parse_tree(source_bytes)
-    if len(_TREE_CACHE) >= _MAX_TREE_CACHE_ENTRIES and cache_key not in _TREE_CACHE:
-        oldest = next(iter(_TREE_CACHE))
-        del _TREE_CACHE[oldest]
-        _CACHE_STATS.evictions += 1
-    _TREE_CACHE[cache_key] = (tree, content_hash)
+    if not is_tree_sitter_python_available():
+        return None, source_bytes
+    session = get_parse_session(language="python", parser_factory=_make_parser)
+    tree, _changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
     return tree, source_bytes
+
+
+def parse_python_tree_with_ranges(
+    source: str,
+    *,
+    cache_key: str | None = None,
+) -> tuple[Tree | None, tuple[object, ...]]:
+    """Parse source and return tree with changed ranges when incremental parse is used.
+
+    Returns:
+        tuple[Tree | None, tuple[object, ...]]: Parsed tree and changed ranges
+            (empty when caching is unavailable or no changes are tracked).
+    """
+    source_bytes = source.encode("utf-8", errors="replace")
+    if not is_tree_sitter_python_available():
+        return None, ()
+    session = get_parse_session(language="python", parser_factory=_make_parser)
+    tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
+    return tree, changed_ranges
 
 
 def parse_python_tree(source: str, *, cache_key: str | None = None) -> Tree | None:
     """Parse and optionally cache a tree-sitter Python tree.
 
     Returns:
-    -------
-    Tree | None
-        Parsed syntax tree, or ``None`` when unavailable or parsing fails.
+        Tree | None: Parsed syntax tree, or ``None`` when unavailable or parsing
+            fails.
     """
     if not is_tree_sitter_python_available():
         return None
     try:
-        tree, _ = _get_tree(source, cache_key=cache_key)
+        tree, _ = _parse_with_session(source, cache_key=cache_key)
     except _ENRICHMENT_ERRORS:
         return None
     return tree
@@ -144,20 +129,23 @@ def parse_python_tree(source: str, *, cache_key: str | None = None) -> Tree | No
 
 def clear_tree_sitter_python_cache() -> None:
     """Clear parser/query caches and reset observability counters."""
-    _TREE_CACHE.clear()
+    clear_parse_session(language="python")
     _python_language.cache_clear()
     _compile_query.cache_clear()
-    _CACHE_STATS.hits = 0
-    _CACHE_STATS.misses = 0
-    _CACHE_STATS.evictions = 0
 
 
 def get_tree_sitter_python_cache_stats() -> dict[str, int]:
     """Return tree-sitter Python cache counters."""
+    session = get_parse_session(language="python", parser_factory=_make_parser)
+    stats = session.stats()
     return {
-        "cache_hits": _CACHE_STATS.hits,
-        "cache_misses": _CACHE_STATS.misses,
-        "cache_evictions": _CACHE_STATS.evictions,
+        "entries": stats.entries,
+        "cache_hits": stats.cache_hits,
+        "cache_misses": stats.cache_misses,
+        "cache_evictions": 0,
+        "parse_count": stats.parse_count,
+        "reparse_count": stats.reparse_count,
+        "edit_failures": stats.edit_failures,
     }
 
 
@@ -174,7 +162,17 @@ def _compile_query(_filename: str, source: str) -> Query:
     if _TreeSitterQuery is None:
         msg = "tree_sitter query bindings are unavailable"
         raise RuntimeError(msg)
-    return _TreeSitterQuery(_python_language(), source)
+    query = _TreeSitterQuery(_python_language(), source)
+    rules = load_pack_rules("python")
+    pattern_count = int(getattr(query, "pattern_count", 0))
+    for pattern_idx in range(pattern_count):
+        if rules.require_rooted and not bool(query.is_pattern_rooted(pattern_idx)):
+            msg = f"python query pattern not rooted: {pattern_idx}"
+            raise ValueError(msg)
+        if rules.forbid_non_local and bool(query.is_pattern_non_local(pattern_idx)):
+            msg = f"python query pattern non-local: {pattern_idx}"
+            raise ValueError(msg)
+    return query
 
 
 def _safe_cursor_captures(
@@ -339,11 +337,7 @@ def _finalize_gap_fill_payload(payload: dict[str, object]) -> None:
     payload.setdefault("binding_candidates", [])
     payload.setdefault("import_alias_chain", [])
     call_target = payload.get("call_target")
-    if (
-        not payload["qualified_name_candidates"]
-        and isinstance(call_target, str)
-        and call_target
-    ):
+    if not payload["qualified_name_candidates"] and isinstance(call_target, str) and call_target:
         payload["qualified_name_candidates"] = [{"name": call_target, "source": "tree_sitter"}]
     if not payload["binding_candidates"]:
         binding_candidate = _binding_candidate_from_call_target(call_target)
@@ -646,9 +640,7 @@ def enrich_python_context_by_byte_range(
     dict[str, object] | None
         Enrichment payload, or ``None`` when enrichment is unavailable.
     """
-    if byte_start < 0 or byte_end <= byte_start:
-        return None
-    if not is_tree_sitter_python_available():
+    if byte_start < 0 or byte_end <= byte_start or not is_tree_sitter_python_available():
         return None
 
     source_bytes = source.encode("utf-8", errors="replace")
@@ -668,10 +660,15 @@ def enrich_python_context_by_byte_range(
         return payload
 
     try:
-        tree, source_bytes = _get_tree(source, cache_key=cache_key)
+        tree, source_bytes = _parse_with_session(source, cache_key=cache_key)
     except _ENRICHMENT_ERRORS as exc:
         payload["enrichment_status"] = "degraded"
         payload["degrade_reason"] = type(exc).__name__
+        payload["parse_quality"] = _default_parse_quality()
+        return payload
+    if tree is None:
+        payload["enrichment_status"] = "degraded"
+        payload["degrade_reason"] = "parse_unavailable"
         payload["parse_quality"] = _default_parse_quality()
         return payload
 
@@ -688,6 +685,13 @@ def enrich_python_context_by_byte_range(
         byte_end=window_end,
     )
     payload["parse_quality"] = parse_quality
+    diagnostics = collect_tree_sitter_diagnostics(
+        language="python",
+        root=root,
+        windows=(QueryWindowV1(start_byte=window_start, end_byte=window_end),),
+        match_limit=1024,
+    )
+    payload["tree_sitter_diagnostics"] = [msgspec.to_builtins(row) for row in diagnostics]
 
     try:
         payload.update(
@@ -705,52 +709,11 @@ def enrich_python_context_by_byte_range(
     return payload
 
 
-def lint_python_query_packs() -> list[str]:
-    """Validate query packs by compile and by node/field references.
-
-    Returns:
-    -------
-    list[str]
-        Validation errors found in the query pack set.
-    """
-    errors: list[str] = []
-    if not is_tree_sitter_python_available():
-        return errors
-    language = _python_language()
-    node_pattern = re.compile(r"\(([A-Za-z_][A-Za-z0-9_]*)")
-    field_pattern = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:")
-    named_node_kind = True
-    unnamed_node_kind = False
-
-    for filename, source in _query_sources().items():
-        try:
-            _compile_query(filename, source)
-        except _COMPILE_ERRORS as exc:
-            errors.append(f"{filename}: compile_error:{type(exc).__name__}")
-            continue
-
-        for node_kind in node_pattern.findall(source):
-            if node_kind in {"ERROR", "MISSING", "_"}:
-                continue
-            if (
-                language.id_for_node_kind(node_kind, named_node_kind) is None
-                and language.id_for_node_kind(node_kind, unnamed_node_kind) is None
-            ):
-                errors.append(f"{filename}: unknown_node:{node_kind}")
-
-        errors.extend(
-            f"{filename}: unknown_field:{field_name}"
-            for field_name in field_pattern.findall(source)
-            if language.field_id_for_name(field_name) is None
-        )
-    return errors
-
-
 __all__ = [
     "clear_tree_sitter_python_cache",
     "enrich_python_context_by_byte_range",
     "get_tree_sitter_python_cache_stats",
     "is_tree_sitter_python_available",
-    "lint_python_query_packs",
     "parse_python_tree",
+    "parse_python_tree_with_ranges",
 ]

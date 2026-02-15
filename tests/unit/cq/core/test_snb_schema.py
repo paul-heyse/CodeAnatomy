@@ -8,6 +8,7 @@ from tools.cq.core.snb_schema import (
     BundleMetaV1,
     DegradeEventV1,
     NeighborhoodGraphSummaryV1,
+    NeighborhoodSliceKind,
     NeighborhoodSliceV1,
     SemanticEdgeV1,
     SemanticNeighborhoodBundleRefV1,
@@ -105,7 +106,7 @@ def test_semantic_edge_v1_construction() -> None:
 
 def test_neighborhood_slice_kind_contains_all_values() -> None:
     """Test NeighborhoodSliceKind contains all 13 expected values."""
-    expected_kinds = {
+    expected_kinds: set[NeighborhoodSliceKind] = {
         "callers",
         "callees",
         "references",
@@ -123,7 +124,7 @@ def test_neighborhood_slice_kind_contains_all_values() -> None:
     # NeighborhoodSliceKind is a Literal type, so we can't iterate it directly
     # but we can test construction with each value
     for kind in expected_kinds:
-        slice_v1 = NeighborhoodSliceV1(kind=kind, title=f"{kind} slice")  # type: ignore[arg-type]
+        slice_v1 = NeighborhoodSliceV1(kind=kind, title=f"{kind} slice")
         assert slice_v1.kind == kind
 
 
@@ -338,7 +339,7 @@ def test_semantic_neighborhood_bundle_v1_with_full_data() -> None:
         "related",
     ],
 )
-def test_all_neighborhood_slice_kinds(kind: str) -> None:
+def test_all_neighborhood_slice_kinds(kind: NeighborhoodSliceKind) -> None:
     """Test that all 13 NeighborhoodSliceKind values are valid."""
-    slice_v1 = NeighborhoodSliceV1(kind=kind, title=f"{kind} test")  # type: ignore[arg-type]
+    slice_v1 = NeighborhoodSliceV1(kind=kind, title=f"{kind} test")
     assert slice_v1.kind == kind

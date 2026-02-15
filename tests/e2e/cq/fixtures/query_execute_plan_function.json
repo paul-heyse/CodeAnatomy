@@ -316,8 +316,8 @@
       "counts": {
         "diagnostics": 0,
         "injections": 0,
-        "locals": 3,
-        "semantic_tokens": 3
+        "locals": 2,
+        "semantic_tokens": 2
       },
       "degradation": [],
       "language": "python",
@@ -325,10 +325,6 @@
         "diagnostics": [],
         "injections": [],
         "locals": [
-          {
-            "kind": "scope",
-            "name": "<module>"
-          },
           {
             "kind": "qualified_name",
             "name": "ExecutePlanRequestV1"
@@ -346,10 +342,6 @@
           {
             "kind": "item_role",
             "value": "free_function"
-          },
-          {
-            "kind": "signature",
-            "value": "def execute_plan(request: ExecutePlanRequestV1, *, tc: Toolchain) -> CqResult"
           }
         ]
       },

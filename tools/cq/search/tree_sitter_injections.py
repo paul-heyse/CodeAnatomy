@@ -17,6 +17,10 @@ class InjectionPlanV1(CqStruct, frozen=True):
     language: str
     start_byte: int
     end_byte: int
+    start_row: int = 0
+    start_col: int = 0
+    end_row: int = 0
+    end_col: int = 0
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
@@ -45,7 +49,7 @@ def build_injection_plan(
     if not content_nodes:
         return ()
 
-    planned: OrderedDict[tuple[str, int, int], None] = OrderedDict()
+    planned: OrderedDict[tuple[str, int, int, int, int, int, int], None] = OrderedDict()
     for idx, node in enumerate(content_nodes):
         language = default_language
         if idx < len(language_nodes):
@@ -56,11 +60,29 @@ def build_injection_plan(
         end_byte = int(getattr(node, "end_byte", start_byte))
         if end_byte <= start_byte:
             continue
-        planned[language, start_byte, end_byte] = None
+        start_point = getattr(node, "start_point", (0, 0))
+        end_point = getattr(node, "end_point", start_point)
+        planned[
+            language,
+            start_byte,
+            end_byte,
+            int(start_point[0]),
+            int(start_point[1]),
+            int(end_point[0]),
+            int(end_point[1]),
+        ] = None
 
     return tuple(
-        InjectionPlanV1(language=language, start_byte=start_byte, end_byte=end_byte)
-        for language, start_byte, end_byte in planned
+        InjectionPlanV1(
+            language=language,
+            start_byte=start_byte,
+            end_byte=end_byte,
+            start_row=start_row,
+            start_col=start_col,
+            end_row=end_row,
+            end_col=end_col,
+        )
+        for language, start_byte, end_byte, start_row, start_col, end_row, end_col in planned
     )
 
 

@@ -1679,14 +1679,11 @@ def _static_extract_base_schema_for(name: str) -> pa.Schema | None:
     return static_root_schemas.get(name)
 
 
-def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:  # noqa: C901
+def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:
     from datafusion_engine.extract.metadata import extract_metadata_by_name
     from datafusion_engine.schema.derivation import derive_nested_dataset_schema
     from datafusion_engine.schema.nested_views import (
         NESTED_DATASET_INDEX,
-        extract_nested_context_for,
-        identity_fields_for,
-        struct_for_path,
     )
     from utils.schema_from_struct import schema_from_struct
 
@@ -1695,30 +1692,18 @@ def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:  # noqa: 
         return None
     root_name = spec["root"]
     nested_path = spec["path"]
-
     metadata = extract_metadata_by_name().get(root_name)
     if metadata is None:
         return None
-    candidate_root_schemas: list[pa.Schema] = []
-    derived_root_schema = _derived_extract_base_schema_for(root_name)
-    if derived_root_schema is not None:
-        candidate_root_schemas.append(derived_root_schema)
-    static_root_schema = _static_extract_base_schema_for(root_name)
-    if static_root_schema is not None and static_root_schema not in candidate_root_schemas:
-        candidate_root_schemas.append(static_root_schema)
 
-    root_schema: pa.Schema | None = None
-    row_struct: pa.StructType | None = None
-    for candidate_schema in candidate_root_schemas:
-        try:
-            candidate_row_struct = struct_for_path(candidate_schema, nested_path)
-        except (KeyError, TypeError, ValueError):
-            continue
-        root_schema = candidate_schema
-        row_struct = candidate_row_struct
-        break
-    if root_schema is None or row_struct is None:
+    candidate_info = _resolve_nested_dataset_context(
+        root_name=root_name,
+        nested_path=nested_path,
+        metadata=metadata,
+    )
+    if candidate_info is None:
         return None
+    root_schema, row_struct = candidate_info
 
     row_schema = _resolve_nested_row_schema_authority(
         dataset_name=name,
@@ -1729,6 +1714,73 @@ def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:  # noqa: 
         ),
         struct_schema=schema_from_struct(row_struct),
     )
+    selections = _collect_nested_schema_fields(
+        name=name,
+        root_schema=root_schema,
+        row_struct=row_struct,
+        row_schema=row_schema,
+    )
+    return pa.schema(selections)
+
+
+def _resolve_nested_dataset_context(
+    *,
+    metadata: object,
+    root_name: str,
+    nested_path: str,
+) -> tuple[pa.Schema, pa.StructType] | None:
+    candidate_root_schemas = _nested_dataset_root_schemas(root_name)
+    if not candidate_root_schemas:
+        return None
+    candidate = _resolve_nested_row_struct(
+        candidate_root_schemas=candidate_root_schemas,
+        nested_path=nested_path,
+    )
+    if candidate is None:
+        return None
+    if metadata is None:
+        return None
+    return candidate
+
+
+def _nested_dataset_root_schemas(root_name: str) -> tuple[pa.Schema, ...]:
+    derived_root_schema = _derived_extract_base_schema_for(root_name)
+    static_root_schema = _static_extract_base_schema_for(root_name)
+    if derived_root_schema is None:
+        return (static_root_schema,) if static_root_schema is not None else ()
+    if static_root_schema is None or static_root_schema == derived_root_schema:
+        return (derived_root_schema,)
+    return (derived_root_schema, static_root_schema)
+
+
+def _resolve_nested_row_struct(
+    *,
+    candidate_root_schemas: tuple[pa.Schema, ...],
+    nested_path: str,
+) -> tuple[pa.Schema, pa.StructType] | None:
+    from datafusion_engine.schema.nested_views import struct_for_path
+
+    for candidate_schema in candidate_root_schemas:
+        try:
+            row_struct = struct_for_path(candidate_schema, nested_path)
+        except (KeyError, TypeError, ValueError):
+            continue
+        return candidate_schema, row_struct
+    return None
+
+
+def _collect_nested_schema_fields(
+    *,
+    name: str,
+    root_schema: pa.Schema,
+    row_struct: pa.StructType,
+    row_schema: pa.Schema,
+) -> list[pa.Field]:
+    from datafusion_engine.schema.nested_views import (
+        extract_nested_context_for,
+        identity_fields_for,
+    )
+
     selections: list[pa.Field] = []
     selected_names: set[str] = set()
     for field_name in identity_fields_for(name, root_schema, row_struct):
@@ -1736,10 +1788,14 @@ def _derived_extract_nested_schema_for(name: str) -> pa.Schema | None:  # noqa: 
         _append_schema_field(selections, selected_names, field=field)
     for alias, ctx_path in extract_nested_context_for(name).items():
         field = _field_for_path(root_schema, ctx_path)
-        _append_schema_field(selections, selected_names, field=_clone_field(field, name=alias))
+        _append_schema_field(
+            selections,
+            selected_names,
+            field=_clone_field(field, name=alias),
+        )
     for field in row_schema:
         _append_schema_field(selections, selected_names, field=field)
-    return pa.schema(selections)
+    return selections
 
 
 def _derived_extract_schema_for(name: str) -> pa.Schema | None:

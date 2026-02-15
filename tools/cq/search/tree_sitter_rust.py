@@ -13,15 +13,24 @@ They may affect: containing_scope display (used only for grouping in output).
 
 from __future__ import annotations
 
-import hashlib
-from collections.abc import Callable
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.search.tree_sitter_diagnostics import collect_tree_sitter_diagnostics
+from tools.cq.search.tree_sitter_injection_runtime import parse_injected_ranges
 from tools.cq.search.tree_sitter_injections import build_injection_plan
-from tools.cq.search.tree_sitter_runtime import run_bounded_query_captures
+from tools.cq.search.tree_sitter_match_row_contracts import ObjectEvidenceRowV1
+from tools.cq.search.tree_sitter_match_rows import build_match_rows
+from tools.cq.search.tree_sitter_pack_contracts import load_pack_rules
+from tools.cq.search.tree_sitter_parse_session import clear_parse_session, get_parse_session
+from tools.cq.search.tree_sitter_runtime import (
+    run_bounded_query_captures,
+    run_bounded_query_matches,
+)
 from tools.cq.search.tree_sitter_runtime_contracts import (
     QueryExecutionSettingsV1,
     QueryWindowV1,
@@ -58,26 +67,6 @@ _SCOPE_KINDS: tuple[str, ...] = (
     "macro_invocation",
 )
 
-# ---------------------------------------------------------------------------
-# Cache infrastructure
-# ---------------------------------------------------------------------------
-
-_MAX_TREE_CACHE_ENTRIES = 64
-_TREE_CACHE: dict[str, tuple[Tree, str]] = {}
-
-
-class _CacheStats:
-    """Mutable cache counter holder."""
-
-    def __init__(self) -> None:
-        """Initialize zeroed cache counters."""
-        self.hits = 0
-        self.misses = 0
-        self.evictions = 0
-
-
-_CACHE_STATS = _CacheStats()
-
 _DEFAULT_SCOPE_DEPTH = 24
 _MAX_SCOPE_NODES = 256
 MAX_SOURCE_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -99,6 +88,9 @@ _MAX_VARIANTS_SHOWN = 12
 _MAX_MEMBER_TEXT_LEN = 60
 _MAX_CALL_TARGET_LEN = 120
 _MAX_CALL_RECEIVER_LEN = 80
+_MAX_TREE_CACHE_ENTRIES = 128
+_TREE_CACHE: OrderedDict[str, None] = OrderedDict()
+_TREE_CACHE_EVICTIONS = {"value": 0}
 
 # ---------------------------------------------------------------------------
 # Enrichment field groups (documentation / validation reference)
@@ -175,22 +167,6 @@ def _truncate(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return text[: max(1, max_len - 3)] + "..."
-
-
-def _source_hash(source_bytes: bytes) -> str:
-    """Compute a fast content hash for cache staleness detection.
-
-    Parameters
-    ----------
-    source_bytes
-        Raw file bytes to hash.
-
-    Returns:
-    -------
-    str
-        Hex digest of BLAKE2b-128.
-    """
-    return hashlib.blake2b(source_bytes, digest_size=16).hexdigest()
 
 
 def _byte_col_to_char_col(source_bytes: bytes, line_start_byte: int, byte_col: int) -> int:
@@ -294,49 +270,52 @@ def _parse_tree(source_bytes: bytes) -> Tree:
     return tree
 
 
-def _get_tree(source: str, *, cache_key: str | None) -> tuple[Tree, bytes]:
+def _touch_tree_cache(session: object, cache_key: str | None) -> None:
+    if not cache_key:
+        return
+    if cache_key in _TREE_CACHE:
+        _TREE_CACHE.move_to_end(cache_key)
+        return
+    _TREE_CACHE[cache_key] = None
+    while len(_TREE_CACHE) > _MAX_TREE_CACHE_ENTRIES:
+        stale_key, _ = _TREE_CACHE.popitem(last=False)
+        entries = getattr(session, "_entries", None)
+        if isinstance(entries, dict):
+            entries.pop(stale_key, None)
+        _TREE_CACHE_EVICTIONS["value"] += 1
+
+
+def _parse_with_session(source: str, *, cache_key: str | None) -> tuple[Tree | None, bytes]:
     source_bytes = source.encode("utf-8", errors="replace")
-    if cache_key is None:
-        _CACHE_STATS.misses += 1
-        return _parse_tree(source_bytes), source_bytes
-
-    content_hash = _source_hash(source_bytes)
-    cached = _TREE_CACHE.get(cache_key)
-    if cached is not None:
-        cached_tree, cached_hash = cached
-        if cached_hash == content_hash:
-            _CACHE_STATS.hits += 1
-            return cached_tree, source_bytes
-        # Stale entry -- fall through to re-parse
-
-    _CACHE_STATS.misses += 1
-    tree = _parse_tree(source_bytes)
-
-    # Evict oldest entry (FIFO) when at capacity
-    if len(_TREE_CACHE) >= _MAX_TREE_CACHE_ENTRIES and cache_key not in _TREE_CACHE:
-        oldest_key = next(iter(_TREE_CACHE))
-        del _TREE_CACHE[oldest_key]
-        _CACHE_STATS.evictions += 1
-
-    _TREE_CACHE[cache_key] = (tree, content_hash)
+    if not is_tree_sitter_rust_available():
+        return None, source_bytes
+    session = get_parse_session(language="rust", parser_factory=_make_parser)
+    _touch_tree_cache(session=session, cache_key=cache_key)
+    tree, _changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
     return tree, source_bytes
 
 
 def clear_tree_sitter_rust_cache() -> None:
     """Clear per-process Rust parser caches and reset debug counters."""
+    clear_parse_session(language="rust")
     _TREE_CACHE.clear()
+    _TREE_CACHE_EVICTIONS["value"] = 0
     _rust_language.cache_clear()
-    _CACHE_STATS.hits = 0
-    _CACHE_STATS.misses = 0
-    _CACHE_STATS.evictions = 0
+    _compile_query.cache_clear()
 
 
 def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
     """Return cache counters for observability/debugging."""
+    session = get_parse_session(language="rust", parser_factory=_make_parser)
+    stats = session.stats()
     return {
-        "cache_hits": _CACHE_STATS.hits,
-        "cache_misses": _CACHE_STATS.misses,
-        "cache_evictions": _CACHE_STATS.evictions,
+        "entries": stats.entries,
+        "cache_hits": stats.cache_hits,
+        "cache_misses": stats.cache_misses,
+        "cache_evictions": _TREE_CACHE_EVICTIONS["value"],
+        "parse_count": stats.parse_count,
+        "reparse_count": stats.reparse_count,
+        "edit_failures": stats.edit_failures,
     }
 
 
@@ -346,7 +325,17 @@ def _compile_query(pack_name: str, source: str) -> Query:
         msg = "tree_sitter query bindings are unavailable"
         raise RuntimeError(msg)
     _ = pack_name
-    return _TreeSitterQuery(_rust_language(), source)
+    query = _TreeSitterQuery(_rust_language(), source)
+    rules = load_pack_rules("rust")
+    pattern_count = int(getattr(query, "pattern_count", 0))
+    for pattern_idx in range(pattern_count):
+        if rules.require_rooted and not bool(query.is_pattern_rooted(pattern_idx)):
+            msg = f"rust query pattern not rooted: {pattern_idx}"
+            raise ValueError(msg)
+        if rules.forbid_non_local and bool(query.is_pattern_non_local(pattern_idx)):
+            msg = f"rust query pattern non-local: {pattern_idx}"
+            raise ValueError(msg)
+    return query
 
 
 def _pack_sources() -> tuple[tuple[str, str], ...]:
@@ -379,27 +368,44 @@ def _capture_texts_from_captures(
 def _collect_query_pack_captures(
     *,
     root: Node,
+    source_bytes: bytes,
     window: QueryWindowV1,
     settings: QueryExecutionSettingsV1,
-) -> tuple[dict[str, list[Node]], dict[str, object]]:
+) -> tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], dict[str, object]]:
     captures: dict[str, list[Node]] = {}
+    rows: list[ObjectEvidenceRowV1] = []
     query_telemetry: dict[str, object] = {}
     for pack_name, query_source in _pack_sources():
         try:
             query = _compile_query(pack_name, query_source)
-            pack_captures, telemetry = run_bounded_query_captures(
+            pack_captures, capture_telemetry = run_bounded_query_captures(
                 query,
                 root,
                 windows=(window,),
                 settings=settings,
             )
+            pack_matches, match_telemetry = run_bounded_query_matches(
+                query,
+                root,
+                windows=(window,),
+                settings=QueryExecutionSettingsV1(
+                    match_limit=settings.match_limit,
+                    max_start_depth=settings.max_start_depth,
+                    budget_ms=settings.budget_ms,
+                    require_containment=True,
+                ),
+            )
         except _ENRICHMENT_ERRORS:
             continue
-        query_telemetry[pack_name] = msgspec.to_builtins(telemetry)
+        query_telemetry[pack_name] = {
+            "captures": msgspec.to_builtins(capture_telemetry),
+            "matches": msgspec.to_builtins(match_telemetry),
+        }
         for capture_name, nodes in pack_captures.items():
             bucket = captures.setdefault(capture_name, [])
             bucket.extend(nodes)
-    return captures, query_telemetry
+        rows.extend(build_match_rows(query=query, matches=pack_matches, source_bytes=source_bytes))
+    return captures, tuple(rows), query_telemetry
 
 
 # ---------------------------------------------------------------------------
@@ -1338,16 +1344,52 @@ def _collect_query_pack_payload(
 
     window = QueryWindowV1(start_byte=byte_start, end_byte=byte_end)
     settings = QueryExecutionSettingsV1(match_limit=_QUERY_MATCH_LIMIT)
-    captures, query_telemetry = _collect_query_pack_captures(
+    captures, rows, query_telemetry = _collect_query_pack_captures(
         root=root,
+        source_bytes=source_bytes,
         window=window,
         settings=settings,
     )
 
-    payload: dict[str, object] = {}
-    if query_telemetry:
-        payload["query_pack_telemetry"] = query_telemetry
+    payload: dict[str, object] = (
+        {"query_pack_telemetry": query_telemetry} if query_telemetry else {}
+    )
+    definitions, references, calls, imports = _rust_fact_lists(captures, source_bytes)
+    _extend_rust_fact_lists_from_rows(
+        rows=rows,
+        definitions=definitions,
+        references=references,
+        calls=calls,
+        imports=imports,
+    )
+    payload["rust_tree_sitter_facts"] = _rust_fact_payload(
+        definitions=definitions,
+        references=references,
+        calls=calls,
+        imports=imports,
+    )
+    _attach_query_pack_payload(
+        payload=payload,
+        rows=rows,
+        captures=captures,
+        source_bytes=source_bytes,
+    )
+    payload["tree_sitter_diagnostics"] = [
+        msgspec.to_builtins(row)
+        for row in collect_tree_sitter_diagnostics(
+            language="rust",
+            root=root,
+            windows=(window,),
+            match_limit=1024,
+        )
+    ]
+    return payload
 
+
+def _rust_fact_lists(
+    captures: dict[str, list[Node]],
+    source_bytes: bytes,
+) -> tuple[list[str], list[str], list[str], list[str]]:
     definitions = _capture_texts_from_captures(
         captures,
         source_bytes,
@@ -1366,35 +1408,110 @@ def _collect_query_pack_payload(
         "ref.use.path",
         "ref.macro.path",
     )
-    calls = _capture_texts_from_captures(
-        captures,
-        source_bytes,
-        "call.target",
-        "call.macro.path",
-    )
+    calls = _capture_texts_from_captures(captures, source_bytes, "call.target", "call.macro.path")
     imports = _capture_texts_from_captures(
         captures,
         source_bytes,
         "import.path",
         "import.extern.name",
     )
+    return definitions, references, calls, imports
 
-    payload["rust_tree_sitter_facts"] = {
-        "definitions": definitions,
-        "references": references,
-        "calls": calls,
-        "imports": imports,
+
+def _extend_rust_fact_lists_from_rows(
+    *,
+    rows: tuple[ObjectEvidenceRowV1, ...],
+    definitions: list[str],
+    references: list[str],
+    calls: list[str],
+    imports: list[str],
+) -> None:
+    for row in rows:
+        if row.emit == "definitions":
+            _extend_fact_list(
+                target=definitions,
+                captures=row.captures,
+                keys=(
+                    "def.function.name",
+                    "def.struct.name",
+                    "def.enum.name",
+                    "def.trait.name",
+                    "def.module.name",
+                    "def.macro.name",
+                ),
+            )
+        elif row.emit == "references":
+            _extend_fact_list(
+                target=references,
+                captures=row.captures,
+                keys=("ref.identifier", "ref.scoped.name", "ref.use.path", "ref.macro.path"),
+            )
+        elif row.emit == "calls":
+            _extend_fact_list(
+                target=calls,
+                captures=row.captures,
+                keys=("call.target", "call.macro.path"),
+            )
+        elif row.emit in {"imports", "modules"}:
+            _extend_fact_list(
+                target=imports,
+                captures=row.captures,
+                keys=("import.path", "import.extern.name", "module.name"),
+            )
+
+
+def _extend_fact_list(
+    *,
+    target: list[str],
+    captures: Mapping[str, object],
+    keys: tuple[str, ...],
+) -> None:
+    for key in keys:
+        value = captures.get(key)
+        if isinstance(value, str) and value and value not in target:
+            target.append(value)
+
+
+def _rust_fact_payload(
+    *,
+    definitions: list[str],
+    references: list[str],
+    calls: list[str],
+    imports: list[str],
+) -> dict[str, list[str]]:
+    return {
+        "definitions": definitions[:_MAX_FIELDS_SHOWN],
+        "references": references[:_MAX_FIELDS_SHOWN],
+        "calls": calls[:_MAX_FIELDS_SHOWN],
+        "imports": imports[:_MAX_FIELDS_SHOWN],
     }
+
+
+def _attach_query_pack_payload(
+    *,
+    payload: dict[str, object],
+    rows: tuple[ObjectEvidenceRowV1, ...],
+    captures: dict[str, list[Node]],
+    source_bytes: bytes,
+) -> None:
+    payload["query_match_rows"] = [msgspec.to_builtins(row) for row in rows]
     payload["query_pack_bundle"] = msgspec.to_builtins(
         load_rust_grammar_bundle(include_distribution_queries=False)
     )
     payload["query_pack_tags"] = msgspec.to_builtins(
         build_tag_events(source_bytes, captures=captures)
     )
-    payload["query_pack_injections"] = msgspec.to_builtins(
-        build_injection_plan(source_bytes, captures=captures, default_language="rust")
-    )
-    return payload
+    injection_plan = build_injection_plan(source_bytes, captures=captures, default_language="rust")
+    payload["query_pack_injections"] = msgspec.to_builtins(injection_plan)
+    rust_plan = tuple(row for row in injection_plan if row.language == "rust")
+    if rust_plan:
+        payload["query_pack_injection_runtime"] = msgspec.to_builtins(
+            parse_injected_ranges(
+                source_bytes=source_bytes,
+                language=_rust_language(),
+                plans=rust_plan,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1434,7 +1551,9 @@ def enrich_rust_context(
         return None
 
     try:
-        tree, source_bytes = _get_tree(source, cache_key=cache_key)
+        tree, source_bytes = _parse_with_session(source, cache_key=cache_key)
+        if tree is None:
+            return None
         if _TreeSitterPoint is None:
             return None
         point = _TreeSitterPoint(max(0, line - 1), max(0, col))
@@ -1498,7 +1617,9 @@ def enrich_rust_context_by_byte_range(
         return None
 
     try:
-        tree, source_bytes = _get_tree(source, cache_key=cache_key)
+        tree, source_bytes = _parse_with_session(source, cache_key=cache_key)
+        if tree is None:
+            return None
         node = tree.root_node.named_descendant_for_byte_range(byte_start, byte_end)
         if node is None:
             return None

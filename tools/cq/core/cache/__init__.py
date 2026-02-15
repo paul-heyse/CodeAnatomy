@@ -5,6 +5,8 @@ from tools.cq.core.cache.content_hash import (
     file_content_hash,
     reset_file_content_hash_cache,
 )
+from tools.cq.core.cache.coordination import publish_once_per_barrier, tree_sitter_lane_guard
+from tools.cq.core.cache.coordination_contracts import LaneCoordinationPolicyV1
 from tools.cq.core.cache.diagnostics import snapshot_backend_metrics
 from tools.cq.core.cache.diskcache_backend import (
     DiskcacheBackend,
@@ -40,6 +42,8 @@ from tools.cq.core.cache.key_builder import (
     build_search_artifact_index_key,
     canonicalize_cache_payload,
 )
+from tools.cq.core.cache.maintenance import maintenance_tick
+from tools.cq.core.cache.maintenance_contracts import CacheMaintenanceSnapshotV1
 from tools.cq.core.cache.namespaces import (
     cache_namespace_env_suffix,
     is_namespace_cache_enabled,
@@ -54,6 +58,11 @@ from tools.cq.core.cache.run_lifecycle import (
     resolve_write_cache_tag,
 )
 from tools.cq.core.cache.scope_services import ScopePlanV1, ScopeResolutionV1, resolve_scope
+from tools.cq.core.cache.search_artifact_store import (
+    list_search_artifact_entries,
+    load_search_artifact_bundle,
+    persist_search_artifact_bundle,
+)
 from tools.cq.core.cache.snapshot_fingerprint import (
     ScopeFileStatV1,
     ScopeSnapshotFingerprintV1,
@@ -74,8 +83,15 @@ from tools.cq.core.cache.telemetry import (
     reset_cache_telemetry,
     snapshot_cache_telemetry,
 )
+from tools.cq.core.cache.tree_sitter_cache_store import (
+    build_tree_sitter_cache_key,
+    load_tree_sitter_payload,
+    persist_tree_sitter_payload,
+)
+from tools.cq.core.cache.tree_sitter_cache_store_contracts import TreeSitterCacheEnvelopeV1
 
 __all__ = [
+    "CacheMaintenanceSnapshotV1",
     "CacheNamespaceTelemetry",
     "CacheWriteTagRequestV1",
     "CqCacheBackend",
@@ -90,11 +106,13 @@ __all__ = [
     "FragmentProbeRuntimeV1",
     "FragmentRequestV1",
     "FragmentWriteV1",
+    "LaneCoordinationPolicyV1",
     "NoopCacheBackend",
     "ScopeFileStatV1",
     "ScopePlanV1",
     "ScopeResolutionV1",
     "ScopeSnapshotFingerprintV1",
+    "TreeSitterCacheEnvelopeV1",
     "build_cache_key",
     "build_cache_tag",
     "build_namespace_cache_tag",
@@ -103,6 +121,7 @@ __all__ = [
     "build_scope_snapshot_fingerprint",
     "build_search_artifact_cache_key",
     "build_search_artifact_index_key",
+    "build_tree_sitter_cache_key",
     "cache_namespace_env_suffix",
     "canonicalize_cache_payload",
     "close_cq_cache_backend",
@@ -113,10 +132,17 @@ __all__ = [
     "get_cq_cache_backend",
     "is_namespace_cache_enabled",
     "is_namespace_ephemeral",
+    "list_search_artifact_entries",
+    "load_search_artifact_bundle",
+    "load_tree_sitter_payload",
+    "maintenance_tick",
     "maybe_evict_run_cache_tag",
     "namespace_defaults",
     "partition_fragment_entries",
     "persist_fragment_writes",
+    "persist_search_artifact_bundle",
+    "persist_tree_sitter_payload",
+    "publish_once_per_barrier",
     "record_cache_abort",
     "record_cache_cull",
     "record_cache_decode_failure",
@@ -134,4 +160,5 @@ __all__ = [
     "resolve_write_cache_tag",
     "snapshot_backend_metrics",
     "snapshot_cache_telemetry",
+    "tree_sitter_lane_guard",
 ]

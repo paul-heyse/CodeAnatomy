@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.structs import CqStruct
 from tools.cq.search.tree_sitter_node_schema import GrammarSchemaIndex
+from tools.cq.search.tree_sitter_pack_contracts import load_pack_rules
 
 if TYPE_CHECKING:
     from tree_sitter import Query
@@ -96,11 +97,12 @@ def lint_query_pack_source(
         for field_name in unknown_fields
     )
 
+    rules = load_pack_rules(language)
     pattern_count = int(getattr(query, "pattern_count", 0))
     pattern_issues: list[QueryPackLintIssueV1] = []
     for pattern_idx in range(pattern_count):
         is_rooted = bool(query.is_pattern_rooted(pattern_idx))
-        if not is_rooted:
+        if rules.require_rooted and not is_rooted:
             pattern_issues.append(
                 QueryPackLintIssueV1(
                     language=language,
@@ -110,7 +112,7 @@ def lint_query_pack_source(
                 )
             )
         is_non_local = bool(query.is_pattern_non_local(pattern_idx))
-        if is_non_local:
+        if rules.forbid_non_local and is_non_local:
             pattern_issues.append(
                 QueryPackLintIssueV1(
                     language=language,

@@ -55,6 +55,9 @@ def test_object_resolver_groups_occurrences_by_qualified_name() -> None:
     assert len(runtime.view.summaries) == 1
     assert runtime.view.summaries[0].occurrence_count == 2
     assert len(runtime.view.occurrences) == 2
+    assert runtime.view.occurrences[0].line_id is not None
+    assert runtime.view.occurrences[0].block_start_line == 8
+    assert runtime.view.occurrences[0].block_end_line == 12
     assert runtime.view.occurrences[0].context_start_line == 8
     assert runtime.view.occurrences[0].context_end_line == 12
     assert len(runtime.view.snippets) == 2
@@ -92,6 +95,8 @@ def test_object_resolver_defaults_block_bounds_to_match_line() -> None:
     )
     runtime = build_object_resolved_view([match], query="stable_id")
     occurrence = runtime.view.occurrences[0]
+    assert occurrence.block_start_line == 40
+    assert occurrence.block_end_line == 40
     assert occurrence.context_start_line == 40
     assert occurrence.context_end_line == 40
 

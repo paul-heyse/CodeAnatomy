@@ -177,7 +177,19 @@ def _infer_entity_from_schema(name: str) -> tuple[str, str] | None:
     return mapping.get(table_type)
 
 
-def _infer_entity_grain_from_metadata(  # noqa: PLR0911
+def _infer_entity_grain_from_table_type(
+    table_type: TableType,
+) -> tuple[str, str] | None:
+    mapping = {
+        TableType.RELATION: ("edge", "per_edge"),
+        TableType.ENTITY: ("entity", "per_entity"),
+        TableType.EVIDENCE: ("evidence", "per_evidence"),
+        TableType.SYMBOL_SOURCE: ("symbol", "per_symbol"),
+    }
+    return mapping.get(table_type)
+
+
+def _infer_entity_grain_from_metadata(
     row: SemanticDatasetRow,
 ) -> tuple[str, str] | None:
     join_keys = tuple(row.join_keys)
@@ -186,6 +198,25 @@ def _infer_entity_grain_from_metadata(  # noqa: PLR0911
     all_columns = {*join_keys, *row.fields, *row.partition_cols}
     table_type = infer_table_type({infer_column_type(name) for name in all_columns})
 
+    inferred = _infer_entity_grain_by_join_key_signature(
+        join_key_groups=join_key_groups,
+        join_key_types=join_key_types,
+    )
+    if inferred is None:
+        inferred = _infer_entity_grain_from_table_type(table_type)
+    if inferred is None:
+        inferred = _infer_entity_grain_by_join_key_fallback(
+            join_key_groups=join_key_groups,
+            join_key_types=join_key_types,
+        )
+    return inferred
+
+
+def _infer_entity_grain_by_join_key_signature(
+    *,
+    join_key_groups: set[CompatibilityGroup],
+    join_key_types: set[ColumnType],
+) -> tuple[str, str] | None:
     if (
         CompatibilityGroup.ENTITY_IDENTITY in join_key_groups
         and CompatibilityGroup.SYMBOL_IDENTITY in join_key_groups
@@ -193,17 +224,19 @@ def _infer_entity_grain_from_metadata(  # noqa: PLR0911
         return ("edge", "per_edge")
     if ColumnType.FILE_ID in join_key_types or ColumnType.PATH in join_key_types:
         return ("file", "per_file")
-    if CompatibilityGroup.SYMBOL_IDENTITY in join_key_groups or ColumnType.SYMBOL in join_key_types:
+    if (
+        CompatibilityGroup.SYMBOL_IDENTITY in join_key_groups
+        or ColumnType.SYMBOL in join_key_types
+    ):
         return ("symbol", "per_symbol")
-    table_type_mapping = {
-        TableType.RELATION: ("edge", "per_edge"),
-        TableType.ENTITY: ("entity", "per_entity"),
-        TableType.EVIDENCE: ("evidence", "per_evidence"),
-        TableType.SYMBOL_SOURCE: ("symbol", "per_symbol"),
-    }
-    inferred = table_type_mapping.get(table_type)
-    if inferred is not None:
-        return inferred
+    return None
+
+
+def _infer_entity_grain_by_join_key_fallback(
+    *,
+    join_key_groups: set[CompatibilityGroup],
+    join_key_types: set[ColumnType],
+) -> tuple[str, str] | None:
     if (
         CompatibilityGroup.ENTITY_IDENTITY in join_key_groups
         or ColumnType.ENTITY_ID in join_key_types

@@ -80,8 +80,25 @@ def parse_target_spec(raw: str) -> TargetSpecV1:
     return TargetSpecV1(raw=raw, target_name=text)
 
 
+def parse_bundle_target_spec(raw: str) -> TargetSpecV1:
+    """Parse and validate bundle target syntax (``kind:value``).
+
+    Returns:
+        Parsed target spec with required bundle fields populated.
+
+    Raises:
+        ValueError: If ``raw`` is not in ``kind:value`` format.
+    """
+    parsed = parse_target_spec(raw)
+    if parsed.bundle_kind is None or parsed.bundle_value is None:
+        msg = "Target spec must be in the form kind:value"
+        raise ValueError(msg)
+    return parsed
+
+
 __all__ = [
     "BundleTargetKind",
     "TargetSpecV1",
+    "parse_bundle_target_spec",
     "parse_target_spec",
 ]

@@ -14,7 +14,11 @@ from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context, require_ctx
 from tools.cq.cli_app.options import SearchOptions, options_from_params
 from tools.cq.cli_app.params import SearchParams
-from tools.cq.core.request_factory import RequestContextV1, RequestFactory
+from tools.cq.core.request_factory import (
+    RequestContextV1,
+    RequestFactory,
+    SearchRequestOptionsV1,
+)
 
 
 @require_ctx
@@ -64,13 +68,15 @@ def search(
     request = RequestFactory.search(
         request_ctx,
         query=query,
-        mode=mode,
-        lang_scope=parse_query_language_scope(str(options.lang)),
-        include_globs=include_globs if include_globs else None,
-        exclude_globs=list(options.exclude) if options.exclude else None,
-        include_strings=options.include_strings,
-        with_neighborhood=options.with_neighborhood,
-        limits=SMART_SEARCH_LIMITS,
+        options=SearchRequestOptionsV1(
+            mode=mode,
+            lang_scope=parse_query_language_scope(str(options.lang)),
+            include_globs=include_globs if include_globs else None,
+            exclude_globs=list(options.exclude) if options.exclude else None,
+            include_strings=options.include_strings,
+            with_neighborhood=options.with_neighborhood,
+            limits=SMART_SEARCH_LIMITS,
+        ),
     )
 
     services = resolve_runtime_services(ctx.root)

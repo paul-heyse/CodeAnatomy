@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from diskcache import FanoutCache
-    from tree_sitter import Node, Query
 
 
 # -- Resource Paths -----------------------------------------------------------
@@ -38,10 +38,13 @@ def diagnostics_query_path(language: str) -> Path:
 # -- Pack Metadata ------------------------------------------------------------
 
 
-def pattern_settings(query: Query, pattern_idx: int) -> dict[str, str]:
+def pattern_settings(query: object, pattern_idx: int) -> dict[str, str]:
     """Return normalized string-only metadata for one pattern index."""
-    settings = query.pattern_settings(pattern_idx)
-    if not isinstance(settings, dict):
+    pattern_settings_fn = getattr(query, "pattern_settings", None)
+    if not callable(pattern_settings_fn):
+        return {}
+    settings = pattern_settings_fn(pattern_idx)
+    if not isinstance(settings, Mapping):
         return {}
     out: dict[str, str] = {}
     for key, value in settings.items():
@@ -53,10 +56,10 @@ def pattern_settings(query: Query, pattern_idx: int) -> dict[str, str]:
     return out
 
 
-def first_capture(capture_map: dict[str, list[Node]], capture_name: str) -> Node | None:
+def first_capture(capture_map: Mapping[str, Sequence[object]], capture_name: str) -> object | None:
     """Return first node for capture name when available."""
     nodes = capture_map.get(capture_name)
-    if not isinstance(nodes, list) or not nodes:
+    if not isinstance(nodes, Sequence) or not nodes:
         return None
     return nodes[0]
 

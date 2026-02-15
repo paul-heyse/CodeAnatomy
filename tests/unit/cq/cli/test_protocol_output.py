@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tools.cq.cli_app.context import CliContext, CliTextResult
-from tools.cq.cli_app.protocol_output import json_result, text_result, wants_json
+from tools.cq.cli_app.protocol_output import emit_payload, json_result, text_result, wants_json
 from tools.cq.cli_app.types import OutputFormat
 from tools.cq.core.toolchain import Toolchain
 
@@ -141,3 +141,31 @@ def test_json_result_complex_payload() -> None:
     assert result.result.media_type == "application/json"
     assert '"sections"' in result.result.text
     assert '"total_bytes": 1024' in result.result.text
+
+
+def test_emit_payload_json_output_uses_json_result() -> None:
+    """emit_payload should return JSON media type when output format requests JSON."""
+    ctx = CliContext(
+        argv=["cq", "test"],
+        root=Path("/tmp"),
+        toolchain=Toolchain.detect(),
+        output_format=OutputFormat.json,
+    )
+    result = emit_payload(ctx, {"message": "ok"})
+    assert isinstance(result.result, CliTextResult)
+    assert result.result.media_type == "application/json"
+    assert '"message": "ok"' in result.result.text
+
+
+def test_emit_payload_prefers_message_for_text_fallback() -> None:
+    """emit_payload should use payload.message for text fallback in non-JSON output."""
+    ctx = CliContext(
+        argv=["cq", "test"],
+        root=Path("/tmp"),
+        toolchain=Toolchain.detect(),
+        output_format=OutputFormat.md,
+    )
+    result = emit_payload(ctx, {"deprecated": True, "message": "legacy"})
+    assert isinstance(result.result, CliTextResult)
+    assert result.result.media_type == "text/plain"
+    assert result.result.text == "legacy"

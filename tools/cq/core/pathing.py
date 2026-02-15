@@ -144,4 +144,5 @@ def compile_gitwildmatch(patterns: Sequence[str]) -> PathSpec:
     >>> spec.match_file("test_foo.py")
     False
     """
-    return PathSpec.from_lines("gitwildmatch", patterns)
+    compiled_patterns = tuple(str(pattern) for pattern in patterns if pattern)
+    return PathSpec.from_lines("gitwildmatch", compiled_patterns)  # type: ignore[arg-type]

@@ -17,6 +17,7 @@ from tools.cq.cli_app.types import (
     ImpactBucket,
     QueryLanguageToken,
     SeverityLevel,
+    _converter_value,
     comma_separated_enum,
     comma_separated_list,
 )
@@ -44,6 +45,36 @@ run_input = Group(
 _LIMIT_VALIDATOR = validators.Number(gte=1, lte=1_000_000)
 _DEPTH_VALIDATOR = validators.Number(gte=1, lte=10_000)
 _MAX_FILES_VALIDATOR = validators.Number(gte=1, lte=1_000_000)
+
+
+def _token_value_for_converter(*args: object) -> object:
+    return _converter_value(args)
+
+
+def _iter_converter_texts(*args: object) -> list[str]:
+    value = _token_value_for_converter(*args)
+    items = value if isinstance(value, (list, tuple)) else [value]
+    texts: list[str] = []
+    for item in items:
+        token_value = getattr(item, "value", item)
+        if isinstance(token_value, str):
+            texts.append(token_value)
+    return texts
+
+
+def _run_step_converter(*args: object) -> list[RunStep]:
+    return [parse_run_step_json(raw) for raw in _iter_converter_texts(*args)]
+
+
+def _run_steps_converter(*args: object) -> list[RunStep]:
+    parsed: list[RunStep] = []
+    for raw in _iter_converter_texts(*args):
+        text = raw.lstrip()
+        if text.startswith("["):
+            parsed.extend(parse_run_steps_json(raw))
+        else:
+            parsed.append(parse_run_step_json(raw))
+    return parsed
 
 
 @dataclass(kw_only=True)
@@ -259,7 +290,7 @@ class RunParams(FilterParams):
             group=run_input,
             n_tokens=1,
             accepts_keys=False,
-            converter=lambda raw: parse_run_step_json(raw) if isinstance(raw, str) else raw,
+            converter=_run_step_converter,
             help='Repeatable JSON step object (e.g., \'{"type":"q","query":"..."}\')',
         ),
     ] = field(default_factory=list)
@@ -270,7 +301,7 @@ class RunParams(FilterParams):
             group=run_input,
             n_tokens=1,
             accepts_keys=False,
-            converter=lambda raw: parse_run_steps_json(raw) if isinstance(raw, str) else raw,
+            converter=_run_steps_converter,
             help='JSON array of steps (e.g., \'[{"type":"q",...},{"type":"calls",...}]\')',
         ),
     ] = field(default_factory=list)

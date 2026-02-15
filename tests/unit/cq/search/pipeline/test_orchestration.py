@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from tools.cq.core.schema import Finding, Section
+from tools.cq.core.schema import CqResult, Finding, RunMeta, Section
 from tools.cq.search.pipeline.contracts import SearchConfig
 from tools.cq.search.pipeline.orchestration import (
     SearchPipeline,
@@ -78,20 +78,29 @@ class TestSearchPipeline:
         context = cast("SearchConfig", object())
         pipeline = SearchPipeline(context=context)
         calls: list[str] = []
+        expected_result = CqResult(
+            run=RunMeta(
+                macro="search",
+                argv=[],
+                root=".",
+                started_ms=0.0,
+                elapsed_ms=0.0,
+            )
+        )
 
-        def runner(ctx: object) -> list[str]:
+        def runner(ctx: SearchConfig) -> list[str]:
             calls.append("run")
             assert ctx is context
             return ["partition"]
 
-        def assembler(ctx: object, results: Any) -> dict[str, bool]:
+        def assembler(ctx: SearchConfig, results: list[str]) -> CqResult:
             calls.append("assemble")
             assert ctx is context
             assert results == ["partition"]
-            return {"ok": True}
+            return expected_result
 
         result = pipeline.execute(runner, assembler)
-        assert result == {"ok": True}
+        assert result is expected_result
         assert calls == ["run", "assemble"]
 
 

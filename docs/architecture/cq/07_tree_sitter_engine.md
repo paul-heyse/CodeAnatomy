@@ -99,7 +99,7 @@ def execute_pack_rows_with_matches(...) -> tuple[...]:
 
 ### Text Extraction Utilities
 
-**Location**: `tools/cq/search/tree_sitter/core/text_utils.py` (~25 LOC)
+**Location**: `tools/cq/search/tree_sitter/core/node_utils.py`
 
 Shared UTF-8 text extraction helper for tree-sitter node byte spans.
 
@@ -955,7 +955,7 @@ The recent refactoring introduced several cross-cutting improvements:
 
 2. **Query Pack Executor** (`core/query_pack_executor.py`): Shared `execute_pack_rows()` and `execute_pack_rows_with_matches()` eliminate duplicate match-row building across Python and Rust lanes.
 
-3. **Text Utilities** (`core/text_utils.py`): Shared `node_text()` function for UTF-8 text extraction with strip/truncation.
+3. **Node Utilities** (`core/node_utils.py`): Shared `node_text()` and `node_byte_span()` helpers for UTF-8 extraction and byte-span normalization.
 
 4. **Resource Paths** (`query/resource_paths.py`): Canonical path helpers (`query_pack_dir()`, `query_pack_path()`, `query_contracts_path()`, `diagnostics_query_path()`) eliminate path duplication.
 

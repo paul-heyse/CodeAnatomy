@@ -260,7 +260,7 @@ def collect_callers_callees(
 
 **Runtime Dependencies** (see **Doc 07: Tree-Sitter Subsystem**):
 - `core/language_runtime.py` — `load_language()` for multi-language grammar loading
-- `core/text_utils.py` — `node_text()` for UTF-8 byte-span extraction with max_len truncation
+- `core/node_utils.py` — `node_text()` for UTF-8 byte-span extraction with max_len truncation
 - `query/resource_paths.py` — `query_pack_path()` for canonical query pack path resolution
 
 These shared utilities replace inline language loading, text extraction, and query path logic with centralized implementations, ensuring consistency across the tree-sitter subsystem.
@@ -583,7 +583,7 @@ The neighborhood subsystem leverages CQ's tree-sitter engine (see **Doc 07**) fo
 
 **Runtime Dependencies** (see **Doc 07**):
 - `core/language_runtime.py` — `make_parser()` for parser instantiation with language binding
-- `core/text_utils.py` — `node_text()` for UTF-8 text extraction with strip/max_len support
+- `core/node_utils.py` — `node_text()` for UTF-8 text extraction with strip/max_len support
 - `core/parser_controls.py` — `apply_parser_controls()` for environment-driven parser tuning
 
 **Query Packs Used**:
@@ -601,13 +601,13 @@ The neighborhood subsystem leverages CQ's tree-sitter engine (see **Doc 07**) fo
 2. Resolve query pack path: `query_pack_path(language, "10_calls.scm")` from `query/resource_paths.py`
 3. Compile query: `_compile_query(language, "10_calls.scm")`
 4. Execute bounded query: `run_bounded_query_matches(tree_root, query, source_bytes, settings)`
-5. Extract node text: `_node_text(node, source_bytes)` → `node_text()` from `core/text_utils.py`
+5. Extract node text: `_node_text(node, source_bytes)` → `node_text()` from `core/node_utils.py`
 6. Filter matches to `anchor_name`
 7. Classify as callers (node references anchor) or callees (anchor calls node)
 
 **Runtime Dependencies** (see **Doc 07**):
 - `core/language_runtime.py` — `load_language()` replaces inline `_TreeSitterLanguage` construction
-- `core/text_utils.py` — `node_text()` replaces inline byte-span extraction logic
+- `core/node_utils.py` — `node_text()` replaces inline byte-span extraction logic
 - `query/resource_paths.py` — `query_pack_path()` replaces inline `Path` construction for query pack resolution
 
 **Budget Constraints**:
@@ -770,7 +770,7 @@ no_lsp = false
 As of the recent refactoring, the neighborhood subsystem delegates tree-sitter primitives to shared utilities from the tree-sitter subsystem (**Doc 07**):
 
 - **Language Loading**: `load_language()` and `make_parser()` from `core/language_runtime.py` replace inline grammar loading
-- **Text Extraction**: `node_text()` from `core/text_utils.py` replaces inline byte-span slicing
+- **Text Extraction**: `node_text()` from `core/node_utils.py` replaces inline byte-span slicing
 - **Query Path Resolution**: `query_pack_path()` from `query/resource_paths.py` replaces inline `Path` construction
 
 **Rationale**: Eliminates code duplication across tree-sitter consumers (neighborhood, search, structural export) and ensures consistency in language binding, text handling, and query pack resolution.

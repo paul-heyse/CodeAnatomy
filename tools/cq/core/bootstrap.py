@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tools.cq.core.cache import CqCacheBackend, close_cq_cache_backend, get_cq_cache_backend
-from tools.cq.core.runtime import RuntimeExecutionPolicy, default_runtime_execution_policy
+from tools.cq.core.runtime import RuntimeExecutionPolicy
 from tools.cq.core.services import CallsService, EntityService, SearchService
+from tools.cq.core.settings_factory import SettingsFactory
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,7 @@ def build_runtime_services(*, root: Path) -> CqRuntimeServices:
         entity=EntityService(),
         calls=CallsService(),
         cache=get_cq_cache_backend(root=root),
-        policy=default_runtime_execution_policy(),
+        policy=SettingsFactory.runtime_policy(),
     )
 
 

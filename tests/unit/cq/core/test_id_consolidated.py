@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from tools.cq.core.id import canonicalize_payload, stable_digest, stable_digest24
 
 
@@ -15,6 +17,7 @@ class TestCanonicalizePayload:
 
     def test_dict_sorted(self) -> None:
         result = canonicalize_payload({"b": 2, "a": 1})
+        assert isinstance(result, Mapping)
         assert list(result.keys()) == ["a", "b"]
 
     def test_list(self) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from functools import lru_cache
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from tools.cq.search.tree_sitter.contracts.core_models import (
     QueryExecutionSettingsV1,
@@ -23,34 +23,45 @@ except ImportError:  # pragma: no cover - optional dependency
     _TreeSitterQuery = None
 
 
+class _LanguageLike(Protocol):
+    def next_state(self, parse_state: int, grammar_id: int) -> object: ...
+
+    def lookahead_iterator(self, next_state: object) -> Iterable[object]: ...
+
+    def node_kind_for_id(self, symbol_id: int) -> str: ...
+
+
 # -- Recovery Hints -----------------------------------------------------------
 
 
 def recovery_hints_for_node(
     *,
-    language: Language,
-    node: Node,
+    language: object,
+    node: object,
     max_expected: int = 12,
 ) -> tuple[str, ...]:
     """Return expected node kinds near parse failure boundaries."""
-    if not hasattr(language, "next_state") or not hasattr(language, "lookahead_iterator"):
+    next_state_fn = getattr(language, "next_state", None)
+    lookahead_fn = getattr(language, "lookahead_iterator", None)
+    if not callable(next_state_fn) or not callable(lookahead_fn):
         return ()
     state_info = _parse_state(node)
     if state_info is None:
         return ()
     parse_state, grammar_id = state_info
+    language_like = cast("_LanguageLike", language)
     try:
-        next_state = language.next_state(parse_state, grammar_id)
-        lookahead = language.lookahead_iterator(next_state)
+        next_state = language_like.next_state(parse_state, grammar_id)
+        lookahead = language_like.lookahead_iterator(next_state)
     except (RuntimeError, TypeError, ValueError, AttributeError):
         return ()
     if not isinstance(lookahead, Iterable):
         return ()
-    lookahead_items = cast("Iterable[object]", lookahead)
+    lookahead_items = lookahead
 
     expected: list[str] = []
     for symbol_id in _iter_symbol_ids(lookahead_items):
-        symbol_name = _symbol_name(language=language, symbol_id=symbol_id)
+        symbol_name = _symbol_name(language=language_like, symbol_id=symbol_id)
         if symbol_name is None:
             continue
         expected.append(symbol_name)
@@ -59,7 +70,7 @@ def recovery_hints_for_node(
     return tuple(expected)
 
 
-def _parse_state(node: Node) -> tuple[int, int] | None:
+def _parse_state(node: object) -> tuple[int, int] | None:
     parse_state = getattr(node, "parse_state", None)
     grammar_id = getattr(node, "grammar_id", None)
     if not isinstance(parse_state, int) or not isinstance(grammar_id, int):
@@ -81,7 +92,7 @@ def _iter_symbol_ids(lookahead: Iterable[object]) -> tuple[int, ...]:
     return tuple(symbol_ids)
 
 
-def _symbol_name(*, language: Language, symbol_id: int) -> str | None:
+def _symbol_name(*, language: _LanguageLike, symbol_id: int) -> str | None:
     try:
         symbol_name = language.node_kind_for_id(symbol_id)
     except (RuntimeError, TypeError, ValueError, AttributeError):

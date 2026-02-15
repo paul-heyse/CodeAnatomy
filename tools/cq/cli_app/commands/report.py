@@ -41,8 +41,9 @@ def report(
         CliResult: Renderable command result payload.
     """
     from tools.cq.cli_app.context import CliResult
-    from tools.cq.core.bundles import BundleContext, parse_bundle_target_spec, run_bundle
+    from tools.cq.core.bundles import BundleContext, run_bundle
     from tools.cq.core.schema import ms
+    from tools.cq.core.target_specs import parse_bundle_target_spec
 
     ctx = require_context(ctx)
     options = options_from_params(opts, type_=ReportOptions)

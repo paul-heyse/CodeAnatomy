@@ -20,7 +20,11 @@ from tools.cq.core.multilang_orchestrator import (
     merge_language_cq_results,
     runmeta_for_scope_merge,
 )
-from tools.cq.core.request_factory import RequestContextV1, RequestFactory
+from tools.cq.core.request_factory import (
+    RequestContextV1,
+    RequestFactory,
+    SearchRequestOptionsV1,
+)
 from tools.cq.core.result_factory import build_error_result
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.runtime.worker_scheduler import get_worker_scheduler
@@ -911,13 +915,15 @@ def _execute_search_step(
     request = RequestFactory.search(
         request_ctx,
         query=step.query,
-        mode=mode,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        include_strings=step.include_strings,
-        lang_scope=step.lang_scope,
-        limits=SMART_SEARCH_LIMITS,
-        run_id=run_id,
+        options=SearchRequestOptionsV1(
+            mode=mode,
+            include_globs=include_globs,
+            exclude_globs=exclude_globs,
+            include_strings=step.include_strings,
+            lang_scope=step.lang_scope,
+            limits=SMART_SEARCH_LIMITS,
+            run_id=run_id,
+        ),
     )
 
     services = resolve_runtime_services(ctx.root)
@@ -932,12 +938,14 @@ def _execute_search_fallback(query: str, plan: RunPlan, ctx: CliContext) -> CqRe
     request = RequestFactory.search(
         request_ctx,
         query=query,
-        mode=None,
-        include_globs=include_globs,
-        exclude_globs=exclude_globs,
-        include_strings=False,
-        lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-        limits=SMART_SEARCH_LIMITS,
+        options=SearchRequestOptionsV1(
+            mode=None,
+            include_globs=include_globs,
+            exclude_globs=exclude_globs,
+            include_strings=False,
+            lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+            limits=SMART_SEARCH_LIMITS,
+        ),
     )
 
     services = resolve_runtime_services(ctx.root)

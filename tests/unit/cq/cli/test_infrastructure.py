@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from pathlib import Path
 
 import pytest
 from tools.cq.cli_app.context import CliContext
@@ -55,7 +56,7 @@ class TestContextDecorators:
 
     def test_require_context_with_valid_context(self) -> None:
         """Test that require_context returns the context when valid."""
-        ctx = CliContext(root=".", verbose=0)
+        ctx = CliContext.build(argv=["cq"], root=Path(), verbose=0)
         result = require_context(ctx)
         assert result is ctx
 
@@ -71,7 +72,7 @@ class TestContextDecorators:
         def test_command(*, ctx: CliContext) -> str:
             return f"root={ctx.root}"
 
-        ctx = CliContext(root="/test", verbose=0)
+        ctx = CliContext.build(argv=["cq"], root=Path("/test"), verbose=0)
         result = test_command(ctx=ctx)
         assert result == "root=/test"
 

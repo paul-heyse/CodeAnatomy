@@ -182,7 +182,7 @@ Internal operations use frozen `CqStruct` request types for clean input contract
 - `RustEnrichmentRequest` - Rust enrichment
 - `SummaryBuildRequest` / `MergeResultsRequest` - orchestration contracts
 
-Request structs live in `tools/cq/search/requests.py` and `tools/cq/core/requests.py`.
+Request structs live in `tools/cq/search/_shared/core.py` and `tools/cq/core/contracts.py`.
 
 ## Analysis Session Caching
 

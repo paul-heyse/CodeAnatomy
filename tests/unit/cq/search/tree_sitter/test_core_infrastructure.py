@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from tools.cq.search.tree_sitter.core.infrastructure import (
     ParserControlSettingsV1,
     apply_parser_controls,
@@ -147,17 +148,10 @@ def test_apply_parser_controls_skips_when_flags_false() -> None:
     assert not parser.dot_paths
 
 
-def test_parser_controls_from_env_defaults_to_false(monkeypatch: object) -> None:
-    import pytest
-
-    if not hasattr(monkeypatch, "delenv"):
-        pytest.skip("monkeypatch fixture required")
-
-    mp = monkeypatch
-
-    mp.delenv("CQ_TREE_SITTER_PARSER_RESET", raising=False)
-    mp.delenv("CQ_TREE_SITTER_PARSER_LOGGER", raising=False)
-    mp.delenv("CQ_TREE_SITTER_DOT_GRAPH_DIR", raising=False)
+def test_parser_controls_from_env_defaults_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CQ_TREE_SITTER_PARSER_RESET", raising=False)
+    monkeypatch.delenv("CQ_TREE_SITTER_PARSER_LOGGER", raising=False)
+    monkeypatch.delenv("CQ_TREE_SITTER_DOT_GRAPH_DIR", raising=False)
 
     settings = parser_controls_from_env()
     assert settings.reset_before_parse is False
@@ -165,17 +159,12 @@ def test_parser_controls_from_env_defaults_to_false(monkeypatch: object) -> None
     assert settings.dot_graph_dir is None
 
 
-def test_parser_controls_from_env_respects_flags(monkeypatch: object, tmp_path: Path) -> None:
-    import pytest
-
-    if not hasattr(monkeypatch, "setenv"):
-        pytest.skip("monkeypatch fixture required")
-
-    mp = monkeypatch
-
-    mp.setenv("CQ_TREE_SITTER_PARSER_RESET", "1")
-    mp.setenv("CQ_TREE_SITTER_PARSER_LOGGER", "1")
-    mp.setenv("CQ_TREE_SITTER_DOT_GRAPH_DIR", str(tmp_path))
+def test_parser_controls_from_env_respects_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("CQ_TREE_SITTER_PARSER_RESET", "1")
+    monkeypatch.setenv("CQ_TREE_SITTER_PARSER_LOGGER", "1")
+    monkeypatch.setenv("CQ_TREE_SITTER_DOT_GRAPH_DIR", str(tmp_path))
 
     settings = parser_controls_from_env()
     assert settings.reset_before_parse is True

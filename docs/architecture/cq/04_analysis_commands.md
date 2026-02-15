@@ -168,20 +168,17 @@ Convenience builder for simple file/finding count payloads.
 - `impact.py:766` - Impact scoring with cross-file taint evidence
 - `sig_impact.py:376` - Signature impact scoring with breakages/ambiguities
 
-### Common Re-Exports
+### Shared Macro Primitives
 
-The `macros/common/` package provides clean re-export surfaces for shared infrastructure:
+Shared macro primitives are defined directly in the `tools/cq/macros/` package:
 
-**contracts.py** (`macros/common/contracts.py:1-19`):
-- Re-exports: `MacroRequestBase`, `ScopedMacroRequestBase`, `MacroExecutionRequestV1`, `MacroTargetResolutionV1`, `MacroScorePayloadV1`
+**contracts.py** (`macros/contracts.py`):
+- Defines `MacroRequestBase`, `ScopedMacroRequestBase`, `MacroExecutionRequestV1`, `MacroTargetResolutionV1`, and `MacroScorePayloadV1`
 
-**scoring.py** (`macros/common/scoring.py:1-7`):
-- Re-exports: `macro_score_payload`
+**shared.py** (`macros/shared.py`):
+- Defines `macro_score_payload` and `resolve_target_files`
 
-**targets.py** (`macros/common/targets.py:1-7`):
-- Re-exports: `resolve_target_files`
-
-**Usage**: These re-exports allow future macro implementations to import from `tools.cq.macros.common` without knowing the internal module structure.
+**Usage**: Macro implementations should import from `tools.cq.macros.contracts` and `tools.cq.macros.shared` directly.
 
 ## Architecture Patterns
 
@@ -1629,7 +1626,7 @@ The refactoring to shared macro infrastructure provides several architectural im
 
 **Extensibility**:
 - New macros can extend `MacroRequestBase` or `ScopedMacroRequestBase`
-- Re-export package (`macros/common/`) provides clean import surface
+- Shared primitives in `macros/contracts.py` and `macros/shared.py` provide a stable import surface
 - Future request fields (e.g., timeout, cache_policy) added in single location
 
 **Migration Path**:

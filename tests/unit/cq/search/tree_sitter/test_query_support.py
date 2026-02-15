@@ -42,10 +42,10 @@ def test_query_pack_path_resolves_existing_assets() -> None:
 
 
 class _FakeQuery:
-    def __init__(self, settings: dict[int, dict[str, object]]) -> None:
+    def __init__(self, settings: dict[int, dict[object, object]]) -> None:
         self._settings = settings
 
-    def pattern_settings(self, idx: int) -> dict[str, object]:
+    def pattern_settings(self, idx: int) -> dict[object, object]:
         return self._settings.get(idx, {})
 
 

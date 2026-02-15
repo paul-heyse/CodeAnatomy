@@ -11,11 +11,11 @@ from tools.cq.core.contract_codec import (
     to_public_dict,
     to_public_list,
 )
-from tools.cq.core.schema import CqResult
+from tools.cq.core.schema import CqResult, RunMeta
 from tools.cq.core.structs import CqStruct, JsonScalar, JsonValue
 
 
-class _SampleStruct(CqStruct):
+class _SampleStruct(CqStruct, frozen=True):
     name: str = "test"
     count: int = 0
 
@@ -41,7 +41,15 @@ class TestDumpsJsonValue:
 
 class TestLoadsJsonResult:
     def test_decode_minimal_result(self) -> None:
-        result = CqResult()
+        result = CqResult(
+            run=RunMeta(
+                macro="test",
+                argv=[],
+                root=".",
+                started_ms=0.0,
+                elapsed_ms=0.0,
+            )
+        )
         encoded = msgspec.json.encode(result)
         decoded = loads_json_result(encoded)
         assert isinstance(decoded, CqResult)

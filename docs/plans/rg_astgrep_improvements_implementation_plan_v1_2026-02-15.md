@@ -2,16 +2,16 @@
 
 ## Scope Summary
 
-This plan covers 21 scope items organized into four groups that elevate CQ's ripgrep and ast-grep-py utilization to best-in-class while fixing confirmed execution-path correctness gaps:
+This plan covers 23 scope items organized into four groups that elevate CQ's ripgrep and ast-grep-py utilization to best-in-class while fixing confirmed execution-path correctness gaps:
 
-- **Group A (9 items):** Ripgrep improvements — multi-pattern OR, boundary mode standardization, context lines, count probes, file enumeration, deterministic sort, multiline mode, JSON fidelity, capability negotiation.
+- **Group A (10 items):** Ripgrep improvements — unified operation modes + scoped paths, multi-pattern OR, boundary mode standardization, context lines, count probes, file enumeration, deterministic sort, multiline mode, JSON fidelity, capability negotiation.
 - **Group B (7 items):** ast-grep-py improvements — variadic captures, dynamic metavariable extraction, YAML rule packs, shared utility rules, constraint pushdown, refinement predicates, pattern-object execution.
-- **Group C (3 items):** Combined/new capabilities — ripgrep prefiltering for ast-grep scans, begin/end file events, neighborhood ripgrep-lane consolidation.
+- **Group C (4 items):** Combined/new capabilities — ripgrep prefiltering for ast-grep scans, begin/end file events, neighborhood ripgrep-lane consolidation, macro symbol-target resolution via shared rg lane.
 - **Group D (2 items):** Query correctness hardening — planner/executor threading fixes and pattern runtime parity for composite/nthChild/pattern-object semantics.
 
 **Design stance:** Hard additions — no compatibility shims. New fields use defaults so existing callers are unaffected. No tree-sitter scope overlap: ripgrep handles text-level candidate generation, ast-grep handles structural classification, tree-sitter owns semantic enrichment.
 
-**Priority order:** D1, D2, B7, B4, B6, B1, A3, C3, A8, A2, A1, A4, A5, C2, C1, B5, A6, B2, B3, A7, A9.
+**Priority order:** D1, D2, A0, B7, B4, B6, B1, A3, C3, A9, A8, A2, A1, A4, A5, C2, C1, C4, B5, A6, B2, B3, A7.
 
 ## Design Principles
 
@@ -21,6 +21,7 @@ This plan covers 21 scope items organized into four groups that elevate CQ's rip
 4. **Test parity** — Every new module or function gets a corresponding test file. Existing test files gain parametrized cases for new behavior.
 5. **Minimal Python post-processing** — Push filtering, matching, and ordering into ripgrep/ast-grep native engines wherever the API supports it.
 6. **Execution-path correctness first** — Any scope item that changes behavior already represented in `Query`/`ToolPlan` must land before performance-oriented items. Specifically, planner/executor pattern threading and metavariable capture fidelity are blocking prerequisites for prefilter and profile optimization work.
+7. **Single ripgrep execution plane** — New ripgrep capabilities must route through `tools/cq/search/rg/runner.py` + `tools/cq/search/rg/contracts.py` + `tools/cq/search/_shared/core.py`. No new ad-hoc `subprocess.run(["rg", ...])` lanes are added in helper modules.
 
 ## Current Baseline
 
@@ -30,6 +31,7 @@ This plan covers 21 scope items organized into four groups that elevate CQ's rip
 - **`tools/cq/search/rg/adapter.py`** (244 LOC): `find_call_candidates()` manually builds `rf"\b{symbol}\s*\("`; smart-search has a separate identifier-boundary construction path, so boundary semantics are duplicated across callsites. `find_def_lines()` reads files with Python instead of ripgrep.
 - **`tools/cq/search/rg/contracts.py`** (65 LOC): `RgRunSettingsV1` has `pattern: str` (single), `mode: str`, `lang_types`, globs. No multi-pattern or context fields.
 - **`tools/cq/search/_shared/core.py`** (384 LOC): `RgRunRequest` has `pattern: str` (single). No multi-pattern, context, sort, or multiline fields.
+- **`tools/cq/search/rg/runner.py`**: Command assembly hardcodes search root to `"."`; there is no operation-mode contract for `--count`, `--files`, or `--files-with-matches` and no path-scoped search input.
 - **`tools/cq/search/pipeline/profiles.py`** (67 LOC): `SearchLimits` has 6 fields with 4 presets (`DEFAULT`, `INTERACTIVE`, `AUDIT`, `LITERAL`). No `context_before`, `context_after`, `sort_by_path`, or `multiline` fields.
 - **`tools/cq/search/pipeline/classifier.py`**: `QueryMode` enum has 3 values: `IDENTIFIER`, `REGEX`, `LITERAL`. Multiline behavior is correctly modeled as a search option rather than a query-mode dimension.
 - **`tools/cq/astgrep/sgpy_scanner.py`** (533 LOC): `scan_with_pattern()` accepts only `pattern: str` and is only exercised by scanner unit tests. Query execution does not call this function. `_extract_metavars()` iterates hardcoded names calling `get_match()` only — never calls `get_multiple_matches()`.
@@ -40,10 +42,12 @@ This plan covers 21 scope items organized into four groups that elevate CQ's rip
 - **`tools/cq/query/parser.py`**: `_parse_pattern_object()` parses `pattern.context` and `pattern.selector` from tokens into `PatternSpec`. Parser also captures `composite` and `nth_child` for pattern queries.
 - **`tools/cq/query/planner.py`**: `_compile_pattern_query()` threads `pattern/context/selector/strictness` into `AstGrepRule` but currently drops `query.composite` and `query.nth_child`.
 - **`tools/cq/query/executor.py`**: `_iter_rule_matches()` uses only `find_all(pattern=...)` / `find_all(kind=...)` and does not use inline rule execution for pattern findings. `_iter_rule_matches_for_spans()` has inline-rule support, so span filtering and finding generation currently use different rule execution semantics.
+- **`tools/cq/query/batch.py`**: Batch entity sessions run ast-grep scans via `scan_files(...)`; prefilter adoption must include this path, not just `query/sg_parser.py`.
 - **`tools/cq/query/executor.py`**: Metavariable extraction is hardcoded to `_COMMON_METAVAR_NAMES`; captures for valid names outside that list (e.g., `$FOO123`) are dropped.
 - **`tools/cq/query/metavar.py`**: Contains richer metavariable parsing helpers (`parse_metavariables`) but these are not currently integrated into query execution.
 - **`tools/cq/search/pipeline/classifier_runtime.py`**: `_is_docstring_context()` walks parent chain in Python — candidate for `node.inside()` replacement.
 - **`tools/cq/search/python/extractors.py`**: 25+ `.parent()`/`.kind()` chains for context classification — candidates for refinement predicate replacement.
+- **`tools/cq/macros/shared.py`**: `resolve_target_files()` currently scans file text in Python (`"def {target}"` / `"class {target}"`) for symbol fallback candidate discovery.
 - **`tools/cq/neighborhood/target_resolution.py`**: Uses direct `subprocess.run(["rg", ...])` rather than the shared rg runner/contracts path.
 - **`tools/cq/search/rg/runner.py`**: `detect_rg_types()` exists but is not consumed by runtime capability gating.
 - **`tools/cq/astgrep/rules/python_facts/*.yml`**: 23 existing CLI-mode YAML rule files already externalize the Python rules for ast-grep's CLI runner. These define rules using ast-grep's native YAML schema (`id`, `language`, `severity`, `rule`, `metadata`). The `metadata.record` and `metadata.kind` fields map to `RuleSpec.record_type` and `RuleSpec.kind`. Example: `py_def_function.yml` uses `rule.kind: function_definition` with `metadata: {record: def, kind: function}`.
@@ -52,6 +56,98 @@ This plan covers 21 scope items organized into four groups that elevate CQ's rip
 - **`tools/cq/astgrep/rules_rust.py`**: 8 Rust `RuleSpec` objects with **no** corresponding CLI-mode YAML files.
 - **`tools/cq/core/typed_boundary.py`**: Contains `decode_yaml_strict()` — the canonical CQ pattern for YAML boundary decoding using `msgspec.yaml.decode(raw, type=type_, strict=True)` with `BoundaryDecodeError` wrapping. Already used in `tools/cq/search/tree_sitter/contracts/query_models.py:load_pack_rules()` for loading YAML-defined query pack contracts.
 - **YAML tooling**: CQ uses `msgspec.yaml` (which wraps PyYAML SafeLoader internally) for all YAML operations. No raw `pyyaml` API usage exists. No custom loader subclassing, tag constructors, or representers are needed.
+
+---
+
+## S0. A0 — Unified Ripgrep Operation Modes + Scoped Path Execution Contracts
+
+### Goal
+
+Introduce one shared contract for all ripgrep operation modes (`json`, `count`, `files`, `files_with_matches`) and scoped path inputs. This is a prerequisite for S1/S7/S10 so those scopes do not create new ad-hoc `subprocess.run(["rg", ...])` lanes.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/_shared/core.py — RgRunRequest extension
+class RgRunRequest(CqStruct, frozen=True):
+    root: Path
+    pattern: str
+    mode: QueryMode
+    lang_types: tuple[str, ...]
+    limits: SearchLimits
+    include_globs: list[str] = msgspec.field(default_factory=list)
+    exclude_globs: list[str] = msgspec.field(default_factory=list)
+    operation: str = "json"  # json|count|files|files_with_matches
+    paths: tuple[str, ...] = (".",)
+    extra_patterns: tuple[str, ...] = ()
+```
+
+```python
+# tools/cq/search/rg/contracts.py — serialized settings parity
+class RgRunSettingsV1(CqSettingsStruct, frozen=True):
+    pattern: str
+    mode: str
+    lang_types: tuple[str, ...]
+    include_globs: tuple[str, ...] = ()
+    exclude_globs: tuple[str, ...] = ()
+    operation: str = "json"
+    paths: tuple[str, ...] = (".",)
+    extra_patterns: tuple[str, ...] = ()
+
+
+class RgProcessResultV1(CqOutputStruct, frozen=True):
+    command: tuple[str, ...]
+    timed_out: bool
+    returncode: int
+    stderr: str
+    events: tuple[dict[str, object], ...] = ()
+    stdout_lines: tuple[str, ...] = ()  # required by count/files operation modes
+```
+
+```python
+# tools/cq/search/rg/runner.py — build_rg_command() mode/path switch
+def build_rg_command(...) -> list[str]:
+    command = ["rg"]
+    if operation == "json":
+        command.extend(["--json", "--line-number", "--column"])
+    elif operation == "count":
+        command.extend(["--count-matches", "--no-heading"])
+    elif operation == "files":
+        command.append("--files")
+    elif operation == "files_with_matches":
+        command.extend(["--files-with-matches", "--no-messages"])
+    else:
+        msg = f"Unsupported rg operation: {operation}"
+        raise ValueError(msg)
+
+    # Shared type/glob/mode flags...
+    # Shared pattern flags for search operations...
+
+    search_paths = list(paths) or ["."]
+    if operation == "files":
+        command.extend(search_paths)
+    else:
+        command.extend(["-e", pattern])
+        for extra in extra_patterns:
+            command.extend(["-e", extra])
+        command.extend(search_paths)
+    return command
+```
+
+### Files to Edit
+
+- `tools/cq/search/_shared/core.py` — Extend `RgRunRequest` with `operation`, `paths`, and `extra_patterns`.
+- `tools/cq/search/rg/contracts.py` — Extend `RgRunSettingsV1` with matching fields and request/settings conversion.
+- `tools/cq/search/rg/runner.py` — Route command construction through operation-mode and path-aware logic.
+- `tools/cq/search/rg/adapter.py` — Use operation-mode settings for file-list/count helpers instead of direct command composition.
+
+### New Files to Create
+
+- None — expand existing `tests/unit/cq/search/rg/test_runner.py` and `tests/unit/cq/search/rg/test_contracts.py` with operation-mode and path-scoping coverage.
+
+### Legacy Decommission/Delete Scope
+
+- Delete operation-specific ad-hoc rg command assembly in helper modules introduced by S1/S7/S10 drafts; all such behavior is superseded by `RgRunRequest`/`RgRunSettingsV1` + shared runner routing.
 
 ---
 
@@ -70,11 +166,15 @@ Eliminate unnecessary file reads and AST parses in multi-file ast-grep scans by 
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tools.cq.astgrep.sgpy_scanner import RuleSpec
+from tools.cq.core.pathing import normalize_repo_relative_path
+from tools.cq.query.language import ripgrep_types_for_scope
+from tools.cq.search.pipeline.classifier import QueryMode
+from tools.cq.search.pipeline.profiles import INTERACTIVE, SearchLimits
+from tools.cq.search.rg.runner import run_rg_files_with_matches
 
 if TYPE_CHECKING:
     from tools.cq.query.language import QueryLanguageScope
@@ -108,32 +208,28 @@ def rg_prefilter_files(
     files: list[Path],
     literals: tuple[str, ...],
     lang_scope: QueryLanguageScope,
-    timeout_seconds: float = 10.0,
+    limits: SearchLimits | None = None,
 ) -> list[Path]:
     """Return subset of files that contain at least one literal."""
     if not literals:
         return files
-
-    command = ["rg", "--files-with-matches", "-F", "--no-heading"]
-    for literal in literals:
-        command.extend(["-e", literal])
-    command.extend(["."])
-
-    proc = subprocess.run(
-        command,
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout_seconds,
+    effective_limits = limits or INTERACTIVE
+    candidate_paths = tuple(
+        normalize_repo_relative_path(path.resolve(), root=root.resolve()) for path in files
     )
-    if proc.returncode not in (0, 1):
+    matched_rel = run_rg_files_with_matches(
+        root=root,
+        patterns=literals,
+        mode=QueryMode.LITERAL,
+        lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
+        include_globs=[],
+        exclude_globs=[],
+        paths=candidate_paths,
+        limits=effective_limits,
+    )
+    if matched_rel is None:
         return files  # Fail open
-
-    matched = {(root / line.strip()).resolve() for line in proc.stdout.splitlines() if line.strip()}
-    if not matched:
-        return []
-    return sorted({path.resolve() for path in files} & matched)
+    return sorted((root / rel).resolve() for rel in matched_rel)
 ```
 
 ```python
@@ -168,16 +264,31 @@ records = scan_files(files, rules, root, lang=lang, prefilter=True)
 ```
 
 ```python
+# tools/cq/query/batch.py — same prefilter behavior for shared entity sessions
+records = scan_files(files, rules, root, lang=lang, prefilter=True)
+```
+
+```python
 # tools/cq/search/pipeline/classifier_runtime.py — keep single-file classification direct
 records = scan_files([file_path], rules, root, lang=lang, prefilter=False)
 ```
 
+```python
+# tools/cq/query/executor.py — optional prefilter in pattern runtime paths
+# Apply only when file_count > 1 and literals are available.
+for file_path in maybe_prefilter_astgrep_files(files, rules, root, lang=lang):
+    ...
+```
+
 ### Files to Edit
 
-- `tools/cq/search/rg/prefilter.py` — Add fragment extraction and `rg_prefilter_files()` helpers.
 - `tools/cq/astgrep/sgpy_scanner.py` — Add `prefilter` parameter to `scan_files()` and apply prefilter prior to parse loop.
 - `tools/cq/query/sg_parser.py` — Enable prefilter for batch scans used in query execution.
+- `tools/cq/query/batch.py` — Enable prefilter for shared batch entity scan sessions.
 - `tools/cq/search/pipeline/classifier_runtime.py` — Explicitly disable prefilter for single-file classification lane.
+- `tools/cq/query/executor.py` — Optionally apply prefilter to pattern runtime file loops when multi-file.
+- `tests/unit/cq/test_sg_parser.py` — Add coverage asserting prefilter integration in parser scan path.
+- `tests/unit/cq/test_run_batch_scan.py` — Add coverage asserting prefilter integration in query batch sessions.
 
 ### New Files to Create
 
@@ -483,7 +594,9 @@ class RgCollector:
 
 ### Goal
 
-Replace Python-side parent-chain walking (`.parent()`, `.kind() ==` patterns) in classifier and extractor code with ast-grep-py's native refinement predicates (`matches()`, `inside()`, `has()`). These run in Rust and are more efficient than Python-side filtering.
+Replace Python-side parent-chain walking in a phased, high-confidence sequence instead of a single large sweep.
+Phase 1 migrates the highest-value hotspots (`classifier_runtime.py` docstring/scope checks and a bounded set of extractor helpers).
+Phase 2 expands to remaining extractor parent-chain sites only after Phase 1 equivalence tests pass.
 
 ### Representative Code Snippets
 
@@ -512,7 +625,7 @@ def _is_docstring_context(node: SgNode) -> bool:
 ```
 
 ```python
-# tools/cq/search/python/extractors.py — Replace parent-chain context checks
+# tools/cq/search/python/extractors.py — Phase 1: replace bounded parent-chain helpers
 # Before (representative):
 def _is_method_def(node: SgNode) -> bool:
     parent = node.parent()
@@ -530,7 +643,7 @@ def _is_method_def(node: SgNode) -> bool:
 ```
 
 ```python
-# tools/cq/search/pipeline/classifier_runtime.py — Use has() for child checks
+# tools/cq/search/pipeline/classifier_runtime.py — Phase 1: use has() for child checks
 # Before:
 def _has_decorator(node: SgNode) -> bool:
     for child in node.children():
@@ -545,17 +658,17 @@ def _has_decorator(node: SgNode) -> bool:
 
 ### Files to Edit
 
-- `tools/cq/search/pipeline/classifier_runtime.py` — Replace `_is_docstring_context()` and similar parent-chain checks with `inside()` predicates. Replace child iteration checks with `has()`.
-- `tools/cq/search/python/extractors.py` — Replace `.parent()`/`.kind()` context classification chains with refinement predicates.
+- `tools/cq/search/pipeline/classifier_runtime.py` — Phase 1 migration for `_is_docstring_context()` and bounded child-check helpers.
+- `tools/cq/search/python/extractors.py` — Phase 1 migration for a named subset of helpers (method/class/function context predicates) with behavior-parity assertions before any wider conversion.
 
 ### New Files to Create
 
-- None — tests for existing files cover the refactored logic.
+- None — extend existing `tests/unit/cq/search/pipeline/test_classification.py` and `tests/unit/cq/search/python/test_extractors.py` with explicit parity cases for each migrated helper.
 
 ### Legacy Decommission/Delete Scope
 
-- `tools/cq/search/pipeline/classifier_runtime.py` — Remove manual parent-chain walking code in `_is_docstring_context()` and similar helpers.
-- `tools/cq/search/python/extractors.py` — Remove explicit `.parent()` / `.kind()` chain checks for context classification (approximately 25+ patterns across the file).
+- `tools/cq/search/pipeline/classifier_runtime.py` — Remove only the specific parent-chain helpers replaced in Phase 1.
+- `tools/cq/search/python/extractors.py` — Remove only superseded helper implementations named in the Phase 1 file manifest; defer broader deletion to a follow-on phase after measured parity.
 
 ---
 
@@ -563,12 +676,12 @@ def _has_decorator(node: SgNode) -> bool:
 
 ### Goal
 
-Add a lightweight `run_rg_count()` function that uses `--count` mode for fast cardinality probes without paying full JSON decode cost. Enables adaptive profile selection in smart search pre-flight: if a count query returns many results, switch to a more restrictive profile before the full search.
+Add a lightweight `run_rg_count()` function routed through the shared rg lane from S0. This uses operation-mode `count` output for fast cardinality probes without full JSON event decode and enables adaptive profile selection in smart-search pre-flight.
 
 ### Representative Code Snippets
 
 ```python
-# tools/cq/search/rg/runner.py — New count function
+# tools/cq/search/rg/runner.py — New count function via shared runner contracts
 
 def run_rg_count(
     *,
@@ -578,57 +691,22 @@ def run_rg_count(
     lang_types: tuple[str, ...],
     include_globs: list[str] | None = None,
     exclude_globs: list[str] | None = None,
-    timeout_seconds: float = 5.0,
+    paths: tuple[str, ...] = (".",),
+    limits: SearchLimits | None = None,
 ) -> dict[str, int]:
-    """Run ``rg --count`` and return per-file match counts.
-
-    Parameters
-    ----------
-    root
-        Search root directory.
-    pattern
-        Search pattern.
-    mode
-        Query mode for flag selection.
-    lang_types
-        Ripgrep type filters.
-    include_globs
-        Include glob patterns.
-    exclude_globs
-        Exclude glob patterns.
-    timeout_seconds
-        Subprocess timeout.
-
-    Returns
-    -------
-    dict[str, int]
-        Mapping of relative file path to match count.
-    """
-    command = ["rg", "--count", "--no-heading"]
-    for lt in lang_types:
-        command.extend(["--type", lt])
-    for g in (include_globs or []):
-        command.extend(["-g", g])
-    for g in (exclude_globs or []):
-        normalized = g[1:] if g.startswith("!") else g
-        command.extend(["-g", f"!{normalized}"])
-    if mode.value == "literal":
-        command.append("-F")
-    elif mode.value == "identifier":
-        command.append("-w")
-    command.extend(["-e", pattern, "."])
-
-    proc = subprocess.run(
-        command,
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout_seconds,
+    settings = RgRunSettingsV1(
+        pattern=pattern,
+        mode=mode.value,
+        lang_types=lang_types,
+        include_globs=tuple(include_globs or ()),
+        exclude_globs=tuple(exclude_globs or ()),
+        operation="count",
+        paths=paths,
     )
+    result = run_with_settings(root=root, limits=limits or INTERACTIVE, settings=settings)
     counts: dict[str, int] = {}
-    if proc.returncode in (0, 1):
-        for line in proc.stdout.splitlines():
+    if result.returncode in (0, 1):
+        for line in result.stdout_lines:
             parts = line.rsplit(":", maxsplit=1)
             if len(parts) == 2:
                 path, count_str = parts
@@ -641,7 +719,8 @@ def run_rg_count(
 
 ### Files to Edit
 
-- `tools/cq/search/rg/runner.py` — Add `run_rg_count()` function; update `__all__`.
+- `tools/cq/search/rg/runner.py` — Add `run_rg_count()` function using S0 operation-mode routing.
+- `tools/cq/search/rg/contracts.py` — Include `stdout_lines` payload for non-JSON operation modes.
 - `tools/cq/search/pipeline/smart_search.py` — Use `run_rg_count()` in pre-flight to select adaptive profile.
 
 ### New Files to Create
@@ -770,7 +849,7 @@ def build_rg_command(
 
 ### Goal
 
-Add a `list_candidate_files()` function using ripgrep's `--files` mode to enumerate exactly which files would be searched given current ignore/glob/type configuration. Useful for debugging "why didn't rg find X?" and validating scope configuration.
+Add a `list_candidate_files()` function using shared rg operation mode `files` (from S0) to enumerate exactly which files would be searched given current ignore/glob/type configuration. Useful for debugging "why didn't rg find X?" and validating scope configuration without creating a new subprocess lane.
 
 ### Representative Code Snippets
 
@@ -783,65 +862,34 @@ def list_candidate_files(
     lang_types: tuple[str, ...] = (),
     include_globs: list[str] | None = None,
     exclude_globs: list[str] | None = None,
-    timeout_seconds: float = 10.0,
+    paths: tuple[str, ...] = (".",),
+    limits: SearchLimits | None = None,
 ) -> list[Path]:
     """List files that ripgrep would search given current configuration.
 
-    Uses ``rg --files`` mode for exact file-set enumeration matching
-    ripgrep's ignore, glob, and type filtering.
-
-    Parameters
-    ----------
-    root
-        Search root directory.
-    lang_types
-        Ripgrep type filters.
-    include_globs
-        Include glob patterns.
-    exclude_globs
-        Exclude glob patterns.
-    timeout_seconds
-        Subprocess timeout.
-
-    Returns
-    -------
-    list[Path]
-        Sorted list of absolute file paths.
-    """
-    command = ["rg", "--files"]
-    for lt in lang_types:
-        command.extend(["--type", lt])
-    for g in (include_globs or []):
-        command.extend(["-g", g])
-    for g in (exclude_globs or []):
-        normalized = g[1:] if g.startswith("!") else g
-        command.extend(["-g", f"!{normalized}"])
-    command.append(".")
-
-    proc = subprocess.run(
-        command,
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout_seconds,
+    settings = RgRunSettingsV1(
+        pattern="",
+        mode="regex",
+        lang_types=lang_types,
+        include_globs=tuple(include_globs or ()),
+        exclude_globs=tuple(exclude_globs or ()),
+        operation="files",
+        paths=paths,
     )
-    if proc.returncode not in (0, 1):
+    result = run_with_settings(root=root, limits=limits or INTERACTIVE, settings=settings)
+    if result.returncode not in (0, 1):
         return []
-    return sorted(
-        (root / line.strip()).resolve()
-        for line in proc.stdout.splitlines()
-        if line.strip()
-    )
+    return sorted((root / rel.strip()).resolve() for rel in result.stdout_lines if rel.strip())
 ```
 
 ### Files to Edit
 
-- `tools/cq/search/rg/adapter.py` — Add `list_candidate_files()` function; update `__all__`.
+- `tools/cq/search/rg/adapter.py` — Add `list_candidate_files()` function using S0 operation-mode settings.
+- `tools/cq/search/rg/contracts.py` — Carry `stdout_lines` for `operation="files"` responses.
 
 ### New Files to Create
 
-- None — existing test file `tests/unit/cq/search/rg/test_runner.py` or a new `test_adapter.py` gains file enumeration cases.
+- None — expand existing `tests/unit/cq/search/rg/test_runner.py` and `tests/unit/cq/search/rg/test_contracts.py` with `operation="files"` coverage plus adapter integration assertions.
 
 ### Legacy Decommission/Delete Scope
 
@@ -1029,7 +1077,7 @@ CI = SearchLimits(
 
 ### Goal
 
-Unify the dual rule systems — 23 CLI-mode YAML rules at `tools/cq/astgrep/rules/python_facts/*.yml` and 23 hand-translated Python `RuleSpec` objects in `rules_py.py` — into a single YAML-authoritative loader. The CLI-mode YAML rules already exist and use ast-grep's native schema; this scope item builds a schema bridge that loads those files into `RuleSpec` tuples at runtime, replacing the hand-maintained Python equivalents. The 8 Rust rules in `rules_rust.py` have no YAML equivalents and need new YAML files created.
+Unify the dual rule systems into a YAML-authoritative loader with staged migration. Stage 1 adds loader + parity validation while keeping `rules_py.py`/`rules_rust.py` as compatibility providers. Stage 2 migrates imports/callsites and tests to loader-backed APIs. Stage 3 deletes compatibility modules only after all direct imports are removed and parity tests pass.
 
 **Key design decision:** Use `decode_yaml_strict()` from `tools/cq/core/typed_boundary.py` as the canonical YAML decode path, consistent with `load_pack_rules()` in `query_models.py`. Do NOT create standalone `msgspec.yaml.Decoder` instances — all YAML decoding in CQ goes through the typed boundary layer for uniform `BoundaryDecodeError` handling.
 
@@ -1178,7 +1226,7 @@ def load_default_rulepacks() -> dict[str, tuple[RuleSpec, ...]]:
 ```
 
 ```python
-# tests/unit/cq/astgrep/test_rulepack_loader.py — Round-trip parity test
+# tests/unit/cq/test_rulepack_loader.py — Round-trip parity test
 """Validate YAML rules produce identical RuleSpec configs to Python rules."""
 
 from __future__ import annotations
@@ -1186,7 +1234,7 @@ from __future__ import annotations
 import pytest
 
 from tools.cq.astgrep.rulepack_loader import load_default_rulepacks
-from tools.cq.astgrep.rules_py import PYTHON_RULES
+from tools.cq.astgrep.rules_py import PYTHON_FACT_RULES
 
 
 def test_yaml_python_rule_parity() -> None:
@@ -1194,7 +1242,7 @@ def test_yaml_python_rule_parity() -> None:
     packs = load_default_rulepacks()
     yaml_rules = packs.get("python", ())
     yaml_by_id = {r.rule_id: r for r in yaml_rules}
-    python_by_id = {r.rule_id: r for r in PYTHON_RULES}
+    python_by_id = {r.rule_id: r for r in PYTHON_FACT_RULES}
 
     # Same rule IDs
     assert set(yaml_by_id.keys()) == set(python_by_id.keys()), (
@@ -1218,17 +1266,20 @@ def test_yaml_python_rule_parity() -> None:
 
 - `tools/cq/astgrep/sgpy_scanner.py` — Add optional `rulepack_path` parameter to `scan_files()`, fallback to Python rules when YAML not available.
 - `tools/cq/astgrep/rules.py` — Update language-aware rule dispatcher to prefer YAML-loaded rules when available, falling back to Python rule modules.
+- `tests/unit/cq/test_rules_py.py` — Migrate direct imports to loader-backed interfaces before decommission.
+- `tests/unit/cq/test_astgrep_rules.py` — Update rust-rule assertions to run through loader-backed dispatch.
+- `tests/unit/cq/test_sgpy_scanner.py` — Replace direct `rules_py` imports with fixture-based loader rule retrieval.
 
 ### New Files to Create
 
 - `tools/cq/astgrep/rulepack_loader.py` — YAML rule pack loader using `decode_yaml_strict()` to bridge CLI-mode YAML schema to `RuleSpec`.
 - `tools/cq/astgrep/rules/rust_facts/` — New directory with 8 YAML rule files for Rust (the 23 Python YAML rules already exist at `rules/python_facts/`).
-- `tests/unit/cq/astgrep/test_rulepack_loader.py` — Round-trip parity tests validating YAML rules produce identical `RuleSpec` configs to existing Python rules, plus Rust rule loading tests.
+- `tests/unit/cq/test_rulepack_loader.py` — Round-trip parity tests validating YAML rules produce identical `RuleSpec` configs to existing Python rules, plus Rust rule loading tests.
 
 ### Legacy Decommission/Delete Scope
 
-- `tools/cq/astgrep/rules_py.py` — Entire file becomes legacy once YAML loader is validated via round-trip parity tests and active. Keep as fallback during migration, delete after parity test passes.
-- `tools/cq/astgrep/rules_rust.py` — Same as above, after Rust YAML rules are created and validated.
+- `tools/cq/astgrep/rules_py.py` — Mark as compatibility-only in Stage 1; delete only after Stage 2 import migration is complete across runtime callsites and tests.
+- `tools/cq/astgrep/rules_rust.py` — Same staged deletion policy; no removal until YAML rust packs and migration tests are green.
 
 ---
 
@@ -1302,7 +1353,7 @@ def build_runtime_config(rule: CliRuleFile, utils: dict[str, dict[str, object]])
 - `tools/cq/astgrep/utils/is-python-literal.yml` — Python literal utility matcher.
 - `tools/cq/astgrep/utils/is-python-builtin-call.yml` — Python builtin-call utility matcher.
 - `tools/cq/astgrep/utils/is-rust-test-attr.yml` — Rust test attribute utility matcher.
-- `tests/unit/cq/astgrep/test_rulepack_utils.py` — Utility loading + `matches` resolution tests.
+- `tests/unit/cq/test_rulepack_utils.py` — Utility loading + `matches` resolution tests.
 
 ### Legacy Decommission/Delete Scope
 
@@ -1438,7 +1489,7 @@ rule = AstGrepRule(
 ```
 
 ```python
-# tests/unit/cq/query/test_planner.py
+# tests/unit/cq/test_pattern_queries.py
 def test_compile_pattern_query_threads_composite_and_nth_child() -> None:
     ...
     plan = compile_query(query)
@@ -1449,7 +1500,7 @@ def test_compile_pattern_query_threads_composite_and_nth_child() -> None:
 ### Files to Edit
 
 - `tools/cq/query/planner.py` — Add composite/nthChild threading in `_compile_pattern_query()`.
-- `tests/unit/cq/query/test_planner.py` — Add compile-time parity coverage for composite/nthChild.
+- `tests/unit/cq/test_pattern_queries.py` — Add compile-time parity coverage for composite/nthChild.
 
 ### New Files to Create
 
@@ -1499,11 +1550,11 @@ for match in _execute_rule_matches(node, rule, constraints=constraints):
 ### Files to Edit
 
 - `tools/cq/query/executor.py` — Replace split match iterators with one shared execution function.
-- `tests/unit/cq/query/test_executor_pattern.py` — Add parity tests ensuring findings and spans match identical rule semantics.
+- `tests/unit/cq/test_pattern_queries.py` — Add parity tests ensuring findings and spans match identical rule semantics.
 
 ### New Files to Create
 
-- None.
+- `tests/unit/cq/test_pattern_runtime_parity.py` — Focused regression file for findings-vs-span runtime semantic parity.
 
 ### Legacy Decommission/Delete Scope
 
@@ -1515,7 +1566,7 @@ for match in _execute_rule_matches(node, rule, constraints=constraints):
 
 ### Goal
 
-Replace direct subprocess ripgrep calls in neighborhood target resolution with the shared ripgrep runner/contracts path. This consolidates timeout/error handling, language filtering, and command construction across CQ lanes.
+Replace direct subprocess ripgrep calls in neighborhood target resolution with the shared ripgrep runner/contracts path and canonical path helpers from `tools/cq/core/pathing.py`. This consolidates timeout/error handling, language filtering, and path normalization across CQ lanes.
 
 ### Representative Code Snippets
 
@@ -1532,19 +1583,24 @@ def find_symbol_candidates(
 ```
 
 ```python
-# tools/cq/neighborhood/target_resolution.py — consume shared rg lane
+# tools/cq/neighborhood/target_resolution.py — consume shared rg lane + canonical pathing
+from tools.cq.core.pathing import normalize_repo_relative_path
+
 rows = find_symbol_candidates(
     root=root,
     symbol_name=symbol_name,
     lang_scope="rust" if language == "rust" else "python",
     limits=INTERACTIVE,
 )
+
+rel_path = normalize_repo_relative_path(root / rows[0][0], root=root)
 ```
 
 ### Files to Edit
 
 - `tools/cq/neighborhood/target_resolution.py` — Remove direct `subprocess.run(["rg", ...])` usage and call shared adapter helper.
 - `tools/cq/search/rg/adapter.py` — Add symbol-candidate helper built on shared runner/contracts.
+- `tools/cq/core/pathing.py` — Reuse existing normalization helpers; no new neighborhood-specific path normalization utilities.
 
 ### New Files to Create
 
@@ -1553,6 +1609,7 @@ rows = find_symbol_candidates(
 ### Legacy Decommission/Delete Scope
 
 - Delete direct ripgrep command assembly and subprocess execution in `tools/cq/neighborhood/target_resolution.py`.
+- Delete neighborhood-local `_normalize_file_path()` logic superseded by shared `core/pathing.py` helpers.
 
 ---
 
@@ -1591,6 +1648,14 @@ match_abs_end = absolute_base + end
 ```
 
 ```python
+# tools/cq/search/pipeline/smart_search.py — propagate absolute offsets in RawMatch
+class RawMatch(CqStruct, frozen=True):
+    ...
+    match_abs_byte_start: int | None = None
+    match_abs_byte_end: int | None = None
+```
+
+```python
 # tools/cq/search/pipeline/smart_search.py — expose richer stats
 summary["rg_stats"] = {
     "matches": stats.total_matches,
@@ -1604,7 +1669,7 @@ summary["rg_stats"] = {
 
 - `tools/cq/search/rg/codec.py` — Add `absolute_offset` and richer summary-stat fields.
 - `tools/cq/search/rg/collector.py` — Track and propagate absolute byte offsets where available.
-- `tools/cq/search/pipeline/smart_search.py` — Surface richer ripgrep stats in summary output.
+- `tools/cq/search/pipeline/smart_search.py` — Surface richer ripgrep stats in summary output and propagate absolute-byte offsets through `RawMatch`.
 
 ### New Files to Create
 
@@ -1616,6 +1681,70 @@ summary["rg_stats"] = {
 
 ---
 
+## S22. C4 — Macro Symbol-Target Resolution via Shared Ripgrep Lane
+
+### Goal
+
+Replace Python text scanning in `tools/cq/macros/shared.py:resolve_target_files()` with shared rg-lane symbol discovery for macro target resolution. This improves speed and consistency for macro commands (`scopes`, `bytecode-surface`, related target-based flows) without overlapping tree-sitter semantics.
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/rg/adapter.py — macro-focused symbol definition probe
+def find_symbol_definition_files(
+    root: Path,
+    symbol_name: str,
+    *,
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
+    limits: SearchLimits | None = None,
+) -> list[Path]:
+    escaped = re.escape(symbol_name)
+    pattern = rf"(def|class)\s+{escaped}\b"
+    rows = find_files_with_pattern(
+        root=root,
+        pattern=pattern,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        limits=limits,
+        lang_scope="python",
+    )
+    return rows
+```
+
+```python
+# tools/cq/macros/shared.py — resolve_target_files() integration
+files = find_symbol_definition_files(
+    root=root,
+    symbol_name=target,
+    include_globs=include,
+    exclude_globs=exclude,
+    limits=INTERACTIVE,
+)
+if files:
+    return files[: max(0, int(max_files))]
+
+# Fail-open fallback retained only during migration window.
+return _legacy_text_scan_target_files(...)
+```
+
+### Files to Edit
+
+- `tools/cq/macros/shared.py` — Replace `read_text()`-based target symbol scanning with shared rg helper + temporary fail-open fallback.
+- `tools/cq/search/rg/adapter.py` — Add macro-focused symbol definition probe helper.
+- `tools/cq/macros/scopes.py` — Verify behavior parity for `cmd_scopes()` target resolution path.
+- `tools/cq/macros/bytecode.py` — Verify behavior parity for `cmd_bytecode_surface()` target resolution path.
+
+### New Files to Create
+
+- None — extend existing `tests/unit/cq/macros/test_shared.py`, `tests/unit/cq/macros/test_target_resolution.py`, and `tests/unit/cq/macros/test_scope_filtering.py` for symbol-resolution parity.
+
+### Legacy Decommission/Delete Scope
+
+- `tools/cq/macros/shared.py` — Delete legacy per-file text scanning loop (`"def {target}"` / `"class {target}"`) after rg-backed path proves parity in macro tests.
+
+---
+
 ## Cross-Scope Legacy Decommission and Deletion Plan
 
 ### Batch D1 (after S2/A2, S3/A1)
@@ -1624,12 +1753,12 @@ summary["rg_stats"] = {
 
 ### Batch D2 (after S14/B2, S15/B3)
 
-- Delete `tools/cq/astgrep/rules_py.py` after YAML parity tests pass for all Python rule IDs.
-- Delete `tools/cq/astgrep/rules_rust.py` after Rust YAML rule parity tests pass.
+- Remove direct imports of `tools/cq/astgrep/rules_py.py` and `tools/cq/astgrep/rules_rust.py` from runtime callsites and tests (`tests/unit/cq/test_rules_py.py`, `tests/unit/cq/test_astgrep_rules.py`, `tests/unit/cq/test_sgpy_scanner.py`), switching to loader-backed dispatch paths.
+- Delete `tools/cq/astgrep/rules_py.py` and `tools/cq/astgrep/rules_rust.py` only after the import-migration step above and parity tests are both complete.
 
 ### Batch D3 (after S6/B5, S8/B4, S11/B6, S19/D2)
 
-- Remove remaining Python-side parent-chain and metadata-only pattern filtering paths superseded by refinement predicates, constraint pushdown, and unified inline-rule execution.
+- Remove only the migrated Phase 1 parent-chain helpers and metadata-only pattern filtering paths superseded by refinement predicates, constraint pushdown, and unified inline-rule execution. Defer wider extractor cleanup until follow-on parity validation lands.
 
 ### Batch D4 (after S17/B7, S19/D2)
 
@@ -1638,6 +1767,11 @@ summary["rg_stats"] = {
 ### Batch D5 (after S20/C2, S21/A9)
 
 - Remove neighborhood-specific ripgrep subprocess wrappers and ad-hoc output parsing now replaced by shared rg lane contracts.
+- Remove neighborhood-local `_normalize_file_path()` in favor of `tools/cq/core/pathing.py` helpers.
+
+### Batch D6 (after S22/C4)
+
+- Delete macro-local per-file text scanning loop in `tools/cq/macros/shared.py:resolve_target_files()` once rg-backed symbol target resolution parity is confirmed.
 
 ---
 
@@ -1649,28 +1783,31 @@ summary["rg_stats"] = {
 4. **S8/B4 — Constraint pushdown** (Moves positive metavariable filtering into native engine)
 5. **S11/B6 — Pattern object runtime threading** (Ensures context/selector/strictness are executed)
 6. **S4/B1 — Variadic captures** (Completes multi-capture fidelity after dynamic metavar threading)
-7. **S5/A3 — Context line support** (Foundation for richer ripgrep event handling)
-8. **S12/C3 — Begin/end event handling** (Accurate file accounting and binary detection)
-9. **S21/A9 — JSON fidelity fields** (Absolute offsets + richer stats)
-10. **S9/A8 — Multiline mode** (Cross-line text search mode)
-11. **S2/A2 — Word-boundary standardization** (Centralized identifier semantics)
-12. **S3/A1 — Multi-pattern OR** (Contract extension for batched probes)
-13. **S7/A4 — Count probes** (Adaptive preflight optimization)
-14. **S10/A5 — File-set enumeration** (Debug and diagnostics utility)
-15. **S20/C2 — Neighborhood rg-lane consolidation** (Shared execution stack across lanes)
-16. **S1/C1 — Ripgrep prefiltering for ast-grep scans** (Apply after correctness + lane unification)
-17. **S6/B5 — Refinement predicate migration** (Code cleanup/perf improvement path)
-18. **S13/A6 — Deterministic sort mode** (CI determinism toggle)
-19. **S14/B2 — YAML rule pack loader** (Schema bridge + parity scaffolding)
-20. **S15/B3 — Shared utility rule packs** (Deduplicate rule fragments after YAML loader lands)
-21. **S16/A7 — PCRE2 capability detection** (Capability telemetry and conditional advanced regex support)
+7. **S0/A0 — Unified rg operation modes + scoped paths** (Required foundation for S1/S7/S10)
+8. **S5/A3 — Context line support** (Foundation for richer ripgrep event handling)
+9. **S12/C3 — Begin/end event handling** (Accurate file accounting and binary detection)
+10. **S21/A9 — JSON fidelity fields** (Absolute offsets + richer stats + `RawMatch` propagation)
+11. **S9/A8 — Multiline mode** (Cross-line text search mode)
+12. **S2/A2 — Word-boundary standardization** (Centralized identifier semantics)
+13. **S3/A1 — Multi-pattern OR** (Contract extension for batched probes)
+14. **S7/A4 — Count probes** (Adaptive preflight optimization through shared rg lane)
+15. **S10/A5 — File-set enumeration** (Debug and diagnostics utility through shared rg lane)
+16. **S20/C2 — Neighborhood rg-lane consolidation** (Shared execution stack + canonical pathing)
+17. **S1/C1 — Ripgrep prefiltering for ast-grep scans** (Apply after rg lane unification and multi-pattern support)
+18. **S22/C4 — Macro symbol-target resolution** (Reuse shared rg lane for macro target discovery)
+19. **S6/B5 — Refinement predicate migration** (Phased cleanup/perf improvement path)
+20. **S13/A6 — Deterministic sort mode** (CI determinism toggle)
+21. **S14/B2 — YAML rule pack loader** (Schema bridge + migration staging)
+22. **S15/B3 — Shared utility rule packs** (Deduplicate rule fragments after loader landing)
+23. **S16/A7 — PCRE2 capability detection** (Capability telemetry and conditional advanced regex support)
 
-**Rationale:** correctness-path scopes (D/B execution fidelity) land first, then ripgrep event/model fidelity, then optimization and ergonomics scopes, then rulepack migration and utility-rule consolidation.
+**Rationale:** correctness-path scopes (D/B execution fidelity) land first, then rg-lane contract foundations, then event/model fidelity and optimization scopes, then rulepack migration and utility-rule consolidation with staged decommissioning.
 
 ---
 
 ## Implementation Checklist
 
+- [ ] S0/A0 — Unified ripgrep operation modes + scoped path execution contracts
 - [ ] S1/C1 — Ripgrep-accelerated prefiltering for ast-grep batch scans
 - [ ] S2/A2 — Word-boundary mode (`-w`) standardization
 - [ ] S3/A1 — Multi-pattern OR search (`-e P1 -e P2`)
@@ -1692,8 +1829,10 @@ summary["rg_stats"] = {
 - [ ] S19/D2 — Unified pattern runtime semantics across findings/spans
 - [ ] S20/C2 — Neighborhood ripgrep-lane consolidation
 - [ ] S21/A9 — Ripgrep JSON fidelity (`absolute_offset`, bytes/text unions, richer stats)
+- [ ] S22/C4 — Macro symbol-target resolution via shared ripgrep lane
 - [ ] D1 — Decommission manual identifier `\b` wrapping (after S2, S3)
-- [ ] D2 — Decommission Python rule modules (after S14, S15)
+- [ ] D2 — Migrate imports off Python rule modules and then decommission compatibility modules (after S14, S15)
 - [ ] D3 — Decommission Python-side parent-chain/metadata filtering (after S6, S8, S11, S19)
 - [ ] D4 — Decommission hardcoded metavariable-name lists (after S17, S19)
 - [ ] D5 — Decommission neighborhood-specific rg subprocess wrappers (after S20, S21)
+- [ ] D6 — Decommission macro-local text scanning target resolution (after S22)

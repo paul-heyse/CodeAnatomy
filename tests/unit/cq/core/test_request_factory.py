@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tools.cq.core.request_factory import RequestContextV1, RequestFactory
+from tools.cq.core.request_factory import (
+    RequestContextV1,
+    RequestFactory,
+    SearchRequestOptionsV1,
+)
 from tools.cq.core.toolchain import Toolchain
 
 
@@ -106,9 +110,11 @@ def test_search_request(request_context: RequestContextV1) -> None:
     request = RequestFactory.search(
         request_context,
         query="test_query",
-        mode=None,
-        lang_scope="python",
-        include_strings=True,
+        options=SearchRequestOptionsV1(
+            mode=None,
+            lang_scope="python",
+            include_strings=True,
+        ),
     )
     assert isinstance(request, SearchServiceRequest)
     assert request.root == request_context.root

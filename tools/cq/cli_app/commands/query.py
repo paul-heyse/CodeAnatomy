@@ -16,7 +16,11 @@ from tools.cq.cli_app.context import CliContext, CliResult
 from tools.cq.cli_app.infrastructure import require_context, require_ctx
 from tools.cq.cli_app.options import QueryOptions, options_from_params
 from tools.cq.cli_app.params import QueryParams
-from tools.cq.core.request_factory import RequestContextV1, RequestFactory
+from tools.cq.core.request_factory import (
+    RequestContextV1,
+    RequestFactory,
+    SearchRequestOptionsV1,
+)
 from tools.cq.core.result_factory import build_error_result
 
 
@@ -75,12 +79,14 @@ def q(
             request = RequestFactory.search(
                 request_ctx,
                 query=query_string,
-                mode=None,  # Auto-detect
-                lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
-                include_globs=include_globs,
-                exclude_globs=options.exclude if options.exclude else None,
-                include_strings=False,
-                limits=SMART_SEARCH_LIMITS,
+                options=SearchRequestOptionsV1(
+                    mode=None,
+                    lang_scope=DEFAULT_QUERY_LANGUAGE_SCOPE,
+                    include_globs=include_globs,
+                    exclude_globs=options.exclude if options.exclude else None,
+                    include_strings=False,
+                    limits=SMART_SEARCH_LIMITS,
+                ),
             )
 
             services = resolve_runtime_services(ctx.root)

@@ -6,7 +6,7 @@ import pytest
 from tools.cq.search.tree_sitter.query.compiler import compile_query
 
 pytestmark = pytest.mark.skipif(
-    not hasattr(pytest, "tree_sitter_available") or not pytest.tree_sitter_available,
+    not getattr(pytest, "tree_sitter_available", False),
     reason="tree-sitter not available",
 )
 

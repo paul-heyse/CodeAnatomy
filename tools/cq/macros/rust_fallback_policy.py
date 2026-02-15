@@ -14,7 +14,7 @@ from tools.cq.core.schema import CqResult
 from tools.cq.core.structs import CqStruct
 
 
-class RustFallbackPolicyV1(CqStruct):
+class RustFallbackPolicyV1(CqStruct, frozen=True):
     """Declarative Rust fallback parameters for a macro."""
 
     macro_name: str

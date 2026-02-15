@@ -25,9 +25,10 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterDiagnosticV1,
 )
 from tools.cq.search.tree_sitter.core.infrastructure import (
+    ParserControlSettingsV1,
     apply_parser_controls,
     make_parser,
-    parser_controls_from_env,
+    parse_streaming_source,
 )
 from tools.cq.search.tree_sitter.core.node_utils import node_text
 from tools.cq.search.tree_sitter.structural.export import export_structural_rows
@@ -73,6 +74,12 @@ _MAX_WALK_NODES = 10_000
 _CONJUNCTION_PEER_MAX_DEPTH = 8
 
 
+def _parser_controls() -> ParserControlSettingsV1:
+    from tools.cq.core.settings_factory import SettingsFactory
+
+    return SettingsFactory.parser_controls()
+
+
 @dataclass(frozen=True, slots=True)
 class _SliceBuildSpec:
     kind: NeighborhoodSliceKind
@@ -107,7 +114,7 @@ def _parser(language: str) -> Parser:
         msg = "tree_sitter parser bindings are unavailable"
         raise RuntimeError(msg)
     parser = make_parser(language)
-    apply_parser_controls(parser, parser_controls_from_env())
+    apply_parser_controls(parser, _parser_controls())
     return parser
 
 
@@ -534,8 +541,6 @@ def _parse_tree_for_request(
     try:
         source_bytes = source_path.read_bytes()
         parser = _parser(request.language)
-        from tools.cq.search.tree_sitter.core.stream_source import parse_streaming_source
-
         tree = parse_streaming_source(parser, source_bytes)
     except (OSError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
         return _parse_error_result(type(exc).__name__)

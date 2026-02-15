@@ -13,9 +13,9 @@ from tools.cq.search.tree_sitter.contracts.core_models import (
     TreeSitterInputEditV1,
 )
 from tools.cq.search.tree_sitter.core.infrastructure import (
+    ParserControlSettingsV1,
     apply_parser_controls,
     parse_streaming_source,
-    parser_controls_from_env,
 )
 
 if TYPE_CHECKING:
@@ -24,6 +24,12 @@ if TYPE_CHECKING:
 
 _LANGUAGE_SESSION_LOCK = threading.Lock()
 _LF: int = 0x0A
+
+
+def _parser_controls() -> ParserControlSettingsV1:
+    from tools.cq.core.settings_factory import SettingsFactory
+
+    return SettingsFactory.parser_controls()
 
 
 @dataclass(slots=True)
@@ -134,7 +140,7 @@ class ParseSession:
                 changed_ranges, reused)`` tuple.
         """
         parser = self._parser_factory()
-        apply_parser_controls(parser, parser_controls_from_env())
+        apply_parser_controls(parser, _parser_controls())
         if not file_key:
             return self._parse_uncached(parser=parser, source_bytes=source_bytes)
 

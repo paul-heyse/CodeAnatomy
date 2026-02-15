@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tools.cq.search.pipeline.classifier import QueryMode
 from tools.cq.search.pipeline.contracts import (
     CandidateSearchRequest,
     SearchConfig,
@@ -47,7 +48,7 @@ def test_candidate_search_request_required_fields() -> None:
     req = CandidateSearchRequest(
         root=Path("/repo"),
         query="baz",
-        mode="identifier",
+        mode=QueryMode.IDENTIFIER,
         limits=limits,
     )
     assert req.query == "baz"

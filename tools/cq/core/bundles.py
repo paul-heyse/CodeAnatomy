@@ -13,7 +13,7 @@ from tools.cq.core.merge import merge_step_results
 from tools.cq.core.request_factory import RequestContextV1, RequestFactory
 from tools.cq.core.run_context import RunContext
 from tools.cq.core.schema import CqResult, Finding, Section, mk_result, ms
-from tools.cq.core.target_specs import BundleTargetKind, parse_target_spec
+from tools.cq.core.target_specs import BundleTargetKind, TargetSpecV1
 from tools.cq.macros.bytecode import cmd_bytecode_surface
 from tools.cq.macros.exceptions import cmd_exceptions
 from tools.cq.macros.impact import cmd_impact
@@ -28,14 +28,6 @@ from tools.cq.query.planner import compile_query
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
-
-
-@dataclass(frozen=True)
-class TargetSpec:
-    """Target specification for report bundles."""
-
-    kind: BundleTargetKind
-    value: str
 
 
 @dataclass(frozen=True)
@@ -65,30 +57,27 @@ class BundleContext:
     tc: Toolchain
     root: Path
     argv: list[str]
-    target: TargetSpec
+    target: TargetSpecV1
     in_dir: str | None = None
     param: str | None = None
     signature: str | None = None
     bytecode_show: str | None = None
 
 
-def parse_bundle_target_spec(value: str) -> TargetSpec:
-    """Parse a bundle target spec string like ``function:foo``.
-
-    Args:
-        value: Target specification string in ``kind:value`` form.
-
-    Returns:
-        TargetSpec: Parsed target spec payload.
-
-    Raises:
-        ValueError: If the target spec is malformed or unsupported.
-    """
-    parsed = parse_target_spec(value)
-    if parsed.bundle_kind is None or parsed.bundle_value is None:
-        msg = "Target spec must be in the form kind:value"
+def _bundle_target_kind(target: TargetSpecV1) -> BundleTargetKind:
+    kind = target.bundle_kind
+    if kind is None:
+        msg = "Bundle target kind is required."
         raise ValueError(msg)
-    return TargetSpec(kind=parsed.bundle_kind, value=parsed.bundle_value)
+    return kind
+
+
+def _bundle_target_value(target: TargetSpecV1) -> str:
+    value = target.bundle_value
+    if value is None:
+        msg = "Bundle target value is required."
+        raise ValueError(msg)
+    return value
 
 
 @dataclass(frozen=True)
@@ -129,24 +118,26 @@ def resolve_target_scope(ctx: BundleContext) -> TargetScope:
     """
     root = ctx.root
     target = ctx.target
+    target_kind = _bundle_target_kind(target)
+    target_value = _bundle_target_value(target)
 
-    if target.kind == "path":
-        path = (root / target.value).resolve()
+    if target_kind == "path":
+        path = (root / target_value).resolve()
         if path.is_dir():
             return TargetScope(files=frozenset(), dirs=frozenset({path}))
         if path.is_file():
             return TargetScope(files=frozenset({path}), dirs=frozenset())
         return TargetScope(files=frozenset(), dirs=frozenset())
 
-    if target.kind == "module":
-        module_path = Path(target.value.replace(".", "/"))
+    if target_kind == "module":
+        module_path = Path(target_value.replace(".", "/"))
         module_file = (root / module_path).with_suffix(".py")
         package_init = root / module_path / "__init__.py"
         files = {path for path in (module_file, package_init) if path.exists()}
         dirs = {root / module_path} if (root / module_path).is_dir() else set()
         return TargetScope(files=frozenset(files), dirs=frozenset(dirs))
 
-    query = parse_query(f"entity={target.kind} name={target.value}")
+    query = parse_query(f"entity={target_kind} name={target_value}")
     if ctx.in_dir:
         query = query.with_scope(Scope(in_dir=ctx.in_dir))
     plan = compile_query(query)
@@ -230,7 +221,7 @@ def merge_bundle_results(preset: str, ctx: BundleContext, results: list[CqResult
 
     merged.summary = {
         "bundle": preset,
-        "target": f"{ctx.target.kind}:{ctx.target.value}",
+        "target": f"{_bundle_target_kind(ctx.target)}:{_bundle_target_value(ctx.target)}",
         "in_dir": ctx.in_dir,
     }
 
@@ -260,11 +251,13 @@ def _bundle_steps(preset: str, ctx: BundleContext) -> list[BundleStepResult]:
 def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
     target = ctx.target
+    target_kind = _bundle_target_kind(target)
+    target_value = _bundle_target_value(target)
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
     services = resolve_runtime_services(ctx.root)
 
-    if target.kind in {"function", "method"}:
-        request = RequestFactory.calls(request_ctx, function_name=target.value)
+    if target_kind in {"function", "method"}:
+        request = RequestFactory.calls(request_ctx, function_name=target_value)
         results.append(
             BundleStepResult(
                 result=services.calls.execute(request),
@@ -274,7 +267,7 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
         if ctx.param:
             request = RequestFactory.impact(
                 request_ctx,
-                function_name=target.value,
+                function_name=target_value,
                 param_name=ctx.param,
             )
             results.append(
@@ -288,7 +281,7 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
         if ctx.signature:
             request = RequestFactory.sig_impact(
                 request_ctx,
-                symbol=target.value,
+                symbol=target_value,
                 to=ctx.signature,
             )
             results.append(
@@ -310,11 +303,11 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
             BundleStepResult(result=_skip_result(ctx, "sig-impact", "requires function target"))
         )
 
-    module_filter = target.value if target.kind == "module" else None
+    module_filter = target_value if target_kind == "module" else None
     request = RequestFactory.imports_cmd(request_ctx, module=module_filter)
     results.append(BundleStepResult(result=cmd_imports(request)))
 
-    function_filter = target.value if target.kind in {"function", "method"} else None
+    function_filter = target_value if target_kind in {"function", "method"} else None
     request = RequestFactory.exceptions(request_ctx, function=function_filter)
     results.append(BundleStepResult(result=cmd_exceptions(request)))
 
@@ -327,7 +320,9 @@ def _run_refactor_impact(ctx: BundleContext) -> list[BundleStepResult]:
 def _run_safety_reliability(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
-    function_filter = ctx.target.value if ctx.target.kind in {"function", "method"} else None
+    target_kind = _bundle_target_kind(ctx.target)
+    target_value = _bundle_target_value(ctx.target)
+    function_filter = target_value if target_kind in {"function", "method"} else None
 
     request = RequestFactory.exceptions(request_ctx, function=function_filter)
     results.append(BundleStepResult(result=cmd_exceptions(request)))
@@ -341,14 +336,16 @@ def _run_safety_reliability(ctx: BundleContext) -> list[BundleStepResult]:
 def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
     target = ctx.target
+    target_kind = _bundle_target_kind(target)
+    target_value = _bundle_target_value(target)
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
     services = resolve_runtime_services(ctx.root)
 
-    if target.kind in {"function", "method"}:
+    if target_kind in {"function", "method"}:
         if ctx.param:
             request = RequestFactory.impact(
                 request_ctx,
-                function_name=target.value,
+                function_name=target_value,
                 param_name=ctx.param,
             )
             results.append(
@@ -360,7 +357,7 @@ def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
         else:
             results.append(BundleStepResult(result=_skip_result(ctx, "impact", "missing --param")))
 
-        request = RequestFactory.calls(request_ctx, function_name=target.value)
+        request = RequestFactory.calls(request_ctx, function_name=target_value)
         results.append(
             BundleStepResult(
                 result=services.calls.execute(request),
@@ -377,7 +374,7 @@ def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
 
     request = RequestFactory.bytecode_surface(
         request_ctx,
-        target=target.value,
+        target=target_value,
         show=ctx.bytecode_show or "globals,attrs,constants",
     )
     results.append(
@@ -387,7 +384,7 @@ def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
         )
     )
 
-    request = RequestFactory.scopes(request_ctx, target=target.value)
+    request = RequestFactory.scopes(request_ctx, target=target_value)
     results.append(BundleStepResult(result=cmd_scopes(request)))
 
     return results
@@ -396,7 +393,9 @@ def _run_change_propagation(ctx: BundleContext) -> list[BundleStepResult]:
 def _run_dependency_health(ctx: BundleContext) -> list[BundleStepResult]:
     results: list[BundleStepResult] = []
     request_ctx = RequestContextV1(root=ctx.root, argv=ctx.argv, tc=ctx.tc)
-    module_filter = ctx.target.value if ctx.target.kind == "module" else None
+    target_kind = _bundle_target_kind(ctx.target)
+    target_value = _bundle_target_value(ctx.target)
+    module_filter = target_value if target_kind == "module" else None
 
     request = RequestFactory.imports_cmd(request_ctx, cycles=True, module=module_filter)
     results.append(BundleStepResult(result=cmd_imports(request)))
@@ -404,7 +403,7 @@ def _run_dependency_health(ctx: BundleContext) -> list[BundleStepResult]:
     request = RequestFactory.side_effects(request_ctx)
     results.append(BundleStepResult(result=cmd_side_effects(request)))
 
-    request = RequestFactory.scopes(request_ctx, target=ctx.target.value)
+    request = RequestFactory.scopes(request_ctx, target=target_value)
     results.append(BundleStepResult(result=cmd_scopes(request)))
 
     return results

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import json
+import msgspec
 
 from tools.cq.cli_app.context import CliContext, CliResult, CliTextResult
 from tools.cq.cli_app.types import OutputFormat
+
+_JSON_ENCODER = msgspec.json.Encoder(order="deterministic")
 
 
 def wants_json(ctx: CliContext) -> bool:
@@ -62,7 +64,7 @@ def json_result(
     Returns:
         CliResult: Wrapped CLI result with JSON text payload.
     """
-    serialized = json.dumps(payload, indent=2)
+    serialized = _serialize_json(payload)
     return CliResult(
         result=CliTextResult(text=serialized, media_type="application/json"),
         context=ctx,
@@ -71,7 +73,38 @@ def json_result(
     )
 
 
+def emit_payload(
+    ctx: CliContext,
+    payload: object,
+    *,
+    text_fallback: str | None = None,
+    exit_code: int = 0,
+) -> CliResult:
+    """Emit payload as JSON or text based on output format.
+
+    Returns:
+        CliResult: Serialized response in the requested output format.
+    """
+    if wants_json(ctx):
+        return json_result(ctx, payload, exit_code=exit_code)
+
+    if text_fallback is None and isinstance(payload, dict):
+        message = payload.get("message")
+        if isinstance(message, str) and message:
+            text_fallback = message
+    if text_fallback is None:
+        text_fallback = _serialize_json(payload)
+
+    return text_result(ctx, text_fallback, exit_code=exit_code)
+
+
+def _serialize_json(payload: object) -> str:
+    encoded = _JSON_ENCODER.encode(payload)
+    return msgspec.json.format(encoded, indent=2).decode("utf-8")
+
+
 __all__ = [
+    "emit_payload",
     "json_result",
     "text_result",
     "wants_json",

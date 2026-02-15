@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from tools.cq.search.python.evidence import (
     build_agreement_summary,
     evaluate_python_semantic_signal_from_mapping,
@@ -37,7 +39,7 @@ class TestEvaluatePythonSemanticSignal:
 
     def test_partial_signal(self) -> None:
         """Verify partial signal (1-2 reasons) still yields has_signal=True."""
-        payload = {
+        payload: dict[str, object] = {
             "symbol_grounding": {
                 "definition_targets": [{"file": "a.py"}],
             },
@@ -58,9 +60,11 @@ class TestBuildAgreementSummary:
             native_fields={"kind": "function"},
             tree_sitter_fields={"kind": "function"},
         )
+        matched_keys = cast("list[str]", result["matched_keys"])
+        conflicting_keys = cast("list[str]", result["conflicting_keys"])
         assert result["status"] == "full"
-        assert "kind" in result["matched_keys"]
-        assert result["conflicting_keys"] == []
+        assert "kind" in matched_keys
+        assert conflicting_keys == []
 
     def test_partial_agreement(self) -> None:
         """Verify partial agreement when sources disagree on some keys."""
@@ -68,9 +72,11 @@ class TestBuildAgreementSummary:
             ast_grep_fields={"kind": "function", "name": "foo"},
             native_fields={"kind": "function", "name": "bar"},
         )
+        matched_keys = cast("list[str]", result["matched_keys"])
+        conflicting_keys = cast("list[str]", result["conflicting_keys"])
         assert result["status"] == "partial"
-        assert "kind" in result["matched_keys"]
-        assert "name" in result["conflicting_keys"]
+        assert "kind" in matched_keys
+        assert "name" in conflicting_keys
 
     def test_conflict_when_no_matches(self) -> None:
         """Verify conflict status when all keys disagree."""

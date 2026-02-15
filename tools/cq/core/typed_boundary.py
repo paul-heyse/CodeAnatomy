@@ -18,7 +18,7 @@ def _raise_boundary_error(exc: Exception) -> BoundaryDecodeError:
 def convert_strict[T](
     payload: object,
     *,
-    type_: object,
+    type_: type[T] | object,
     from_attributes: bool = False,
 ) -> T:
     """Convert payload with strict msgspec semantics.
@@ -46,7 +46,7 @@ def convert_strict[T](
 def convert_lax[T](
     payload: object,
     *,
-    type_: object,
+    type_: type[T] | object,
     from_attributes: bool = False,
 ) -> T:
     """Convert payload with lax msgspec semantics.
@@ -71,7 +71,7 @@ def convert_lax[T](
         raise _raise_boundary_error(exc) from exc
 
 
-def decode_json_strict[T](payload: bytes | str, *, type_: object) -> T:
+def decode_json_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T:
     """Decode JSON payload with strict schema validation.
 
     Returns:
@@ -87,7 +87,7 @@ def decode_json_strict[T](payload: bytes | str, *, type_: object) -> T:
         raise _raise_boundary_error(exc) from exc
 
 
-def decode_toml_strict[T](payload: bytes | str, *, type_: object) -> T:
+def decode_toml_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T:
     """Decode TOML payload with strict schema validation.
 
     Returns:
@@ -103,7 +103,7 @@ def decode_toml_strict[T](payload: bytes | str, *, type_: object) -> T:
         raise _raise_boundary_error(exc) from exc
 
 
-def decode_yaml_strict[T](payload: bytes | str, *, type_: object) -> T:
+def decode_yaml_strict[T](payload: bytes | str, *, type_: type[T] | object) -> T:
     """Decode YAML payload with strict schema validation.
 
     Returns:

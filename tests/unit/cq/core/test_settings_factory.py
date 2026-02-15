@@ -21,21 +21,21 @@ def test_runtime_policy_returns_valid_instance() -> None:
     """Test that runtime_policy returns a valid RuntimeExecutionPolicy."""
     policy = SettingsFactory.runtime_policy()
     assert isinstance(policy, RuntimeExecutionPolicy)
-    assert policy.max_workers >= 1
+    assert policy.parallelism.cpu_workers >= 1
 
 
 def test_cache_policy_returns_valid_instance(tmp_path: Path) -> None:
     """Test that cache_policy returns a valid CqCachePolicyV1."""
     policy = SettingsFactory.cache_policy(root=tmp_path)
     assert isinstance(policy, CqCachePolicyV1)
-    assert policy.cache_dir is not None
+    assert policy.directory != ""
 
 
 def test_parser_controls_returns_valid_instance() -> None:
     """Test that parser_controls returns a valid ParserControlSettingsV1."""
     controls = SettingsFactory.parser_controls()
     assert isinstance(controls, ParserControlSettingsV1)
-    assert controls.timeout_seconds > 0
+    assert isinstance(controls.reset_before_parse, bool)
 
 
 def test_cache_runtime_tuning_returns_valid_instance(tmp_path: Path) -> None:
@@ -52,31 +52,31 @@ def test_cache_runtime_tuning_returns_valid_instance(tmp_path: Path) -> None:
 
 
 def test_runtime_policy_respects_environment_max_workers() -> None:
-    """Test that runtime_policy respects CQ_MAX_WORKERS environment variable."""
-    old_value = os.getenv("CQ_MAX_WORKERS")
+    """Test that runtime_policy respects CQ_RUNTIME_CPU_WORKERS."""
+    old_value = os.getenv("CQ_RUNTIME_CPU_WORKERS")
     try:
-        os.environ["CQ_MAX_WORKERS"] = "2"
+        os.environ["CQ_RUNTIME_CPU_WORKERS"] = "2"
         policy = SettingsFactory.runtime_policy()
-        assert policy.max_workers == 2
+        assert policy.parallelism.cpu_workers == 2
     finally:
         if old_value is not None:
-            os.environ["CQ_MAX_WORKERS"] = old_value
+            os.environ["CQ_RUNTIME_CPU_WORKERS"] = old_value
         else:
-            os.environ.pop("CQ_MAX_WORKERS", None)
+            os.environ.pop("CQ_RUNTIME_CPU_WORKERS", None)
 
 
-def test_parser_controls_respects_environment_timeout() -> None:
-    """Test that parser_controls respects CQ_TS_PARSE_TIMEOUT_SECONDS."""
-    old_value = os.getenv("CQ_TS_PARSE_TIMEOUT_SECONDS")
+def test_parser_controls_respects_environment_reset_flag() -> None:
+    """Test that parser_controls respects CQ_TREE_SITTER_PARSER_RESET."""
+    old_value = os.getenv("CQ_TREE_SITTER_PARSER_RESET")
     try:
-        os.environ["CQ_TS_PARSE_TIMEOUT_SECONDS"] = "5.0"
+        os.environ["CQ_TREE_SITTER_PARSER_RESET"] = "1"
         controls = SettingsFactory.parser_controls()
-        assert controls.timeout_seconds == 5.0
+        assert controls.reset_before_parse is True
     finally:
         if old_value is not None:
-            os.environ["CQ_TS_PARSE_TIMEOUT_SECONDS"] = old_value
+            os.environ["CQ_TREE_SITTER_PARSER_RESET"] = old_value
         else:
-            os.environ.pop("CQ_TS_PARSE_TIMEOUT_SECONDS", None)
+            os.environ.pop("CQ_TREE_SITTER_PARSER_RESET", None)
 
 
 def test_cache_runtime_tuning_respects_environment_cull_limit(tmp_path: Path) -> None:
@@ -100,8 +100,7 @@ def test_cache_policy_with_custom_root(tmp_path: Path) -> None:
     custom_root.mkdir()
     policy = SettingsFactory.cache_policy(root=custom_root)
     assert isinstance(policy, CqCachePolicyV1)
-    # The cache_dir should be derived from the custom root
-    assert policy.cache_dir is not None
+    assert policy.directory.startswith(str(custom_root))
 
 
 def test_all_factory_methods_are_static() -> None:

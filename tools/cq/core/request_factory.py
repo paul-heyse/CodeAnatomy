@@ -7,9 +7,23 @@ request object instantiation across CQ command surfaces.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.toolchain import Toolchain
+
+if TYPE_CHECKING:
+    from tools.cq.core.services import CallsServiceRequest, SearchServiceRequest
+    from tools.cq.macros.bytecode import BytecodeSurfaceRequest
+    from tools.cq.macros.exceptions import ExceptionsRequest
+    from tools.cq.macros.impact import ImpactRequest
+    from tools.cq.macros.imports import ImportRequest
+    from tools.cq.macros.scopes import ScopeRequest
+    from tools.cq.macros.side_effects import SideEffectsRequest
+    from tools.cq.macros.sig_impact import SigImpactRequest
+    from tools.cq.query.language import QueryLanguageScope
+    from tools.cq.search.pipeline.classifier import QueryMode
+    from tools.cq.search.pipeline.profiles import SearchLimits
 
 
 class RequestContextV1(CqStruct, frozen=True):
@@ -30,6 +44,19 @@ class RequestContextV1(CqStruct, frozen=True):
     tc: Toolchain
 
 
+class SearchRequestOptionsV1(CqStruct, frozen=True):
+    """Options for SearchServiceRequest construction."""
+
+    mode: QueryMode | None = None
+    lang_scope: QueryLanguageScope = "auto"
+    include_globs: list[str] | None = None
+    exclude_globs: list[str] | None = None
+    include_strings: bool = False
+    with_neighborhood: bool = False
+    limits: SearchLimits | None = None
+    run_id: str | None = None
+
+
 class RequestFactory:
     """Canonical request builder for CLI, run engine, and bundles.
 
@@ -42,7 +69,7 @@ class RequestFactory:
     def calls(
         ctx: RequestContextV1,
         function_name: str,
-    ) -> object:
+    ) -> CallsServiceRequest:
         """Build CallsServiceRequest.
 
         Parameters
@@ -71,15 +98,8 @@ class RequestFactory:
         ctx: RequestContextV1,
         query: str,
         *,
-        mode: object = None,
-        lang_scope: object = "auto",
-        include_globs: list[str] | None = None,
-        exclude_globs: list[str] | None = None,
-        include_strings: bool = False,
-        with_neighborhood: bool = False,
-        limits: object = None,
-        run_id: str | None = None,
-    ) -> object:
+        options: SearchRequestOptionsV1 | None = None,
+    ) -> SearchServiceRequest:
         """Build SearchServiceRequest.
 
         Parameters
@@ -88,22 +108,8 @@ class RequestFactory:
             Request context.
         query : str
             Search query string.
-        mode : QueryMode | None, optional
-            Query mode override.
-        lang_scope : QueryLanguageScope, optional
-            Language scope filter.
-        include_globs : list[str] | None, optional
-            Include glob patterns.
-        exclude_globs : list[str] | None, optional
-            Exclude glob patterns.
-        include_strings : bool, optional
-            Whether to include matches in strings/comments.
-        with_neighborhood : bool, optional
-            Whether to include neighborhood data.
-        limits : SearchLimits | None, optional
-            Search result limits.
-        run_id : str | None, optional
-            Run identifier for cache tagging.
+        options : SearchRequestOptionsV1 | None, optional
+            Optional request options; defaults to canonical search defaults.
 
         Returns:
         -------
@@ -112,19 +118,20 @@ class RequestFactory:
         """
         from tools.cq.core.services import SearchServiceRequest
 
+        opts = options if options is not None else SearchRequestOptionsV1()
         return SearchServiceRequest(
             root=ctx.root,
             query=query,
-            mode=mode,
-            lang_scope=lang_scope,
-            include_globs=include_globs,
-            exclude_globs=exclude_globs,
-            include_strings=include_strings,
-            with_neighborhood=with_neighborhood,
-            limits=limits,
+            mode=opts.mode,
+            lang_scope=opts.lang_scope,
+            include_globs=opts.include_globs,
+            exclude_globs=opts.exclude_globs,
+            include_strings=opts.include_strings,
+            with_neighborhood=opts.with_neighborhood,
+            limits=opts.limits,
             tc=ctx.tc,
             argv=ctx.argv,
-            run_id=run_id,
+            run_id=opts.run_id,
         )
 
     @staticmethod
@@ -134,7 +141,7 @@ class RequestFactory:
         param_name: str,
         *,
         max_depth: int = 5,
-    ) -> object:
+    ) -> ImpactRequest:
         """Build ImpactRequest.
 
         Parameters
@@ -169,7 +176,7 @@ class RequestFactory:
         ctx: RequestContextV1,
         symbol: str,
         to: str,
-    ) -> object:
+    ) -> SigImpactRequest:
         """Build SigImpactRequest.
 
         Parameters
@@ -204,7 +211,7 @@ class RequestFactory:
         module: str | None = None,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
-    ) -> object:
+    ) -> ImportRequest:
         """Build ImportRequest.
 
         Parameters
@@ -244,7 +251,7 @@ class RequestFactory:
         function: str | None = None,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
-    ) -> object:
+    ) -> ExceptionsRequest:
         """Build ExceptionsRequest.
 
         Parameters
@@ -281,7 +288,7 @@ class RequestFactory:
         max_files: int = 500,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
-    ) -> object:
+    ) -> SideEffectsRequest:
         """Build SideEffectsRequest.
 
         Parameters
@@ -317,7 +324,7 @@ class RequestFactory:
         target: str,
         *,
         max_files: int = 500,
-    ) -> object:
+    ) -> ScopeRequest:
         """Build ScopeRequest.
 
         Parameters
@@ -351,7 +358,7 @@ class RequestFactory:
         *,
         show: str = "globals,attrs,constants",
         max_files: int = 500,
-    ) -> object:
+    ) -> BytecodeSurfaceRequest:
         """Build BytecodeSurfaceRequest.
 
         Parameters
@@ -385,4 +392,5 @@ class RequestFactory:
 __all__ = [
     "RequestContextV1",
     "RequestFactory",
+    "SearchRequestOptionsV1",
 ]

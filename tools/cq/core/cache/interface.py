@@ -50,6 +50,21 @@ class CqCacheBackend(Protocol):
         _ = (self, key, value, expire, tag)
         return False
 
+    def set_many(
+        self,
+        items: dict[str, object],
+        *,
+        expire: int | None = None,
+        tag: str | None = None,
+    ) -> int:
+        """Store multiple values and return successful write count.
+
+        Returns:
+            int: Number of values written.
+        """
+        _ = (self, items, expire, tag)
+        return 0
+
     def incr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
         """Increment numeric key by delta.
 
@@ -200,6 +215,21 @@ class NoopCacheBackend:
         """
         _ = (self, key, value, expire, tag)
         return False
+
+    def set_many(
+        self,
+        items: dict[str, object],
+        *,
+        expire: int | None = None,
+        tag: str | None = None,
+    ) -> int:
+        """Ignore bulk writes.
+
+        Returns:
+            int: Always ``0`` in no-op backend.
+        """
+        _ = (self, items, expire, tag)
+        return 0
 
     def incr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
         """Ignore increments.

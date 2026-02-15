@@ -310,6 +310,10 @@ class RunMeta(msgspec.Struct):
         Schema version string.
     run_id : str | None
         Stable run identifier for this invocation.
+    run_uuid_version : int | None
+        UUID version for ``run_id``.
+    run_created_ms : float | None
+        UUIDv7 timestamp in epoch milliseconds for ``run_id``.
     """
 
     macro: str
@@ -320,6 +324,8 @@ class RunMeta(msgspec.Struct):
     toolchain: dict[str, str | None] = msgspec.field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
     run_id: str | None = None
+    run_uuid_version: int | None = None
+    run_created_ms: float | None = None
 
 
 class CqResult(msgspec.Struct):
@@ -379,9 +385,10 @@ def mk_runmeta(
     """
     import time
 
-    from tools.cq.utils.uuid_factory import uuid7_str
+    from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
 
     elapsed = time.time() * 1000 - started_ms
+    identity = resolve_run_identity_contract(run_id)
     return RunMeta(
         macro=macro,
         argv=argv,
@@ -389,7 +396,9 @@ def mk_runmeta(
         started_ms=started_ms,
         elapsed_ms=elapsed,
         toolchain=toolchain,
-        run_id=run_id or uuid7_str(),
+        run_id=identity.run_id,
+        run_uuid_version=identity.run_uuid_version,
+        run_created_ms=float(identity.run_created_ms),
     )
 
 

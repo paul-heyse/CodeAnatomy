@@ -55,7 +55,6 @@ def impact(
     from tools.cq.macros.impact import ImpactRequest, cmd_impact
 
     ctx = require_context(ctx)
-
     options = options_from_params(opts, type_=ImpactOptions)
 
     request = ImpactRequest(
@@ -93,7 +92,6 @@ def calls(
     from tools.cq.core.services import CallsServiceRequest
 
     ctx = require_context(ctx)
-
     if opts is None:
         opts = FilterParams()
     options = options_from_params(opts, type_=CommonFilters)
@@ -130,7 +128,6 @@ def imports(
     from tools.cq.macros.imports import ImportRequest, cmd_imports
 
     ctx = require_context(ctx)
-
     if opts is None:
         opts = ImportsParams()
     options = options_from_params(opts, type_=ImportsOptions)
@@ -168,7 +165,6 @@ def exceptions(
     from tools.cq.macros.exceptions import cmd_exceptions
 
     ctx = require_context(ctx)
-
     if opts is None:
         opts = ExceptionsParams()
     options = options_from_params(opts, type_=ExceptionsOptions)
@@ -206,7 +202,6 @@ def sig_impact(
     from tools.cq.macros.sig_impact import SigImpactRequest, cmd_sig_impact
 
     ctx = require_context(ctx)
-
     options = options_from_params(opts, type_=SigImpactOptions)
 
     request = SigImpactRequest(
@@ -240,7 +235,6 @@ def side_effects(
     from tools.cq.macros.side_effects import SideEffectsRequest, cmd_side_effects
 
     ctx = require_context(ctx)
-
     if opts is None:
         opts = SideEffectsParams()
     options = options_from_params(opts, type_=SideEffectsOptions)
@@ -279,7 +273,6 @@ def scopes(
     from tools.cq.macros.scopes import ScopeRequest, cmd_scopes
 
     ctx = require_context(ctx)
-
     if opts is None:
         opts = FilterParams()
     options = options_from_params(opts, type_=CommonFilters)
@@ -316,7 +309,6 @@ def bytecode_surface(
     from tools.cq.macros.bytecode import BytecodeSurfaceRequest, cmd_bytecode_surface
 
     ctx = require_context(ctx)
-
     if opts is None:
         opts = BytecodeSurfaceParams()
     options = options_from_params(opts, type_=BytecodeSurfaceOptions)

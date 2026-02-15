@@ -2020,11 +2020,12 @@ def _run_tree_sitter_stage(
     state: _PythonEnrichmentState,
     *,
     source_bytes: bytes,
-    byte_start: int | None,
-    byte_end: int | None,
+    byte_span: tuple[int | None, int | None],
     cache_key: str,
+    query_budget_ms: int | None,
     session: PythonAnalysisSession | None,
 ) -> None:
+    byte_start, byte_end = byte_span
     if byte_start is None or byte_end is None:
         state.stage_status["tree_sitter"] = "skipped"
         state.stage_timings_ms["tree_sitter"] = 0.0
@@ -2039,6 +2040,7 @@ def _run_tree_sitter_stage(
             byte_start=byte_start,
             byte_end=byte_end,
             cache_key=cache_key,
+            query_budget_ms=query_budget_ms,
         )
         if ts_payload:
             state.tree_sitter_fields.update(ts_payload)
@@ -2164,9 +2166,9 @@ def enrich_python_context(request: PythonNodeEnrichmentRequest) -> dict[str, obj
     _run_tree_sitter_stage(
         state,
         source_bytes=request.source_bytes,
-        byte_start=byte_start,
-        byte_end=byte_end,
+        byte_span=(byte_start, byte_end),
         cache_key=request.cache_key,
+        query_budget_ms=request.query_budget_ms,
         session=cast("PythonAnalysisSession | None", request.session),
     )
     _finalize_python_enrichment_payload(state)

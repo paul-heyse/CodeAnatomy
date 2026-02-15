@@ -25,6 +25,8 @@ def _capture_payload(capture_map: dict[str, list[Node]], source_bytes: bytes) ->
     for capture_name, nodes in capture_map.items():
         if not isinstance(capture_name, str):
             continue
+        if capture_name.startswith(("payload.", "debug.")):
+            continue
         if not isinstance(nodes, list) or not nodes:
             continue
         text = _node_text(nodes[0], source_bytes)

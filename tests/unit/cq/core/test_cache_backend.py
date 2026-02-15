@@ -105,6 +105,17 @@ def test_cache_backend_advanced_operations(tmp_path: Path) -> None:
     assert backend.add("counter", 2, expire=30, tag="x") is False
     assert backend.incr("counter", 2, default=0) == 3
     assert backend.decr("counter", 1, default=0) == 2
+    written = backend.set_many(
+        {
+            "bulk:k1": {"value": 1},
+            "bulk:k2": {"value": 2},
+        },
+        expire=30,
+        tag="bulk",
+    )
+    assert written == 2
+    assert backend.get("bulk:k1") == {"value": 1}
+    assert backend.get("bulk:k2") == {"value": 2}
 
     with backend.transact():
         assert backend.set("k1", 1, expire=30, tag="x") is True

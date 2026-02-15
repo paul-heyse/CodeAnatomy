@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, distribution
-from pathlib import Path
+from importlib import import_module
+from typing import Any, cast
 
 from tools.cq.core.structs import CqStruct
+
+try:
+    from tree_sitter import Language as _TreeSitterLanguage
+except ImportError:  # pragma: no cover - optional dependency
+    _TreeSitterLanguage = None
+
+try:
+    import tree_sitter_python as _tree_sitter_python
+except ImportError:  # pragma: no cover - optional dependency
+    _tree_sitter_python = None
+
+try:
+    import tree_sitter_rust as _tree_sitter_rust
+except ImportError:  # pragma: no cover - optional dependency
+    _tree_sitter_rust = None
 
 
 class GrammarNodeTypeV1(CqStruct, frozen=True):
@@ -35,73 +49,105 @@ class GrammarSchemaIndex:
     field_names: frozenset[str]
 
 
-_LANGUAGE_DISTRIBUTION: dict[str, str] = {
-    "python": "tree-sitter-python",
-    "rust": "tree-sitter-rust",
+_GENERATED_MODULES: dict[str, str] = {
+    "python": "tools.cq.search.generated.python_node_types_v1",
+    "rust": "tools.cq.search.generated.rust_node_types_v1",
 }
+_NODE_TYPE_ROW_LENGTH = 3
+_RUNTIME_FIELD_REGISTRY_NODE = "__field_registry__"
 
 
-def _distribution_node_types_path(distribution_name: str) -> Path | None:
+def _load_generated_node_types(language: str) -> tuple[GrammarNodeTypeV1, ...]:
+    module_name = _GENERATED_MODULES.get(language)
+    if module_name is None:
+        return ()
     try:
-        dist = distribution(distribution_name)
-    except PackageNotFoundError:
-        return None
-    files = list(dist.files or ())
-    if not files:
-        return None
-    preferred: Path | None = None
-    fallback: Path | None = None
-    for item in files:
-        item_text = str(item)
-        if not item_text.endswith("node-types.json"):
+        module = import_module(module_name)
+    except (ImportError, RuntimeError, TypeError, ValueError):
+        return ()
+    rows = getattr(module, "NODE_TYPES", ())
+    if not isinstance(rows, tuple):
+        return ()
+    out: list[GrammarNodeTypeV1] = []
+    for row in rows:
+        if not isinstance(row, tuple) or len(row) != _NODE_TYPE_ROW_LENGTH:
             continue
-        candidate = Path(str(dist.locate_file(item)))
-        if item_text.endswith("src/node-types.json"):
-            preferred = candidate
-            break
-        fallback = candidate
-    return preferred or fallback
+        node_type, named, fields = row
+        if not isinstance(node_type, str) or not isinstance(named, bool):
+            continue
+        if not isinstance(fields, tuple):
+            continue
+        normalized_fields = tuple(value for value in fields if isinstance(value, str))
+        out.append(GrammarNodeTypeV1(type=node_type, named=named, fields=normalized_fields))
+    return tuple(out)
 
 
-def _decode_node_types(path: Path) -> list[dict[str, object]]:
-    raw = path.read_text(encoding="utf-8")
-    payload = json.loads(raw)
-    if not isinstance(payload, list):
-        return []
-    return [row for row in payload if isinstance(row, dict)]
-
-
-def _row_to_node_type(row: dict[str, object]) -> GrammarNodeTypeV1 | None:
-    node_type = row.get("type")
-    named = row.get("named")
-    if not isinstance(node_type, str) or not isinstance(named, bool):
+def _runtime_language(language: str) -> object | None:
+    if _TreeSitterLanguage is None:
         return None
-    fields_raw = row.get("fields")
-    field_names: tuple[str, ...] = ()
-    if isinstance(fields_raw, dict):
-        field_names = tuple(sorted(key for key in fields_raw if isinstance(key, str)))
-    return GrammarNodeTypeV1(type=node_type, named=named, fields=field_names)
+    normalized = language.strip().lower()
+    if normalized == "python" and _tree_sitter_python is not None:
+        return _TreeSitterLanguage(_tree_sitter_python.language())
+    if normalized == "rust" and _tree_sitter_rust is not None:
+        return _TreeSitterLanguage(_tree_sitter_rust.language())
+    return None
+
+
+def _load_runtime_node_types(language: str) -> tuple[GrammarNodeTypeV1, ...]:
+    runtime_language_obj = _runtime_language(language)
+    if runtime_language_obj is None:
+        return ()
+    runtime_language = cast("Any", runtime_language_obj)
+    node_kind_count = int(getattr(runtime_language, "node_kind_count", 0))
+    field_count = int(getattr(runtime_language, "field_count", 0))
+    if node_kind_count <= 0:
+        return ()
+
+    rows: list[GrammarNodeTypeV1] = []
+    for kind_id in range(node_kind_count):
+        node_kind = runtime_language.node_kind_for_id(kind_id)
+        if not isinstance(node_kind, str) or not node_kind:
+            continue
+        rows.append(
+            GrammarNodeTypeV1(
+                type=node_kind,
+                named=bool(runtime_language.node_kind_is_named(kind_id)),
+                fields=(),
+            )
+        )
+
+    field_names = tuple(
+        field_name
+        for field_id in range(field_count)
+        if isinstance((field_name := runtime_language.field_name_for_id(field_id)), str)
+        and field_name
+    )
+    if field_names:
+        rows.append(
+            GrammarNodeTypeV1(
+                type=_RUNTIME_FIELD_REGISTRY_NODE,
+                named=False,
+                fields=field_names,
+            )
+        )
+    return tuple(rows)
 
 
 def load_grammar_schema(language: str) -> GrammarSchemaV1 | None:
-    """Load grammar schema for a language from installed distribution assets.
+    """Load grammar schema for a language from generated node-type modules.
 
     Returns:
     -------
     GrammarSchemaV1 | None
-        Simplified schema rows when distribution assets are available.
+        Simplified schema rows when generated modules are available.
     """
-    distribution_name = _LANGUAGE_DISTRIBUTION.get(language)
-    if distribution_name is None:
-        return None
-    path = _distribution_node_types_path(distribution_name)
-    if path is None or not path.exists():
-        return None
-    rows = _decode_node_types(path)
-    node_types = tuple(
-        node_type for row in rows if (node_type := _row_to_node_type(row)) is not None
-    )
-    return GrammarSchemaV1(language=language, node_types=node_types)
+    runtime = _load_runtime_node_types(language)
+    if runtime:
+        return GrammarSchemaV1(language=language, node_types=runtime)
+    generated = _load_generated_node_types(language)
+    if generated:
+        return GrammarSchemaV1(language=language, node_types=generated)
+    return None
 
 
 def build_schema_index(schema: GrammarSchemaV1) -> GrammarSchemaIndex:

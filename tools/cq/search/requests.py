@@ -47,6 +47,7 @@ class PythonNodeEnrichmentRequest(CqStruct, frozen=True):
     cache_key: str
     byte_start: int | None = None
     byte_end: int | None = None
+    query_budget_ms: int | None = None
     session: object | None = None
 
 
@@ -61,6 +62,7 @@ class PythonByteRangeEnrichmentRequest(CqStruct, frozen=True):
     resolved_node: object | None = None
     resolved_line: int | None = None
     resolved_col: int | None = None
+    query_budget_ms: int | None = None
     session: object | None = None
 
 
@@ -72,6 +74,7 @@ class RustEnrichmentRequest(CqStruct, frozen=True):
     byte_end: int
     cache_key: str | None = None
     max_scope_depth: int = 24
+    query_budget_ms: int | None = None
 
 
 __all__ = [

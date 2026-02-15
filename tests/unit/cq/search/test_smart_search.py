@@ -629,7 +629,7 @@ class TestBuildSections:
         assert len(with_strings_occurrences.findings) == 1
 
 
-class TestSmartSearch:  # noqa: PLR0904
+class TestSmartSearch:
     """Tests for the full smart search pipeline."""
 
     def test_smart_search_identifier(self, sample_repo: Path) -> None:
@@ -930,6 +930,10 @@ class TestSmartSearch:  # noqa: PLR0904
         assert anchors
         assert all(Path(anchor.file).suffix == ".rs" for anchor in anchors)
         assert all(finding.details.get("language") == "rust" for finding in result.evidence)
+
+
+class TestSmartSearchFiltersAndEnrichment:
+    """Additional smart-search tests split from TestSmartSearch."""
 
     def test_python_scope_filters_out_rust_files(self, tmp_path: Path) -> None:
         """Python scope should not emit findings anchored to Rust files."""

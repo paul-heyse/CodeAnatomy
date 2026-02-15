@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.schema import RunMeta, mk_runmeta
 from tools.cq.core.structs import CqStruct
-from tools.cq.utils.uuid_factory import uuid7_str
+from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
 
 if TYPE_CHECKING:
     from tools.cq.core.toolchain import Toolchain
@@ -21,6 +21,8 @@ class RunContext(CqStruct, frozen=True):
     tc: Toolchain | None = None
     started_ms: float = 0.0
     run_id: str | None = None
+    run_uuid_version: int | None = None
+    run_created_ms: float | None = None
 
     @classmethod
     def from_parts(
@@ -39,12 +41,15 @@ class RunContext(CqStruct, frozen=True):
         RunContext
             Fully populated run context.
         """
+        identity = resolve_run_identity_contract(run_id)
         return cls(
             root=root,
             argv=list(argv) if argv else [],
             tc=tc,
             started_ms=started_ms,
-            run_id=run_id or uuid7_str(),
+            run_id=identity.run_id,
+            run_uuid_version=identity.run_uuid_version,
+            run_created_ms=float(identity.run_created_ms),
         )
 
     def to_runmeta(self, macro: str) -> RunMeta:

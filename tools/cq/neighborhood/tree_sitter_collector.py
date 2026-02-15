@@ -22,6 +22,10 @@ from tools.cq.neighborhood.tree_sitter_contracts import (
 )
 from tools.cq.neighborhood.tree_sitter_neighborhood_query_engine import collect_callers_callees
 from tools.cq.search.tree_sitter_diagnostics import collect_tree_sitter_diagnostics
+from tools.cq.search.tree_sitter_parser_controls import (
+    apply_parser_controls,
+    parser_controls_from_env,
+)
 from tools.cq.search.tree_sitter_runtime_contracts import QueryWindowV1
 from tools.cq.search.tree_sitter_structural_export import export_structural_rows
 
@@ -126,7 +130,9 @@ def _parser(language: str) -> Parser:
     if _TreeSitterParser is None:
         msg = "tree_sitter parser bindings are unavailable"
         raise RuntimeError(msg)
-    return _TreeSitterParser(_rust_language() if language == "rust" else _python_language())
+    parser = _TreeSitterParser(_rust_language() if language == "rust" else _python_language())
+    apply_parser_controls(parser, parser_controls_from_env())
+    return parser
 
 
 def _node_text(node: Node, source_bytes: bytes, *, max_len: int = 120) -> str:
@@ -563,7 +569,9 @@ def _parse_tree_for_request(
     try:
         source_bytes = source_path.read_bytes()
         parser = _parser(request.language)
-        tree = parser.parse(source_bytes)
+        from tools.cq.search.tree_sitter_stream_source import parse_streaming_source
+
+        tree = parse_streaming_source(parser, source_bytes)
     except (OSError, RuntimeError, TypeError, ValueError, AttributeError) as exc:
         return _parse_error_result(type(exc).__name__)
 
@@ -666,11 +674,17 @@ def collect_tree_sitter_neighborhood(
         source_bytes=source_bytes,
         relationships=relationships,
     )
+    structural_export = export_structural_rows(
+        file_path=request.target_file,
+        root=anchor,
+        source_bytes=source_bytes,
+    )
     return TreeSitterNeighborhoodCollectResult(
         subject=subject,
         slices=tuple(slices),
         diagnostics=_tree_parse_diagnostics(language=request.language, tree_root=tree_root),
-        structural_export=export_structural_rows(file_path=request.target_file, root=anchor),
+        structural_export=structural_export,
+        cst_tokens=tuple(structural_export.tokens),
     )
 
 

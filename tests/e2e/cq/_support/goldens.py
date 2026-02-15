@@ -59,6 +59,8 @@ def _normalize_run_block(result_dict: dict[str, Any]) -> None:
     run.pop("started_ms", None)
     run.pop("elapsed_ms", None)
     run.pop("run_id", None)
+    run.pop("run_uuid_version", None)
+    run.pop("run_created_ms", None)
     root = run.get("root")
     if isinstance(root, str):
         run["root"] = "<repo_root>"
@@ -135,7 +137,13 @@ def _scrub_mapping(value: dict[str, object]) -> dict[str, object]:
 
     run = scrubbed.get("run")
     if isinstance(run, dict):
-        for unstable_key in ("started_ms", "elapsed_ms", "run_id"):
+        for unstable_key in (
+            "started_ms",
+            "elapsed_ms",
+            "run_id",
+            "run_uuid_version",
+            "run_created_ms",
+        ):
             run.pop(unstable_key, None)
         root = run.get("root")
         if isinstance(root, str):

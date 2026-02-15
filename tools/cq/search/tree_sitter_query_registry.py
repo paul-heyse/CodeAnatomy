@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING
 
 from tools.cq.core.cache.diskcache_backend import get_cq_cache_backend
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.tree_sitter_adaptive_runtime import memoized_value
+from tools.cq.search.tree_sitter_grammar_drift import build_grammar_drift_report
+from tools.cq.search.tree_sitter_grammar_drift_contracts import GrammarDriftReportV1
 
 if TYPE_CHECKING:
     from diskcache import FanoutCache
@@ -21,7 +24,7 @@ except ImportError:  # pragma: no cover - optional dependency
 _STAMP_TTL_SECONDS = 300
 _STAMP_TAG = "ns:tree_sitter|kind:query_pack_load"
 
-_STAMPED_LOADERS: dict[str, object] = {}
+_LAST_DRIFT_REPORTS: dict[str, GrammarDriftReportV1] = {}
 
 
 class QueryPackSourceV1(CqStruct, frozen=True):
@@ -130,19 +133,19 @@ def _stamped_loader(language: str) -> object | None:
     cache = _fanout_cache()
     if cache is None or memoize_stampede is None:
         return None
-    cached = _STAMPED_LOADERS.get(language)
-    if cached is not None:
-        return cached
 
     @memoize_stampede(cache, expire=_STAMP_TTL_SECONDS, tag=_STAMP_TAG)
     def _load(*, include_distribution: bool, local_hash: str) -> tuple[QueryPackSourceV1, ...]:
-        _ = local_hash
-        return _load_sources_uncached(
-            language=language,
-            include_distribution=include_distribution,
+        cache_key = f"ts_query_registry:{language}:{int(include_distribution)}:{local_hash}"
+        return memoized_value(
+            key=cache_key,
+            compute=lambda: _load_sources_uncached(
+                language=language,
+                include_distribution=include_distribution,
+            ),
+            ttl_seconds=_STAMP_TTL_SECONDS,
         )
 
-    _STAMPED_LOADERS[language] = _load
     return _load
 
 
@@ -163,6 +166,7 @@ def load_query_pack_sources(
     """
     loader = _stamped_loader(language)
     local_hash = _local_query_pack_hash(language)
+    loaded_rows: tuple[QueryPackSourceV1, ...]
     if callable(loader):
         try:
             loaded = loader(include_distribution=include_distribution, local_hash=local_hash)
@@ -172,16 +176,38 @@ def load_query_pack_sources(
                 include_distribution=include_distribution,
             )
         if isinstance(loaded, tuple):
-            return loaded
-        if isinstance(loaded, list):
-            return tuple(row for row in loaded if isinstance(row, QueryPackSourceV1))
-    return _load_sources_uncached(
-        language=language,
-        include_distribution=include_distribution,
-    )
+            loaded_rows = loaded
+        elif isinstance(loaded, list):
+            loaded_rows = tuple(row for row in loaded if isinstance(row, QueryPackSourceV1))
+        else:
+            loaded_rows = _load_sources_uncached(
+                language=language,
+                include_distribution=include_distribution,
+            )
+    else:
+        loaded_rows = _load_sources_uncached(
+            language=language,
+            include_distribution=include_distribution,
+        )
+    report = build_grammar_drift_report(language=language, query_sources=loaded_rows)
+    _LAST_DRIFT_REPORTS[language] = report
+    if not report.compatible and include_distribution:
+        fallback_rows = _load_sources_uncached(language=language, include_distribution=False)
+        _LAST_DRIFT_REPORTS[language] = build_grammar_drift_report(
+            language=language,
+            query_sources=fallback_rows,
+        )
+        return fallback_rows
+    return loaded_rows
+
+
+def get_last_grammar_drift_report(language: str) -> GrammarDriftReportV1 | None:
+    """Return latest grammar drift report for a language load lane."""
+    return _LAST_DRIFT_REPORTS.get(language)
 
 
 __all__ = [
     "QueryPackSourceV1",
+    "get_last_grammar_drift_report",
     "load_query_pack_sources",
 ]

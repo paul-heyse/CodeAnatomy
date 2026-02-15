@@ -18,6 +18,8 @@ from tools.cq.search.enrichment.core import (
     normalize_rust_payload,
     set_degraded,
 )
+from tools.cq.search.rust_macro_expansion_bridge import attach_macro_expansion_evidence
+from tools.cq.search.rust_module_graph import attach_rust_module_graph
 from tools.cq.search.tree_sitter_rust import enrich_rust_context_by_byte_range as _ts_enrich
 
 if TYPE_CHECKING:
@@ -520,6 +522,7 @@ def enrich_rust_context_by_byte_range(
     byte_end: int,
     cache_key: str | None = None,
     max_scope_depth: int = _DEFAULT_SCOPE_DEPTH,
+    query_budget_ms: int | None = None,
 ) -> dict[str, object] | None:
     """Best-effort Rust enrichment with deterministic ast-grep-first merging.
 
@@ -547,12 +550,15 @@ def enrich_rust_context_by_byte_range(
         byte_end=byte_end,
         cache_key=cache_key,
         max_scope_depth=max_scope_depth,
+        query_budget_ms=query_budget_ms,
     )
 
     if ast_payload is None and not ts_payload:
         return None
 
     merged = _merge_enrichment_payloads(ast_payload=ast_payload, ts_payload=ts_payload)
+    attach_macro_expansion_evidence(merged)
+    attach_rust_module_graph(merged)
 
     if os.getenv(_CROSSCHECK_ENV) == "1" and ts_payload and ast_payload is not None:
         mismatches = _crosscheck_mismatches(ast_payload, ts_payload)
@@ -590,6 +596,7 @@ def _safe_tree_sitter_payload(
     byte_end: int,
     cache_key: str | None,
     max_scope_depth: int,
+    query_budget_ms: int | None,
 ) -> dict[str, object]:
     try:
         return _canonicalize_tree_sitter_payload(
@@ -599,6 +606,7 @@ def _safe_tree_sitter_payload(
                 byte_end=byte_end,
                 cache_key=cache_key,
                 max_scope_depth=max_scope_depth,
+                query_budget_ms=query_budget_ms,
             )
         )
     except _ENRICHMENT_ERRORS:

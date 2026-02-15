@@ -33,7 +33,6 @@ def chain(
         RuntimeError: If no chain segments are provided.
     """
     ctx = require_context(ctx)
-
     groups = [
         list(group)
         for is_delim, group in itertools.groupby(tokens, lambda t: t == delimiter)

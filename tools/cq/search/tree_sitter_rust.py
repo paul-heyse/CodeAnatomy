@@ -20,6 +20,16 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.search.tree_sitter_adaptive_runtime import adaptive_query_budget_ms
+from tools.cq.search.tree_sitter_change_windows import (
+    contains_window,
+    ensure_query_windows,
+    windows_from_changed_ranges,
+)
+from tools.cq.search.tree_sitter_custom_predicates import (
+    has_custom_predicates,
+    make_query_predicate,
+)
 from tools.cq.search.tree_sitter_diagnostics import collect_tree_sitter_diagnostics
 from tools.cq.search.tree_sitter_injection_runtime import parse_injected_ranges
 from tools.cq.search.tree_sitter_injections import build_injection_plan
@@ -27,7 +37,11 @@ from tools.cq.search.tree_sitter_match_row_contracts import ObjectEvidenceRowV1
 from tools.cq.search.tree_sitter_match_rows import build_match_rows
 from tools.cq.search.tree_sitter_pack_contracts import load_pack_rules
 from tools.cq.search.tree_sitter_parse_session import clear_parse_session, get_parse_session
+from tools.cq.search.tree_sitter_query_planner import build_pack_plan, sort_pack_plans
+from tools.cq.search.tree_sitter_query_planner_contracts import QueryPackPlanV1
+from tools.cq.search.tree_sitter_query_specialization import specialize_query
 from tools.cq.search.tree_sitter_runtime import (
+    QueryExecutionCallbacksV1,
     run_bounded_query_captures,
     run_bounded_query_matches,
 )
@@ -39,7 +53,7 @@ from tools.cq.search.tree_sitter_rust_bundle import (
     load_rust_grammar_bundle,
     load_rust_query_sources,
 )
-from tools.cq.search.tree_sitter_tags import build_tag_events
+from tools.cq.search.tree_sitter_work_queue import enqueue_windows
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Parser, Query, Tree
@@ -285,14 +299,18 @@ def _touch_tree_cache(session: object, cache_key: str | None) -> None:
         _TREE_CACHE_EVICTIONS["value"] += 1
 
 
-def _parse_with_session(source: str, *, cache_key: str | None) -> tuple[Tree | None, bytes]:
+def _parse_with_session(
+    source: str,
+    *,
+    cache_key: str | None,
+) -> tuple[Tree | None, bytes, tuple[object, ...]]:
     source_bytes = source.encode("utf-8", errors="replace")
     if not is_tree_sitter_rust_available():
-        return None, source_bytes
+        return None, source_bytes, ()
     session = get_parse_session(language="rust", parser_factory=_make_parser)
     _touch_tree_cache(session=session, cache_key=cache_key)
-    tree, _changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
-    return tree, source_bytes
+    tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
+    return tree, source_bytes, tuple(changed_ranges) if changed_ranges is not None else ()
 
 
 def clear_tree_sitter_rust_cache() -> None:
@@ -302,6 +320,7 @@ def clear_tree_sitter_rust_cache() -> None:
     _TREE_CACHE_EVICTIONS["value"] = 0
     _rust_language.cache_clear()
     _compile_query.cache_clear()
+    _pack_source_rows.cache_clear()
 
 
 def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
@@ -320,7 +339,12 @@ def get_tree_sitter_rust_cache_stats() -> dict[str, int]:
 
 
 @lru_cache(maxsize=128)
-def _compile_query(pack_name: str, source: str) -> Query:
+def _compile_query(
+    pack_name: str,
+    source: str,
+    *,
+    request_surface: str = "artifact",
+) -> Query:
     if _TreeSitterQuery is None:
         msg = "tree_sitter query bindings are unavailable"
         raise RuntimeError(msg)
@@ -335,14 +359,36 @@ def _compile_query(pack_name: str, source: str) -> Query:
         if rules.forbid_non_local and bool(query.is_pattern_non_local(pattern_idx)):
             msg = f"rust query pattern non-local: {pattern_idx}"
             raise ValueError(msg)
-    return query
+    return specialize_query(query, request_surface=request_surface)
+
+
+@lru_cache(maxsize=1)
+def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
+    sources = load_rust_query_sources(include_distribution_queries=False)
+    source_rows = [
+        (
+            source.pack_name,
+            source.source,
+            build_pack_plan(
+                pack_name=source.pack_name,
+                query=_compile_query(
+                    source.pack_name,
+                    source.source,
+                    request_surface="artifact",
+                ),
+                query_text=source.source,
+            ),
+        )
+        for source in sources
+        if source.pack_name.endswith(".scm")
+    ]
+    return tuple(
+        (pack_name, source, plan) for pack_name, source, plan in sort_pack_plans(source_rows)
+    )
 
 
 def _pack_sources() -> tuple[tuple[str, str], ...]:
-    sources = load_rust_query_sources(include_distribution_queries=False)
-    return tuple(
-        (source.pack_name, source.source) for source in sources if source.pack_name.endswith(".scm")
-    )
+    return tuple((pack_name, source) for pack_name, source, _ in _pack_source_rows())
 
 
 def _capture_texts_from_captures(
@@ -369,7 +415,7 @@ def _collect_query_pack_captures(
     *,
     root: Node,
     source_bytes: bytes,
-    window: QueryWindowV1,
+    windows: tuple[QueryWindowV1, ...],
     settings: QueryExecutionSettingsV1,
 ) -> tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], dict[str, object]]:
     captures: dict[str, list[Node]] = {}
@@ -377,23 +423,36 @@ def _collect_query_pack_captures(
     query_telemetry: dict[str, object] = {}
     for pack_name, query_source in _pack_sources():
         try:
-            query = _compile_query(pack_name, query_source)
+            query = _compile_query(pack_name, query_source, request_surface="artifact")
+            predicate_callback = (
+                make_query_predicate(source_bytes=source_bytes)
+                if has_custom_predicates(query_source)
+                else None
+            )
+            callbacks = (
+                QueryExecutionCallbacksV1(predicate_callback=predicate_callback)
+                if predicate_callback is not None
+                else None
+            )
             pack_captures, capture_telemetry = run_bounded_query_captures(
                 query,
                 root,
-                windows=(window,),
+                windows=windows,
                 settings=settings,
+                callbacks=callbacks,
             )
             pack_matches, match_telemetry = run_bounded_query_matches(
                 query,
                 root,
-                windows=(window,),
+                windows=windows,
                 settings=QueryExecutionSettingsV1(
                     match_limit=settings.match_limit,
                     max_start_depth=settings.max_start_depth,
                     budget_ms=settings.budget_ms,
+                    timeout_micros=settings.timeout_micros,
                     require_containment=True,
                 ),
+                callbacks=callbacks,
             )
         except _ENRICHMENT_ERRORS:
             continue
@@ -1336,37 +1395,67 @@ def _collect_query_pack_payload(
     *,
     root: Node,
     source_bytes: bytes,
-    byte_start: int,
-    byte_end: int,
+    byte_span: tuple[int, int],
+    changed_ranges: tuple[object, ...] = (),
+    query_budget_ms: int | None = None,
+    file_key: str | None = None,
 ) -> dict[str, object]:
+    byte_start, byte_end = byte_span
     if byte_end <= byte_start:
         return {}
 
-    window = QueryWindowV1(start_byte=byte_start, end_byte=byte_end)
-    settings = QueryExecutionSettingsV1(match_limit=_QUERY_MATCH_LIMIT)
+    anchor_window = QueryWindowV1(start_byte=byte_start, end_byte=byte_end)
+    windows = windows_from_changed_ranges(
+        changed_ranges,
+        source_byte_len=len(source_bytes),
+        pad_bytes=96,
+    )
+    windows = ensure_query_windows(windows, fallback=anchor_window)
+    if windows and not contains_window(
+        windows,
+        value=anchor_window.start_byte,
+        width=anchor_window.end_byte - anchor_window.start_byte,
+    ):
+        windows = (*windows, anchor_window)
+    enqueue_windows(
+        language="rust",
+        file_key=file_key or "<memory>",
+        windows=windows,
+    )
+
+    effective_budget_ms = adaptive_query_budget_ms(
+        language="rust",
+        fallback_budget_ms=query_budget_ms if query_budget_ms is not None else 200,
+    )
+    settings = QueryExecutionSettingsV1(
+        match_limit=_QUERY_MATCH_LIMIT,
+        budget_ms=effective_budget_ms,
+    )
     captures, rows, query_telemetry = _collect_query_pack_captures(
         root=root,
         source_bytes=source_bytes,
-        window=window,
+        windows=windows,
         settings=settings,
     )
 
     payload: dict[str, object] = (
         {"query_pack_telemetry": query_telemetry} if query_telemetry else {}
     )
-    definitions, references, calls, imports = _rust_fact_lists(captures, source_bytes)
+    definitions, references, calls, imports, modules = _rust_fact_lists(captures, source_bytes)
     _extend_rust_fact_lists_from_rows(
         rows=rows,
         definitions=definitions,
         references=references,
         calls=calls,
         imports=imports,
+        modules=modules,
     )
     payload["rust_tree_sitter_facts"] = _rust_fact_payload(
         definitions=definitions,
         references=references,
         calls=calls,
         imports=imports,
+        modules=modules,
     )
     _attach_query_pack_payload(
         payload=payload,
@@ -1379,7 +1468,7 @@ def _collect_query_pack_payload(
         for row in collect_tree_sitter_diagnostics(
             language="rust",
             root=root,
-            windows=(window,),
+            windows=windows,
             match_limit=1024,
         )
     ]
@@ -1389,7 +1478,7 @@ def _collect_query_pack_payload(
 def _rust_fact_lists(
     captures: dict[str, list[Node]],
     source_bytes: bytes,
-) -> tuple[list[str], list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     definitions = _capture_texts_from_captures(
         captures,
         source_bytes,
@@ -1415,7 +1504,13 @@ def _rust_fact_lists(
         "import.path",
         "import.extern.name",
     )
-    return definitions, references, calls, imports
+    modules = _capture_texts_from_captures(
+        captures,
+        source_bytes,
+        "module.name",
+        "def.module.name",
+    )
+    return definitions, references, calls, imports, modules
 
 
 def _extend_rust_fact_lists_from_rows(
@@ -1425,6 +1520,7 @@ def _extend_rust_fact_lists_from_rows(
     references: list[str],
     calls: list[str],
     imports: list[str],
+    modules: list[str],
 ) -> None:
     for row in rows:
         if row.emit == "definitions":
@@ -1452,11 +1548,17 @@ def _extend_rust_fact_lists_from_rows(
                 captures=row.captures,
                 keys=("call.target", "call.macro.path"),
             )
-        elif row.emit in {"imports", "modules"}:
+        elif row.emit == "imports":
             _extend_fact_list(
                 target=imports,
                 captures=row.captures,
-                keys=("import.path", "import.extern.name", "module.name"),
+                keys=("import.path", "import.extern.name"),
+            )
+        elif row.emit == "modules":
+            _extend_fact_list(
+                target=modules,
+                captures=row.captures,
+                keys=("module.name", "def.module.name"),
             )
 
 
@@ -1478,12 +1580,14 @@ def _rust_fact_payload(
     references: list[str],
     calls: list[str],
     imports: list[str],
+    modules: list[str],
 ) -> dict[str, list[str]]:
     return {
         "definitions": definitions[:_MAX_FIELDS_SHOWN],
         "references": references[:_MAX_FIELDS_SHOWN],
         "calls": calls[:_MAX_FIELDS_SHOWN],
         "imports": imports[:_MAX_FIELDS_SHOWN],
+        "modules": modules[:_MAX_FIELDS_SHOWN],
     }
 
 
@@ -1498,11 +1602,15 @@ def _attach_query_pack_payload(
     payload["query_pack_bundle"] = msgspec.to_builtins(
         load_rust_grammar_bundle(include_distribution_queries=False)
     )
-    payload["query_pack_tags"] = msgspec.to_builtins(
-        build_tag_events(source_bytes, captures=captures)
+    injection_plan = build_injection_plan(source_bytes, captures=captures)
+    payload["query_pack_injections"] = [msgspec.to_builtins(row) for row in injection_plan]
+    payload["query_pack_injection_profiles"] = sorted(
+        {
+            str(row.profile_name)
+            for row in injection_plan
+            if isinstance(getattr(row, "profile_name", None), str)
+        }
     )
-    injection_plan = build_injection_plan(source_bytes, captures=captures, default_language="rust")
-    payload["query_pack_injections"] = msgspec.to_builtins(injection_plan)
     rust_plan = tuple(row for row in injection_plan if row.language == "rust")
     if rust_plan:
         payload["query_pack_injection_runtime"] = msgspec.to_builtins(
@@ -1526,6 +1634,7 @@ def enrich_rust_context(
     col: int,
     cache_key: str | None = None,
     max_scope_depth: int = _DEFAULT_SCOPE_DEPTH,
+    query_budget_ms: int | None = None,
 ) -> dict[str, object] | None:
     """Extract optional Rust context details for a match location.
 
@@ -1551,7 +1660,10 @@ def enrich_rust_context(
         return None
 
     try:
-        tree, source_bytes = _parse_with_session(source, cache_key=cache_key)
+        tree, source_bytes, changed_ranges = _parse_with_session(
+            source,
+            cache_key=cache_key,
+        )
         if tree is None:
             return None
         if _TreeSitterPoint is None:
@@ -1568,8 +1680,13 @@ def enrich_rust_context(
             _collect_query_pack_payload(
                 root=tree.root_node,
                 source_bytes=source_bytes,
-                byte_start=int(getattr(node, "start_byte", 0)),
-                byte_end=int(getattr(node, "end_byte", 0)),
+                byte_span=(
+                    int(getattr(node, "start_byte", 0)),
+                    int(getattr(node, "end_byte", 0)),
+                ),
+                changed_ranges=changed_ranges,
+                query_budget_ms=query_budget_ms,
+                file_key=cache_key,
             )
         )
     except _ENRICHMENT_ERRORS:
@@ -1585,6 +1702,7 @@ def enrich_rust_context_by_byte_range(
     byte_end: int,
     cache_key: str | None = None,
     max_scope_depth: int = _DEFAULT_SCOPE_DEPTH,
+    query_budget_ms: int | None = None,
 ) -> dict[str, object] | None:
     """Extract optional Rust context using byte offsets instead of line/col.
 
@@ -1617,7 +1735,10 @@ def enrich_rust_context_by_byte_range(
         return None
 
     try:
-        tree, source_bytes = _parse_with_session(source, cache_key=cache_key)
+        tree, source_bytes, changed_ranges = _parse_with_session(
+            source,
+            cache_key=cache_key,
+        )
         if tree is None:
             return None
         node = tree.root_node.named_descendant_for_byte_range(byte_start, byte_end)
@@ -1631,8 +1752,10 @@ def enrich_rust_context_by_byte_range(
             _collect_query_pack_payload(
                 root=tree.root_node,
                 source_bytes=source_bytes,
-                byte_start=byte_start,
-                byte_end=byte_end,
+                byte_span=(byte_start, byte_end),
+                changed_ranges=changed_ranges,
+                query_budget_ms=query_budget_ms,
+                file_key=cache_key,
             )
         )
     except _ENRICHMENT_ERRORS:

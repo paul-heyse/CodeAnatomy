@@ -2,32 +2,29 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, cast
 
 from tools.cq.core.structs import CqStruct
-from tools.cq.search.tree_sitter_node_schema import build_schema_index, load_grammar_schema
+from tools.cq.search.tree_sitter_grammar_drift import build_grammar_drift_report
+from tools.cq.search.tree_sitter_language_registry import (
+    load_language_registry,
+    load_tree_sitter_language,
+)
+from tools.cq.search.tree_sitter_node_schema import (
+    GrammarSchemaIndex,
+    build_schema_index,
+    load_grammar_schema,
+)
 from tools.cq.search.tree_sitter_query_contracts import lint_query_pack_source
-from tools.cq.search.tree_sitter_query_registry import load_query_pack_sources
+from tools.cq.search.tree_sitter_query_registry import QueryPackSourceV1, load_query_pack_sources
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Query
 
 try:
-    import tree_sitter_python as _tree_sitter_python
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_python = None
-
-try:
-    import tree_sitter_rust as _tree_sitter_rust
-except ImportError:  # pragma: no cover - optional dependency
-    _tree_sitter_rust = None
-
-try:
-    from tree_sitter import Language as _TreeSitterLanguage
     from tree_sitter import Query as _TreeSitterQuery
 except ImportError:  # pragma: no cover - optional dependency
-    _TreeSitterLanguage = None
     _TreeSitterQuery = None
 
 
@@ -38,20 +35,6 @@ class QueryPackLintResultV1(CqStruct, frozen=True):
     errors: tuple[str, ...] = ()
 
 
-@lru_cache(maxsize=1)
-def _python_language() -> Language | None:
-    if _tree_sitter_python is None or _TreeSitterLanguage is None:
-        return None
-    return _TreeSitterLanguage(_tree_sitter_python.language())
-
-
-@lru_cache(maxsize=1)
-def _rust_language() -> Language | None:
-    if _tree_sitter_rust is None or _TreeSitterLanguage is None:
-        return None
-    return _TreeSitterLanguage(_tree_sitter_rust.language())
-
-
 def _compile_query(language: Language, source: str) -> Query:
     if _TreeSitterQuery is None:
         msg = "tree_sitter query bindings are unavailable"
@@ -59,7 +42,52 @@ def _compile_query(language: Language, source: str) -> Query:
     return _TreeSitterQuery(language, source)
 
 
+def _predicate_pack_missing_pushdown(*, pack_name: str, source_text: str) -> bool:
+    if not pack_name.endswith("70_predicate_filters.scm"):
+        return False
+    return not any(token in source_text for token in ("#match?", "#any-of?", "#eq?", "#cq-"))
+
+
+def _lint_pack_sources(
+    *,
+    language: str,
+    sources: tuple[QueryPackSourceV1, ...],
+    schema_index: GrammarSchemaIndex,
+    compile_query: Callable[[str], Query],
+) -> list[str]:
+    errors: list[str] = []
+    for source in sources:
+        pack_name = getattr(source, "pack_name", "")
+        source_text = getattr(source, "source", "")
+        if not isinstance(pack_name, str) or not pack_name.endswith(".scm"):
+            continue
+        if isinstance(source_text, str) and _predicate_pack_missing_pushdown(
+            pack_name=pack_name,
+            source_text=source_text,
+        ):
+            errors.append(
+                f"{language}:{pack_name}:predicate_pack_missing_pushdown:missing predicate filters"
+            )
+        issues = lint_query_pack_source(
+            language=language,
+            pack_name=pack_name,
+            source=source_text if isinstance(source_text, str) else "",
+            schema_index=schema_index,
+            compile_query=compile_query,
+        )
+        errors.extend(
+            f"{issue.language}:{issue.pack_name}:{issue.code}:{issue.message}" for issue in issues
+        )
+    return errors
+
+
 def _lint_language(language: str) -> tuple[str, ...]:
+    registry = load_language_registry(language)
+    if registry is None:
+        return ()
+    if not registry.node_kinds:
+        return (f"{language}:registry:empty_node_kinds:language registry has no node kinds",)
+
     schema = load_grammar_schema(language)
     if schema is None:
         return ()
@@ -68,29 +96,24 @@ def _lint_language(language: str) -> tuple[str, ...]:
     sources = load_query_pack_sources(language, include_distribution=False)
     if not sources:
         return ()
+    drift_report = build_grammar_drift_report(language=language, query_sources=sources)
 
-    language_obj = _python_language() if language == "python" else _rust_language()
+    language_obj = load_tree_sitter_language(language)
     if language_obj is None:
         return ()
-    language_runtime: Language = language_obj
+    language_runtime = cast("Language", language_obj)
 
     def compile_for_language(query_source: str) -> Query:
         return _compile_query(language_runtime, query_source)
 
-    errors: list[str] = []
-    for source in sources:
-        if not source.pack_name.endswith(".scm"):
-            continue
-        issues = lint_query_pack_source(
-            language=language,
-            pack_name=source.pack_name,
-            source=source.source,
-            schema_index=schema_index,
-            compile_query=compile_for_language,
-        )
-        errors.extend(
-            f"{issue.language}:{issue.pack_name}:{issue.code}:{issue.message}" for issue in issues
-        )
+    errors = _lint_pack_sources(
+        language=language,
+        sources=sources,
+        schema_index=schema_index,
+        compile_query=compile_for_language,
+    )
+    if not drift_report.compatible:
+        errors.extend(f"{language}:grammar_drift:{error}" for error in drift_report.errors)
     return tuple(errors)
 
 

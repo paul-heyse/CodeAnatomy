@@ -12,6 +12,11 @@ from tools.cq.search.tree_sitter_parse_contracts import (
     PointV1,
     TreeSitterInputEditV1,
 )
+from tools.cq.search.tree_sitter_parser_controls import (
+    apply_parser_controls,
+    parser_controls_from_env,
+)
+from tools.cq.search.tree_sitter_stream_source import parse_streaming_source
 
 if TYPE_CHECKING:
     from tree_sitter import Parser, Tree
@@ -129,6 +134,7 @@ class ParseSession:
                 changed_ranges, reused)`` tuple.
         """
         parser = self._parser_factory()
+        apply_parser_controls(parser, parser_controls_from_env())
         if not file_key:
             return self._parse_uncached(parser=parser, source_bytes=source_bytes)
 
@@ -158,7 +164,7 @@ class ParseSession:
     ) -> tuple[Tree | None, tuple[object, ...], bool]:
         self._cache_misses += 1
         self._parse_count += 1
-        tree = parser.parse(source_bytes)
+        tree = parse_streaming_source(parser, source_bytes)
         return tree, (), False
 
     def _parse_initial(
@@ -168,7 +174,7 @@ class ParseSession:
         file_key: str,
         source_bytes: bytes,
     ) -> tuple[Tree | None, tuple[object, ...], bool]:
-        tree = parser.parse(source_bytes)
+        tree = parse_streaming_source(parser, source_bytes)
         with self._lock:
             self._cache_misses += 1
             self._parse_count += 1
@@ -207,7 +213,7 @@ class ParseSession:
                 source_bytes=source_bytes,
             )
 
-        new_tree = parser.parse(source_bytes, old_tree=old_tree)
+        new_tree = parse_streaming_source(parser, source_bytes, old_tree=old_tree)
         if new_tree is None:
             with self._lock:
                 self._cache_misses += 1
@@ -227,7 +233,7 @@ class ParseSession:
         file_key: str,
         source_bytes: bytes,
     ) -> tuple[Tree | None, tuple[object, ...], bool]:
-        tree = parser.parse(source_bytes)
+        tree = parse_streaming_source(parser, source_bytes)
         with self._lock:
             self._cache_misses += 1
             self._reparse_count += 1

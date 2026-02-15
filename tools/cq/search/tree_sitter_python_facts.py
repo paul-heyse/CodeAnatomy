@@ -9,12 +9,29 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from tools.cq.search.tree_sitter_adaptive_runtime import adaptive_query_budget_ms
+from tools.cq.search.tree_sitter_change_windows import (
+    contains_window,
+    ensure_query_windows,
+    windows_from_changed_ranges,
+)
+from tools.cq.search.tree_sitter_custom_predicates import (
+    has_custom_predicates,
+    make_query_predicate,
+)
 from tools.cq.search.tree_sitter_match_row_contracts import ObjectEvidenceRowV1
 from tools.cq.search.tree_sitter_match_rows import build_match_rows
 from tools.cq.search.tree_sitter_pack_contracts import load_pack_rules
-from tools.cq.search.tree_sitter_python import is_tree_sitter_python_available, parse_python_tree
+from tools.cq.search.tree_sitter_python import (
+    is_tree_sitter_python_available,
+    parse_python_tree_with_ranges,
+)
+from tools.cq.search.tree_sitter_query_planner import build_pack_plan, sort_pack_plans
+from tools.cq.search.tree_sitter_query_planner_contracts import QueryPackPlanV1
 from tools.cq.search.tree_sitter_query_registry import load_query_pack_sources
+from tools.cq.search.tree_sitter_query_specialization import specialize_query
 from tools.cq.search.tree_sitter_runtime import (
+    QueryExecutionCallbacksV1,
     run_bounded_query_captures,
     run_bounded_query_matches,
 )
@@ -22,6 +39,7 @@ from tools.cq.search.tree_sitter_runtime_contracts import (
     QueryExecutionSettingsV1,
     QueryWindowV1,
 )
+from tools.cq.search.tree_sitter_work_queue import enqueue_windows
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Query
@@ -49,7 +67,12 @@ def _python_language() -> Language:
 
 
 @lru_cache(maxsize=64)
-def _compile_query(pack_name: str, source: str) -> Query:
+def _compile_query(
+    pack_name: str,
+    source: str,
+    *,
+    request_surface: str = "artifact",
+) -> Query:
     if _TreeSitterQuery is None:
         msg = "tree_sitter query bindings are unavailable"
         raise RuntimeError(msg)
@@ -64,7 +87,7 @@ def _compile_query(pack_name: str, source: str) -> Query:
         if rules.forbid_non_local and bool(query.is_pattern_non_local(pattern_idx)):
             msg = f"python query pattern non-local: {pattern_idx}"
             raise ValueError(msg)
-    return query
+    return specialize_query(query, request_surface=request_surface)
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
@@ -169,18 +192,59 @@ def _parse_quality(captures: dict[str, list[Node]], source_bytes: bytes) -> dict
     }
 
 
-def _pack_sources() -> tuple[tuple[str, str], ...]:
+@lru_cache(maxsize=1)
+def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
     sources = load_query_pack_sources("python", include_distribution=False)
-    return tuple(
-        (source.pack_name, source.source) for source in sources if source.pack_name.endswith(".scm")
+    rows = [
+        (
+            source.pack_name,
+            source.source,
+            build_pack_plan(
+                pack_name=source.pack_name,
+                query=_compile_query(
+                    source.pack_name,
+                    source.source,
+                    request_surface="artifact",
+                ),
+                query_text=source.source,
+            ),
+        )
+        for source in sources
+        if source.pack_name.endswith(".scm")
+    ]
+    return tuple((pack_name, source, plan) for pack_name, source, plan in sort_pack_plans(rows))
+
+
+def _pack_sources() -> tuple[tuple[str, str], ...]:
+    return tuple((pack_name, source) for pack_name, source, _ in _pack_source_rows())
+
+
+def _build_query_windows(
+    *,
+    anchor_window: QueryWindowV1,
+    source_byte_len: int,
+    changed_ranges: tuple[object, ...],
+) -> tuple[QueryWindowV1, ...]:
+    windows = windows_from_changed_ranges(
+        changed_ranges,
+        source_byte_len=source_byte_len,
+        pad_bytes=96,
     )
+    windows = ensure_query_windows(windows, fallback=anchor_window)
+    if windows and not contains_window(
+        windows,
+        value=anchor_window.start_byte,
+        width=anchor_window.end_byte - anchor_window.start_byte,
+    ):
+        return (*windows, anchor_window)
+    return windows
 
 
 def _collect_query_pack_captures(
     *,
     root: Node,
     source_bytes: bytes,
-    window: QueryWindowV1,
+    windows: tuple[QueryWindowV1, ...],
     settings: QueryExecutionSettingsV1,
 ) -> tuple[dict[str, list[Node]], tuple[ObjectEvidenceRowV1, ...], dict[str, object]]:
     all_captures: dict[str, list[Node]] = {}
@@ -188,23 +252,35 @@ def _collect_query_pack_captures(
     telemetry: dict[str, object] = {}
     for pack_name, query_source in _pack_sources():
         try:
-            query = _compile_query(pack_name, query_source)
+            query = _compile_query(pack_name, query_source, request_surface="artifact")
+            predicate_callback = (
+                make_query_predicate(source_bytes=source_bytes)
+                if has_custom_predicates(query_source)
+                else None
+            )
+            callbacks = (
+                QueryExecutionCallbacksV1(predicate_callback=predicate_callback)
+                if predicate_callback is not None
+                else None
+            )
             captures, run_telemetry = run_bounded_query_captures(
                 query,
                 root,
-                windows=(window,),
+                windows=windows,
                 settings=settings,
+                callbacks=callbacks,
             )
             matches, match_telemetry = run_bounded_query_matches(
                 query,
                 root,
-                windows=(window,),
+                windows=windows,
                 settings=QueryExecutionSettingsV1(
                     match_limit=settings.match_limit,
                     max_start_depth=settings.max_start_depth,
                     budget_ms=settings.budget_ms,
                     require_containment=True,
                 ),
+                callbacks=callbacks,
             )
         except (RuntimeError, TypeError, ValueError, AttributeError):
             continue
@@ -452,6 +528,7 @@ def build_python_tree_sitter_facts(
     byte_end: int,
     cache_key: str | None = None,
     match_limit: int = _DEFAULT_MATCH_LIMIT,
+    query_budget_ms: int | None = None,
 ) -> dict[str, object] | None:
     """Build tree-sitter-first structural facts for one byte range.
 
@@ -467,27 +544,40 @@ def build_python_tree_sitter_facts(
     if byte_end > len(source_bytes):
         return None
 
-    tree = parse_python_tree(source, cache_key=cache_key)
+    tree, changed_ranges = parse_python_tree_with_ranges(source, cache_key=cache_key)
     if tree is None:
         return None
 
-    root = tree.root_node
-    anchor = root.named_descendant_for_byte_range(byte_start, byte_end)
+    anchor = tree.root_node.named_descendant_for_byte_range(byte_start, byte_end)
     if anchor is None:
         return None
     anchor = _lift_anchor(anchor)
 
-    settings = QueryExecutionSettingsV1(match_limit=match_limit)
+    effective_budget_ms = adaptive_query_budget_ms(
+        language="python",
+        fallback_budget_ms=query_budget_ms if query_budget_ms is not None else 200,
+    )
+    settings = QueryExecutionSettingsV1(match_limit=match_limit, budget_ms=effective_budget_ms)
     anchor_start = int(getattr(anchor, "start_byte", byte_start))
     anchor_end = int(getattr(anchor, "end_byte", byte_end))
     window = QueryWindowV1(
         start_byte=anchor_start if anchor_end > anchor_start else byte_start,
         end_byte=anchor_end if anchor_end > anchor_start else byte_end,
     )
+    query_windows = _build_query_windows(
+        anchor_window=window,
+        source_byte_len=len(source_bytes),
+        changed_ranges=changed_ranges,
+    )
+    enqueue_windows(
+        language="python",
+        file_key=cache_key or "<memory>",
+        windows=query_windows,
+    )
     captures, rows, telemetry = _collect_query_pack_captures(
-        root=root,
+        root=tree.root_node,
         source_bytes=source_bytes,
-        window=window,
+        windows=query_windows,
         settings=settings,
     )
     facts = _extract_fact_lists(rows, captures, source_bytes)

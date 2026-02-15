@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -193,18 +192,45 @@ def handle_result(cli_result: CliResult, filters: FilterConfig | None = None) ->
 
     # Render and output
     output = render_result(result, output_format)
-    sys.stdout.write(f"{output}\n")
+    _emit_output(output, output_format=output_format)
 
     return 0
 
 
+def _emit_output(output: str, *, output_format: OutputFormat) -> None:
+    """Emit rendered output without introducing wrapping artifacts.
+
+    JSON payloads are consumed by downstream automation and tests, so they must
+    be written verbatim instead of going through Rich wrapping.
+    """
+    from tools.cq.cli_app.app import console
+
+    format_value = str(output_format)
+    if format_value in {"json", "ldmd", "dot", "mermaid", "mermaid-class"}:
+        stream = console.file
+        stream.write(output)
+        if not output.endswith("\n"):
+            stream.write("\n")
+        stream.flush()
+        return
+    console.print(output)
+
+
 def _handle_non_cq_result(cli_result: CliResult) -> int | None:
+    from tools.cq.cli_app.app import console
     from tools.cq.cli_app.context import CliTextResult
 
     if cli_result.is_cq_result:
         return None
     if isinstance(cli_result.result, CliTextResult):
-        sys.stdout.write(f"{cli_result.result.text}\n")
+        if cli_result.result.media_type == "application/json":
+            stream = console.file
+            stream.write(cli_result.result.text)
+            if not cli_result.result.text.endswith("\n"):
+                stream.write("\n")
+            stream.flush()
+        else:
+            console.print(cli_result.result.text)
     return cli_result.get_exit_code()
 
 
@@ -300,7 +326,11 @@ def _build_search_artifact_bundle(
         occurrences=list(resolved_view.occurrences),
         diagnostics=_search_artifact_diagnostics(result.summary),
         snippets=dict(resolved_view.snippets),
-        created_ms=result.run.started_ms,
+        created_ms=(
+            result.run.run_created_ms
+            if isinstance(result.run.run_created_ms, int | float)
+            else result.run.started_ms
+        ),
     )
 
 

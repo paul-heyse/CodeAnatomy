@@ -78,12 +78,6 @@ def _compile_query(language: str, pack_name: str) -> Query | None:
         return None
 
 
-def _matches_name(callee_text: str, anchor_name: str) -> bool:
-    if callee_text == anchor_name:
-        return True
-    return callee_text.endswith((f".{anchor_name}", f"::{anchor_name}"))
-
-
 def collect_callers_callees(
     *,
     language: str,
@@ -137,7 +131,7 @@ def collect_callers_callees(
         callee_text = _node_text(callee_nodes[0], source_bytes)
         if not isinstance(callee_text, str):
             continue
-        if _matches_name(callee_text, anchor_name):
+        if callee_text == anchor_name:
             callers.append(site_nodes[0])
 
     callees: list[Node] = []

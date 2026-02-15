@@ -33,7 +33,6 @@ def run(
     from tools.cq.run.runner import execute_run_plan
 
     ctx = require_context(ctx)
-
     if opts is None:
         opts = RunParams()
     options = options_from_params(opts, type_=RunOptions)

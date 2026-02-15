@@ -1,7 +1,7 @@
 ---
 name: impl-plan-exec
 description: Execute an implementation plan document end-to-end without stopping. Implements all scope items, tracks progress, verifies completeness against the plan, then runs quality gates in strict order.
-allowed-tools: Read, Glob, Grep, Bash, Write, Edit, Task, TaskCreate, TaskUpdate, TaskList, TaskGet, Skill, EnterPlanMode, ExitPlanMode
+allowed-tools: Read, Glob, Grep, Ripgrep, AST-grep, Bash, Write, Edit, Task, TaskCreate, TaskUpdate, TaskList, TaskGet, Skill, EnterPlanMode, ExitPlanMode
 user-invocable: true
 ---
 
@@ -54,50 +54,67 @@ When running pytest, scope it to the subsystem being modified. Do not run the fu
 - Plan modifies `src/semantics/` → `uv run pytest tests/unit/test_semantic*.py -v`
 - Plan modifies `src/datafusion_engine/` → `uv run pytest tests/unit/datafusion_engine/ -v`
 
-### 5. Track progress with the task list
+### 5. Use the task list to focus execution, not just track it
 
-Before beginning implementation, create a task for each scope item (`S1`, `S2`, ...) and each decommission batch (`D1`, `D2`, ...) using `TaskCreate`. Set up dependency ordering with `addBlockedBy`/`addBlocks` where the plan specifies dependencies between scope items. Mark each task `in_progress` when starting and `completed` when done.
+The task list exists so you can **focus on one work unit at a time** without re-reading and re-analyzing the entire plan between tasks. Without this discipline, you will cycle through reviewing every affected file repeatedly and never land on actually writing code. The task list is your mechanism for breaking the plan into digestible, independently-actionable work units.
+
+**Task granularity — group by interdependency, not 1:1 with scope items:**
+
+Tasks should NOT be a literal mirror of the plan's scope item list. Instead, group and sequence scope items based on a high-level assessment of their implementation interdependencies:
+
+- **Interdependent scope items go in the same task.** If `S1` creates a contract that `S2` and `S3` immediately consume, those three form one task (e.g., "Implement X contract and wire its consumers").
+- **Independent scope items are separate tasks.** If `S4` touches entirely different files with no dependency on `S1`–`S3`, it is its own task.
+- **Decommission work attaches to the task whose scope items it depends on**, not as a standalone task — unless the decommission batch is truly independent of all scope items in the plan.
+
+**Task descriptions must be self-contained.** Each task description should capture enough context — which files to read/edit/create, what the changes accomplish, and any relevant snippet guidance from the plan — so that you can execute it by reading only that task description and the relevant source files. You should **not** need to re-read the full plan document to work on an individual task.
+
+**Workflow per task:**
+1. Mark the task `in_progress`.
+2. Read the task description, then read the **applicable sections** of the plan for this task's scope items. Do not re-read the entire plan — only the sections relevant to the scope items grouped into this task.
+3. Read the source files relevant to this task.
+4. Implement the changes. Do not review or analyze files outside this task's scope.
+5. Mark the task `completed`.
+6. Move to the next task immediately. Do not re-read the entire plan between tasks.
 
 ---
 
 ## Execution Procedure
 
-### Phase 1: Plan Ingestion and Sequencing
+### Phase 1: Plan Ingestion and Task Decomposition
 
-1. **Read the plan document** end-to-end to understand full scope.
+1. **Read the plan document** end-to-end to understand full scope. This is the first of **two** full reads — the second is the completeness audit in Phase 3.
 2. **Extract the implementation sequence** from the plan (the plan's "Implementation Sequence" section).
-3. **Determine optimal execution order** considering:
+3. **Assess interdependencies** across scope items, considering:
    - Explicit dependency chains stated in the plan.
-   - Shared-file batching (scope items touching the same files should be adjacent).
-   - Foundation-first ordering (contracts and core modules before consumers).
-4. **Create task list** with one task per scope item and one per decommission batch, in execution order. Set `addBlockedBy` relationships where the plan specifies dependency chains (e.g., `D1` blocked by `S1`, `S2`, `S3`, `S4`).
+   - Implicit coupling: scope items that create and consume the same contracts, touch the same files, or modify the same module interfaces.
+   - Foundation-first ordering: contracts and core modules before their consumers.
+4. **Create the task list** by grouping interdependent scope items into work units:
+   - Each task groups one or more scope items (and any associated decommission work) that should land together.
+   - Write a **self-contained description** for each task that includes: the goal, the files to read/edit/create, the key changes, and any relevant code snippet guidance from the plan. The description should be sufficient to execute the task without re-reading the plan.
+   - Set `addBlockedBy` relationships between tasks where one task's output is required by another.
+   - Order tasks foundation-first: tasks that produce contracts or core interfaces come before tasks that consume them.
 
 ### Phase 2: Scope Implementation
 
-For each scope item in execution order:
+For each task in execution order:
 
 1. **Mark task `in_progress`.**
-2. **Read the plan section** for this scope item (Goal, Representative Code Snippets, Files to Edit, New Files to Create, Legacy Decommission/Delete Scope).
-3. **Implement the scope item:**
-   - Create new files listed under "New Files to Create."
-   - Edit existing files listed under "Files to Edit."
-   - Follow the representative code snippets as architectural guidance (adapt to actual codebase state; snippets are illustrative, not copy-paste).
-   - Execute the per-item "Legacy Decommission/Delete Scope" deletions.
-4. **Write tests** for new modules. Every new file under `tools/` or `src/` must have a corresponding test file.
-5. **Mark task `completed`.**
-6. **Proceed immediately** to the next scope item. Do not pause.
-
-For decommission batches:
-
-1. **Verify all prerequisite scope items are completed** (check task list).
-2. **Execute the batch deletions** specified in the plan.
-3. **Mark task `completed`.**
+2. **Read the task description** (via `TaskGet`), then read the **applicable sections** of the plan for this task's scope items. Focus only on those sections — do not re-read the entire plan.
+3. **Read only the source files relevant to this task.**
+4. **Implement the changes:**
+   - Create new files as needed.
+   - Edit existing files as specified.
+   - Follow representative code snippets as architectural guidance (adapt to actual codebase state; snippets are illustrative, not copy-paste).
+   - Execute any decommission deletions grouped into this task.
+5. **Write tests** for new modules. Every new file under `tools/` or `src/` must have a corresponding test file.
+6. **Mark task `completed`.**
+7. **Proceed immediately** to the next task. Do not pause. Do not re-read the entire plan.
 
 ### Phase 3: Completeness Verification
 
-After all scope items and decommission batches are implemented:
+After all tasks are completed:
 
-1. **Re-read the plan document** from top to bottom.
+1. **Re-read the plan document** from top to bottom (this is the second and final full read).
 2. **For each scope item**, verify against the codebase:
    - Are all "Files to Edit" actually modified?
    - Are all "New Files to Create" present?

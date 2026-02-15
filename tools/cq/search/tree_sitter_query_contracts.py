@@ -7,6 +7,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from tools.cq.core.structs import CqStruct
+from tools.cq.search.tree_sitter_custom_predicate_contracts import (
+    SUPPORTED_QUERY_PREDICATE_NAMES,
+)
 from tools.cq.search.tree_sitter_node_schema import GrammarSchemaIndex
 from tools.cq.search.tree_sitter_pack_contracts import load_pack_rules
 
@@ -32,6 +35,7 @@ class QueryPackLintSummaryV1(CqStruct, frozen=True):
 
 _NODE_PATTERN = re.compile(r"\(([A-Za-z_][A-Za-z0-9_]*)")
 _FIELD_PATTERN = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*:")
+_PREDICATE_PATTERN = re.compile(r"#([A-Za-z0-9_.!?-]+)")
 _IGNORED_NODE_KINDS = frozenset({"ERROR", "MISSING", "_"})
 
 
@@ -99,6 +103,15 @@ def lint_query_pack_source(
 
     rules = load_pack_rules(language)
     pattern_count = int(getattr(query, "pattern_count", 0))
+    if pattern_count == 0:
+        issues.append(
+            QueryPackLintIssueV1(
+                language=language,
+                pack_name=pack_name,
+                code="empty_query_pack",
+                message="pattern_count=0",
+            )
+        )
     pattern_issues: list[QueryPackLintIssueV1] = []
     for pattern_idx in range(pattern_count):
         is_rooted = bool(query.is_pattern_rooted(pattern_idx))
@@ -122,6 +135,21 @@ def lint_query_pack_source(
                 )
             )
     issues.extend(pattern_issues)
+
+    custom_predicates = {
+        name for name in _PREDICATE_PATTERN.findall(source) if name.startswith("cq-")
+    }
+    for predicate_name in sorted(custom_predicates):
+        if predicate_name in SUPPORTED_QUERY_PREDICATE_NAMES:
+            continue
+        issues.append(
+            QueryPackLintIssueV1(
+                language=language,
+                pack_name=pack_name,
+                code="unsupported_custom_predicate",
+                message=predicate_name,
+            )
+        )
 
     return tuple(issues)
 

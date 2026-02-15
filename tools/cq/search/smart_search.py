@@ -150,6 +150,8 @@ from tools.cq.search.semantic_contract_state import (
     SemanticProvider,
     derive_semantic_contract_state,
 )
+from tools.cq.search.tree_sitter_adaptive_runtime import adaptive_query_budget_ms
+from tools.cq.search.tree_sitter_budgeting import budget_ms_per_anchor
 from tools.cq.search.tree_sitter_python import get_tree_sitter_python_cache_stats
 from tools.cq.search.tree_sitter_rust import get_tree_sitter_rust_cache_stats
 from tools.cq.utils.uuid_factory import uuid7_str
@@ -198,6 +200,10 @@ _PYTHON_SEMANTIC_PREFETCH_NON_FATAL_EXCEPTIONS = (
 )
 MAX_SEARCH_CLASSIFY_WORKERS = 4
 MAX_PYTHON_SEMANTIC_ENRICH_FINDINGS = 8
+_TREE_SITTER_QUERY_BUDGET_FALLBACK_MS = budget_ms_per_anchor(
+    timeout_seconds=SMART_SEARCH_LIMITS.timeout_seconds,
+    max_anchors=SMART_SEARCH_LIMITS.max_total_matches,
+)
 _PythonSemanticAnchorKey = tuple[str, int, int, str]
 _SEARCH_OBJECT_VIEW_REGISTRY: dict[str, SearchObjectResolvedViewV1] = {}
 
@@ -658,11 +664,16 @@ def classify_match(
         lang=lang,
         enable_symtable=resolved_options.enable_symtable,
     )
+    tree_sitter_budget_ms = adaptive_query_budget_ms(
+        language=str(lang),
+        fallback_budget_ms=_TREE_SITTER_QUERY_BUDGET_FALLBACK_MS,
+    )
     rust_tree_sitter = (
         _maybe_rust_tree_sitter_enrichment(
             file_path,
             raw,
             lang=lang,
+            query_budget_ms=tree_sitter_budget_ms,
         )
         if resolved_options.enable_deep_enrichment
         else None
@@ -673,6 +684,7 @@ def classify_match(
             raw,
             lang=lang,
             resolved_python=resolved_python,
+            query_budget_ms=tree_sitter_budget_ms,
         )
         if resolved_options.enable_deep_enrichment
         else None
@@ -948,6 +960,7 @@ def _maybe_rust_tree_sitter_enrichment(
     raw: RawMatch,
     *,
     lang: QueryLanguage,
+    query_budget_ms: int | None = None,
 ) -> dict[str, object] | None:
     if lang != "rust":
         return None
@@ -965,6 +978,7 @@ def _maybe_rust_tree_sitter_enrichment(
             byte_start=byte_start,
             byte_end=byte_end,
             cache_key=str(file_path),
+            query_budget_ms=query_budget_ms,
         )
         return normalize_rust_payload(payload)
     except _RUST_ENRICHMENT_ERRORS:
@@ -977,6 +991,7 @@ def _maybe_python_enrichment(
     *,
     lang: QueryLanguage,
     resolved_python: ResolvedNodeContext | None = None,
+    query_budget_ms: int | None = None,
 ) -> dict[str, object] | None:
     """Attempt Python context enrichment for a match.
 
@@ -1023,6 +1038,7 @@ def _maybe_python_enrichment(
                 resolved_node=resolved_python.node if resolved_python is not None else None,
                 resolved_line=resolved_python.line if resolved_python is not None else None,
                 resolved_col=resolved_python.col if resolved_python is not None else None,
+                query_budget_ms=query_budget_ms,
                 session=session,
             )
         )

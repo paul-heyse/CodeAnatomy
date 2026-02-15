@@ -9,6 +9,7 @@ from tools.cq.search.tree_sitter_structural_contracts import (
     TreeSitterStructuralExportV1,
     TreeSitterStructuralNodeV1,
 )
+from tools.cq.search.tree_sitter_token_export import export_cst_tokens
 
 if TYPE_CHECKING:
     from tree_sitter import Node
@@ -86,7 +87,12 @@ def _advance_cursor(
             child_index_stack.pop()
 
 
-def export_structural_rows(*, file_path: str, root: Node) -> TreeSitterStructuralExportV1:
+def export_structural_rows(
+    *,
+    file_path: str,
+    root: Node,
+    source_bytes: bytes | None = None,
+) -> TreeSitterStructuralExportV1:
     """Export deterministic node/edge rows with field labels.
 
     Returns:
@@ -94,6 +100,23 @@ def export_structural_rows(*, file_path: str, root: Node) -> TreeSitterStructura
     """
     nodes: list[TreeSitterStructuralNodeV1] = []
     edges: list[TreeSitterStructuralEdgeV1] = []
+    tokens_source = source_bytes
+    if tokens_source is None and hasattr(root, "text"):
+        try:
+            raw_text = root.text
+            if isinstance(raw_text, (bytes, bytearray, memoryview)):
+                tokens_source = bytes(raw_text)
+            else:
+                tokens_source = None
+        except (RuntimeError, TypeError, ValueError, AttributeError):
+            tokens_source = None
+    if tokens_source is None:
+        tokens_source = b""
+    tokens = export_cst_tokens(
+        file_path=file_path,
+        root=root,
+        source_bytes=tokens_source,
+    )
     cursor = root.walk()
     parent_stack: list[str] = []
     child_index_stack: list[int] = [0]
@@ -101,7 +124,7 @@ def export_structural_rows(*, file_path: str, root: Node) -> TreeSitterStructura
     while True:
         node = cursor.node
         if node is None:
-            return TreeSitterStructuralExportV1(nodes=nodes, edges=edges)
+            return TreeSitterStructuralExportV1(nodes=nodes, edges=edges, tokens=tokens)
         field_name = cursor.field_name if isinstance(cursor.field_name, str) else None
         node_id = _node_id(file_path=file_path, node=node)
         child_index = child_index_stack[-1] if child_index_stack else None
@@ -124,7 +147,7 @@ def export_structural_rows(*, file_path: str, root: Node) -> TreeSitterStructura
             parent_stack=parent_stack,
             child_index_stack=child_index_stack,
         ):
-            return TreeSitterStructuralExportV1(nodes=nodes, edges=edges)
+            return TreeSitterStructuralExportV1(nodes=nodes, edges=edges, tokens=tokens)
 
 
 __all__ = ["export_structural_rows"]

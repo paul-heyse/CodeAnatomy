@@ -53,3 +53,34 @@ def test_search_artifact_store_roundtrip(tmp_path: Path) -> None:
     close_cq_cache_backend()
     os.environ.pop("CQ_CACHE_ENABLED", None)
     os.environ.pop("CQ_CACHE_DIR", None)
+
+
+def test_search_artifact_store_large_bundle_roundtrip(tmp_path: Path) -> None:
+    close_cq_cache_backend()
+    os.environ["CQ_CACHE_ENABLED"] = "1"
+    os.environ["CQ_CACHE_DIR"] = str(tmp_path / "cq_cache")
+
+    bundle = SearchArtifactBundleV1(
+        run_id="run-large",
+        query="stable_id",
+        macro="search",
+        summary={"query": "stable_id", "blob": "x" * (128 * 1024)},
+        diagnostics={"timed_out": False},
+        created_ms=11.0,
+    )
+    entry = persist_search_artifact_bundle(
+        root=tmp_path,
+        bundle=bundle,
+        tag="ns:search_artifacts|lang:auto",
+        key_extras={"scope_hash": "xyz"},
+    )
+    assert entry is not None
+
+    loaded, loaded_entry = load_search_artifact_bundle(root=tmp_path, run_id="run-large")
+    assert loaded_entry is not None
+    assert loaded is not None
+    assert loaded.summary.get("blob") == "x" * (128 * 1024)
+
+    close_cq_cache_backend()
+    os.environ.pop("CQ_CACHE_ENABLED", None)
+    os.environ.pop("CQ_CACHE_DIR", None)

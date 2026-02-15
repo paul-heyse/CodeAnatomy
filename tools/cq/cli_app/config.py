@@ -23,7 +23,7 @@ def build_config_chain(
     """Build config provider chain based on CLI options.
 
     The config chain supports:
-    1. Environment variables with CQ_ prefix (highest priority)
+    1. Environment variables with CQ_ prefix (command context disabled so names are stable across commands)
     2. Explicit config file (if provided)
     3. pyproject.toml [tool.cq] section (default, lowest priority)
 
@@ -56,7 +56,7 @@ def build_config_chain(
     if no_config:
         return []
 
-    providers: list[Any] = [Env(prefix="CQ_")]
+    providers: list[Any] = [Env(prefix="CQ_", command=False)]
 
     if config_file:
         providers.append(Toml(Path(config_file), must_exist=True))

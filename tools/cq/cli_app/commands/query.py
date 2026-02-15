@@ -55,7 +55,6 @@ def q(
     from tools.cq.query.planner import compile_query
 
     ctx = require_context(ctx)
-
     if opts is None:
         opts = QueryParams()
     options = options_from_params(opts, type_=QueryOptions)

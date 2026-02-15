@@ -1,7 +1,7 @@
 ---
 name: impl-plan
 description: Generate a comprehensive implementation plan document from proposed scope items, with code snippets, file manifests, deprecation scope, and checklists
-allowed-tools: Read, Glob, Grep, Bash, Write, Edit
+allowed-tools: Read, Glob, Grep, Bash, Write, Edit, Ripgrep, AST-grep
 user-invocable: true
 ---
 

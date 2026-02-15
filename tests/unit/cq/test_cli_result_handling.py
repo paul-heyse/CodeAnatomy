@@ -177,6 +177,8 @@ class TestInvokeWithTelemetry:
         assert event.ok is True
         assert event.command is not None
         assert event.parse_ms >= 0
+        assert event.event_id is not None
+        assert event.event_uuid_version in {0, 7}
 
     def test_invoke_parse_error(self, tmp_path: Path) -> None:
         """Test parse-failure telemetry."""
@@ -185,3 +187,4 @@ class TestInvokeWithTelemetry:
         assert exit_code == 2
         assert event.ok is False
         assert event.error_stage is not None
+        assert event.event_id is not None

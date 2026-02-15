@@ -18,6 +18,9 @@ class TreeSitterEventV1(CqStruct, frozen=True):
     start_line: int | None = None
     end_line: int | None = None
     captures: dict[str, str] = msgspec.field(default_factory=dict)
+    event_id: str | None = None
+    event_uuid_version: int | None = None
+    event_created_ms: int | None = None
 
 
 class TreeSitterEventBatchV1(CqStruct, frozen=True):

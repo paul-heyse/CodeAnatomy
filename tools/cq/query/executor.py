@@ -457,6 +457,11 @@ def _scan_entity_records(
                     expire=expire,
                     tag=tag,
                 ),
+                cache_set_many=lambda rows, *, expire=None, tag=None: fragment_ctx.cache.set_many(
+                    rows,
+                    expire=expire,
+                    tag=tag,
+                ),
                 encode=contract_to_builtins,
                 cache_enabled=fragment_ctx.cache_enabled,
                 transact=fragment_ctx.cache.transact,
@@ -1264,6 +1269,11 @@ def _execute_ast_grep_rules(
                 cache_set=lambda key, value, *, expire=None, tag=None: fragment_ctx.cache.set(
                     key,
                     value,
+                    expire=expire,
+                    tag=tag,
+                ),
+                cache_set_many=lambda rows, *, expire=None, tag=None: fragment_ctx.cache.set_many(
+                    rows,
                     expire=expire,
                     tag=tag,
                 ),

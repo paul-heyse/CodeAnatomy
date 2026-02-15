@@ -32,14 +32,30 @@ class TreeSitterStructuralEdgeV1(CqStruct, frozen=True):
     field_name: str | None = None
 
 
+class TreeSitterCstTokenV1(CqStruct, frozen=True):
+    """Leaf-level CST token record for structural ABI output."""
+
+    token_id: str
+    kind: str
+    text: str
+    start_byte: int
+    end_byte: int
+    start_line: int
+    start_col: int
+    end_line: int
+    end_col: int
+
+
 class TreeSitterStructuralExportV1(CqStruct, frozen=True):
     """Container for deterministic structural export payload."""
 
     nodes: list[TreeSitterStructuralNodeV1] = msgspec.field(default_factory=list)
     edges: list[TreeSitterStructuralEdgeV1] = msgspec.field(default_factory=list)
+    tokens: list[TreeSitterCstTokenV1] = msgspec.field(default_factory=list)
 
 
 __all__ = [
+    "TreeSitterCstTokenV1",
     "TreeSitterStructuralEdgeV1",
     "TreeSitterStructuralExportV1",
     "TreeSitterStructuralNodeV1",

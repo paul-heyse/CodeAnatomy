@@ -13,6 +13,7 @@ from cyclopts.exceptions import CycloptsError
 
 from tools.cq.cli_app.context import CliContext
 from tools.cq.cli_app.result_action import cq_result_action
+from tools.cq.utils.uuid_temporal_contracts import resolve_run_identity_contract
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,9 @@ class CqInvokeEvent:
     exit_code: int
     error_class: str | None = None
     error_stage: str | None = None
+    event_id: str | None = None
+    event_uuid_version: int | None = None
+    event_created_ms: int | None = None
 
 
 def _apply_result_action(app: App, result: object) -> int:
@@ -61,6 +65,7 @@ def invoke_with_telemetry(
     normalized = normalize_tokens(tokens)
     t0 = time.perf_counter()
     command_name: str | None = normalized[0] if normalized else None
+    event_identity = resolve_run_identity_contract(None)
 
     with app.app_stack(
         normalized,
@@ -97,6 +102,9 @@ def invoke_with_telemetry(
                     exit_code=2,
                     error_class=f"cyclopts.{exc.__class__.__name__}",
                     error_stage=_classify_error_stage(exc),
+                    event_id=event_identity.run_id,
+                    event_uuid_version=event_identity.run_uuid_version,
+                    event_created_ms=event_identity.run_created_ms,
                 )
                 return 2, event
             else:
@@ -108,6 +116,9 @@ def invoke_with_telemetry(
                     parse_ms=parse_ms,
                     exec_ms=exec_ms,
                     exit_code=exit_code,
+                    event_id=event_identity.run_id,
+                    event_uuid_version=event_identity.run_uuid_version,
+                    event_created_ms=event_identity.run_created_ms,
                 )
                 return exit_code, event
         except CycloptsError as exc:
@@ -120,6 +131,9 @@ def invoke_with_telemetry(
                 exit_code=2,
                 error_class=f"cyclopts.{exc.__class__.__name__}",
                 error_stage=_classify_error_stage(exc),
+                event_id=event_identity.run_id,
+                event_uuid_version=event_identity.run_uuid_version,
+                event_created_ms=event_identity.run_created_ms,
             )
             return 2, event
         except Exception as exc:
@@ -132,6 +146,9 @@ def invoke_with_telemetry(
                 exit_code=1,
                 error_class=f"runtime.{exc.__class__.__name__}",
                 error_stage="execution",
+                event_id=event_identity.run_id,
+                event_uuid_version=event_identity.run_uuid_version,
+                event_created_ms=event_identity.run_created_ms,
             )
             return 1, event
 

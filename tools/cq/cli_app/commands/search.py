@@ -40,7 +40,6 @@ def search(
     from tools.cq.search.smart_search import SMART_SEARCH_LIMITS
 
     ctx = require_context(ctx)
-
     # Determine mode
     if opts is None:
         opts = SearchParams()

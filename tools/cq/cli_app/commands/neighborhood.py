@@ -59,7 +59,6 @@ def neighborhood(
     from tools.cq.neighborhood.target_resolution import parse_target_spec, resolve_target
 
     ctx = require_context(ctx)
-
     started = ms()
     run_id = uuid7_str()
     resolved_lang = str(lang)

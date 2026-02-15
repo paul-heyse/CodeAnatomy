@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
+from tools.cq.search.tree_sitter_adaptive_runtime import record_runtime_sample
 from tools.cq.search.tree_sitter_runtime_contracts import (
     QueryExecutionSettingsV1,
     QueryExecutionTelemetryV1,
@@ -20,6 +22,16 @@ try:
     from tree_sitter import QueryCursor as _TreeSitterQueryCursor
 except ImportError:  # pragma: no cover - optional dependency guard
     _TreeSitterQueryCursor = None
+
+
+@dataclass(frozen=True, slots=True)
+class QueryExecutionCallbacksV1:
+    """Optional callback bundle for query runtime execution."""
+
+    progress_callback: Callable[[object], bool] | None = None
+    predicate_callback: (
+        Callable[[str, object, int, Mapping[str, Sequence[object]]], bool] | None
+    ) = None
 
 
 def _default_window(root: Node) -> QueryWindowV1:
@@ -63,6 +75,10 @@ def _combined_progress_callback(
     progress_callback: Callable[[object], bool] | None,
 ) -> Callable[[object], bool] | None:
     callback = progress_callback if callable(progress_callback) else None
+    if callback is None:
+        # QueryCursor progress callbacks can be unstable across versions.
+        # Keep the hot path callback-free unless an explicit callback was provided.
+        return None
     if budget_ms is None or budget_ms <= 0:
         return callback
 
@@ -97,8 +113,14 @@ def _build_cursor(query: Query, settings: QueryExecutionSettingsV1) -> Any:
         msg = "tree_sitter query cursor bindings are unavailable"
         raise RuntimeError(msg)
     cursor = _TreeSitterQueryCursor(query, match_limit=settings.match_limit)
-    if settings.max_start_depth is not None and hasattr(cursor, "set_max_start_depth"):
-        cursor.set_max_start_depth(settings.max_start_depth)
+    cursor_any = cast("Any", cursor)
+    if settings.max_start_depth is not None and hasattr(cursor_any, "set_max_start_depth"):
+        cursor_any.set_max_start_depth(settings.max_start_depth)
+    timeout_micros: int | None = settings.timeout_micros
+    if timeout_micros is None and settings.budget_ms is not None and settings.budget_ms > 0:
+        timeout_micros = int(settings.budget_ms) * 1_000
+    if timeout_micros is not None and hasattr(cursor_any, "set_timeout_micros"):
+        cursor_any.set_timeout_micros(timeout_micros)
     return cursor
 
 
@@ -133,7 +155,53 @@ def _apply_window(
             (point_window.end_row, point_window.end_col),
         )
         return
-    cursor.set_byte_range(window.start_byte, window.end_byte)
+    _ = window
+    # Avoid QueryCursor.set_byte_range due native instability on some trees.
+    # We apply window filtering in Python after query execution instead.
+    return
+
+
+def _node_overlaps_window(node: Node, window: QueryWindowV1) -> bool:
+    node_start = int(getattr(node, "start_byte", 0))
+    node_end = int(getattr(node, "end_byte", node_start))
+    return node_end > window.start_byte and node_start < window.end_byte
+
+
+def _capture_map_overlaps_window(
+    *,
+    capture_map: dict[str, list[Node]],
+    window: QueryWindowV1,
+) -> bool:
+    for values in capture_map.values():
+        for node in values:
+            if _node_overlaps_window(node, window):
+                return True
+    return False
+
+
+def _filter_captures_by_window(
+    *,
+    captures: dict[str, list[Node]],
+    window: QueryWindowV1,
+) -> dict[str, list[Node]]:
+    out: dict[str, list[Node]] = {}
+    for capture_name, nodes in captures.items():
+        filtered = [node for node in nodes if _node_overlaps_window(node, window)]
+        if filtered:
+            out[capture_name] = filtered
+    return out
+
+
+def _match_fingerprint(pattern_idx: int, capture_map: dict[str, list[Node]]) -> tuple[object, ...]:
+    rows: list[tuple[str, tuple[tuple[int, int], ...]]] = []
+    for capture_name in sorted(capture_map):
+        nodes = capture_map[capture_name]
+        spans = tuple(
+            (int(getattr(node, "start_byte", 0)), int(getattr(node, "end_byte", 0)))
+            for node in nodes
+        )
+        rows.append((capture_name, spans))
+    return (pattern_idx, tuple(rows))
 
 
 def _cancelled(
@@ -152,6 +220,54 @@ def _progress_allows(progress: Callable[[object], bool] | None) -> bool:
     return bool(progress(None))
 
 
+def _cursor_captures(
+    *,
+    cursor: Any,
+    root: Node,
+    predicate_callback: Callable[[str, object, int, Mapping[str, Sequence[object]]], bool] | None,
+    progress: Callable[[object], bool] | None,
+) -> dict[str, list[Node]]:
+    if predicate_callback is not None or progress is not None:
+        try:
+            return cursor.captures(
+                root,
+                predicate=predicate_callback,
+                progress_callback=progress,
+            )
+        except TypeError:
+            pass
+    if progress is not None:
+        try:
+            return cursor.captures(root, progress_callback=progress)
+        except TypeError:
+            pass
+    return cursor.captures(root)
+
+
+def _cursor_matches(
+    *,
+    cursor: Any,
+    root: Node,
+    predicate_callback: Callable[[str, object, int, Mapping[str, Sequence[object]]], bool] | None,
+    progress: Callable[[object], bool] | None,
+) -> list[tuple[int, dict[str, list[Node]]]]:
+    if predicate_callback is not None or progress is not None:
+        try:
+            return cursor.matches(
+                root,
+                predicate=predicate_callback,
+                progress_callback=progress,
+            )
+        except TypeError:
+            pass
+    if progress is not None:
+        try:
+            return cursor.matches(root, progress_callback=progress)
+        except TypeError:
+            pass
+    return cursor.matches(root)
+
+
 def run_bounded_query_captures(
     query: Query,
     root: Node,
@@ -159,7 +275,7 @@ def run_bounded_query_captures(
     windows: Iterable[QueryWindowV1] | None = None,
     point_windows: Iterable[QueryPointWindowV1] | None = None,
     settings: QueryExecutionSettingsV1 | None = None,
-    progress_callback: Callable[[object], bool] | None = None,
+    callbacks: QueryExecutionCallbacksV1 | None = None,
 ) -> tuple[dict[str, list[Node]], QueryExecutionTelemetryV1]:
     """Run `captures` over bounded windows with defensive limits.
 
@@ -168,12 +284,14 @@ def run_bounded_query_captures(
             execution telemetry.
     """
     effective_settings = settings or QueryExecutionSettingsV1()
+    callback_bundle = callbacks or QueryExecutionCallbacksV1()
     cursor = _build_cursor(query, effective_settings)
     plan = _window_plan(root=root, windows=windows, point_windows=point_windows)
     progress = _combined_progress_callback(
         budget_ms=effective_settings.budget_ms,
-        progress_callback=progress_callback,
+        progress_callback=callback_bundle.progress_callback,
     )
+    started = monotonic()
 
     merged: dict[str, list[Node]] = {}
     windows_executed = 0
@@ -181,7 +299,13 @@ def run_bounded_query_captures(
         _apply_window(cursor=cursor, window=window, point_window=point_window)
         if not _progress_allows(progress):
             break
-        captures = cursor.captures(root)
+        raw_captures = _cursor_captures(
+            cursor=cursor,
+            root=root,
+            predicate_callback=callback_bundle.predicate_callback,
+            progress=progress,
+        )
+        captures = _filter_captures_by_window(captures=raw_captures, window=window)
         windows_executed += 1
         if isinstance(captures, dict):
             for capture_name, nodes in captures.items():
@@ -206,6 +330,7 @@ def run_bounded_query_captures(
             exceeded_match_limit=exceeded,
         ),
     )
+    record_runtime_sample("query_captures", (monotonic() - started) * 1000.0)
     return merged, telemetry
 
 
@@ -216,7 +341,7 @@ def run_bounded_query_matches(
     windows: Iterable[QueryWindowV1] | None = None,
     point_windows: Iterable[QueryPointWindowV1] | None = None,
     settings: QueryExecutionSettingsV1 | None = None,
-    progress_callback: Callable[[object], bool] | None = None,
+    callbacks: QueryExecutionCallbacksV1 | None = None,
 ) -> tuple[list[tuple[int, dict[str, list[Node]]]], QueryExecutionTelemetryV1]:
     """Run `matches` over bounded windows with defensive limits.
 
@@ -225,31 +350,36 @@ def run_bounded_query_matches(
             Match rows and execution telemetry.
     """
     effective_settings = settings or QueryExecutionSettingsV1()
+    callback_bundle = callbacks or QueryExecutionCallbacksV1()
     cursor = _build_cursor(query, effective_settings)
     plan = _window_plan(root=root, windows=windows, point_windows=point_windows)
     progress = _combined_progress_callback(
         budget_ms=effective_settings.budget_ms,
-        progress_callback=progress_callback,
+        progress_callback=callback_bundle.progress_callback,
     )
+    started = monotonic()
 
     merged: list[tuple[int, dict[str, list[Node]]]] = []
+    seen_match_fingerprints: set[tuple[object, ...]] = set()
     windows_executed = 0
     for window, point_window in plan:
         _apply_window(cursor=cursor, window=window, point_window=point_window)
         if not _progress_allows(progress):
             break
-        matches = cursor.matches(root)
+        matches = _cursor_matches(
+            cursor=cursor,
+            root=root,
+            predicate_callback=callback_bundle.predicate_callback,
+            progress=progress,
+        )
         windows_executed += 1
-        if isinstance(matches, list):
-            for pattern_idx, capture_map in matches:
-                if not isinstance(pattern_idx, int) or not isinstance(capture_map, dict):
-                    continue
-                if effective_settings.require_containment and not _is_match_contained(
-                    capture_map=capture_map,
-                    window=window,
-                ):
-                    continue
-                merged.append((pattern_idx, capture_map))
+        _merge_window_matches(
+            matches=matches,
+            require_containment=effective_settings.require_containment,
+            window=window,
+            seen_match_fingerprints=seen_match_fingerprints,
+            merged=merged,
+        )
         if bool(getattr(cursor, "did_exceed_match_limit", False)):
             break
 
@@ -266,10 +396,38 @@ def run_bounded_query_matches(
             exceeded_match_limit=exceeded,
         ),
     )
+    record_runtime_sample("query_matches", (monotonic() - started) * 1000.0)
     return merged, telemetry
 
 
+def _merge_window_matches(
+    *,
+    matches: object,
+    require_containment: bool,
+    window: QueryWindowV1 | None,
+    seen_match_fingerprints: set[tuple[object, ...]],
+    merged: list[tuple[int, dict[str, list[Node]]]],
+) -> None:
+    if not isinstance(matches, list):
+        return
+    for pattern_idx, capture_map in matches:
+        if not isinstance(pattern_idx, int) or not isinstance(capture_map, dict):
+            continue
+        if window is not None:
+            if require_containment:
+                if not _is_match_contained(capture_map=capture_map, window=window):
+                    continue
+            elif not _capture_map_overlaps_window(capture_map=capture_map, window=window):
+                continue
+        fingerprint = _match_fingerprint(pattern_idx, capture_map)
+        if fingerprint in seen_match_fingerprints:
+            continue
+        seen_match_fingerprints.add(fingerprint)
+        merged.append((pattern_idx, capture_map))
+
+
 __all__ = [
+    "QueryExecutionCallbacksV1",
     "run_bounded_query_captures",
     "run_bounded_query_matches",
 ]

@@ -28,6 +28,7 @@ class LanguageSemanticEnrichmentOutcome(CqStruct, frozen=True):
     timed_out: bool = False
     failure_reason: str | None = None
     provider_root: Path | None = None
+    macro_expansion_count: int | None = None
 
 
 class SemanticOutcomeCacheV1(CqStruct, frozen=True):

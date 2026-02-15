@@ -54,6 +54,7 @@ class SearchObjectSummaryV1(CqOutputStruct, frozen=True):
     files: list[str] = msgspec.field(default_factory=list)
     representative_category: str | None = None
     code_facts: dict[str, object] = msgspec.field(default_factory=dict)
+    module_graph: dict[str, object] = msgspec.field(default_factory=dict)
     coverage_level: str = "structural_only"
     applicability: dict[str, str] = msgspec.field(default_factory=dict)
     coverage_reasons: tuple[str, ...] = ()

@@ -208,3 +208,7 @@ coverage-threshold = 0.9
 coverage-action = "error"
 missing-params-action = "error"
 missing-returns-action = "error"
+
+[tool.cq.tree_sitter_codegen]
+python-output = "tools/cq/search/generated/python_node_types_v1.py"
+rust-output = "tools/cq/search/generated/rust_node_types_v1.py"

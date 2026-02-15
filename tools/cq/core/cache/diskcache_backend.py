@@ -11,6 +11,10 @@ from typing import Final
 
 from diskcache import FanoutCache, Timeout
 
+from tools.cq.core.cache.cache_runtime_tuning import (
+    apply_cache_runtime_tuning,
+    resolve_cache_runtime_tuning,
+)
 from tools.cq.core.cache.interface import CqCacheBackend, NoopCacheBackend
 from tools.cq.core.cache.policy import CqCachePolicyV1, default_cache_policy
 from tools.cq.core.cache.telemetry import (
@@ -72,15 +76,23 @@ class _FailOpenTransaction:
 class DiskcacheBackend:
     """Fail-open diskcache backend for CQ runtime."""
 
-    def __init__(self, cache: FanoutCache, *, default_ttl_seconds: int) -> None:
+    def __init__(
+        self,
+        cache: FanoutCache,
+        *,
+        default_ttl_seconds: int,
+        transaction_batch_size: int = 128,
+    ) -> None:
         """Initialize disk cache adapter.
 
         Args:
             cache: Backing diskcache instance.
             default_ttl_seconds: Default cache TTL in seconds.
+            transaction_batch_size: Max keys to write per transaction batch.
         """
         self.cache = cache
         self.default_ttl_seconds = default_ttl_seconds
+        self.transaction_batch_size = max(1, int(transaction_batch_size))
 
     @staticmethod
     def _namespace_from_key(key: str) -> str:
@@ -170,6 +182,30 @@ class DiskcacheBackend:
         except _NON_FATAL_ERRORS:
             self.record_abort(namespace=namespace)
             return False
+
+    def set_many(
+        self,
+        items: dict[str, object],
+        *,
+        expire: int | None = None,
+        tag: str | None = None,
+    ) -> int:
+        """Write multiple keys in one best-effort transaction.
+
+        Returns:
+            int: Number of keys successfully written.
+        """
+        written = 0
+        if not items:
+            return written
+        rows = list(items.items())
+        batch_size = max(1, int(self.transaction_batch_size))
+        for start in range(0, len(rows), batch_size):
+            with self.transact():
+                for key, value in rows[start : start + batch_size]:
+                    if self.set(key, value, expire=expire, tag=tag):
+                        written += 1
+        return written
 
     def incr(self, key: str, delta: int = 1, default: int = 0) -> int | None:
         """Increment numeric value and return updated value.
@@ -401,7 +437,13 @@ def _build_diskcache_backend(policy: CqCachePolicyV1) -> CqCacheBackend:
             cache = _open_cache()
         except _OPEN_ERRORS:
             return NoopCacheBackend()
-    return DiskcacheBackend(cache, default_ttl_seconds=policy.ttl_seconds)
+    tuning = resolve_cache_runtime_tuning(policy)
+    apply_cache_runtime_tuning(cache, tuning)
+    return DiskcacheBackend(
+        cache,
+        default_ttl_seconds=policy.ttl_seconds,
+        transaction_batch_size=tuning.transaction_batch_size,
+    )
 
 
 def get_cq_cache_backend(*, root: Path) -> CqCacheBackend:

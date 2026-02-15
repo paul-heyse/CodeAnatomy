@@ -20,6 +20,7 @@ DecodeFn = Callable[[object], object | None]
 EncodeFn = Callable[[object], object]
 CacheGetFn = Callable[[str], object | None]
 CacheSetFn = Callable[..., bool]
+CacheSetManyFn = Callable[..., int]
 TransactFactoryFn = Callable[[], AbstractContextManager[None]]
 RecordGetFn = Callable[..., None]
 RecordSetFn = Callable[..., None]
@@ -46,6 +47,7 @@ class FragmentPersistRuntimeV1:
     cache_enabled: bool
     transact: TransactFactoryFn
     record_set: RecordSetFn
+    cache_set_many: CacheSetManyFn | None = None
 
 
 def partition_fragment_entries(
@@ -90,6 +92,21 @@ def persist_fragment_writes(
 ) -> None:
     """Persist fragment payload writes using one backend transaction."""
     if not (runtime.cache_enabled and writes):
+        return
+    if callable(runtime.cache_set_many):
+        encoded_rows = {write.entry.cache_key: runtime.encode(write.payload) for write in writes}
+        written = runtime.cache_set_many(
+            encoded_rows,
+            expire=request.ttl_seconds,
+            tag=request.tag,
+        )
+        ok_all = written == len(encoded_rows)
+        for write in writes:
+            runtime.record_set(
+                namespace=request.namespace,
+                ok=ok_all,
+                key=write.entry.cache_key,
+            )
         return
     with runtime.transact():
         for write in writes:

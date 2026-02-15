@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from types import ModuleType
 
 UUID7_HEX_LENGTH: Final[int] = 32
+UUID7_VERSION: Final[int] = 7
 _UUID_LOCK: Final[threading.Lock] = threading.Lock()
 
 if uuid6_pkg is None:
@@ -150,6 +151,30 @@ def legacy_compatible_event_id(
         return new_uuid7()
 
 
+def uuid8_or_uuid7() -> uuid.UUID:
+    """Return UUIDv8 when available, otherwise fallback to UUIDv7."""
+    if UUID6_MODULE is None:
+        return new_uuid7()
+    uuid8_fn = getattr(UUID6_MODULE, "uuid8", None)
+    if not callable(uuid8_fn):
+        return new_uuid7()
+    try:
+        with _UUID_LOCK:
+            return cast("Callable[[], uuid.UUID]", uuid8_fn)()
+    except (RuntimeError, TypeError, ValueError):
+        return new_uuid7()
+
+
+def uuid7_time_ms(value: uuid.UUID) -> int | None:
+    """Return UUIDv7 timestamp in epoch milliseconds."""
+    if value.version != UUID7_VERSION:
+        return None
+    raw = getattr(value, "time", None)
+    if isinstance(raw, int):
+        return int(raw)
+    return None
+
+
 def secure_token_hex(nbytes: int = 16) -> str:
     """Return a CSPRNG-backed hex token.
 
@@ -168,6 +193,7 @@ def secure_token_hex(nbytes: int = 16) -> str:
 __all__ = [
     "UUID6_MODULE",
     "UUID7_HEX_LENGTH",
+    "UUID7_VERSION",
     "artifact_id_hex",
     "legacy_compatible_event_id",
     "new_uuid7",
@@ -178,4 +204,6 @@ __all__ = [
     "uuid7_hex",
     "uuid7_str",
     "uuid7_suffix",
+    "uuid7_time_ms",
+    "uuid8_or_uuid7",
 ]

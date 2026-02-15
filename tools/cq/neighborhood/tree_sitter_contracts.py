@@ -6,7 +6,10 @@ from collections.abc import Mapping
 
 from tools.cq.core.snb_schema import DegradeEventV1, NeighborhoodSliceV1, SemanticNodeRefV1
 from tools.cq.core.structs import CqStruct
-from tools.cq.search.tree_sitter_structural_contracts import TreeSitterStructuralExportV1
+from tools.cq.search.tree_sitter_structural_contracts import (
+    TreeSitterCstTokenV1,
+    TreeSitterStructuralExportV1,
+)
 
 
 class TreeSitterNeighborhoodCollectRequest(CqStruct, frozen=True):
@@ -29,6 +32,7 @@ class TreeSitterNeighborhoodCollectResult(CqStruct, frozen=True):
     slices: tuple[NeighborhoodSliceV1, ...] = ()
     diagnostics: tuple[DegradeEventV1, ...] = ()
     structural_export: TreeSitterStructuralExportV1 | None = None
+    cst_tokens: tuple[TreeSitterCstTokenV1, ...] = ()
 
 
 __all__ = [

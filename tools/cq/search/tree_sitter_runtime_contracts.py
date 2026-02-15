@@ -27,6 +27,7 @@ class QueryExecutionSettingsV1(CqStruct, frozen=True):
     match_limit: int = 4096
     max_start_depth: int | None = None
     budget_ms: int | None = None
+    timeout_micros: int | None = None
     require_containment: bool = False
 
 

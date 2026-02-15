@@ -6,20 +6,38 @@ payload that never alters ranking, counts, or category classification.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 
+from tools.cq.search.tree_sitter_adaptive_runtime import adaptive_query_budget_ms
+from tools.cq.search.tree_sitter_change_windows import (
+    contains_window,
+    ensure_query_windows,
+    windows_from_changed_ranges,
+)
+from tools.cq.search.tree_sitter_custom_predicates import (
+    has_custom_predicates,
+    make_query_predicate,
+)
 from tools.cq.search.tree_sitter_diagnostics import collect_tree_sitter_diagnostics
 from tools.cq.search.tree_sitter_pack_contracts import load_pack_rules
 from tools.cq.search.tree_sitter_parse_session import clear_parse_session, get_parse_session
+from tools.cq.search.tree_sitter_query_planner import build_pack_plan, sort_pack_plans
+from tools.cq.search.tree_sitter_query_planner_contracts import QueryPackPlanV1
 from tools.cq.search.tree_sitter_query_registry import load_query_pack_sources
-from tools.cq.search.tree_sitter_runtime import run_bounded_query_captures
+from tools.cq.search.tree_sitter_query_specialization import specialize_query
+from tools.cq.search.tree_sitter_runtime import (
+    QueryExecutionCallbacksV1,
+    run_bounded_query_captures,
+)
 from tools.cq.search.tree_sitter_runtime_contracts import (
     QueryExecutionSettingsV1,
     QueryWindowV1,
 )
+from tools.cq.search.tree_sitter_work_queue import enqueue_windows
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Parser, Query, Tree
@@ -83,13 +101,17 @@ def _parse_tree(source_bytes: bytes) -> Tree:
     return tree
 
 
-def _parse_with_session(source: str, *, cache_key: str | None) -> tuple[Tree | None, bytes]:
+def _parse_with_session(
+    source: str,
+    *,
+    cache_key: str | None,
+) -> tuple[Tree | None, bytes, tuple[object, ...]]:
     source_bytes = source.encode("utf-8", errors="replace")
     if not is_tree_sitter_python_available():
-        return None, source_bytes
+        return None, source_bytes, ()
     session = get_parse_session(language="python", parser_factory=_make_parser)
-    tree, _changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
-    return tree, source_bytes
+    tree, changed_ranges, _reused = session.parse(file_key=cache_key, source_bytes=source_bytes)
+    return tree, source_bytes, tuple(changed_ranges) if changed_ranges is not None else ()
 
 
 def parse_python_tree_with_ranges(
@@ -121,10 +143,31 @@ def parse_python_tree(source: str, *, cache_key: str | None = None) -> Tree | No
     if not is_tree_sitter_python_available():
         return None
     try:
-        tree, _ = _parse_with_session(source, cache_key=cache_key)
+        tree, _, _ = _parse_with_session(source, cache_key=cache_key)
     except _ENRICHMENT_ERRORS:
         return None
     return tree
+
+
+def _build_query_windows(
+    *,
+    anchor_window: QueryWindowV1,
+    source_byte_len: int,
+    changed_ranges: tuple[object, ...],
+) -> tuple[QueryWindowV1, ...]:
+    windows = windows_from_changed_ranges(
+        changed_ranges,
+        source_byte_len=source_byte_len,
+        pad_bytes=96,
+    )
+    windows = ensure_query_windows(windows, fallback=anchor_window)
+    if windows and not contains_window(
+        windows,
+        value=anchor_window.start_byte,
+        width=anchor_window.end_byte - anchor_window.start_byte,
+    ):
+        return (*windows, anchor_window)
+    return windows
 
 
 def clear_tree_sitter_python_cache() -> None:
@@ -132,6 +175,7 @@ def clear_tree_sitter_python_cache() -> None:
     clear_parse_session(language="python")
     _python_language.cache_clear()
     _compile_query.cache_clear()
+    _pack_source_rows.cache_clear()
 
 
 def get_tree_sitter_python_cache_stats() -> dict[str, int]:
@@ -149,16 +193,42 @@ def get_tree_sitter_python_cache_stats() -> dict[str, int]:
     }
 
 
-def _query_sources() -> dict[str, str]:
+@lru_cache(maxsize=1)
+def _pack_source_rows() -> tuple[tuple[str, str, QueryPackPlanV1], ...]:
     sources: dict[str, str] = {}
     for source in load_query_pack_sources("python", include_distribution=False):
         if source.pack_name.endswith(".scm"):
             sources[source.pack_name] = source.source
-    return sources
+    packed = [
+        (
+            pack_name,
+            source,
+            build_pack_plan(
+                pack_name=pack_name,
+                query=_compile_query(
+                    pack_name,
+                    source,
+                    request_surface="artifact",
+                ),
+                query_text=source,
+            ),
+        )
+        for pack_name, source in sorted(sources.items())
+    ]
+    return sort_pack_plans(packed)
 
 
-@lru_cache(maxsize=16)
-def _compile_query(_filename: str, source: str) -> Query:
+def _query_sources() -> tuple[tuple[str, str], ...]:
+    return tuple((pack_name, source) for pack_name, source, _ in _pack_source_rows())
+
+
+@lru_cache(maxsize=64)
+def _compile_query(
+    _filename: str,
+    source: str,
+    *,
+    request_surface: str = "artifact",
+) -> Query:
     if _TreeSitterQuery is None:
         msg = "tree_sitter query bindings are unavailable"
         raise RuntimeError(msg)
@@ -172,24 +242,39 @@ def _compile_query(_filename: str, source: str) -> Query:
         if rules.forbid_non_local and bool(query.is_pattern_non_local(pattern_idx)):
             msg = f"python query pattern non-local: {pattern_idx}"
             raise ValueError(msg)
-    return query
+    return specialize_query(query, request_surface=request_surface)
 
 
 def _safe_cursor_captures(
     query: Query,
     root: Node,
     *,
-    byte_start: int,
-    byte_end: int,
+    windows: tuple[QueryWindowV1, ...],
     match_limit: int,
-) -> tuple[dict[str, list[Node]], bool]:
+    predicate_callback: object | None = None,
+    budget_ms: int | None = None,
+) -> tuple[dict[str, list[Node]], bool, bool]:
+    typed_predicate = (
+        cast(
+            "Callable[[str, object, int, Mapping[str, Sequence[object]]], bool]",
+            predicate_callback,
+        )
+        if callable(predicate_callback)
+        else None
+    )
+    callbacks = (
+        QueryExecutionCallbacksV1(predicate_callback=typed_predicate)
+        if typed_predicate is not None
+        else None
+    )
     captures, telemetry = run_bounded_query_captures(
         query,
         root,
-        windows=(QueryWindowV1(start_byte=byte_start, end_byte=byte_end),),
-        settings=QueryExecutionSettingsV1(match_limit=match_limit),
+        windows=windows,
+        settings=QueryExecutionSettingsV1(match_limit=match_limit, budget_ms=budget_ms),
+        callbacks=callbacks,
     )
-    return captures, telemetry.exceeded_match_limit
+    return captures, telemetry.exceeded_match_limit, telemetry.cancelled
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
@@ -204,20 +289,24 @@ def _extract_parse_quality(
     root: Node,
     source_bytes: bytes,
     *,
-    byte_start: int,
-    byte_end: int,
+    windows: tuple[QueryWindowV1, ...],
+    query_budget_ms: int | None = None,
 ) -> dict[str, object]:
     quality: dict[str, object] = {"has_error": bool(getattr(root, "has_error", False))}
     captures: dict[str, list[Node]]
     did_exceed_match_limit = False
     try:
-        query = _compile_query("__errors__.scm", "(ERROR) @error (MISSING) @missing")
-        captures, did_exceed_match_limit = _safe_cursor_captures(
+        query = _compile_query(
+            "__errors__.scm",
+            "(ERROR) @error (MISSING) @missing",
+            request_surface="diagnostic",
+        )
+        captures, did_exceed_match_limit, _cancelled = _safe_cursor_captures(
             query,
             root,
-            byte_start=byte_start,
-            byte_end=byte_end,
+            windows=windows,
             match_limit=1_024,
+            budget_ms=query_budget_ms,
         )
     except _ENRICHMENT_ERRORS:
         captures = {}
@@ -243,23 +332,36 @@ def _capture_gap_fill_fields(
     root: Node,
     source_bytes: bytes,
     *,
-    byte_start: int,
-    byte_end: int,
+    windows: tuple[QueryWindowV1, ...],
     match_limit: int,
+    query_budget_ms: int | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {}
     did_exceed_match_limit = False
-    for filename, source in _query_sources().items():
+    cancelled = False
+    fallback_budget = query_budget_ms if query_budget_ms is not None else 200
+    effective_budget_ms = adaptive_query_budget_ms(
+        language="python",
+        fallback_budget_ms=fallback_budget,
+    )
+    for filename, source in _query_sources():
         try:
-            query = _compile_query(filename, source)
-            captures, exceeded = _safe_cursor_captures(
+            query = _compile_query(filename, source, request_surface="artifact")
+            predicate_callback = (
+                make_query_predicate(source_bytes=source_bytes)
+                if has_custom_predicates(source)
+                else None
+            )
+            captures, exceeded, cancelled_one = _safe_cursor_captures(
                 query,
                 root,
-                byte_start=byte_start,
-                byte_end=byte_end,
+                windows=windows,
                 match_limit=match_limit,
+                predicate_callback=predicate_callback,
+                budget_ms=effective_budget_ms,
             )
             did_exceed_match_limit = did_exceed_match_limit or exceeded
+            cancelled = cancelled or cancelled_one
         except _ENRICHMENT_ERRORS:
             continue
         _apply_gap_fill_from_captures(payload, captures, source_bytes)
@@ -267,7 +369,7 @@ def _capture_gap_fill_fields(
     payload["query_runtime"] = {
         "match_limit": match_limit,
         "did_exceed_match_limit": did_exceed_match_limit,
-        "cancelled": False,
+        "cancelled": cancelled,
     }
     return payload
 
@@ -632,6 +734,7 @@ def enrich_python_context_by_byte_range(
     byte_end: int,
     cache_key: str | None = None,
     match_limit: int = _DEFAULT_MATCH_LIMIT,
+    query_budget_ms: int | None = None,
 ) -> dict[str, object] | None:
     """Best-effort tree-sitter Python enrichment for a byte-anchored match.
 
@@ -660,7 +763,7 @@ def enrich_python_context_by_byte_range(
         return payload
 
     try:
-        tree, source_bytes = _parse_with_session(source, cache_key=cache_key)
+        tree, source_bytes, changed_ranges = _parse_with_session(source, cache_key=cache_key)
     except _ENRICHMENT_ERRORS as exc:
         payload["enrichment_status"] = "degraded"
         payload["degrade_reason"] = type(exc).__name__
@@ -678,17 +781,28 @@ def enrich_python_context_by_byte_range(
         byte_start=byte_start,
         byte_end=byte_end,
     )
+    anchor_window = QueryWindowV1(start_byte=window_start, end_byte=window_end)
+    query_windows = _build_query_windows(
+        anchor_window=anchor_window,
+        source_byte_len=len(source_bytes),
+        changed_ranges=changed_ranges,
+    )
+    enqueue_windows(
+        language="python",
+        file_key=cache_key or "<memory>",
+        windows=query_windows,
+    )
     parse_quality = _extract_parse_quality(
         root,
         source_bytes,
-        byte_start=window_start,
-        byte_end=window_end,
+        windows=query_windows,
+        query_budget_ms=query_budget_ms,
     )
     payload["parse_quality"] = parse_quality
     diagnostics = collect_tree_sitter_diagnostics(
         language="python",
         root=root,
-        windows=(QueryWindowV1(start_byte=window_start, end_byte=window_end),),
+        windows=query_windows,
         match_limit=1024,
     )
     payload["tree_sitter_diagnostics"] = [msgspec.to_builtins(row) for row in diagnostics]
@@ -698,9 +812,9 @@ def enrich_python_context_by_byte_range(
             _capture_gap_fill_fields(
                 root,
                 source_bytes,
-                byte_start=window_start,
-                byte_end=window_end,
+                windows=query_windows,
                 match_limit=match_limit,
+                query_budget_ms=query_budget_ms,
             )
         )
     except _ENRICHMENT_ERRORS as exc:

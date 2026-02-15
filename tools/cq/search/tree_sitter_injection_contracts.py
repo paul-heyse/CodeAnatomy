@@ -12,6 +12,7 @@ class InjectionRuntimeResultV1(CqStruct, frozen=True):
 
     language: str
     plan_count: int = 0
+    combined_count: int = 0
     parsed: bool = False
     included_ranges_applied: bool = False
     errors: tuple[str, ...] = ()

@@ -96,6 +96,7 @@ def build_object_resolved_view(
         object_ref = _merge_object_ref_with_representative(object_refs[object_id], rep)
         coverage_level, applicability, coverage_reasons = _coverage_for_match(rep, object_ref)
         code_facts = _code_facts_for_match(rep)
+        module_graph = _module_graph_for_match(rep)
         files = sorted({match.file for match in object_matches})
         summaries.append(
             SearchObjectSummaryV1(
@@ -104,6 +105,7 @@ def build_object_resolved_view(
                 files=files,
                 representative_category=rep.category,
                 code_facts=code_facts,
+                module_graph=module_graph,
                 coverage_level=coverage_level,
                 applicability=applicability,
                 coverage_reasons=coverage_reasons,
@@ -394,6 +396,15 @@ def _code_facts_for_match(match: EnrichedMatch) -> dict[str, object]:
         enrichment["symtable"] = msgspec.to_builtins(match.symtable)
     facts["enrichment"] = enrichment
     return facts
+
+
+def _module_graph_for_match(match: EnrichedMatch) -> dict[str, object]:
+    if not isinstance(match.rust_tree_sitter, dict):
+        return {}
+    module_graph = match.rust_tree_sitter.get("rust_module_graph")
+    if isinstance(module_graph, dict):
+        return dict(module_graph)
+    return {}
 
 
 def _coverage_for_match(

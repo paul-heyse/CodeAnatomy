@@ -102,7 +102,7 @@ class TestEntitySymbolConfig:
         assert cfg.exact_span_weight == 15.0
 
 
-class TestEntitySymbolRelationship:  # noqa: PLR0904
+class TestEntitySymbolRelationship:
     """Tests for entity_symbol_relationship factory."""
 
     def _default_cfg(self, **overrides: Unpack[_EntitySymbolConfigOverrides]) -> EntitySymbolConfig:
@@ -220,6 +220,28 @@ class TestEntitySymbolRelationship:  # noqa: PLR0904
         spec_no = entity_symbol_relationship(self._default_cfg())
         spec_yes = entity_symbol_relationship(self._default_cfg(scip_role_filter="r__is_read"))
         assert len(spec_yes.signals.hard) == len(spec_no.signals.hard) + 1
+
+
+class TestEntitySymbolRelationshipRanking:
+    """Projection/ranking focused tests for entity_symbol_relationship."""
+
+    def _default_cfg(self, **overrides: Unpack[_EntitySymbolConfigOverrides]) -> EntitySymbolConfig:
+        """Build a default config with optional overrides.
+
+        Returns:
+        -------
+        EntitySymbolConfig
+            Config with test defaults.
+        """
+        return EntitySymbolConfig(
+            name=overrides.get("name", "rel_test"),
+            left_view=overrides.get("left_view", "test_norm"),
+            entity_id_col=overrides.get("entity_id_col", "l__test_id"),
+            origin=overrides.get("origin", "test_origin"),
+            span_strategy=overrides.get("span_strategy", "overlap"),
+            scip_role_filter=overrides.get("scip_role_filter"),
+            exact_span_weight=overrides.get("exact_span_weight", 20.0),
+        )
 
     def test_output_projection_aliases(self) -> None:
         """Template produces standard entity_id/symbol/path/bstart/bend output."""

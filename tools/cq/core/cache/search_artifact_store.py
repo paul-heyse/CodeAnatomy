@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from pathlib import Path
 from typing import Final, Protocol, cast
 
@@ -17,6 +18,12 @@ from tools.cq.core.cache.telemetry import (
     record_cache_decode_failure,
     record_cache_get,
     record_cache_set,
+)
+from tools.cq.core.cache.tree_sitter_blob_store import (
+    decode_blob_pointer,
+    encode_blob_pointer,
+    read_blob,
+    write_blob,
 )
 
 try:
@@ -40,6 +47,7 @@ class _SearchArtifactDequeLike(Protocol):
 _NAMESPACE: Final[str] = "search_artifacts"
 _VERSION: Final[str] = "v2"
 _MAX_INDEX_ROWS: Final[int] = 1000
+_BLOB_THRESHOLD_BYTES: Final[int] = 64 * 1024
 
 _ENCODER = msgspec.msgpack.Encoder()
 _DECODER = msgspec.msgpack.Decoder(type=SearchArtifactBundleV1)
@@ -115,20 +123,40 @@ def _decode_entry(value: object) -> SearchArtifactIndexEntryV1 | None:
     return None
 
 
+def _transaction_context(store: object | None) -> AbstractContextManager[object]:
+    if store is None:
+        return cast("AbstractContextManager[object]", nullcontext(None))
+    transact = getattr(store, "transact", None)
+    if not callable(transact):
+        return cast("AbstractContextManager[object]", nullcontext(None))
+    try:
+        return cast("AbstractContextManager[object]", transact(retry=True))
+    except TypeError:
+        try:
+            return cast("AbstractContextManager[object]", transact())
+        except (RuntimeError, ValueError, OSError, AttributeError):
+            return cast("AbstractContextManager[object]", nullcontext(None))
+    except (RuntimeError, ValueError, OSError, AttributeError):
+        return cast("AbstractContextManager[object]", nullcontext(None))
+
+
 def _record_index_entry(policy: CqCachePolicyV1, entry: SearchArtifactIndexEntryV1) -> None:
     global_index = _open_index(_global_index_path(policy))
-    if global_index is not None:
-        global_index[entry.cache_key] = msgspec.to_builtins(entry)
     run_index = _open_index(_run_index_path(policy, entry.run_id))
-    if run_index is not None:
-        run_index[entry.cache_key] = msgspec.to_builtins(entry)
-
     global_order = _open_deque(_global_order_path(policy))
-    if global_order is not None:
-        global_order.appendleft(entry.cache_key)
     run_order = _open_deque(_run_order_path(policy, entry.run_id))
-    if run_order is not None:
-        run_order.appendleft(entry.cache_key)
+    builtins_entry = msgspec.to_builtins(entry)
+    with ExitStack() as stack:
+        for store in (global_index, run_index, global_order, run_order):
+            stack.enter_context(_transaction_context(store))
+        if global_index is not None:
+            global_index[entry.cache_key] = builtins_entry
+        if run_index is not None:
+            run_index[entry.cache_key] = builtins_entry
+        if global_order is not None:
+            global_order.appendleft(entry.cache_key)
+        if run_order is not None:
+            run_order.appendleft(entry.cache_key)
 
 
 def persist_search_artifact_bundle(
@@ -156,9 +184,15 @@ def persist_search_artifact_bundle(
         extras=key_extras,
     )
     payload = _ENCODER.encode(bundle)
+    stored_value: object
+    if len(payload) > _BLOB_THRESHOLD_BYTES:
+        blob_ref = write_blob(root=root, payload=payload)
+        stored_value = encode_blob_pointer(blob_ref)
+    else:
+        stored_value = payload
     ok = backend.set(
         cache_key,
-        payload,
+        stored_value,
         expire=ttl_seconds,
         tag=tag,
     )
@@ -273,6 +307,39 @@ def _touch_cached_entry(*, root: Path, cache_key: str) -> None:
         return
 
 
+def _decode_bundle_payload(
+    *,
+    root: Path,
+    payload: object,
+) -> tuple[SearchArtifactBundleV1 | None, bool]:
+    bundle: SearchArtifactBundleV1 | None = None
+    attempted = False
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        attempted = True
+        try:
+            bundle = _DECODER.decode(payload)
+        except (RuntimeError, TypeError, ValueError):
+            bundle = None
+    elif isinstance(payload, dict):
+        attempted = True
+        blob_ref = decode_blob_pointer(payload)
+        if blob_ref is not None:
+            blob_payload = read_blob(root=root, ref=blob_ref)
+            if isinstance(blob_payload, (bytes, bytearray, memoryview)):
+                try:
+                    bundle = _DECODER.decode(blob_payload)
+                except (RuntimeError, TypeError, ValueError):
+                    bundle = None
+            else:
+                bundle = None
+        else:
+            try:
+                bundle = msgspec.convert(payload, type=SearchArtifactBundleV1)
+            except (RuntimeError, TypeError, ValueError):
+                bundle = None
+    return bundle, attempted
+
+
 def load_search_artifact_bundle(
     *,
     root: Path,
@@ -294,26 +361,13 @@ def load_search_artifact_bundle(
     payload = backend.get(entry.cache_key)
     hit = isinstance(payload, (bytes, bytearray, memoryview, dict))
     record_cache_get(namespace=_NAMESPACE, hit=hit, key=entry.cache_key)
-    if isinstance(payload, (bytes, bytearray, memoryview)):
-        try:
-            bundle = _DECODER.decode(payload)
-        except (RuntimeError, TypeError, ValueError):
+    bundle, attempted_decode = _decode_bundle_payload(root=root, payload=payload)
+    if bundle is None:
+        if attempted_decode:
             record_cache_decode_failure(namespace=_NAMESPACE)
-            return None, entry
-        _touch_cached_entry(root=root, cache_key=entry.cache_key)
-        return bundle, entry
-
-    if isinstance(payload, dict):
-        # Backward-compatible decode for pre-v2 payloads.
-        try:
-            bundle = msgspec.convert(payload, type=SearchArtifactBundleV1)
-        except (RuntimeError, TypeError, ValueError):
-            record_cache_decode_failure(namespace=_NAMESPACE)
-            return None, entry
-        _touch_cached_entry(root=root, cache_key=entry.cache_key)
-        return bundle, entry
-
-    return None, entry
+        return None, entry
+    _touch_cached_entry(root=root, cache_key=entry.cache_key)
+    return bundle, entry
 
 
 __all__ = [

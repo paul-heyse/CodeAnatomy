@@ -17,6 +17,8 @@ def test_mk_runmeta_generates_run_id(tmp_path: Path) -> None:
     run = mk_runmeta("q", [], str(tmp_path), ms(), _toolchain_dict())
     assert run.run_id
     assert isinstance(run.run_id, str)
+    assert run.run_uuid_version is not None
+    assert run.run_created_ms is not None
 
 
 def test_runmeta_serializes_run_id(tmp_path: Path) -> None:

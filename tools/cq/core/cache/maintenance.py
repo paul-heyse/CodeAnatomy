@@ -31,6 +31,8 @@ def maintenance_tick(backend: CqCacheBackend) -> CacheMaintenanceSnapshotV1:
     culled_raw = backend.cull()
     culled_removed = int(culled_raw) if isinstance(culled_raw, int) else 0
 
+    _ = backend.volume()
+
     integrity_raw = backend.check(fix=False)
     integrity_errors = int(integrity_raw) if isinstance(integrity_raw, int) else 0
     if integrity_errors > 0:

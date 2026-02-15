@@ -10,17 +10,18 @@ from tools.cq.cli_app.context import CliContext
 
 
 def require_ctx(func: Callable[..., Any]) -> Callable[..., Any]:
-    """Ensure the command is invoked with an injected ``ctx`` keyword argument.
+    """Assert and verify CLI context injection for command entrypoints.
 
     Returns:
-        Callable[..., Any]: Wrapped callable.
+        Callable[..., Any]: Wrapped callable that validates `ctx`.
     """
 
     @wraps(func)
     def _wrapped(*args: object, **kwargs: object) -> Any:
-        if kwargs.get("ctx") is None:
+        ctx = kwargs.get("ctx")
+        if not isinstance(ctx, CliContext):
             msg = "Context not injected"
-            raise RuntimeError(msg)
+            raise TypeError(msg)
         return func(*args, **kwargs)
 
     return _wrapped

@@ -32,10 +32,12 @@ def parse_injected_ranges(
         InjectionRuntimeResultV1: Result describing parse success and included-range
             behavior.
     """
+    combined_count = sum(1 for row in plans if bool(getattr(row, "combined", False)))
     if _TreeSitterParser is None or _TreeSitterPoint is None or _TreeSitterRange is None:
         return InjectionRuntimeResultV1(
             language=str(getattr(language, "name", "unknown")),
             plan_count=len(plans),
+            combined_count=combined_count,
             parsed=False,
             included_ranges_applied=False,
             errors=("tree_sitter_bindings_unavailable",),
@@ -56,6 +58,7 @@ def parse_injected_ranges(
         return InjectionRuntimeResultV1(
             language=str(getattr(language, "name", "unknown")),
             plan_count=len(plans),
+            combined_count=combined_count,
             parsed=False,
             included_ranges_applied=False,
             errors=(type(exc).__name__,),
@@ -67,6 +70,7 @@ def parse_injected_ranges(
         return InjectionRuntimeResultV1(
             language=str(getattr(language, "name", "unknown")),
             plan_count=len(plans),
+            combined_count=combined_count,
             parsed=False,
             included_ranges_applied=True,
             errors=(type(exc).__name__,),
@@ -74,6 +78,7 @@ def parse_injected_ranges(
     return InjectionRuntimeResultV1(
         language=str(getattr(language, "name", "unknown")),
         plan_count=len(plans),
+        combined_count=combined_count,
         parsed=tree is not None,
         included_ranges_applied=True,
         errors=(),

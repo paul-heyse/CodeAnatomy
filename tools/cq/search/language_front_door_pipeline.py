@@ -46,6 +46,7 @@ from tools.cq.search.semantic_request_budget import (
     budget_for_mode,
     call_with_retry,
 )
+from tools.cq.search.tree_sitter_adaptive_runtime import adaptive_query_budget_ms
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +289,13 @@ def _python_payload(
     byte_end: int,
 ) -> dict[str, object] | None:
     sg_root = get_sg_root(context.target_file_path, lang="python")
+    query_budget_ms = int(
+        1000.0 * (context.budget.startup_timeout_seconds + context.budget.probe_timeout_seconds)
+    )
+    query_budget_ms = adaptive_query_budget_ms(
+        language="python",
+        fallback_budget_ms=query_budget_ms,
+    )
     payload = enrich_python_context_by_byte_range(
         PythonByteRangeEnrichmentRequest(
             sg_root=sg_root,
@@ -295,6 +303,7 @@ def _python_payload(
             byte_start=byte_start,
             byte_end=byte_end,
             cache_key=str(context.target_file_path),
+            query_budget_ms=query_budget_ms,
         )
     )
     if not isinstance(payload, dict):
@@ -342,11 +351,17 @@ def _execute_rust_provider(
         retry_backoff_ms=context.budget.retry_backoff_ms,
     )
     normalized = payload if isinstance(payload, dict) else None
+    macro_expansion_count = None
+    if isinstance(normalized, dict):
+        expansions = normalized.get("macro_expansions")
+        if isinstance(expansions, list):
+            macro_expansion_count = len(expansions)
     return LanguageSemanticEnrichmentOutcome(
         payload=dict(normalized) if isinstance(normalized, dict) else None,
         timed_out=timed_out,
         failure_reason=_rust_failure_reason(normalized, timed_out=timed_out),
         provider_root=context.provider_root,
+        macro_expansion_count=macro_expansion_count,
     )
 
 
@@ -358,11 +373,19 @@ def _rust_payload(
     byte_start: int,
     byte_end: int,
 ) -> dict[str, object] | None:
+    query_budget_ms = int(
+        1000.0 * (context.budget.startup_timeout_seconds + context.budget.probe_timeout_seconds)
+    )
+    query_budget_ms = adaptive_query_budget_ms(
+        language="rust",
+        fallback_budget_ms=query_budget_ms,
+    )
     payload = enrich_rust_context_by_byte_range(
         source,
         byte_start=byte_start,
         byte_end=byte_end,
         cache_key=str(context.target_file_path),
+        query_budget_ms=query_budget_ms,
     )
     if not isinstance(payload, dict):
         return None

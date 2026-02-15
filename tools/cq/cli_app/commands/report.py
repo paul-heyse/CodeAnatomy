@@ -45,7 +45,6 @@ def report(
     from tools.cq.core.schema import mk_result, ms
 
     ctx = require_context(ctx)
-
     options = options_from_params(opts, type_=ReportOptions)
 
     # Parse target spec

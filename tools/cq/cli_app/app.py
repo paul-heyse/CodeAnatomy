@@ -334,7 +334,10 @@ app.command("tools.cq.cli_app.commands.admin:cache", group=admin_group)
 app.command("tools.cq.cli_app.commands.admin:schema", group=admin_group)
 
 # Protocol command sub-apps (lazy-loaded)
-app.command("tools.cq.cli_app.commands.ldmd:ldmd_app", name="ldmd")
+app.command(
+    "tools.cq.cli_app.commands.ldmd:ldmd_app",
+    name="ldmd",
+)
 app.command(
     "tools.cq.cli_app.commands.artifact:artifact_app",
     name="artifact",

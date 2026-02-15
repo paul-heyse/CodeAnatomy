@@ -11,6 +11,8 @@ class UuidIdentityContractV1(CqStruct, frozen=True):
     run_id: str
     artifact_id: str
     cache_key_uses_uuid: bool = False
+    run_uuid_version: int | None = None
+    run_created_ms: int | None = None
 
 
 __all__ = ["UuidIdentityContractV1"]

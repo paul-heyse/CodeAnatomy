@@ -16,10 +16,17 @@ from tools.cq.core.cache.telemetry import (
     record_cache_get,
     record_cache_set,
 )
+from tools.cq.core.cache.tree_sitter_blob_store import (
+    decode_blob_pointer,
+    encode_blob_pointer,
+    read_blob,
+    write_blob,
+)
 from tools.cq.core.cache.tree_sitter_cache_store_contracts import TreeSitterCacheEnvelopeV1
 
 _NAMESPACE: Final[str] = "tree_sitter"
 _VERSION: Final[str] = "v3"
+_BLOB_THRESHOLD_BYTES: Final[int] = 64 * 1024
 
 _ENCODER = msgspec.msgpack.Encoder()
 _DECODER = msgspec.msgpack.Decoder(type=TreeSitterCacheEnvelopeV1)
@@ -67,9 +74,16 @@ def persist_tree_sitter_payload(
     backend = get_cq_cache_backend(root=root)
     policy = default_cache_policy(root=root)
     ttl_seconds = resolve_namespace_ttl_seconds(policy=policy, namespace=_NAMESPACE)
+    encoded = _ENCODER.encode(envelope)
+    payload: object
+    if len(encoded) > _BLOB_THRESHOLD_BYTES:
+        blob_ref = write_blob(root=root, payload=encoded)
+        payload = encode_blob_pointer(blob_ref)
+    else:
+        payload = encoded
     ok = backend.set(
         cache_key,
-        _ENCODER.encode(envelope),
+        payload,
         expire=ttl_seconds,
         tag=tag,
     )
@@ -92,19 +106,43 @@ def load_tree_sitter_payload(
     cached = backend.get(cache_key)
     hit = isinstance(cached, (bytes, bytearray, memoryview, dict))
     record_cache_get(namespace=_NAMESPACE, hit=hit, key=cache_key)
-    if isinstance(cached, (bytes, bytearray, memoryview)):
+    envelope, attempted_decode = _decode_tree_sitter_payload(root=root, payload=cached)
+    if envelope is None and attempted_decode:
+        record_cache_decode_failure(namespace=_NAMESPACE)
+    return envelope
+
+
+def _decode_tree_sitter_payload(
+    *,
+    root: Path,
+    payload: object,
+) -> tuple[TreeSitterCacheEnvelopeV1 | None, bool]:
+    envelope: TreeSitterCacheEnvelopeV1 | None = None
+    attempted = False
+    if isinstance(payload, (bytes, bytearray, memoryview)):
+        attempted = True
         try:
-            return _DECODER.decode(cached)
+            envelope = _DECODER.decode(payload)
         except (RuntimeError, TypeError, ValueError):
-            record_cache_decode_failure(namespace=_NAMESPACE)
-            return None
-    if isinstance(cached, dict):
-        try:
-            return msgspec.convert(cached, type=TreeSitterCacheEnvelopeV1)
-        except (RuntimeError, TypeError, ValueError):
-            record_cache_decode_failure(namespace=_NAMESPACE)
-            return None
-    return None
+            envelope = None
+    elif isinstance(payload, dict):
+        attempted = True
+        blob_ref = decode_blob_pointer(payload)
+        if blob_ref is not None:
+            blob_payload = read_blob(root=root, ref=blob_ref)
+            if isinstance(blob_payload, (bytes, bytearray, memoryview)):
+                try:
+                    envelope = _DECODER.decode(blob_payload)
+                except (RuntimeError, TypeError, ValueError):
+                    envelope = None
+            else:
+                envelope = None
+        else:
+            try:
+                envelope = msgspec.convert(payload, type=TreeSitterCacheEnvelopeV1)
+            except (RuntimeError, TypeError, ValueError):
+                envelope = None
+    return envelope, attempted
 
 
 __all__ = [

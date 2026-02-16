@@ -2,19 +2,20 @@
 
 ## Scope Summary
 
-This plan covers 34 improvement items identified in the design review synthesis (`docs/reviews/design_review_synthesis_tools_cq_2026-02-15.md`) and consolidated plan (`docs/plans/cq_design_review_consolidated_implementation_plan_v1_2026-02-16.md`), organized into 4 implementation phases:
+This plan covers 37 improvement items identified in the design review synthesis (`docs/reviews/design_review_synthesis_tools_cq_2026-02-15.md`) and consolidated plan (`docs/plans/cq_design_review_consolidated_implementation_plan_v1_2026-02-16.md`), organized into 4 implementation phases:
 
 - **Phase 1 (Quick Wins):** 17 items (S1-S15, S33, S34) - small mechanical changes with immediate type-safety and DRY improvements
 - **Phase 2 (Structural Prep):** 3 items - move vocabulary types and extract data models to enable safe decomposition
-- **Phase 3 (Targeted Extractions):** 7 items - medium-effort protocol/cache/payload extractions
+- **Phase 3 (Targeted Extractions + Guardrails):** 10 items (S19-S25, S35-S37) - medium-effort protocol/cache/payload extractions plus architecture/test harness enforcement
 - **Phase 4 (God Module Decomposition):** 7 items - large-effort file decompositions
 
 **Migration strategy:**
-- **Hard cutover:** Type changes (Literal types, payload structs) are breaking changes
-- **Backward-compatible:** All decompositions preserve existing public APIs via re-exports in original files
-- **Legacy decommission:** After re-exports are stable, delete old code in 5 batched cleanup phases (D1-D5)
+- **Strict hard cutover:** Type changes (Literal types, payload structs) are breaking changes and land atomically with all call sites updated in the same PR.
+- **No compatibility shims:** Do not add re-export bridges, feature flags for compatibility, or long-lived deprecation aliases.
+- **Contract reuse:** Reuse and extend existing contract modules when equivalent files already exist; do not introduce parallel near-duplicate contract files.
+- **Legacy decommission:** Delete superseded code in the same scope item whenever possible; reserve D1-D5 batches for cross-scope coupled deletions.
 
-**Timeline:** 8 weeks for full execution. Quick wins (Phase 1) deliver immediate value within 2 weeks.
+**Timeline:** 9 weeks for full execution. Quick wins (Phase 1) deliver immediate value within 2 weeks.
 
 ---
 
@@ -27,10 +28,12 @@ This plan covers 34 improvement items identified in the design review synthesis 
 3. **Extend parse-don't-validate boundary enforcement (2.3/3):** All new types must use msgspec frozen structs with `convert_strict`.
 4. **No duplicate tool configuration:** Do not replicate ruff/pyrefly rules in docstrings or comments.
 5. **Fail-open on enrichment:** All enrichment planes must degrade gracefully without blocking core workflows.
-6. **Test coverage parity:** Every extracted module must maintain coverage at or above original file's level.
+6. **Test coverage parity:** Every extracted module must maintain coverage at or above original file's level via either direct module tests or explicitly mapped integration/e2e coverage.
 7. **No upward imports:** Foundation, lane, and core modules must not import from orchestration modules. Dependency direction flows downward only.
 8. **Explicit public API surfaces:** All modules must declare `__all__`; private (`_`-prefixed) imports across module boundaries are forbidden.
 9. **Mutable state encapsulation:** Mutable process-global state must be encapsulated behind injectable abstractions (bounded caches, context objects).
+10. **Strict hard cutover execution:** Scope items must land without compatibility shims (no transitional re-export or feature-flag compatibility mode).
+11. **Contract file reuse over parallel contracts:** If a semantically equivalent contract module already exists, extend it in place rather than creating a sibling module with overlapping responsibility.
 
 ---
 
@@ -64,6 +67,8 @@ This plan covers 34 improvement items identified in the design review synthesis 
 - `CqResult.summary` and cache result summaries are untyped mappings (`dict[str, object]`) in `tools/cq/core/schema.py` and `tools/cq/core/cache/contracts.py`.
 - Query batch modules import private executor internals (`tools/cq/query/batch.py`, `tools/cq/query/batch_spans.py` importing `_build_scan_context`, `_execute_rule_matches`, etc. from `tools/cq/query/executor.py`).
 - `tools/cq/cli_app` command handlers currently use both `@require_ctx` decorator and `require_context()` function for redundant dual context validation.
+- `tools/cq/search/pipeline/orchestration.py` currently imports a private symbol (`_assemble_smart_search_result`) from `smart_search.py`.
+- `tools/cq/search/tree_sitter/query/drift.py` and `tools/cq/search/tree_sitter/query/registry.py` retain mutable process-global snapshot/report dictionaries.
 
 ---
 
@@ -600,7 +605,8 @@ def some_command(..., ctx: CqCliContext | None = None) -> ...:
    - Keep only `require_context()` function (lines 99-108)
    - Update docstring to clarify it's the single validation mechanism
 
-2. **Update 6+ command files** (use grep to find all `@require_ctx` usages):
+2. **Update command modules under** `tools/cq/cli_app/commands/*.py`:
+   - Verified affected modules include `admin.py`, `analysis.py`, `artifact.py`, `chain.py`, `ldmd.py`, `neighborhood.py`, `query.py`, `report.py`, `repl.py`, `run.py`, `search.py`
    - Remove `@require_ctx` decorator
    - Keep `ctx = require_context(ctx)` call inside function body
    - Change signature from `ctx: CqCliContext | None = None` to `ctx: CqCliContext | None = None` (no change needed)
@@ -691,17 +697,10 @@ __all__ = [
    - `tools/cq/macros/sig_impact.py` → import from `..core.semantic_contracts`
    - `tools/cq/search/pipeline/smart_search.py` → import from `...core.semantic_contracts`
 
-3. **Add re-export to old location:** `tools/cq/search/semantic/models.py`
-
-```python
-# Backward compatibility re-export
-from tools.cq.core.semantic_contracts import (
-    SemanticProvider,
-    SemanticStatus,
-    SemanticContractStateInputV1,
-    derive_semantic_contract_state,
-)
-```
+3. **Hard-cutover cleanup in old location:** `tools/cq/search/semantic/models.py`
+   - Delete moved semantic contract definitions from the search-layer module.
+   - Remove deprecated alias names (`fail_open`, `enrich_semantics`) in the same PR.
+   - Do not add transitional re-exports.
 
 ### New Files to Create
 
@@ -709,7 +708,7 @@ from tools.cq.core.semantic_contracts import (
 
 ### Legacy Decommission/Delete Scope
 
-After all imports migrated (in batch D1), delete re-export and original definitions of `SemanticProvider`, `SemanticStatus`, `SemanticContractStateInputV1`, and `derive_semantic_contract_state` from `search/semantic/models.py`. Also delete deprecated alias names (`fail_open`, `enrich_semantics`) from `search/semantic/models.py`.
+Hard-cutover in this scope item: delete original definitions of `SemanticProvider`, `SemanticStatus`, `SemanticContractStateInputV1`, and `derive_semantic_contract_state` from `search/semantic/models.py` in the same PR that migrates imports. Also delete deprecated alias names (`fail_open`, `enrich_semantics`) with no compatibility shim period.
 
 ---
 
@@ -830,8 +829,9 @@ def load_or_build(cls, root: Path) -> DefIndex:
 1. **Delete method:** `tools/cq/index/def_index.py:478-513`
    - Remove `load_or_build()` method entirely
 
-2. **Update callsites** (use grep to find all `DefIndex.load_or_build` calls):
-   - Replace `DefIndex.load_or_build(root)` with `DefIndex.build(root)`
+2. **Callsite verification:**
+   - Repository-wide search currently shows no callsites for `DefIndex.load_or_build`.
+   - Add a regression assertion/test to keep callsite count at zero after method deletion.
 
 ### New Files to Create
 
@@ -984,7 +984,7 @@ Rename `NeighborhoodStep.no_semantic_enrichment` boolean field to positive form 
 **Current state:**
 
 ```python
-# Search for definition in tools/cq/run/spec.py or tools/cq/neighborhood/
+# tools/cq/run/spec.py:111-114
 @frozen
 class NeighborhoodStep:
     no_semantic_enrichment: bool = False  # NEGATIVE BOOLEAN
@@ -1000,13 +1000,15 @@ class NeighborhoodStep:
 
 ### Files to Edit
 
-1. **Update struct definition** (find in `tools/cq/run/spec.py` or `tools/cq/neighborhood/`)
+1. **Update struct definition:** `tools/cq/run/spec.py`
    - Rename field: `no_semantic_enrichment` → `semantic_enrichment`
    - Invert default: `False` → `True`
 
-2. **Update all references** (use grep to find `no_semantic_enrichment`):
-   - Invert condition checks: `if step.no_semantic_enrichment:` → `if not step.semantic_enrichment:`
-   - Update CLI flag parsing logic to set `semantic_enrichment=False` when user passes `--no-semantic-enrichment`
+2. **Update all references:** `tools/cq/run/runner.py`
+   - Invert condition checks at existing call sites:
+     - `enable_semantic_enrichment=not step.no_semantic_enrichment`
+     - `enable_semantic_enrichment=not step.no_semantic_enrichment`
+   - Replace with `enable_semantic_enrichment=step.semantic_enrichment`
 
 ### New Files to Create
 
@@ -1021,25 +1023,44 @@ None (in-place rename).
 ## S15. Export is_section_collapsed
 
 ### Goal
-Export `is_section_collapsed()` function from neighborhood module's `__all__` list for external use.
+Add and export `is_section_collapsed()` from neighborhood section-layout helpers so collapse policy is centralized and callable from downstream renderers/tests.
 
 ### Representative Code Snippets
 
 **Current state:**
 
 ```python
-# Search for function definition in tools/cq/neighborhood/
-def is_section_collapsed(section: str, config: NeighborhoodConfig) -> bool:
-    """Check if section should be collapsed in output."""
-    # ... implementation
-# Currently private (not in __all__)
+# tools/cq/neighborhood/section_layout.py:318-324
+collapsed = True
+if slice_.kind in _UNCOLLAPSED_SECTIONS:
+    collapsed = False
+elif threshold is not None:
+    collapsed = slice_.total > threshold
+```
+
+**After:**
+
+```python
+# tools/cq/neighborhood/section_layout.py
+def is_section_collapsed(kind: str, total: int) -> bool:
+    """Return whether a section kind should default to collapsed."""
+    if kind in _UNCOLLAPSED_SECTIONS:
+        return False
+    threshold = _DYNAMIC_COLLAPSE_SECTIONS.get(kind)
+    if threshold is None:
+        return True
+    return total > threshold
 ```
 
 ### Files to Edit
 
-1. **Add to exports:** Find file containing `is_section_collapsed` in `tools/cq/neighborhood/`
-   - Add `"is_section_collapsed"` to module's `__all__` list
-   - If no `__all__` exists, create one
+1. **Add helper and reuse it:** `tools/cq/neighborhood/section_layout.py`
+   - Introduce `is_section_collapsed(kind: str, total: int) -> bool`
+   - Replace inline collapse branching in `_slice_to_section` with helper call
+   - Add `"is_section_collapsed"` to module `__all__`
+
+2. **Expose from package surface:** `tools/cq/neighborhood/__init__.py`
+   - Export `is_section_collapsed` from neighborhood package API
 
 ### New Files to Create
 
@@ -1119,9 +1140,9 @@ class SearchLimits:
 __all__ = ["QueryMode", "SearchLimits"]
 ```
 
-2. **Add re-exports to old locations:**
-   - `tools/cq/search/pipeline/classifier.py` → `from .._shared.types import QueryMode`
-   - `tools/cq/search/pipeline/profiles.py` → `from .._shared.types import SearchLimits`
+2. **Hard-cutover update in old locations:**
+   - `tools/cq/search/pipeline/classifier.py` → delete local `QueryMode` definition and import from `.._shared.types`
+   - `tools/cq/search/pipeline/profiles.py` → delete local `SearchLimits` definition and import from `.._shared.types`
 
 3. **Update imports in 8 files:**
    - `tools/cq/search/_shared/core.py:26-27` → import from `.types` instead of `..pipeline`
@@ -1138,7 +1159,7 @@ __all__ = ["QueryMode", "SearchLimits"]
 
 ### Legacy Decommission/Delete Scope
 
-After imports migrated (in batch D2), delete original definitions from `classifier.py` and `profiles.py`, keeping only re-exports.
+Hard-cutover in this scope item: delete original definitions from `classifier.py` and `profiles.py` in the same PR. No compatibility re-export phase.
 
 ---
 
@@ -1331,8 +1352,8 @@ __all__ = [
    - Add direct import: `from .smart_search_types import RawMatch, EnrichedMatch, ...`
    - Replace `_smart_search_module().RawMatch` with `RawMatch`
 
-4. **Update other importers** (use grep to find all `from .smart_search import`):
-   - Update type-only imports to import from `.smart_search_types` instead
+4. **Importer verification:**
+   - Verify no remaining type-only imports reference `from .smart_search import ...` after extraction.
 
 ### New Files to Create
 
@@ -1344,7 +1365,7 @@ Delete type definitions from `smart_search.py` and `_smart_search_module()` hack
 
 ---
 
-## PHASE 3: TARGETED EXTRACTIONS (Items 19-25)
+## PHASE 3: TARGETED EXTRACTIONS (Items 19-25) + GUARDRAILS (Items 35-37)
 
 ---
 
@@ -2008,7 +2029,7 @@ __all__ = ["SymbolIndex"]
 
 ### Legacy Decommission/Delete Scope
 
-None (protocol addition is backward-compatible).
+None (protocol addition is additive and does not require compatibility shims).
 
 ---
 
@@ -2107,7 +2128,6 @@ def set_worker_scheduler(scheduler: WorkerScheduler | None) -> None:
 
 ### New Files to Create
 
-- `tools/cq/core/runtime/worker_scheduler.py` (~40 LOC)
 - `tests/unit/tools/cq/core/runtime/test_worker_scheduler.py`
 
 ### Legacy Decommission/Delete Scope
@@ -2123,7 +2143,7 @@ None (additive change for testability).
 ## S26. Decompose smart_search.py
 
 ### Goal
-Decompose 3,914 LOC God Module into 4 focused modules (~1000 LOC each). This addresses 9 principle violations.
+Decompose 3,914 LOC God Module into 7 focused modules (~100-900 LOC each). This addresses 9 principle violations.
 
 ### Decomposition Plan
 
@@ -2210,7 +2230,7 @@ from .search_object_view_store import SearchObjectViewStore
 
 ### Legacy Decommission/Delete Scope
 
-After re-exports stable, original definitions already deleted during extraction. Additionally:
+After hard-cutover extraction lands, original definitions are deleted during extraction. Additionally:
 - Delete `_SEARCH_OBJECT_VIEW_REGISTRY` global dict from `smart_search.py`
 - Delete `clear_caches()` side-effect from `_build_search_context` path
 
@@ -2221,7 +2241,7 @@ After re-exports stable, original definitions already deleted during extraction.
 ## S27. Decompose executor.py
 
 ### Goal
-Decompose 3,457 LOC God Module into 5 focused modules (~700 LOC each). This addresses 8 principle violations.
+Decompose 3,457 LOC God Module into 9 focused modules (~100-850 LOC each). This addresses 8 principle violations.
 
 ### Decomposition Plan
 
@@ -2331,14 +2351,14 @@ Original definitions deleted during extraction. Additionally:
 ## S28. Decompose calls.py into Package
 
 ### Goal
-Decompose 2,274 LOC God Module into a `tools/cq/macros/calls/` package with 7 focused modules. This addresses 5 principle violations. Package split (not flat siblings) provides cleaner namespace and `__init__.py` re-exports.
+Decompose 2,274 LOC God Module into a `tools/cq/macros/calls/` package with 7 focused modules. This addresses 5 principle violations. Package split (not flat siblings) provides cleaner namespace and curated `__all__` exports.
 
 ### Decomposition Plan
 
 **Target structure (package split):**
 ```
 tools/cq/macros/calls/
-├── __init__.py         # Re-exports public API
+├── __init__.py         # Public API export surface
 ├── entry.py            (~350 LOC) - Command entry, call discovery orchestration
 ├── scanning.py         (~200 LOC) - rg-based candidate finding
 ├── analysis.py         (~280 LOC) - AST call analysis
@@ -2650,7 +2670,7 @@ Keep:
 - Public API: `render_result()`, `format_finding()`
 - Finding format logic
 - Section render orchestration
-- Re-exports
+- Explicit `__all__` export surface
 
 ### New Files to Create
 
@@ -2727,7 +2747,7 @@ from tools.cq.run.step_executors import execute_non_q_step
 Keep:
 - Public API: `execute_run()`, `execute_steps()`
 - Plan orchestration
-- Re-exports
+- Explicit `__all__` export surface
 
 ### New Files to Create
 
@@ -2744,7 +2764,7 @@ Original definitions deleted during extraction.
 ## S33. Define Typed Summary Models (RunSummaryV1)
 
 ### Goal
-Replace `CqResult.summary: dict[str, object]` with typed `RunSummaryV1` struct so downstream logic stops re-validating ad hoc dicts. Addresses P9 (Parse don't validate) and P10 (Make illegal states unrepresentable).
+Replace `CqResult.summary: dict[str, object]` with typed `RunSummaryV1` struct so downstream logic stops re-validating ad hoc dicts. Reuse existing `tools/cq/core/summary_contracts.py` rather than creating a parallel contract module. Addresses P9 (Parse don't validate) and P10 (Make illegal states unrepresentable).
 
 ### Representative Code Snippets
 
@@ -2765,15 +2785,15 @@ class CachedResult:
 **After:**
 
 ```python
-# tools/cq/core/summary_models.py
+# tools/cq/core/summary_contracts.py
 from __future__ import annotations
 
 import msgspec
 
-from tools.cq.core.structs import CqStruct
+from tools.cq.core.structs import CqStrictOutputStruct
 
 
-class RunSummaryV1(CqStruct, frozen=True):
+class RunSummaryV1(CqStrictOutputStruct, frozen=True):
     """Typed run summary replacing dict[str, object]."""
     query: str | None = None
     mode: str | None = None
@@ -2791,16 +2811,16 @@ class CqResult:
 
 ### Files to Edit
 
-1. `tools/cq/core/schema.py` - Update `CqResult.summary` field type
-2. `tools/cq/core/cache/contracts.py` - Update `CachedResult.summary` field type
-3. `tools/cq/cli_app/context.py` - Update summary construction sites
-4. `tools/cq/cli_app/result.py` - Update summary consumption sites
-5. `tools/cq/run/runner.py` - Update run summary population
+1. `tools/cq/core/summary_contracts.py` - Add `RunSummaryV1` and conversion helpers
+2. `tools/cq/core/schema.py` - Update `CqResult.summary` field type
+3. `tools/cq/core/cache/contracts.py` - Update `CachedResult.summary` field type
+4. `tools/cq/cli_app/context.py` - Update summary construction sites
+5. `tools/cq/cli_app/result.py` - Update summary consumption sites
+6. `tools/cq/run/runner.py` - Update run summary population
 
 ### New Files to Create
 
-- `tools/cq/core/summary_models.py` (~40 LOC)
-- `tests/unit/tools/cq/core/test_summary_models.py`
+None required if existing CQ integration coverage already exercises summary production/consumption paths. If gaps are identified, add `tests/unit/tools/cq/core/test_summary_contracts.py`.
 
 ### Legacy Decommission/Delete Scope
 
@@ -2811,7 +2831,7 @@ Delete `summary: dict[str, object]` field type in `CqResult` and `CachedResult` 
 ## S34. Define Macro Scoring Contracts (ScoringDetailsV1)
 
 ### Goal
-Replace dict-return from `macro_scoring_details()` in `tools/cq/macros/shared.py` with typed `ScoringDetailsV1` struct. Addresses P8 (Design by contract) and P10 (Make illegal states unrepresentable).
+Replace dict-return from `macro_scoring_details()` in `tools/cq/macros/shared.py` with typed `ScoringDetailsV1` struct. Reuse existing `tools/cq/macros/contracts.py` rather than creating a parallel contract module. Addresses P8 (Design by contract) and P10 (Make illegal states unrepresentable).
 
 ### Representative Code Snippets
 
@@ -2832,7 +2852,7 @@ def macro_scoring_details(...) -> dict[str, object]:
 **After:**
 
 ```python
-# tools/cq/macros/scoring_contracts.py
+# tools/cq/macros/contracts.py
 from __future__ import annotations
 
 from tools.cq.core.structs import CqStruct
@@ -2848,7 +2868,7 @@ class ScoringDetailsV1(CqStruct, frozen=True):
 
 
 # tools/cq/macros/shared.py
-from tools.cq.macros.scoring_contracts import ScoringDetailsV1
+from tools.cq.macros.contracts import ScoringDetailsV1
 
 
 def macro_scoring_details(...) -> ScoringDetailsV1:
@@ -2863,19 +2883,172 @@ def macro_scoring_details(...) -> ScoringDetailsV1:
 
 ### Files to Edit
 
-1. `tools/cq/macros/shared.py` - Update return type and construction
-2. `tools/cq/macros/calls.py` - Update scoring detail consumption
-3. `tools/cq/macros/impact.py` - Update scoring detail consumption
-4. `tools/cq/macros/contracts.py` - Import/reference new type
+1. `tools/cq/macros/contracts.py` - Add `ScoringDetailsV1`
+2. `tools/cq/macros/shared.py` - Update return type and construction
+3. `tools/cq/macros/calls.py` - Update scoring detail consumption
+4. `tools/cq/macros/impact.py` - Update scoring detail consumption
 
 ### New Files to Create
 
-- `tools/cq/macros/scoring_contracts.py` (~30 LOC)
-- `tests/unit/tools/cq/macros/test_scoring_contracts.py`
+None required if existing macro integration/unit tests already cover scoring payload shape. If gaps are identified, add `tests/unit/tools/cq/macros/test_scoring_contracts.py`.
 
 ### Legacy Decommission/Delete Scope
 
 Delete dict-return shape for `macro_scoring_details` in `tools/cq/macros/shared.py` (replaced by `ScoringDetailsV1`).
+
+---
+
+## PHASE 3 EXTENSIONS: ARCHITECTURE AND RELIABILITY GUARDRAILS (Items 35-37)
+
+---
+
+## S35. Enforce Dependency Direction and Private Import Boundaries
+
+### Goal
+Make dependency direction and information-hiding rules enforceable in CI so architectural regressions fail fast. This scope turns Principle 5/8 constraints into executable checks rather than review-time convention.
+
+### Representative Code Snippets
+
+**Current state:**
+
+```python
+# tools/cq/search/pipeline/orchestration.py:26
+from tools.cq.search.pipeline.smart_search import _assemble_smart_search_result
+```
+
+**After:**
+
+```python
+# tests/unit/cq/architecture/test_import_boundaries.py
+import subprocess
+
+
+def test_no_private_cross_module_imports() -> None:
+    """Disallow 'from x import _private' across module boundaries."""
+    result = subprocess.run(
+        ["rg", "-n", r"from\\s+tools\\.cq\\..+\\s+import\\s+_[A-Za-z0-9_]+", "tools/cq"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode in (0, 1)
+    assert result.stdout.strip() == ""
+```
+
+### Files to Edit
+
+1. `tools/cq/search/pipeline/orchestration.py` - Replace private import with public assembly API
+2. `tools/cq/search/pipeline/smart_search.py` - Expose required public assembly entrypoint
+3. `tests/unit/cq` boundary test modules - Add/extend import-boundary checks for upward/private imports
+
+### New Files to Create
+
+- `tests/unit/cq/architecture/test_import_boundaries.py`
+
+### Legacy Decommission/Delete Scope
+
+- Delete private cross-module import usage patterns where `from ... import _private_symbol` is used across files.
+- Delete temporary allowlists for dependency-direction exceptions once violations are fixed.
+
+---
+
+## S36. Consolidate Residual Mutable Process-Global State
+
+### Goal
+Move remaining process-global mutable registries to explicit injectable runtime state surfaces so behavior is deterministic, resettable, and testable.
+
+### Representative Code Snippets
+
+**Current state:**
+
+```python
+# tools/cq/search/tree_sitter/query/drift.py:75
+_LAST_CONTRACT_SNAPSHOTS: dict[str, QueryContractSnapshotV1] = {}
+
+# tools/cq/search/tree_sitter/query/registry.py:30
+_LAST_DRIFT_REPORTS: dict[str, GrammarDriftReportV1] = {}
+```
+
+**After:**
+
+```python
+# tools/cq/search/tree_sitter/query/runtime_state.py
+class QueryRuntimeStateV1(CqStruct, frozen=True):
+    last_contract_snapshots: dict[str, QueryContractSnapshotV1]
+    last_drift_reports: dict[str, GrammarDriftReportV1]
+```
+
+### Files to Edit
+
+1. `tools/cq/search/tree_sitter/query/drift.py` - Read/write snapshot state via injected runtime state
+2. `tools/cq/search/tree_sitter/query/registry.py` - Read/write drift reports via injected runtime state
+3. `tools/cq/core/bootstrap.py` - Wire runtime-state provider through CQ runtime services
+
+### New Files to Create
+
+- `tools/cq/search/tree_sitter/query/runtime_state.py`
+- `tests/unit/cq/search/test_query_runtime_state.py`
+
+### Legacy Decommission/Delete Scope
+
+- Delete `_LAST_CONTRACT_SNAPSHOTS` and `_LAST_DRIFT_REPORTS` module-level mutable globals.
+- Delete direct module-global mutation helpers superseded by runtime-state APIs.
+
+---
+
+## S37. Add Determinism and Performance Regression Harness for CQ
+
+### Goal
+Codify deterministic-output and performance guardrails as CI-tested artifacts so hard-cutover refactors stay within documented behavior/performance budgets.
+
+### Representative Code Snippets
+
+**Current state:**
+
+```python
+# tests/unit/cq/search/test_performance_smoke.py
+# benchmark checks are opt-in via environment flags
+```
+
+**After:**
+
+```python
+# tests/integration/cq/test_determinism_regression.py
+from tools.cq.core.toolchain import Toolchain
+from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.parser import parse_query
+from tools.cq.query.planner import compile_query
+
+
+def test_repeated_runs_produce_identical_summary_payload() -> None:
+    tc = Toolchain.detect()
+    query_text = "entity=function name=execute_plan"
+    query = parse_query(query_text)
+    plan = compile_query(query)
+    first = execute_plan(
+        ExecutePlanRequestV1(plan=plan, query=query, root=".", argv=(), query_text=query_text),
+        tc=tc,
+    )
+    second = execute_plan(
+        ExecutePlanRequestV1(plan=plan, query=query, root=".", argv=(), query_text=query_text),
+        tc=tc,
+    )
+    assert first.summary == second.summary
+```
+
+### Files to Edit
+
+1. `tests/e2e/cq/test_query_performance.py` - Add explicit baseline assertions and report format
+2. `tests/e2e/cq/test_query_regression.py` - Add deterministic summary/order assertions for representative commands
+3. `docs/plans/cq_design_improvements_implementation_plan_v1_2026-02-15.md` quality-gate section - Tie phase gates to determinism/perf harness results
+
+### New Files to Create
+
+- `tests/integration/cq/test_determinism_regression.py`
+
+### Legacy Decommission/Delete Scope
+
+- Delete ad hoc/manual determinism verification checklist items superseded by automated deterministic regression tests.
 
 ---
 
@@ -2899,9 +3072,9 @@ Delete dict-return shape for `macro_scoring_details` in `tools/cq/macros/shared.
    - `tools/cq/search/tree_sitter/schema/node_schema.py:93-98`
 
 3. Delete duplicate `_python_field_ids` (3 locations):
-   - `tools/cq/search/python_lane/locals_index.py:38-40`
-   - `tools/cq/search/python_lane/facts.py:113-115`
-   - `tools/cq/search/python_lane/fallback_support.py:18-20`
+   - `tools/cq/search/tree_sitter/python_lane/locals_index.py:38-40`
+   - `tools/cq/search/tree_sitter/python_lane/facts.py:113-115`
+   - `tools/cq/search/tree_sitter/python_lane/fallback_support.py:18-20`
 
 4. Delete `_truncation_tracker` module-level list:
    - `tools/cq/search/python/extractors.py:187`
@@ -2916,8 +3089,8 @@ Delete dict-return shape for `macro_scoring_details` in `tools/cq/macros/shared.
 6. Delete `@require_ctx` decorator:
    - `tools/cq/cli_app/infrastructure.py:81-96`
 
-7. Delete semantic contract re-exports after migration:
-   - `tools/cq/search/semantic/models.py` (delete `SemanticStatus`, `SemanticContractStateInputV1` definitions)
+7. Delete legacy semantic contract definitions from search layer:
+   - `tools/cq/search/semantic/models.py` (delete `SemanticProvider`, `SemanticStatus`, `SemanticContractStateInputV1`, `derive_semantic_contract_state`)
 
 8. Delete duplicate AST helpers (4 functions):
    - `tools/cq/search/python/analysis_session.py:36-53` (`_node_byte_span`)
@@ -2947,7 +3120,7 @@ Delete dict-return shape for `macro_scoring_details` in `tools/cq/macros/shared.
 
 **Files to clean:**
 
-1. Delete original `QueryMode`/`SearchLimits` definitions from pipeline (keep re-exports):
+1. Delete original `QueryMode`/`SearchLimits` definitions from pipeline (hard cutover):
    - `tools/cq/search/pipeline/classifier.py:36` (delete enum definition)
    - `tools/cq/search/pipeline/profiles.py:12` (delete struct definition)
 
@@ -2959,29 +3132,25 @@ Delete dict-return shape for `macro_scoring_details` in `tools/cq/macros/shared.
 4. Delete `_smart_search_module()` hack:
    - `tools/cq/search/pipeline/partition_pipeline.py:129-132`
 
-### Batch D3: After Phase 3 Targeted Extractions (S19-S25)
+### Batch D3: After Phase 3 Targeted Extractions + Guardrails (S19-S25, S35-S37)
 
-**Timing:** After enrichment payloads migrated to typed structs (end of week 5).
+**Timing:** After enrichment payloads/guardrails are migrated and enforced (end of week 6).
 
 **Files to clean:**
 
 1. Delete key-set constants (replaced by struct field access):
-   - `_PY_RESOLUTION_KEYS` (multiple locations)
-   - `_PY_BEHAVIOR_KEYS` (multiple locations)
-   - `_PY_STRUCTURE_KEYS` (multiple locations)
-   - `_RUST_ENRICHMENT_KEYS` (multiple locations)
+   - `tools/cq/search/enrichment/core.py` (`_PY_RESOLUTION_KEYS`)
+   - `tools/cq/search/enrichment/core.py` (`_PY_BEHAVIOR_KEYS`)
 
 2. Delete manual cache eviction patterns (replaced by `BoundedCache`):
-   - Manual FIFO logic in `rust/enrichment.py`
-   - Manual FIFO logic in `analysis_session.py`
-   - Manual LRU logic in `rust_lane/runtime.py`
-   - Manual clear calls in `classifier_runtime.py`
+   - `tools/cq/search/rust/enrichment.py` (`_AST_CACHE` FIFO eviction branch)
+   - `tools/cq/search/python/extractors.py` (`_AST_CACHE` FIFO eviction branch)
+   - `tools/cq/search/python/analysis_session.py` (`_SESSION_CACHE` FIFO eviction branch)
+   - `tools/cq/search/pipeline/classifier_runtime.py` (manual `clear()` fan-out in classifier cache lifecycle)
 
-3. Delete dict-navigation helper functions (10+ across search/core/query):
-   - `_extract_enrichment_key()`
-   - `_safe_get_nested()`
-   - `_partition_enrichment_dict()`
-   - etc.
+3. Delete mutable snapshot/report globals superseded by runtime-state injection:
+   - `tools/cq/search/tree_sitter/query/drift.py` (`_LAST_CONTRACT_SNAPSHOTS`)
+   - `tools/cq/search/tree_sitter/query/registry.py` (`_LAST_DRIFT_REPORTS`)
 
 4. Delete `_SEARCH_OBJECT_VIEW_REGISTRY` global dict from `tools/cq/search/pipeline/smart_search.py`
 
@@ -2991,22 +3160,22 @@ Delete dict-return shape for `macro_scoring_details` in `tools/cq/macros/shared.
 
 ### Batch D4: After Phase 4 God Module Decompositions (S26-S32)
 
-**Timing:** After all 7 God Modules decomposed and re-exports stable (end of week 8).
+**Timing:** After all 7 God Modules decomposed and hard-cutover imports stabilized (end of week 9).
 
 **No deletions needed** - original definitions already deleted during extraction. Only verification:
 
-1. Verify all re-exports working correctly
+1. Verify public API exports (`__all__` and package surfaces) are complete and stable
 2. Verify test coverage maintained or improved
 3. Verify no behavioral regressions
 4. Update import paths in documentation/examples
 
-### Batch D5: Final Typed-Summary and DetailPayload Mutation Deletions (after S33, S8-expanded, S9-expanded)
+### Batch D5: Final Typed-Summary and DetailPayload Mutation Deletions (after S33, S8, S9)
 
 **Timing:** After typed summary models and expanded core contracts are stable.
 
 **Files to clean:**
 
-1. Delete untyped summary-path compatibility code:
+1. Delete legacy untyped summary-path code:
    - `tools/cq/core/schema.py` - remove `dict[str, object]` summary field remnants
    - `tools/cq/core/cache/contracts.py` - remove `dict[str, object]` summary field remnants
    - `tools/cq/cli_app/context.py` - remove untyped summary construction paths
@@ -3052,7 +3221,7 @@ Execute in this order to minimize risk and maximize incremental value:
 
 **Rationale:** These 3 changes create the foundation for safe God Module decomposition. S16 fixes dependency inversions. S17 consolidates lane duplication. S18 extracts types from the largest God Module. D2 validates structural changes.
 
-### Week 3-5: Targeted Extractions
+### Week 3-6: Targeted Extractions + Guardrails
 23. **S19** - Extract ast-grep from `executor.py` (targeted decomposition)
 24. **S20** - Extract enrichment telemetry from `smart_search.py` (targeted decomposition)
 25. **S21** - Extract enrichment rendering from `report.py` (callback injection, targeted decomposition)
@@ -3060,22 +3229,25 @@ Execute in this order to minimize risk and maximize incremental value:
 27. **S23** - Define typed enrichment payloads (highest-ROI change)
 28. **S24** - Introduce `SymbolIndex` protocol (testability improvement)
 29. **S25** - Worker scheduler injection hook + runtime services verification
-30. **D3** - Batch delete Phase 3 legacy code (key-sets, manual caches, view registry, side-effects)
+30. **S35** - Enforce dependency direction + private-import boundaries in CI
+31. **S36** - Consolidate residual process-global mutable state
+32. **S37** - Add determinism/performance regression harness for CQ
+33. **D3** - Batch delete Phase 3 legacy code (key-sets, manual caches, view registry, mutable globals)
 
-**Rationale:** S19-S21 are rehearsals for full God Module decomposition. S22-S23 address systemic patterns (caching, untyped dicts). S23 is the highest-impact change for principle violations. D3 removes significant dead code.
+**Rationale:** S19-S21 are rehearsals for full God Module decomposition. S22-S23 address systemic patterns (caching, untyped dicts). S35-S37 convert architectural/testability principles into executable enforcement. D3 removes significant dead code.
 
-### Week 5-8: God Module Decompositions
-31. **S27** - Decompose `executor.py` into 7 modules (benefits most from S19)
-32. **S26** - Decompose `smart_search.py` into 7 modules (benefits from S18, S20)
-33. **S28** - Decompose `calls.py` into `calls/` package (benefits from S24)
-34. **S30** - Decompose `rust_lane/runtime.py` (benefits from S17)
-35. **S31** - Decompose `report.py` + `type_coercion.py` (benefits from S21)
-36. **S32** - Decompose `runner.py` → `step_executors.py` + `run_summary.py` (smallest, can parallelize)
-37. **S29** - Decompose `extractors.py` (last, benefits from all patterns)
-38. **D4** - Verify re-exports and test coverage
-39. **D5** - Final typed-summary and DetailPayload mutation deletions
+### Week 6-9: God Module Decompositions
+34. **S27** - Decompose `executor.py` into 7 modules (benefits most from S19)
+35. **S26** - Decompose `smart_search.py` into 7 modules (benefits from S18, S20)
+36. **S28** - Decompose `calls.py` into `calls/` package (benefits from S24)
+37. **S30** - Decompose `rust_lane/runtime.py` (benefits from S17)
+38. **S31** - Decompose `report.py` + `type_coercion.py` (benefits from S21)
+39. **S32** - Decompose `runner.py` → `step_executors.py` + `run_summary.py` (smallest, can parallelize)
+40. **S29** - Decompose `extractors.py` (last, benefits from all patterns)
+41. **D4** - Verify API export surfaces and coverage
+42. **D5** - Final typed-summary and DetailPayload mutation deletions
 
-**Rationale:** Execute in order of dependency and impact. S27/S26 are the largest and benefit most from prior work. S28-S32 can partially overlap if separate engineers work on them. S29 last to benefit from all established patterns. D4 is verification-only (no deletions). D5 removes final compatibility code after all typed contracts stabilize.
+**Rationale:** Execute in order of dependency and impact. S27/S26 are the largest and benefit most from prior work. S28-S32 can partially overlap if separate engineers work on them. S29 runs last to apply established extraction patterns. D4 is verification-only (no deletions). D5 removes final legacy untyped paths after typed contracts stabilize.
 
 ---
 
@@ -3086,20 +3258,20 @@ Execute in this order to minimize risk and maximize incremental value:
 - [ ] S2: Extract `_normalize_semantic_version` → `core/language_registry.py`
 - [ ] S3: Extract `_python_field_ids` → `python_lane/runtime.py`
 - [ ] S4: Define Literal types (6 categorical fields)
-- [ ] S34: Define `ScoringDetailsV1` → `macros/scoring_contracts.py`
+- [ ] S34: Define `ScoringDetailsV1` in `macros/contracts.py`
 - [ ] S5: Move `_truncation_tracker` to per-call context
 - [ ] S6: Deduplicate query utilities → `query/shared_utils.py`
 - [ ] S7: Add `__all__` to `enrichment.py`, `planner.py`
 - [ ] S8: Consolidate dual context injection
 - [ ] S9: Move semantic contracts → `core/semantic_contracts.py` (expanded: `SemanticProvider`, `derive_semantic_contract_state`)
-- [ ] S33: Define `RunSummaryV1` → `core/summary_models.py`
+- [ ] S33: Define `RunSummaryV1` in `core/summary_contracts.py`
 - [ ] S10: Extract AST helpers → `python/ast_utils.py`
 - [ ] S11: Remove `DefIndex.load_or_build` dead code
 - [ ] S12: Extract coercion helpers to module level (later absorbed into S31 `type_coercion.py`)
 - [ ] S13: Fix `canonicalize_*_lane_payload` mutations (copy-first approach)
 - [ ] S14: Rename `no_semantic_enrichment` to positive form
 - [ ] S15: Export `is_section_collapsed` from neighborhood
-- [ ] D1: Batch delete Phase 1 legacy code (12 deletion targets including `_SELF_CLS`, deprecated aliases)
+- [ ] D1: Batch delete Phase 1 legacy code (including `_SELF_CLS`, deprecated aliases)
 
 ### Phase 2: Structural Preparation (Week 2-3)
 - [ ] S16: Move `QueryMode`/`SearchLimits` → `_shared/types.py`
@@ -3107,7 +3279,7 @@ Execute in this order to minimize risk and maximize incremental value:
 - [ ] S18: Extract types → `smart_search_types.py` (~800 LOC)
 - [ ] D2: Batch delete Phase 2 legacy code (4 deletion targets)
 
-### Phase 3: Targeted Extractions (Week 3-5)
+### Phase 3: Targeted Extractions + Guardrails (Week 3-6)
 - [ ] S19: Extract ast-grep → `executor_ast_grep.py` (~450 LOC)
 - [ ] S20: Extract telemetry → `smart_search_telemetry.py` (~140 LOC)
 - [ ] S21: Extract rendering → `render_enrichment.py` (~252 LOC, with `EnrichmentCallback` injection)
@@ -3115,9 +3287,12 @@ Execute in this order to minimize risk and maximize incremental value:
 - [ ] S23: Define typed enrichment structs → `enrichment/{python,rust}_facts.py`
 - [ ] S24: Introduce `SymbolIndex` protocol → `index/protocol.py`
 - [ ] S25: Worker scheduler injection hook → `core/runtime/worker_scheduler.py`
-- [ ] D3: Batch delete Phase 3 legacy code (key-sets, manual caches, view registry, side-effects)
+- [ ] S35: Enforce private-import and upward-import boundaries in CI
+- [ ] S36: Consolidate mutable process-global runtime state
+- [ ] S37: Add deterministic-output and performance regression harness
+- [ ] D3: Batch delete Phase 3 legacy code (key-sets, manual caches, view registry, mutable globals)
 
-### Phase 4: God Module Decompositions (Week 5-8)
+### Phase 4: God Module Decompositions (Week 6-9)
 - [ ] S27: Decompose `executor.py` → 7 modules (3457 LOC, includes `scan.py`, `finding_builders.py`, `section_builders.py`, `executor_cache.py`)
 - [ ] S26: Decompose `smart_search.py` → 7 modules (3914 LOC, includes `assembly.py`, `python_semantic.py`, `search_object_view_store.py`)
 - [ ] S28: Decompose `calls.py` → `calls/` package (2274 LOC, 7 modules: entry, scanning, analysis, neighborhood, semantic, insight, context_snippet)
@@ -3125,13 +3300,13 @@ Execute in this order to minimize risk and maximize incremental value:
 - [ ] S31: Decompose `report.py` → 5 modules (1773 LOC, includes `render_summary.py` + `type_coercion.py`)
 - [ ] S32: Decompose `runner.py` → 3 modules (`step_executors.py` + `q_step_collapsing.py` + `run_summary.py`)
 - [ ] S29: Decompose `extractors.py` → 4 modules (2251 → 800 + 3x~450 LOC)
-- [ ] D4: Verify re-exports and test coverage (no deletions)
+- [ ] D4: Verify API export surfaces and test coverage (no deletions)
 - [ ] D5: Final typed-summary and DetailPayload mutation deletions
 
 ### Quality Gates (After Each Phase)
-- [ ] Phase 1: Run `uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pytest -q`
+- [ ] Phase 1: Run `uv run ruff format && uv run ruff check --fix && uv run pyrefly check && uv run pyright && uv run pytest -q`
 - [ ] Phase 2: Run full gate + verify no import errors
-- [ ] Phase 3: Run full gate + verify enrichment pipeline unchanged
+- [ ] Phase 3: Run full gate + verify enrichment pipeline unchanged + determinism/perf harness pass
 - [ ] Phase 4: Run full gate + verify God Module LOC targets met
 
 ---
@@ -3163,7 +3338,7 @@ Execute in this order to minimize risk and maximize incremental value:
 ### Behavioral Invariants (Must Preserve)
 
 1. All existing tests pass without modification
-2. CLI contract unchanged (same inputs → same outputs)
+2. CLI command surface and semantics remain stable where possible; typed payload contracts transition via documented hard cutover (intentional breaking change)
 3. Enrichment pipeline deterministic (same cache behavior)
 4. Performance within 5% of baseline (no regression from decomposition)
 
@@ -3175,22 +3350,22 @@ Execute in this order to minimize risk and maximize incremental value:
 
 | Change | Risk | Mitigation |
 |--------|------|------------|
-| S23 (Typed enrichment payloads) | Breaking change to 10+ modules | Implement in isolated branch, extensive integration testing, feature flag for gradual rollout |
+| S23 (Typed enrichment payloads) | Breaking change to 10+ modules | Implement as atomic hard-cutover PR, exhaustive integration + regression tests, immediate rollback via revert if needed |
 | S26 (smart_search decomposition) | 3914 LOC, complex interdependencies | Extract types/telemetry first (S18, S20), validate with existing tests, add integration smoke tests |
-| S27 (executor decomposition) | 3457 LOC, central query orchestrator | Extract ast-grep first (S19), preserve public API exactly, comprehensive regression suite |
+| S27 (executor decomposition) | 3457 LOC, central query orchestrator | Extract ast-grep first (S19), preserve expected command semantics, comprehensive regression suite |
 
 ### Rollback Strategy
 
-Each scope item (S1-S32) is a separate PR with:
-- Feature flag (for runtime changes)
-- Backward-compatible re-exports (for decompositions)
-- Isolated test coverage
+Each scope item (S1-S37) is a separate PR with:
+- Atomic cutover (all call sites updated in the same PR)
+- No compatibility shims (no transitional re-exports/feature-flag compatibility paths)
+- Isolated test coverage or explicitly mapped integration/e2e coverage
 - Git revert path if integration fails
 
 For Phase 4 decompositions:
-- Keep re-exports in original files for 2 release cycles
+- No compatibility re-export grace period
 - Monitor production metrics for performance regressions
-- Gradual import migration with deprecation warnings
+- Complete import migration in the same PR that lands decomposition
 
 ---
 

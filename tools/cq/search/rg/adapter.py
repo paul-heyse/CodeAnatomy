@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.query.language import (
     DEFAULT_QUERY_LANGUAGE_SCOPE,
     QueryLanguageScope,
@@ -12,48 +14,64 @@ from tools.cq.query.language import (
 )
 from tools.cq.search._shared.core import RgRunRequest, search_sync_with_timeout
 from tools.cq.search.pipeline.classifier import QueryMode
-from tools.cq.search.pipeline.profiles import DEFAULT, SearchLimits
+from tools.cq.search.pipeline.profiles import DEFAULT, INTERACTIVE, SearchLimits
 from tools.cq.search.rg.codec import as_match_data, match_line_number, match_line_text, match_path
-from tools.cq.search.rg.runner import run_rg_json
+from tools.cq.search.rg.contracts import RgRunSettingsV1
+from tools.cq.search.rg.runner import run_rg_json, run_with_settings
+
+_DEF_LINE_PATTERN = r"^\s*(def |async def |class |fn |pub fn |struct |enum |trait |impl )"
+
+
+def _as_absolute(root: Path, row: str) -> Path:
+    candidate = Path(row.strip())
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (root / row.strip()).resolve()
 
 
 def find_def_lines(file_path: Path) -> list[tuple[int, int]]:
-    """Find all top-level def/async/class and Rust type lines with indentation.
-
-    Returns:
-    -------
-    list[tuple[int, int]]
-        `(line_number, indent)` tuples.
-    """
-    if not file_path.exists():
+    """Find def/class/type lines with indentation using ripgrep."""
+    resolved = file_path.resolve()
+    if not resolved.exists():
         return []
+
+    root = resolved.parent
     try:
-        content = file_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        proc = search_sync_with_timeout(
+            run_rg_json,
+            DEFAULT.timeout_seconds,
+            kwargs={
+                "request": RgRunRequest(
+                    root=root,
+                    pattern=_DEF_LINE_PATTERN,
+                    mode=QueryMode.REGEX,
+                    lang_types=(),
+                    include_globs=[],
+                    exclude_globs=[],
+                    limits=DEFAULT,
+                    paths=(resolved.name,),
+                )
+            },
+        )
+    except TimeoutError:
         return []
 
-    results: list[tuple[int, int]] = []
-    for i, line in enumerate(content.splitlines(), 1):
-        stripped = line.lstrip()
-        if stripped.startswith(
-            (
-                "def ",
-                "async def ",
-                "class ",
-                "fn ",
-                "pub fn ",
-                "struct ",
-                "enum ",
-                "trait ",
-                "impl ",
-            )
-        ):
-            indent = len(line) - len(stripped)
-            results.append((i, indent))
-    return results
+    lines: list[tuple[int, int]] = []
+    for event in proc.events:
+        data = as_match_data(event)
+        if data is None:
+            continue
+        line_number = match_line_number(data)
+        if line_number is None:
+            continue
+        text = match_line_text(data)
+        stripped = text.lstrip()
+        indent = len(text) - len(stripped)
+        lines.append((line_number, indent))
+    return sorted(set(lines))
 
 
-def find_files_with_pattern(
+def find_files_with_pattern(  # noqa: PLR0913
     root: Path,
     pattern: str,
     *,
@@ -61,14 +79,11 @@ def find_files_with_pattern(
     exclude_globs: list[str] | None = None,
     limits: SearchLimits | None = None,
     lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE,
+    paths: tuple[str, ...] = (".",),
+    mode: QueryMode = QueryMode.REGEX,
+    extra_patterns: tuple[str, ...] = (),
 ) -> list[Path]:
-    """Find files containing pattern with native ripgrep.
-
-    Returns:
-    -------
-    list[Path]
-        Absolute file paths containing at least one match.
-    """
+    """Find files containing pattern with native ripgrep."""
     if not root.exists():
         return []
     limits = limits or DEFAULT
@@ -83,11 +98,13 @@ def find_files_with_pattern(
                 "request": RgRunRequest(
                     root=root,
                     pattern=pattern,
-                    mode=QueryMode.REGEX,
+                    mode=mode,
                     lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
                     include_globs=include_globs,
                     exclude_globs=exclude_globs,
                     limits=limits,
+                    paths=paths,
+                    extra_patterns=extra_patterns,
                 )
             },
         )
@@ -109,6 +126,32 @@ def find_files_with_pattern(
     return sorted(seen)
 
 
+def list_candidate_files(
+    root: Path,
+    *,
+    lang_types: tuple[str, ...] = (),
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
+    paths: tuple[str, ...] = (".",),
+    limits: SearchLimits | None = None,
+) -> list[Path]:
+    """List files ripgrep would scan under current scope configuration."""
+    settings = RgRunSettingsV1(
+        pattern="",
+        mode=QueryMode.REGEX.value,
+        lang_types=lang_types,
+        include_globs=tuple(include_globs or ()),
+        exclude_globs=tuple(exclude_globs or ()),
+        operation="files",
+        paths=paths,
+    )
+    result = run_with_settings(root=root, limits=limits or INTERACTIVE, settings=settings)
+    if result.returncode not in {0, 1}:
+        return []
+    rel_rows = [line.strip() for line in result.stdout_lines if line.strip()]
+    return sorted(_as_absolute(root, row) for row in rel_rows)
+
+
 def find_call_candidates(
     root: Path,
     function_name: str,
@@ -116,18 +159,12 @@ def find_call_candidates(
     limits: SearchLimits | None = None,
     lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE,
 ) -> list[tuple[Path, int]]:
-    """Find candidate call sites for function/method symbols.
-
-    Returns:
-    -------
-    list[tuple[Path, int]]
-        Absolute path and 1-based line number tuples.
-    """
+    """Find candidate call sites for function/method symbols."""
     if not root.exists():
         return []
     limits = limits or DEFAULT
     symbol = function_name.rsplit(".", maxsplit=1)[-1]
-    pattern = rf"\b{symbol}\s*\("
+    pattern = rf"{re.escape(symbol)}\s*\("
     try:
         proc = search_sync_with_timeout(
             run_rg_json,
@@ -136,7 +173,7 @@ def find_call_candidates(
                 "request": RgRunRequest(
                     root=root,
                     pattern=pattern,
-                    mode=QueryMode.REGEX,
+                    mode=QueryMode.IDENTIFIER,
                     lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
                     include_globs=[],
                     exclude_globs=[],
@@ -171,13 +208,7 @@ def find_callers(
     limits: SearchLimits | None = None,
     lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE,
 ) -> list[tuple[Path, int]]:
-    """Find callers for a symbol.
-
-    Returns:
-    -------
-    list[tuple[Path, int]]
-        Absolute path and 1-based line number tuples.
-    """
+    """Find callers for a symbol."""
     return find_call_candidates(root, function_name, limits=limits, lang_scope=lang_scope)
 
 
@@ -189,13 +220,7 @@ def search_content(
     limits: SearchLimits | None = None,
     lang_scope: QueryLanguageScope = DEFAULT_QUERY_LANGUAGE_SCOPE,
 ) -> list[tuple[Path, int, str]]:
-    """Search file contents and return `(path, line, text)` triples.
-
-    Returns:
-    -------
-    list[tuple[Path, int, str]]
-        Absolute path, 1-based line number, and line text triples.
-    """
+    """Search file contents and return ``(path, line, text)`` triples."""
     if not root.exists():
         return []
     limits = limits or DEFAULT
@@ -234,10 +259,79 @@ def search_content(
     return results
 
 
+def find_symbol_candidates(
+    root: Path,
+    symbol_name: str,
+    *,
+    lang_scope: QueryLanguageScope,
+    limits: SearchLimits,
+) -> list[tuple[str, int, str]]:
+    """Find symbol candidates via shared rg lane for neighborhood fallback."""
+    request = RgRunRequest(
+        root=root,
+        pattern=re.escape(symbol_name),
+        mode=QueryMode.IDENTIFIER,
+        lang_types=tuple(ripgrep_types_for_scope(lang_scope)),
+        include_globs=[],
+        exclude_globs=[],
+        limits=limits,
+    )
+    try:
+        proc = search_sync_with_timeout(
+            run_rg_json,
+            limits.timeout_seconds,
+            kwargs={"request": request},
+        )
+    except TimeoutError:
+        return []
+
+    rows: list[tuple[str, int, str]] = []
+    for event in proc.events:
+        data = as_match_data(event)
+        if data is None:
+            continue
+        rel = match_path(data)
+        line = match_line_number(data)
+        if rel is None or line is None:
+            continue
+        rel_norm = normalize_repo_relative_path(rel, root=root)
+        if not is_path_in_lang_scope(rel_norm, lang_scope):
+            continue
+        rows.append((rel_norm, line, match_line_text(data)))
+        if len(rows) >= limits.max_total_matches:
+            break
+    return rows
+
+
+def find_symbol_definition_files(
+    root: Path,
+    symbol_name: str,
+    *,
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
+    limits: SearchLimits | None = None,
+) -> list[Path]:
+    """Find Python definition files for a symbol using the shared rg lane."""
+    escaped = re.escape(symbol_name)
+    pattern = rf"(def|class)\s+{escaped}\b"
+    return find_files_with_pattern(
+        root=root,
+        pattern=pattern,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        limits=limits,
+        lang_scope="python",
+        mode=QueryMode.REGEX,
+    )
+
+
 __all__ = [
     "find_call_candidates",
     "find_callers",
     "find_def_lines",
     "find_files_with_pattern",
+    "find_symbol_candidates",
+    "find_symbol_definition_files",
+    "list_candidate_files",
     "search_content",
 ]

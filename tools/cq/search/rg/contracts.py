@@ -18,6 +18,9 @@ class RgRunSettingsV1(CqSettingsStruct, frozen=True):
     lang_types: tuple[str, ...]
     include_globs: tuple[str, ...] = ()
     exclude_globs: tuple[str, ...] = ()
+    operation: str = "json"
+    paths: tuple[str, ...] = (".",)
+    extra_patterns: tuple[str, ...] = ()
 
 
 class RgProcessResultV1(CqOutputStruct, frozen=True):
@@ -28,6 +31,7 @@ class RgProcessResultV1(CqOutputStruct, frozen=True):
     returncode: int
     stderr: str
     events: tuple[dict[str, object], ...] = msgspec.field(default_factory=tuple)
+    stdout_lines: tuple[str, ...] = msgspec.field(default_factory=tuple)
 
 
 def settings_from_request(request: RgRunRequest) -> RgRunSettingsV1:
@@ -38,6 +42,9 @@ def settings_from_request(request: RgRunRequest) -> RgRunSettingsV1:
         lang_types=tuple(request.lang_types),
         include_globs=tuple(request.include_globs),
         exclude_globs=tuple(request.exclude_globs),
+        operation=request.operation,
+        paths=request.paths,
+        extra_patterns=request.extra_patterns,
     )
 
 
@@ -53,6 +60,7 @@ def result_from_process(result: RgProcessResult) -> RgProcessResultV1:
             for row in (to_contract_builtins(event) for event in result.events)
             if isinstance(row, dict)
         ),
+        stdout_lines=tuple(result.stdout_lines),
     )
 
 

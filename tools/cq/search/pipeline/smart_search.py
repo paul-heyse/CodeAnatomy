@@ -125,7 +125,7 @@ from tools.cq.search.python.extractors import (
 )
 from tools.cq.search.python.extractors import enrich_python_context_by_byte_range
 from tools.cq.search.rg.collector import RgCollector
-from tools.cq.search.rg.runner import build_rg_command, run_rg_json
+from tools.cq.search.rg.runner import build_rg_command, run_rg_count, run_rg_json
 from tools.cq.search.rust.enrichment import enrich_rust_context_by_byte_range
 from tools.cq.search.semantic.diagnostics import (
     build_cross_language_diagnostics,
@@ -223,6 +223,10 @@ class RawMatch(CqStruct, frozen=True):
         Line-relative UTF-8 byte offset of match start.
     match_byte_end
         Line-relative UTF-8 byte offset of match end.
+    match_abs_byte_start
+        Absolute UTF-8 byte offset of match start when provided by ripgrep.
+    match_abs_byte_end
+        Absolute UTF-8 byte offset of match end when provided by ripgrep.
     submatch_index
         Which submatch on this line.
     """
@@ -234,6 +238,8 @@ class RawMatch(CqStruct, frozen=True):
     match_end: int
     match_byte_start: int
     match_byte_end: int
+    match_abs_byte_start: int | None = None
+    match_abs_byte_end: int | None = None
     submatch_index: int = 0
 
     @property
@@ -348,6 +354,7 @@ class SearchStats(CqStruct, frozen=True):
     max_files_hit: bool = False
     max_matches_hit: bool = False
     dropped_by_scope: int = 0
+    rg_stats: dict[str, object] | None = None
 
 
 class EnrichedMatch(CqStruct, frozen=True):
@@ -505,8 +512,7 @@ def build_candidate_searcher(
 
 def _build_candidate_searcher(config: SearchConfig) -> tuple[list[str], str]:
     if config.mode == QueryMode.IDENTIFIER:
-        # Word boundary match for identifiers
-        pattern = rf"\b{re.escape(config.query)}\b"
+        pattern = _identifier_pattern(config.query)
     elif config.mode == QueryMode.LITERAL:
         # Exact literal match (non-regex)
         pattern = config.query
@@ -525,11 +531,49 @@ def _build_candidate_searcher(config: SearchConfig) -> tuple[list[str], str]:
     return command, pattern
 
 
+def _identifier_pattern(query: str) -> str:
+    """Escape identifier text; ripgrep word boundaries are applied via ``-w``."""
+    return re.escape(query)
+
+
+def _adaptive_limits_from_count(  # noqa: PLR0913
+    *,
+    root: Path,
+    pattern: str,
+    mode: QueryMode,
+    lang: QueryLanguage,
+    include_globs: list[str] | None,
+    exclude_globs: list[str] | None,
+    limits: SearchLimits,
+) -> SearchLimits:
+    """Choose candidate limits from a quick rg count preflight."""
+    counts = run_rg_count(
+        root=root,
+        pattern=pattern,
+        mode=mode,
+        lang_types=(ripgrep_type_for_language(lang),),
+        include_globs=include_globs or [],
+        exclude_globs=exclude_globs or [],
+        limits=limits,
+    )
+    if not counts:
+        return limits
+    estimated_total = sum(max(0, value) for value in counts.values())
+    if estimated_total > limits.max_total_matches * 10:
+        return msgspec.structs.replace(
+            limits,
+            max_matches_per_file=min(limits.max_matches_per_file, 100),
+        )
+    return limits
+
+
 def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchStats:
-    scanned_files = len(collector.seen_files)
+    scanned_files = len(
+        collector.files_completed or collector.files_started or collector.seen_files
+    )
     matched_files = len(collector.seen_files)
     total_matches = len(collector.matches)
-    scanned_files_is_estimate = True
+    scanned_files_is_estimate = not bool(collector.files_completed or collector.files_started)
     summary_stats = collector.summary_stats
     if isinstance(summary_stats, dict):
         searches = summary_stats.get("searches")
@@ -552,6 +596,7 @@ def _build_search_stats(collector: RgCollector, *, timed_out: bool) -> SearchSta
         max_files_hit=collector.max_files_hit,
         max_matches_hit=collector.max_matches_hit,
         scanned_files_is_estimate=scanned_files_is_estimate,
+        rg_stats=summary_stats if isinstance(summary_stats, dict) else None,
     )
 
 
@@ -589,7 +634,8 @@ def collect_candidates(request: CandidateCollectionRequest) -> tuple[list[RawMat
             include_globs=request.include_globs or [],
             exclude_globs=request.exclude_globs or [],
             limits=request.limits,
-        )
+        ),
+        pcre2_available=request.pcre2_available,
     )
     collector = RgCollector(limits=request.limits, match_factory=RawMatch)
     for event in proc.events:
@@ -910,6 +956,11 @@ def _raw_match_abs_byte_range(raw: RawMatch, source_bytes: bytes) -> tuple[int, 
     tuple[int, int] | None
         Absolute start/end byte offsets when a range can be resolved.
     """
+    if isinstance(raw.match_abs_byte_start, int) and isinstance(raw.match_abs_byte_end, int):
+        start = max(0, min(raw.match_abs_byte_start, len(source_bytes)))
+        end = max(start + 1, min(raw.match_abs_byte_end, len(source_bytes)))
+        return start, end
+
     abs_range = line_relative_byte_range_to_absolute(
         source_bytes,
         line=raw.line,
@@ -1498,7 +1549,10 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         "file_globs": inputs.file_globs or file_globs_for_scope(config.lang_scope),
         "include": config.include_globs or [],
         "exclude": config.exclude_globs or [],
-        "context_lines": {"before": 1, "after": 1},
+        "context_lines": {
+            "before": config.limits.context_before,
+            "after": config.limits.context_after,
+        },
         "limit": inputs.limit if inputs.limit is not None else config.limits.max_total_matches,
         "scanned_files": inputs.stats.scanned_files,
         "scanned_files_is_estimate": inputs.stats.scanned_files_is_estimate,
@@ -1538,6 +1592,11 @@ def _build_summary(inputs: SearchSummaryInputs) -> dict[str, object]:
         "semantic_planes": dict[str, object](),
         "python_semantic_diagnostics": list[dict[str, object]](),
     }
+    if config.tc is not None:
+        common["rg_pcre2_available"] = bool(getattr(config.tc, "rg_pcre2_available", False))
+        common["rg_pcre2_version"] = getattr(config.tc, "rg_pcre2_version", None)
+    if isinstance(inputs.stats.rg_stats, dict):
+        common["rg_stats"] = inputs.stats.rg_stats.copy()
     return build_multilang_summary(
         SummaryBuildRequest(
             common=common,
@@ -1741,19 +1800,29 @@ def _run_candidate_phase(
     lang: QueryLanguage,
     mode: QueryMode,
 ) -> tuple[list[RawMatch], SearchStats, str]:
-    pattern = rf"\b{re.escape(ctx.query)}\b" if mode == QueryMode.IDENTIFIER else ctx.query
+    pattern = _identifier_pattern(ctx.query) if mode == QueryMode.IDENTIFIER else ctx.query
     include_globs = constrain_include_globs_for_language(ctx.include_globs, lang)
     exclude_globs = list(ctx.exclude_globs or [])
     exclude_globs.extend(language_extension_exclude_globs(lang))
+    effective_limits = _adaptive_limits_from_count(
+        root=ctx.root,
+        pattern=pattern,
+        mode=mode,
+        lang=lang,
+        include_globs=include_globs,
+        exclude_globs=exclude_globs,
+        limits=ctx.limits,
+    )
     raw_matches, stats = collect_candidates(
         CandidateCollectionRequest(
             root=ctx.root,
             pattern=pattern,
             mode=mode,
-            limits=ctx.limits,
+            limits=effective_limits,
             lang=lang,
             include_globs=include_globs,
             exclude_globs=exclude_globs,
+            pcre2_available=bool(getattr(ctx.tc, "rg_pcre2_available", False)),
         )
     )
     return raw_matches, stats, pattern

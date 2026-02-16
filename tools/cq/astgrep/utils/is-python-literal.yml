@@ -1,0 +1,10 @@
+id: is-python-literal
+language: python
+rule:
+  any:
+    - kind: string
+    - kind: integer
+    - kind: float
+    - kind: "true"
+    - kind: "false"
+    - kind: none

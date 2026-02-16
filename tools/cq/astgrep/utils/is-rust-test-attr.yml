@@ -1,0 +1,5 @@
+id: is-rust-test-attr
+language: rust
+rule:
+  kind: attribute_item
+  regex: "^#\\[(test|tokio::test)\\]"

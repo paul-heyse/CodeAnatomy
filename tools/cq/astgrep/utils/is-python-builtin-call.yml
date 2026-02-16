@@ -1,0 +1,5 @@
+id: is-python-builtin-call
+language: python
+rule:
+  kind: identifier
+  regex: "^(print|len|range|map|filter|sum|min|max|sorted|str|int|float|dict|list|set|tuple)$"

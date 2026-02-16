@@ -1,0 +1,8 @@
+id: rs_def_module
+language: rust
+severity: hint
+rule:
+  kind: mod_item
+metadata:
+  record: def
+  kind: module

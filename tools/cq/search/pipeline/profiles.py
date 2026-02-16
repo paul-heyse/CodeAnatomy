@@ -35,6 +35,10 @@ class SearchLimits(CqSettingsStruct, frozen=True):
     timeout_seconds: PositiveFloat = 30.0
     max_depth: PositiveInt = 25
     max_file_size_bytes: PositiveInt = 2 * 1024 * 1024
+    context_before: int = 0
+    context_after: int = 0
+    multiline: bool = False
+    sort_by_path: bool = False
 
 
 # Default limits for general-purpose searches
@@ -55,6 +59,16 @@ AUDIT = SearchLimits(
     timeout_seconds=300.0,
     max_depth=50,
     max_file_size_bytes=10 * 1024 * 1024,
+)
+
+# CI limits for deterministic output ordering
+CI = SearchLimits(
+    max_files=50000,
+    max_total_matches=100000,
+    timeout_seconds=300.0,
+    max_depth=50,
+    max_file_size_bytes=10 * 1024 * 1024,
+    sort_by_path=True,
 )
 
 # Literal limits for simple string searches

@@ -140,6 +140,20 @@ class TestPatternQueryPlanning:
         plan = compile_query(query)
         assert plan.sg_rules[0].context == "class $C"
 
+    def test_compile_pattern_query_threads_composite_and_nth_child(self) -> None:
+        """Pattern-plan compilation should preserve composite + nthChild."""
+        query = parse_query(
+            "pattern='print($A)' any='print($A),print($B)' "
+            "nthChild=2 nthChild.reverse=true nthChild.ofRule='kind=argument'"
+        )
+        plan = compile_query(query)
+        assert plan.sg_rules[0].composite is not None
+        assert plan.sg_rules[0].composite.operator == "any"
+        assert plan.sg_rules[0].nth_child is not None
+        assert plan.sg_rules[0].nth_child.position == 2
+        assert plan.sg_rules[0].nth_child.reverse is True
+        assert plan.sg_rules[0].nth_child.of_rule == "kind=argument"
+
 
 class TestAstGrepRule:
     """Tests for AstGrepRule dataclass."""

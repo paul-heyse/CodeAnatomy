@@ -25,14 +25,23 @@ def test_resolve_target_files_scans_symbol_candidates(
 ) -> None:
     candidate = tmp_path / "candidate.py"
     candidate.write_text("def interesting_symbol():\n    pass\n", encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    def _fake_find(**kwargs: object) -> list[Path]:
+        observed["kwargs"] = kwargs
+        return [candidate]
+
     monkeypatch.setattr(
         shared,
-        "iter_files",
-        lambda **_kwargs: [candidate],
+        "find_symbol_definition_files",
+        _fake_find,
     )
     rows = shared.resolve_target_files(
         root=tmp_path,
         target="interesting_symbol",
         max_files=5,
     )
-    assert rows == [candidate]
+    assert rows == [candidate.resolve()]
+    kwargs = observed["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["symbol_name"] == "interesting_symbol"

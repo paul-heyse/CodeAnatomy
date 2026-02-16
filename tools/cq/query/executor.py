@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -96,10 +96,17 @@ from tools.cq.query.language import (
     file_extensions_for_language,
     file_extensions_for_scope,
 )
+from tools.cq.query.metavar import (
+    apply_metavar_filters,
+    extract_rule_metavars,
+    extract_rule_variadic_metavars,
+    partition_metavar_filters,
+)
 from tools.cq.query.planner import AstGrepRule, ToolPlan, scope_to_globs, scope_to_paths
 from tools.cq.query.sg_parser import filter_records_by_kind, list_scan_files, sg_scan
 from tools.cq.search.pipeline.profiles import SearchLimits
 from tools.cq.search.rg.adapter import find_files_with_pattern
+from tools.cq.search.rg.prefilter import extract_literal_fragments, rg_prefilter_files
 from tools.cq.search.semantic.diagnostics import (
     build_language_capabilities,
 )
@@ -118,6 +125,7 @@ from tools.cq.query.merge import merge_auto_scope_query_results
 
 _ENTITY_RELATIONSHIP_DETAIL_MAX_MATCHES = 50
 _ENTITY_FRAGMENT_PAYLOAD_LEN = 3
+_MIN_PREFILTER_LITERAL_LEN = 3
 
 
 @dataclass
@@ -257,33 +265,6 @@ class AstGrepMatchSpan:
     def end_line(self) -> int:
         """Return the ending line for this match span."""
         return self.span.end_line if self.span.end_line is not None else self.span.start_line
-
-
-_COMMON_METAVAR_NAMES: tuple[str, ...] = (
-    "FUNC",
-    "F",
-    "CLASS",
-    "METHOD",
-    "M",
-    "X",
-    "Y",
-    "Z",
-    "A",
-    "B",
-    "OBJ",
-    "ATTR",
-    "VAL",
-    "E",
-    "NAME",
-    "MODULE",
-    "ARGS",
-    "KWARGS",
-    "COND",
-    "VAR",
-    "P",
-    "L",
-    "DECORATOR",
-)
 
 
 def _build_runmeta(ctx: QueryExecutionContext) -> RunMeta:
@@ -1471,8 +1452,58 @@ def _assemble_pattern_output(
     return findings, records, raw_matches
 
 
+def _collect_rule_prefilter_literals(rules: tuple[AstGrepRule, ...]) -> tuple[str, ...]:
+    fragments: list[str] = []
+    for rule in rules:
+        for text in (
+            rule.pattern,
+            rule.context,
+            rule.inside,
+            rule.has,
+            rule.precedes,
+            rule.follows,
+        ):
+            if isinstance(text, str) and text:
+                fragments.extend(extract_literal_fragments(text)[:2])
+        if rule.composite is not None:
+            for pattern in rule.composite.patterns:
+                fragments.extend(extract_literal_fragments(pattern)[:2])
+    unique = sorted(
+        {fragment for fragment in fragments if len(fragment) >= _MIN_PREFILTER_LITERAL_LEN},
+        key=len,
+        reverse=True,
+    )
+    return tuple(unique[:8])
+
+
+def _maybe_prefilter_pattern_paths(
+    *,
+    root: Path,
+    files: list[Path],
+    rules: tuple[AstGrepRule, ...],
+    lang: QueryLanguage,
+) -> list[Path]:
+    if len(files) <= 1 or not rules:
+        return files
+    literals = _collect_rule_prefilter_literals(rules)
+    if not literals:
+        return files
+    return rg_prefilter_files(
+        root,
+        files=files,
+        literals=literals,
+        lang_scope="rust" if lang == "rust" else "python",
+    )
+
+
 def _run_ast_grep(ctx: AstGrepExecutionContext, state: AstGrepExecutionState) -> None:
-    for file_path in ctx.paths:
+    candidate_paths = _maybe_prefilter_pattern_paths(
+        root=ctx.root,
+        files=ctx.paths,
+        rules=ctx.rules,
+        lang=ctx.lang,
+    )
+    for file_path in candidate_paths:
         _process_ast_grep_file(ctx, state, file_path)
 
 
@@ -1505,24 +1536,95 @@ def _process_ast_grep_rule(
     state: AstGrepExecutionState,
     rule_ctx: AstGrepRuleContext,
 ) -> None:
-    for match in _iter_rule_matches(rule_ctx.node, rule_ctx.rule):
+    metavar_names = _resolve_rule_metavar_names(rule_ctx.rule, ctx.query)
+    variadic_names = _resolve_rule_variadic_metavars(rule_ctx.rule)
+    constraints, residual_filters = _partition_query_metavar_filters(
+        ctx.query,
+        allowed_names=frozenset(metavar_names),
+    )
+
+    for match in _execute_rule_matches(
+        rule_ctx.node,
+        rule_ctx.rule,
+        constraints=constraints or None,
+    ):
         match_data = _build_match_data(
             match,
             rule_id=rule_ctx.rule_id,
             rel_path=rule_ctx.rel_path,
+            metavar_names=metavar_names,
+            variadic_names=variadic_names,
         )
         state.raw_matches.append(match_data)
-        if not _match_passes_filters(ctx, match):
+        if not _match_passes_filters(
+            match,
+            filters=residual_filters,
+            metavar_names=metavar_names,
+            variadic_names=variadic_names,
+        ):
             continue
         finding, record = _match_to_finding(match_data)
         if finding:
-            _apply_metavar_details(ctx, match, finding)
+            _apply_metavar_details(
+                match,
+                finding,
+                metavar_names=metavar_names,
+                variadic_names=variadic_names,
+            )
             state.findings.append(finding)
         if record:
             state.records.append(record)
 
 
-def _iter_rule_matches(node: SgNode, rule: AstGrepRule) -> list[SgNode]:
+def _resolve_rule_metavar_names(rule: AstGrepRule, query: Query | None) -> tuple[str, ...]:
+    names = set(extract_rule_metavars(rule))
+    if query is not None:
+        names.update(filter_spec.name for filter_spec in query.metavar_filters)
+    return tuple(sorted(names))
+
+
+def _resolve_rule_variadic_metavars(rule: AstGrepRule) -> frozenset[str]:
+    return extract_rule_variadic_metavars(rule)
+
+
+def _partition_query_metavar_filters(
+    query: Query | None,
+    *,
+    allowed_names: frozenset[str] | None = None,
+) -> tuple[dict[str, dict[str, str]], tuple[MetaVarFilter, ...]]:
+    if query is None or not query.metavar_filters:
+        return {}, ()
+    if allowed_names is None:
+        return partition_metavar_filters(query.metavar_filters)
+    relevant = tuple(
+        filter_spec for filter_spec in query.metavar_filters if filter_spec.name in allowed_names
+    )
+    constraints, residual = partition_metavar_filters(relevant)
+    residual_all = [
+        *residual,
+        *[
+            filter_spec
+            for filter_spec in query.metavar_filters
+            if filter_spec.name not in allowed_names
+        ],
+    ]
+    return constraints, tuple(residual_all)
+
+
+def _execute_rule_matches(
+    node: SgNode,
+    rule: AstGrepRule,
+    *,
+    constraints: dict[str, dict[str, str]] | None = None,
+) -> list[SgNode]:
+    if rule.requires_inline_rule() or constraints:
+        rule_payload = _strip_unsupported_sgpy_rule_keys(rule.to_yaml_dict())
+        config: Config = {"rule": cast("Rule", rule_payload)}
+        if constraints:
+            constraint_payload = cast("dict[str, Mapping[object, object]]", constraints)
+            config["constraints"] = constraint_payload
+        return list(node.find_all(config=config))
+
     pattern = rule.pattern
     if not pattern or pattern in {"$FUNC", "$METHOD", "$CLASS"}:
         if rule.kind:
@@ -1531,7 +1633,34 @@ def _iter_rule_matches(node: SgNode, rule: AstGrepRule) -> list[SgNode]:
     return list(node.find_all(pattern=pattern))
 
 
-def _build_match_data(match: SgNode, *, rule_id: str, rel_path: str) -> dict[str, object]:
+def _strip_unsupported_sgpy_rule_keys(value: object) -> object:
+    """Remove rule keys not supported by ast-grep-py bindings.
+
+    Returns:
+    -------
+    object
+        Sanitized rule payload compatible with ast-grep-py runtime config.
+    """
+    if isinstance(value, dict):
+        filtered: dict[str, object] = {}
+        for key, child in value.items():
+            if key == "strictness":
+                continue
+            filtered[key] = _strip_unsupported_sgpy_rule_keys(child)
+        return filtered
+    if isinstance(value, list):
+        return [_strip_unsupported_sgpy_rule_keys(child) for child in value]
+    return value
+
+
+def _build_match_data(
+    match: SgNode,
+    *,
+    rule_id: str,
+    rel_path: str,
+    metavar_names: tuple[str, ...],
+    variadic_names: frozenset[str],
+) -> dict[str, object]:
     range_obj = match.range()
     return {
         "ruleId": rule_id,
@@ -1541,30 +1670,70 @@ def _build_match_data(match: SgNode, *, rule_id: str, rel_path: str) -> dict[str
             "start": {"line": range_obj.start.line, "column": range_obj.start.column},
             "end": {"line": range_obj.end.line, "column": range_obj.end.column},
         },
-        "metaVariables": _extract_match_metavars(match),
+        "metaVariables": _extract_match_metavars(
+            match,
+            metavar_names=metavar_names,
+            variadic_names=variadic_names,
+            include_multi=True,
+        ),
     }
 
 
-def _match_passes_filters(ctx: AstGrepExecutionContext, match: SgNode) -> bool:
-    from tools.cq.query.metavar import apply_metavar_filters
-
-    if ctx.query and ctx.query.metavar_filters:
-        captures = _parse_sgpy_metavariables(match)
-        return apply_metavar_filters(captures, ctx.query.metavar_filters)
+def _match_passes_filters(
+    match: SgNode,
+    *,
+    filters: tuple[MetaVarFilter, ...],
+    metavar_names: tuple[str, ...],
+    variadic_names: frozenset[str],
+) -> bool:
+    if filters:
+        captures = _parse_sgpy_metavariables(
+            match,
+            metavar_names=metavar_names,
+            variadic_names=variadic_names,
+        )
+        return apply_metavar_filters(captures, filters)
     return True
 
 
 def _apply_metavar_details(
-    ctx: AstGrepExecutionContext,
     match: SgNode,
     finding: Finding,
+    *,
+    metavar_names: tuple[str, ...],
+    variadic_names: frozenset[str],
 ) -> None:
-    if ctx.query and ctx.query.metavar_filters:
-        captures = _extract_match_metavars(match)
+    captures = _extract_match_metavars(
+        match,
+        metavar_names=metavar_names,
+        variadic_names=variadic_names,
+        include_multi=True,
+    )
+    if captures:
         finding.details["metavar_captures"] = captures
 
 
-def _extract_match_metavars(match: SgNode) -> dict[str, str]:
+def _node_payload(node: SgNode) -> dict[str, object]:
+    range_obj = node.range()
+    return {
+        "text": node.text(),
+        "start": {"line": range_obj.start.line, "column": range_obj.start.column},
+        "end": {"line": range_obj.end.line, "column": range_obj.end.column},
+    }
+
+
+def _is_variadic_separator(node: SgNode) -> bool:
+    text = node.text().strip()
+    return node.kind() in {",", ";"} or text in {",", ";"}
+
+
+def _extract_match_metavars(
+    match: SgNode,
+    *,
+    metavar_names: tuple[str, ...],
+    variadic_names: frozenset[str],
+    include_multi: bool = False,
+) -> dict[str, object]:
     """Extract metavariable captures from an ast-grep-py match.
 
     Parameters
@@ -1574,22 +1743,40 @@ def _extract_match_metavars(match: SgNode) -> dict[str, str]:
 
     Returns:
     -------
-    dict[str, str]
-        Dictionary of metavariable name to captured text.
+    dict[str, object]
+        Dictionary of metavariable names to capture payloads.
     """
-    metavars: dict[str, str] = {}
-    for bare_name in _COMMON_METAVAR_NAMES:
+    metavars: dict[str, object] = {}
+    for bare_name in metavar_names:
         captured = match.get_match(bare_name)
         if captured is None:
-            continue
-        text = captured.text()
-        # Keep both bare and `$`-prefixed keys for output compatibility.
-        metavars[bare_name] = text
-        metavars[f"${bare_name}"] = text
+            pass
+        else:
+            text = captured.text()
+            # Keep both bare and `$`-prefixed keys for output compatibility.
+            metavars[bare_name] = text
+            metavars[f"${bare_name}"] = text
+
+        if include_multi and bare_name in variadic_names:
+            captured_multi = match.get_multiple_matches(bare_name)
+            all_nodes: list[SgNode] = list(captured_multi) if captured_multi is not None else []
+            captured_nodes = [node for node in all_nodes if not _is_variadic_separator(node)]
+            if captured_nodes:
+                text = ", ".join(node.text() for node in captured_nodes)
+                metavars[f"$$${bare_name}"] = {
+                    "kind": "multi",
+                    "text": text,
+                    "nodes": [_node_payload(node) for node in captured_nodes],
+                }
     return metavars
 
 
-def _parse_sgpy_metavariables(match: SgNode) -> dict[str, MetaVarCapture]:
+def _parse_sgpy_metavariables(
+    match: SgNode,
+    *,
+    metavar_names: tuple[str, ...],
+    variadic_names: frozenset[str],
+) -> dict[str, MetaVarCapture]:
     """Parse metavariables from ast-grep-py match for filter application.
 
     Parameters
@@ -1605,11 +1792,25 @@ def _parse_sgpy_metavariables(match: SgNode) -> dict[str, MetaVarCapture]:
     from tools.cq.query.ir import MetaVarCapture
 
     result: dict[str, MetaVarCapture] = {}
-    for bare_name in _COMMON_METAVAR_NAMES:
+    for bare_name in metavar_names:
         captured = match.get_match(bare_name)
-        if captured is None:
+        if captured is not None:
+            result[bare_name] = MetaVarCapture(name=bare_name, kind="single", text=captured.text())
             continue
-        result[bare_name] = MetaVarCapture(name=bare_name, kind="single", text=captured.text())
+        if bare_name not in variadic_names:
+            continue
+        captured_multi = match.get_multiple_matches(bare_name)
+        all_nodes: list[SgNode] = list(captured_multi) if captured_multi is not None else []
+        captured_nodes = [node for node in all_nodes if not _is_variadic_separator(node)]
+        if not captured_nodes:
+            continue
+        texts = [node.text() for node in captured_nodes]
+        result[bare_name] = MetaVarCapture(
+            name=bare_name,
+            kind="multi",
+            text=", ".join(texts),
+            nodes=texts,
+        )
     return result
 
 
@@ -1701,12 +1902,11 @@ def _collect_match_spans(
         rules,
         root,
         query.primary_language,
+        query=query,
     )
     if not matches:
         return {}
-    if not query.metavar_filters:
-        return _group_match_spans(matches)
-    return _filter_match_spans_by_metavars(matches, query.metavar_filters)
+    return _group_match_spans(matches)
 
 
 def _collect_ast_grep_match_spans(
@@ -1714,9 +1914,17 @@ def _collect_ast_grep_match_spans(
     rules: tuple[AstGrepRule, ...],
     root: Path,
     lang: QueryLanguage,
+    *,
+    query: Query,
 ) -> list[AstGrepMatchSpan]:
     matches: list[AstGrepMatchSpan] = []
-    for file_path in files:
+    candidate_files = _maybe_prefilter_pattern_paths(
+        root=root,
+        files=files,
+        rules=rules,
+        lang=lang,
+    )
+    for file_path in candidate_files:
         try:
             src = file_path.read_text(encoding="utf-8")
         except OSError:
@@ -1725,7 +1933,20 @@ def _collect_ast_grep_match_spans(
         node = sg_root.root()
         rel_path = normalize_repo_relative_path(str(file_path), root=root)
         for rule in rules:
-            for match in _iter_rule_matches_for_spans(node, rule):
+            metavar_names = _resolve_rule_metavar_names(rule, query)
+            variadic_names = _resolve_rule_variadic_metavars(rule)
+            constraints, residual_filters = _partition_query_metavar_filters(
+                query,
+                allowed_names=frozenset(metavar_names),
+            )
+            for match in _execute_rule_matches(node, rule, constraints=constraints or None):
+                if not _match_passes_filters(
+                    match,
+                    filters=residual_filters,
+                    metavar_names=metavar_names,
+                    variadic_names=variadic_names,
+                ):
+                    continue
                 range_obj = match.range()
                 matches.append(
                     AstGrepMatchSpan(
@@ -1742,13 +1963,6 @@ def _collect_ast_grep_match_spans(
     return matches
 
 
-def _iter_rule_matches_for_spans(node: SgNode, rule: AstGrepRule) -> list[SgNode]:
-    if rule.requires_inline_rule():
-        rule_config: Config = {"rule": cast("Rule", rule.to_yaml_dict())}
-        return list(node.find_all(rule_config))
-    return _iter_rule_matches(node, rule)
-
-
 def _group_match_spans(
     matches: list[AstGrepMatchSpan],
 ) -> dict[str, list[tuple[int, int]]]:
@@ -1756,21 +1970,6 @@ def _group_match_spans(
     for match in matches:
         spans.setdefault(match.file, []).append((match.start_line, match.end_line))
     return spans
-
-
-def _filter_match_spans_by_metavars(
-    matches: list[AstGrepMatchSpan],
-    metavar_filters: tuple[MetaVarFilter, ...],
-) -> dict[str, list[tuple[int, int]]]:
-    from tools.cq.query.metavar import apply_metavar_filters
-
-    filtered: dict[str, list[tuple[int, int]]] = {}
-    for match in matches:
-        captures = _parse_sgpy_metavariables(match.match)
-        if not apply_metavar_filters(captures, metavar_filters):
-            continue
-        filtered.setdefault(match.file, []).append((match.start_line, match.end_line))
-    return filtered
 
 
 def _filter_records_by_spans(

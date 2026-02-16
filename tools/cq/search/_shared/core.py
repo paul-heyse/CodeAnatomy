@@ -191,7 +191,7 @@ class PythonByteRangeRuntimeV1:
 
 # Shared requests
 class RgRunRequest(CqStruct, frozen=True):
-    """Input contract for native ripgrep JSON execution."""
+    """Input contract for native ripgrep execution."""
 
     root: Path
     pattern: str
@@ -200,6 +200,9 @@ class RgRunRequest(CqStruct, frozen=True):
     limits: SearchLimits
     include_globs: list[str] = msgspec.field(default_factory=list)
     exclude_globs: list[str] = msgspec.field(default_factory=list)
+    operation: str = "json"
+    paths: tuple[str, ...] = (".",)
+    extra_patterns: tuple[str, ...] = ()
 
     def to_settings(self) -> object:
         """Return serializable rg execution settings contract."""
@@ -211,6 +214,9 @@ class RgRunRequest(CqStruct, frozen=True):
             lang_types=self.lang_types,
             include_globs=tuple(self.include_globs),
             exclude_globs=tuple(self.exclude_globs),
+            operation=self.operation,
+            paths=self.paths,
+            extra_patterns=self.extra_patterns,
         )
 
 
@@ -224,6 +230,7 @@ class CandidateCollectionRequest(CqStruct, frozen=True):
     lang: QueryLanguage
     include_globs: list[str] | None = None
     exclude_globs: list[str] | None = None
+    pcre2_available: bool = False
 
 
 class PythonNodeEnrichmentRequest(CqStruct, frozen=True):

@@ -1,0 +1,12 @@
+id: rs_call_macro
+language: rust
+severity: hint
+rule:
+  all:
+    - kind: macro_invocation
+    - not:
+        has:
+          matches: is-rust-test-attr
+metadata:
+  record: call
+  kind: macro_invocation

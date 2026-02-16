@@ -1,0 +1,8 @@
+id: rs_def_struct
+language: rust
+severity: hint
+rule:
+  kind: struct_item
+metadata:
+  record: def
+  kind: struct

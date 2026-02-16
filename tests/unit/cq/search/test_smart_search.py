@@ -1325,8 +1325,8 @@ class TestCandidateSearcher:
             QueryMode.IDENTIFIER,
             SMART_SEARCH_LIMITS,
         )
-        assert r"\b" in pattern  # Word boundary
-        assert "build_graph" in pattern
+        assert r"\b" not in pattern  # Boundaries are handled by rg -w
+        assert pattern == "build_graph"
 
     def test_build_searcher_literal(self, sample_repo: Path) -> None:
         """Test building searcher for literal mode."""

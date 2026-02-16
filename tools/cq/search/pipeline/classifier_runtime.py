@@ -94,7 +94,7 @@ def get_record_context(
         return _record_context_cache[key]
 
     rules = get_rules_for_types(None, lang=lang)
-    records = scan_files([file_path], rules, root, lang=lang)
+    records = scan_files([file_path], rules, root, lang=lang, prefilter=False)
     record_index = IntervalIndex.from_records(records)
     def_records = [record for record in records if record.record == "def"]
     def_index: IntervalIndex[SgRecord] = (
@@ -267,22 +267,41 @@ def _is_docstring_context(node: SgNode) -> bool:
     bool
         True if node is a docstring.
     """
-    # A docstring is an expression_statement containing only a string
-    # as the first statement of a function/class/module
-    parent = node.parent()
-    if parent and parent.kind() == "expression_statement":
-        grandparent = parent.parent()
-        if grandparent and grandparent.kind() in {
-            "block",
-            "module",
-            "function_definition",
-            "class_definition",
-        }:
-            # Check if it's the first statement
-            siblings = list(grandparent.children())
-            if siblings and siblings[0] == parent:
-                return True
-    return False
+    expr_stmt = node.parent()
+    if expr_stmt is None or expr_stmt.kind() != "expression_statement":
+        return False
+
+    scope_body = expr_stmt.parent()
+    if scope_body is None:
+        return False
+
+    # Module docstrings live directly under module; function/class docstrings live
+    # under a block node whose first statement must be the docstring expression.
+    if scope_body.kind() == "module":
+        pass
+    elif scope_body.kind() == "block":
+        owner = scope_body.parent()
+        if owner is None or owner.kind() not in {"function_definition", "class_definition"}:
+            return False
+    else:
+        return False
+
+    def _node_key(value: SgNode) -> tuple[str, int, int, int, int]:
+        range_obj = value.range()
+        return (
+            value.kind(),
+            range_obj.start.line,
+            range_obj.start.column,
+            range_obj.end.line,
+            range_obj.end.column,
+        )
+
+    first_stmt = next((child for child in scope_body.children() if child.is_named()), None)
+    if first_stmt is None or _node_key(first_stmt) != _node_key(expr_stmt):
+        return False
+
+    first_expr_child = next((child for child in expr_stmt.children() if child.is_named()), None)
+    return first_expr_child is not None and _node_key(first_expr_child) == _node_key(node)
 
 
 def get_symtable_table(file_path: Path, source: str) -> symtable.SymbolTable | None:

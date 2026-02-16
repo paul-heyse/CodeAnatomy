@@ -15,12 +15,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from tools.cq.astgrep.rules_rust import (
-    RS_CALL_MACRO,
-    RS_DEF_MODULE,
-    RULES_BY_RECORD_TYPE,
-    RUST_FACT_RULES,
-)
+from tools.cq.astgrep.rulepack_loader import clear_rulepack_cache, load_default_rulepacks
+from tools.cq.astgrep.rules import get_rules_for_types
+from tools.cq.astgrep.sgpy_scanner import RuleSpec
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 SGCONFIG_PATH = REPO_ROOT / "tools" / "cq" / "astgrep" / "sgconfig.yml"
@@ -223,36 +220,49 @@ def test_astgrep_metadata_in_output() -> None:
 class TestRustRuleSpecs:
     """Verify Rust rule specs are correctly defined and registered."""
 
+    @staticmethod
+    def _rust_rules() -> tuple[RuleSpec, ...]:
+        clear_rulepack_cache()
+        packs = load_default_rulepacks()
+        return packs.get("rust", ())
+
     @pytest.mark.smoke
     def test_rs_def_module_exists(self) -> None:
-        """Verify RS_DEF_MODULE is present in RUST_FACT_RULES."""
-        assert RS_DEF_MODULE in RUST_FACT_RULES
+        """Verify rs_def_module is present in Rust YAML-loaded rules."""
+        rule_ids = {rule.rule_id for rule in self._rust_rules()}
+        assert "rs_def_module" in rule_ids
 
     @pytest.mark.smoke
     def test_rs_call_macro_exists(self) -> None:
-        """Verify RS_CALL_MACRO is present in RUST_FACT_RULES."""
-        assert RS_CALL_MACRO in RUST_FACT_RULES
+        """Verify rs_call_macro is present in Rust YAML-loaded rules."""
+        rule_ids = {rule.rule_id for rule in self._rust_rules()}
+        assert "rs_call_macro" in rule_ids
 
     @pytest.mark.smoke
     def test_rules_by_record_type_has_module(self) -> None:
-        """Verify RS_DEF_MODULE is registered in RULES_BY_RECORD_TYPE["def"]."""
-        assert RS_DEF_MODULE in RULES_BY_RECORD_TYPE["def"]
+        """Verify rs_def_module is available in def-record dispatch."""
+        def_rules = get_rules_for_types({"def"}, lang="rust")
+        assert any(rule.rule_id == "rs_def_module" for rule in def_rules)
 
     @pytest.mark.smoke
     def test_rules_by_record_type_has_macro_call(self) -> None:
-        """Verify RS_CALL_MACRO is registered in RULES_BY_RECORD_TYPE["call"]."""
-        assert RS_CALL_MACRO in RULES_BY_RECORD_TYPE["call"]
+        """Verify rs_call_macro is available in call-record dispatch."""
+        call_rules = get_rules_for_types({"call"}, lang="rust")
+        assert any(rule.rule_id == "rs_call_macro" for rule in call_rules)
 
     def test_rs_def_module_structure(self) -> None:
-        """Verify RS_DEF_MODULE has correct rule_id, record_type, and kind."""
-        assert RS_DEF_MODULE.rule_id == "rs_def_module"
-        assert RS_DEF_MODULE.record_type == "def"
-        assert RS_DEF_MODULE.kind == "module"
-        assert RS_DEF_MODULE.config == {"rule": {"kind": "mod_item"}}
+        """Verify rs_def_module has expected structure."""
+        by_id = {rule.rule_id: rule for rule in self._rust_rules()}
+        module_rule = by_id["rs_def_module"]
+        assert module_rule.record_type == "def"
+        assert module_rule.kind == "module"
+        assert module_rule.to_config() == {"kind": "mod_item"}
 
     def test_rs_call_macro_structure(self) -> None:
-        """Verify RS_CALL_MACRO has correct rule_id, record_type, and kind."""
-        assert RS_CALL_MACRO.rule_id == "rs_call_macro"
-        assert RS_CALL_MACRO.record_type == "call"
-        assert RS_CALL_MACRO.kind == "macro_invocation"
-        assert RS_CALL_MACRO.config == {"rule": {"kind": "macro_invocation"}}
+        """Verify rs_call_macro has expected structure."""
+        by_id = {rule.rule_id: rule for rule in self._rust_rules()}
+        macro_rule = by_id["rs_call_macro"]
+        assert macro_rule.record_type == "call"
+        assert macro_rule.kind == "macro_invocation"
+        config = macro_rule.to_config()
+        assert "all" in config

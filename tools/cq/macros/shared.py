@@ -16,6 +16,8 @@ from tools.cq.core.scoring import (
 from tools.cq.index.files import build_repo_file_index, tabulate_files
 from tools.cq.index.repo import resolve_repo_context
 from tools.cq.macros.contracts import MacroScorePayloadV1
+from tools.cq.search.pipeline.profiles import INTERACTIVE
+from tools.cq.search.rg.adapter import find_symbol_definition_files
 
 # ── Scope Filtering ──
 
@@ -106,6 +108,7 @@ def resolve_target_files(
     list[Path]
         Files matching the explicit path or symbol-hint scan.
     """
+    _ = extensions
     target_path = Path(target)
     if target_path.exists() and target_path.is_file():
         return [target_path.resolve()]
@@ -113,21 +116,14 @@ def resolve_target_files(
     if rooted_target.exists() and rooted_target.is_file():
         return [rooted_target]
 
-    files: list[Path] = []
-    for candidate in iter_files(
+    files = find_symbol_definition_files(
         root=root,
-        include=include,
-        exclude=exclude,
-        extensions=extensions,
-        max_files=max_files,
-    ):
-        try:
-            source = candidate.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        if f"def {target}" in source or f"class {target}" in source:
-            files.append(candidate)
-    return files
+        symbol_name=target,
+        include_globs=include,
+        exclude_globs=exclude,
+        limits=INTERACTIVE,
+    )
+    return files[: max(0, int(max_files))]
 
 
 # ── Scoring Utilities ──

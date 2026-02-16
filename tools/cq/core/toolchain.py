@@ -45,6 +45,26 @@ def _detect_rg() -> tuple[bool, str | None]:
     return True, line or None
 
 
+def _detect_pcre2() -> tuple[bool, str | None]:
+    """Detect ripgrep PCRE2 capability.
+
+    Returns:
+    -------
+    tuple[bool, str | None]
+        Availability flag and PCRE2 version banner.
+    """
+    proc = subprocess.run(
+        ["rg", "--pcre2-version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return False, None
+    line = proc.stdout.splitlines()[0].strip() if proc.stdout else ""
+    return True, line or None
+
+
 class Toolchain(CqStruct, frozen=True):
     """Available tools and versions."""
 
@@ -58,6 +78,8 @@ class Toolchain(CqStruct, frozen=True):
     diskcache_version: str | None
     py_path: str
     py_version: str
+    rg_pcre2_available: bool = False
+    rg_pcre2_version: str | None = None
 
     @staticmethod
     def detect() -> Toolchain:
@@ -71,6 +93,7 @@ class Toolchain(CqStruct, frozen=True):
         import sys
 
         rg_available, rg_version = _detect_rg()
+        rg_pcre2_available, rg_pcre2_version = _detect_pcre2() if rg_available else (False, None)
         sgpy_version = _package_version("ast-grep-py")
         sgpy_available = sgpy_version is not None
         msgspec_version = _package_version("msgspec")
@@ -82,6 +105,8 @@ class Toolchain(CqStruct, frozen=True):
         return Toolchain(
             rg_available=rg_available,
             rg_version=rg_version,
+            rg_pcre2_available=rg_pcre2_available,
+            rg_pcre2_version=rg_pcre2_version,
             sgpy_available=sgpy_available,
             sgpy_version=sgpy_version,
             msgspec_available=msgspec_available,
@@ -102,6 +127,7 @@ class Toolchain(CqStruct, frozen=True):
         """
         return {
             "rg": self.rg_version,
+            "rg_pcre2": self.rg_pcre2_version if self.rg_pcre2_available else None,
             "sgpy": self.sgpy_version,
             "msgspec": self.msgspec_version,
             "diskcache": self.diskcache_version,

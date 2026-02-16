@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
+from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.core.snb_schema import DegradeEventV1
 from tools.cq.core.structs import CqStruct
 from tools.cq.core.target_specs import TargetSpecV1
-
-_RG_ROW_MIN_PARTS = 2
-_RG_ROW_WITH_TEXT_PARTS = 3
+from tools.cq.search.pipeline.profiles import INTERACTIVE
+from tools.cq.search.rg.adapter import find_symbol_candidates
 
 
 class ResolvedTarget(CqStruct, frozen=True):
@@ -44,7 +43,7 @@ def resolve_target(
     degrades: list[DegradeEventV1] = []
 
     if spec.target_file:
-        normalized_file = _normalize_file_path(spec.target_file)
+        normalized_file = normalize_repo_relative_path(spec.target_file, root=root)
         if (root / normalized_file).exists():
             name = spec.target_name or Path(normalized_file).stem
             return ResolvedTarget(
@@ -100,7 +99,9 @@ def resolve_target(
         )
     )
 
-    fallback_file = _normalize_file_path(spec.target_file or "")
+    fallback_file = (
+        normalize_repo_relative_path(spec.target_file, root=root) if spec.target_file else ""
+    )
     return ResolvedTarget(
         target_name=symbol_name,
         target_file=fallback_file,
@@ -121,48 +122,15 @@ def _resolve_symbol_with_rg(root: Path, symbol_name: str, language: str) -> tupl
     tuple[str, int] | None
         Relative file path and 1-based line number for the first hit.
     """
-    extensions = ("rs",) if language == "rust" else ("py", "pyi")
-    globs: list[str] = []
-    for ext in extensions:
-        globs.extend(["-g", f"**/*.{ext}"])
-
-    cmd = [
-        "rg",
-        "--line-number",
-        "--no-heading",
-        "--fixed-strings",
-        symbol_name,
-        *globs,
-        str(root),
-    ]
-    try:
-        proc = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return None
-    if proc.returncode not in {0, 1}:
-        return None
+    rows = find_symbol_candidates(
+        root=root,
+        symbol_name=symbol_name,
+        lang_scope="rust" if language == "rust" else "python",
+        limits=INTERACTIVE,
+    )
 
     best: tuple[int, str, int] | None = None
-    for row in proc.stdout.splitlines():
-        parts = row.split(":", 2)
-        if len(parts) < _RG_ROW_MIN_PARTS:
-            continue
-        file_part, line_part = parts[0], parts[1]
-        if not file_part or not line_part.isdigit():
-            continue
-        file_path = Path(file_part)
-        try:
-            rel = file_path.resolve().relative_to(root.resolve())
-        except ValueError:
-            rel = file_path
-        rel_path = _normalize_file_path(str(rel))
-        line_number = max(1, int(line_part))
-        line_text = parts[2] if len(parts) >= _RG_ROW_WITH_TEXT_PARTS else ""
+    for rel_path, line_number, line_text in rows:
         score = _symbol_match_score(
             symbol_name=symbol_name,
             language=language,
@@ -203,10 +171,6 @@ def _symbol_match_score(
     if file_path.startswith("tests/"):
         score -= 20
     return score
-
-
-def _normalize_file_path(path: str) -> str:
-    return path.replace("\\", "/").lstrip("./")
 
 
 def _to_uri(root: Path, relative_path: str) -> str | None:

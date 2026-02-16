@@ -127,7 +127,7 @@ def sg_scan(
     if not rules:
         return []
 
-    records = scan_files(files, rules, root, lang=lang)
+    records = scan_files(files, rules, root, lang=lang, prefilter=True)
     return filter_records_by_type(records, normalized_record_types)
 
 

@@ -9,9 +9,15 @@ from typing import TYPE_CHECKING
 from tools.cq.core.locations import SourceSpan, byte_col_to_char_col, span_from_rg_match
 from tools.cq.search.rg.codec import (
     RgAnyEvent,
+    RgBeginData,
+    RgContextData,
+    RgEndData,
     RgMatchData,
     RgSubmatch,
     RgSummaryData,
+    as_begin_data,
+    as_context_data,
+    as_end_data,
     as_match_data,
     as_summary_data,
     match_line_number,
@@ -37,24 +43,45 @@ class MatchPayload:
     match_end: int
     match_byte_start: int
     match_byte_end: int
+    match_abs_byte_start: int | None
+    match_abs_byte_end: int | None
     submatch_index: int
 
 
 @dataclass
 class RgCollector:
-    """Collector for ripgrep JSON output."""
+    """Collector for ripgrep output."""
 
     limits: SearchLimits
     match_factory: Callable[..., RawMatch]
     matches: list[RawMatch] = field(default_factory=list)
     seen_files: set[str] = field(default_factory=set)
+    files_started: set[str] = field(default_factory=set)
+    files_completed: set[str] = field(default_factory=set)
+    binary_files: set[str] = field(default_factory=set)
+    context_lines: dict[str, dict[int, str]] = field(default_factory=dict)
     summary_stats: dict[str, object] | None = None
     truncated: bool = False
     max_files_hit: bool = False
     max_matches_hit: bool = False
 
-    def handle_event(self, event: RgAnyEvent) -> None:
+    def handle_event(self, event: RgAnyEvent) -> None:  # noqa: C901
         """Dispatch a decoded ripgrep event."""
+        if event.type == "begin":
+            data = as_begin_data(event)
+            if data is not None:
+                self._handle_begin(data)
+            return
+        if event.type == "end":
+            data = as_end_data(event)
+            if data is not None:
+                self._handle_end(data)
+            return
+        if event.type == "context":
+            data = as_context_data(event)
+            if data is not None:
+                self._handle_context(data)
+            return
         if event.type == "summary":
             data = as_summary_data(event)
             if data is not None:
@@ -66,6 +93,26 @@ class RgCollector:
         if data is not None:
             self.handle_match(data)
 
+    def _handle_begin(self, data: RgBeginData) -> None:
+        file_path = match_path(data)
+        if file_path:
+            self.files_started.add(file_path)
+
+    def _handle_end(self, data: RgEndData) -> None:
+        file_path = match_path(data)
+        if file_path:
+            self.files_completed.add(file_path)
+            if isinstance(data.binary_offset, int):
+                self.binary_files.add(file_path)
+
+    def _handle_context(self, data: RgContextData) -> None:
+        file_path = match_path(data)
+        line_number = match_line_number(data)
+        if not file_path or line_number is None:
+            return
+        lines = self.context_lines.setdefault(file_path, {})
+        lines[line_number] = match_line_text(data)
+
     def handle_summary(self, data: RgSummaryData) -> None:
         """Record summary stats from a ripgrep JSON payload."""
         stats = summary_stats(data)
@@ -73,7 +120,7 @@ class RgCollector:
             self.summary_stats = stats
 
     def handle_match(self, data: RgMatchData) -> None:
-        """Process a ripgrep JSON match payload into RawMatch entries."""
+        """Process a ripgrep match payload into RawMatch entries."""
         if self.max_matches_hit or self.max_files_hit:
             return
         file_path = match_path(data)
@@ -86,12 +133,20 @@ class RgCollector:
 
         line_text = match_line_text(data)
         submatches = data.submatches
+        absolute_base = data.absolute_offset if isinstance(data.absolute_offset, int) else None
 
         if submatches:
             for i, submatch in enumerate(submatches):
                 if self._max_matches_reached():
                     break
-                self._append_submatch(line_text, file_path, line_number, submatch, i)
+                self._append_submatch(
+                    line_text,
+                    file_path,
+                    line_number,
+                    submatch,
+                    i,
+                    absolute_base=absolute_base,
+                )
             return
 
         if self._max_matches_reached():
@@ -110,6 +165,12 @@ class RgCollector:
                 match_end=len(line_text),
                 match_byte_start=0,
                 match_byte_end=len(line_text.encode("utf-8", errors="replace")),
+                match_abs_byte_start=absolute_base,
+                match_abs_byte_end=(
+                    absolute_base + len(line_text.encode("utf-8", errors="replace"))
+                    if isinstance(absolute_base, int)
+                    else None
+                ),
                 submatch_index=0,
             )
         )
@@ -140,6 +201,8 @@ class RgCollector:
         line_number: int,
         submatch: RgSubmatch,
         index: int,
+        *,
+        absolute_base: int | None,
     ) -> None:
         start = submatch.start
         end = submatch.end
@@ -164,6 +227,12 @@ class RgCollector:
                 match_end=char_end,
                 match_byte_start=start,
                 match_byte_end=end,
+                match_abs_byte_start=(absolute_base + start)
+                if isinstance(absolute_base, int)
+                else None,
+                match_abs_byte_end=(absolute_base + end)
+                if isinstance(absolute_base, int)
+                else None,
                 submatch_index=index,
             )
         )
@@ -178,6 +247,8 @@ class RgCollector:
                 match_end=payload.match_end,
                 match_byte_start=payload.match_byte_start,
                 match_byte_end=payload.match_byte_end,
+                match_abs_byte_start=payload.match_abs_byte_start,
+                match_abs_byte_end=payload.match_abs_byte_end,
                 submatch_index=payload.submatch_index,
             )
         )
@@ -186,10 +257,14 @@ class RgCollector:
         """Finalize summary stats when ripgrep doesn't emit a summary."""
         if self.summary_stats is not None:
             return
+        scanned = len(self.files_completed or self.files_started or self.seen_files)
         self.summary_stats = {
-            "searches": len(self.seen_files),
+            "searches": scanned,
             "searches_with_match": len(self.seen_files),
             "matches": len(self.matches),
+            "matched_lines": len(self.matches),
+            "bytes_searched": 0,
+            "bytes_printed": 0,
         }
 
 

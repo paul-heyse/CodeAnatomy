@@ -331,6 +331,8 @@ def _compile_pattern_query(query: Query) -> ToolPlan:
         context=query.pattern_spec.context,
         selector=query.pattern_spec.selector,
         strictness=query.pattern_spec.strictness,
+        composite=query.composite,
+        nth_child=query.nth_child,
     )
 
     # Apply relational constraints

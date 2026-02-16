@@ -109,6 +109,16 @@ class TestParseQuery:
         query = parse_query("entity=import in=src/")
         assert query.entity == "import"
 
+    def test_pattern_query_with_nth_child(self) -> None:
+        """Parse pattern query with nthChild options."""
+        query = parse_query(
+            "pattern='print($A)' nthChild=2 nthChild.reverse=true nthChild.ofRule='kind=argument'"
+        )
+        assert query.nth_child is not None
+        assert query.nth_child.position == 2
+        assert query.nth_child.reverse is True
+        assert query.nth_child.of_rule == "kind=argument"
+
 
 class TestParseQueryErrors:
     """Tests for parse_query error handling."""

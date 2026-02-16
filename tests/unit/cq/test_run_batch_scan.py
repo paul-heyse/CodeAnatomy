@@ -10,6 +10,7 @@ from tools.cq.cli_app.context import CliContext
 from tools.cq.core.schema import CqResult
 from tools.cq.query import batch as batch_queries
 from tools.cq.query.executor import ExecutePlanRequestV1, execute_plan
+from tools.cq.query.language import QueryLanguage
 from tools.cq.query.parser import parse_query
 from tools.cq.query.planner import compile_query
 from tools.cq.run.runner import execute_run_plan
@@ -24,10 +25,20 @@ def test_batch_q_steps_scan_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     calls = 0
     real_scan = batch_queries.scan_files
 
-    def wrapped(files: list[Path], rules: tuple[RuleSpec, ...], root: Path) -> list[SgRecord]:
+    observed_prefilter: list[bool] = []
+
+    def wrapped(
+        files: list[Path],
+        rules: tuple[RuleSpec, ...],
+        root: Path,
+        *,
+        lang: QueryLanguage = "python",
+        prefilter: bool = True,
+    ) -> list[SgRecord]:
         nonlocal calls
         calls += 1
-        return real_scan(files, rules, root)
+        observed_prefilter.append(prefilter)
+        return real_scan(files, rules, root, lang=lang, prefilter=prefilter)
 
     monkeypatch.setattr(batch_queries, "scan_files", wrapped)
 
@@ -41,6 +52,7 @@ def test_batch_q_steps_scan_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
     execute_run_plan(plan, ctx)
     assert calls == 1
+    assert observed_prefilter == [True]
 
 
 def test_batch_equivalence_single_query(tmp_path: Path) -> None:
@@ -84,10 +96,20 @@ def test_batch_q_steps_auto_scope_collapses_per_parent_step(
     calls = 0
     real_scan = batch_queries.scan_files
 
-    def wrapped(files: list[Path], rules: tuple[RuleSpec, ...], root: Path) -> list[SgRecord]:
+    observed_prefilter: list[bool] = []
+
+    def wrapped(
+        files: list[Path],
+        rules: tuple[RuleSpec, ...],
+        root: Path,
+        *,
+        lang: QueryLanguage = "python",
+        prefilter: bool = True,
+    ) -> list[SgRecord]:
         nonlocal calls
         calls += 1
-        return real_scan(files, rules, root)
+        observed_prefilter.append(prefilter)
+        return real_scan(files, rules, root, lang=lang, prefilter=prefilter)
 
     monkeypatch.setattr(batch_queries, "scan_files", wrapped)
 
@@ -102,6 +124,7 @@ def test_batch_q_steps_auto_scope_collapses_per_parent_step(
 
     # Python files only => one shared scan for python partition.
     assert calls == 1
+    assert observed_prefilter == [True]
     steps = result.summary.get("steps")
     assert isinstance(steps, list)
     assert steps.count("q_auto_0") == 1

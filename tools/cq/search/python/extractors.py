@@ -665,6 +665,9 @@ def _classify_function_role_by_parent(
         A role string such as ``"method"``, ``"static_or_classmethod"``,
         or ``"free_function"``.
     """
+    if not node.inside(kind="class_definition"):
+        return "free_function"
+
     parent = node.parent()
     while parent is not None:
         parent_kind = parent.kind()
@@ -822,6 +825,9 @@ def _find_enclosing_class(node: SgNode) -> SgNode | None:
     SgNode | None
         The enclosing class_definition node, or None.
     """
+    if not node.inside(kind="class_definition"):
+        return None
+
     current = node.parent()
     depth = 0
     while current is not None and depth < _MAX_PARENT_DEPTH:

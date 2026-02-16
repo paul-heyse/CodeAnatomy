@@ -11,6 +11,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tools.cq.query.ir import MetaVarCapture, MetaVarFilter, MetaVarKind
+    from tools.cq.query.planner import AstGrepRule
+
+_METAVAR_TOKEN_RE = re.compile(r"\${1,3}([A-Z][A-Z0-9_]*)")
+_VARIADIC_METAVAR_TOKEN_RE = re.compile(r"\${3}([A-Z][A-Z0-9_]*)")
 
 
 def parse_metavariables(match_result: dict[str, object]) -> dict[str, MetaVarCapture]:
@@ -159,3 +163,98 @@ def get_metavar_kind(metavar: str) -> MetaVarKind:
     if metavar.startswith("$$"):
         return "unnamed"
     return "single"
+
+
+def extract_metavar_names(text: str) -> tuple[str, ...]:
+    """Extract unique metavariable names from one pattern string.
+
+    Returns:
+    -------
+    tuple[str, ...]
+        Sorted unique metavariable names without ``$`` prefixes.
+    """
+    if not text:
+        return ()
+    return tuple(sorted({match.group(1) for match in _METAVAR_TOKEN_RE.finditer(text)}))
+
+
+def extract_variadic_metavar_names(text: str) -> tuple[str, ...]:
+    """Extract unique variadic metavariable names (``$$$NAME``) from one pattern string.
+
+    Returns:
+    -------
+    tuple[str, ...]
+        Sorted unique variadic metavariable names.
+    """
+    if not text:
+        return ()
+    return tuple(sorted({match.group(1) for match in _VARIADIC_METAVAR_TOKEN_RE.finditer(text)}))
+
+
+def extract_rule_metavars(rule: AstGrepRule) -> tuple[str, ...]:
+    """Extract all metavariable names referenced by a compiled ast-grep rule.
+
+    Returns:
+    -------
+    tuple[str, ...]
+        Sorted unique metavariable names referenced across rule sections.
+    """
+    parts: list[str] = [rule.pattern]
+    parts.extend(
+        value
+        for value in (rule.context, rule.inside, rule.has, rule.precedes, rule.follows)
+        if value
+    )
+    if rule.composite is not None:
+        parts.extend(rule.composite.patterns)
+    if rule.nth_child is not None and isinstance(rule.nth_child.of_rule, str):
+        parts.append(rule.nth_child.of_rule)
+    names = {name for part in parts for name in extract_metavar_names(part)}
+    return tuple(sorted(names))
+
+
+def extract_rule_variadic_metavars(rule: AstGrepRule) -> frozenset[str]:
+    """Extract all variadic metavariable names referenced by a compiled ast-grep rule.
+
+    Returns:
+    -------
+    frozenset[str]
+        Set of variadic metavariable names referenced across rule sections.
+    """
+    parts: list[str] = [rule.pattern]
+    parts.extend(
+        value
+        for value in (rule.context, rule.inside, rule.has, rule.precedes, rule.follows)
+        if value
+    )
+    if rule.composite is not None:
+        parts.extend(rule.composite.patterns)
+    if rule.nth_child is not None and isinstance(rule.nth_child.of_rule, str):
+        parts.append(rule.nth_child.of_rule)
+    names = {name for part in parts for name in extract_variadic_metavar_names(part)}
+    return frozenset(names)
+
+
+def partition_metavar_filters(
+    filters: tuple[MetaVarFilter, ...],
+) -> tuple[dict[str, dict[str, str]], tuple[MetaVarFilter, ...]]:
+    """Partition filters into ast-grep constraints and residual Python filters.
+
+    Returns:
+    -------
+    tuple[dict[str, dict[str, str]], tuple[MetaVarFilter, ...]]
+        Pushdown constraints and residual filters for Python-side evaluation.
+    """
+    constraints: dict[str, dict[str, str]] = {}
+    residual: list[MetaVarFilter] = []
+    for item in filters:
+        if item.negate:
+            residual.append(item)
+            continue
+        # ast-grep accepts one regex per metavariable in constraints.
+        # Keep duplicates in residual path to preserve full semantics.
+        if item.name in constraints:
+            residual.append(item)
+            continue
+        constraints[item.name] = {"regex": item.pattern}
+    return constraints, tuple(residual)

@@ -21,11 +21,17 @@ def test_settings_from_request() -> None:
         limits=SearchLimits(),
         include_globs=["**/*.py"],
         exclude_globs=["**/tests/**"],
+        operation="files_with_matches",
+        paths=("src", "tools"),
+        extra_patterns=("bar",),
     )
     settings = settings_from_request(request)
     assert settings.pattern == "foo"
     assert settings.mode == "regex"
     assert settings.include_globs == ("**/*.py",)
+    assert settings.operation == "files_with_matches"
+    assert settings.paths == ("src", "tools")
+    assert settings.extra_patterns == ("bar",)
 
 
 def test_result_from_process() -> None:
@@ -35,8 +41,10 @@ def test_result_from_process() -> None:
         timed_out=False,
         returncode=0,
         stderr="",
+        stdout_lines=["src/foo.py:1"],
     )
     result = result_from_process(process)
     assert result.command == ("rg", "--json")
     assert result.returncode == 0
     assert len(result.events) == 1
+    assert result.stdout_lines == ("src/foo.py:1",)

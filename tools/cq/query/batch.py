@@ -67,9 +67,9 @@ def build_batch_session(
         records: list[SgRecord] = []
     else:
         if lang == DEFAULT_QUERY_LANGUAGE:
-            records = scan_files(files, rules, root)
+            records = scan_files(files, rules, root, prefilter=True)
         else:
-            records = scan_files(files, rules, root, lang=lang)
+            records = scan_files(files, rules, root, lang=lang, prefilter=True)
         records = filter_records_by_type(records, normalized_record_types)
 
     scan_ctx = _build_scan_context(records)

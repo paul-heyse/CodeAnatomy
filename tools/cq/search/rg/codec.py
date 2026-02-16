@@ -38,6 +38,16 @@ class RgMatchData(msgspec.Struct, omit_defaults=True):
     path: RgPath | None = None
     lines: RgText | None = None
     line_number: int | None = None
+    absolute_offset: int | None = None
+    submatches: list[RgSubmatch] = msgspec.field(default_factory=list)
+
+
+class RgContextData(msgspec.Struct, omit_defaults=True):
+    """Typed ripgrep context data payload."""
+
+    path: RgPath | None = None
+    lines: RgText | None = None
+    line_number: int | None = None
     submatches: list[RgSubmatch] = msgspec.field(default_factory=list)
 
 
@@ -47,11 +57,28 @@ class RgSummaryStats(msgspec.Struct, omit_defaults=True):
     searches: int | None = None
     searches_with_match: int | None = None
     matches: int | None = None
+    matched_lines: int | None = None
+    bytes_searched: int | None = None
+    bytes_printed: int | None = None
 
 
 class RgSummaryData(msgspec.Struct, omit_defaults=True):
     """Typed ripgrep summary data payload."""
 
+    stats: RgSummaryStats | None = None
+
+
+class RgBeginData(msgspec.Struct, omit_defaults=True):
+    """Typed ripgrep begin event payload."""
+
+    path: RgPath | None = None
+
+
+class RgEndData(msgspec.Struct, omit_defaults=True):
+    """Typed ripgrep end event payload."""
+
+    path: RgPath | None = None
+    binary_offset: int | None = None
     stats: RgSummaryStats | None = None
 
 
@@ -66,6 +93,17 @@ class RgMatchEvent(msgspec.Struct, frozen=True, tag_field="type", tag="match"):
         return "match"
 
 
+class RgContextEvent(msgspec.Struct, frozen=True, tag_field="type", tag="context"):
+    """Typed ripgrep context event."""
+
+    data: RgContextData
+
+    @property
+    def type(self) -> Literal["context"]:
+        """Return tagged event type for compatibility with generic event paths."""
+        return "context"
+
+
 class RgSummaryEvent(msgspec.Struct, frozen=True, tag_field="type", tag="summary"):
     """Typed ripgrep summary event."""
 
@@ -77,6 +115,28 @@ class RgSummaryEvent(msgspec.Struct, frozen=True, tag_field="type", tag="summary
         return "summary"
 
 
+class RgBeginEvent(msgspec.Struct, frozen=True, tag_field="type", tag="begin"):
+    """Typed ripgrep begin event."""
+
+    data: RgBeginData
+
+    @property
+    def type(self) -> Literal["begin"]:
+        """Return tagged event type for compatibility with generic event paths."""
+        return "begin"
+
+
+class RgEndEvent(msgspec.Struct, frozen=True, tag_field="type", tag="end"):
+    """Typed ripgrep end event."""
+
+    data: RgEndData
+
+    @property
+    def type(self) -> Literal["end"]:
+        """Return tagged event type for compatibility with generic event paths."""
+        return "end"
+
+
 class RgEvent(msgspec.Struct, frozen=True):
     """Minimal ripgrep JSON event."""
 
@@ -84,8 +144,10 @@ class RgEvent(msgspec.Struct, frozen=True):
     data: object | None = None
 
 
-type RgTypedEvent = RgMatchEvent | RgSummaryEvent
-type RgAnyEvent = RgMatchEvent | RgSummaryEvent | RgEvent
+type RgTypedEvent = RgMatchEvent | RgSummaryEvent | RgContextEvent | RgBeginEvent | RgEndEvent
+type RgAnyEvent = (
+    RgMatchEvent | RgSummaryEvent | RgContextEvent | RgBeginEvent | RgEndEvent | RgEvent
+)
 
 _RG_TYPED_DECODER = msgspec.json.Decoder(type=RgTypedEvent)
 _RG_FALLBACK_DECODER = msgspec.json.Decoder(type=RgEvent)
@@ -127,50 +189,75 @@ def decode_rg_event_mapping(line: str | bytes) -> dict[str, object] | None:
     return decode_event(line)
 
 
-def as_match_data(event: RgAnyEvent) -> RgMatchData | None:
-    """Coerce event payload into typed match data."""
-    if isinstance(event, RgMatchEvent):
-        return event.data
-    if event.type != "match":
+def _coerce_event_data(event: RgAnyEvent, event_type: str, type_: object) -> object | None:
+    if event.type != event_type:
         return None
     if not isinstance(event.data, Mapping):
         return None
     try:
-        return convert_lax(event.data, type_=RgMatchData)
+        return convert_lax(event.data, type_=type_)
     except BoundaryDecodeError:
         return None
+
+
+def as_match_data(event: RgAnyEvent) -> RgMatchData | None:
+    """Coerce event payload into typed match data."""
+    if isinstance(event, RgMatchEvent):
+        return event.data
+    value = _coerce_event_data(event, "match", RgMatchData)
+    return value if isinstance(value, RgMatchData) else None
+
+
+def as_context_data(event: RgAnyEvent) -> RgContextData | None:
+    """Coerce event payload into typed context data."""
+    if isinstance(event, RgContextEvent):
+        return event.data
+    value = _coerce_event_data(event, "context", RgContextData)
+    return value if isinstance(value, RgContextData) else None
 
 
 def as_summary_data(event: RgAnyEvent) -> RgSummaryData | None:
     """Coerce event payload into typed summary data."""
     if isinstance(event, RgSummaryEvent):
         return event.data
-    if event.type != "summary":
-        return None
-    if not isinstance(event.data, Mapping):
-        return None
-    try:
-        return convert_lax(event.data, type_=RgSummaryData)
-    except BoundaryDecodeError:
-        return None
+    value = _coerce_event_data(event, "summary", RgSummaryData)
+    return value if isinstance(value, RgSummaryData) else None
 
 
-def match_path(data: RgMatchData) -> str | None:
-    """Extract path text from typed match data."""
-    if data.path is None:
+def as_begin_data(event: RgAnyEvent) -> RgBeginData | None:
+    """Coerce event payload into typed begin data."""
+    if isinstance(event, RgBeginEvent):
+        return event.data
+    value = _coerce_event_data(event, "begin", RgBeginData)
+    return value if isinstance(value, RgBeginData) else None
+
+
+def as_end_data(event: RgAnyEvent) -> RgEndData | None:
+    """Coerce event payload into typed end data."""
+    if isinstance(event, RgEndEvent):
+        return event.data
+    value = _coerce_event_data(event, "end", RgEndData)
+    return value if isinstance(value, RgEndData) else None
+
+
+def match_path(data: RgMatchData | RgContextData | RgBeginData | RgEndData) -> str | None:
+    """Extract path text from typed event data."""
+    path = getattr(data, "path", None)
+    if path is None:
         return None
-    return data.path.text or data.path.bytes
+    return path.text or path.bytes
 
 
-def match_line_text(data: RgMatchData) -> str:
-    """Extract line text from typed match data."""
-    if data.lines is None:
+def match_line_text(data: RgMatchData | RgContextData) -> str:
+    """Extract line text from typed match/context data."""
+    lines = getattr(data, "lines", None)
+    if lines is None:
         return ""
-    return data.lines.text or data.lines.bytes or ""
+    return lines.text or lines.bytes or ""
 
 
-def match_line_number(data: RgMatchData) -> int | None:
-    """Extract 1-based line number from typed match data."""
+def match_line_number(data: RgMatchData | RgContextData) -> int | None:
+    """Extract 1-based line number from typed match/context data."""
     return data.line_number
 
 
@@ -193,11 +280,26 @@ def summary_stats(data: RgSummaryData) -> dict[str, object] | None:
             data.stats.searches_with_match if isinstance(data.stats.searches_with_match, int) else 0
         ),
         "matches": data.stats.matches if isinstance(data.stats.matches, int) else 0,
+        "matched_lines": data.stats.matched_lines
+        if isinstance(data.stats.matched_lines, int)
+        else 0,
+        "bytes_searched": data.stats.bytes_searched
+        if isinstance(data.stats.bytes_searched, int)
+        else 0,
+        "bytes_printed": data.stats.bytes_printed
+        if isinstance(data.stats.bytes_printed, int)
+        else 0,
     }
 
 
 __all__ = [
     "RgAnyEvent",
+    "RgBeginData",
+    "RgBeginEvent",
+    "RgContextData",
+    "RgContextEvent",
+    "RgEndData",
+    "RgEndEvent",
     "RgEvent",
     "RgMatchData",
     "RgMatchEvent",
@@ -207,6 +309,9 @@ __all__ = [
     "RgSummaryEvent",
     "RgSummaryStats",
     "RgText",
+    "as_begin_data",
+    "as_context_data",
+    "as_end_data",
     "as_match_data",
     "as_summary_data",
     "decode_event",

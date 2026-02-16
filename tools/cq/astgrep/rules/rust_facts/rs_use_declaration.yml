@@ -1,0 +1,8 @@
+id: rs_use_declaration
+language: rust
+severity: hint
+rule:
+  kind: use_declaration
+metadata:
+  record: import
+  kind: use_declaration

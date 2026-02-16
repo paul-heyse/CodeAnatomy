@@ -1,0 +1,8 @@
+id: rs_def_function
+language: rust
+severity: hint
+rule:
+  kind: function_item
+metadata:
+  record: def
+  kind: function

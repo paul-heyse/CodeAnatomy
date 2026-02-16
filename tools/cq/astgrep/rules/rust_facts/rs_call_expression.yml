@@ -1,0 +1,8 @@
+id: rs_call_expression
+language: rust
+severity: hint
+rule:
+  kind: call_expression
+metadata:
+  record: call
+  kind: call_expression

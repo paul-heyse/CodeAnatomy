@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
+from tools.cq.astgrep.rulepack_loader import load_default_rulepacks
 from tools.cq.astgrep.sgpy_scanner import RecordType, RuleSpec
 from tools.cq.query.language import QueryLanguage
+
+
+def _filter_rules_for_types(
+    rules: tuple[RuleSpec, ...],
+    record_types: set[RecordType] | None,
+) -> tuple[RuleSpec, ...]:
+    if record_types is None:
+        return rules
+    allowed = set(record_types)
+    return tuple(rule for rule in rules if rule.record_type in allowed)
 
 
 def get_rules_for_types(
@@ -16,16 +27,11 @@ def get_rules_for_types(
     Returns:
     -------
     tuple[RuleSpec, ...]
-        Rules matching the requested language and record types.
+        Loaded rules filtered by requested record types.
     """
-    if lang == "rust":
-        from tools.cq.astgrep.rules_rust import get_rules_for_types as get_rust_rules_for_types
-
-        return get_rust_rules_for_types(record_types)
-
-    from tools.cq.astgrep.rules_py import get_rules_for_types as get_python_rules_for_types
-
-    return get_python_rules_for_types(record_types)
+    packs = load_default_rulepacks()
+    selected = packs.get(lang, ())
+    return _filter_rules_for_types(selected, record_types)
 
 
 __all__ = ["get_rules_for_types"]

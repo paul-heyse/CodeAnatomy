@@ -2,7 +2,7 @@
 
 ## Scope Summary
 
-This plan addresses 11 tree-sitter API capability gaps identified by cross-referencing py-tree-sitter 0.25+ documentation against actual usage in `tools/cq/search/tree_sitter/`. The scope spans safety (ABI gating), provenance (grammar version stamping), performance (field ID hot-path, byte-seek navigation, cursor pooling), enrichment (highlights and tags query packs), grammar intelligence (supertype taxonomy, node visibility), and runtime correctness (injection.combined handling, Node.has_changes filtering).
+This plan addresses 12 tree-sitter API capability gaps identified by cross-referencing py-tree-sitter 0.25+ documentation against actual usage in `tools/cq/search/tree_sitter/`. The scope spans safety (ABI gating + single construction gate), provenance (grammar version stamping), performance (field ID hot-path, byte-seek navigation, cursor pooling), enrichment (highlights and tags query packs), grammar intelligence (supertype taxonomy, node visibility), and runtime correctness (injection.combined handling, Node.has_changes filtering).
 
 **Design stance:** No compatibility shims. All new APIs are py-tree-sitter 0.25+ only with fail-open guards. Each scope item is independently deployable. No existing behavior changes unless the scope item explicitly says so.
 
@@ -15,24 +15,28 @@ This plan addresses 11 tree-sitter API capability gaps identified by cross-refer
 3. **No `# noqa` or `# type: ignore`.** Use `cast()` or `TYPE_CHECKING` guards for tree-sitter API types.
 4. **Incremental deployment.** Each scope item can land independently; cross-scope deletions are in a separate batch section.
 5. **msgspec boundary.** All new serialized structs use `CqStruct` (msgspec.Struct). No pydantic in hot paths.
+6. **Single language construction gate.** `Language(...)` object creation happens only in `core/language_registry.py`; all other modules consume that loader.
 
 ---
 
 ## Current Baseline
 
-- **py-tree-sitter version:** 0.25+ (imports `Parser`, `Language`, `Query`, `QueryCursor`, `Point`, `Range` from `tree_sitter`)
-- **Grammar wheels:** `tree_sitter_python`, `tree_sitter_rust` (imported directly)
-- **Language loading:** `language_registry.py:59` — `@lru_cache(maxsize=8)` wrapping `_TreeSitterLanguage(_tree_sitter_python.language())`; no ABI version check
+- **Runtime versions (verified in environment):** `tree-sitter==0.25.2`, `tree-sitter-python==0.25.0`, `tree-sitter-rust==0.24.0`
+- **Language loading:** `language_registry.py` has one cached loader, but direct `Language(...)` constructors also exist in `schema/node_schema.py`, `python_lane/runtime.py`, `python_lane/facts.py`, and `rust_lane/runtime.py`
 - **No `Language.abi_version` usage** anywhere in codebase
-- **No `Language.semantic_version` or `Language.name` usage** for provenance
-- **`supertypes` field exists** on `TreeSitterLanguageRegistryV1` (line 33) but is always `()` — never populated from `Language.supertypes`
+- **No `Language.semantic_version` or `Language.name` usage** for provenance (and `semantic_version` in 0.25 is tuple-typed, not `str`)
+- **`supertypes` field exists** on `TreeSitterLanguageRegistryV1` but is always `()` — never populated from runtime `Language.supertypes` ids
 - **`build_runtime_ids()` and `build_runtime_field_ids()`** exist at `node_schema.py:188-208` but are never called from hot-path code
 - **28 `child_by_field_name()` calls** across 5 files in `tools/cq/search/tree_sitter/` — all using string lookups, none using cached field IDs
+- **Field enumeration bug:** runtime schema loading uses `range(field_count)`; tree-sitter field ids are 1..`field_count`, so the highest id is currently skipped
 - **`InjectionSettingsV1.combined` field** is parsed at `injection_config.py:49` but `injection_runtime.py` treats all plans uniformly (no grouping for combined parsing)
-- **`_advance_cursor()` in `structural/export.py:68`** uses only `goto_first_child()`, `goto_next_sibling()`, `goto_parent()` — no byte-seek or cursor copy
+- **`_advance_cursor()` in `structural/export.py`** uses only `goto_first_child()`, `goto_next_sibling()`, `goto_parent()` — no byte-seek or cursor copy
+- **`TreeCursor.goto_first_child_for_byte()` return semantics are not handled:** API returns child index (`int | None`), where `0` is valid and must not be treated as falsey
+- **Cursor reset semantics are not handled:** `TreeCursor.reset_to()` resets from another cursor; node-based reset is `TreeCursor.reset(node)`
 - **No `.scm` files** exist under `tools/cq/search/tree_sitter/` — query packs are loaded from registry/distribution
-- **`RustManifestV1`** already has `highlights`, `injections`, `tags` fields parsed from grammar `tree-sitter.json` at `bundle.py:42`
-- **`build_tag_events()` exists** at `tags.py:44` but only processes matches from CQ's custom query packs, not from standard `tags.scm`
+- **Distribution query loading is Rust-only in `query/registry.py`**; Python wheel queries (`highlights.scm`, `tags.scm`) are not currently loaded via the same path
+- **`build_tag_events()` exists** at `tags.py` but only recognizes `role.definition` / `role.reference`; standard captures like `definition.function` / `reference.call` are dropped
+- **`QueryCursor.set_containing_*` APIs are not available in current runtime bindings** and require capability-gated fallback to byte/point range modes
 - **`semantic_overlays.py`** has been removed/moved (only `.pyc` cache remains)
 - **`Node.has_changes` is not used** anywhere in the codebase
 
@@ -90,7 +94,7 @@ return lang_obj
 
 ### Goal
 
-Record `Language.semantic_version` and `Language.name` in grammar metadata contracts for full reproducibility. Stamp these into `GrammarSchemaV1`, `QueryPackPlanV1`, and `TreeSitterLanguageRegistryV1`.
+Record `Language.semantic_version`, `Language.name`, and `Language.abi_version` in grammar metadata contracts for full reproducibility. Use tuple-typed semantic versioning to match py-tree-sitter 0.25 runtime behavior and avoid lossy string coercion.
 
 ### Representative Code Snippets
 
@@ -100,9 +104,9 @@ class GrammarSchemaV1(CqStruct, frozen=True):
     """Simplified grammar schema for lint-time checks."""
     language: str
     node_types: tuple[GrammarNodeTypeV1, ...] = ()
-    grammar_name: str | None = None        # NEW: Language.name
-    semantic_version: str | None = None     # NEW: Language.semantic_version
-    abi_version: int | None = None          # NEW: Language.abi_version
+    grammar_name: str | None = None
+    semantic_version: tuple[int, int, int] | None = None
+    abi_version: int | None = None
 ```
 
 ```python
@@ -113,21 +117,32 @@ class TreeSitterLanguageRegistryV1(CqStruct, frozen=True):
     named_node_kinds: tuple[str, ...] = ()
     field_names: tuple[str, ...] = ()
     supertypes: tuple[str, ...] = ()
-    grammar_name: str | None = None         # NEW
-    semantic_version: str | None = None     # NEW
-    abi_version: int | None = None          # NEW
+    grammar_name: str | None = None
+    semantic_version: tuple[int, int, int] | None = None
+    abi_version: int | None = None
 ```
 
 ```python
 # Extraction helper at schema load time
-def _extract_provenance(language_obj: object) -> tuple[str | None, str | None, int | None]:
+def _extract_provenance(
+    language_obj: object,
+) -> tuple[str | None, tuple[int, int, int] | None, int | None]:
     """Extract provenance fields from a Language object."""
     name = getattr(language_obj, "name", None)
     sem_ver = getattr(language_obj, "semantic_version", None)
     abi = getattr(language_obj, "abi_version", None)
+
+    sem_tuple: tuple[int, int, int] | None = None
+    if (
+        isinstance(sem_ver, tuple)
+        and len(sem_ver) == 3
+        and all(isinstance(part, int) and not isinstance(part, bool) for part in sem_ver)
+    ):
+        sem_tuple = (int(sem_ver[0]), int(sem_ver[1]), int(sem_ver[2]))
+
     return (
         str(name) if isinstance(name, str) else None,
-        str(sem_ver) if isinstance(sem_ver, str) else None,
+        sem_tuple,
         int(abi) if isinstance(abi, int) and not isinstance(abi, bool) else None,
     )
 ```
@@ -139,16 +154,17 @@ class QueryPackPlanV1(CqStruct, frozen=True):
     query_hash: str = ""
     plans: tuple[QueryPatternPlanV1, ...] = ()
     score: float = 0.0
-    grammar_name: str | None = None         # NEW
-    semantic_version: str | None = None     # NEW
+    grammar_name: str | None = None
+    semantic_version: tuple[int, int, int] | None = None
+    abi_version: int | None = None
 ```
 
 ### Files to Edit
 
 - `tools/cq/search/tree_sitter/schema/node_schema.py` — add provenance fields to `GrammarSchemaV1`, extract in `load_grammar_schema()`
 - `tools/cq/search/tree_sitter/core/language_registry.py` — add provenance fields to `TreeSitterLanguageRegistryV1`, populate in `load_language_registry()`
-- `tools/cq/search/tree_sitter/contracts/query_models.py` — add provenance fields to `QueryPackPlanV1`
-- `tools/cq/search/tree_sitter/query/planner.py` — stamp provenance into `build_pack_plan()` output
+- `tools/cq/search/tree_sitter/contracts/query_models.py` — add tuple-typed semantic version and ABI fields to `QueryPackPlanV1`
+- `tools/cq/search/tree_sitter/query/planner.py` — stamp provenance into `build_pack_plan()` output from registry-loaded language metadata
 
 ### New Files to Create
 
@@ -164,7 +180,7 @@ class QueryPackPlanV1(CqStruct, frozen=True):
 
 ### Goal
 
-Use `node.has_changes` as a secondary filter during node-level processing within changed ranges. When walking a changed range's descendant tree in enrichment passes, nodes without `has_changes` can be skipped for certain expensive enrichment operations.
+Use `node.has_changes` as a secondary filter during node-level processing within changed ranges. Apply this filter only when incremental parse reuse is confirmed (non-empty changed-range context from parse session); otherwise keep current full processing behavior.
 
 ### Representative Code Snippets
 
@@ -193,7 +209,7 @@ for capture_name, nodes in captures.items():
 ### Files to Edit
 
 - `tools/cq/search/tree_sitter/python_lane/facts.py` — add `has_changes` check in `_collect_query_pack_captures()` loop
-- `tools/cq/search/tree_sitter/core/runtime.py` — add optional `has_changes` filter in `run_bounded_query_captures()` when changed-range context is available
+- `tools/cq/search/tree_sitter/core/runtime.py` — add optional `has_changes` filter in `run_bounded_query_captures()` only when changed-range context indicates incremental reuse
 
 ### New Files to Create
 
@@ -209,7 +225,7 @@ for capture_name, nodes in captures.items():
 
 ### Goal
 
-Use `TreeCursor.goto_first_child_for_byte()` in traversal patterns that process changed ranges sequentially within wide container nodes. Also use `Node.first_child_for_byte()` / `Node.first_named_child_for_byte()` for direct node access patterns.
+Use `TreeCursor.goto_first_child_for_byte()` in traversal patterns that process changed ranges sequentially within wide container nodes. Treat its return value as `int | None` (child index), where `0` is a valid success result. Also use `Node.first_child_for_byte()` / `Node.first_named_child_for_byte()` for direct node access patterns.
 
 ### Representative Code Snippets
 
@@ -221,7 +237,8 @@ def _advance_cursor_to_byte(cursor: Any, target_byte: int) -> bool:
     if goto is None:
         return cursor.goto_first_child()  # fail-open: use standard traversal
     try:
-        return bool(goto(target_byte))
+        idx = goto(target_byte)
+        return idx is not None
     except (TypeError, ValueError, RuntimeError):
         return cursor.goto_first_child()
 ```
@@ -262,7 +279,7 @@ def _find_child_at_byte(node: Node, byte_offset: int) -> Node | None:
 
 ### Goal
 
-Use `TreeCursor.copy()` and `TreeCursor.reset_to()` for cursor pooling in structural export where fork-and-explore patterns are needed.
+Use `TreeCursor.copy()` for cursor pooling and support both reset APIs correctly: `reset_to(other_cursor)` for cursor-to-cursor rewind, and `reset(node)` for node-based repositioning.
 
 ### Representative Code Snippets
 
@@ -279,10 +296,17 @@ def _fork_cursor(cursor: Any) -> Any | None:
         return None
 
 
-def _reset_cursor_to(cursor: Any, node: object) -> bool:
-    """Reset a pooled cursor to a new root node."""
-    reset_fn = getattr(cursor, "reset_to", None)
-    if reset_fn is None:
+def _reset_cursor_to(cursor: Any, *, from_cursor: Any | None = None, node: object | None = None) -> bool:
+    """Reset a pooled cursor from another cursor or a node."""
+    reset_to_fn = getattr(cursor, "reset_to", None)
+    if from_cursor is not None and callable(reset_to_fn):
+        try:
+            reset_to_fn(from_cursor)
+            return True
+        except (TypeError, RuntimeError, AttributeError):
+            pass
+    reset_fn = getattr(cursor, "reset", None)
+    if node is None or not callable(reset_fn):
         return False
     try:
         reset_fn(node)
@@ -306,7 +330,7 @@ if forked is not None:
 
 ### New Files to Create
 
-- `tests/unit/cq/search/tree_sitter/test_cursor_pooling.py` — test copy/reset_to behaviors, test fallback when methods unavailable
+- `tests/unit/cq/search/tree_sitter/test_cursor_pooling.py` — test copy/reset_to/reset behaviors, test fallback when methods unavailable
 
 ### Legacy Decommission/Delete Scope
 
@@ -318,30 +342,41 @@ if forked is not None:
 
 ### Goal
 
-Use `Language.supertypes` and `Language.subtypes()` to derive taxonomy from grammar rather than maintaining hardcoded kind lists. Build supertype/subtype indices for Python and Rust grammars. Populate the existing `supertypes` field on `TreeSitterLanguageRegistryV1`.
+Use `Language.supertypes` and `Language.subtypes()` to derive taxonomy from grammar rather than maintaining hardcoded kind lists. In py-tree-sitter 0.25, these APIs are id-based (`int`), so taxonomy loading must resolve ids back to node-kind names explicitly. Populate `TreeSitterLanguageRegistryV1.supertypes` with resolved names and retain id mappings in schema indexes.
 
 ### Representative Code Snippets
 
 ```python
 # tools/cq/search/tree_sitter/core/language_registry.py
-def _load_supertypes(language_obj: object) -> tuple[str, ...]:
-    """Load supertype kinds from Language.supertypes."""
+def _load_supertype_ids(language_obj: object) -> tuple[int, ...]:
+    """Load supertype ids from Language.supertypes."""
     supertypes_attr = getattr(language_obj, "supertypes", None)
     if supertypes_attr is None:
         return ()
     try:
-        return tuple(sorted(str(st) for st in supertypes_attr if isinstance(st, str)))
+        return tuple(sorted(int(st) for st in supertypes_attr if isinstance(st, int)))
     except (TypeError, RuntimeError):
         return ()
 
 
-def _load_subtypes(language_obj: object, supertype: str) -> tuple[str, ...]:
-    """Load subtype kinds for one supertype via Language.subtypes()."""
+def _kind_name(language_obj: object, kind_id: int) -> str | None:
+    node_kind_for_id = getattr(language_obj, "node_kind_for_id", None)
+    if not callable(node_kind_for_id):
+        return None
+    try:
+        value = node_kind_for_id(kind_id)
+    except (TypeError, RuntimeError, ValueError):
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def _load_subtype_ids(language_obj: object, supertype_id: int) -> tuple[int, ...]:
+    """Load subtype ids for one supertype via Language.subtypes()."""
     subtypes_fn = getattr(language_obj, "subtypes", None)
     if subtypes_fn is None or not callable(subtypes_fn):
         return ()
     try:
-        return tuple(sorted(str(st) for st in subtypes_fn(supertype) if isinstance(st, str)))
+        return tuple(sorted(int(st) for st in subtypes_fn(supertype_id) if isinstance(st, int)))
     except (TypeError, RuntimeError):
         return ()
 ```
@@ -349,7 +384,12 @@ def _load_subtypes(language_obj: object, supertype: str) -> tuple[str, ...]:
 ```python
 # Populate supertypes in load_language_registry()
 lang_obj = load_tree_sitter_language(language)
-supertypes = _load_supertypes(lang_obj) if lang_obj is not None else ()
+supertype_ids = _load_supertype_ids(lang_obj) if lang_obj is not None else ()
+supertypes = tuple(
+    name
+    for supertype_id in supertype_ids
+    if (name := _kind_name(lang_obj, supertype_id)) is not None
+)
 return TreeSitterLanguageRegistryV1(
     language=language,
     node_kinds=node_kinds,
@@ -363,20 +403,32 @@ return TreeSitterLanguageRegistryV1(
 # tools/cq/search/tree_sitter/schema/node_schema.py — supertype index
 class SupertypeIndexV1(CqStruct, frozen=True):
     """Supertype → subtypes mapping derived from grammar."""
+    supertype_id: int
     supertype: str
+    subtype_ids: tuple[int, ...] = ()
     subtypes: tuple[str, ...] = ()
 
 
 def build_supertype_index(language_obj: object) -> tuple[SupertypeIndexV1, ...]:
     """Build full supertype taxonomy from Language.supertypes + subtypes()."""
-    supertypes = _load_supertypes(language_obj)
-    return tuple(
-        SupertypeIndexV1(
-            supertype=st,
-            subtypes=_load_subtypes(language_obj, st),
+    supertype_ids = _load_supertype_ids(language_obj)
+    rows: list[SupertypeIndexV1] = []
+    for supertype_id in supertype_ids:
+        subtype_ids = _load_subtype_ids(language_obj, supertype_id)
+        subtype_names = tuple(
+            name
+            for subtype_id in subtype_ids
+            if (name := _kind_name(language_obj, subtype_id)) is not None
         )
-        for st in supertypes
-    )
+        rows.append(
+            SupertypeIndexV1(
+                supertype_id=supertype_id,
+                supertype=_kind_name(language_obj, supertype_id) or f"id:{supertype_id}",
+                subtype_ids=subtype_ids,
+                subtypes=subtype_names,
+            )
+        )
+    return tuple(rows)
 ```
 
 ### Files to Edit
@@ -398,7 +450,7 @@ def build_supertype_index(language_obj: object) -> tuple[SupertypeIndexV1, ...]:
 
 ### Goal
 
-Load and execute the standard `highlights.scm` query packs shipped with Python and Rust grammars to produce a complete semantic token overlay. This provides a byte-sorted token stream with semantic classes (@keyword, @function, @type, @property, @string, etc.) that complements CQ's existing captures (defs/calls/imports).
+Load and execute standard `highlights.scm` query packs shipped with Python and Rust grammar wheels to produce a complete semantic token overlay. The loader must be registry-based (not Rust-manifest-based) so both languages use one distribution-query ingestion path.
 
 ### Representative Code Snippets
 
@@ -435,7 +487,8 @@ class HighlightsResultV1(CqStruct, frozen=True):
     token_count: int = 0
     tokens: tuple[HighlightTokenV1, ...] = ()
     grammar_name: str | None = None
-    semantic_version: str | None = None
+    semantic_version: tuple[int, int, int] | None = None
+    abi_version: int | None = None
 
 
 def run_highlights_pack(
@@ -451,20 +504,23 @@ def run_highlights_pack(
 ```
 
 ```python
-# Loading highlights.scm from distribution
-# tools/cq/search/tree_sitter/rust_lane/bundle.py already has:
-#   RustManifestV1.highlights field with the .scm filename
-# Use _distribution_file_path() to resolve the actual file content
+# tools/cq/search/tree_sitter/query/registry.py — unified distribution source loader
+def load_distribution_query_source(language: str, pack_name: str) -> str | None:
+    for row in _load_distribution_queries(language):
+        if row.pack_name == pack_name:
+            return row.source
+    return None
 ```
 
 ### Files to Edit
 
-- `tools/cq/search/tree_sitter/rust_lane/bundle.py` — add `load_highlights_source()` helper that reads `highlights.scm` from distribution
-- `tools/cq/search/tree_sitter/core/language_registry.py` — add `load_highlights_source(language)` dispatch for Python/Rust
+- `tools/cq/search/tree_sitter/query/registry.py` — generalize distribution query loading beyond Rust and add `load_distribution_query_source(language, pack_name)`
+- `tests/unit/cq/search/tree_sitter/test_query_registry.py` — add Python distribution query coverage and single-pack lookup assertions.
+- `tests/unit/cq/search/tree_sitter/test_query_registry_profiles.py` — verify profile behavior remains deterministic after Python distribution support is introduced.
 
 ### New Files to Create
 
-- `tools/cq/search/tree_sitter/core/highlights_runner.py` — `HighlightTokenV1`, `HighlightsResultV1` contracts; `run_highlights_pack()` entry point
+- `tools/cq/search/tree_sitter/core/highlights_runner.py` — resolve `highlights.scm` through query registry and execute over bounded windows.
 - `tests/unit/cq/search/tree_sitter/test_highlights_runner.py` — test token extraction, byte-ordering, windowed execution, graceful degradation
 
 ### Legacy Decommission/Delete Scope
@@ -477,54 +533,61 @@ def run_highlights_pack(
 
 ### Goal
 
-Load and execute the standard `tags.scm` query pack for the Rust grammar to provide a grammar-author-maintained definition/reference event stream. Normalize into the existing `RustTagEventV1` contract. Enable cross-reference with CQ's custom captures for drift detection.
+Normalize standard `tags.scm` capture taxonomies into `RustTagEventV1` for Rust, including both CQ-style (`role.definition` / `role.reference`) and grammar-style (`definition.*` / `reference.*`) captures. This preserves compatibility while enabling distribution tags to flow through the existing runtime path.
 
 ### Representative Code Snippets
 
 ```python
-# tools/cq/search/tree_sitter/tags.py — extend build_tag_events
-# The existing build_tag_events() already normalizes matches into
-# RustTagEventV1 rows. The change is to also feed matches from
-# the standard tags.scm (loaded from distribution) through the
-# same normalization.
+# tools/cq/search/tree_sitter/tags.py — broaden role normalization
+def _normalized_role(capture_names: Sequence[str]) -> str | None:
+    for name in capture_names:
+        if name.startswith("role.definition") or name.startswith("definition."):
+            return "definition"
+        if name.startswith("role.reference") or name.startswith("reference."):
+            return "reference"
+    return None
 
-def run_distribution_tags_pack(
+
+def build_tag_events(
     *,
-    language: str,
-    root: Node,
+    matches: Sequence[tuple[int, Mapping[str, Sequence[NodeLike]]]],
     source_bytes: bytes,
-    windows: tuple[QueryWindowV1, ...],
-    settings: QueryExecutionSettingsV1 | None = None,
 ) -> tuple[RustTagEventV1, ...]:
-    """Execute distribution tags.scm and normalize into tag events."""
-    from tools.cq.search.tree_sitter.core.runtime import run_bounded_query_matches
-    from tools.cq.search.tree_sitter.query.compiler import compile_query
-    from tools.cq.search.tree_sitter.rust_lane.bundle import load_tags_source
-
-    tags_source = load_tags_source(language)
-    if tags_source is None:
-        return ()
-    query = compile_query(
-        language=language,
-        pack_name="tags.scm",
-        source=tags_source,
-        request_surface="distribution",
-    )
-    matches, _telemetry = run_bounded_query_matches(
-        query, root, windows=windows, settings=settings,
-    )
-    return build_tag_events(matches=matches, source_bytes=source_bytes)
+    rows: list[RustTagEventV1] = []
+    for pattern_idx, capture_map in matches:
+        role = _normalized_role(tuple(capture_map.keys()))
+        if role is None:
+            continue
+        names = capture_map.get("name", ())
+        if not names:
+            continue
+        node = names[0]
+        text = node_text(node, source_bytes)
+        if not text:
+            continue
+        rows.append(
+            RustTagEventV1(
+                role=role,
+                kind="symbol",
+                name=text,
+                start_byte=int(getattr(node, "start_byte", 0)),
+                end_byte=int(getattr(node, "end_byte", 0)),
+                metadata={"pattern_index": pattern_idx},
+            )
+        )
+    return tuple(rows)
 ```
 
 ### Files to Edit
 
-- `tools/cq/search/tree_sitter/rust_lane/bundle.py` — add `load_tags_source()` helper
-- `tools/cq/search/tree_sitter/tags.py` — add `run_distribution_tags_pack()` entry point
-- `tools/cq/search/tree_sitter/rust_lane/runtime.py` — integrate distribution tags into `_collect_query_pack_captures()` output
+- `tools/cq/search/tree_sitter/tags.py` — normalize role capture taxonomies (`role.*` and `definition.*` / `reference.*`)
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py` — ensure `tags.scm` distribution pack remains enabled in runtime profiles and routed through `build_tag_events()`
+- `tests/unit/cq/search/tree_sitter/test_tags.py` — add taxonomy fixtures for `definition.*` / `reference.*` capture names.
+- `tests/unit/cq/search/tree_sitter/test_rust_lane_runtime.py` — validate distribution `tags.scm` rows flow through runtime event assembly.
 
 ### New Files to Create
 
-- `tests/unit/cq/search/tree_sitter/test_distribution_tags.py` — test tags.scm loading, match normalization, cross-reference with custom captures
+- None.
 
 ### Legacy Decommission/Delete Scope
 
@@ -609,7 +672,7 @@ def _parse_combined_injection(
 
 ### Goal
 
-Wire the already-computed field IDs from `build_runtime_field_ids()` and `build_runtime_ids()` in `node_schema.py` into the hot-path node access code. Replace `child_by_field_name("name")` with `child_by_field_id(cached_name_id)` in frequently-called functions. Infrastructure already exists — this is pure plumbing.
+Wire field IDs from `build_runtime_field_ids()` / `build_runtime_ids()` into hot-path node access code, and expand field-id precomputation beyond the current fixed trio (`name`, `body`, `parameters`). Fix runtime field enumeration so id `field_count` is not skipped.
 
 ### Representative Code Snippets
 
@@ -619,13 +682,18 @@ from functools import lru_cache
 from tools.cq.search.tree_sitter.schema.node_schema import (
     build_runtime_field_ids,
     build_runtime_ids,
+    load_grammar_schema,
 )
 
 @lru_cache(maxsize=4)
 def _cached_field_ids(language: str) -> dict[str, int]:
     """Load and cache field IDs for a language."""
     lang_obj = load_language(language)
-    return build_runtime_field_ids(lang_obj)
+    schema = load_grammar_schema(language)
+    field_names = tuple(
+        sorted({field for row in schema.node_types for field in row.fields})
+    ) if schema is not None else ()
+    return build_runtime_field_ids(lang_obj, field_names=field_names)
 
 
 @lru_cache(maxsize=4)
@@ -633,6 +701,16 @@ def _cached_node_ids(language: str) -> dict[str, int]:
     """Load and cache node-kind IDs for a language."""
     lang_obj = load_language(language)
     return build_runtime_ids(lang_obj)
+```
+
+```python
+# tools/cq/search/tree_sitter/schema/node_schema.py — field-id enumeration fix
+field_names = tuple(
+    field_name
+    for field_id in range(1, field_count + 1)
+    if isinstance((field_name := runtime_language.field_name_for_id(field_id)), str)
+    and field_name
+)
 ```
 
 ```python
@@ -660,7 +738,8 @@ child = child_by_field(parent, field_name, _cached_field_ids("rust"))
 
 ### Files to Edit
 
-- `tools/cq/search/tree_sitter/core/infrastructure.py` — add `_cached_field_ids()`, `_cached_node_ids()`, and `child_by_field()` helper
+- `tools/cq/search/tree_sitter/core/infrastructure.py` — add `_cached_field_ids()`, `_cached_node_ids()`, and `child_by_field()` helper; source candidate field names from runtime schema
+- `tools/cq/search/tree_sitter/schema/node_schema.py` — fix field id enumeration (`1..field_count`) and extend `build_runtime_field_ids()` to accept caller-provided field-name candidates
 - `tools/cq/search/tree_sitter/python_lane/facts.py` — convert 2 `child_by_field_name()` call sites
 - `tools/cq/search/tree_sitter/python_lane/fallback_support.py` — convert 6 `child_by_field_name()` call sites
 - `tools/cq/search/tree_sitter/python_lane/locals_index.py` — convert 2 `child_by_field_name()` call sites
@@ -751,36 +830,115 @@ node_row = TreeSitterStructuralNodeV1(
 
 ---
 
+## S12. Centralized Language Construction + Runtime Capability Snapshot
+
+### Goal
+
+Route all `Language(...)` construction through `core/language_registry.py` so ABI/provenance gating is uniformly enforced, and expose a lightweight capability snapshot for runtime feature gating (`goto_first_child_for_byte`, cursor reset APIs, containing-range query cursor methods).
+
+### Representative Code Snippets
+
+```python
+# tools/cq/search/tree_sitter/core/language_registry.py
+class TreeSitterRuntimeCapabilitiesV1(CqStruct, frozen=True):
+    language: str
+    has_cursor_copy: bool = False
+    has_cursor_reset: bool = False
+    has_cursor_reset_to: bool = False
+    has_goto_first_child_for_byte: bool = False
+    has_query_cursor_containing_byte_range: bool = False
+    has_query_cursor_containing_point_range: bool = False
+```
+
+```python
+# tools/cq/search/tree_sitter/core/language_registry.py
+@lru_cache(maxsize=8)
+def load_tree_sitter_capabilities(language: str) -> TreeSitterRuntimeCapabilitiesV1:
+    lang_obj = load_tree_sitter_language(language)
+    if lang_obj is None:
+        return TreeSitterRuntimeCapabilitiesV1(language=language)
+
+    has_query_cursor_containing_byte_range = hasattr(
+        _TreeSitterQueryCursor,
+        "set_containing_byte_range",
+    ) if _TreeSitterQueryCursor is not None else False
+    has_query_cursor_containing_point_range = hasattr(
+        _TreeSitterQueryCursor,
+        "set_containing_point_range",
+    ) if _TreeSitterQueryCursor is not None else False
+    return TreeSitterRuntimeCapabilitiesV1(
+        language=language,
+        has_query_cursor_containing_byte_range=has_query_cursor_containing_byte_range,
+        has_query_cursor_containing_point_range=has_query_cursor_containing_point_range,
+    )
+```
+
+```python
+# tools/cq/search/tree_sitter/python_lane/runtime.py
+from tools.cq.search.tree_sitter.core.language_registry import load_tree_sitter_language
+
+@lru_cache(maxsize=1)
+def _python_language() -> Language:
+    resolved = load_tree_sitter_language("python")
+    if resolved is None:
+        msg = "tree_sitter_python language bindings are unavailable"
+        raise RuntimeError(msg)
+    return cast("Language", resolved)
+```
+
+### Files to Edit
+
+- `tools/cq/search/tree_sitter/core/language_registry.py` — add `TreeSitterRuntimeCapabilitiesV1` and `load_tree_sitter_capabilities()`
+- `tools/cq/search/tree_sitter/schema/node_schema.py` — remove direct `Language(...)` construction and consume registry loader
+- `tools/cq/search/tree_sitter/python_lane/runtime.py` — remove direct `Language(...)` construction and consume registry loader
+- `tools/cq/search/tree_sitter/python_lane/facts.py` — remove direct `Language(...)` construction and consume registry loader
+- `tools/cq/search/tree_sitter/rust_lane/runtime.py` — remove direct `Language(...)` construction and consume registry loader
+
+### New Files to Create
+
+- `tests/unit/cq/search/tree_sitter/test_language_registry_capabilities.py` — test capability snapshot defaults, binding-presence flags, and fail-open behavior.
+
+### Legacy Decommission/Delete Scope
+
+- Delete direct `_TreeSitterLanguage(...)` constructors from `tools/cq/search/tree_sitter/schema/node_schema.py`, `tools/cq/search/tree_sitter/python_lane/runtime.py`, `tools/cq/search/tree_sitter/python_lane/facts.py`, and `tools/cq/search/tree_sitter/rust_lane/runtime.py`.
+
+---
+
 ## Cross-Scope Legacy Decommission and Deletion Plan
 
 ### Batch D1 (after S6, S11)
 
-- Delete hardcoded `supertypes=()` assignment at `language_registry.py:54` — superseded by dynamic `_load_supertypes()`.
-- If `_SCOPE_KINDS` tuples in `rust_lane/runtime.py:82-90` can be derived from supertype taxonomy, replace hardcoded tuple with grammar-derived set. (Requires validation that Rust grammar supertype `_declaration_statement` covers the same kinds.)
+- Delete hardcoded `supertypes=()` assignment at `tools/cq/search/tree_sitter/core/language_registry.py` — superseded by runtime supertype loading.
+- Keep `tools/cq/search/tree_sitter/rust_lane/runtime.py:_SCOPE_KINDS` as an explicit semantic policy list in this plan (not grammar-derived), because scope-grouping semantics are product-level and intentionally stricter than grammar supertypes.
 
 ### Batch D2 (after S7, S8)
 
-- If distribution highlights.scm and tags.scm cover all captures currently provided by CQ's custom `.scm` packs for the same semantic roles, document overlap percentage and recommend deduplication of overlapping custom captures in a follow-up plan. (No deletion in this plan — requires validation against actual grammar .scm content.)
+- Delete any Rust-lane-only distribution query loading branches introduced during migration (`highlights.scm` / `tags.scm` lookup helpers in lane modules); keep `tools/cq/search/tree_sitter/query/registry.py` as the sole distribution query source loader for both Python and Rust.
 
 ### Batch D3 (after S9)
 
-- Delete the flat `parse_injected_ranges()` implementation from `injection_runtime.py` once the combined/separate split is validated — the new implementation fully replaces it.
+- Delete the flat `parse_injected_ranges()` implementation path in `tools/cq/search/tree_sitter/rust_lane/injection_runtime.py` once combined/separate split tests pass.
+
+### Batch D4 (after S12)
+
+- Delete duplicated direct language-construction code paths listed in S12 once all lanes are on `load_tree_sitter_language()`.
 
 ---
 
 ## Implementation Sequence
 
-1. **S1 (ABI Version Gating)** — Highest priority, trivial effort, prevents silent corruption. No dependencies.
-2. **S2 (Grammar Provenance)** — Builds on S1 infrastructure (same `language_registry.py`). Additive contract fields.
-3. **S10 (Field ID Hot-Path)** — Low effort, existing infrastructure. Immediate perf benefit. No dependencies.
-4. **S6 (Supertype Taxonomy)** — Populates existing empty field. Required foundation for S11.
-5. **S11 (Supertype/Visible Classification)** — Depends on S6 for supertype data. Additive schema fields.
-6. **S7 (Highlights Query Pack)** — Medium effort, new capability. Benefits from S2 provenance for stamping.
-7. **S8 (Tags Query Pack for Rust)** — Parallel with S7. Builds on existing `tags.py` contract.
-8. **S4 (Byte-Seek Navigation)** — Independent perf optimization. Can land anytime.
-9. **S3 (Node.has_changes Filter)** — Independent optimization. Requires changed-range context plumbing.
-10. **S9 (injection.combined Handling)** — Independent correctness fix. Refactors injection_runtime.py.
-11. **S5 (TreeCursor Pooling)** — Lowest priority, marginal benefit. Can land anytime.
+1. **S1 (ABI Version Gating)** — Safety gate first; blocks invalid runtime/grammar combinations.
+2. **S12 (Centralized Language Construction + Capability Snapshot)** — Establishes one construction path and capability facts used by downstream scopes.
+3. **S2 (Grammar Provenance)** — Provenance fields layer on top of S1/S12 language metadata.
+4. **S6 (Supertype Taxonomy)** — Builds id-based supertype/subtype indexes from runtime language APIs.
+5. **S11 (Supertype/Visible Classification)** — Extends schema/export rows using S6 taxonomy + visibility APIs.
+6. **S10 (Field ID Hot-Path)** — Uses corrected field-id enumeration and cached ids for hot access paths.
+7. **S4 (Byte-Seek Navigation)** — Introduces byte-seek traversal with correct `int | None` handling.
+8. **S5 (TreeCursor Pooling)** — Adds copy/reset pooling with correct `reset_to` vs `reset` semantics.
+9. **S9 (injection.combined Handling)** — Correctness fix for embedded parsing behavior.
+10. **S3 (`Node.has_changes` Filter)** — Additive optimization gated on confirmed incremental reuse context.
+11. **S7 (Highlights Query Pack Execution)** — Adds unified highlights execution via registry-backed distribution loading.
+12. **S8 (Tags Query Pack for Rust)** — Finalizes distribution tags normalization and runtime integration.
 
 ---
 
@@ -797,6 +955,8 @@ node_row = TreeSitterStructuralNodeV1(
 - [ ] S9. `injection.combined` Property Handling
 - [ ] S10. Field ID Hot-Path Optimization
 - [ ] S11. Supertype/Visible Classification
-- [ ] D1. Cross-scope decommission (after S6 + S11)
-- [ ] D2. Highlights/Tags overlap assessment (after S7 + S8)
-- [ ] D3. Injection runtime flat-path removal (after S9)
+- [ ] S12. Centralized Language Construction + Runtime Capability Snapshot
+- [ ] D1. Decommission hardcoded supertype placeholder (after S6 + S11)
+- [ ] D2. Decommission lane-specific distribution loaders (after S7 + S8)
+- [ ] D3. Decommission injection flat-path runtime logic (after S9)
+- [ ] D4. Decommission duplicated direct language constructors (after S12)

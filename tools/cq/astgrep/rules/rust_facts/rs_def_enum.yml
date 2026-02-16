@@ -1,0 +1,8 @@
+id: rs_def_enum
+language: rust
+severity: hint
+rule:
+  kind: enum_item
+metadata:
+  record: def
+  kind: enum

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.cq.astgrep.rules_py import PY_CALL_NAME, PY_DEF_CLASS, PY_DEF_FUNCTION, PY_IMPORT
+from tools.cq.astgrep.rulepack_loader import clear_rulepack_cache, load_default_rulepacks
 from tools.cq.astgrep.sgpy_scanner import (
     RecordType,
     RuleSpec,
@@ -14,6 +14,13 @@ from tools.cq.astgrep.sgpy_scanner import (
     scan_files,
     scan_with_pattern,
 )
+
+clear_rulepack_cache()
+_PY_RULES = {rule.rule_id: rule for rule in load_default_rulepacks().get("python", ())}
+PY_CALL_NAME = _PY_RULES["py_call_name"]
+PY_DEF_CLASS = _PY_RULES["py_def_class"]
+PY_DEF_FUNCTION = _PY_RULES["py_def_function"]
+PY_IMPORT = _PY_RULES["py_import"]
 
 
 class TestRuleSpec:
@@ -168,6 +175,20 @@ class TestScanWithPattern:
         assert len(matches) == 1
         # Metavariables are captured
         assert "metaVariables" in matches[0]
+        assert "$A" in matches[0]["metaVariables"]
+
+    def test_pattern_with_variadic_metavar(self, tmp_path: Path) -> None:
+        """scan_with_pattern should capture variadic metavariables."""
+        test_file = tmp_path / "test.py"
+        test_file.write_text("print(1, 2)\n", encoding="utf-8")
+
+        matches = scan_with_pattern([test_file], "print($$$ARGS)", tmp_path)
+        assert len(matches) == 1
+        metavars = matches[0]["metaVariables"]
+        assert "$$$ARGS" in metavars
+        capture = metavars["$$$ARGS"]
+        assert capture["kind"] == "multi"
+        assert len(capture["nodes"]) == 2
 
 
 class TestFilterRecordsByType:

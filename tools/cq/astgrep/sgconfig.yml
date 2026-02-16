@@ -3,6 +3,7 @@
 
 ruleDirs:
   - rules/python_facts
+  - rules/rust_facts
 
 testConfigs:
   - testDir: rule-tests/python_facts

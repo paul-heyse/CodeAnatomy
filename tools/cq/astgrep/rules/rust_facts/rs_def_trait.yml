@@ -1,0 +1,8 @@
+id: rs_def_trait
+language: rust
+severity: hint
+rule:
+  kind: trait_item
+metadata:
+  record: def
+  kind: trait

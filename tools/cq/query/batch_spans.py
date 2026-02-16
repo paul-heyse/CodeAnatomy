@@ -11,9 +11,12 @@ from tools.cq.core.locations import SourceSpan
 from tools.cq.core.pathing import normalize_repo_relative_path
 from tools.cq.query.executor import (
     AstGrepMatchSpan,
-    _filter_match_spans_by_metavars,
+    _execute_rule_matches,
     _group_match_spans,
-    _iter_rule_matches_for_spans,
+    _match_passes_filters,
+    _partition_query_metavar_filters,
+    _resolve_rule_metavar_names,
+    _resolve_rule_variadic_metavars,
 )
 from tools.cq.query.language import QueryLanguage, file_extensions_for_language
 
@@ -44,6 +47,7 @@ def collect_span_filters(
         _collect_file_matches(
             file_path=file_path,
             root=root,
+            queries=queries,
             rule_sets=rule_sets,
             query_langs=query_langs,
             per_query=per_query,
@@ -56,6 +60,7 @@ def _collect_file_matches(
     *,
     file_path: Path,
     root: Path,
+    queries: list[Query],
     rule_sets: list[tuple[AstGrepRule, ...]],
     query_langs: list[QueryLanguage],
     per_query: list[list[AstGrepMatchSpan]],
@@ -77,7 +82,20 @@ def _collect_file_matches(
             roots_by_lang[lang] = SgRoot(src, lang).root()
         node = roots_by_lang[lang]
         for rule in rules:
-            for match in _iter_rule_matches_for_spans(node, rule):
+            metavar_names = _resolve_rule_metavar_names(rule, queries[idx])
+            variadic_names = _resolve_rule_variadic_metavars(rule)
+            constraints, residual_filters = _partition_query_metavar_filters(
+                queries[idx],
+                allowed_names=frozenset(metavar_names),
+            )
+            for match in _execute_rule_matches(node, rule, constraints=constraints or None):
+                if not _match_passes_filters(
+                    match,
+                    filters=residual_filters,
+                    metavar_names=metavar_names,
+                    variadic_names=variadic_names,
+                ):
+                    continue
                 range_obj = match.range()
                 per_query[idx].append(
                     AstGrepMatchSpan(
@@ -109,11 +127,10 @@ def _query_spans(
     matches: list[AstGrepMatchSpan],
     query: Query,
 ) -> dict[str, list[tuple[int, int]]]:
+    _ = query
     if not matches:
         return {}
-    if not query.metavar_filters:
-        return _group_match_spans(matches)
-    return _filter_match_spans_by_metavars(matches, query.metavar_filters)
+    return _group_match_spans(matches)
 
 
 __all__ = [

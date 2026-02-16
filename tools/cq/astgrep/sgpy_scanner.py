@@ -16,6 +16,7 @@ from ast_grep_py import Config, Rule, SgNode, SgRoot
 
 from tools.cq.core.locations import SourceSpan
 from tools.cq.query.language import DEFAULT_QUERY_LANGUAGE, QueryLanguage
+from tools.cq.query.metavar import extract_metavar_names, extract_variadic_metavar_names
 
 # Record types from ast-grep rules
 RecordType = Literal["def", "call", "import", "raise", "except", "assign_ctor"]
@@ -172,6 +173,9 @@ def scan_files(
     rules: tuple[RuleSpec, ...],
     root: Path,
     lang: QueryLanguage = DEFAULT_QUERY_LANGUAGE,
+    *,
+    prefilter: bool = True,
+    rulepack_path: Path | None = None,
 ) -> list[SgRecord]:
     """Scan files using ast-grep-py native bindings.
 
@@ -192,8 +196,18 @@ def scan_files(
         Parsed scan records.
     """
     records: list[SgRecord] = []
+    _ = rulepack_path
+    from tools.cq.search.rg.prefilter import maybe_prefilter_astgrep_files
 
-    for file_path in files:
+    candidate_files = maybe_prefilter_astgrep_files(
+        root,
+        files=files,
+        rules=rules,
+        lang_scope="rust" if lang == "rust" else "python",
+        enabled=prefilter,
+    )
+
+    for file_path in candidate_files:
         try:
             src = file_path.read_text(encoding="utf-8")
         except OSError:
@@ -259,6 +273,9 @@ def scan_with_pattern(
     """
     matches: list[dict[str, Any]] = []
 
+    metavar_names = extract_metavar_names(pattern)
+    variadic_names = frozenset(extract_variadic_metavar_names(pattern))
+
     for file_path in files:
         try:
             src = file_path.read_text(encoding="utf-8")
@@ -269,7 +286,14 @@ def scan_with_pattern(
         node = sg_root.root()
 
         for match in node.find_all(pattern=pattern):
-            match_dict = _node_to_match_dict(match, file_path, root, rule_id)
+            match_dict = _node_to_match_dict(
+                match,
+                file_path,
+                root,
+                rule_id,
+                metavar_names=metavar_names,
+                variadic_names=variadic_names,
+            )
             matches.append(match_dict)
 
     return matches
@@ -334,6 +358,9 @@ def _node_to_match_dict(
     file_path: Path,
     root: Path,
     rule_id: str,
+    *,
+    metavar_names: tuple[str, ...],
+    variadic_names: frozenset[str],
 ) -> dict[str, Any]:
     """Convert an ast-grep-py match to a dict matching CLI JSON output.
 
@@ -363,7 +390,11 @@ def _node_to_match_dict(
     }
 
     # Extract metavariables
-    metavars = _extract_metavars(match)
+    metavars = _extract_metavars(
+        match,
+        metavar_names=metavar_names,
+        variadic_names=variadic_names,
+    )
 
     return {
         "ruleId": rule_id,
@@ -374,7 +405,26 @@ def _node_to_match_dict(
     }
 
 
-def _extract_metavars(match: SgNode) -> dict[str, dict[str, Any]]:
+def _node_payload(node: SgNode) -> dict[str, Any]:
+    range_obj = node.range()
+    return {
+        "text": node.text(),
+        "start": {"line": range_obj.start.line, "column": range_obj.start.column},
+        "end": {"line": range_obj.end.line, "column": range_obj.end.column},
+    }
+
+
+def _is_variadic_separator(node: SgNode) -> bool:
+    text = node.text().strip()
+    return node.kind() in {",", ";"} or text in {",", ";"}
+
+
+def _extract_metavars(
+    match: SgNode,
+    *,
+    metavar_names: tuple[str, ...],
+    variadic_names: frozenset[str],
+) -> dict[str, dict[str, Any]]:
     """Extract metavariable captures from a match.
 
     Parameters
@@ -389,47 +439,22 @@ def _extract_metavars(match: SgNode) -> dict[str, dict[str, Any]]:
     """
     metavars: dict[str, dict[str, Any]] = {}
 
-    # Common metavariable names to try
-    common_names = [
-        "FUNC",
-        "F",
-        "CLASS",
-        "METHOD",
-        "M",
-        "X",
-        "Y",
-        "Z",
-        "A",
-        "B",
-        "OBJ",
-        "ATTR",
-        "VAL",
-        "ARGS",
-        "KWARGS",
-        "E",
-        "NAME",
-        "MODULE",
-        "EXCEPT",
-        "COND",
-        "VAR",
-        "P",
-        "L",
-        "DECORATOR",
-        "SQL",
-        "CURSOR",
-    ]
-
-    for name in common_names:
+    for name in metavar_names:
         captured = match.get_match(name)
         if captured is not None:
-            range_obj = captured.range()
-            payload = {
-                "text": captured.text(),
-                "start": {"line": range_obj.start.line, "column": range_obj.start.column},
-                "end": {"line": range_obj.end.line, "column": range_obj.end.column},
-            }
+            payload = _node_payload(captured)
             metavars[name] = payload
             metavars[f"${name}"] = payload
+
+        if name in variadic_names:
+            captured_multi = match.get_multiple_matches(name)
+            all_nodes: list[SgNode] = list(captured_multi) if captured_multi is not None else []
+            captured_nodes = [node for node in all_nodes if not _is_variadic_separator(node)]
+            if captured_nodes:
+                metavars[f"$$${name}"] = {
+                    "kind": "multi",
+                    "nodes": [_node_payload(node) for node in captured_nodes],
+                }
 
     return metavars
 

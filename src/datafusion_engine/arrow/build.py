@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
@@ -40,16 +41,21 @@ from datafusion_engine.arrow.nested import (
 )
 from datafusion_engine.arrow.types import list_view_type, map_type
 
+logger = logging.getLogger(__name__)
+
 
 def _resolve_schema(schema: SchemaLike) -> pa.Schema:
     if isinstance(schema, pa.Schema):
+        logger.debug("Resolved schema directly from pyarrow.Schema")
         return schema
     to_pyarrow = getattr(schema, "to_pyarrow", None)
     if callable(to_pyarrow):
         resolved = to_pyarrow()
         if isinstance(resolved, pa.Schema):
+            logger.debug("Resolved schema via to_pyarrow()")
             return resolved
     msg = "Schema must be a pyarrow.Schema derived from DataFusion."
+    logger.warning("Failed to resolve schema from %s", type(schema).__name__)
     raise TypeError(msg)
 
 
@@ -371,8 +377,14 @@ def table_from_arrays(
     """
     if schema is None and names is None:
         msg = "table_from_arrays requires schema or names."
+        logger.warning("table_from_arrays missing schema and names")
         raise ValueError(msg)
     resolved_schema = _resolve_schema(schema) if schema is not None else None
+    logger.debug(
+        "Building Arrow table from arrays: columns=%s schema_provided=%s",
+        len(arrays),
+        resolved_schema is not None,
+    )
     return pa.table(arrays, schema=resolved_schema, names=names)
 
 
@@ -429,7 +441,13 @@ def table_from_rows(
         Table built from mapping rows.
     """
     resolved_schema = _resolve_schema(schema) if schema is not None else None
-    return pa.Table.from_pylist(list(rows), schema=resolved_schema)
+    row_payload = list(rows)
+    logger.debug(
+        "Building Arrow table from row mappings: rows=%s schema_provided=%s",
+        len(row_payload),
+        resolved_schema is not None,
+    )
+    return pa.Table.from_pylist(row_payload, schema=resolved_schema)
 
 
 def table_from_row_dicts(rows: Iterable[Mapping[str, object]]) -> TableLike:
@@ -627,6 +645,7 @@ def cast_table(
         Casted table.
     """
     resolved = _resolve_schema(schema)
+    logger.debug("Casting table to schema with %s fields (safe=%s)", len(resolved), safe)
     return table.cast(resolved, safe=safe)
 
 

@@ -21,6 +21,11 @@ from datafusion_engine.extensions.context_adaptation import (
     ExtensionEntrypointInvocation,
     invoke_entrypoint_with_adapted_context,
 )
+from datafusion_engine.udf.constants import (
+    EXTENSION_MODULE_LABEL,
+    EXTENSION_MODULE_PATH,
+    REBUILD_WHEELS_HINT,
+)
 from storage.ipc_utils import payload_ipc_bytes
 
 if TYPE_CHECKING:
@@ -219,13 +224,13 @@ def _load_extension() -> object:
         ImportError: If the extension module cannot be loaded.
     """
     try:
-        module = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
+        module = importlib.import_module(EXTENSION_MODULE_PATH)
     except ImportError as exc:
-        msg = "The datafusion_ext module with FunctionFactory hooks is required."
+        msg = f"The {EXTENSION_MODULE_LABEL} module with FunctionFactory hooks is required."
         raise ImportError(msg) from exc
     if hasattr(module, "install_function_factory"):
         return module
-    msg = "datafusion_ext is missing install_function_factory entrypoint."
+    msg = f"{EXTENSION_MODULE_LABEL} is missing install_function_factory entrypoint."
     raise ImportError(msg)
 
 
@@ -277,8 +282,7 @@ def install_function_factory(
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = (
             "FunctionFactory install failed due to SessionContext type mismatch. "
-            "Rebuild and install matching datafusion/datafusion_ext wheels "
-            "(scripts/build_datafusion_wheels.sh + uv sync)."
+            f"{REBUILD_WHEELS_HINT}"
         )
         raise TypeError(msg) from exc
 

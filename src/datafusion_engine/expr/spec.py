@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 import msgspec
 
 from datafusion_engine.arrow.interop import ScalarLike
+from datafusion_engine.sql.helpers import sql_identifier
 from datafusion_engine.udf.expr import udf_expr
 from serde_msgspec import StructBaseStrict
 
@@ -190,11 +191,6 @@ def _sql_literal(
     raise TypeError(msg)
 
 
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
-
-
 class ExprIR(StructBaseStrict, frozen=True):
     """Minimal expression spec for DataFusion SQL emission."""
 
@@ -217,7 +213,7 @@ class ExprIR(StructBaseStrict, frozen=True):
             if self.name is None:
                 msg = "ExprIR field op requires name."
                 raise ValueError(msg)
-            return _sql_identifier(self.name)
+            return sql_identifier(self.name)
         if self.op == "literal":
             return _sql_literal(self.value)
         if self.op == "call":

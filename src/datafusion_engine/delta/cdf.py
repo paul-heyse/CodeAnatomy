@@ -65,7 +65,7 @@ def register_cdf_inputs(
     for name in table_names:
         location = dataset_resolver.location(name)
         cdf_name = f"{name}__cdf"
-        metadata = table_provider_metadata(id(ctx), table_name=name)
+        metadata = table_provider_metadata(ctx, table_name=name)
         supports_cdf = bool(metadata.supports_cdf) if metadata is not None else False
         provider = resolve_datafusion_provider(location) if location is not None else None
         if location is not None and provider == "delta_cdf":

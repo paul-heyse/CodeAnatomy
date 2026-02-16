@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from tests.test_helpers.optional_deps import require_datafusion
 
 require_datafusion()
@@ -11,7 +9,10 @@ require_datafusion()
 import pyarrow as pa
 import pytest
 
+from datafusion_engine.dataset.registry import DatasetLocation
+from datafusion_engine.dataset.resolution import DatasetResolution
 from datafusion_engine.delta import service as delta_service
+from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
 from datafusion_engine.delta.store_policy import DeltaStorePolicy
 from datafusion_engine.session.runtime import DataFusionRuntimeProfile, PolicyBundleConfig
 from storage.deltalake.delta import DeltaReadRequest
@@ -93,37 +94,44 @@ def test_delta_service_provider_artifact_payload_includes_canonical_fields() -> 
     """Provider artifact payloads should include canonical snapshot identity metadata."""
     profile = DataFusionRuntimeProfile()
     service = profile.delta_service()
-    request = SimpleNamespace(
+    location = DatasetLocation(
+        path="s3a://Example-Bucket/path/table",
+        format="delta",
+        delta_version=7,
+        delta_timestamp=None,
+        delta_log_storage_options={"aws_endpoint": "http://localhost:4566"},
+        storage_options={"region": "us-east-1"},
+    )
+    resolution = DatasetResolution(
         name="events",
-        location=SimpleNamespace(
-            path="s3a://Example-Bucket/path/table",
-            format="delta",
-            delta_version=7,
-            delta_timestamp=None,
-            delta_log_storage_options={"aws_endpoint": "http://localhost:4566"},
-            storage_options={"region": "us-east-1"},
-        ),
-        resolution=SimpleNamespace(
-            provider_kind="delta",
-            delta_scan_options=None,
-            delta_scan_effective={"fallback": True},
-            delta_scan_snapshot={"scan": "v1"},
-            delta_scan_identity_hash="abc123",
-            delta_snapshot={"version": 7},
-            add_actions=[{"path": "part-000.parquet"}],
-            predicate_error="predicate parse failed",
-        ),
+        location=location,
+        provider=object(),
+        provider_kind="delta",
+        delta_snapshot={"version": 7},
+        delta_scan_config={"source": "runtime"},
+        delta_scan_effective={"fallback": True},
+        delta_scan_snapshot={"scan": "v1"},
+        delta_scan_identity_hash="abc123",
+        delta_scan_options=None,
+        add_actions=[{"path": "part-000.parquet"}],
+        predicate_error="predicate parse failed",
+    )
+    request = delta_service._ProviderArtifactRecordRequest(  # noqa: SLF001
+        ctx=profile.session_context(),
+        resolution=resolution,
+        location=location,
+        name="events",
         predicate="id > 1",
         scan_files=("part-000.parquet",),
     )
-    compatibility = SimpleNamespace(
-        module="datafusion_ext",
+    compatibility = DeltaExtensionCompatibility(
+        available=True,
+        compatible=True,
+        error=None,
         entrypoint="delta_provider_from_session",
+        module="datafusion_ext",
         ctx_kind="outer",
         probe_result="ok",
-        compatible=True,
-        available=True,
-        error=None,
     )
 
     payload = service._provider_artifact_payload(  # noqa: SLF001

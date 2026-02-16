@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
 from datafusion_engine.delta.scan_config import delta_scan_config_snapshot_from_options
 from serde_msgspec import StructBaseStrict, to_builtins
 from storage.deltalake.delta import canonical_table_uri
@@ -85,7 +86,7 @@ class DeltaProviderBuildRequest:
     scan_files_requested: bool | None = None
     scan_files_count: int | None = None
     predicate: str | None = None
-    compatibility: object | None = None
+    compatibility: DeltaExtensionCompatibility | None = None
     registration_path: str | None = None
     delta_version: int | None = None
     delta_timestamp: str | None = None
@@ -112,7 +113,7 @@ class RegistrationProviderArtifactInput:
     table_uri: str
     dataset_format: str
     provider_kind: str
-    compatibility: object | None
+    compatibility: DeltaExtensionCompatibility | None
     context: object
 
 
@@ -121,7 +122,7 @@ class ServiceProviderArtifactInput:
     """Input adapter for Delta-service provider artifact derivation."""
 
     request: object
-    compatibility: object | None
+    compatibility: DeltaExtensionCompatibility | None
     provider_mode: str
     strict_native_provider_enabled: bool
     strict_native_provider_violation: bool
@@ -281,6 +282,7 @@ def build_delta_provider_build_result(
         storage_options=request.delta_storage_options,
         log_storage_options=request.delta_log_storage_options,
     )
+    compatibility = request.compatibility
     return DeltaProviderBuildResult(
         event_time_unix_ms=int(time.time() * 1000) if request.include_event_metadata else None,
         run_id=request.run_id if request.include_event_metadata else None,
@@ -296,13 +298,13 @@ def build_delta_provider_build_result(
         scan_files_requested=request.scan_files_requested,
         scan_files_count=request.scan_files_count,
         predicate=request.predicate,
-        module=getattr(request.compatibility, "module", None),
-        entrypoint=getattr(request.compatibility, "entrypoint", None),
-        ctx_kind=getattr(request.compatibility, "ctx_kind", None),
-        probe_result=getattr(request.compatibility, "probe_result", None),
-        compatible=getattr(request.compatibility, "compatible", None),
-        available=getattr(request.compatibility, "available", None),
-        error=getattr(request.compatibility, "error", None),
+        module=compatibility.module if compatibility is not None else None,
+        entrypoint=compatibility.entrypoint if compatibility is not None else None,
+        ctx_kind=compatibility.ctx_kind if compatibility is not None else None,
+        probe_result=compatibility.probe_result if compatibility is not None else None,
+        compatible=compatibility.compatible if compatibility is not None else None,
+        available=compatibility.available if compatibility is not None else None,
+        error=compatibility.error if compatibility is not None else None,
         registration_path=request.registration_path,
         delta_version=request.delta_version,
         delta_timestamp=request.delta_timestamp,

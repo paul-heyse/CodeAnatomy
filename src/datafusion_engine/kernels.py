@@ -29,6 +29,7 @@ from datafusion_engine.arrow.metadata import (
     metadata_spec_from_schema,
     ordering_from_schema,
 )
+from datafusion_engine.sql.helpers import sql_identifier as _sql_identifier
 from serde_msgspec import StructBaseStrict
 
 # =============================================================================
@@ -321,11 +322,6 @@ def _sort_exprs(keys: Sequence[PlanSortKey]) -> list[DFSortKey]:
         )
         out.append(expr)
     return out
-
-
-def _sql_identifier(name: str) -> str:
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
 
 
 def _order_exprs_for_dedupe(spec: DedupeSpec) -> list[DFSortKey]:

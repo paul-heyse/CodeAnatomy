@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pyarrow as pa
+
+logger = logging.getLogger(__name__)
 
 SEMANTIC_TYPE_META = b"semantic_type"
 
@@ -87,6 +90,7 @@ def _arrow_ext_deserialize(
     if name == SPAN_ID_TYPE_INFO.name:
         return _SemanticExtensionType(SPAN_ID_TYPE_INFO)
     msg = f"Unsupported semantic extension type: {name!r}."
+    logger.warning("Unsupported semantic extension type payload: %s", name)
     raise ValueError(msg)
 
 
@@ -114,6 +118,7 @@ def _coerce_extension_payload(
 
 def register_semantic_extension_types() -> None:
     """Register semantic extension types with pyarrow."""
+    logger.debug("Registering semantic extension types")
     for info in (
         SPAN_TYPE_INFO,
         BYTE_SPAN_TYPE_INFO,
@@ -304,6 +309,7 @@ def apply_semantic_types(schema: pa.Schema) -> pa.Schema:
     pyarrow.Schema
         Schema with semantic types applied to matching fields.
     """
+    logger.debug("Applying semantic types to schema with %s fields", len(schema))
     fields = [_apply_semantic_field(field) for field in schema]
     return pa.schema(fields, metadata=schema.metadata)
 

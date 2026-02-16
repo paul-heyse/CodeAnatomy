@@ -44,7 +44,6 @@ from datafusion_engine.arrow.field_builders import (
     string_field,
 )
 from datafusion_engine.arrow.metadata import (
-    function_requirements_metadata_spec,
     optional_functions_from_metadata,
     ordering_metadata_spec,
     required_function_signature_types_from_metadata,
@@ -1534,33 +1533,9 @@ CST_VIEW_NAMES: tuple[str, ...] = (
     "cst_edges",
 )
 
-# ---------------------------------------------------------------------------
-# Function requirements metadata
-# ---------------------------------------------------------------------------
-
 
 def _sorted_tokens(tokens: frozenset[str]) -> tuple[str, ...]:
     return tuple(sorted(tokens))
-
-
-_ENGINE_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
-    required=(
-        "array_agg",
-        "array_distinct",
-        "array_sort",
-        "array_to_string",
-        "bool_or",
-        "coalesce",
-        "col_to_byte",
-        "concat_ws",
-        "prefixed_hash64",
-        "row_number",
-        "sha256",
-        "stable_hash64",
-        "stable_hash128",
-        "stable_id",
-    ),
-).schema_metadata
 
 
 from dataclasses import dataclass

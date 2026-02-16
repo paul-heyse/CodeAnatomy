@@ -5,39 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-import pyarrow as pa
-
+from datafusion_engine.arrow.interop import arrow_schema_from_df
 from datafusion_engine.udf.extension_runtime import udf_names_from_snapshot
 
 if TYPE_CHECKING:
-    from datafusion.dataframe import DataFrame
-
     from datafusion_engine.lineage.reporting import LineageReport
     from datafusion_engine.plan.bundle_artifact import DataFusionPlanArtifact
-
-
-def arrow_schema_from_df(df: DataFrame) -> pa.Schema:
-    """Extract a PyArrow schema from a DataFusion DataFrame.
-
-    Args:
-        df: Description.
-
-    Returns:
-        pa.Schema: Result.
-
-    Raises:
-        TypeError: If the operation cannot be completed.
-    """
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    msg = "Failed to resolve DataFusion schema."
-    raise TypeError(msg)
 
 
 def extract_lineage_from_bundle(bundle: DataFusionPlanArtifact) -> LineageReport:

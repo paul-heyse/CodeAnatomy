@@ -646,7 +646,7 @@ def table_constraint_rows(
     """
     snapshot = _introspection_cache_for_ctx(ctx, sql_options=sql_options).snapshot
     rows = _constraint_rows_from_snapshot(snapshot, table_name=table_name)
-    metadata = table_provider_metadata(id(ctx), table_name=table_name)
+    metadata = table_provider_metadata(ctx, table_name=table_name)
     if metadata is None or not metadata.constraints:
         return rows
     extra_rows = _constraint_rows_from_metadata(
@@ -1103,7 +1103,7 @@ class SchemaIntrospector:
             if name is None or default is None:
                 continue
             defaults[str(name)] = default
-        metadata = table_provider_metadata(id(self.ctx), table_name=table_name)
+        metadata = table_provider_metadata(self.ctx, table_name=table_name)
         if metadata is not None and metadata.default_values:
             for name, value in metadata.default_values.items():
                 defaults.setdefault(name, value)
@@ -1155,7 +1155,7 @@ class SchemaIntrospector:
         str | None
             CREATE TABLE statement when available.
         """
-        metadata = table_provider_metadata(id(self.ctx), table_name=table_name)
+        metadata = table_provider_metadata(self.ctx, table_name=table_name)
         return metadata.ddl if metadata else None
 
     def table_constraints(self, table_name: str) -> tuple[str, ...]:

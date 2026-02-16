@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """Tests for typed structural query-hit export helpers."""
 
 from __future__ import annotations

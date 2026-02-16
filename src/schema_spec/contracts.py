@@ -14,7 +14,8 @@ and information_schema.key_column_usage views.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from functools import lru_cache
 from typing import TYPE_CHECKING, Literal, TypedDict, Unpack, cast
 
 import msgspec
@@ -39,7 +40,6 @@ from datafusion_engine.expr.query_spec import ProjectionSpec, QuerySpec
 from datafusion_engine.expr.spec import ExprSpec
 from datafusion_engine.extensions.schema_runtime import load_schema_runtime
 from datafusion_engine.kernels import DedupeSpec, SortKey
-from datafusion_engine.schema import extract_nested_dataset_names
 from datafusion_engine.schema.alignment import SchemaEvolutionSpec
 from datafusion_engine.schema.finalize import Contract
 from datafusion_engine.schema.introspection import SchemaIntrospector
@@ -1720,14 +1720,34 @@ def dataset_spec_from_path(
     return dataset_spec_from_dataset(name, dataset, version=version)
 
 
-SCHEMA_EVOLUTION_PRESETS: Mapping[str, SchemaEvolutionSpec] = {
-    name: SchemaEvolutionSpec(
-        allow_missing=True,
-        allow_extra=True,
-        allow_casts=True,
-    )
-    for name in (*extract_nested_dataset_names(), "symtable_files_v1")
-}
+@lru_cache(maxsize=1)
+def _schema_evolution_presets() -> Mapping[str, SchemaEvolutionSpec]:
+    from datafusion_engine.schema.nested_views import extract_nested_dataset_names
+
+    return {
+        name: SchemaEvolutionSpec(
+            allow_missing=True,
+            allow_extra=True,
+            allow_casts=True,
+        )
+        for name in (*extract_nested_dataset_names(), "symtable_files_v1")
+    }
+
+
+class _SchemaEvolutionPresetsProxy(Mapping[str, SchemaEvolutionSpec]):
+    """Lazy mapping proxy for schema-evolution defaults."""
+
+    def __getitem__(self, key: str) -> SchemaEvolutionSpec:
+        return _schema_evolution_presets()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(_schema_evolution_presets())
+
+    def __len__(self) -> int:
+        return len(_schema_evolution_presets())
+
+
+SCHEMA_EVOLUTION_PRESETS: Mapping[str, SchemaEvolutionSpec] = _SchemaEvolutionPresetsProxy()
 
 
 def resolve_schema_evolution_spec(name: str) -> SchemaEvolutionSpec:
@@ -1738,7 +1758,7 @@ def resolve_schema_evolution_spec(name: str) -> SchemaEvolutionSpec:
     SchemaEvolutionSpec
         Evolution rules for the dataset name.
     """
-    return SCHEMA_EVOLUTION_PRESETS.get(name, SchemaEvolutionSpec())
+    return _schema_evolution_presets().get(name, SchemaEvolutionSpec())
 
 
 class ContractCatalogSpec(StructBaseStrict, frozen=True):

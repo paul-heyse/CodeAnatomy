@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from datafusion_engine.delta.capabilities import DeltaExtensionCompatibility
 from datafusion_engine.delta.provider_artifacts import (
     DeltaProviderBuildRequest,
     RegistrationProviderArtifactInput,
@@ -19,15 +20,16 @@ FINGERPRINT_LENGTH = 16
 PRUNED_FILE_COUNT = 2
 
 
-@dataclass(frozen=True)
-class _CompatibilityStub:
-    module: str = "datafusion_ext"
-    entrypoint: str = "delta_provider_from_session"
-    ctx_kind: str = "outer"
-    probe_result: str = "ok"
-    compatible: bool = True
-    available: bool = True
-    error: str | None = None
+def _compatibility_stub() -> DeltaExtensionCompatibility:
+    return DeltaExtensionCompatibility(
+        available=True,
+        compatible=True,
+        error=None,
+        entrypoint="delta_provider_from_session",
+        module="datafusion_ext",
+        ctx_kind="outer",
+        probe_result="ok",
+    )
 
 
 @dataclass(frozen=True)
@@ -93,7 +95,7 @@ def test_build_delta_provider_build_result_emits_snapshot_identity_and_fingerpri
         scan_files_requested=False,
         scan_files_count=0,
         predicate="id > 1",
-        compatibility=_CompatibilityStub(),
+        compatibility=_compatibility_stub(),
         registration_path="provider",
         delta_version=11,
         delta_storage_options={"region": "us-east-1"},
@@ -148,7 +150,7 @@ def test_provider_build_request_adapter_from_registration_context() -> None:
             table_uri="s3://bucket/events",
             dataset_format="delta",
             provider_kind="delta",
-            compatibility=_CompatibilityStub(),
+            compatibility=_compatibility_stub(),
             context=context,
         )
     )
@@ -168,7 +170,7 @@ def test_provider_build_request_adapter_from_service_context() -> None:
     build_request = provider_build_request_from_service_context(
         ServiceProviderArtifactInput(
             request=request,
-            compatibility=_CompatibilityStub(),
+            compatibility=_compatibility_stub(),
             provider_mode="delta_table_provider",
             strict_native_provider_enabled=True,
             strict_native_provider_violation=False,
@@ -200,7 +202,7 @@ def test_provider_build_request_adapter_preserves_internal_bootstrap_context() -
             table_uri="file:///tmp/artifacts/datafusion_view_cache_inventory_v1",
             dataset_format="delta",
             provider_kind="delta",
-            compatibility=_CompatibilityStub(),
+            compatibility=_compatibility_stub(),
             context=context,
         )
     )
@@ -224,7 +226,7 @@ def test_provider_build_result_includes_internal_bootstrap_snapshot_identity() -
         strict_native_provider_enabled=False,
         strict_native_provider_violation=False,
         ffi_table_provider=True,
-        compatibility=_CompatibilityStub(),
+        compatibility=_compatibility_stub(),
         registration_path="bootstrap",
         delta_snapshot={"version": 0},
         include_event_metadata=False,

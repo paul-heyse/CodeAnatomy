@@ -14,6 +14,9 @@ All metadata flows through DataFusion registration surfaces:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from weakref import WeakKeyDictionary
+
+from datafusion import SessionContext
 
 
 @dataclass(frozen=True)
@@ -240,11 +243,14 @@ class TableProviderMetadata:
         )
 
 
-_TABLE_PROVIDER_METADATA: dict[int, dict[str, TableProviderMetadata]] = {}
+_TABLE_PROVIDER_METADATA_BY_CONTEXT: WeakKeyDictionary[
+    SessionContext,
+    dict[str, TableProviderMetadata],
+] = WeakKeyDictionary()
 
 
 def record_table_provider_metadata(
-    ctx_id: int,
+    ctx: SessionContext,
     *,
     metadata: TableProviderMetadata,
 ) -> None:
@@ -252,17 +258,20 @@ def record_table_provider_metadata(
 
     Parameters
     ----------
-    ctx_id : int
-        Session context ID (from id(ctx)).
+    ctx : SessionContext
+        Session context instance.
     metadata : TableProviderMetadata
         Metadata to record for the table.
     """
-    context_metadata = _TABLE_PROVIDER_METADATA.setdefault(ctx_id, {})
+    context_metadata = _TABLE_PROVIDER_METADATA_BY_CONTEXT.get(ctx)
+    if context_metadata is None:
+        context_metadata = {}
+        _TABLE_PROVIDER_METADATA_BY_CONTEXT[ctx] = context_metadata
     context_metadata[metadata.table_name] = metadata
 
 
 def table_provider_metadata(
-    ctx_id: int,
+    ctx: SessionContext,
     *,
     table_name: str,
 ) -> TableProviderMetadata | None:
@@ -270,8 +279,8 @@ def table_provider_metadata(
 
     Parameters
     ----------
-    ctx_id : int
-        Session context ID (from id(ctx)).
+    ctx : SessionContext
+        Session context instance.
     table_name : str
         Table name to look up.
 
@@ -280,34 +289,34 @@ def table_provider_metadata(
     TableProviderMetadata | None
         Metadata instance when available.
     """
-    return _TABLE_PROVIDER_METADATA.get(ctx_id, {}).get(table_name)
+    return _TABLE_PROVIDER_METADATA_BY_CONTEXT.get(ctx, {}).get(table_name)
 
 
-def all_table_provider_metadata(ctx_id: int) -> dict[str, TableProviderMetadata]:
+def all_table_provider_metadata(ctx: SessionContext) -> dict[str, TableProviderMetadata]:
     """Return all TableProvider metadata for a session context.
 
     Parameters
     ----------
-    ctx_id : int
-        Session context ID (from id(ctx)).
+    ctx : SessionContext
+        Session context instance.
 
     Returns:
     -------
     dict[str, TableProviderMetadata]
         Mapping of table names to metadata.
     """
-    return dict(_TABLE_PROVIDER_METADATA.get(ctx_id, {}))
+    return dict(_TABLE_PROVIDER_METADATA_BY_CONTEXT.get(ctx, {}))
 
 
-def clear_table_provider_metadata(ctx_id: int) -> None:
+def clear_table_provider_metadata(ctx: SessionContext) -> None:
     """Clear all TableProvider metadata for a session context.
 
     Parameters
     ----------
-    ctx_id : int
-        Session context ID (from id(ctx)).
+    ctx : SessionContext
+        Session context instance.
     """
-    _TABLE_PROVIDER_METADATA.pop(ctx_id, None)
+    _TABLE_PROVIDER_METADATA_BY_CONTEXT.pop(ctx, None)
 
 
 __all__ = [

@@ -1,15 +1,9 @@
-"""Extractor templates with convention-based discovery.
-
-Each extractor's metadata is defined as a module-level constant pair
-(``_<NAME>_TEMPLATE`` / ``_<NAME>_CONFIG``) and collected by
-``_discover_templates()`` / ``_discover_configs()`` into the public dicts.
-"""
+"""Extractor templates with explicit registry declarations."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import cast
 
 from arrow_utils.core.ordering import OrderingLevel
 from datafusion_engine.arrow.metadata import EvidenceMetadataSpec, evidence_metadata
@@ -26,17 +20,7 @@ class DatasetTemplateSpec:
 
 
 def _discovered_template_names() -> tuple[str, ...]:
-    return tuple(
-        descriptor.extractor_name
-        for descriptor in sorted(
-            (
-                value
-                for symbol, value in globals().items()
-                if symbol.endswith("_TEMPLATE") and isinstance(value, ExtractorTemplate)
-            ),
-            key=lambda descriptor: descriptor.extractor_name,
-        )
-    )
+    return tuple(sorted(_TEMPLATES))
 
 
 def dataset_template_specs() -> tuple[DatasetTemplateSpec, ...]:
@@ -231,24 +215,31 @@ _SCIP_TEMPLATE = ExtractorTemplate(
 )
 
 
-def _discover_templates() -> dict[str, ExtractorTemplate]:
-    """Collect per-extractor TEMPLATE descriptors into a single dict.
-
-    Returns:
-        dict[str, ExtractorTemplate]: Templates keyed by extractor name.
-    """
-    descriptors = sorted(
-        (
-            value
-            for symbol, value in globals().items()
-            if symbol.endswith("_TEMPLATE") and isinstance(value, ExtractorTemplate)
-        ),
-        key=lambda descriptor: descriptor.extractor_name,
-    )
-    return {t.extractor_name: t for t in descriptors}
+_TEMPLATE_DEFINITIONS: tuple[ExtractorTemplate, ...] = (
+    _AST_TEMPLATE,
+    _BYTECODE_TEMPLATE,
+    _CST_TEMPLATE,
+    _PYTHON_EXTERNAL_TEMPLATE,
+    _PYTHON_IMPORTS_TEMPLATE,
+    _REPO_SCAN_TEMPLATE,
+    _SCIP_TEMPLATE,
+    _SYMTABLE_TEMPLATE,
+    _TREE_SITTER_TEMPLATE,
+)
 
 
-_TEMPLATES: dict[str, ExtractorTemplate] = _discover_templates()
+def _build_template_registry() -> dict[str, ExtractorTemplate]:
+    templates: dict[str, ExtractorTemplate] = {}
+    for descriptor in _TEMPLATE_DEFINITIONS:
+        name = descriptor.extractor_name
+        if name in templates:
+            msg = f"Duplicate extractor template declaration: {name!r}."
+            raise ValueError(msg)
+        templates[name] = descriptor
+    return templates
+
+
+_TEMPLATES: dict[str, ExtractorTemplate] = _build_template_registry()
 
 
 # ---------------------------------------------------------------------------
@@ -441,24 +432,33 @@ _FILE_LINE_INDEX_CONFIG = ExtractorConfigSpec(
 )
 
 
-def _discover_configs() -> dict[str, ExtractorConfigSpec]:
-    """Collect per-extractor CONFIG descriptors into a single dict.
-
-    Returns:
-        dict[str, ExtractorConfigSpec]: Config specs keyed by extractor name.
-    """
-    descriptors = sorted(
-        (
-            value
-            for symbol, value in globals().items()
-            if symbol.endswith("_CONFIG") and isinstance(value, ExtractorConfigSpec)
-        ),
-        key=lambda descriptor: descriptor.extractor_name,
-    )
-    return {c.extractor_name: c for c in descriptors}
+_CONFIG_DEFINITIONS: tuple[ExtractorConfigSpec, ...] = (
+    _AST_CONFIG,
+    _BYTECODE_CONFIG,
+    _CST_CONFIG,
+    _FILE_LINE_INDEX_CONFIG,
+    _PYTHON_EXTERNAL_CONFIG,
+    _PYTHON_IMPORTS_CONFIG,
+    _REPO_BLOBS_CONFIG,
+    _REPO_SCAN_CONFIG,
+    _SCIP_CONFIG,
+    _SYMTABLE_CONFIG,
+    _TREE_SITTER_CONFIG,
+)
 
 
-_CONFIGS: dict[str, ExtractorConfigSpec] = _discover_configs()
+def _build_config_registry() -> dict[str, ExtractorConfigSpec]:
+    configs: dict[str, ExtractorConfigSpec] = {}
+    for descriptor in _CONFIG_DEFINITIONS:
+        name = descriptor.extractor_name
+        if name in configs:
+            msg = f"Duplicate extractor config declaration: {name!r}."
+            raise ValueError(msg)
+        configs[name] = descriptor
+    return configs
+
+
+_CONFIGS: dict[str, ExtractorConfigSpec] = _build_config_registry()
 
 DatasetRowRecord = Mapping[str, object]
 
@@ -1351,31 +1351,24 @@ def _tree_sitter_records(spec: DatasetTemplateSpec) -> tuple[DatasetRowRecord, .
     )
 
 
+_DATASET_TEMPLATE_HANDLERS: dict[
+    str,
+    Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]],
+] = {
+    "ast": _ast_records,
+    "bytecode": _bytecode_records,
+    "cst": _cst_records,
+    "python_external": _python_external_records,
+    "python_imports": _python_imports_records,
+    "repo_scan": _repo_scan_records,
+    "scip": _scip_records,
+    "symtable": _symtable_records,
+    "tree_sitter": _tree_sitter_records,
+}
 _DATASET_TEMPLATE_REGISTRY: ImmutableRegistry[
-    str, Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]
-] = ImmutableRegistry.from_dict({})
-
-
-def _discover_dataset_template_registry() -> ImmutableRegistry[
-    str, Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]
-]:
-    handlers: dict[str, Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]] = {}
-    for symbol, value in globals().items():
-        if not callable(value):
-            continue
-        if not (symbol.startswith("_") and symbol.endswith("_records")):
-            continue
-        template_name = symbol[1:-8]
-        if not template_name:
-            continue
-        handlers[template_name] = cast(
-            "Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]]",
-            value,
-        )
-    return ImmutableRegistry.from_dict(dict(sorted(handlers.items())))
-
-
-_DATASET_TEMPLATE_REGISTRY = _discover_dataset_template_registry()
+    str,
+    Callable[[DatasetTemplateSpec], tuple[DatasetRowRecord, ...]],
+] = ImmutableRegistry.from_dict(dict(sorted(_DATASET_TEMPLATE_HANDLERS.items())))
 
 
 def expand_dataset_templates(

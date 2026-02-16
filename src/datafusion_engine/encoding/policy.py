@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -17,6 +18,7 @@ from datafusion_engine.arrow.interop import (
     DataTypeLike,
     TableLike,
 )
+from datafusion_engine.arrow.types import DEFAULT_DICTIONARY_INDEX_TYPE
 from datafusion_engine.expr.cast import safe_cast
 from datafusion_engine.session.helpers import temp_table
 from schema_spec.arrow_types import ArrowTypeBase, ArrowTypeSpec, arrow_type_to_pyarrow
@@ -25,7 +27,7 @@ from utils.validation import ensure_table
 if TYPE_CHECKING:
     from datafusion.expr import Expr
 
-DEFAULT_DICTIONARY_INDEX_TYPE = pa.int32()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -79,9 +81,15 @@ def apply_encoding(table: TableLike, *, policy: EncodingPolicy) -> TableLike:
         Table with dictionary-encoded columns applied.
     """
     if not policy.dictionary_cols:
+        logger.debug("Encoding policy contains no dictionary columns; returning input table")
         return table
     df_ctx = _datafusion_context()
     resolved = ensure_table(table, label="table")
+    logger.debug(
+        "Applying dictionary encoding to %s columns for table with %s rows",
+        len(policy.dictionary_cols),
+        resolved.num_rows,
+    )
     with temp_table(df_ctx, resolved, prefix="_encoding_") as table_name:
         df = df_ctx.table(table_name)
         selections = _encoding_select_expr(schema=resolved.schema, policy=policy)
@@ -108,6 +116,7 @@ def _encoding_select_expr(
     policy: EncodingPolicy,
 ) -> list[Expr]:
     selections: list[Expr] = []
+    logger.debug("Building encoding selection expressions for %s fields", len(schema))
     for schema_field in schema:
         name = schema_field.name
         if name not in policy.dictionary_cols:

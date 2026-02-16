@@ -299,7 +299,7 @@ def _feature_tuple(value: object) -> tuple[str, ...]:
 
 
 def _delta_gate_values(
-    gate: object | None,
+    gate: DeltaFeatureGate | Mapping[str, object] | None,
 ) -> tuple[int | None, int | None, tuple[str, ...], tuple[str, ...]] | None:
     if gate is None:
         return None

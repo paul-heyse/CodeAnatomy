@@ -2,4 +2,6 @@
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from datafusion_engine.sql.helpers import sql_identifier
+
+__all__ = ["sql_identifier"]

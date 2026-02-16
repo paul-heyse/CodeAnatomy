@@ -137,7 +137,7 @@ def test_runtime_state_mutation() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_state() -> Generator[None, None, None]:
+def _reset_state() -> Generator[None]:
     """Reset global runtime state around each test.
 
     Yields:

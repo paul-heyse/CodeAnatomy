@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from weakref import WeakKeyDictionary
 
 import pyarrow as pa
 from datafusion import col
@@ -370,13 +371,24 @@ class IntrospectionCache:
         return self.snapshot.schema_map()
 
 
-_INTROSPECTION_CACHE_BY_CONTEXT: dict[int, IntrospectionCache] = {}
+@dataclass
+class IntrospectionCaches:
+    """Injectable cache container for introspection snapshots."""
+
+    by_context: WeakKeyDictionary[SessionContext, IntrospectionCache] = field(
+        default_factory=WeakKeyDictionary
+    )
+
+
+def _resolve_introspection_caches(caches: IntrospectionCaches | None) -> IntrospectionCaches:
+    return caches or IntrospectionCaches()
 
 
 def introspection_cache_for_ctx(
     ctx: SessionContext,
     *,
     sql_options: SQLOptions | None = None,
+    caches: IntrospectionCaches | None = None,
 ) -> IntrospectionCache:
     """Return a cached IntrospectionCache for a SessionContext.
 
@@ -385,17 +397,22 @@ def introspection_cache_for_ctx(
     IntrospectionCache
         Cache bound to the provided SessionContext.
     """
-    key = id(ctx)
-    cache = _INTROSPECTION_CACHE_BY_CONTEXT.get(key)
+    resolved_caches = _resolve_introspection_caches(caches)
+    cache = resolved_caches.by_context.get(ctx)
     if cache is None:
         cache = IntrospectionCache(ctx, sql_options=sql_options)
-        _INTROSPECTION_CACHE_BY_CONTEXT[key] = cache
+        resolved_caches.by_context[ctx] = cache
     return cache
 
 
-def invalidate_introspection_cache(ctx: SessionContext) -> None:
+def invalidate_introspection_cache(
+    ctx: SessionContext,
+    *,
+    caches: IntrospectionCaches | None = None,
+) -> None:
     """Invalidate the cached snapshot for a SessionContext, if present."""
-    cache = _INTROSPECTION_CACHE_BY_CONTEXT.get(id(ctx))
+    resolved_caches = _resolve_introspection_caches(caches)
+    cache = resolved_caches.by_context.get(ctx)
     if cache is not None:
         cache.invalidate()
 

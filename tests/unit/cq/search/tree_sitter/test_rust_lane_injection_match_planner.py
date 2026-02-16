@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """Tests for Rust match-centric injection planning."""
 
 from __future__ import annotations

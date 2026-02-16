@@ -194,7 +194,7 @@ class RegistrySchemaProvider(SchemaProvider):
                 storage_location=str(location.path),
                 file_format=location.format or "unknown",
             )
-            record_table_provider_metadata(id(self.ctx), metadata=metadata)
+            record_table_provider_metadata(self.ctx, metadata=metadata)
 
     def deregister_table(self, name: str, cascade: object | None = None) -> None:
         """Remove a table from the schema provider.
@@ -248,7 +248,7 @@ class RegistrySchemaProvider(SchemaProvider):
                 storage_location=str(location.path),
                 file_format=location.format or "unknown",
             )
-            record_table_provider_metadata(id(ctx), metadata=metadata)
+            record_table_provider_metadata(ctx, metadata=metadata)
         return table
 
     def table_metadata(self, name: str) -> TableProviderMetadata | None:
@@ -267,7 +267,7 @@ class RegistrySchemaProvider(SchemaProvider):
         if self.ctx is None:
             return None
         key = _normalize_dataset_name(name)
-        return table_provider_metadata(id(self.ctx), table_name=key)
+        return table_provider_metadata(self.ctx, table_name=key)
 
     def table_exist(self, name: str) -> bool:
         """Return whether a table exists in the schema provider.

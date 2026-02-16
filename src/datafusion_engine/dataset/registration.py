@@ -37,10 +37,11 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlparse
+from weakref import WeakKeyDictionary
 
 import msgspec
 import pyarrow as pa
@@ -56,7 +57,7 @@ from arrow_utils.core.schema_constants import DEFAULT_VALUE_META
 from core.config_base import FingerprintableConfig, config_fingerprint
 from core_types import ensure_path
 from datafusion_engine.arrow.abi import schema_to_dict
-from datafusion_engine.arrow.interop import SchemaLike
+from datafusion_engine.arrow.interop import SchemaLike, arrow_schema_from_df
 from datafusion_engine.arrow.metadata import (
     ordering_from_schema,
     schema_constraints_from_metadata,
@@ -118,7 +119,6 @@ from datafusion_engine.tables.metadata import (
     record_table_provider_metadata,
     table_provider_metadata,
 )
-from datafusion_engine.views.graph import arrow_schema_from_df
 from obs.otel.run_context import get_run_id
 from schema_spec.contracts import (
     DataFusionScanOptions,
@@ -139,9 +139,6 @@ if TYPE_CHECKING:
     from semantics.program_manifest import ManifestDatasetResolver
 
 DEFAULT_CACHE_MAX_COLUMNS = 64
-_CACHED_DATASETS: dict[int, set[str]] = {}
-_REGISTERED_CATALOGS: dict[int, set[str]] = {}
-_REGISTERED_SCHEMAS: dict[int, set[tuple[str, str]]] = {}
 _INPUT_PLUGIN_PREFIXES = ("artifact://", "dataset://", "repo://")
 _DDL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CST_EXTERNAL_TABLE_NAME = "libcst_files_v1"
@@ -422,7 +419,27 @@ class DataFusionRegistrationContext:
     location: DatasetLocation
     options: DataFusionRegistryOptions
     cache: _DataFusionCacheSettings
+    caches: DatasetCaches
     runtime_profile: DataFusionRuntimeProfile | None = None
+
+
+@dataclass
+class DatasetCaches:
+    """Injectable mutable cache container for dataset registration state."""
+
+    cached_datasets: WeakKeyDictionary[SessionContext, set[str]] = field(
+        default_factory=WeakKeyDictionary
+    )
+    registered_catalogs: WeakKeyDictionary[SessionContext, set[str]] = field(
+        default_factory=WeakKeyDictionary
+    )
+    registered_schemas: WeakKeyDictionary[SessionContext, set[tuple[str, str]]] = field(
+        default_factory=WeakKeyDictionary
+    )
+
+
+def _resolve_dataset_caches(caches: DatasetCaches | None) -> DatasetCaches:
+    return caches or DatasetCaches()
 
 
 @dataclass(frozen=True)
@@ -779,14 +796,14 @@ def _ddl_column_definitions(
     available_names = set(schema.names)
     filtered_keys = tuple(name for name in key_fields if name in available_names)
     lines: list[str] = []
-    for field in schema:
-        dtype_name = _sql_type_name(field.type)
-        fragments = [_ddl_identifier(field.name), dtype_name]
-        if not field.nullable or field.name in required_set:
+    for schema_field in schema:
+        dtype_name = _sql_type_name(schema_field.type)
+        fragments = [_ddl_identifier(schema_field.name), dtype_name]
+        if not schema_field.nullable or schema_field.name in required_set:
             fragments.append("NOT NULL")
-        default_value = defaults.get(field.name)
+        default_value = defaults.get(schema_field.name)
         if default_value is not None:
-            literal = _sql_literal_for_field(default_value, dtype=field.type)
+            literal = _sql_literal_for_field(default_value, dtype=schema_field.type)
             if literal is not None:
                 fragments.append(f"DEFAULT {literal}")
         lines.append(" ".join(fragments))
@@ -1031,12 +1048,12 @@ def _table_key_fields(context: DataFusionRegistrationContext) -> tuple[str, ...]
 
 def _expected_column_defaults(schema: pa.Schema) -> dict[str, str]:
     defaults: dict[str, str] = {}
-    for field in schema:
-        meta = field.metadata or {}
+    for schema_field in schema:
+        meta = schema_field.metadata or {}
         default_value = meta.get(DEFAULT_VALUE_META)
         if default_value is None:
             continue
-        defaults[field.name] = default_value.decode("utf-8", errors="replace")
+        defaults[schema_field.name] = default_value.decode("utf-8", errors="replace")
     return defaults
 
 
@@ -1209,9 +1226,11 @@ def _build_registration_context(
     location: DatasetLocation,
     cache_policy: DataFusionCachePolicy | None,
     runtime_profile: DataFusionRuntimeProfile | None,
+    caches: DatasetCaches | None = None,
 ) -> DataFusionRegistrationContext:
+    resolved_caches = _resolve_dataset_caches(caches)
     location = _apply_scan_defaults(name, location)
-    runtime_profile = _prepare_runtime_profile(runtime_profile, ctx=ctx)
+    runtime_profile = _prepare_runtime_profile(runtime_profile, ctx=ctx, caches=resolved_caches)
     options = _resolve_registry_options(name, location, runtime_profile=runtime_profile)
     if options.provider == "listing":
         _register_object_store_for_location(ctx, location, runtime_profile=runtime_profile)
@@ -1226,6 +1245,7 @@ def _build_registration_context(
         location=location,
         options=options,
         cache=cache,
+        caches=resolved_caches,
         runtime_profile=runtime_profile,
     )
     provider_metadata: dict[str, str] = {}
@@ -1262,7 +1282,7 @@ def _build_registration_context(
         metadata=provider_metadata,
         schema_adapter_enabled=schema_adapter_enabled,
     )
-    record_table_provider_metadata(id(ctx), metadata=metadata)
+    record_table_provider_metadata(ctx, metadata=metadata)
     return context
 
 
@@ -1289,14 +1309,17 @@ def _prepare_runtime_profile(
     runtime_profile: DataFusionRuntimeProfile | None,
     *,
     ctx: SessionContext,
+    caches: DatasetCaches | None = None,
 ) -> DataFusionRuntimeProfile | None:
     if runtime_profile is None:
         return None
     runtime_profile = _populate_schema_adapter_factories(runtime_profile)
+    resolved_caches = _resolve_dataset_caches(caches)
     _ensure_catalog_schema(
         ctx,
         catalog=runtime_profile.catalog.default_catalog,
         schema=runtime_profile.catalog.default_schema,
+        caches=resolved_caches,
     )
     return runtime_profile
 
@@ -2127,7 +2150,7 @@ def _update_table_provider_capabilities(
     supports_insert: bool | None = None,
     supports_cdf: bool | None = None,
 ) -> None:
-    metadata = table_provider_metadata(id(ctx), table_name=name)
+    metadata = table_provider_metadata(ctx, table_name=name)
     if metadata is None:
         return
     updated = replace(
@@ -2135,7 +2158,7 @@ def _update_table_provider_capabilities(
         supports_insert=supports_insert,
         supports_cdf=supports_cdf,
     )
-    record_table_provider_metadata(id(ctx), metadata=updated)
+    record_table_provider_metadata(ctx, metadata=updated)
 
 
 def _update_table_provider_scan_config(
@@ -2146,7 +2169,7 @@ def _update_table_provider_scan_config(
     delta_scan_identity_hash: str | None,
     delta_scan_effective: Mapping[str, object] | None,
 ) -> None:
-    metadata = table_provider_metadata(id(ctx), table_name=name)
+    metadata = table_provider_metadata(ctx, table_name=name)
     if metadata is None:
         return
     updated = replace(
@@ -2155,7 +2178,7 @@ def _update_table_provider_scan_config(
         delta_scan_identity_hash=delta_scan_identity_hash,
         delta_scan_effective=dict(delta_scan_effective) if delta_scan_effective else None,
     )
-    record_table_provider_metadata(id(ctx), metadata=updated)
+    record_table_provider_metadata(ctx, metadata=updated)
 
 
 def _update_table_provider_fingerprints(
@@ -2164,7 +2187,7 @@ def _update_table_provider_fingerprints(
     name: str,
     schema: pa.Schema | None,
 ) -> tuple[str | None, str | None, dict[str, object]]:
-    metadata = table_provider_metadata(id(ctx), table_name=name)
+    metadata = table_provider_metadata(ctx, table_name=name)
     if metadata is None:
         return None, None, {}
     schema_identity_hash_value = _schema_identity_hash(schema)
@@ -2176,7 +2199,7 @@ def _update_table_provider_fingerprints(
         schema_identity_hash=schema_identity_hash_value,
         ddl_fingerprint=ddl_fingerprint,
     )
-    record_table_provider_metadata(id(ctx), metadata=updated)
+    record_table_provider_metadata(ctx, metadata=updated)
     details: dict[str, object] = {}
     if schema_identity_hash_value is not None:
         details["schema_identity_hash"] = schema_identity_hash_value
@@ -2292,24 +2315,24 @@ def _projection_exprs_for_schema(
     actual = set(actual_columns)
     defaults = _expected_column_defaults(expected_schema)
     projection_exprs: list[str] = []
-    for field in expected_schema:
-        if field.name in actual:
-            if _supports_projection_cast(field.type):
-                dtype_name = _sql_type_name(field.type)
-                cast_expr = f"cast({field.name} as {dtype_name})"
-                default_value = defaults.get(field.name)
+    for schema_field in expected_schema:
+        if schema_field.name in actual:
+            if _supports_projection_cast(schema_field.type):
+                dtype_name = _sql_type_name(schema_field.type)
+                cast_expr = f"cast({schema_field.name} as {dtype_name})"
+                default_value = defaults.get(schema_field.name)
                 if default_value is not None:
-                    literal = _sql_literal_for_field(default_value, dtype=field.type)
+                    literal = _sql_literal_for_field(default_value, dtype=schema_field.type)
                     if literal is not None:
                         cast_expr = f"coalesce({cast_expr}, {literal})"
-                projection_exprs.append(f"{cast_expr} as {field.name}")
+                projection_exprs.append(f"{cast_expr} as {schema_field.name}")
             else:
-                projection_exprs.append(field.name)
-        elif _supports_projection_cast(field.type):
-            dtype_name = _sql_type_name(field.type)
-            projection_exprs.append(f"cast(NULL as {dtype_name}) as {field.name}")
+                projection_exprs.append(schema_field.name)
+        elif _supports_projection_cast(schema_field.type):
+            dtype_name = _sql_type_name(schema_field.type)
+            projection_exprs.append(f"cast(NULL as {dtype_name}) as {schema_field.name}")
         else:
-            projection_exprs.append(f"NULL as {field.name}")
+            projection_exprs.append(f"NULL as {schema_field.name}")
     return tuple(projection_exprs)
 
 
@@ -2793,26 +2816,6 @@ def _table_schema_snapshot(
     }
 
 
-def _arrow_schema_from_dataframe(
-    ctx: SessionContext,
-    *,
-    table_name: str,
-) -> pa.Schema | None:
-    try:
-        df = ctx.table(table_name)
-    except (KeyError, RuntimeError, TypeError, ValueError):
-        return None
-    schema = df.schema()
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    return None
-
-
 def _partition_column_rows(
     ctx: SessionContext,
     *,
@@ -2883,7 +2886,11 @@ def _table_schema_partition_snapshot(
     expected_types: Mapping[str, str],
     expected_names: Sequence[str],
 ) -> tuple[dict[str, str], list[str], list[dict[str, str]]]:
-    table_schema = _arrow_schema_from_dataframe(ctx, table_name=table_name)
+    table_schema: pa.Schema | None = None
+    try:
+        table_schema = arrow_schema_from_df(ctx.table(table_name))
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        table_schema = None
     if table_schema is None:
         return {}, [], []
     table_schema_types = {field.name: str(field.type) for field in table_schema}
@@ -3107,7 +3114,7 @@ def _register_memory_cache(
         overwrite=True,
         temporary=False,
     )
-    cached_set = _CACHED_DATASETS.setdefault(id(context.ctx), set())
+    cached_set = context.caches.cached_datasets.setdefault(context.ctx, set())
     cached_set.add(context.name)
     return cached
 
@@ -3249,7 +3256,11 @@ def _dataset_cache_partition_by(
     return tuple(name for name in policy_partition_by if name in available)
 
 
-def cached_dataset_names(ctx: SessionContext) -> tuple[str, ...]:
+def cached_dataset_names(
+    ctx: SessionContext,
+    *,
+    caches: DatasetCaches | None = None,
+) -> tuple[str, ...]:
     """Return cached dataset names for a SessionContext.
 
     Returns:
@@ -3257,14 +3268,21 @@ def cached_dataset_names(ctx: SessionContext) -> tuple[str, ...]:
     tuple[str, ...]
         Cached dataset names sorted in ascending order.
     """
-    cached = _CACHED_DATASETS.get(id(ctx), set())
+    resolved_caches = _resolve_dataset_caches(caches)
+    cached = resolved_caches.cached_datasets.get(ctx, set())
     return tuple(sorted(cached))
 
 
-def _ensure_catalog_schema(ctx: SessionContext, *, catalog: str, schema: str) -> None:
-    ctx_id = id(ctx)
-    registered_catalogs = _REGISTERED_CATALOGS.setdefault(ctx_id, set())
-    registered_schemas = _REGISTERED_SCHEMAS.setdefault(ctx_id, set())
+def _ensure_catalog_schema(
+    ctx: SessionContext,
+    *,
+    catalog: str,
+    schema: str,
+    caches: DatasetCaches | None = None,
+) -> None:
+    resolved_caches = _resolve_dataset_caches(caches)
+    registered_catalogs = resolved_caches.registered_catalogs.setdefault(ctx, set())
+    registered_schemas = resolved_caches.registered_schemas.setdefault(ctx, set())
     cat: Catalog
     if catalog in registered_catalogs:
         cat = ctx.catalog(catalog)

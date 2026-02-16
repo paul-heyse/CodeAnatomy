@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """Tests for merged structural exports module (diagnostics, tokens, query hits)."""
 
 from __future__ import annotations

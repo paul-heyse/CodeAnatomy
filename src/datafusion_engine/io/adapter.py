@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
+from weakref import WeakKeyDictionary
 
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -26,7 +27,20 @@ if TYPE_CHECKING:
     from datafusion_engine.session.runtime import DataFusionRuntimeProfile
     from obs.diagnostics import ArtifactSpec
 
-_REGISTERED_OBJECT_STORES: dict[int, set[tuple[str, str | None]]] = {}
+
+@dataclass
+class ObjectStoreRegistries:
+    """Injectable registry for object-store registrations."""
+
+    by_context: WeakKeyDictionary[SessionContext, set[tuple[str, str | None]]] = field(
+        default_factory=WeakKeyDictionary
+    )
+
+
+def _resolve_object_store_registries(
+    registries: ObjectStoreRegistries | None,
+) -> ObjectStoreRegistries:
+    return registries or ObjectStoreRegistries()
 
 
 @dataclass(frozen=True)
@@ -124,6 +138,7 @@ class DataFusionIOAdapter:
 
     ctx: SessionContext
     profile: DataFusionRuntimeProfile | None
+    object_store_registries: ObjectStoreRegistries | None = None
 
     def register_object_store(
         self,
@@ -151,8 +166,8 @@ class DataFusionIOAdapter:
         This method records a diagnostics artifact when a diagnostics
         sink is configured in the runtime profile.
         """
-        ctx_key = id(self.ctx)
-        registry = _REGISTERED_OBJECT_STORES.setdefault(ctx_key, set())
+        registries = _resolve_object_store_registries(self.object_store_registries)
+        registry = registries.by_context.setdefault(self.ctx, set())
         key = (scheme, host)
         if key in registry:
             return

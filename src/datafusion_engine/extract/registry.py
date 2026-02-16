@@ -60,7 +60,6 @@ _EXTRACT_ZORDER_CANDIDATES: tuple[str, ...] = (
     "edge_id",
     "span_id",
 )
-_LEGACY_DATASET_ALIASES: dict[str, str] = {}
 _FILE_IDENTITY_QUERY_COLUMNS: tuple[str, ...] = (
     "repo",
     "path",
@@ -133,8 +132,7 @@ def extract_metadata(name: str) -> ExtractMetadata:
     ExtractMetadata
         Extract metadata for the dataset.
     """
-    resolved_name = _LEGACY_DATASET_ALIASES.get(name, name)
-    return extract_metadata_by_name()[resolved_name]
+    return extract_metadata_by_name()[name]
 
 
 @cache
@@ -146,19 +144,18 @@ def dataset_schema(name: str) -> SchemaLike:
     SchemaLike
         Arrow schema with string-typed columns for metadata fields.
     """
-    resolved_name = _LEGACY_DATASET_ALIASES.get(name, name)
-    if resolved_name in _TYPED_SCHEMA_OVERRIDES:
-        return _TYPED_SCHEMA_OVERRIDES[resolved_name]
-    static_schema = _static_root_extract_schema(resolved_name)
+    if name in _TYPED_SCHEMA_OVERRIDES:
+        return _TYPED_SCHEMA_OVERRIDES[name]
+    static_schema = _static_root_extract_schema(name)
     if static_schema is not None:
         return static_schema
     try:
         from datafusion_engine.schema import extract_schema_for
 
-        return extract_schema_for(resolved_name)
+        return extract_schema_for(name)
     except KeyError:
         pass
-    row = extract_metadata(resolved_name)
+    row = extract_metadata(name)
     fields = [
         pa.field(column, pa.string()) for column in (*row.fields, *row.row_fields, *row.row_extras)
     ]

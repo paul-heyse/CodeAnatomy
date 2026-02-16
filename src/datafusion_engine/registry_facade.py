@@ -206,7 +206,7 @@ class RegistryFacade:
                     ),
                 )
             )
-        except Exception:
+        except Exception:  # intentionally broad: orchestrated registration steps may raise heterogeneous backend errors
             self._rollback_optional(checkpoint)
             raise
         if df is None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import suppress
 from types import TracebackType
@@ -10,6 +11,8 @@ from typing import Protocol, Self, cast, runtime_checkable
 import arro3.core as ac
 import pyarrow as pa
 import pyarrow.compute as _pc
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -27,6 +30,7 @@ def ensure_arrow_dtype(dtype: DataTypeLike | object) -> pa.DataType:
         TypeError: If the operation cannot be completed.
     """
     if isinstance(dtype, pa.DataType):
+        logger.debug("Arrow dtype already concrete: %s", dtype)
         return dtype
     try:
         from schema_spec.arrow_types import ArrowTypeBase as _ArrowTypeBase
@@ -35,8 +39,11 @@ def ensure_arrow_dtype(dtype: DataTypeLike | object) -> pa.DataType:
         msg = "Arrow type conversion requires schema_spec.arrow_types."
         raise TypeError(msg) from exc
     if isinstance(dtype, _ArrowTypeBase):
-        return arrow_type_to_pyarrow(dtype)
+        resolved = arrow_type_to_pyarrow(dtype)
+        logger.debug("Converted schema-spec dtype %s to %s", dtype, resolved)
+        return resolved
     msg = f"Expected pyarrow.DataType, got {type(dtype)!r}."
+    logger.warning("Failed dtype coercion: %s", msg)
     raise TypeError(msg)
 
 
@@ -56,8 +63,36 @@ def coerce_arrow_schema(value: object) -> pa.Schema | None:
     for candidate in _schema_coercion_candidates(value):
         resolved = _coerce_schema_candidate(candidate)
         if resolved is not None:
+            logger.debug("Coerced Arrow schema from %s", type(candidate).__name__)
             return resolved
+    logger.debug("Could not coerce Arrow schema from %s", type(value).__name__)
     return None
+
+
+def arrow_schema_from_dfschema(schema: object) -> pa.Schema | None:
+    """Return an Arrow schema from a DataFusion schema-like object."""
+    return coerce_arrow_schema(schema)
+
+
+def arrow_schema_from_df(df: object) -> pa.Schema:
+    """Extract an Arrow schema from a DataFrame-like object.
+
+    Returns:
+    -------
+    pa.Schema
+        Coerced Arrow schema from the DataFrame schema surface.
+
+    Raises:
+        TypeError: If the DataFrame schema cannot be coerced to a ``pyarrow.Schema``.
+    """
+    schema_attr = getattr(df, "schema", None)
+    schema_value = schema_attr() if callable(schema_attr) else schema_attr
+    resolved = arrow_schema_from_dfschema(schema_value)
+    if resolved is not None:
+        return resolved
+    msg = "Failed to resolve DataFusion schema."
+    logger.warning("DataFrame schema coercion failed for %s", type(df).__name__)
+    raise TypeError(msg)
 
 
 def _schema_coercion_candidates(value: object) -> tuple[object, ...]:
@@ -823,6 +858,8 @@ __all__ = [
     "TableLike",
     "UdfContext",
     "array",
+    "arrow_schema_from_df",
+    "arrow_schema_from_dfschema",
     "as_reader",
     "binary",
     "bool_",

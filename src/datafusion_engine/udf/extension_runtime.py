@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from types import ModuleType
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary, WeakSet
@@ -15,6 +16,13 @@ from datafusion import SessionContext
 from datafusion_engine.extensions.context_adaptation import (
     ExtensionEntrypointInvocation,
     invoke_entrypoint_with_adapted_context,
+)
+from datafusion_engine.udf.constants import (
+    ABI_LOAD_FAILURE_MSG,
+    ABI_VERSION_MISMATCH_MSG,
+    EXTENSION_MODULE_LABEL,
+    EXTENSION_MODULE_PATH,
+    REBUILD_WHEELS_HINT,
 )
 
 if TYPE_CHECKING:
@@ -31,18 +39,31 @@ from serde_msgspec import dumps_msgpack
 from utils.hashing import hash_sha256_hex
 from utils.validation import validate_required_items
 
-_RUST_UDF_CONTEXTS: WeakSet[SessionContext] = WeakSet()
-_RUST_UDF_SNAPSHOTS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
-_RUST_UDF_DOCS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = WeakKeyDictionary()
-_RUST_RUNTIME_PAYLOADS: WeakKeyDictionary[SessionContext, Mapping[str, object]] = (
-    WeakKeyDictionary()
-)
-_RUST_UDF_POLICIES: WeakKeyDictionary[
-    SessionContext,
-    tuple[bool, int | None, int | None],
-] = WeakKeyDictionary()
-_RUST_UDF_VALIDATED: WeakSet[SessionContext] = WeakSet()
-_RUST_UDF_DDL: WeakSet[SessionContext] = WeakSet()
+
+@dataclass
+class ExtensionRegistries:
+    """Injectable registries for Rust UDF runtime state."""
+
+    udf_contexts: WeakSet[SessionContext] = field(default_factory=WeakSet)
+    udf_snapshots: WeakKeyDictionary[SessionContext, Mapping[str, object]] = field(
+        default_factory=WeakKeyDictionary
+    )
+    udf_docs: WeakKeyDictionary[SessionContext, Mapping[str, object]] = field(
+        default_factory=WeakKeyDictionary
+    )
+    runtime_payloads: WeakKeyDictionary[SessionContext, Mapping[str, object]] = field(
+        default_factory=WeakKeyDictionary
+    )
+    udf_policies: WeakKeyDictionary[SessionContext, tuple[bool, int | None, int | None]] = field(
+        default_factory=WeakKeyDictionary
+    )
+    udf_validated: WeakSet[SessionContext] = field(default_factory=WeakSet)
+    udf_ddl: WeakSet[SessionContext] = field(default_factory=WeakSet)
+
+
+def _resolve_registries(registries: ExtensionRegistries | None) -> ExtensionRegistries:
+    return registries or ExtensionRegistries()
+
 
 _REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "scalar",
@@ -209,6 +230,7 @@ def _install_runtime_via_modular_entrypoints(
     enable_async: bool,
     async_udf_timeout_ms: int | None,
     async_udf_batch_size: int | None,
+    registries: ExtensionRegistries,
 ) -> Mapping[str, object]:
     register_udfs = getattr(internal, "register_codeanatomy_udfs", None)
     snapshot_fn = getattr(internal, "registry_snapshot", None)
@@ -217,8 +239,7 @@ def _install_runtime_via_modular_entrypoints(
         missing_csv = ", ".join(missing)
         msg = (
             f"{internal.__name__} is missing modular runtime entrypoints: {missing_csv}. "
-            "Rebuild and install matching datafusion/datafusion_ext wheels "
-            "(scripts/build_datafusion_wheels.sh + uv sync)."
+            f"{REBUILD_WHEELS_HINT}"
         )
         raise TypeError(msg)
 
@@ -244,7 +265,11 @@ def _install_runtime_via_modular_entrypoints(
         msg = f"{internal.__name__}.registry_snapshot returned a non-mapping payload."
         raise TypeError(msg)
 
-    normalized_snapshot = _normalize_registry_snapshot(raw_snapshot, ctx=ctx)
+    normalized_snapshot = _normalize_registry_snapshot(
+        raw_snapshot,
+        ctx=ctx,
+        registries=registries,
+    )
 
     policy = function_factory_policy_from_snapshot(
         normalized_snapshot,
@@ -276,6 +301,7 @@ def _install_codeanatomy_runtime_snapshot(
     enable_async: bool,
     async_udf_timeout_ms: int | None,
     async_udf_batch_size: int | None,
+    registries: ExtensionRegistries,
 ) -> Mapping[str, object]:
     internal = _datafusion_internal()
     installer = getattr(internal, _RUNTIME_INSTALL_ENTRYPOINT, None)
@@ -297,8 +323,7 @@ def _install_codeanatomy_runtime_snapshot(
             msg = (
                 "Rust runtime install failed due to SessionContext ABI mismatch. "
                 f"expected_plugin_abi={expected}. "
-                "Rebuild and install matching datafusion/datafusion_ext wheels "
-                "(scripts/build_datafusion_wheels.sh + uv sync)."
+                f"{REBUILD_WHEELS_HINT}"
             )
             raise RuntimeError(msg) from exc
     else:
@@ -310,14 +335,14 @@ def _install_codeanatomy_runtime_snapshot(
                 enable_async=enable_async,
                 async_udf_timeout_ms=async_udf_timeout_ms,
                 async_udf_batch_size=async_udf_batch_size,
+                registries=registries,
             )
         except (ImportError, RuntimeError, TypeError, ValueError) as exc:
             msg = (
                 "Rust runtime modular install failed due to SessionContext ABI mismatch "
                 "or missing runtime entrypoints. "
                 f"expected_plugin_abi={expected}. "
-                "Rebuild and install matching datafusion/datafusion_ext wheels "
-                "(scripts/build_datafusion_wheels.sh + uv sync)."
+                f"{REBUILD_WHEELS_HINT}"
             )
             raise RuntimeError(msg) from exc
     if not isinstance(payload, Mapping):
@@ -328,7 +353,11 @@ def _install_codeanatomy_runtime_snapshot(
     if snapshot is None:
         msg = "Rust runtime installer returned a payload without a snapshot."
         raise RuntimeError(msg)
-    normalized_snapshot = _normalize_registry_snapshot(snapshot, ctx=ctx)
+    normalized_snapshot = _normalize_registry_snapshot(
+        snapshot,
+        ctx=ctx,
+        registries=registries,
+    )
     payload_mapping.setdefault("contract_version", 3)
     payload_mapping.setdefault("runtime_install_mode", install_mode)
     payload_mapping.setdefault("udf_installed", True)
@@ -339,17 +368,22 @@ def _install_codeanatomy_runtime_snapshot(
         callable(getattr(internal, "register_cache_tables", None)),
     )
     payload_mapping["snapshot"] = normalized_snapshot
-    _RUST_RUNTIME_PAYLOADS[ctx] = payload_mapping
+    registries.runtime_payloads[ctx] = payload_mapping
     return normalized_snapshot
 
 
-def _build_registry_snapshot(ctx: SessionContext) -> Mapping[str, object]:
-    policy = _RUST_UDF_POLICIES.get(ctx, (False, None, None))
+def _build_registry_snapshot(
+    ctx: SessionContext,
+    *,
+    registries: ExtensionRegistries,
+) -> Mapping[str, object]:
+    policy = registries.udf_policies.get(ctx, (False, None, None))
     return _install_codeanatomy_runtime_snapshot(
         ctx,
         enable_async=policy[0],
         async_udf_timeout_ms=policy[1],
         async_udf_batch_size=policy[2],
+        registries=registries,
     )
 
 
@@ -357,6 +391,7 @@ def _normalize_registry_snapshot(
     snapshot: object,
     *,
     ctx: SessionContext,
+    registries: ExtensionRegistries,
 ) -> Mapping[str, object]:
     if not isinstance(snapshot, Mapping):
         msg = "datafusion extension registry_snapshot returned a non-mapping payload."
@@ -395,8 +430,8 @@ def _normalize_registry_snapshot(
     payload["signature_inputs"] = signature_inputs
     payload["return_types"] = return_types
     payload = _supplement_expr_surface_snapshot(payload, ctx=ctx)
-    if ctx in _RUST_UDF_POLICIES:
-        enable_async, timeout_ms, batch_size = _RUST_UDF_POLICIES[ctx]
+    if ctx in registries.udf_policies:
+        enable_async, timeout_ms, batch_size = registries.udf_policies[ctx]
         payload["async_udf_policy"] = {
             "enabled": enable_async,
             "timeout_ms": timeout_ms,
@@ -411,47 +446,48 @@ def _install_rust_udfs(
     enable_async: bool,
     async_udf_timeout_ms: int | None,
     async_udf_batch_size: int | None,
+    registries: ExtensionRegistries,
 ) -> None:
     unified_snapshot = _install_codeanatomy_runtime_snapshot(
         ctx,
         enable_async=enable_async,
         async_udf_timeout_ms=async_udf_timeout_ms,
         async_udf_batch_size=async_udf_batch_size,
+        registries=registries,
     )
-    _RUST_UDF_SNAPSHOTS[ctx] = unified_snapshot
-    _RUST_UDF_VALIDATED.add(ctx)
+    registries.udf_snapshots[ctx] = unified_snapshot
+    registries.udf_validated.add(ctx)
     _notify_udf_snapshot(unified_snapshot)
 
 
 def _datafusion_internal() -> ModuleType:
     try:
-        module = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
+        module = importlib.import_module(EXTENSION_MODULE_PATH)
     except ImportError as exc:
-        msg = (
-            "The datafusion_ext extension module exposing install_codeanatomy_runtime or "
+        msg = ABI_LOAD_FAILURE_MSG.format(module=EXTENSION_MODULE_LABEL, error=exc)
+        details = (
+            f"The {EXTENSION_MODULE_LABEL} extension module exposing install_codeanatomy_runtime or "
             "the modular runtime entrypoint contract is required. "
-            "Rebuild and install matching datafusion/datafusion_ext wheels "
-            "(scripts/build_datafusion_wheels.sh + uv sync)."
+            f"{REBUILD_WHEELS_HINT}"
         )
-        raise ImportError(msg) from exc
+        error_message = f"{msg} {details}"
+        raise ImportError(error_message) from exc
     if _module_supports_runtime_install(module):
         return module
-    msg = (
-        "datafusion_ext is missing required runtime entrypoints. "
-        "Rebuild and install matching datafusion/datafusion_ext wheels "
-        "(scripts/build_datafusion_wheels.sh + uv sync)."
-    )
+    msg = f"{EXTENSION_MODULE_LABEL} is missing required runtime entrypoints. {REBUILD_WHEELS_HINT}"
     raise ImportError(msg)
 
 
 def _extension_module_with_capabilities() -> ModuleType:
     try:
-        module = importlib.import_module("datafusion_engine.extensions.datafusion_ext")
+        module = importlib.import_module(EXTENSION_MODULE_PATH)
     except ImportError as exc:
-        msg = "The datafusion_ext module exposing capabilities_snapshot is required."
-        raise ImportError(msg) from exc
+        msg = ABI_LOAD_FAILURE_MSG.format(module=EXTENSION_MODULE_LABEL, error=exc)
+        details = f"The {EXTENSION_MODULE_LABEL} module exposing capabilities_snapshot is required."
+        error_message = f"{msg} {details}"
+        raise ImportError(error_message) from exc
     if not callable(getattr(module, "capabilities_snapshot", None)):
-        msg = "datafusion_ext is missing required entrypoint capabilities_snapshot."
+        msg = f"{EXTENSION_MODULE_LABEL} is missing required entrypoint capabilities_snapshot."
         raise TypeError(msg)
     return module
 
@@ -472,7 +508,7 @@ def extension_capabilities_snapshot() -> Mapping[str, object]:
     snapshot = module.capabilities_snapshot()
     if isinstance(snapshot, Mapping):
         return dict(snapshot)
-    msg = "datafusion_ext.capabilities_snapshot returned a non-mapping payload."
+    msg = f"{EXTENSION_MODULE_LABEL}.capabilities_snapshot returned a non-mapping payload."
     raise TypeError(msg)
 
 
@@ -504,9 +540,9 @@ def extension_capabilities_report() -> dict[str, object]:
     compatible = major == _EXPECTED_PLUGIN_ABI_MAJOR and minor == _EXPECTED_PLUGIN_ABI_MINOR
     error = None
     if not compatible:
-        error = (
-            "Extension ABI mismatch: "
-            f"expected={expected} observed={{'major': {major}, 'minor': {minor}}}."
+        error = ABI_VERSION_MISMATCH_MSG.format(
+            expected=expected,
+            actual={"major": major, "minor": minor},
         )
     return {
         "available": True,
@@ -550,8 +586,7 @@ def validate_extension_capabilities(
             msg = (
                 "SessionContext ABI mismatch detected by extension contract probe. "
                 f"expected_plugin_abi={expected}. "
-                "Rebuild and install matching datafusion/datafusion_ext wheels "
-                "(scripts/build_datafusion_wheels.sh + uv sync)."
+                f"{REBUILD_WHEELS_HINT}"
             )
             raise RuntimeError(msg) from exc
     return report
@@ -792,11 +827,11 @@ def _require_config_defaults(
             msg = "Rust UDF snapshot config_defaults must map to mappings."
             raise TypeError(msg)
         normalized_entry: dict[str, bool | int | str] = {}
-        for field, field_value in entry.items():
-            if not isinstance(field, str):
+        for option_key, field_value in entry.items():
+            if not isinstance(option_key, str):
                 msg = "Rust UDF snapshot config_defaults fields must use string keys."
                 raise TypeError(msg)
-            normalized_entry[field] = _coerce_config_default_value(field_value)
+            normalized_entry[option_key] = _coerce_config_default_value(field_value)
         output[key] = normalized_entry
     return output
 
@@ -1128,12 +1163,16 @@ def _build_docs_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     internal = _datafusion_internal()
     snapshot = _invoke_runtime_entrypoint(internal, "udf_docs_snapshot", ctx=ctx)
     if not isinstance(snapshot, Mapping):
-        msg = "datafusion_ext.udf_docs_snapshot returned a non-mapping payload."
+        msg = f"{EXTENSION_MODULE_LABEL}.udf_docs_snapshot returned a non-mapping payload."
         raise TypeError(msg)
     return dict(snapshot)
 
 
-def rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
+def rust_udf_snapshot(
+    ctx: SessionContext,
+    *,
+    registries: ExtensionRegistries | None = None,
+) -> Mapping[str, object]:
     """Return cached Rust UDF registry snapshot for a session.
 
     Parameters
@@ -1146,41 +1185,51 @@ def rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
     Mapping[str, object]
         Registry snapshot payload for diagnostics.
     """
-    cached = _RUST_UDF_SNAPSHOTS.get(ctx)
+    resolved_registries = _resolve_registries(registries)
+    cached = resolved_registries.udf_snapshots.get(ctx)
     if cached is not None:
-        if ctx not in _RUST_UDF_VALIDATED:
+        if ctx not in resolved_registries.udf_validated:
             validate_rust_udf_snapshot(cached)
-            _RUST_UDF_VALIDATED.add(ctx)
+            resolved_registries.udf_validated.add(ctx)
         return cached
-    snapshot = _build_registry_snapshot(ctx)
+    snapshot = _build_registry_snapshot(ctx, registries=resolved_registries)
     docs = _build_docs_snapshot(ctx)
     if docs:
         snapshot = dict(snapshot)
         snapshot["documentation"] = docs
     validate_rust_udf_snapshot(snapshot)
-    _RUST_UDF_VALIDATED.add(ctx)
+    resolved_registries.udf_validated.add(ctx)
     _notify_udf_snapshot(snapshot)
-    _RUST_UDF_SNAPSHOTS[ctx] = snapshot
+    resolved_registries.udf_snapshots[ctx] = snapshot
     return snapshot
 
 
-def _validated_snapshot(ctx: SessionContext) -> Mapping[str, object]:
+def _validated_snapshot(
+    ctx: SessionContext,
+    *,
+    registries: ExtensionRegistries,
+) -> Mapping[str, object]:
     """Return a validated Rust UDF snapshot for a session.
 
     Args:
         ctx: Description.
+        registries: Registry container for snapshot validation state.
 
     Raises:
         RuntimeError: If the operation cannot be completed.
     """
-    snapshot = rust_udf_snapshot(ctx)
-    if ctx not in _RUST_UDF_VALIDATED:
+    snapshot = rust_udf_snapshot(ctx, registries=registries)
+    if ctx not in registries.udf_validated:
         msg = "Rust UDF snapshot validation missing for the session context."
         raise RuntimeError(msg)
     return snapshot
 
 
-def rust_udf_docs(ctx: SessionContext) -> Mapping[str, object]:
+def rust_udf_docs(
+    ctx: SessionContext,
+    *,
+    registries: ExtensionRegistries | None = None,
+) -> Mapping[str, object]:
     """Return cached Rust UDF documentation snapshot for a session.
 
     Parameters
@@ -1193,21 +1242,27 @@ def rust_udf_docs(ctx: SessionContext) -> Mapping[str, object]:
     Mapping[str, object]
         Documentation snapshot payload for diagnostics.
     """
-    cached = _RUST_UDF_DOCS.get(ctx)
+    resolved_registries = _resolve_registries(registries)
+    cached = resolved_registries.udf_docs.get(ctx)
     if cached is not None:
         return cached
     snapshot = _build_docs_snapshot(ctx)
-    _RUST_UDF_DOCS[ctx] = snapshot
+    resolved_registries.udf_docs[ctx] = snapshot
     return snapshot
 
 
-def rust_runtime_install_payload(ctx: SessionContext) -> Mapping[str, object]:
+def rust_runtime_install_payload(
+    ctx: SessionContext,
+    *,
+    registries: ExtensionRegistries | None = None,
+) -> Mapping[str, object]:
     """Return cached payload from install_codeanatomy_runtime for a session context."""
-    payload = _RUST_RUNTIME_PAYLOADS.get(ctx)
+    resolved_registries = _resolve_registries(registries)
+    payload = resolved_registries.runtime_payloads.get(ctx)
     if payload is not None:
         return dict(payload)
-    _ = rust_udf_snapshot(ctx)
-    payload = _RUST_RUNTIME_PAYLOADS.get(ctx)
+    _ = rust_udf_snapshot(ctx, registries=resolved_registries)
+    payload = resolved_registries.runtime_payloads.get(ctx)
     if payload is None:
         return {}
     return dict(payload)
@@ -1292,14 +1347,15 @@ def _registered_snapshot(
     ctx: SessionContext,
     *,
     policy: tuple[bool, int | None, int | None],
+    registries: ExtensionRegistries,
 ) -> Mapping[str, object] | None:
-    if ctx not in _RUST_UDF_CONTEXTS:
+    if ctx not in registries.udf_contexts:
         return None
-    existing = _RUST_UDF_POLICIES.get(ctx)
+    existing = registries.udf_policies.get(ctx)
     if existing is not None and existing != policy:
         msg = "Rust UDFs already registered with a different async policy."
         raise ValueError(msg)
-    return _validated_snapshot(ctx)
+    return _validated_snapshot(ctx, registries=registries)
 
 
 def register_rust_udfs(
@@ -1308,6 +1364,7 @@ def register_rust_udfs(
     enable_async: bool = False,
     async_udf_timeout_ms: int | None = None,
     async_udf_batch_size: int | None = None,
+    registries: ExtensionRegistries | None = None,
 ) -> Mapping[str, object]:
     """Ensure Rust UDF snapshots are available for a session context.
 
@@ -1316,6 +1373,7 @@ def register_rust_udfs(
         enable_async: Whether async UDF execution is enabled.
         async_udf_timeout_ms: Optional async UDF timeout override.
         async_udf_batch_size: Optional async UDF batch-size override.
+        registries: Optional registry container for runtime UDF state.
 
     Returns:
         Mapping[str, object]: Result.
@@ -1332,9 +1390,11 @@ def register_rust_udfs(
     except ValueError as exc:
         msg = f"Invalid async UDF policy: {exc}"
         raise ValueError(msg) from exc
+    resolved_registries = _resolve_registries(registries)
     existing = _registered_snapshot(
         ctx,
         policy=policy,
+        registries=resolved_registries,
     )
     if existing is not None:
         return existing
@@ -1343,10 +1403,11 @@ def register_rust_udfs(
         enable_async=enable_async,
         async_udf_timeout_ms=async_udf_timeout_ms,
         async_udf_batch_size=async_udf_batch_size,
+        registries=resolved_registries,
     )
-    _RUST_UDF_CONTEXTS.add(ctx)
-    _RUST_UDF_POLICIES[ctx] = policy
-    return _validated_snapshot(ctx)
+    resolved_registries.udf_contexts.add(ctx)
+    resolved_registries.udf_policies[ctx] = policy
+    return _validated_snapshot(ctx, registries=resolved_registries)
 
 
 def register_udfs_via_ddl(
@@ -1354,6 +1415,7 @@ def register_udfs_via_ddl(
     *,
     snapshot: Mapping[str, object],
     replace: bool = True,
+    registries: ExtensionRegistries | None = None,
 ) -> None:
     """Register Rust UDFs via CREATE FUNCTION DDL for catalog visibility.
 
@@ -1366,7 +1428,8 @@ def register_udfs_via_ddl(
     replace
         Whether to replace existing CREATE FUNCTION entries.
     """
-    if ctx in _RUST_UDF_DDL:
+    resolved_registries = _resolve_registries(registries)
+    if ctx in resolved_registries.udf_ddl:
         return
     from datafusion_engine.udf.factory import register_function
     from datafusion_engine.udf.metadata import datafusion_udf_specs
@@ -1381,7 +1444,7 @@ def register_udfs_via_ddl(
         replace=replace,
         register_fn=register_function,
     )
-    _RUST_UDF_DDL.add(ctx)
+    resolved_registries.udf_ddl.add(ctx)
 
 
 def _register_udf_specs(
@@ -1573,6 +1636,7 @@ def udf_audit_payload(snapshot: Mapping[str, object]) -> dict[str, object]:
 
 
 __all__ = [
+    "ExtensionRegistries",
     "RustUdfSnapshot",
     "extension_capabilities_report",
     "extension_capabilities_snapshot",

@@ -60,6 +60,7 @@ from datafusion_engine.errors import DataFusionEngineError, ErrorKind
 from datafusion_engine.io.adapter import DataFusionIOAdapter
 from datafusion_engine.plan.signals import extract_plan_signals
 from datafusion_engine.schema.contracts import delta_constraints_for_location
+from datafusion_engine.sql.helpers import sql_identifier as _sql_identifier
 from datafusion_engine.sql.options import sql_options_for_profile
 from relspec.table_size_tiers import TableSizeTier, classify_table_size
 from schema_spec.contracts import (
@@ -137,14 +138,6 @@ _RETRYABLE_DELTA_STREAM_ERROR_MARKERS: tuple[str, ...] = (
     "c data interface error",
     "expected 3 buffers for imported type string",
 )
-
-
-def _sql_identifier(name: str) -> str:
-    parts = [part for part in name.split(".") if part]
-    if parts and all(part.isidentifier() for part in parts):
-        return name
-    escaped = name.replace('"', '""')
-    return f'"{escaped}"'
 
 
 def _sql_string_literal(value: str) -> str:
@@ -1169,20 +1162,16 @@ class WritePipeline:
     def write(
         self,
         request: WriteRequest,
-        *,
-        prefer_streaming: bool = True,
     ) -> WriteResult:
         """Write using best available method.
 
         Chooses between COPY-based and streaming write paths based on
-        format, partitioning requirements, and preference hint.
+        format and partitioning requirements.
 
         Parameters
         ----------
         request
             Write request specification.
-        prefer_streaming
-            If True, prefer streaming write for DELTA format.
 
         Returns:
         -------
@@ -1194,14 +1183,11 @@ class WritePipeline:
         The unified writer executes a DataFusion DataFrame. Delta uses
         streaming dataset writes; other formats use DataFusion-native writers.
         """
-        _ = prefer_streaming
         return self.write_via_streaming(request)
 
     def write_view(
         self,
         request: WriteViewRequest,
-        *,
-        prefer_streaming: bool = True,
     ) -> WriteResult:
         """Write a registered view using the unified pipeline.
 
@@ -1209,8 +1195,6 @@ class WritePipeline:
         ----------
         request
             Write request specifying the registered view.
-        prefer_streaming
-            Prefer streaming writes when possible.
 
         Returns:
         -------
@@ -1228,7 +1212,7 @@ class WritePipeline:
             table_name=request.table_name,
             constraints=request.constraints,
         )
-        return self.write(write_request, prefer_streaming=prefer_streaming)
+        return self.write(write_request)
 
     def _record_write_artifact(
         self,
@@ -1987,7 +1971,9 @@ class WritePipeline:
 
         try:
             _write_with_source(stream)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentionally broad: deltalake write surfaces backend-specific exceptions
             if not _is_retryable_delta_stream_error(exc):
                 raise
             fallback_table = result.df.to_arrow_table()
@@ -2120,7 +2106,7 @@ class WritePipeline:
 
     def _table_target(self, request: WriteRequest) -> str | None:
         target = request.table_name or request.destination
-        metadata = table_provider_metadata(id(self.ctx), table_name=target)
+        metadata = table_provider_metadata(self.ctx, table_name=target)
         if metadata is None:
             return None
         if metadata.supports_insert is False:

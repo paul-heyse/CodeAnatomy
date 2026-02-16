@@ -295,7 +295,7 @@ class DataFusionExecutionFacade:
                         session_runtime=session_runtime,
                     ),
                 )
-            except Exception as exc:
+            except Exception as exc:  # intentionally broad: DataFusion backend errors are dynamic
                 record_exception(span, exc)
                 duration_s = time.perf_counter() - start
                 record_error("datafusion", type(exc).__name__)
@@ -670,7 +670,9 @@ class DataFusionExecutionFacade:
             try:
                 pipeline = self.write_pipeline()
                 result = pipeline.write(request)
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentionally broad: write pipeline backend errors are dynamic
                 record_exception(span, exc)
                 duration_s = time.perf_counter() - start
                 record_error("datafusion", type(exc).__name__)
@@ -693,8 +695,6 @@ class DataFusionExecutionFacade:
     def write_view(
         self,
         request: WriteViewRequest,
-        *,
-        prefer_streaming: bool = True,
     ) -> ExecutionResult:
         """Write a registered view using the write pipeline.
 
@@ -702,8 +702,6 @@ class DataFusionExecutionFacade:
         ----------
         request
             Write request specifying the registered view.
-        prefer_streaming
-            Prefer streaming writes when possible.
 
         Returns:
         -------
@@ -726,8 +724,10 @@ class DataFusionExecutionFacade:
         ) as span:
             try:
                 pipeline = self.write_pipeline()
-                result = pipeline.write_view(request, prefer_streaming=prefer_streaming)
-            except Exception as exc:
+                result = pipeline.write_view(request)
+            except (
+                Exception
+            ) as exc:  # intentionally broad: write pipeline backend errors are dynamic
                 record_exception(span, exc)
                 duration_s = time.perf_counter() - start
                 record_error("datafusion", type(exc).__name__)

@@ -29,6 +29,7 @@ from utils.registry_protocol import Registry, SnapshotRegistry
 
 if TYPE_CHECKING:
     from datafusion_engine.schema.introspection import SchemaIntrospector
+    from datafusion_engine.udf.extension_runtime import ExtensionRegistries
 
 # UdfTier type - Rust-only execution
 UdfTier = Literal["builtin"]
@@ -1153,13 +1154,21 @@ def _normalize_table_return_type(return_type: pa.DataType) -> pa.DataType:
     return return_type
 
 
-def _rust_udf_snapshot(ctx: SessionContext) -> Mapping[str, object]:
+def _rust_udf_snapshot(
+    ctx: SessionContext,
+    *,
+    registries: ExtensionRegistries | None = None,
+) -> Mapping[str, object]:
     from datafusion_engine.udf.extension_runtime import rust_udf_snapshot
 
-    return rust_udf_snapshot(ctx)
+    return rust_udf_snapshot(ctx, registries=registries)
 
 
-def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
+def get_default_udf_catalog(
+    *,
+    introspector: SchemaIntrospector,
+    registries: ExtensionRegistries | None = None,
+) -> UdfCatalog:
     """Get a default UDF catalog with runtime builtin introspection.
 
     Returns:
@@ -1167,7 +1176,7 @@ def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
     UdfCatalog
         Default catalog with standard tier policy.
     """
-    registry_snapshot = _rust_udf_snapshot(introspector.ctx)
+    registry_snapshot = _rust_udf_snapshot(introspector.ctx, registries=registries)
     specs = {
         spec.func_id: spec for spec in datafusion_udf_specs(registry_snapshot=registry_snapshot)
     }
@@ -1176,7 +1185,11 @@ def get_default_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
     return catalog
 
 
-def get_strict_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
+def get_strict_udf_catalog(
+    *,
+    introspector: SchemaIntrospector,
+    registries: ExtensionRegistries | None = None,
+) -> UdfCatalog:
     """Get a strict UDF catalog that prefers builtins only.
 
     Returns:
@@ -1184,7 +1197,7 @@ def get_strict_udf_catalog(*, introspector: SchemaIntrospector) -> UdfCatalog:
     UdfCatalog
         Catalog with strict builtin-only policy.
     """
-    registry_snapshot = _rust_udf_snapshot(introspector.ctx)
+    registry_snapshot = _rust_udf_snapshot(introspector.ctx, registries=registries)
     specs = {
         spec.func_id: spec for spec in datafusion_udf_specs(registry_snapshot=registry_snapshot)
     }

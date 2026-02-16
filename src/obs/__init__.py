@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     column_stats_table: object
+    datafusion_engine_runtime_metrics: object
     dataset_stats_table: object
     schema_identity_hash: object
     table_summary: object
@@ -18,8 +19,17 @@ _EXPORT_MAP: dict[str, tuple[str, str]] = {
     "table_summary": ("obs.metrics", "table_summary"),
 }
 
+_MODULE_EXPORTS: dict[str, str] = {
+    "datafusion_engine_runtime_metrics": "obs.datafusion_engine_runtime_metrics",
+}
+
 
 def __getattr__(name: str) -> object:
+    module_path = _MODULE_EXPORTS.get(name)
+    if module_path is not None:
+        module = importlib.import_module(module_path)
+        globals()[name] = module
+        return module
     target = _EXPORT_MAP.get(name)
     if target is None:
         msg = f"module {__name__!r} has no attribute {name!r}"
@@ -37,6 +47,7 @@ def __dir__() -> list[str]:
 
 __all__ = (
     "column_stats_table",
+    "datafusion_engine_runtime_metrics",
     "dataset_stats_table",
     "schema_identity_hash",
     "table_summary",

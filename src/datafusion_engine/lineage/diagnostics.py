@@ -578,16 +578,6 @@ class DiagnosticsRecorderAdapter:
             return cast("dict[str, list[Mapping[str, Any]]]", snapshot())
         return {}
 
-    def __getattr__(self, name: str) -> object:
-        """Delegate unknown attributes to the underlying sink.
-
-        Returns:
-        -------
-        object
-            Attribute resolved from the underlying sink.
-        """
-        return getattr(self.sink, name)
-
 
 def record_artifact(
     profile: DataFusionRuntimeProfile | None,

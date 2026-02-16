@@ -11,8 +11,8 @@ This module centralizes access to the Rust Delta control plane exposed via
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable, Mapping, Sequence
-from typing import NoReturn, Protocol, cast
+from collections.abc import Mapping, Sequence
+from typing import NoReturn, cast
 
 import msgspec
 import pyarrow as pa
@@ -20,6 +20,7 @@ from datafusion import SessionContext
 
 from datafusion_engine.arrow.abi import schema_to_dict
 from datafusion_engine.delta.capabilities import (
+    DeltaExtensionCompatibility,
     is_delta_extension_compatible,
     resolve_delta_extension_module,
 )
@@ -30,6 +31,14 @@ from datafusion_engine.delta.payload import (
     schema_ipc_payload,
 )
 from datafusion_engine.delta.protocol import delta_feature_gate_rust_payload
+from datafusion_engine.delta.protocols import (
+    DeltaCdfExtensionModule,
+    DeltaProviderHandle,
+    InternalSessionContext,
+    RustCdfOptionsHandle,
+    RustDeltaEntrypoint,
+    RustDeltaExtensionModule,
+)
 from datafusion_engine.delta.specs import (
     DeltaAppTransactionSpec as DeltaAppTransaction,
 )
@@ -51,14 +60,6 @@ from utils.validation import ensure_mapping
 from utils.value_coercion import coerce_mapping_list
 
 
-class InternalSessionContext(Protocol):
-    """Protocol representing the internal DataFusion session context."""
-
-
-class _DeltaCdfExtension(Protocol):
-    def delta_cdf_table_provider(self, *args: object, **kwargs: object) -> object: ...
-
-
 class DeltaTableRef(StructBaseStrict, frozen=True):
     """Reference to a Delta table with versioning context."""
 
@@ -71,7 +72,7 @@ class DeltaTableRef(StructBaseStrict, frozen=True):
 class DeltaProviderBundle(StructBaseStrict, frozen=True):
     """Provider response with canonical control-plane metadata."""
 
-    provider: object
+    provider: DeltaProviderHandle
     snapshot: Mapping[str, object]
     scan_config: Mapping[str, object]
     scan_effective: dict[str, object]
@@ -82,7 +83,7 @@ class DeltaProviderBundle(StructBaseStrict, frozen=True):
 class DeltaCdfProviderBundle(StructBaseStrict, frozen=True):
     """CDF provider response with canonical control-plane metadata."""
 
-    provider: object
+    provider: DeltaProviderHandle
     snapshot: Mapping[str, object]
     cdf_options: DeltaCdfOptions | None
 
@@ -467,7 +468,7 @@ def _resolve_extension_module(
     *,
     required_attr: str | None = None,
     entrypoint: str | None = None,
-) -> object:
+) -> RustDeltaExtensionModule:
     """Return the Delta extension module (datafusion_ext).
 
     Args:
@@ -482,7 +483,7 @@ def _resolve_extension_module(
         entrypoint=entrypoint,
     )
     if resolved is not None:
-        return resolved.module
+        return cast("RustDeltaExtensionModule", resolved.module)
     msg = "Delta control-plane operations require datafusion_ext."
     raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
 
@@ -561,32 +562,32 @@ def _context_from_compatibility(
 def _compatibility_message(
     prefix: str,
     *,
-    compatibility: object,
+    compatibility: DeltaExtensionCompatibility,
     entrypoint: str,
 ) -> str:
     details: list[str] = [prefix, f"entrypoint={entrypoint}"]
-    probe_result = getattr(compatibility, "probe_result", None)
+    probe_result = compatibility.probe_result
     if probe_result:
         details.append(f"probe_result={probe_result}")
-    module = getattr(compatibility, "module", None)
+    module = compatibility.module
     if module is not None:
         details.append(f"module={module}")
-    ctx_kind = getattr(compatibility, "ctx_kind", None)
+    ctx_kind = compatibility.ctx_kind
     if ctx_kind is not None:
         details.append(f"ctx_kind={ctx_kind}")
-    error = getattr(compatibility, "error", None)
+    error = compatibility.error
     if error:
         details.append(f"error={error}")
     return " ".join(details)
 
 
-def _require_internal_entrypoint(name: str) -> Callable[..., object]:
+def _require_internal_entrypoint(name: str) -> RustDeltaEntrypoint:
     module = _resolve_extension_module(entrypoint=name)
     entrypoint = getattr(module, name, None)
     if not callable(entrypoint):
         msg = f"Delta control-plane entrypoint {name} is unavailable."
         raise DataFusionEngineError(msg, kind=ErrorKind.PLUGIN)
-    return entrypoint
+    return cast("RustDeltaEntrypoint", entrypoint)
 
 
 def _parse_add_actions(payload: object | None) -> Sequence[Mapping[str, object]] | None:
@@ -609,7 +610,10 @@ def _decode_schema_ipc(payload: bytes) -> pa.Schema:
         _raise_engine_error(msg, kind=ErrorKind.ARROW, exc=exc)
 
 
-def _cdf_options_to_ext(module: object, options: DeltaCdfOptions | None) -> object:
+def _cdf_options_to_ext(
+    module: RustDeltaExtensionModule,
+    options: DeltaCdfOptions | None,
+) -> RustCdfOptionsHandle:
     """Convert Python CDF options into the Rust extension options type.
 
     Returns:
@@ -622,12 +626,28 @@ def _cdf_options_to_ext(module: object, options: DeltaCdfOptions | None) -> obje
     if options_type is None:
         msg = "Delta CDF options type is unavailable in the extension module."
         _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
-    ext_options = options_type()
+    ext_options = cast("RustCdfOptionsHandle", options_type())
     payload = cdf_options_payload(options)
-    ext_options.starting_version = payload["starting_version"]
-    ext_options.ending_version = payload["ending_version"]
-    ext_options.starting_timestamp = payload["starting_timestamp"]
-    ext_options.ending_timestamp = payload["ending_timestamp"]
+    starting_version = payload.get("starting_version")
+    ending_version = payload.get("ending_version")
+    starting_timestamp = payload.get("starting_timestamp")
+    ending_timestamp = payload.get("ending_timestamp")
+    if starting_version is not None and not isinstance(starting_version, int):
+        msg = "Delta CDF starting_version must be an int or None."
+        _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+    if ending_version is not None and not isinstance(ending_version, int):
+        msg = "Delta CDF ending_version must be an int or None."
+        _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+    if starting_timestamp is not None and not isinstance(starting_timestamp, str):
+        msg = "Delta CDF starting_timestamp must be a str or None."
+        _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+    if ending_timestamp is not None and not isinstance(ending_timestamp, str):
+        msg = "Delta CDF ending_timestamp must be a str or None."
+        _raise_engine_error(msg, kind=ErrorKind.PLUGIN)
+    ext_options.starting_version = starting_version
+    ext_options.ending_version = ending_version
+    ext_options.starting_timestamp = starting_timestamp
+    ext_options.ending_timestamp = ending_timestamp
     ext_options.allow_out_of_range = bool(payload["allow_out_of_range"])
     return ext_options
 
@@ -697,7 +717,6 @@ def delta_provider_from_session(
         if storage_profile.storage_options
         else None
     )
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
         _internal_ctx(
             ctx,
@@ -713,10 +732,7 @@ def delta_provider_from_session(
         request.delta_scan.schema_force_view_types if request.delta_scan else None,
         request.delta_scan.wrap_partition_values if request.delta_scan else None,
         schema_ipc,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
     )
     payload = ensure_mapping(response, label="delta_table_provider_from_session")
     snapshot = ensure_mapping(payload.get("snapshot"), label="snapshot")
@@ -726,7 +742,7 @@ def delta_provider_from_session(
         msg = "Delta control-plane response missing provider capsule."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
     return DeltaProviderBundle(
-        provider=provider,
+        provider=cast("DeltaProviderHandle", provider),
         snapshot=snapshot,
         scan_config=scan_config,
         scan_effective=_scan_effective_payload(scan_config),
@@ -777,7 +793,6 @@ def delta_provider_with_files(
         if storage_profile.storage_options
         else None
     )
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = provider_factory(
         _internal_ctx(
             ctx,
@@ -793,10 +808,7 @@ def delta_provider_with_files(
         request.delta_scan.schema_force_view_types if request.delta_scan else None,
         request.delta_scan.wrap_partition_values if request.delta_scan else None,
         schema_ipc,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
     )
     payload = ensure_mapping(response, label="delta_table_provider_with_files")
     snapshot = ensure_mapping(payload.get("snapshot"), label="snapshot")
@@ -806,7 +818,7 @@ def delta_provider_with_files(
         msg = "Delta control-plane response missing provider capsule."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
     return DeltaProviderBundle(
-        provider=provider,
+        provider=cast("DeltaProviderHandle", provider),
         snapshot=snapshot,
         scan_config=scan_config,
         scan_effective=_scan_effective_payload(scan_config),
@@ -835,9 +847,8 @@ def delta_cdf_provider(
         required_attr="DeltaCdfOptions",
         entrypoint="delta_cdf_table_provider",
     )
-    provider_factory = cast("_DeltaCdfExtension", module).delta_cdf_table_provider
+    provider_factory = cast("DeltaCdfExtensionModule", module).delta_cdf_table_provider
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     ext_options = _cdf_options_to_ext(module, request.options)
     response = provider_factory(
         request.table_uri,
@@ -845,10 +856,7 @@ def delta_cdf_provider(
         request.version,
         request.timestamp,
         ext_options,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
     )
     payload = ensure_mapping(response, label="delta_cdf_table_provider")
     snapshot = ensure_mapping(payload.get("snapshot"), label="snapshot")
@@ -857,7 +865,7 @@ def delta_cdf_provider(
         msg = "Delta control-plane CDF response missing provider capsule."
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
     return DeltaCdfProviderBundle(
-        provider=provider,
+        provider=cast("DeltaProviderHandle", provider),
         snapshot=snapshot,
         cdf_options=request.options,
     )
@@ -881,17 +889,13 @@ def delta_snapshot_info(
     """
     snapshot_factory = _require_internal_entrypoint("delta_snapshot_info")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     try:
         response = snapshot_factory(
             request.table_uri,
             storage_payload,
             request.version,
             request.timestamp,
-            gate_payload[0],
-            gate_payload[1],
-            gate_payload[2],
-            gate_payload[3],
+            *delta_feature_gate_rust_payload(request.gate),
         )
     except (RuntimeError, TypeError, ValueError) as exc:
         msg = "Delta snapshot retrieval failed."
@@ -917,16 +921,12 @@ def delta_add_actions(
     """
     add_actions_factory = _require_internal_entrypoint("delta_add_actions")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = add_actions_factory(
         request.table_uri,
         storage_payload,
         request.version,
         request.timestamp,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
     )
     return ensure_mapping(response, label="delta_add_actions")
 
@@ -953,7 +953,6 @@ def delta_write_ipc(
     """
     write_fn = _require_internal_entrypoint("delta_write_ipc")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     partitions_payload = list(request.partition_columns) if request.partition_columns else None
@@ -969,10 +968,7 @@ def delta_write_ipc(
         partitions_payload,
         request.target_file_size,
         constraints_payload,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1005,7 +1001,6 @@ def delta_delete(
     """
     delete_fn = _require_internal_entrypoint("delta_delete")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     response = delete_fn(
@@ -1016,10 +1011,7 @@ def delta_delete(
         request.timestamp,
         request.predicate,
         constraints_payload,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1112,7 +1104,6 @@ def delta_update(
     _validate_update_constraints(ctx, request)
     update_fn = _require_internal_entrypoint("delta_update")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     updates_payload = sorted((str(key), str(value)) for key, value in request.updates.items())
@@ -1125,10 +1116,7 @@ def delta_update(
         request.predicate,
         updates_payload,
         constraints_payload,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1161,7 +1149,6 @@ def delta_merge(
     """
     merge_fn = _require_internal_entrypoint("delta_merge")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = list(request.extra_constraints) if request.extra_constraints else None
     matched_payload = sorted(
@@ -1190,10 +1177,7 @@ def delta_merge(
         request.not_matched_by_source_predicate,
         request.delete_not_matched_by_source,
         constraints_payload,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1226,7 +1210,6 @@ def delta_optimize_compact(
     """
     optimize_fn = _require_internal_entrypoint("delta_optimize_compact")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     z_order_payload = list(request.z_order_cols) if request.z_order_cols else None
     response = optimize_fn(
@@ -1237,10 +1220,7 @@ def delta_optimize_compact(
         request.timestamp,
         request.target_size,
         z_order_payload,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1273,7 +1253,6 @@ def delta_vacuum(
     """
     vacuum_fn = _require_internal_entrypoint("delta_vacuum")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     response = vacuum_fn(
         _internal_ctx(ctx, entrypoint="delta_vacuum"),
@@ -1285,10 +1264,7 @@ def delta_vacuum(
         request.dry_run,
         request.enforce_retention_duration,
         request.require_vacuum_protocol_check,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1321,7 +1297,6 @@ def delta_restore(
     """
     restore_fn = _require_internal_entrypoint("delta_restore")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     response = restore_fn(
         _internal_ctx(ctx, entrypoint="delta_restore"),
@@ -1331,10 +1306,7 @@ def delta_restore(
         request.timestamp,
         request.restore_version,
         request.restore_timestamp,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1370,7 +1342,6 @@ def delta_set_properties(
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
     set_fn = _require_internal_entrypoint("delta_set_properties")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     properties_payload = sorted((str(key), str(value)) for key, value in request.properties.items())
     response = set_fn(
@@ -1380,10 +1351,7 @@ def delta_set_properties(
         request.version,
         request.timestamp,
         properties_payload,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1419,7 +1387,6 @@ def delta_add_features(
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
     add_fn = _require_internal_entrypoint("delta_add_features")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     features_payload = [str(feature) for feature in request.features]
     response = add_fn(
@@ -1430,10 +1397,7 @@ def delta_add_features(
         request.timestamp,
         features_payload,
         request.allow_protocol_versions_increase,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1462,7 +1426,6 @@ def delta_add_constraints(
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
     add_fn = _require_internal_entrypoint("delta_add_constraints")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     constraints_payload = sorted(
         (str(name), str(expr)) for name, expr in request.constraints.items()
@@ -1474,10 +1437,7 @@ def delta_add_constraints(
         request.version,
         request.timestamp,
         constraints_payload,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1506,7 +1466,6 @@ def delta_drop_constraints(
         _raise_engine_error(msg, kind=ErrorKind.DELTA)
     drop_fn = _require_internal_entrypoint("delta_drop_constraints")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     commit_payload_values = commit_payload(request.commit_options)
     response = drop_fn(
         _internal_ctx(ctx, entrypoint="delta_drop_constraints"),
@@ -1516,10 +1475,7 @@ def delta_drop_constraints(
         request.timestamp,
         [str(name) for name in request.constraints],
         request.raise_if_not_exists,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
         commit_payload_values[0],
         commit_payload_values[1],
         commit_payload_values[2],
@@ -1545,17 +1501,13 @@ def delta_create_checkpoint(
     """
     checkpoint_fn = _require_internal_entrypoint("delta_create_checkpoint")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = checkpoint_fn(
         _internal_ctx(ctx, entrypoint="delta_create_checkpoint"),
         request.table_uri,
         storage_payload,
         request.version,
         request.timestamp,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
     )
     return ensure_mapping(response, label="delta_create_checkpoint")
 
@@ -1575,17 +1527,13 @@ def delta_cleanup_metadata(
     """
     cleanup_fn = _require_internal_entrypoint("delta_cleanup_metadata")
     storage_payload = list(request.storage_options.items()) if request.storage_options else None
-    gate_payload = delta_feature_gate_rust_payload(request.gate)
     response = cleanup_fn(
         _internal_ctx(ctx, entrypoint="delta_cleanup_metadata"),
         request.table_uri,
         storage_payload,
         request.version,
         request.timestamp,
-        gate_payload[0],
-        gate_payload[1],
-        gate_payload[2],
-        gate_payload[3],
+        *delta_feature_gate_rust_payload(request.gate),
     )
     return ensure_mapping(response, label="delta_cleanup_metadata")
 
@@ -1603,6 +1551,77 @@ def _feature_reports(
     return payload
 
 
+def _feature_properties_report(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    properties: Mapping[str, str],
+) -> Mapping[str, object]:
+    return delta_set_properties(
+        ctx,
+        request=DeltaSetPropertiesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            properties=properties,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+
+
+def _feature_add_report(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    features: Sequence[str],
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    return delta_add_features(
+        ctx,
+        request=DeltaAddFeaturesRequest(
+            table_uri=request.table_uri,
+            storage_options=request.storage_options,
+            version=request.version,
+            timestamp=request.timestamp,
+            features=features,
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+            gate=request.gate,
+            commit_options=request.commit_options,
+        ),
+    )
+
+
+def _feature_toggle_report(
+    ctx: SessionContext,
+    *,
+    request: DeltaFeatureEnableRequest,
+    properties: Mapping[str, str] | None = None,
+    features: Sequence[str] | None = None,
+    allow_protocol_versions_increase: bool = True,
+) -> Mapping[str, object]:
+    properties_report = (
+        _feature_properties_report(ctx, request=request, properties=properties)
+        if properties is not None
+        else None
+    )
+    features_report = (
+        _feature_add_report(
+            ctx,
+            request=request,
+            features=features,
+            allow_protocol_versions_increase=allow_protocol_versions_increase,
+        )
+        if features is not None
+        else None
+    )
+    return _feature_reports(
+        properties_report=properties_report,
+        features_report=features_report,
+    )
+
+
 def delta_enable_column_mapping(
     ctx: SessionContext,
     *,
@@ -1617,38 +1636,16 @@ def delta_enable_column_mapping(
     Mapping[str, object]
         Properties/features report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={
-                "delta.columnMapping.mode": mode,
-                "delta.minReaderVersion": "2",
-                "delta.minWriterVersion": "5",
-            },
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    features_report = delta_add_features(
-        ctx,
-        request=DeltaAddFeaturesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            features=["columnMapping"],
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=features_report,
+        request=request,
+        properties={
+            "delta.columnMapping.mode": mode,
+            "delta.minReaderVersion": "2",
+            "delta.minWriterVersion": "5",
+        },
+        features=["columnMapping"],
+        allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
 
@@ -1665,34 +1662,12 @@ def delta_enable_deletion_vectors(
     Mapping[str, object]
         Properties/features report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.enableDeletionVectors": "true"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    features_report = delta_add_features(
-        ctx,
-        request=DeltaAddFeaturesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            features=["deletionVectors"],
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=features_report,
+        request=request,
+        properties={"delta.enableDeletionVectors": "true"},
+        features=["deletionVectors"],
+        allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
 
@@ -1709,34 +1684,12 @@ def delta_enable_row_tracking(
     Mapping[str, object]
         Properties/features report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.enableRowTracking": "true"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    features_report = delta_add_features(
-        ctx,
-        request=DeltaAddFeaturesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            features=["rowTracking"],
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=features_report,
+        request=request,
+        properties={"delta.enableRowTracking": "true"},
+        features=["rowTracking"],
+        allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
 
@@ -1753,34 +1706,12 @@ def delta_enable_change_data_feed(
     Mapping[str, object]
         Properties/features report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.enableChangeDataFeed": "true"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    features_report = delta_add_features(
-        ctx,
-        request=DeltaAddFeaturesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            features=["changeDataFeed"],
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=features_report,
+        request=request,
+        properties={"delta.enableChangeDataFeed": "true"},
+        features=["changeDataFeed"],
+        allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
 
@@ -1797,22 +1728,11 @@ def delta_enable_generated_columns(
     Mapping[str, object]
         Properties/features report payload.
     """
-    features_report = delta_add_features(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaAddFeaturesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            features=["generatedColumns"],
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=None,
-        features_report=features_report,
+        request=request,
+        features=["generatedColumns"],
+        allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
 
@@ -1829,22 +1749,11 @@ def delta_enable_invariants(
     Mapping[str, object]
         Properties/features report payload.
     """
-    features_report = delta_add_features(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaAddFeaturesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            features=["invariants"],
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=None,
-        features_report=features_report,
+        request=request,
+        features=["invariants"],
+        allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
 
@@ -1861,22 +1770,11 @@ def delta_enable_check_constraints(
     Mapping[str, object]
         Properties/features report payload.
     """
-    features_report = delta_add_features(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaAddFeaturesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            features=["checkConstraints"],
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=None,
-        features_report=features_report,
+        request=request,
+        features=["checkConstraints"],
+        allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
 
@@ -1899,22 +1797,7 @@ def delta_enable_in_commit_timestamps(
         properties["delta.inCommitTimestampEnablementVersion"] = str(enablement_version)
     if enablement_timestamp is not None:
         properties["delta.inCommitTimestampEnablementTimestamp"] = enablement_timestamp
-    properties_report = delta_set_properties(
-        ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties=properties,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=None,
-    )
+    return _feature_toggle_report(ctx, request=request, properties=properties)
 
 
 def delta_enable_v2_checkpoints(
@@ -1930,34 +1813,12 @@ def delta_enable_v2_checkpoints(
     Mapping[str, object]
         Properties/features report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.checkpointPolicy": "v2"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    features_report = delta_add_features(
-        ctx,
-        request=DeltaAddFeaturesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            features=["v2Checkpoint"],
-            allow_protocol_versions_increase=allow_protocol_versions_increase,
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=features_report,
+        request=request,
+        properties={"delta.checkpointPolicy": "v2"},
+        features=["v2Checkpoint"],
+        allow_protocol_versions_increase=allow_protocol_versions_increase,
     )
 
 
@@ -1973,21 +1834,10 @@ def delta_enable_vacuum_protocol_check(
     Mapping[str, object]
         Properties report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.vacuumProtocolCheck": "true"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=None,
+        request=request,
+        properties={"delta.vacuumProtocolCheck": "true"},
     )
 
 
@@ -2003,21 +1853,10 @@ def delta_enable_checkpoint_protection(
     Mapping[str, object]
         Properties report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.checkpointProtection": "true"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=None,
+        request=request,
+        properties={"delta.checkpointProtection": "true"},
     )
 
 
@@ -2033,21 +1872,10 @@ def delta_disable_change_data_feed(
     Mapping[str, object]
         Properties report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.enableChangeDataFeed": "false"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=None,
+        request=request,
+        properties={"delta.enableChangeDataFeed": "false"},
     )
 
 
@@ -2063,21 +1891,10 @@ def delta_disable_deletion_vectors(
     Mapping[str, object]
         Properties report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.enableDeletionVectors": "false"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=None,
+        request=request,
+        properties={"delta.enableDeletionVectors": "false"},
     )
 
 
@@ -2093,21 +1910,10 @@ def delta_disable_row_tracking(
     Mapping[str, object]
         Properties report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.enableRowTracking": "false"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=None,
+        request=request,
+        properties={"delta.enableRowTracking": "false"},
     )
 
 
@@ -2123,21 +1929,10 @@ def delta_disable_in_commit_timestamps(
     Mapping[str, object]
         Properties report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.enableInCommitTimestamps": "false"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=None,
+        request=request,
+        properties={"delta.enableInCommitTimestamps": "false"},
     )
 
 
@@ -2153,21 +1948,10 @@ def delta_disable_vacuum_protocol_check(
     Mapping[str, object]
         Properties report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.vacuumProtocolCheck": "false"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=None,
+        request=request,
+        properties={"delta.vacuumProtocolCheck": "false"},
     )
 
 
@@ -2183,21 +1967,10 @@ def delta_disable_checkpoint_protection(
     Mapping[str, object]
         Properties report payload.
     """
-    properties_report = delta_set_properties(
+    return _feature_toggle_report(
         ctx,
-        request=DeltaSetPropertiesRequest(
-            table_uri=request.table_uri,
-            storage_options=request.storage_options,
-            version=request.version,
-            timestamp=request.timestamp,
-            properties={"delta.checkpointProtection": "false"},
-            gate=request.gate,
-            commit_options=request.commit_options,
-        ),
-    )
-    return _feature_reports(
-        properties_report=properties_report,
-        features_report=None,
+        request=request,
+        properties={"delta.checkpointProtection": "false"},
     )
 
 

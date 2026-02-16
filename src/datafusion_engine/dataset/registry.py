@@ -119,9 +119,6 @@ class ResolvedDatasetLocation(StructBaseStrict, frozen=True):
     schema: SchemaLike | None
 
 
-_RESOLVED_LOCATION_CACHE: dict[int, ResolvedDatasetLocation] = {}
-
-
 @dataclass
 class DatasetCatalog(MutableRegistry[str, DatasetLocation]):
     """Map dataset names to locations for DataFusion registration."""
@@ -669,13 +666,7 @@ def resolve_dataset_location(location: DatasetLocation) -> ResolvedDatasetLocati
 
 
 def _resolve_cached_location(location: DatasetLocation) -> ResolvedDatasetLocation:
-    cache_key = id(location)
-    cached = _RESOLVED_LOCATION_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-    resolved = resolve_dataset_location(location)
-    _RESOLVED_LOCATION_CACHE[cache_key] = resolved
-    return resolved
+    return resolve_dataset_location(location)
 
 
 def resolve_datafusion_provider(location: DatasetLocation) -> DataFusionProvider | None:

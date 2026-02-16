@@ -9,6 +9,7 @@ from datafusion_engine.plan.perf_policy import (
     PerformancePolicy,
     StatisticsPolicy,
 )
+from datafusion_engine.session.contracts import IdentifierNormalizationMode
 from datafusion_engine.session.runtime import (
     DataFusionJoinPolicy,
     DataFusionRuntimeProfile,
@@ -63,12 +64,12 @@ def test_schema_evolution_adapter_enabled_by_default() -> None:
     assert profile.features.enable_schema_evolution_adapter is True
 
 
-def test_force_disable_ident_normalization_overrides() -> None:
-    """Disable identifier normalization when forced."""
+def test_delta_session_defaults_disable_non_strict_ident_normalization() -> None:
+    """Delta session defaults should disable non-strict identifier normalization."""
     profile = DataFusionRuntimeProfile(
         features=FeatureGatesConfig(
-            enable_ident_normalization=True,
-            force_disable_ident_normalization=True,
+            identifier_normalization_mode=IdentifierNormalizationMode.SQL_SAFE,
+            enable_delta_session_defaults=True,
         ),
     )
     settings = profile.settings_payload()

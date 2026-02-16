@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import cast
 
@@ -26,6 +27,8 @@ from datafusion_engine.arrow.types import (
 )
 from utils.validation import validate_required_items
 
+logger = logging.getLogger(__name__)
+
 MAX_INT8_CODE = 127
 MAX_INT16_CODE = 32767
 _UNION_TAG_KEY = "__union_tag__"
@@ -44,6 +47,7 @@ def _safe_array(values: Sequence[object | None], *, dtype: DataTypeLike) -> Arra
     try:
         return pa.array(values, type=dtype)
     except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError, ValueError):
+        logger.debug("Falling back to scalar-by-scalar array coercion for nested dtype %s", dtype)
         coerced: list[object | None] = []
         for value in values:
             if value is None:
@@ -140,6 +144,7 @@ def _union_child_index(
     if idx is not None:
         return idx
     msg = f"Union array cannot encode value: {value!r}."
+    logger.warning("Union child resolution failed for value type=%s", type(value).__name__)
     raise TypeError(msg)
 
 

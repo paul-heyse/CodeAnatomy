@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import pyarrow as pa
 from typing import cast
 
-from semantics.incremental.delta_port import DeltaServiceCdfPort
+import pyarrow as pa
+
 from datafusion_engine.delta.service import DeltaService
+from semantics.incremental.delta_port import DeltaServiceCdfPort
 from storage.deltalake import DeltaCdfOptions, StorageOptions
 
 EXPECTED_TABLE_VERSION = 7

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
+from typing import Any, cast
 
 import semantics
 
@@ -15,12 +17,15 @@ EXPECTED_EXPORTS = {
 
 def test_semantics_exports_expected_symbols() -> None:
     """Public semantics exports include pipeline entrypoints."""
-    assert EXPECTED_EXPORTS.issubset(set(semantics.__all__))
+    exports = getattr(semantics, "__all__", ())
+    assert EXPECTED_EXPORTS.issubset(set(exports))
 
 
 def test_build_cpg_signature_contains_stable_parameters() -> None:
     """build_cpg keeps expected core parameters."""
-    sig = inspect.signature(semantics.build_cpg)
+    symbol = "build_cpg"
+    build_cpg = cast("Callable[..., Any]", getattr(semantics, symbol))
+    sig = inspect.signature(build_cpg)
     params = sig.parameters
 
     assert "ctx" in params

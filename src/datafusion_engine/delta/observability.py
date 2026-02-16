@@ -771,6 +771,13 @@ def _bootstrap_observability_table(
     bootstrap_row = _bootstrap_observability_row(schema)
     empty = pa.Table.from_pylist([bootstrap_row], schema=schema)
     from deltalake import CommitProperties
+    from deltalake.exceptions import (
+        CommitFailedError,
+        DeltaError,
+        DeltaProtocolError,
+        SchemaMismatchError,
+        TableNotFoundError,
+    )
     from deltalake.writer import write_deltalake
 
     commit_properties = CommitProperties(
@@ -787,7 +794,17 @@ def _bootstrap_observability_table(
             schema_mode="overwrite",
             commit_properties=commit_properties,
         )
-    except Exception as exc:
+    except (
+        CommitFailedError,
+        DeltaError,
+        DeltaProtocolError,
+        OSError,
+        RuntimeError,
+        SchemaMismatchError,
+        TableNotFoundError,
+        TypeError,
+        ValueError,
+    ) as exc:
         if not _is_corrupt_delta_log_error(exc):
             raise
         with contextlib.suppress(OSError):

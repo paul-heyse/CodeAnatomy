@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import logging
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -27,6 +29,10 @@ from datafusion_engine.delta.service import (
     DeltaFeatureMutationRequest,
     delta_service_for_profile,
 )
+from obs.datafusion_engine_runtime_metrics import (
+    maintenance_tracer,
+    record_delta_maintenance_run,
+)
 from storage.deltalake.delta import DeltaFeatureMutationOptions
 
 if TYPE_CHECKING:
@@ -35,6 +41,7 @@ if TYPE_CHECKING:
     from schema_spec.contracts import DeltaMaintenancePolicy
 
 _MIN_RETENTION_HOURS = 168
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -426,13 +433,22 @@ def run_delta_maintenance(
     policy = plan.policy
     service = delta_service_for_profile(runtime_profile)
     reports: list[Mapping[str, object]] = []
+    logger.info(
+        "Running delta maintenance table_uri=%s dataset=%s",
+        plan.table_uri,
+        plan.dataset_name,
+    )
     if plan.policy.enable_deletion_vectors:
-        report = service.features.enable_deletion_vectors(
-            _feature_mutation_options(
-                plan,
-                runtime_profile=runtime_profile,
-                commit_metadata={"operation": "enable_deletion_vectors"},
-            )
+        report = _run_maintenance_operation(
+            operation="enable_deletion_vectors",
+            table_uri=plan.table_uri,
+            execute=lambda: service.features.enable_deletion_vectors(
+                _feature_mutation_options(
+                    plan,
+                    runtime_profile=runtime_profile,
+                    commit_metadata={"operation": "enable_deletion_vectors"},
+                )
+            ),
         )
         reports.append(report)
         _record_maintenance(
@@ -447,12 +463,16 @@ def run_delta_maintenance(
             ),
         )
     if plan.policy.enable_v2_checkpoints:
-        report = service.features.enable_v2_checkpoints(
-            _feature_mutation_options(
-                plan,
-                runtime_profile=runtime_profile,
-                commit_metadata={"operation": "enable_v2_checkpoints"},
-            )
+        report = _run_maintenance_operation(
+            operation="enable_v2_checkpoints",
+            table_uri=plan.table_uri,
+            execute=lambda: service.features.enable_v2_checkpoints(
+                _feature_mutation_options(
+                    plan,
+                    runtime_profile=runtime_profile,
+                    commit_metadata={"operation": "enable_v2_checkpoints"},
+                )
+            ),
         )
         reports.append(report)
         _record_maintenance(
@@ -467,7 +487,11 @@ def run_delta_maintenance(
             ),
         )
     if policy.optimize_on_write:
-        report = _run_optimize(ctx, plan=plan)
+        report = _run_maintenance_operation(
+            operation="optimize",
+            table_uri=plan.table_uri,
+            execute=lambda: _run_optimize(ctx, plan=plan),
+        )
         reports.append(report)
         _record_maintenance(
             runtime_profile,
@@ -481,7 +505,11 @@ def run_delta_maintenance(
             ),
         )
     if policy.vacuum_on_write:
-        report, retention_hours = _run_vacuum(ctx, plan=plan)
+        report, retention_hours = _run_maintenance_operation(
+            operation="vacuum",
+            table_uri=plan.table_uri,
+            execute=lambda: _run_vacuum(ctx, plan=plan),
+        )
         reports.append(report)
         _record_maintenance(
             runtime_profile,
@@ -495,7 +523,11 @@ def run_delta_maintenance(
             ),
         )
     if getattr(policy, "checkpoint_on_write", False):
-        report = _run_checkpoint(ctx, plan=plan)
+        report = _run_maintenance_operation(
+            operation="checkpoint",
+            table_uri=plan.table_uri,
+            execute=lambda: _run_checkpoint(ctx, plan=plan),
+        )
         reports.append(report)
         _record_maintenance(
             runtime_profile,
@@ -509,14 +541,62 @@ def run_delta_maintenance(
             ),
         )
     if policy.enable_log_compaction:
-        report = service.cleanup_log(
-            path=plan.table_uri,
-            storage_options=plan.storage_options,
-            log_storage_options=plan.log_storage_options,
-            dataset_name=plan.dataset_name,
+        report = _run_maintenance_operation(
+            operation="log_compaction",
+            table_uri=plan.table_uri,
+            execute=lambda: service.cleanup_log(
+                path=plan.table_uri,
+                storage_options=plan.storage_options,
+                log_storage_options=plan.log_storage_options,
+                dataset_name=plan.dataset_name,
+            ),
         )
         reports.append(report)
+    logger.info(
+        "Delta maintenance completed table_uri=%s operations=%s",
+        plan.table_uri,
+        len(reports),
+    )
     return tuple(reports)
+
+
+def _run_maintenance_operation[T](
+    *,
+    operation: str,
+    table_uri: str,
+    execute: Callable[[], T],
+) -> T:
+    start = time.perf_counter()
+    tracer = maintenance_tracer()
+    with tracer.start_as_current_span(f"delta.maintenance.{operation}") as span:
+        span.set_attribute("delta.table_uri", table_uri)
+        span.set_attribute("delta.operation", operation)
+        try:
+            result = execute()
+        except (
+            RuntimeError,
+            TypeError,
+            ValueError,
+            OSError,
+        ):
+            duration_s = time.perf_counter() - start
+            record_delta_maintenance_run(
+                operation=operation,
+                status="error",
+                duration_s=duration_s,
+            )
+            span.set_attribute("status", "error")
+            logger.exception(
+                "Delta maintenance operation failed table_uri=%s operation=%s",
+                table_uri,
+                operation,
+            )
+            raise
+        duration_s = time.perf_counter() - start
+        record_delta_maintenance_run(operation=operation, status="ok", duration_s=duration_s)
+        span.set_attribute("status", "ok")
+        span.set_attribute("duration_s", duration_s)
+        return result
 
 
 def _feature_mutation_options(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
@@ -98,6 +99,8 @@ _INDEX_TYPES: Mapping[str, pa.DataType] = {
 }
 
 EXTRACTOR_DEFAULTS_META = b"extractor_option_defaults"
+
+logger = logging.getLogger(__name__)
 
 
 class SchemaMetadataSpec(StructBaseStrict, frozen=True):
@@ -531,6 +534,7 @@ def metadata_spec_from_schema(schema: SchemaLike) -> SchemaMetadataSpec:
     SchemaMetadataSpec
         Metadata specification derived from the schema.
     """
+    logger.debug("Capturing metadata spec from schema-like %s", type(schema).__name__)
     schema_meta = dict(schema.metadata or {})
     field_meta: dict[str, dict[bytes, bytes]] = {}
     for schema_field in schema:
@@ -768,6 +772,7 @@ def merge_metadata_specs(*specs: SchemaMetadataSpec | None) -> SchemaMetadataSpe
     SchemaMetadataSpec
         Combined schema metadata spec.
     """
+    logger.debug("Merging %s schema metadata specs", len(specs))
     schema_metadata: dict[bytes, bytes] = {}
     field_metadata: dict[str, dict[bytes, bytes]] = {}
     for spec in specs:
@@ -990,6 +995,7 @@ def apply_spec_metadata(spec: TableSchemaSpec) -> SchemaMetadataSpec:
     SchemaMetadataSpec
         Schema metadata spec derived from the table spec.
     """
+    logger.debug("Applying schema metadata for table spec %s", spec.name)
     return metadata_spec_from_schema(spec.to_arrow_schema())
 
 

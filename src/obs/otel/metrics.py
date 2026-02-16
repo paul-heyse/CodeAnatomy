@@ -626,6 +626,22 @@ def record_storage_operation(
     )
 
 
+def record_delta_maintenance_metrics(
+    *,
+    operation: str,
+    status: str,
+    duration_s: float,
+) -> None:
+    """Record DataFusion Delta maintenance metrics."""
+    from obs.datafusion_engine_runtime_metrics import record_delta_maintenance_run
+
+    record_delta_maintenance_run(
+        operation=operation,
+        status=status,
+        duration_s=duration_s,
+    )
+
+
 def metrics_snapshot() -> dict[str, object]:
     """Return a snapshot of gauge metrics for diagnostics.
 
@@ -649,6 +665,7 @@ __all__ = [
     "record_artifact_count",
     "record_cache_event",
     "record_datafusion_duration",
+    "record_delta_maintenance_metrics",
     "record_error",
     "record_stage_duration",
     "record_storage_operation",

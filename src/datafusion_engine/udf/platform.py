@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 from weakref import WeakSet
 
@@ -45,6 +45,7 @@ from datafusion_engine.expr.planner import (
 )
 from datafusion_engine.udf.contracts import InstallRustUdfPlatformRequestV1
 from datafusion_engine.udf.extension_runtime import (
+    ExtensionRegistries,
     register_rust_udfs,
     rust_runtime_install_payload,
     rust_udf_docs,
@@ -100,8 +101,14 @@ class RustUdfPlatformOptions:
     strict: bool = True
 
 
-_FUNCTION_FACTORY_CTXS: WeakSet[SessionContext] = WeakSet()
-_EXPR_PLANNER_CTXS: WeakSet[SessionContext] = WeakSet()
+@dataclass
+class RustUdfPlatformRegistries:
+    """Injectable runtime registries for platform installation state."""
+
+    function_factory_ctxs: WeakSet[SessionContext] = field(default_factory=WeakSet)
+    expr_planner_ctxs: WeakSet[SessionContext] = field(default_factory=WeakSet)
+
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -122,10 +129,11 @@ def _install_function_factory(
     enabled: bool,
     hook: Callable[[SessionContext], None] | None,
     policy: FunctionFactoryPolicy | None,
+    registries: RustUdfPlatformRegistries,
 ) -> tuple[ExtensionInstallStatus | None, Mapping[str, object] | None]:
     if not enabled:
         return None, None
-    if ctx in _FUNCTION_FACTORY_CTXS:
+    if ctx in registries.function_factory_ctxs:
         return ExtensionInstallStatus(available=True, installed=True), function_factory_payloads(
             policy
         )
@@ -138,7 +146,7 @@ def _install_function_factory(
         else:
             hook(ctx)
         installed = True
-        _FUNCTION_FACTORY_CTXS.add(ctx)
+        registries.function_factory_ctxs.add(ctx)
     except ImportError as exc:
         available = False
         error = str(exc)
@@ -155,10 +163,11 @@ def _install_expr_planners(
     enabled: bool,
     hook: Callable[[SessionContext], None] | None,
     planner_names: Sequence[str],
+    registries: RustUdfPlatformRegistries,
 ) -> tuple[ExtensionInstallStatus | None, Mapping[str, object] | None]:
     if not enabled:
         return None, None
-    if ctx in _EXPR_PLANNER_CTXS:
+    if ctx in registries.expr_planner_ctxs:
         return ExtensionInstallStatus(available=True, installed=True), expr_planner_payloads(
             planner_names
         )
@@ -171,7 +180,7 @@ def _install_expr_planners(
         else:
             hook(ctx)
         installed = True
-        _EXPR_PLANNER_CTXS.add(ctx)
+        registries.expr_planner_ctxs.add(ctx)
     except ImportError as exc:
         available = False
         error = str(exc)
@@ -185,6 +194,8 @@ def _install_expr_planners(
 def _resolve_udf_snapshot(
     ctx: SessionContext,
     resolved: RustUdfPlatformOptions,
+    *,
+    extension_registries: ExtensionRegistries | None = None,
 ) -> tuple[
     Mapping[str, object] | None,
     str | None,
@@ -202,6 +213,7 @@ def _resolve_udf_snapshot(
         enable_async=resolved.enable_async_udfs,
         async_udf_timeout_ms=resolved.async_udf_timeout_ms,
         async_udf_batch_size=resolved.async_udf_batch_size,
+        registries=extension_registries,
     )
     snapshot_hash = rust_udf_snapshot_hash(snapshot)
     tag_index = rewrite_tag_index(snapshot)
@@ -209,7 +221,7 @@ def _resolve_udf_snapshot(
     docs_value = snapshot.get("documentation") if isinstance(snapshot, Mapping) else None
     docs = cast("Mapping[str, object] | None", docs_value)
     if docs is None:
-        docs = rust_udf_docs(ctx)
+        docs = rust_udf_docs(ctx, registries=extension_registries)
     return snapshot, snapshot_hash, rewrite_tags, docs
 
 
@@ -253,10 +265,15 @@ def _resolve_platform_install_state(
     *,
     ctx: SessionContext,
     resolved: RustUdfPlatformOptions,
+    extension_registries: ExtensionRegistries | None = None,
 ) -> _PlatformInstallState:
-    snapshot, snapshot_hash, rewrite_tags, docs = _resolve_udf_snapshot(ctx, resolved)
+    snapshot, snapshot_hash, rewrite_tags, docs = _resolve_udf_snapshot(
+        ctx,
+        resolved,
+        extension_registries=extension_registries,
+    )
     runtime_payload = (
-        rust_runtime_install_payload(ctx)
+        rust_runtime_install_payload(ctx, registries=extension_registries)
         if snapshot is not None
         else cast("Mapping[str, object]", {})
     )
@@ -276,6 +293,7 @@ def _install_function_factory_status(
     ctx: SessionContext,
     resolved: RustUdfPlatformOptions,
     state: _PlatformInstallState,
+    registries: RustUdfPlatformRegistries,
 ) -> tuple[ExtensionInstallStatus | None, Mapping[str, object] | None]:
     function_factory_payload = (
         function_factory_payloads(state.function_factory_policy)
@@ -290,6 +308,7 @@ def _install_function_factory_status(
             enabled=True,
             hook=resolved.function_factory_hook,
             policy=state.function_factory_policy,
+            registries=registries,
         )
     if state.snapshot is not None and "function_factory_installed" in state.runtime_payload:
         installed = bool(state.runtime_payload.get("function_factory_installed"))
@@ -304,6 +323,7 @@ def _install_function_factory_status(
         enabled=True,
         hook=None,
         policy=state.function_factory_policy,
+        registries=registries,
     )
 
 
@@ -312,6 +332,7 @@ def _install_expr_planner_status(
     ctx: SessionContext,
     resolved: RustUdfPlatformOptions,
     state: _PlatformInstallState,
+    registries: RustUdfPlatformRegistries,
 ) -> tuple[ExtensionInstallStatus | None, Mapping[str, object] | None]:
     expr_planner_payload = (
         expr_planner_payloads(state.planner_names) if resolved.enable_expr_planners else None
@@ -324,6 +345,7 @@ def _install_expr_planner_status(
             enabled=True,
             hook=resolved.expr_planner_hook,
             planner_names=state.planner_names,
+            registries=registries,
         )
     if state.snapshot is not None and "expr_planners_installed" in state.runtime_payload:
         installed = bool(state.runtime_payload.get("expr_planners_installed"))
@@ -336,6 +358,7 @@ def _install_expr_planner_status(
         enabled=True,
         hook=None,
         planner_names=state.planner_names,
+        registries=registries,
     )
 
 
@@ -343,12 +366,16 @@ def install_rust_udf_platform(
     request: InstallRustUdfPlatformRequestV1,
     *,
     ctx: SessionContext,
+    registries: RustUdfPlatformRegistries | None = None,
+    extension_registries: ExtensionRegistries | None = None,
 ) -> RustUdfPlatform:
     """Install planning-critical extension platform before plan-bundle construction.
 
     Args:
         request: Serializable platform installation request payload.
         ctx: DataFusion session context.
+        registries: Optional platform registry container.
+        extension_registries: Optional extension-runtime registry container.
 
     Returns:
         RustUdfPlatform: Result.
@@ -364,16 +391,23 @@ def install_rust_udf_platform(
     from datafusion_engine.udf.extension_runtime import validate_extension_capabilities
 
     _ = validate_extension_capabilities(strict=resolved.strict, ctx=ctx)
-    state = _resolve_platform_install_state(ctx=ctx, resolved=resolved)
+    resolved_registries = registries or RustUdfPlatformRegistries()
+    state = _resolve_platform_install_state(
+        ctx=ctx,
+        resolved=resolved,
+        extension_registries=extension_registries,
+    )
     function_factory, function_factory_payload = _install_function_factory_status(
         ctx=ctx,
         resolved=resolved,
         state=state,
+        registries=resolved_registries,
     )
     expr_planners, expr_planner_payload = _install_expr_planner_status(
         ctx=ctx,
         resolved=resolved,
         state=state,
+        registries=resolved_registries,
     )
     if resolved.strict:
         strict_checks = (
@@ -403,6 +437,7 @@ def ensure_rust_udfs(
     enable_async: bool = False,
     async_udf_timeout_ms: int | None = None,
     async_udf_batch_size: int | None = None,
+    extension_registries: ExtensionRegistries | None = None,
 ) -> Mapping[str, object]:
     """Ensure Rust UDFs are registered via the unified platform.
 
@@ -411,6 +446,7 @@ def ensure_rust_udfs(
         enable_async: Whether async UDF execution is enabled.
         async_udf_timeout_ms: Optional async UDF timeout override.
         async_udf_batch_size: Optional async UDF batch-size override.
+        extension_registries: Optional extension-runtime registry container.
 
     Returns:
         Mapping[str, object]: Result.
@@ -433,6 +469,7 @@ def ensure_rust_udfs(
             )
         ),
         ctx=ctx,
+        extension_registries=extension_registries,
     )
     if platform.snapshot is None:
         msg = "Rust UDF platform did not return a registry snapshot."
@@ -444,6 +481,7 @@ __all__ = [
     "ExtensionInstallStatus",
     "RustUdfPlatform",
     "RustUdfPlatformOptions",
+    "RustUdfPlatformRegistries",
     "ensure_rust_udfs",
     "install_rust_udf_platform",
 ]

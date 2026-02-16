@@ -22,9 +22,7 @@ from arrow_utils.core.schema_constants import (
     SCHEMA_META_NAME,
     SCHEMA_META_VERSION,
 )
-from datafusion_engine.arrow.metadata import (
-    function_requirements_metadata_spec,
-)
+from datafusion_engine.arrow.interop import arrow_schema_from_dfschema
 from datafusion_engine.arrow.schema import (
     plan_fingerprint_field,
     task_name_field,
@@ -33,6 +31,7 @@ from datafusion_engine.arrow.semantic import (
     SEMANTIC_TYPE_META,
     semantic_type_for_field_name,
 )
+from datafusion_engine.schema.constants import ENGINE_FUNCTION_REQUIREMENTS
 from datafusion_engine.schema.extraction_schemas import (
     AST_SPAN_META,
     AST_VIEW_REQUIRED_NON_NULL_FIELDS,
@@ -362,7 +361,7 @@ DATAFUSION_SQL_INGEST_SCHEMA = _schema_with_metadata(
     ),
 )
 
-ENGINE_RUNTIME_SCHEMA = _schema_with_metadata(
+_ENGINE_RUNTIME_SCHEMA_BASE = _schema_with_metadata(
     "engine_runtime_v2",
     pa.schema(
         [
@@ -402,30 +401,10 @@ DATAFUSION_OBJECT_STORES_SCHEMA = _schema_with_metadata(
     ),
 )
 
-# Apply function requirements metadata to ENGINE_RUNTIME_SCHEMA
-_ENGINE_FUNCTION_REQUIREMENTS = function_requirements_metadata_spec(
-    required=(
-        "array_agg",
-        "array_distinct",
-        "array_sort",
-        "array_to_string",
-        "bool_or",
-        "coalesce",
-        "col_to_byte",
-        "concat_ws",
-        "prefixed_hash64",
-        "row_number",
-        "sha256",
-        "stable_hash64",
-        "stable_hash128",
-        "stable_id",
-    ),
-).schema_metadata
-
 ENGINE_RUNTIME_SCHEMA = _schema_with_metadata(
     "engine_runtime_v2",
-    ENGINE_RUNTIME_SCHEMA,
-    extra_metadata=_ENGINE_FUNCTION_REQUIREMENTS,
+    _ENGINE_RUNTIME_SCHEMA_BASE,
+    extra_metadata=ENGINE_FUNCTION_REQUIREMENTS,
 )
 
 
@@ -478,7 +457,7 @@ def _require_semantic_type(
     except (RuntimeError, TypeError, ValueError, KeyError) as exc:
         msg = f"Unable to resolve schema for {table_name!r}: {exc}"
         raise ValueError(msg) from exc
-    arrow_schema = _arrow_schema_from_dfschema(table_schema)
+    arrow_schema = arrow_schema_from_dfschema(table_schema)
     semantic_type: str | None = None
     if arrow_schema is not None:
         try:
@@ -1092,17 +1071,6 @@ def _validate_ts_view_outputs(
         errors[f"{name}_information_schema"] = str(exc)
 
 
-def _arrow_schema_from_dfschema(schema: object) -> pa.Schema | None:
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    return None
-
-
 def _dfschema_names(schema: object) -> tuple[str, ...]:
     from collections.abc import Sequence as SeqABC
     from typing import cast
@@ -1125,7 +1093,7 @@ def _dfschema_names(schema: object) -> tuple[str, ...]:
 
 
 def _dfschema_nullability(schema: object) -> dict[str, bool] | None:
-    arrow_schema = _arrow_schema_from_dfschema(schema)
+    arrow_schema = arrow_schema_from_dfschema(schema)
     if arrow_schema is None:
         return None
     return {field.name: field.nullable for field in arrow_schema}

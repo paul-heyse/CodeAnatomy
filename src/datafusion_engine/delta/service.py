@@ -15,7 +15,10 @@ from datafusion_engine.dataset.resolution import (
     DatasetResolutionRequest,
     resolve_dataset_provider,
 )
-from datafusion_engine.delta.capabilities import is_delta_extension_compatible
+from datafusion_engine.delta.capabilities import (
+    DeltaExtensionCompatibility,
+    is_delta_extension_compatible,
+)
 from datafusion_engine.delta.provider_artifacts import (
     ServiceProviderArtifactInput,
     build_delta_provider_build_result,
@@ -117,13 +120,8 @@ class _ProviderArtifactRecordRequest:
     scan_files: Sequence[str] | None
 
 
-def _read_attr(value: object, name: str) -> object:
-    return getattr(value, name, None)
-
-
-def _canonical_provider_mode(resolution: object) -> str:
-    provider_kind = _read_attr(resolution, "provider_kind")
-    if provider_kind == "delta_cdf":
+def _canonical_provider_mode(resolution: DatasetResolution) -> str:
+    if resolution.provider_kind == "delta_cdf":
         return "cdf_table_provider"
     return "delta_table_provider"
 
@@ -442,11 +440,11 @@ class DeltaService:
     def _provider_artifact_payload(
         self,
         *,
-        request: object,
-        compatibility: object,
+        request: _ProviderArtifactRecordRequest,
+        compatibility: DeltaExtensionCompatibility,
     ) -> dict[str, object]:
-        resolution = _read_attr(request, "resolution")
-        snapshot = _read_attr(resolution, "delta_snapshot")
+        resolution = request.resolution
+        snapshot = resolution.delta_snapshot
         snapshot_mapping = snapshot if isinstance(snapshot, Mapping) else None
         provider_mode = _canonical_provider_mode(resolution)
         strict_enabled = self.profile.features.enforce_delta_ffi_provider

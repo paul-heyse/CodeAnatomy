@@ -50,42 +50,6 @@ if TYPE_CHECKING:
     from semantics.program_manifest import ManifestDatasetResolver
 
 
-# ---------------------------------------------------------------------------
-# Resolver identity guard
-# ---------------------------------------------------------------------------
-# Lightweight check that all view registrations within a single pipeline run
-# use the same dataset resolver instance.  The guard is reset at the start of
-# each ``register_view_graph`` invocation and validated on subsequent calls.
-
-_resolver_identity_guard: dict[str, int | None] = {"active_id": None}
-
-
-def _check_resolver_identity(resolver: ManifestDatasetResolver | None) -> None:
-    """Assert resolver identity consistency within a registration batch.
-
-    Args:
-        resolver: Dataset resolver instance provided for this registration.
-
-    Raises:
-        AssertionError: If a different resolver instance is used within the
-            same pipeline run.
-    """
-    if resolver is None:
-        return
-    current_id = id(resolver)
-    stored = _resolver_identity_guard["active_id"]
-    if stored is None:
-        _resolver_identity_guard["active_id"] = current_id
-    elif stored != current_id:
-        msg = "Resolver identity violation: multiple resolver instances in same pipeline run"
-        raise AssertionError(msg)
-
-
-def _reset_resolver_identity_guard() -> None:
-    """Reset the resolver identity guard for a new registration batch."""
-    _resolver_identity_guard["active_id"] = None
-
-
 @dataclass(frozen=True)
 class ViewNode:
     """Declarative view definition with explicit dependencies.
@@ -270,8 +234,6 @@ def register_view_graph(
     if runtime.require_artifacts and runtime.runtime_profile is None:
         msg = "Runtime profile is required for view artifact recording."
         raise ValueError(msg)
-    _reset_resolver_identity_guard()
-    _check_resolver_identity(runtime.dataset_resolver)
     validate_rust_udf_snapshot(snapshot)
     materialized = _materialize_nodes(nodes, snapshot=snapshot)
     ordered = _topo_sort_nodes(materialized)

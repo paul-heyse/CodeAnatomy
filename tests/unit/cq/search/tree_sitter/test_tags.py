@@ -1,3 +1,4 @@
+# ruff: noqa: PLR6301
 """Tests for flattened tags module (contracts and runtime)."""
 
 from __future__ import annotations

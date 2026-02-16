@@ -20,6 +20,7 @@ from datafusion import SessionContext
 from datafusion.dataframe import DataFrame
 
 from core_types import JsonValue
+from datafusion_engine.arrow.interop import arrow_schema_from_df
 from datafusion_engine.delta.protocol import DeltaProtocolSnapshot
 from datafusion_engine.delta.store_policy import delta_store_policy_hash
 from datafusion_engine.identity import schema_identity_hash
@@ -1489,13 +1490,19 @@ def _safe_execution_plan(df: DataFrame) -> object | None:
     -------
     object | None
         Execution plan, or None if unavailable.
+
+    Raises:
+        RuntimeError: If DataFusion returns an unexpected runtime error.
+        TypeError: If the execution-plan call surface is malformed.
+        ValueError: If DataFusion returns an unexpected value error.
+        AttributeError: If execution-plan attributes are not available.
     """
     method = getattr(df, "execution_plan", None)
     if not callable(method):
         return None
     try:
         return method()
-    except Exception as exc:
+    except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
         if str(exc).startswith("DataFusion error:"):
             return None
         raise
@@ -2336,19 +2343,6 @@ def _statistics_value(value: object) -> object:
     return str(value)
 
 
-def _arrow_schema_from_df(df: DataFrame) -> pa.Schema | None:
-    schema: pa.Schema | object = df.schema()
-    if isinstance(schema, pa.Schema):
-        return schema
-    to_arrow = getattr(schema, "to_arrow", None)
-    if callable(to_arrow):
-        with _suppress_errors():
-            resolved = to_arrow()
-        if isinstance(resolved, pa.Schema):
-            return resolved
-    return None
-
-
 def _schema_metadata_payload(schema: pa.Schema) -> dict[str, str]:
     metadata = schema.metadata or {}
     items = sorted(metadata.items(), key=lambda item: str(item[0]))
@@ -2361,7 +2355,9 @@ def _schema_metadata_payload(schema: pa.Schema) -> dict[str, str]:
 
 
 def _schema_provenance(df: DataFrame) -> Mapping[str, object]:
-    schema = _arrow_schema_from_df(df)
+    schema: pa.Schema | None = None
+    with _suppress_errors():
+        schema = arrow_schema_from_df(df)
     if schema is None:
         return {}
 
@@ -2385,7 +2381,9 @@ def _schema_provenance(df: DataFrame) -> Mapping[str, object]:
 
 
 def _schema_describe_rows(df: DataFrame) -> list[dict[str, object]]:
-    resolved_schema = _arrow_schema_from_df(df)
+    resolved_schema: pa.Schema | None = None
+    with _suppress_errors():
+        resolved_schema = arrow_schema_from_df(df)
     if resolved_schema is None:
         return []
     return [
